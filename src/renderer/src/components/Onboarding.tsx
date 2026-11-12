@@ -65,15 +65,15 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             <h2>Get your models</h2>
             <p className="hint">These run privately on this Mac{ram ? ` (${ram} GB)` : ''}, free. They're picked to fit your memory: bigger ones that wouldn't run well aren't offered. Download now or later in Settings → Models.</p>
             {found === null ? <div className="hint">Looking for model apps on this Mac…</div> : ollama ? (
-              <div className="pick-list" data-testid="setup-picks">
+              <div className="setup-pick-list" data-testid="setup-picks">
                 {(picks ?? []).map((p) => {
                   const pr = pull[p.pull]
                   const done = p.installed || pr?.done
                   const busy = pr && !pr.error && !pr.done
                   return (
-                    <div className="pick" key={p.pull}>
-                      <div className="pick-text">
-                        <div className="pick-role">{p.role}</div>
+                    <div className="setup-pick" key={p.pull}>
+                      <div className="setup-pick-text">
+                        <div className="setup-pick-role">{p.role}</div>
                         <b>{p.label}</b> <span className="hint">· {p.sizeGB} GB</span>
                         <div className="hint">{p.blurb}</div>
                         {busy && <div className="meter" style={{ width: '100%', marginTop: 6 }}><i style={{ width: `${pr.pct}%` }} /></div>}
@@ -88,8 +88,8 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
                 {picks?.length === 0 && <div className="hint">This Mac doesn't have enough memory for the recommended local models. Use a cloud key below.</div>}
               </div>
             ) : (
-              <div className="pick install-ollama">
-                <div className="pick-text"><b>Install Ollama to run models on this Mac</b><div className="hint">It's free and takes a minute. Then press Check again.{lmstudio ? ` LM Studio is running with ${lmstudio.models} models; SahilBot uses those too.` : ''}</div></div>
+              <div className="setup-pick install-ollama">
+                <div className="setup-pick-text"><b>Install Ollama to run models on this Mac</b><div className="hint">It's free and takes a minute. Then press Check again.{lmstudio ? ` LM Studio is running with ${lmstudio.models} models; SahilBot uses those too.` : ''}</div></div>
                 <div className="key-edit"><a className="btn" href="https://ollama.com/download" target="_blank" rel="noreferrer">Get Ollama</a><button className="btn" onClick={detect}>Check again</button></div>
               </div>
             )}

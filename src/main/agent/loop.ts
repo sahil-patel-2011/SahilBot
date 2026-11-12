@@ -168,7 +168,10 @@ export class Agent {
       if (m.role === 'assistant' && r?.user && (r.userAt ?? 0) > lastUserAt) notes.push(`[The user reacted ${r.user} to your message: "${m.content.replace(/\s+/g, ' ').slice(0, 80)}"]`)
     }
     if (input.note) notes.push(input.note)
-    if (input.team) notes.push('[Team of Experts is on for this request: 1) Write your plan with todo. 2) Send the research and independent parts to helper agents with the agents tool, in parallel, as many as genuinely help (each with a complete, self-contained task and what to report). 3) Compare their reports, check anything that matters, fill gaps yourself. 4) Then do the rest of the job yourself, carefully, and double-check the result before you answer.]')
+    if (input.team) {
+      const { min, max } = this.teamSize(thread)
+      notes.push(`[Team of Experts is on for this request: 1) Write your plan with todo. 2) Split the research into at least ${min} focused, non-overlapping parts (up to ${max}; different sources, angles, sub-questions, options or sections) and send them all at once with the agents tool; give each helper a complete, self-contained task and say exactly what to report (findings with source URLs, numbers with dates). 3) Compile their reports: compare them, resolve disagreements, check anything important yourself, fill gaps. 4) Then finish the job yourself and double-check it before you answer: one complete, well-organized result, with sources.]`)
+    }
 
     if (input.voice) {
       const st = this.d.db.getState(thread.id)
@@ -368,6 +371,15 @@ export class Agent {
     return state.systemSnapshot
   }
 
+  /** Team of Experts size for this Mac and model: at least 10 helpers when it can run them. */
+  private teamSize(thread: Thread): { min: number; max: number } {
+    const s = this.d.settings.get()
+    const want = thread.model || this.d.db.getSpace(thread.spaceId)?.model || s.defaultModel
+    const id = want === 'auto' ? [...this.d.endpoints.usable()].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id : want
+    const cap = teamCapacity(this.d.endpoints.last?.models.find((m) => m.id === id))
+    return { min: Math.min(10, cap.maxAgents), max: cap.maxAgents }
+  }
+
   /** Helper agents started per chat (the whole tree counts toward the limit). */
   private teamUsed = new Map<string, number>()
   /** Final team per agents call, attached to its tool result. */
@@ -389,6 +401,12 @@ export class Agent {
     const model = this.lastModel.get(parent.id) ?? parent.model ?? this.d.settings.get().defaultModel
     const cap = teamCapacity(this.d.endpoints.last?.models.find((m) => m.id === model))
     const used = this.teamUsed.get(rootId) ?? 0
+    // Team of Experts: the first team must be wide enough to research properly.
+    const teamMode = depth === 1 && !![...db.listMessages(parent.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.meta?.team
+    const min = Math.min(10, cap.maxAgents)
+    if (teamMode && used === 0 && tasks.length < min) {
+      throw new Error(`Team of Experts is on: send at least ${min} helpers (you sent ${tasks.length}). Split the research into ${min} or more focused parts (different sources, angles, sub-questions or options) and call agents again with all of them.`)
+    }
     if (used + tasks.length > cap.maxAgents) {
       throw new Error(`This Mac can run ${cap.maxAgents} helper agents per task with this model (${cap.why}); ${Math.max(0, cap.maxAgents - used)} left. Combine the work into fewer, bigger tasks or do the rest yourself.`)
     }
@@ -559,6 +577,7 @@ export class Agent {
     const failures = new Map<string, number>()
     const guard = new LoopGuard()
     let nudged = false
+    let teamNudged = false
     let linkChecked = false
     let verified = false
     // Set by execute(): did this run change anything or research anything? Then it gets a self-check pass.
@@ -641,6 +660,17 @@ export class Agent {
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true }, content: `[From the app] Before you finish, double-check your work:\n${track.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${track.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${actions >= 8 ? '- If this took a non-obvious procedure or several tries, save what worked with memory(action="save_skill") so next time is faster.\n' : ''}- Fix anything that's wrong.\nThen write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.` })
+            continue
+          }
+          // Team of Experts on, but no team yet: send one.
+          const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+          if (lastUser?.meta?.team && !run.helper && !(this.teamUsed.get(state.rootId ?? thread.id) ?? 0) && !teamNudged && step < HARD_CAP) {
+            teamNudged = true
+            budget = Math.max(budget, step + 2)
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true }, content: `[From the app] Team of Experts is on for this request, but you haven't used your team. Split the research into at least ${this.teamSize(thread).min} focused parts and send them with the agents tool, then compile their reports into the final answer.` })
+            assistant.meta = { ...assistant.meta, superseded: true }
+            db.updateMessage(assistant)
+            this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
             continue
           }
           // Don't stop with an unfinished plan: one nudge per run.

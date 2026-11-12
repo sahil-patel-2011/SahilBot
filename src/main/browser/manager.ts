@@ -66,7 +66,7 @@ export class BrowserManager {
   controlling = false
   takenOver = false
 
-  constructor(private win: () => BrowserWindow | null, private emit: (s: BrowserState) => void, _requestOpen?: () => void) {
+  constructor(private win: () => BrowserWindow | null, private emit: (s: BrowserState) => void, private requestOpen?: () => void) {
     this.ses = electronSession.fromPartition('persist:foreman-browser')
     // Sites don't get the camera, mic, location or notifications, and nothing downloads silently.
     this.ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
@@ -649,6 +649,39 @@ export class BrowserManager {
       const { title, text } = readable(r.result.value, wc.getURL())
       return `# ${title}\n${wc.getURL()}\n\n${text}`
     })
+  }
+
+  /**
+   * A human check (CAPTCHA, "verify you are human") on the page, if any. SahilBot never solves these:
+   * the browser comes forward so the user can, and the agent waits.
+   */
+  async humanCheck(): Promise<string | null> {
+    const wc = this.view?.webContents
+    if (!wc || wc.isDestroyed()) return null
+    try {
+      const r = await this.cdp<{ result: { value: string | null } }>(wc, 'Runtime.evaluate', {
+        returnByValue: true,
+        expression: `(() => {
+          const srcs = [...document.querySelectorAll('iframe')].map((f) => f.src || '').join(' ').toLowerCase()
+          if (srcs.includes('recaptcha')) return 'reCAPTCHA'
+          if (srcs.includes('hcaptcha')) return 'hCaptcha'
+          if (srcs.includes('challenges.cloudflare.com') || srcs.includes('turnstile') || document.querySelector('.cf-turnstile, #challenge-form, #cf-challenge-running')) return 'Cloudflare check'
+          if (srcs.includes('arkoselabs') || srcs.includes('funcaptcha')) return 'Arkose check'
+          const t = (document.title + ' ' + (document.body ? document.body.innerText.slice(0, 3000) : '')).toLowerCase()
+          const phrases = ['verify you are human', 'verify that you are human', 'verify you are a human', "i'm not a robot", 'i am not a robot', 'are you a robot', 'complete the security check', 'press and hold', 'unusual traffic from your computer']
+          if (phrases.some((p) => t.includes(p))) return 'human check'
+          return null
+        })()`
+      })
+      return r.result.value
+    } catch {
+      return null
+    }
+  }
+
+  /** Bring the browser panel forward for the user (e.g. to complete a human check). */
+  showToUser(): void {
+    this.requestOpen?.()
   }
 
   listTabs(): string {

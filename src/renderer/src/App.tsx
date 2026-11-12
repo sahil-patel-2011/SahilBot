@@ -6,11 +6,11 @@ import { BotEditor } from './components/BotEditor'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
 import { ConnectApps } from './components/ConnectApps'
-import { Home } from './components/Home'
+import { FilesView, Home, ProjectsView } from './components/Home'
 import { Onboarding } from './components/Onboarding'
 import { RightPanel, type PanelTab } from './components/RightPanel'
 import { SettingsModal } from './components/SettingsModal'
-import { Sidebar } from './components/Sidebar'
+import { Sidebar, type MainView } from './components/Sidebar'
 import { ThreadView } from './components/ThreadView'
 import { VoiceMode } from './components/VoiceMode'
 import { ProjectHome } from './components/ProjectHome'
@@ -38,6 +38,7 @@ export function App() {
   const [file, setFile] = useState<string | null>(null)
   const [browser, setBrowser] = useState<BrowserState | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [view, setView] = useState<MainView>('home')
   const [settingsPage, setSettingsPage] = useState<'general' | 'models' | 'keys' | undefined>(undefined)
   const [showConnect, setShowConnect] = useState(false)
   const [editor, setEditor] = useState<Editor>(null)
@@ -57,6 +58,7 @@ export function App() {
   const [teamCap, setTeamCap] = useState<{ maxAgents: number; heavy: boolean; why: string } | null>(null)
   const composer = useRef<ComposerHandle>(null)
 
+  const newChatRef = useRef<() => void>(() => undefined)
   const threadRef = useRef<string | null>(null)
   threadRef.current = thread?.id ?? null
   // Read-aloud plays here (voice mode has its own player).
@@ -204,6 +206,9 @@ export function App() {
     r.classList.toggle('tinted', a.tint > 0)
   }, [settings?.appearance])
 
+  // The browser comes forward only when you're needed (e.g. a human check to complete).
+  useEffect(() => api.browser.onOpenRequest(() => setPanel('browser')), [])
+
   // The browser works in the background; "Watch" (or the globe) shows it.
   useEffect(() => {
     const watch = (): void => setPanel('browser')
@@ -223,7 +228,8 @@ export function App() {
 
   useEffect(() => {
     const k = (e: KeyboardEvent): void => {
-      if (e.metaKey && e.key === 'n') { e.preventDefault(); setPalette(true) }
+      if (e.metaKey && e.key === 'n') { e.preventDefault(); newChatRef.current() }
+      if (e.metaKey && e.key === 'k') { e.preventDefault(); setPalette(true) }
       if (e.metaKey && e.key === ',') { e.preventDefault(); setShowSettings(true) }
       if (e.metaKey && e.key === '\\') { e.preventDefault(); setPanel((p) => (p ? null : 'progress')) }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); composer.current?.toggleDictation() }
@@ -236,15 +242,18 @@ export function App() {
     return () => window.removeEventListener('keydown', k)
   }, [])
 
-  const openMain = (): void => { setSpaceId(main?.id ?? null); setThread(null) }
+  const openMain = (): void => { setSpaceId(main?.id ?? null); setThread(null); setView('home') }
+  newChatRef.current = openMain
   const openChat = async (id: string): Promise<void> => {
     const t = chats.find((x) => x.id === id) ?? (await api.threads.list(main?.id)).find((x) => x.id === id)
     if (!t) return
     setSpaceId(t.spaceId)
     setThread(t)
+    setView('home')
   }
   /** A bot has one ongoing conversation (created on first open). */
   const openBot = async (id: string): Promise<void> => {
+    setView('home')
     const sp = await api.spaces.list()
     const s = sp.find((x) => x.id === id)
     if (s?.isMain) return openMain()
@@ -335,6 +344,13 @@ export function App() {
 
 
   const openFile = (p: string): void => { setFile(p); setPanel('file') }
+  /** Any chat, in any bot or project (e.g. the one a file came from). */
+  const openAnyChat = async (id: string): Promise<void> => {
+    for (const sp of spaces) {
+      const t = (await api.threads.list(sp.id)).find((x) => x.id === id)
+      if (t) { setSpaceId(sp.id); setThread(t); setView('home'); return }
+    }
+  }
 
   const composerEl = (
     <Composer
@@ -356,7 +372,24 @@ export function App() {
       onMode={(m) => (thread ? void patchThread({ permissionMode: m }) : setDraft((d) => ({ ...d, mode: m })))}
       accent={isBot ? space?.color : undefined}
       onVoice={() => setVoiceOn(true)}
-      placeholder={isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? 'Message SahilBot' : 'Ask anything, or give SahilBot a job'}
+      placeholder={isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? 'Reply to SahilBot' : 'How can I help you today?'}
+      big={!thread}
+      context={!thread && !isBot ? (
+        <Popover label={<><I.Folder size={14} />{isProject ? space?.name : 'Project or folder'} <I.Chevron size={13} /></>} className="under-pick" title="Work in a project or a folder" testId="context-picker">
+          {(close) => (
+            <>
+              <div className="menu-head">Work in</div>
+              <button className="menu-item" onClick={() => { close(); openMain() }}><span className="check">{!isProject && <I.Check size={14} />}</span>No project</button>
+              {spaces.filter((x) => x.kind === 'project' && !x.hidden).map((x) => (
+                <button key={x.id} className="menu-item" onClick={() => { close(); void openBot(x.id) }}><span className="check">{x.id === space?.id && <I.Check size={14} />}</span>{x.name}</button>
+              ))}
+              <div className="menu-sep" />
+              <button className="menu-item" onClick={() => { close(); void api.files.pick('folder').then((xs) => composer.current?.attach(xs)) }}><I.Folder size={15} />Attach a folder…</button>
+              <button className="menu-item" onClick={() => { close(); setEditor({ space: null, mode: 'project' }) }}><I.Plus size={15} />New project…</button>
+            </>
+          )}
+        </Popover>
+      ) : undefined}
     />
   )
 
@@ -397,7 +430,12 @@ export function App() {
         onOpenMain={openMain}
         onOpenBot={(id) => void openBot(id)}
         onOpenChat={(id) => void openChat(id)}
-        onNew={() => setPalette(true)}
+        onNew={openMain}
+        onNewBot={() => setEditor({ space: null, mode: 'bot' })}
+        onSearch={() => setPalette(true)}
+        view={view}
+        onView={(v) => { setView(v); setThread(null) }}
+        modelLabel={`${settings.defaultModel === 'auto' ? 'Auto' : models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}`}
         onCustomize={(s) => setEditor({ space: s, mode: s.kind })}
         onChanged={() => void refreshSpaces().then((sp) => {
           if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain()
@@ -470,7 +508,11 @@ export function App() {
           </div>
         )}
 
-        {thread ? (
+        {view === 'files' && !thread ? (
+          <FilesView onOpenFile={openFile} onOpenChat={(id) => void openAnyChat(id)} />
+        ) : view === 'projects' && !thread ? (
+          <ProjectsView spaces={spaces} onOpen={(id) => void openBot(id)} onNew={() => setEditor({ space: null, mode: 'project' })} />
+        ) : thread ? (
           <>
             <ThreadView messages={messages} running={isRunning} pending={pending} teams={teams}
               drafting={drafting[thread.id] ?? null} since={runSince[thread.id]}
@@ -497,7 +539,7 @@ export function App() {
         ) : isProject && space ? (
           <ProjectHome project={space} onOpen={(t) => setThread(t)} onEdit={() => setEditor({ space, mode: 'project' })} composer={composerEl} />
         ) : (
-          <Home userName={settings.userName} recent={chats} onOpen={(id) => void openChat(id)} composer={composerEl} onSuggest={(t) => composer.current?.insert(t)} />
+          <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={composerEl} refreshKey={running.size} />
         )}
       </main>
       {panel && (

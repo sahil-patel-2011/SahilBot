@@ -1,78 +1,90 @@
-import { useEffect, useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 
+export type MainView = 'home' | 'projects' | 'files'
+
+/**
+ * The sidebar: actions at the top (New chat, Search, Projects, Files, Scheduled, Connect apps), then
+ * Pinned (drag bots, projects or chats here), Bots, Projects and Recents, with you at the bottom.
+ */
 export function Sidebar(p: {
   spaces: Space[]
   chats: Thread[]
   activeSpaceId: string | null
   activeThreadId: string | null
+  view: MainView
   userName: string
   onOpenMain: () => void
   onOpenBot: (id: string) => void
   onOpenChat: (id: string) => void
   onNew: () => void
+  onNewBot: () => void
+  onSearch: () => void
+  onView: (v: MainView) => void
   onCustomize: (s: Space) => void
   onChanged: () => void
   onSettings: () => void
   onConnect: () => void
   onScheduled: () => void
   onNewProject: () => void
-  /** Bots pinned to the top like widgets (null = just the main bot). */
   pinned: string[] | null
   onPinned: (ids: string[]) => void
+  modelLabel?: string
 }) {
-  const [query, setQuery] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [results, setResults] = useState<Thread[] | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!query.trim()) return setResults(null)
-    const t = setTimeout(() => void api.threads.search(query.trim()).then(setResults), 150)
-    return () => clearTimeout(t)
-  }, [query])
+  const [dragging, setDragging] = useState<{ kind: 'space' | 'chat'; id: string } | null>(null)
+  const [over, setOver] = useState<'pinned' | 'list' | null>(null)
+  const [open, setOpen] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem('sb-sections') ?? '{}') as Record<string, boolean> } catch { return {} }
+  })
+  const toggle = (k: string): void => setOpen((o) => {
+    const n = { ...o, [k]: o[k] === false }
+    try { localStorage.setItem('sb-sections', JSON.stringify(n)) } catch { /* private mode */ }
+    return n
+  })
+  const isOpen = (k: string): boolean => open[k] !== false
 
   const main = p.spaces.find((s) => s.isMain)
-  const pinnedIds = (p.pinned ?? (main ? [main.id] : [])).filter((id) => p.spaces.some((s) => s.id === id))
+  const pinnedIds = (p.pinned ?? (main ? [main.id] : [])).filter((id) => p.spaces.some((s) => s.id === id && !s.hidden))
   const pinnedSpaces = pinnedIds.map((id) => p.spaces.find((s) => s.id === id)!).filter(Boolean)
-  // Bots not pinned on top stay in the list (the main bot too, once it's taken off the top).
+  const pinnedChats = p.chats.filter((t) => t.pinned)
   const bots = p.spaces.filter((s) => !s.hidden && s.kind !== 'project' && !pinnedIds.includes(s.id))
-  const [dragging, setDragging] = useState<string | null>(null)
-  const [dropTop, setDropTop] = useState(false)
-  const pin = (id: string, at?: number): void => {
+  const projects = p.spaces.filter((s) => s.kind === 'project' && !s.hidden && !pinnedIds.includes(s.id))
+  const recents = p.chats.filter((t) => !t.pinned)
+  const colorsOf = (g: Space): string[] => g.members.map((id) => p.spaces.find((s) => s.id === id)?.color).filter((c): c is string => !!c)
+  const initials = (p.userName || 'You').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase()
+
+  const pinSpace = (id: string, at?: number): void => {
     const rest = pinnedIds.filter((x) => x !== id)
     rest.splice(at ?? rest.length, 0, id)
     p.onPinned(rest)
   }
-  const unpin = (id: string): void => p.onPinned(pinnedIds.filter((x) => x !== id))
-  const open = (s: Space): void => (s.isMain ? p.onOpenMain() : p.onOpenBot(s.id))
-  const projects = p.spaces.filter((s) => s.kind === 'project' && !s.hidden)
-  const colorsOf = (g: Space): string[] => g.members.map((id) => p.spaces.find((s) => s.id === id)?.color).filter((c): c is string => !!c)
-  const initials = (p.userName || 'You').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase()
+  const unpinSpace = (id: string): void => p.onPinned(pinnedIds.filter((x) => x !== id))
+  const pinChat = (id: string, on: boolean): void => void api.threads.update(id, { pinned: on }).then(p.onChanged)
+  const openSpace = (s: Space): void => (s.isMain ? p.onOpenMain() : p.onOpenBot(s.id))
 
-  const botMenu = (s: Space, e: React.MouseEvent): void => {
+  const spaceMenu = (s: Space, e: React.MouseEvent): void => {
     e.preventDefault()
     const kind = s.kind === 'group' ? 'Group' : s.kind === 'project' ? 'Project' : 'Bot'
     setMenu({
       x: e.clientX, y: e.clientY,
       items: [
         pinnedIds.includes(s.id)
-          ? { label: 'Remove from top', icon: <I.Close size={15} />, run: () => unpin(s.id) }
-          : { label: 'Pin to top', icon: <I.Pin size={15} />, run: () => pin(s.id) },
-        ...(s.isMain ? [] : [{ label: s.pinned ? 'Unpin in list' : 'Pin in list', icon: <I.Pin size={15} />, run: () => void api.spaces.update(s.id, { pinned: !s.pinned }).then(p.onChanged) }]),
+          ? { label: 'Unpin', icon: <I.Pin size={15} />, run: () => unpinSpace(s.id) }
+          : { label: 'Pin', icon: <I.Pin size={15} />, run: () => pinSpace(s.id) },
         { label: 'Mark as Unread', icon: <I.Sparkle size={15} />, run: () => void api.spaces.markUnread(s.id).then(p.onChanged) },
         'sep',
         { label: `Rename ${kind}`, icon: <I.Edit size={15} />, run: () => setRenaming(s.id) },
         { label: `Customize ${kind}…`, icon: <I.Gear size={15} />, run: () => p.onCustomize(s) },
         'sep',
         { label: 'Copy conversation ID', icon: <I.Copy size={15} />, run: () => void api.threads.list(s.id).then((ts) => navigator.clipboard.writeText(ts[0]?.id ?? s.id)) },
-        'sep',
         ...(s.isMain ? [] : [
+          'sep',
           { label: 'Hide from sidebar', icon: <I.Close size={15} />, run: () => void api.spaces.update(s.id, { hidden: true }).then(p.onChanged) },
           {
             label: 'Delete', icon: <I.Trash size={15} />, danger: true,
@@ -88,7 +100,7 @@ export function Sidebar(p: {
     setMenu({
       x: e.clientX, y: e.clientY,
       items: [
-        { label: t.pinned ? 'Unpin' : 'Pin', icon: <I.Pin size={15} />, run: () => void api.threads.update(t.id, { pinned: !t.pinned }).then(p.onChanged) },
+        { label: t.pinned ? 'Unpin' : 'Pin', icon: <I.Pin size={15} />, run: () => pinChat(t.id, !t.pinned) },
         { label: 'Mark as Unread', icon: <I.Sparkle size={15} />, run: () => void api.threads.update(t.id, { unread: true }).then(p.onChanged) },
         { label: 'Rename', icon: <I.Edit size={15} />, run: () => setRenaming(t.id) },
         { label: 'Copy conversation ID', icon: <I.Copy size={15} />, run: () => void navigator.clipboard.writeText(t.id) },
@@ -105,112 +117,113 @@ export function Sidebar(p: {
       data-testid={`rename-${id}`} />
   )
 
-  const pinnedChats = p.chats.filter((t) => t.pinned)
-  const recentChats = p.chats.filter((t) => !t.pinned)
-  const chatRow = (t: Thread) => (
-    <div key={t.id} className={`thread-item${t.id === p.activeThreadId ? ' active' : ''}`} onContextMenu={(e) => chatMenu(t, e)}>
-      {renaming === t.id ? renameInput(t.id, t.title, (v) => api.threads.update(t.id, { title: v })) : (
-        <button className="thread-btn" onClick={() => p.onOpenChat(t.id)} data-testid="thread-item">
-          <span className="t">{t.title}</span>
-          {t.unread && t.id !== p.activeThreadId && <span className="unread-dot" />}
-          {t.pinned && <I.Pin size={12} className="pin" />}
+  const drag = (kind: 'space' | 'chat', id: string) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => { e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; setDragging({ kind, id }) },
+    onDragEnd: () => { setDragging(null); setOver(null) }
+  })
+
+  const spaceRow = (s: Space, pinnedRow: boolean, i = 0) => (
+    <div key={s.id} className={`nav-row${s.id === p.activeSpaceId && (!s.isMain || !p.activeThreadId) && p.view === 'home' ? ' active' : ''}`} onContextMenu={(e) => spaceMenu(s, e)} {...drag('space', s.id)}
+      onDrop={pinnedRow ? (e) => { e.preventDefault(); e.stopPropagation(); setOver(null); if (dragging?.kind === 'space' && dragging.id !== s.id) pinSpace(dragging.id, i); setDragging(null) } : undefined}>
+      {renaming === s.id ? renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v })) : (
+        <button className="nav-btn" onClick={() => openSpace(s)} data-testid={s.isMain ? 'main-bot' : s.kind === 'project' ? 'project-item' : 'space-item'} title={s.lastPreview ?? s.name}>
+          {s.kind === 'project'
+            ? <span className="row-icon proj" style={{ background: s.color }}><I.Folder size={12} /></span>
+            : <span className="row-icon"><SpaceAvatar color={s.color} shape={s.shape} size={22} group={s.kind === 'group' ? colorsOf(s) : undefined} /></span>}
+          <span className="t">{s.name}</span>
+          {s.unread && s.id !== p.activeSpaceId && <span className="unread-dot" />}
         </button>
       )}
     </div>
   )
 
-  return (
-    <aside className="sidebar">
-      <div className="sidebar-top drag">
-        <button className="circle-btn" title="Search (⌘K)" onClick={() => setSearchOpen((o) => !o)}><I.Search /></button>
-        <button className="circle-btn" title="Start a chat (⌘N)" onClick={p.onNew} data-testid="new-thread"><I.Plus /></button>
-      </div>
-      {/* Pinned bots: drag bots here to pin them like widgets; drag them out (or right-click) to remove. */}
-      <div className={`pinned-top n${Math.min(pinnedSpaces.length, 3)}${dropTop ? ' drop' : ''}${dragging && !pinnedSpaces.length ? ' empty' : ''}`} data-testid="pinned-top"
-        onDragOver={(e) => { if (dragging) { e.preventDefault(); setDropTop(true) } }}
-        onDragLeave={() => setDropTop(false)}
-        onDrop={(e) => { e.preventDefault(); setDropTop(false); if (dragging) pin(dragging); setDragging(null) }}>
-        {pinnedSpaces.length === 0 && !dragging && <div className="pin-empty">Drag a bot here to pin it</div>}
-        {pinnedSpaces.map((s, i) => (
-          <button key={s.id} className={`brand${p.activeSpaceId === s.id && (!s.isMain || !p.activeThreadId) ? ' on' : ''}`} onClick={() => open(s)} onContextMenu={(e) => botMenu(s, e)}
-            draggable onDragStart={(e) => { e.dataTransfer.setData('text/plain', s.id); e.dataTransfer.effectAllowed = 'move'; setDragging(s.id) }} onDragEnd={() => setDragging(null)}
-            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDropTop(false); if (dragging && dragging !== s.id) pin(dragging, i); setDragging(null) }}
-            data-testid={s.isMain ? 'main-bot' : 'pinned-bot'} title={s.isMain ? 'SahilBot' : s.name}>
-            <SpaceAvatar color={s.color} shape={s.shape} size={pinnedSpaces.length === 1 ? (s.shape === 'mascot' ? 92 : 84) : 52} group={s.kind === 'group' ? colorsOf(s) : undefined} />
-            <div className="brand-name">{s.name}</div>
-            {s.unread && s.id !== p.activeSpaceId && <span className="unread-dot" />}
-          </button>
-        ))}
-        {dragging && !pinnedSpaces.some((x) => x.id === dragging) && <div className="pin-hint">Drop to pin here</div>}
-      </div>
-      <div style={{ padding: '0 10px 4px' }}>
-        <button className="side-nav" onClick={p.onScheduled} data-testid="nav-scheduled"><I.Clock size={16} />Scheduled</button>
-      </div>
-      {searchOpen && (
-        <div className="search-box">
-          <I.Search size={15} />
-          <input autoFocus placeholder="Search chats and bots" value={query} onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Escape' && (setQuery(''), setSearchOpen(false))} />
-        </div>
-      )}
-      <div className="side-scroll"
-        onDragOver={(e) => { if (dragging && pinnedIds.includes(dragging)) e.preventDefault() }}
-        onDrop={(e) => { e.preventDefault(); if (dragging && pinnedIds.includes(dragging)) unpin(dragging); setDragging(null) }}>
-        {results ? (
-          <>
-            <div className="side-label">Results</div>
-            {results.length ? results.map((t) => (
-              <button key={t.id} className="thread-item" onClick={() => {
-                const s = p.spaces.find((x) => x.id === t.spaceId)
-                if (s && !s.isMain) p.onOpenBot(s.id)
-                else p.onOpenChat(t.id)
-                setQuery('')
-                setSearchOpen(false)
-              }}><span className="t">{t.title}</span></button>
-            )) : <div className="hint" style={{ padding: '4px 10px' }}>No matches</div>}
-          </>
-        ) : (
-          <>
-            {bots.map((s) => (
-              <div key={s.id} className={`space-item${s.id === p.activeSpaceId ? ' active' : ''}`} onContextMenu={(e) => botMenu(s, e)}
-                draggable onDragStart={(e) => { e.dataTransfer.setData('text/plain', s.id); e.dataTransfer.effectAllowed = 'move'; setDragging(s.id) }} onDragEnd={() => setDragging(null)}>
-                <button className="space-btn" onClick={() => open(s)} data-testid="space-item">
-                  <SpaceAvatar color={s.color} shape={s.shape} group={s.kind === 'group' ? colorsOf(s) : undefined} />
-                  <div className="space-text">
-                    {renaming === s.id ? renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v })) : (
-                      <div className="space-name">{s.name}{s.pinned && <I.Pin size={12} className="pin" />}</div>
-                    )}
-                    <div className="space-preview">{s.isMain ? 'Your main assistant' : s.lastPreview ?? (s.kind === 'group' ? `${s.members.length} bots` : 'Say hi')}</div>
-                  </div>
-                  {s.unread && s.id !== p.activeSpaceId && <span className="unread-dot" />}
-                </button>
-              </div>
-            ))}
-            <div className="side-label">Projects <button onClick={p.onNewProject} title="New project" data-testid="new-project">+</button></div>
-            {projects.map((s) => (
-              <div key={s.id} onContextMenu={(e) => botMenu(s, e)}>
-                {renaming === s.id ? renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v })) : (
-                  <button className={`project-row${s.id === p.activeSpaceId ? ' active' : ''}`} onClick={() => p.onOpenBot(s.id)} data-testid="project-item">
-                    <span className="sq" style={{ background: s.color }}><I.Folder size={13} /></span>
-                    <span className="t" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
-                    {s.unread && <span className="unread-dot" />}
-                  </button>
-                )}
-              </div>
-            ))}
-            {projects.length === 0 && <div className="hint" style={{ padding: '0 10px 4px' }}>A folder + instructions + chats.</div>}
-            {(pinnedChats.length > 0 || recentChats.length > 0) && <div className="side-label">Chats</div>}
-            {pinnedChats.map(chatRow)}
-            {recentChats.map(chatRow)}
-          </>
-        )}
-      </div>
-      <div className="sidebar-bottom">
-        <button className="profile" onClick={p.onSettings} title="Settings (⌘,)">{initials}</button>
-        <button className="connect" onClick={p.onConnect} data-testid="connect-apps">
-          Connect apps
-          <span className="connect-dots"><i style={{ background: '#EA4335' }} /><i style={{ background: '#4285F4' }} /><i style={{ background: '#FF642D' }} /></span>
+  const chatRow = (t: Thread) => (
+    <div key={t.id} className={`nav-row${t.id === p.activeThreadId ? ' active' : ''}`} onContextMenu={(e) => chatMenu(t, e)} {...drag('chat', t.id)}>
+      {renaming === t.id ? renameInput(t.id, t.title, (v) => api.threads.update(t.id, { title: v })) : (
+        <button className="nav-btn chat" onClick={() => p.onOpenChat(t.id)} data-testid="thread-item" title={t.title}>
+          <span className="t">{t.title.replace(/^⏰ /, '')}</span>
+          {t.title.startsWith('⏰') && <I.Clock size={14} className="row-tail" />}
+          {t.unread && t.id !== p.activeThreadId && <span className="unread-dot" />}
         </button>
+      )}
+    </div>
+  )
+
+  const section = (key: string, title: string, children: ReactNode, action?: ReactNode) => (
+    <div className="nav-section">
+      <div className="nav-label">
+        <button onClick={() => toggle(key)} aria-expanded={isOpen(key)}>{title}<I.Chevron size={12} style={{ transform: isOpen(key) ? undefined : 'rotate(-90deg)' }} /></button>
+        {action}
+      </div>
+      {isOpen(key) && children}
+    </div>
+  )
+
+  return (
+    <aside className="sidebar" onDragOver={(e) => { if (dragging) e.preventDefault() }}>
+      <div className="sidebar-top drag" />
+      <div className="nav-actions">
+        <button className="nav-new" onClick={p.onNew} data-testid="new-chat"><I.Plus size={17} /><span>New chat</span><kbd>⌘N</kbd></button>
+        <button className="nav-item" onClick={p.onSearch} data-testid="nav-search"><I.Search size={17} /><span>Search</span><kbd>⌘K</kbd></button>
+        <button className={`nav-item${p.view === 'projects' ? ' on' : ''}`} onClick={() => p.onView('projects')} data-testid="nav-projects"><I.Folder size={17} /><span>Projects</span></button>
+        <button className={`nav-item${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} data-testid="nav-files"><I.File size={17} /><span>Files</span></button>
+        <button className="nav-item" onClick={p.onScheduled} data-testid="nav-scheduled"><I.Clock size={17} /><span>Scheduled</span></button>
+        <button className="nav-item" onClick={p.onConnect} data-testid="connect-apps"><I.Plug size={17} /><span>Connect apps</span></button>
+      </div>
+
+      <div className="side-scroll">
+        <div className={`nav-pinned${over === 'pinned' ? ' drop' : ''}`} data-testid="pinned-top"
+          onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('pinned') } }}
+          onDragLeave={() => setOver(null)}
+          onDrop={(e) => {
+            e.preventDefault(); setOver(null)
+            if (dragging?.kind === 'space') pinSpace(dragging.id)
+            if (dragging?.kind === 'chat') pinChat(dragging.id, true)
+            setDragging(null)
+          }}>
+          {section('pinned', 'Pinned', (
+            <>
+              {pinnedSpaces.map((s, i) => spaceRow(s, true, i))}
+              {pinnedChats.map(chatRow)}
+              {!pinnedSpaces.length && !pinnedChats.length && <div className="nav-empty">Drag bots, projects or chats here</div>}
+            </>
+          ))}
+        </div>
+        <div onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('list') } }}
+          onDrop={(e) => {
+            e.preventDefault(); setOver(null)
+            if (dragging?.kind === 'space' && pinnedIds.includes(dragging.id)) unpinSpace(dragging.id)
+            if (dragging?.kind === 'chat') pinChat(dragging.id, false)
+            setDragging(null)
+          }}>
+          {section('bots', 'Bots', (
+            <>
+              {bots.map((s) => spaceRow(s, false))}
+              {!bots.length && <div className="nav-empty">Bots you make show up here</div>}
+            </>
+          ), <button className="nav-add" onClick={p.onNewBot} title="New bot" data-testid="new-bot"><I.Plus size={14} /></button>)}
+          {section('projects', 'Projects', (
+            <>
+              {projects.map((s) => spaceRow(s, false))}
+              {!projects.length && <div className="nav-empty">A folder, instructions and chats</div>}
+            </>
+          ), <button className="nav-add" onClick={p.onNewProject} title="New project" data-testid="new-project"><I.Plus size={14} /></button>)}
+          {section('recents', 'Recents', (
+            <>
+              {recents.map(chatRow)}
+              {!recents.length && <div className="nav-empty">Your chats show up here</div>}
+            </>
+          ))}
+        </div>
+      </div>
+
+      <div className="sidebar-bottom">
+        <button className="me" onClick={p.onSettings} title="Settings (⌘,)" data-testid="profile">
+          <span className="me-avatar">{initials}</span>
+          <span className="me-text"><b>{p.userName || 'You'}</b>{p.modelLabel && <span>{p.modelLabel}</span>}</span>
+        </button>
+        <button className="icon-btn" onClick={p.onSettings} title="Settings (⌘,)"><I.Gear size={17} /></button>
       </div>
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
     </aside>

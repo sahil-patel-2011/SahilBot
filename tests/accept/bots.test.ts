@@ -29,8 +29,7 @@ describe('bots, group chats, reactions, attachments and documents', () => {
       { toolCalls: [{ name: 'update_bot', arguments: '{"name":"Robo Coach","instructions":"You help with the robotics team."}' }] },
       { content: 'Done — I am Robo Coach now.' }
     )
-    await page.click('[data-testid="new-thread"]')
-    await page.locator('[data-testid="palette"] button', { hasText: 'Create new Bot' }).click()
+    await page.click('[data-testid="new-bot"]')
     await page.click('[data-testid="bot-save"]')
     const q = page.locator('[data-testid="question-card"]')
     await q.waitFor({ timeout: 20_000 })

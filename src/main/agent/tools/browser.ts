@@ -153,6 +153,20 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
       ]
     },
     async run(a) {
+      const out = await act(a)
+      // A CAPTCHA or "verify you are human" page: never solved by SahilBot. The user does it, then the agent continues.
+      if (['navigate', 'click', 'snapshot', 'fill_form', 'type', 'get_text'].includes(a.action)) {
+        const check = await b.humanCheck()
+        if (check) {
+          b.showToUser()
+          return { ...out, text: `${out.text}\n\n[This page is showing a human check (${check}). Don't try to solve it or get around it. The browser panel is now open for the user: call ask_user with the question "Please complete the check in the browser panel, then press Done." and options ["Done", "Skip"]. After Done, take a snapshot and continue; after Skip, try another source.]`, display: `${out.display ?? ''} · waiting for you to pass a human check` }
+        }
+      }
+      return out
+    }
+  }
+  async function act(a: Args): Promise<import('../types').ToolOutput> {
+    {
       switch (a.action) {
         case 'navigate': {
           const url = /^[a-z]+:\/\//i.test(a.url!) ? a.url! : `https://${a.url}`

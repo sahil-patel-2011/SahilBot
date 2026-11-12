@@ -137,6 +137,17 @@ export class Db {
                  ORDER BY m.seq DESC LIMIT 1) AS last_preview
     FROM threads t`
 
+  /** Files SahilBot made or changed, newest first (from successful file and document tool calls). */
+  recentFiles(limit = 60): Array<{ path: string; threadId: string; threadTitle: string; createdAt: number; tool: string }> {
+    const rows = this.sql.prepare(`
+      SELECT json_extract(m.data, '$.meta.path') AS path, m.thread_id AS threadId, t.title AS threadTitle, MAX(m.created_at) AS createdAt, json_extract(m.data, '$.toolName') AS tool
+      FROM messages m JOIN threads t ON t.id = m.thread_id
+      WHERE m.role = 'tool' AND json_extract(m.data, '$.meta.path') IS NOT NULL AND json_extract(m.data, '$.meta.status') = 'ok'
+        AND json_extract(m.data, '$.toolName') IN ('file_write', 'create_document')
+      GROUP BY path ORDER BY createdAt DESC LIMIT ?`).all(limit) as Row[]
+    return rows.map((r) => ({ path: r.path as string, threadId: r.threadId as string, threadTitle: r.threadTitle as string, createdAt: r.createdAt as number, tool: r.tool as string }))
+  }
+
   /** Helper-agent threads started from a chat. */
   childThreads(parentId: string): Thread[] {
     return (this.sql.prepare(`${this.threadSelect} WHERE t.parent_id = ? ORDER BY t.created_at`).all(parentId) as Row[]).map(toThread)

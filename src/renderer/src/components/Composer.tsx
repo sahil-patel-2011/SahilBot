@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
 import type { Attachment, Effort, ModelList, PermissionMode } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
@@ -23,6 +23,7 @@ export interface ComposerHandle {
   insert(text: string): void
   focus(): void
   toggleDictation(): void
+  attach(items: Attachment[]): void
 }
 
 export interface Outgoing {
@@ -52,6 +53,10 @@ export const Composer = forwardRef<ComposerHandle, {
   onManageModels?: () => void
   thinking?: Effort
   onThinking?: (e: Effort) => void
+  /** Left side of the row under the box (Home: the project or folder picker). */
+  context?: ReactNode
+  /** The big Home version of the box. */
+  big?: boolean
   /** Team of Experts capacity for the current model (null = unknown yet). */
   team?: { on: boolean; maxAgents: number; heavy: boolean; why: string } | null
   onTeam?: (on: boolean) => void
@@ -73,8 +78,10 @@ export const Composer = forwardRef<ComposerHandle, {
       requestAnimationFrame(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } })
     },
     focus() { ta.current?.focus() },
-    toggleDictation() { void toggleRef.current() }
+    toggleDictation() { void toggleRef.current() },
+    attach(items: Attachment[]) { addRef.current(items) }
   }))
+  const addRef = useRef<(xs: Attachment[]) => void>(() => undefined)
   const toggleRef = useRef<() => Promise<void>>(async () => undefined)
   const [dictSince, setDictSince] = useState(0)
   const [, tick] = useState(0)
@@ -142,6 +149,7 @@ export const Composer = forwardRef<ComposerHandle, {
   }
 
   const addAtts = (xs: Attachment[]): void => setAtts((cur) => [...cur, ...xs.filter((x) => !cur.some((c) => c.path === x.path))])
+  addRef.current = addAtts
 
   const onDrop = async (e: React.DragEvent): Promise<void> => {
     e.preventDefault()
@@ -166,76 +174,83 @@ export const Composer = forwardRef<ComposerHandle, {
 
   return (
     <div className="composer-inner">
-      <div className={`composer${drag ? ' dragging' : ''}`}
+      <div className={`composer${drag ? ' dragging' : ''}${p.big ? ' big' : ''}`}
         onDragOver={(e) => { e.preventDefault(); setDrag(true) }}
         onDragLeave={() => setDrag(false)}
         onDrop={(e) => void onDrop(e)}>
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          {(images.length > 0 || atts.length > 0) && (
-            <div className="attachments" data-testid="attachments">
-              {images.map((src, i) => (
-                <div className="a" key={`i${i}`}><img src={src} alt="" /><button onClick={() => setImages((xs) => xs.filter((_, j) => j !== i))}>×</button></div>
-              ))}
-              {atts.map((a) => (
-                <div className={`a ${a.kind}`} key={a.path} title={a.path}>
-                  {a.kind === 'image' && a.dataUrl ? <img src={a.dataUrl} alt="" /> : (
-                    <span className="att-pill">{a.kind === 'folder' ? <I.Folder size={14} /> : <I.File size={14} />}<span>{a.name}</span></span>
-                  )}
-                  <button onClick={() => setAtts((xs) => xs.filter((x) => x.path !== a.path))}>×</button>
-                </div>
-              ))}
-            </div>
-          )}
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
-            <Popover label={<I.Plus />} className="plus-pop" title="Attach">
-              {(close) => (
-                <>
-                  <button className="menu-item" onClick={() => { close(); void api.files.pick('files').then(addAtts) }} data-testid="attach-files"><I.Paperclip size={15} />Upload files or photos</button>
-                  <button className="menu-item" onClick={() => { close(); void api.files.pick('folder').then(addAtts) }} data-testid="attach-folder"><I.Folder size={15} />Attach a folder<span className="sub">SahilBot can read and edit files inside it</span></button>
-                </>
-              )}
-            </Popover>
-            <textarea
-              ref={ta}
-              rows={1}
-              value={text}
-              placeholder={p.answering ? 'Type your answer, or talk about something else' : p.placeholder ?? 'Message SahilBot'}
-              onChange={(e) => setText(e.target.value)}
-              onPaste={onPaste}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape' && dictating) { e.preventDefault(); e.stopPropagation(); void cancelDictation(); return }
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault()
-                  // Enter while dictating: finish dictation first, then send what was said.
-                  if (dictating) { void toggleDictation().then(() => requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-testid="send"]')?.click())); return }
-                  send()
-                }
-              }}
-              data-testid="composer-input"
-            />
-            {dictating && (
-              <span className="dictating" data-testid="dictating">
-                <span className="dict-bars" style={{ ['--lvl' as string]: Math.min(1, (mic.current?.level ?? 0) * 6) }}><i /><i /><i /><i /></span>
-                {Math.floor((Date.now() - dictSince) / 1000)}s
-              </span>
-            )}
-            <button className={`c-btn${dictating ? ' recording' : ''}`} title={dictating ? 'Stop dictation (⌘⇧D) · Esc cancels' : 'Dictate (⌘⇧D)'} onClick={() => void toggleDictation()} data-testid="dictate"><I.Mic /></button>
-            {p.running && !p.answering && !canSend ? (
-              <button className="c-btn primary" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
-            ) : canSend ? (
-              <button className="c-btn primary" title="Send" onClick={send} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
-            ) : (
-              <button className="c-btn primary" title="Voice mode" onClick={p.onVoice} data-testid="voice-btn" style={p.accent ? { background: p.accent } : undefined}><I.Wave /></button>
-            )}
+        {(images.length > 0 || atts.length > 0) && (
+          <div className="attachments" data-testid="attachments">
+            {images.map((src, i) => (
+              <div className="a" key={`i${i}`}><img src={src} alt="" /><button onClick={() => setImages((xs) => xs.filter((_, j) => j !== i))}>×</button></div>
+            ))}
+            {atts.map((a) => (
+              <div className={`a ${a.kind}`} key={a.path} title={a.path}>
+                {a.kind === 'image' && a.dataUrl ? <img src={a.dataUrl} alt="" /> : (
+                  <span className="att-pill">{a.kind === 'folder' ? <I.Folder size={14} /> : <I.File size={14} />}<span>{a.name}</span></span>
+                )}
+                <button onClick={() => setAtts((xs) => xs.filter((x) => x.path !== a.path))}>×</button>
+              </div>
+            ))}
           </div>
+        )}
+        <textarea
+          ref={ta}
+          rows={p.big ? 2 : 1}
+          value={text}
+          placeholder={p.answering ? 'Type your answer, or talk about something else' : p.placeholder ?? 'Message SahilBot'}
+          onChange={(e) => setText(e.target.value)}
+          onPaste={onPaste}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && dictating) { e.preventDefault(); e.stopPropagation(); void cancelDictation(); return }
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              // Enter while dictating: finish dictation first, then send what was said.
+              if (dictating) { void toggleDictation().then(() => requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-testid="send"]')?.click())); return }
+              send()
+            }
+          }}
+          data-testid="composer-input"
+        />
+        <div className="composer-bar">
+          <Popover label={<I.Plus />} className="plus-pop" title="Attach files or a folder">
+            {(close) => (
+              <>
+                <button className="menu-item" onClick={() => { close(); void api.files.pick('files').then(addAtts) }} data-testid="attach-files"><I.Paperclip size={15} />Upload files or photos</button>
+                <button className="menu-item" onClick={() => { close(); void api.files.pick('folder').then(addAtts) }} data-testid="attach-folder"><I.Folder size={15} />Attach a folder<span className="sub">SahilBot can read and edit files inside it</span></button>
+              </>
+            )}
+          </Popover>
+          {p.team && p.onTeam && (
+            <button className={`team-chip${p.team.on ? ' on' : ''}`} onClick={() => p.onTeam!(!p.team!.on)} data-testid="team-toggle"
+              title={p.team.on ? `Team of Experts is on: ${Math.min(10, p.team.maxAgents)} to ${p.team.maxAgents} helper agents research in parallel, then SahilBot puts it together (${p.team.why})` : `Team of Experts: at least ${Math.min(10, p.team.maxAgents)} helper agents research in parallel, then SahilBot puts it together (${p.team.why})`}>
+              <I.Users size={15} />Team of Experts
+            </button>
+          )}
+          <span className="spacer" />
+          {dictating && (
+            <span className="dictating" data-testid="dictating">
+              <span className="dict-bars" style={{ ['--lvl' as string]: Math.min(1, (mic.current?.level ?? 0) * 6) }}><i /><i /><i /><i /></span>
+              {Math.floor((Date.now() - dictSince) / 1000)}s
+            </span>
+          )}
+          <button className={`c-btn${dictating ? ' recording' : ''}`} title={dictating ? 'Stop dictation (⌘⇧D) · Esc cancels' : 'Dictate (⌘⇧D)'} onClick={() => void toggleDictation()} data-testid="dictate"><I.Mic /></button>
+          {p.running && !p.answering && !canSend ? (
+            <button className="c-btn primary" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
+          ) : canSend ? (
+            <button className="c-btn primary" title="Send" onClick={send} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
+          ) : (
+            <button className="c-btn ghost" title="Talk with SahilBot (⌘⇧V)" onClick={p.onVoice} data-testid="voice-btn"><I.Wave /></button>
+          )}
         </div>
       </div>
       <div className="under">
-        <Popover label={<><I.Cpu size={14} />{modelLabel} <I.Chevron size={13} /></>} title="Model" testId="model-picker">
+        {p.context}
+        <span className="spacer" />
+        <Popover label={<>{modelLabel}</>} className="under-pick" title="Model" testId="model-picker" menuClass="right">
           {(close) => <ModelMenu list={p.models} model={p.model} onPick={(id) => { p.onModel(id); close() }} onRefresh={p.onRefreshModels} onManage={p.onManageModels ? () => { close(); p.onManageModels!() } : undefined} />}
         </Popover>
         {p.thinking && p.onThinking && (
-          <Popover label={<><I.Sparkle size={14} />{THINKING.find((t) => t.id === p.thinking)?.label} <I.Chevron size={13} /></>} title="Thinking (adapts to each problem)" testId="thinking-picker">
+          <Popover label={<span className="dim">{THINKING.find((t) => t.id === p.thinking)?.label}</span>} className="under-pick" title="Thinking (adapts to each problem)" testId="thinking-picker" menuClass="right">
             {(close) => (
               <>
                 <div className="menu-head">Thinking · adapts to each problem</div>
@@ -249,15 +264,8 @@ export const Composer = forwardRef<ComposerHandle, {
             )}
           </Popover>
         )}
-        {p.team && p.onTeam && (
-          <button className={`team-chip${p.team.on ? ' on' : ''}`} onClick={() => p.onTeam!(!p.team!.on)} data-testid="team-toggle"
-            title={p.team.on ? `Team of Experts is on: up to ${p.team.maxAgents} helper agents (${p.team.why})` : `Team of Experts: split big jobs across up to ${p.team.maxAgents} helper agents that research in parallel (${p.team.why})`}>
-            <I.Users size={14} />Team{p.team.on ? ` · up to ${p.team.maxAgents}` : ''}
-          </button>
-        )}
-        <span className="spacer" />
-        <Popover label={<>{p.mode === 'bypass' && <span className="dot red" />}<I.Shield size={14} />{mode.label} <I.Chevron size={13} /></>}
-          className={p.mode === 'bypass' ? 'bypass' : ''} menuClass="right" title="Permission mode" testId="mode-picker">
+        <Popover label={<>{p.mode === 'bypass' ? <span className="dot red" /> : <I.Shield size={14} />}{mode.label}</>}
+          className={`under-pick${p.mode === 'bypass' ? ' bypass' : ''}`} menuClass="right" title="Permission mode" testId="mode-picker">
           {(close) => MODES.map((m) => (
             <button key={m.id} className="menu-item" onClick={() => { p.onMode(m.id); close() }}>
               <span className="check">{m.id === p.mode && <I.Check size={14} />}</span>

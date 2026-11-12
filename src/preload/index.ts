@@ -45,7 +45,9 @@ const api: SahilBotApi = {
     fromDrop: (files: File[]) => ipcRenderer.invoke('files:register', files.map((f) => webUtils.getPathForFile(f)).filter(Boolean)),
     preview: call('files:preview') as never,
     open: call('files:open') as never,
-    reveal: call('files:reveal') as never
+    reveal: call('files:reveal') as never,
+    recent: call('files:recent') as never,
+    snippet: call('files:snippet') as never
   },
   providers: call('providers') as never,
   onMenu(cb) {

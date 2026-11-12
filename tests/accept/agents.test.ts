@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import { launch, tempProfile } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 
@@ -10,20 +10,23 @@ import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 describe('agent platform', () => {
   let llm: MockLlm
   beforeAll(async () => { llm = await startMockLlm() })
+  // Each test scripts its own replies; leftovers from a previous test must not leak in.
+  beforeEach(() => { llm.script.length = 0 })
   afterAll(async () => { await llm.close() })
 
   const sys = (req: Record<string, any>): string => String(req.messages?.[0]?.content ?? '')
   const lastUser = (req: Record<string, any>): string => String([...req.messages].reverse().find((m: any) => m.role === 'user')?.content ?? '')
 
-  test('Team of Experts: the lead sends tasks to helpers in parallel, gets their reports, and finishes', async () => {
+  const CITIES = ['Paris', 'Tokyo', 'Lagos', 'Lima', 'Oslo', 'Cairo', 'Seoul', 'Quito', 'Hanoi', 'Perth']
+  test('Team of Experts: the lead sends at least 10 helpers in parallel, gets their reports, and compiles them', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
     // Every request decides its own reply: helpers report, the lead delegates once then answers.
     const reply = (req: Record<string, any>) => {
       if (sys(req).includes('You are a helper agent')) return { content: `REPORT for "${lastUser(req).slice(0, 30)}": found it, source https://example.com/${lastUser(req).length}` }
       if (req.messages.some((m: any) => m.role === 'tool' && String(m.content).includes('REPORT for'))) return { content: 'Both helpers reported back; the answer is combined.' }
-      return { toolCalls: [{ name: 'agents', arguments: JSON.stringify({ tasks: [{ title: 'Paris facts', task: 'Find the population of Paris.' }, { title: 'Tokyo facts', task: 'Find the population of Tokyo.' }] }) }] }
+      return { toolCalls: [{ name: 'agents', arguments: JSON.stringify({ tasks: CITIES.map((c) => ({ title: `${c} facts`, task: `Find the population of ${c}.` })) }) }] }
     }
-    for (let i = 0; i < 6; i++) llm.script.push(reply)
+    for (let i = 0; i < 40; i++) llm.script.push(reply)
     await page.click('[data-testid="team-toggle"]')
     await page.fill('[data-testid="composer-input"]', 'Compare the populations of Paris and Tokyo')
     await page.keyboard.press('Enter')
@@ -33,9 +36,10 @@ describe('agent platform', () => {
     expect(JSON.stringify(lead.messages)).toContain('Team of Experts is on')
     const helpers = llm.requests.filter((r) => sys(r).includes('You are a helper agent'))
     // (Each helper may be sent back once: its made-up link was never opened, so the link check catches it.)
-    expect([...new Set(helpers.map((r) => r.messages.find((m: any) => m.role === 'user')?.content))].sort()).toEqual(['Find the population of Paris.', 'Find the population of Tokyo.'])
+    expect([...new Set(helpers.map((r) => r.messages.find((m: any) => m.role === 'user')?.content))].sort()).toEqual(CITIES.map((c) => `Find the population of ${c}.`).sort())
+    expect(JSON.stringify(lead.messages)).toContain('at least 10')
     // The team card shows both helpers finished; helper threads don't appear as chats.
-    await expect.poll(() => page.locator('[data-testid="team-member"].tm-done').count()).toBe(2)
+    await expect.poll(() => page.locator('[data-testid="team-member"].tm-done').count()).toBe(10)
     expect(await page.locator('[data-testid="thread-item"]').count()).toBe(1)
     await app.close()
   })
@@ -96,5 +100,36 @@ describe('agent platform', () => {
     // Keys are never sent to the screen, only whether one is saved.
     expect(JSON.stringify(s)).not.toContain('sk-test-123')
     await app.close()
+  })
+})
+
+describe('human checks', () => {
+  let llm: MockLlm
+  beforeAll(async () => { llm = await startMockLlm() })
+  afterAll(async () => { await llm.close() })
+
+  test('a CAPTCHA page brings the browser to the user and the agent waits; it never tries to solve it', async () => {
+    const { startTestSite } = await import('../fixtures/test-site')
+    const site = await startTestSite()
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
+    llm.script.push(
+      { toolCalls: [{ name: 'browser', arguments: JSON.stringify({ action: 'navigate', url: `${site.url}/check` }) }] },
+      (req) => {
+        const last = String([...req.messages].reverse().find((m: any) => m.role === 'tool')?.content ?? '')
+        return last.includes('human check') ? { toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ question: 'Please complete the check in the browser panel, then press Done.', options: ['Done', 'Skip'] }) }] } : { content: 'no check seen' }
+      },
+      { content: 'Thanks, carrying on.' }
+    )
+    await page.fill('[data-testid="composer-input"]', `Open ${site.url}/check`)
+    await page.keyboard.press('Enter')
+    // The browser panel opens by itself for the user, and the agent asks them to do the check.
+    await page.locator('[data-testid="question-card"]').waitFor({ timeout: 20_000 })
+    expect(await page.locator('[data-testid="right-panel"]').count()).toBe(1)
+    const told = llm.requests.at(-1)!.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content).join('\n')
+    expect(told).toContain("Don't try to solve it")
+    await page.locator('[data-testid="question-card"] button', { hasText: 'Done' }).click()
+    await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 15_000 }).toContain('carrying on')
+    await app.close()
+    await site.close()
   })
 })

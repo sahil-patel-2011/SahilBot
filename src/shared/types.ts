@@ -481,6 +481,10 @@ export interface SahilBotApi {
     /** Resolves dropped File objects to paths (preload only; the renderer can't fake these). */
     fromDrop(files: File[]): Promise<Attachment[]>
     preview(path: string): Promise<FilePreview>
+    /** The first lines of a document SahilBot made (PDF, Word, PowerPoint), for thumbnails. */
+    snippet(path: string): Promise<string>
+    /** Files SahilBot made, newest first. */
+    recent(limit?: number): Promise<Array<{ path: string; name: string; size: number; threadId: string; threadTitle: string; createdAt: number; tool: string }>>
     open(path: string): Promise<void>
     reveal(path: string): Promise<void>
   }

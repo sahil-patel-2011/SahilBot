@@ -2,9 +2,9 @@ import { app, BrowserWindow, dialog, globalShortcut, ipcMain, nativeImage, nativ
 import { execFileSync } from 'node:child_process'
 import { totalmem } from 'node:os'
 import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import type { BotShape, ChatEvent, SendInput, Settings, Space } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 import { INTRO } from './agent/prompt'
@@ -32,6 +32,7 @@ import { samplingFor } from './llm/catalog'
 import { MemoryStore } from './memory'
 import { appRoot, dataDir, sub } from './paths'
 import { SkillStore } from './skills'
+import { docxText, pdfText, pptxText } from './docs/read'
 import { RuleStore } from './rules'
 import { cursorTool, macAppsTool } from './agent/tools/apps'
 import { shellTool } from './agent/tools/shell'
@@ -374,6 +375,16 @@ app.whenReady().then(() => {
   handle('files:register', (paths: string[]) => attachments.register(paths))
   handle('files:preview', (path: string) => attachments.preview(path))
   handle('files:open', async (path: string) => { await attachments.open(path) })
+  // The first lines of a document, for file thumbnails (only files SahilBot made).
+  handle('files:snippet', async (path: string) => {
+    if (!db.recentFiles(500).some((f) => f.path === path) || !existsSync(path)) return ''
+    try {
+      const text = /\.pdf$/i.test(path) ? (await pdfText(path)).text : /\.docx$/i.test(path) ? await docxText(path) : /\.pptx$/i.test(path) ? await pptxText(path) : ''
+      return text.slice(0, 800)
+    } catch { return '' }
+  })
+  // Files SahilBot made, for Home and the Files page (only ones that still exist).
+  handle('files:recent', (limit?: number) => db.recentFiles(limit ?? 60).filter((f) => existsSync(f.path)).map((f) => ({ ...f, name: basename(f.path), size: statSync(f.path).size })))
   handle('files:reveal', (path: string) => attachments.reveal(path))
   handle('providers', () => PROVIDERS)
   handle('budget', () => budget.summary())

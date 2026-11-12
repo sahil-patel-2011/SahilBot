@@ -16,10 +16,9 @@ test('ui v2 screenshots', async () => {
     void r
   }
   await page.reload()
-  await page.click('[data-testid="new-thread"]')
+  await page.click('[data-testid="new-bot"]')
   await page.waitForTimeout(300)
   await page.screenshot({ path: `${out}/v2-palette.png` })
-  await page.locator('[data-testid="palette"] button', { hasText: 'Create new Bot' }).click()
   llm.script.push(
     { content: "Hey Sahil! I'm your new bot, fresh and ready to take on whatever you want to throw at me.", toolCalls: [{ name: 'ask_user', arguments: '{"question":"What do you want me to focus on?","options":["Vantage app work","Robotics team stuff","Personal errands","Something else"]}' }] }
   )
