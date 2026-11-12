@@ -138,9 +138,14 @@ export function readable(html: string, url: string): { title: string; text: stri
   } catch {
     /* fall through */
   }
-  const { document: d2 } = parseHTML(html)
-  d2.querySelectorAll('script,style,noscript,svg,nav,footer').forEach((n: { remove(): void }) => n.remove())
-  return { title: d2.title || url, text: tidy(d2.body?.textContent ?? '') }
+  try {
+    const { document: d2 } = parseHTML(html)
+    d2.querySelectorAll('script,style,noscript,svg,nav,footer').forEach((n: { remove(): void }) => n.remove())
+    return { title: d2.title || url, text: tidy(d2.body?.textContent ?? '') }
+  } catch {
+    // Markup the parser can't build a document from: plain text is still better than an error.
+    return { title: url, text: tidy(html.replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ')) }
+  }
 }
 
 function tidy(t: string): string {
@@ -222,7 +227,7 @@ export function webTools(getConfig: () => SearchConfig): ToolDef[] {
       let page = pages.get(url)
       if (!page) {
         const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5' }, redirect: 'follow', signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(20_000)]) })
-        if (!res.ok) throw new Error(`${url} returned HTTP ${res.status}`)
+        if (!res.ok) throw new Error(`${url} returned HTTP ${res.status}${res.status === 404 ? '. Don\'t guess addresses: find the right page with web_search first.' : ''}`)
         const type = res.headers.get('content-type') ?? ''
         if (/pdf|image|audio|video|octet-stream|zip/.test(type)) throw new Error(`${url} is ${type}, not a web page.`)
         const body = await res.text()

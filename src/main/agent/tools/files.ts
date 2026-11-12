@@ -89,6 +89,12 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     async run({ path, start, end }, ctx) {
       const workspace = getWorkspace()
       mkdirSync(workspace, { recursive: true })
+      // A saved tool-result id passed as a path: read the saved result instead of failing.
+      const saved = /^(r|msg)-[\w-]+$/.test(path) ? ctx.readResult(path) : undefined
+      if (saved !== undefined) {
+        const lines = saved.split('\n').slice((start ?? 1) - 1, end ?? undefined).join('\n')
+        return { text: lines.length > 20_000 ? `${lines.slice(0, 20_000)}\n[… more: read_result id="${path}" with a later line range]` : lines, display: `read ${path}` }
+      }
       const isDoc = /^docs([\\/]|$)/.test(path)
       const full = isDoc ? insideRoot(docsDir, path.replace(/^docs[\\/]?/, '') || '.') : resolvePath(path, workspace, roots(ctx))
       if (!existsSync(full)) throw new Error(`No such file or folder: ${path}`)

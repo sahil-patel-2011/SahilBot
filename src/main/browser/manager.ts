@@ -656,8 +656,8 @@ export class BrowserManager {
 
   async getText(): Promise<string> {
     return this.control(async (wc) => {
-      const r = await this.cdp<{ result: { value: string } }>(wc, 'Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true })
-      const { title, text } = readable(r.result.value, wc.getURL())
+      const r = await this.cdp<{ result: { value: string } }>(wc, 'Runtime.evaluate', { expression: 'document.documentElement ? document.documentElement.outerHTML : (document.body ? document.body.outerHTML : "")', returnByValue: true })
+      const { title, text } = readable(r.result.value ?? '', wc.getURL())
       return `# ${title}\n${wc.getURL()}\n\n${text}`
     })
   }
