@@ -516,8 +516,10 @@ export function App() {
               </button>
             )}
             {prog && (
-              <span className="working" title={`Context: ${prog.used.toLocaleString()} of ${prog.window.toLocaleString()} tokens. Older turns are summarized only when it's nearly full.`}>
-                <span className={`meter${prog.used / prog.window > 0.6 ? ' hot' : ''}`}><i style={{ width: `${Math.min(100, (prog.used / prog.window) * 100)}%` }} /></span>
+              <span className="ctx-ring" title={`Conversation memory: ${Math.round((prog.used / prog.window) * 100)}% full (${prog.used.toLocaleString()} of ${prog.window.toLocaleString()} tokens). Older parts are summarized only when it's nearly full.`} data-testid="ctx-ring">
+                <svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--line)" strokeWidth="2.5" />
+                  <circle cx="10" cy="10" r="8" fill="none" stroke={prog.used / prog.window > 0.85 ? 'var(--accent)' : 'var(--text-3)'} strokeWidth="2.5" strokeLinecap="round"
+                    strokeDasharray={`${Math.max(2, Math.min(1, prog.used / prog.window) * 50.3)} 50.3`} transform="rotate(-90 10 10)" /></svg>
               </span>
             )}
             <button className={`icon-btn globe${panel === 'browser' ? ' on' : ''}`} title="Browser" onClick={() => setPanel((p) => (p === 'browser' ? null : 'browser'))} data-testid="toggle-browser">

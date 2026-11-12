@@ -14,9 +14,9 @@ const THINKING: Array<{ id: Effort; label: string; sub: string }> = [
 ]
 
 const MODES: Array<{ id: PermissionMode; label: string; sub: string }> = [
-  { id: 'ask', label: 'Ask', sub: 'Approve every action that changes something' },
-  { id: 'auto', label: 'Auto', sub: 'Runs reads, edits and routine steps; asks before sending, buying, posting or deleting' },
-  { id: 'bypass', label: 'Bypass', sub: 'Everything runs except hard stops. Resets on restart.' }
+  { id: 'ask', label: 'Ask first', sub: 'Approve every action that changes something' },
+  { id: 'auto', label: 'Auto-approve', sub: 'Runs reads, edits and routine steps; asks before sending, buying, posting or deleting' },
+  { id: 'bypass', label: 'Full access', sub: 'Bypass: everything runs except hard stops. Resets on restart.' }
 ]
 
 export interface ComposerHandle {
@@ -240,13 +240,13 @@ export const Composer = forwardRef<ComposerHandle, {
           {p.team && (
             <button className={`team-chip${deep ? ' on' : ''}`} onClick={() => setDeep((d) => !d)} data-testid="deep-toggle"
               title="Deep Research: a team of helper agents researches in parallel, then SahilBot writes a cited report and saves it as a PDF">
-              <I.Search size={15} />Deep Research
+              <I.Search size={15} /><span className="chip-label">Deep Research</span>
             </button>
           )}
           {p.team && p.onTeam && !deep && (
             <button className={`team-chip${p.team.on ? ' on' : ''}`} onClick={() => p.onTeam!(!p.team!.on)} data-testid="team-toggle"
               title={p.team.on ? `Team of Experts is on: ${Math.min(10, p.team.maxAgents)} to ${p.team.maxAgents} helper agents research in parallel, then SahilBot puts it together (${p.team.why})` : `Team of Experts: at least ${Math.min(10, p.team.maxAgents)} helper agents research in parallel, then SahilBot puts it together (${p.team.why})`}>
-              <I.Users size={15} />Team of Experts
+              <I.Users size={15} /><span className="chip-label">Team of Experts</span>
             </button>
           )}
           <span className="spacer" />
@@ -269,11 +269,11 @@ export const Composer = forwardRef<ComposerHandle, {
       <div className="under">
         {p.context}
         <span className="spacer" />
-        <Popover label={<>{modelLabel}</>} className="under-pick" title="Model" testId="model-picker" menuClass="right">
+        <Popover label={<><I.Cpu size={14} />{modelLabel}</>} className="under-pick" title="Model" testId="model-picker" menuClass="right">
           {(close) => <ModelMenu list={p.models} model={p.model} onPick={(id) => { p.onModel(id); close() }} onRefresh={p.onRefreshModels} onManage={p.onManageModels ? () => { close(); p.onManageModels!() } : undefined} />}
         </Popover>
         {p.thinking && p.onThinking && (
-          <Popover label={<span className="dim">{THINKING.find((t) => t.id === p.thinking)?.label}</span>} className="under-pick" title="Thinking (adapts to each problem)" testId="thinking-picker" menuClass="right">
+          <Popover label={<><I.Sparkle size={14} /><span className="dim">{THINKING.find((t) => t.id === p.thinking)?.label}</span></>} className="under-pick" title="Thinking (adapts to each problem)" testId="thinking-picker" menuClass="right">
             {(close) => (
               <>
                 <div className="menu-head">Thinking · adapts to each problem</div>

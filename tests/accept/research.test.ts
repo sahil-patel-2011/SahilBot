@@ -30,7 +30,9 @@ describe('anti-hallucination', () => {
     // Only the corrected answer is shown, with its real source as a pill.
     const bubbles = await page.locator('[data-testid="assistant-bubble"]').allInnerTexts()
     expect(bubbles.join('\n')).not.toContain('made-up.example')
-    expect(await page.locator('[data-testid="sources"]').innerText()).toContain('Result for Qwen 3.8 release date')
+    // Chips show the site; the page title is in the tooltip.
+    expect(await page.locator('[data-testid="sources"]').innerText()).toContain('example.com')
+    expect(await page.locator('[data-testid="sources"] a').first().getAttribute('title')).toContain('Result for Qwen 3.8 release date')
     await app.close()
   })
 })

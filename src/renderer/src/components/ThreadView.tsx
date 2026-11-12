@@ -398,8 +398,8 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
   const error = m.status === 'error' ? String(m.meta?.error ?? 'Something went wrong') : null
   const speaker = m.meta?.botName as string | undefined
   return (
-    <div className="row">
-      <div className="bubble-wrap">
+    <div className="row ai">
+      <div className="bubble-wrap ai-col">
         {speaker && <div className="speaker" style={{ color: (m.meta?.botColor as string) ?? undefined }}>{speaker}</div>}
         <div className={`bubble ai${error ? ' err' : ''}`} data-testid="assistant-bubble" data-status={m.status}>
           {m.reasoning && (
@@ -412,19 +412,21 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
           {m.status === 'stopped' && <div className="hint">Stopped</div>}
           {error && <div>{error}</div>}
         </div>
-        {!!m.meta?.routed && !streaming && m.model && (
-          <div className="routed" title={`Auto chose this model: ${(m.meta.routed as { why: string }).why}`} data-testid="routed">
-            Auto · {(m.meta.routed as { label?: string }).label || m.model}
-          </div>
-        )}
         {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && (
           <div className="sources" data-testid="sources">
-            {(m.meta!.sources as Array<{ title: string; url: string }>).slice(0, 6).map((src) => {
+            {(m.meta!.sources as Array<{ title: string; url: string }>).filter((src, i, all) => {
+              // One chip per site.
+              const h = (u: string): string => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
+              return all.findIndex((x) => h(x.url) === h(src.url)) === i
+            }).slice(0, 6).map((src, i) => {
               let host = src.url
               try { host = new URL(src.url).hostname.replace(/^www\./, '') } catch { /* keep url */ }
+              const hue = [...host].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
               return (
-                <a key={src.url} className="source-pill" href={src.url} target="_blank" rel="noreferrer" title={src.title}>
-                  <span className="source-ico">{host[0]?.toUpperCase()}</span>{src.title.length > 38 ? `${src.title.slice(0, 36)}…` : src.title || host}
+                <a key={src.url} className="source-pill" href={src.url} target="_blank" rel="noreferrer" title={`${src.title}\n${src.url}`}>
+                  <span className="source-ico" style={{ background: `hsl(${hue} 55% 45%)` }}>{host[0]?.toUpperCase()}</span>
+                  <span className="source-host">{host}</span>
+                  <span className="source-n">{i + 1}</span>
                 </a>
               )
             })}
@@ -433,8 +435,17 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
         {reactions.user && (
           <button className="reaction" onClick={() => actions.onReact(m.id, null)} title="Remove reaction" data-testid="user-reaction">{reactions.user}</button>
         )}
+        {m.content && !streaming && (
+          <div className="ai-foot">
+            <MessageTools m={m} actions={actions} side="right" />
+            {!!m.meta?.routed && m.model && (
+              <span className="routed" title={`Auto chose this model: ${(m.meta.routed as { why: string }).why}`} data-testid="routed">
+                {(m.meta.routed as { label?: string }).label || m.model}
+              </span>
+            )}
+          </div>
+        )}
       </div>
-      {m.content && !streaming && <MessageTools m={m} actions={actions} side="right" />}
     </div>
   )
 }
@@ -459,6 +470,7 @@ function MessageTools({ m, actions, side, onEdit }: { m: Message; actions: Threa
       {canReact && <button className="icon-btn" title="React" onClick={() => setPicker(picker ? null : 'quick')} data-testid="react-btn"><I.Smile size={17} /></button>}
       {onEdit && <button className="icon-btn" title="Edit and resend" onClick={onEdit} data-testid="edit-last"><I.Edit size={16} /></button>}
       <button className="icon-btn" title="Reply" onClick={() => actions.onReply(m.content)}><I.Reply size={17} /></button>
+      {canReact && m.content && <button className="icon-btn" title={copied ? 'Copied' : 'Copy'} onClick={() => { void navigator.clipboard.writeText(m.content); setCopied(true); setTimeout(() => setCopied(false), 900) }} data-testid="copy-msg">{copied ? <I.Check size={15} /> : <I.Copy size={15} />}</button>}
       {canReact && m.content && <button className="icon-btn" title="Read aloud (Esc stops)" onClick={() => void api.voice.speak(m.content)} data-testid="read-aloud"><I.Speaker size={16} /></button>}
       <button className="icon-btn" title="More" onClick={() => setMenu((x) => !x)}><span className="more">···</span></button>
       {picker && (
