@@ -60,9 +60,9 @@ registerScheme()
 // One SahilBot at a time: a second launch focuses the existing window.
 if (!app.requestSingleInstanceLock()) app.quit()
 app.on('second-instance', () => {
-  if (!win) return
-  if (win.isMinimized()) win.restore()
-  if (!HIDDEN) { win.show(); win.focus() }
+  if (!app.isReady()) return
+  const w = showMain()
+  if (w?.isMinimized()) w.restore()
 })
 
 const SPACE_COLORS = ['#FF4D4F', '#1F1F1F', '#7C5CFF', '#13A10E', '#F59E0B', '#0EA5E9', '#EC4899', '#A0612F', '#14B8A6']
@@ -70,6 +70,27 @@ const SHAPES: BotShape[] = ['blob', 'drop', 'square', 'pebble', 'star', 'triangl
 const pick = <T,>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)]
 
 let win: BrowserWindow | null = null
+/** Recreates the main window if it was closed (macOS keeps running); set once the app is ready. */
+let reopen: () => BrowserWindow | null = () => null
+
+/** Messages to the main window; dropped while it's closed. */
+function toWin(channel: string, ...args: unknown[]): void {
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, ...args)
+}
+
+/** Shows a chat in the main window; a just-recreated window gets it once its page has loaded. */
+function openThread(threadId: string): void {
+  const w = showMain()
+  if (w?.webContents.isLoading()) w.webContents.once('did-finish-load', () => toWin('open-thread', threadId))
+  else toWin('open-thread', threadId)
+}
+
+/** Brings the main window forward, creating it again if it was closed. */
+function showMain(): BrowserWindow | null {
+  if (!win || win.isDestroyed()) win = reopen()
+  if (win && !HIDDEN) { win.show(); win.focus() }
+  return win
+}
 
 function chip(): string {
   try {
@@ -149,7 +170,7 @@ app.whenReady().then(() => {
   spendHooks.before = (_req, est, maxOutput, pricedAs) => budget.check(pricedAs, est, maxOutput)
   spendHooks.after = (req, input, output, served) => {
     budget.record(new URL(req.baseUrl).host, served, input, output)
-    win?.webContents.send('budget:changed')
+    toWin('budget:changed')
   }
 
   const memory = new MemoryStore(db)
@@ -169,13 +190,13 @@ app.whenReady().then(() => {
   // (always on top, with Stop), and comes back when the task ends.
   let mini: { bounds: Electron.Rectangle; threadId: string } | null = null
   const exitMini = (): void => {
-    if (!mini || !win || win.isDestroyed()) { mini = null; return }
     globalShortcut.unregister('Control+Option+Escape')
+    if (!mini || !win || win.isDestroyed()) { mini = null; return }
     win.setAlwaysOnTop(false)
     win.setMinimumSize(900, 600)
     win.setBounds(mini.bounds, true)
     mini = null
-    win.webContents.send('mini', { on: false })
+    toWin('mini', { on: false })
   }
   const enterMini = (threadId: string): void => {
     if (mini || !win || win.isDestroyed()) return
@@ -184,21 +205,25 @@ app.whenReady().then(() => {
     win.setMinimumSize(260, 150)
     win.setAlwaysOnTop(true, 'floating')
     win.setBounds({ x: workArea.x + workArea.width - 300 - 14, y: workArea.y + 14, width: 300, height: 176 }, true)
-    win.webContents.send('mini', { on: true, threadId })
+    toWin('mini', { on: true, threadId })
     // A way out that works whatever app is in front.
     globalShortcut.register('Control+Option+Escape', () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini() })
   }
   // The Quick Ask bar (created on first use); it follows the same chat events as the main window.
   let quick: BrowserWindow | null = null
+  /** Runs started from Quick Ask answer in the bar itself, so they don't notify. */
+  const quickRuns = new Set<string>()
   const emit = (e: ChatEvent): void => {
-    win?.webContents.send('chat:event', e)
+    toWin('chat:event', e)
     if (quick && !quick.isDestroyed()) quick.webContents.send('chat:event', e)
     for (const l of listeners) l(e)
     if (e.type === 'run' && e.status !== 'started' && mini?.threadId === e.threadId) exitMini()
+    const fromQuick = e.type === 'run' && e.status !== 'started' && quickRuns.delete(e.threadId)
     // A chat finished while you were in another app: a quiet notification.
-    if (e.type === 'run' && (e.status === 'finished' || e.status === 'error') && win && !win.isDestroyed() && !win.isFocused() && !HIDDEN && Notification.isSupported()) {
+    if (e.type === 'run' && (e.status === 'finished' || e.status === 'error') && !fromQuick && !(quick && !quick.isDestroyed() && quick.isVisible()) &&
+      !(win && !win.isDestroyed() && win.isFocused()) && !HIDDEN && Notification.isSupported()) {
       const n = new Notification({ title: e.status === 'error' ? 'SahilBot hit a problem' : 'SahilBot is done', body: (e.title ?? 'Your task').slice(0, 120), silent: false })
-      n.on('click', () => { win?.show(); win?.focus(); win?.webContents.send('open-thread', e.threadId) })
+      n.on('click', () => openThread(e.threadId))
       n.show()
     }
   }
@@ -206,8 +231,8 @@ app.whenReady().then(() => {
   const vault = new Vault(db, secrets)
   const browser = new BrowserManager(
     () => win,
-    (state) => win?.webContents.send('browser:state', state),
-    () => win?.webContents.send('browser:open')
+    (state) => toWin('browser:state', state),
+    () => toWin('browser:open')
   )
 
   // Built-in packs of skills and rules ship in packs/; yours live in the data folder.
@@ -257,7 +282,7 @@ app.whenReady().then(() => {
     return Math.max(16384, Math.min(window, m.maxFittingWindow || 32768))
   }
 
-  const connectors = new Connectors(db, secrets, registry, () => win?.webContents.send('connectors:changed'))
+  const connectors = new Connectors(db, secrets, registry, () => toWin('connectors:changed'))
 
   const chat = new Agent({
     connectors,
@@ -320,6 +345,7 @@ app.whenReady().then(() => {
     const main = db.listSpaces().find((sp) => sp.isMain)
     if (!main) throw new Error('No main bot.')
     const t = db.createThread(main.id, 'auto', null)
+    quickRuns.add(t.id)
     const images: string[] = []
     if (opts.screen) {
       // Hide the bar so it isn't in the picture.
@@ -334,10 +360,7 @@ app.whenReady().then(() => {
   })
   handle('quick:open', (threadId: string) => {
     quick?.hide()
-    if (!win || win.isDestroyed()) return
-    win.show()
-    win.focus()
-    win.webContents.send('open-thread', threadId)
+    openThread(threadId)
   })
   handle('models:list', () => endpoints.list())
   handle('models:setupPicks', async () => { await endpoints.list().catch(() => undefined); return endpoints.setupPicks() })
@@ -371,7 +394,7 @@ app.whenReady().then(() => {
   handle('models:pull', async (tag: string) => {
     if (!/^[\w.\-/]+(:[\w.\-]+)?$/.test(tag) || pulling.has(tag)) return
     pulling.add(tag)
-    const send = (e: Record<string, unknown>): void => win?.webContents.send('models:pull', { tag, ...e })
+    const send = (e: Record<string, unknown>): void => toWin('models:pull', { tag, ...e })
     try {
       const res = await fetch(`${root(settings.providers().ollama.baseUrl)}/api/pull`, { method: 'POST', body: JSON.stringify({ model: tag, stream: true }) })
       if (!res.ok || !res.body) throw new Error(`Ollama answered ${res.status}`)
@@ -521,7 +544,7 @@ app.whenReady().then(() => {
     const last = [...db.listMessages(threadId)].reverse().find((m) => m.role === 'assistant' && m.content)
     if (Notification.isSupported()) new Notification({ title: `${space.isMain ? 'SahilBot' : space.name}: ${task.title}`, body: (last?.content ?? 'Done').replace(/\s+/g, ' ').slice(0, 140) }).show()
     return status === 'finished' ? 'done' : status
-  }, () => win?.webContents.send('schedules:changed'))
+  }, () => toWin('schedules:changed'))
   registry.register({ ...scheduleTool(scheduler, db), core: true })
   scheduler.start()
   handle('schedules:list', () => scheduler.list())
@@ -545,7 +568,7 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------- voice
   let voiceThread: string | null = null
   const voice = new VoiceService({
-    emit: (e) => win?.webContents.send('voice:event', e),
+    emit: (e) => toWin('voice:event', e),
     respond: (text, signal, onText) => new Promise<void>((resolve, reject) => {
       const tid = voiceThread
       if (!tid) return reject(new Error('No voice conversation'))
@@ -643,15 +666,19 @@ app.whenReady().then(() => {
     ws.track(w)
     // Move the page out of a closing window so it (and the agent's work in it) survives.
     w.on('close', () => browser.setBounds(null))
+    w.on('resize', () => browser.reflow())
+    w.on('closed', () => {
+      if (win === w) win = null
+      if (process.platform !== 'darwin') app.quit()
+    })
     return w
   }
+  reopen = () => { const w = open(); win = w; browser.reflow(); return w }
   win = open()
-  win.on('resize', () => browser.reflow())
-  win.on('closed', () => { if (process.platform !== 'darwin') app.quit() })
-  buildMenu((action) => win?.webContents.send('menu', action))
+  buildMenu((action) => toWin('menu', action))
   app.on('activate', () => {
     // The browser's hidden parking window doesn't count as an open window.
-    if (!win || win.isDestroyed()) { win = open(); win.on('resize', () => browser.reflow()); browser.reflow() }
+    if (!win || win.isDestroyed()) reopen()
   })
 })
 

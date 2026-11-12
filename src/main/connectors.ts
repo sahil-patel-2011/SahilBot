@@ -104,9 +104,18 @@ export function toolName(server: string, tool: string): string {
 /** MCP annotations and verbs decide the effect: reads run, writes follow the permission mode. */
 export function effectFor(name: string, ann?: { readOnlyHint?: boolean; destructiveHint?: boolean }): ToolEffect {
   if (ann?.readOnlyHint) return 'read'
-  if (ann?.destructiveHint || /(^|_)(delete|remove|trash|archive|destroy)/.test(name)) return 'destructive'
-  if (/(^|_)(get|list|search|read|fetch|query|find|lookup|describe|view|show|retrieve|count|stats|report|overview|research)/.test(name)) return 'read'
+  if (ann?.destructiveHint || /(^|[_\-.])(delete|remove|trash|archive|destroy)/i.test(name)) return 'destructive'
+  // Only the leading verb counts (create_report, update_view are writes), and a write verb anywhere wins (find_and_replace).
+  if (/(^|[_\-.])(create|update|replace|set|add|write|edit|send|post|put|patch|insert|upsert|modify|move|rename|upload|submit|assign|merge|publish|share|invite|apply)([_\-.]|$)/i.test(name) ||
+    /[a-z](Create|Update|Replace|Set|Add|Write|Edit|Send|Post|Put|Patch|Insert|Upsert|Modify|Move|Rename|Upload|Submit|Assign|Merge|Publish|Share|Invite|Apply)([A-Z]|$)/.test(name)) return 'write_external'
+  // Servers often prefix their own name (notion-search, slack_list_channels); write verbs were already caught above.
+  if (/^([a-z0-9]+[_\-.])?(get|list|search|read|fetch|query|find|lookup|describe|view|show|retrieve|count|stats|report|overview|research)([_\-.]|$)/i.test(name) ||
+    /^(get|list|search|read|fetch|query|find|lookup|describe|view|show|retrieve|count)[A-Z]/.test(name)) return 'read'
   return 'write_external'
+}
+
+function portOf(uri?: string): number | undefined {
+  try { return uri ? Number(new URL(uri).port) || undefined : undefined } catch { return undefined }
 }
 
 class Oauth implements OAuthClientProvider {
@@ -115,7 +124,7 @@ class Oauth implements OAuthClientProvider {
   private waiter: { resolve: (code: string) => void; reject: (e: Error) => void } | null = null
   private stateValue = randomUUID()
 
-  constructor(private id: string, private secrets: Secrets, private staticClient?: { client_id: string; client_secret?: string }) {}
+  constructor(private id: string, private secrets: Secrets, private staticClient?: { client_id: string; client_secret?: string }, private interactive = true) {}
 
   private key(k: string): string { return `mcp:${this.id}:${k}` }
   private read<T>(k: string): T | undefined {
@@ -138,8 +147,21 @@ class Oauth implements OAuthClientProvider {
       if (err) this.waiter?.reject(new Error(`Sign-in failed: ${err}`))
       else this.waiter?.resolve(code!)
     })
-    await new Promise<void>((ok) => this.server!.listen(this.port, '127.0.0.1', ok))
+    // The registered client's redirect_uris name this port, so keep it across connects.
+    const saved = this.read<number>('port') ?? portOf(this.read<{ redirect_uris?: string[] }>('client')?.redirect_uris?.[0])
+    const bind = (port: number): Promise<boolean> => new Promise((ok) => {
+      const s = this.server!
+      const fail = (): void => { s.off('listening', done); ok(false) }
+      const done = (): void => { s.off('error', fail); ok(true) }
+      s.once('error', fail).once('listening', done).listen(port, '127.0.0.1')
+    })
+    if (!saved || !(await bind(saved))) {
+      if (!(await bind(0))) throw new Error('Could not open a local port for sign-in')
+      // A client registered for another port would be rejected (redirect_uri mismatch): register again.
+      if (saved) this.write('client', undefined)
+    }
     this.port = (this.server.address() as AddressInfo).port
+    if (this.port !== saved) this.write('port', this.port)
   }
 
   close(): void {
@@ -166,16 +188,18 @@ class Oauth implements OAuthClientProvider {
   }
   state(): string { return this.stateValue }
   clientInformation() { return this.staticClient ?? this.read<any>('client') }
-  saveClientInformation(info: unknown): void { this.write('client', info) }
+  saveClientInformation(info: unknown): void { this.write('client', info); this.write('port', this.port) }
   tokens() { return this.read<any>('tokens') }
   saveTokens(t: unknown): void { this.write('tokens', t) }
-  async redirectToAuthorization(url: URL): Promise<void> { await shell.openExternal(url.toString()) }
+  // Background connects (at launch) never open the browser; the connector shows "needs sign-in" instead.
+  async redirectToAuthorization(url: URL): Promise<void> { if (this.interactive) await shell.openExternal(url.toString()) }
   saveCodeVerifier(v: string): void { this.write('verifier', v) }
   codeVerifier(): string { return this.read<string>('verifier') ?? '' }
   invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): void {
     if (scope === 'all' || scope === 'client') this.write('client', undefined)
     if (scope === 'all' || scope === 'tokens') this.write('tokens', undefined)
     if (scope === 'all' || scope === 'verifier') this.write('verifier', undefined)
+    if (scope === 'all') this.write('port', undefined)
   }
   hasTokens(): boolean { return !!this.read('tokens') }
 }
@@ -261,7 +285,7 @@ export class Connectors {
         await client.connect(new StdioClientTransport({ command: c.command!, args: c.args ?? [], env, stderr: 'ignore' }))
       } else {
         const secret = this.secrets.get(`mcp:${id}:clientSecret`)
-        const auth = new Oauth(id, this.secrets, c.clientId ? { client_id: c.clientId, ...(secret ? { client_secret: secret } : {}) } : undefined)
+        const auth = new Oauth(id, this.secrets, c.clientId ? { client_id: c.clientId, ...(secret ? { client_secret: secret } : {}) } : undefined, interactive)
         await auth.listen()
         const url = new URL(c.url!)
         const headers = c.headerName && this.secrets.get(`mcp:${id}:header`) ? { [c.headerName]: this.secrets.get(`mcp:${id}:header`)! } : undefined

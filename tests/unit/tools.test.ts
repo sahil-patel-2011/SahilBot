@@ -54,9 +54,16 @@ describe('attached folders', () => {
     writeFileSync(join(ws, 'b.txt'), '2')
     const manage = fileTools(() => ws, ws).find((t) => t.name === 'file_manage')!
     expect(manage.hardStop!({ op: 'delete', path: 'a.txt' })).toMatch(/Trash/)
-    expect((manage.effect as (a: unknown) => string)({ op: 'delete', path: 'a.txt' })).toBe('destructive')
-    expect((manage.effect as (a: unknown) => string)({ op: 'move', path: 'a.txt', to: 'b.txt' })).toBe('destructive')
-    expect((manage.effect as (a: unknown) => string)({ op: 'move', path: 'a.txt', to: 'c.txt' })).toBe('write_local')
+    const effect = manage.effect as (a: unknown, c: { roots: string[] }) => string
+    expect(effect({ op: 'delete', path: 'a.txt' }, { roots: [] })).toBe('destructive')
+    expect(effect({ op: 'move', path: 'a.txt', to: 'b.txt' }, { roots: [] })).toBe('destructive')
+    expect(effect({ op: 'move', path: 'a.txt', to: 'c.txt' }, { roots: [] })).toBe('write_local')
+    // Inside an attached folder: a new name is a plain write, an existing one is an overwrite.
+    const att = mkdtempSync(join(tmpdir(), 'att-'))
+    writeFileSync(join(att, 'kept.txt'), '3')
+    expect(effect({ op: 'copy', path: 'a.txt', to: join(att, 'new.txt') }, { roots: [att] })).toBe('write_local')
+    expect(effect({ op: 'copy', path: 'a.txt', to: join(att, 'kept.txt') }, { roots: [att] })).toBe('destructive')
+    expect(effect({ op: 'copy', path: 'a.txt', to: join(att, 'new.txt') }, { roots: [] })).toBe('destructive')
   })
 })
 

@@ -123,6 +123,13 @@ export const Composer = forwardRef<ComposerHandle, {
     if (!mic.current) return
     if (e.type === 'partial') setText(base.current + e.text)
   }), [])
+  // Leaving this chat (or the app) ends dictation.
+  useEffect(() => () => {
+    if (!mic.current) return
+    mic.current.stop()
+    mic.current = null
+    void api.voice.dictateStop()
+  }, [])
   const toggleDictation = async (): Promise<void> => {
     setDictError(null)
     if (dictating) {
@@ -160,6 +167,12 @@ export const Composer = forwardRef<ComposerHandle, {
   const canSend = !!(text.trim() || images.length || atts.length)
   const send = (queue = false): void => {
     if (!canSend) return
+    if (mic.current) {
+      mic.current.stop()
+      mic.current = null
+      setDictating(false)
+      void api.voice.dictateStop()
+    }
     p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on || deep, deepResearch: deep, planFirst, queue })
     setDeep(false)
     setText('')

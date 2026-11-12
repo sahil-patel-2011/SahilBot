@@ -173,7 +173,10 @@ type P = { s: Settings; patch: (p: SettingsPatchUi) => Promise<Settings> }
 function General({ s, patch }: P) {
   const [braveKey, setBraveKey] = useState('')
   const [spend, setSpend] = useState<{ spent: number; cap: number; requests: number } | null>(null)
-  useEffect(() => void api.budget().then(setSpend), [])
+  useEffect(() => {
+    void api.budget().then(setSpend)
+    return api.onBudgetChanged(() => void api.budget().then(setSpend))
+  }, [])
   return (
     <>
       <h2>General</h2>

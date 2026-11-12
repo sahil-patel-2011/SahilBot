@@ -101,7 +101,8 @@ export function toAnthropic(wire: WireMessage[], model: string): { system: strin
     // user: tool images ride inside the preceding tool_result when there is one
     const { text: t, images } = text(m.content)
     const last = out[out.length - 1]
-    const prevResult = last?.role === 'user' && Array.isArray(last.content) ? [...(last.content as Block[])].reverse().find((b) => b.type === 'tool_result') : undefined
+    const results = last?.role === 'user' && Array.isArray(last.content) ? (last.content as Block[]).filter((b) => b.type === 'tool_result') : []
+    const prevResult = results.find((b) => (b as { tool_use_id?: string }).tool_use_id === m.imagesFor) ?? results[results.length - 1]
     if (prevResult && images.length && /^\[Image returned by /.test(t)) {
       const r = prevResult as Anthropic.Beta.Messages.BetaToolResultBlockParam
       r.content = [{ type: 'text', text: typeof r.content === 'string' ? r.content : '' }, ...(images as Anthropic.Beta.Messages.BetaImageBlockParam[])]
@@ -167,15 +168,15 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
 
   for (let attempt = 0; ; attempt++) {
     const stream = (await client(req.apiKey)).beta.messages.stream(streamParams, { signal: req.signal })
-    const deltas: StreamPart[] = []
+    let streamed = false
     stream.on('text', () => undefined)
     let final: Anthropic.Beta.Messages.BetaMessage
     try {
       for await (const ev of stream) {
         if (ev.type === 'content_block_start' && ev.content_block.type === 'tool_use') yield { type: 'tool_pending', name: ev.content_block.name }
         if (ev.type === 'content_block_delta') {
-          if (ev.delta.type === 'text_delta') yield { type: 'content', text: ev.delta.text }
-          else if (ev.delta.type === 'thinking_delta') yield { type: 'reasoning', text: ev.delta.thinking }
+          if (ev.delta.type === 'text_delta') { streamed = true; yield { type: 'content', text: ev.delta.text } }
+          else if (ev.delta.type === 'thinking_delta') { streamed = true; yield { type: 'reasoning', text: ev.delta.thinking } }
         }
       }
       final = await stream.finalMessage()
@@ -189,7 +190,7 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
         throw err
       }
       if (req.signal?.aborted || attempt >= 2) throw e
-      void deltas
+      if (streamed) yield { type: 'reset' }
       continue
     }
 
@@ -200,7 +201,10 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
       promptTokens: Math.round((u.input_tokens ?? 0) + 1.25 * (u.cache_creation_input_tokens ?? 0) + 0.1 * (u.cache_read_input_tokens ?? 0)),
       completionTokens: u.output_tokens ?? 0
     }
-    yield { type: 'raw', provider: 'anthropic', model: final.model ?? req.model, content: final.content }
+    // Cut off mid tool call: keep the text, drop the half-written tool_use (it would have no tool_result).
+    const cut = final.stop_reason === 'max_tokens'
+    const content = cut ? final.content.filter((b) => b.type !== 'tool_use' && b.type !== 'server_tool_use') : final.content
+    if (content.some((b) => b.type === 'text' || b.type === 'tool_use')) yield { type: 'raw', provider: 'anthropic', model: final.model ?? req.model, content }
 
     if (final.stop_reason === 'refusal') {
       yield { type: 'content', text: '\n\n_Claude declined this request._' }
@@ -208,7 +212,7 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
       return
     }
     // A reply cut off mid tool call must not run that tool.
-    const calls: ToolCall[] = final.stop_reason === 'max_tokens' ? [] : final.content
+    const calls: ToolCall[] = cut ? [] : final.content
       .filter((b): b is Anthropic.Beta.Messages.BetaToolUseBlock => b.type === 'tool_use')
       .map((b) => ({ id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}) }))
     if (calls.length) yield { type: 'tool_calls', calls }

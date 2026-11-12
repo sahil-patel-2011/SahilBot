@@ -78,6 +78,11 @@ const api: SahilBotApi = {
     return () => ipcRenderer.removeListener('open-thread', fn)
   },
   budget: call('budget') as never,
+  onBudgetChanged(cb) {
+    const fn = (): void => cb()
+    ipcRenderer.on('budget:changed', fn)
+    return () => ipcRenderer.removeListener('budget:changed', fn)
+  },
   detectProviders: call('detectProviders') as never,
   pickFolder: call('pickFolder') as never,
   schedules: {

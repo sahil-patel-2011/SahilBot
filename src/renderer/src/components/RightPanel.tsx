@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import DOMPurify from 'dompurify'
 import type { BrowserState, FilePreview, Message, TeamMember } from '@shared/types'
 import { prettyName } from '../lib/steps'
-import { Markdown } from './Markdown'
+import { Markdown, SANITIZE } from './Markdown'
 import { api } from '../api'
 import * as I from '../icons'
 
@@ -159,7 +159,8 @@ function ProgressPane({ messages, onOpenFile, browserState, onBrowser, running, 
         <section className="ov-card">
           <div className="ov-head"><span>Used in this chat</span></div>
           <div className="ov-chips">
-            {attached.map((a) => <span key={a.path} className="ov-chip" title={a.path} onClick={() => !a.folder && onOpenFile(a.path)}>{a.folder ? <I.Folder size={12} /> : <I.Paperclip size={12} />}{a.name}</span>)}
+            {attached.map((a) => <span key={a.path} className="ov-chip" title={a.path} onClick={() => !a.folder && onOpenFile(a.path)}
+              {...(a.folder ? {} : { role: 'button', tabIndex: 0, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenFile(a.path) } } })}>{a.folder ? <I.Folder size={12} /> : <I.Paperclip size={12} />}{a.name}</span>)}
             {[...used.entries()].map(([label, n]) => <span key={label} className="ov-chip">{label}<span className="hint">{n}</span></span>)}
           </div>
         </section>
@@ -178,7 +179,9 @@ function FilePane({ path }: { path: string | null }) {
     setP(null)
     setErr(null)
     setSheet(0)
-    if (path) api.files.preview(path).then(setP).catch((e: Error) => setErr(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')))
+    let alive = true
+    if (path) api.files.preview(path).then((x) => { if (alive) setP(x) }).catch((e: Error) => { if (alive) setErr(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')) })
+    return () => { alive = false }
   }, [path])
   if (!path) return <div className="right-body">Open a file from the chat or the Progress tab to preview it here.</div>
   if (err) return <div className="right-body">{err}</div>
@@ -193,7 +196,7 @@ function FilePane({ path }: { path: string | null }) {
       <div className="file-body">
         {p.kind === 'pdf' && <iframe className="pdf-frame" src={p.url} title={p.name} />}
         {p.kind === 'image' && <img className="file-img" src={p.url} alt={p.name} />}
-        {p.kind === 'html' && <div className="doc-page md" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(p.html ?? '') }} />}
+        {p.kind === 'html' && <div className="doc-page md" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(p.html ?? '', SANITIZE) }} />}
         {p.kind === 'markdown' && <div className="doc-page"><Markdown text={p.text ?? ''} /></div>}
         {p.kind === 'text' && <pre className="file-text">{p.text}</pre>}
         {p.kind === 'sheets' && p.sheets && (

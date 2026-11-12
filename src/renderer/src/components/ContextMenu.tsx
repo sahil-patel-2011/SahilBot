@@ -12,7 +12,7 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
   }, [x, y])
   useEffect(() => {
     const down = (e: MouseEvent): void => { if (!ref.current?.contains(e.target as Node)) onClose() }
-    const key = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose() }
+    const key = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.preventDefault(); onClose() } }
     document.addEventListener('mousedown', down)
     document.addEventListener('keydown', key)
     return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key) }

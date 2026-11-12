@@ -16,6 +16,8 @@ export interface WireMessage {
   name?: string
   /** Provider-native content for this turn (Claude's blocks), sent back unchanged when the model matches. */
   raw?: unknown
+  /** A user turn carrying the images a tool returned (so Claude can put them back in that tool_result). */
+  imagesFor?: string
 }
 
 export interface WireTool {
@@ -54,6 +56,8 @@ export type StreamPart =
   | { type: 'raw'; provider: 'anthropic'; model: string; content: unknown }
   /** A tool call has started streaming: its name is known, its arguments aren't yet. */
   | { type: 'tool_pending'; name: string }
+  /** The provider re-issued the turn: discard the text and reasoning streamed so far. */
+  | { type: 'reset' }
 
 export function isLocal(baseUrl: string): boolean {
   // Tests stand in a local mock for a paid cloud endpoint.
@@ -94,7 +98,8 @@ export function buildBody(req: ChatRequest): Record<string, unknown> {
   const s = req.sampling
   const body: Record<string, unknown> = {
     model: req.model,
-    messages: req.messages,
+    // App-only fields stay home: strict servers reject unknown message keys.
+    messages: req.messages.map(({ raw: _r, imagesFor: _i, ...m }) => m),
     stream: true,
     stream_options: { include_usage: true },
     max_tokens: req.maxTokens
@@ -299,6 +304,7 @@ export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> 
   try {
     for await (const part of isAnthropic(req.baseUrl) ? streamAnthropic(req) : streamOpenAI(req)) {
       if (part.type === 'usage') { input = part.promptTokens; output = part.completionTokens }
+      if (part.type === 'reset') produced = 0
       if (part.type === 'content' || part.type === 'reasoning') produced += part.text.length
       if (part.type === 'tool_calls') produced += JSON.stringify(part.calls).length
       if (part.type === 'raw') served = part.model

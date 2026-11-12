@@ -164,7 +164,8 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
         }
         case 'cloud_stop': {
           const ag = await cursorApi(key!, 'GET', `/v1/agents/${encodeURIComponent(a.id!)}`, undefined, ctx.signal)
-          if (!ag.latestRunId) return { text: `${a.id} has no running work.`, display: 'nothing to stop' }
+          const run = ag.latestRunId ? await cursorApi(key!, 'GET', `/v1/agents/${encodeURIComponent(a.id!)}/runs/${encodeURIComponent(ag.latestRunId)}`, undefined, ctx.signal) : null
+          if (!run || !['CREATING', 'RUNNING', 'WAITING_FOR_BACKGROUND_WORK'].includes(run.status)) return { text: `${a.id} has no running work${run ? ` (last run: ${run.status})` : ''}.`, display: 'nothing to stop' }
           await cursorApi(key!, 'POST', `/v1/agents/${encodeURIComponent(a.id!)}/runs/${encodeURIComponent(ag.latestRunId)}/cancel`, {}, ctx.signal)
           return { text: `Stopped ${a.id}'s current run.`, display: `stopped ${a.id}` }
         }

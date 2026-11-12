@@ -47,7 +47,8 @@ export interface ToolDef<A = any> {
   description: string
   parameters: JsonSchema
   /** What running it can do to the world. May depend on arguments (browser actions). */
-  effect: ToolEffect | ((args: A) => ToolEffect)
+  /** `roots`: the chat's attached folders, so a path inside one resolves. */
+  effect: ToolEffect | ((args: A, call: { roots: string[] }) => ToolEffect)
   /** Always in the tool list. Everything else is loaded through find_tools. */
   core?: boolean
   /** Listed only when this returns true (e.g. the cloud advisor needs a key and a local model). */
@@ -60,7 +61,7 @@ export interface ToolDef<A = any> {
    * For write_external calls: false when the action is routine (sign in, next page, search, save a draft),
    * so Auto mode runs it. Omitted means consequential: Auto asks.
    */
-  consequential?: (args: A) => boolean
+  consequential?: (args: A, call: { threadId: string; unattended?: boolean }) => boolean
   /** Returns a reason when this call falls on the hard-stop list. */
   hardStop?: (args: A) => string | null
   /** Plain-English description of a call for the approval card, e.g. 'Click button "Send" on acme.com'. */

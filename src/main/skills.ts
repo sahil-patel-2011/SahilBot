@@ -68,6 +68,8 @@ export class SkillStore {
   }
 
   remove(name: string): void {
+    // An empty or odd name would resolve to the skills folder itself.
+    if (!SLUG.test(slug(name))) throw new Error('Skill names use letters, numbers and dashes.')
     if (!existsSync(join(this.dir, slug(name)))) throw new Error('Built-in skills can\'t be deleted; edit one to make your own version.')
     rmSync(join(this.dir, slug(name)), { recursive: true, force: true })
   }

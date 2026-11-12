@@ -42,7 +42,8 @@ export function blocks(messages: Message[]): Block[] {
     if (m.role === 'user') {
       if (m.meta?.hidden) continue
       act = null
-      plan = null
+      // Steering mid-run continues the same request: keep its plan card.
+      if (!m.meta?.steer) plan = null
       out.push({ kind: 'user', m })
       continue
     }
@@ -310,7 +311,9 @@ function Activity({ steps, live, waitingApproval, onOpenFile }: { steps: Step[];
         <span className="activity-title">{title}</span>
         {!live && failures > 0 && <span className="activity-warn">{failures} skipped or failed</span>}
         {live && steps.some((x) => x.call.name === 'browser') && (
-          <span className="watch" role="button" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('foreman:watch-browser')) }}>Watch</span>
+          <span className="watch" role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('foreman:watch-browser')) }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); window.dispatchEvent(new CustomEvent('foreman:watch-browser')) } }}
+            onKeyUp={(e) => { if (e.key === ' ') { e.preventDefault(); e.stopPropagation() } }}>Watch</span>
         )}
         <span className="activity-meta">{live ? `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}` : duration(end - steps[0].at)}</span>
         <I.Chevron size={14} style={{ transform: open ? 'rotate(180deg)' : undefined, transition: 'transform .15s' }} />
@@ -385,7 +388,7 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
           <div className="edit-box">
             <textarea autoFocus value={editing} onChange={(e) => setEditing(e.target.value)} data-testid="edit-input"
               onKeyDown={(e) => {
-                if (e.key === 'Escape') setEditing(null)
+                if (e.key === 'Escape') { e.preventDefault(); setEditing(null) }
                 if (e.key === 'Enter' && !e.shiftKey && editing.trim()) { e.preventDefault(); actions.onEditLast(editing.trim()); setEditing(null) }
               }} />
             <div className="pending-actions" style={{ justifyContent: 'flex-end' }}>

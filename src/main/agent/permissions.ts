@@ -8,7 +8,8 @@ export function decide(p: PermissionInput): Decision {
   // Never send a stored secret anywhere, in any mode, even if asked to.
   if (p.leaksSecret) return { verdict: 'deny', reason: 'The arguments contain a saved password. Secrets can only be typed with browser fill_secret.' }
 
-  if (p.effect === 'read') return { verdict: 'allow' }
+  // A read that opens an address steered by fetched content can leak data in the URL itself.
+  if (p.effect === 'read') return p.tainted && p.mode !== 'bypass' ? { verdict: 'ask', reason: 'Opens an address taken from a web page or email' } : { verdict: 'allow' }
 
   if (p.hardStop && (p.mode !== 'bypass' || p.hardStopsEnabled)) {
     return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}` }
@@ -90,4 +91,39 @@ export function isTainted(args: unknown, untrusted: string[], userText: string):
 export function containsSecret(args: unknown, secrets: string[]): boolean {
   const all = strings(args).join('\n')
   return secrets.some((s) => s.length >= 4 && all.includes(s))
+}
+
+/**
+ * A URL steered by fetched content: its host appears in untrusted output but not in what the user typed,
+ * and the URL itself is not a link copied verbatim from that output (so the agent built it, e.g. by
+ * appending private data to a query string).
+ */
+export function urlTainted(url: string, untrusted: string[], userText: string): boolean {
+  if (!untrusted.length) return false
+  let host: string
+  let parsed: URL
+  try { parsed = new URL(/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`); host = parsed.hostname.toLowerCase().replace(/^www\./, '') } catch { return false }
+  // Only a URL that can carry data out matters: a query, or a long path segment. Plain pages on a site
+  // (its /login, /form) are ordinary browsing.
+  const carries = parsed.search.length > 24 || parsed.pathname.split('/').some((p) => p.length > 40)
+  if (!carries) return false
+  const corpus = untrusted.join('\n').toLowerCase()
+  const user = userText.toLowerCase()
+  if (!host || user.includes(host) || !corpus.includes(host)) return false
+  const u = url.toLowerCase().replace(/\/+$/, '')
+  return !corpus.includes(u) && !user.includes(u)
+}
+
+/** Tools whose read calls load a URL the agent chose. */
+const URL_READS: Record<string, (args: any) => string | undefined> = {
+  fetch_page: (a) => a?.url,
+  browser: (a) => (a?.action === 'navigate' || (a?.action === 'tabs' && a?.op === 'new') ? a?.url : undefined)
+}
+
+/** Whether a call's arguments were steered by fetched content, for decide()'s `tainted`. */
+export function checkTaint(tool: string, effect: string, args: unknown, untrusted: string[], userText: string): boolean {
+  if (effect === 'write_external' || effect === 'destructive') return isTainted(args, untrusted, userText)
+  if (effect !== 'read') return false
+  const url = URL_READS[tool]?.(args)
+  return !!url && urlTainted(url, untrusted, userText)
 }

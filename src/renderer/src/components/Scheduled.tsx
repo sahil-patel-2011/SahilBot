@@ -23,7 +23,7 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
   const [prompt, setPrompt] = useState('')
   const [type, setType] = useState<Schedule['type']>('daily')
   const [time, setTime] = useState('09:00')
-  const [at, setAt] = useState(() => new Date(Date.now() + 3600_000).toISOString().slice(0, 16))
+  const [at, setAt] = useState(() => new Date(Date.now() + 3600_000 - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16))
   const [days, setDays] = useState<string[]>(['mon', 'wed', 'fri'])
   const [minutes, setMinutes] = useState(60)
   const [expr, setExpr] = useState('0 9 * * 1-5')
@@ -89,7 +89,8 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
           {tasks.map((t) => (
             <div key={t.id} className="sched-row" data-testid="schedule-row">
               <I.Clock size={17} />
-              <div className="sched-text" onClick={() => t.threadId && onOpen(t)}>
+              <div className="sched-text" onClick={() => t.threadId && onOpen(t)} role="button" tabIndex={t.threadId ? 0 : -1}
+                onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && t.threadId) { e.preventDefault(); onOpen(t) } }}>
                 <b>{t.title}</b>
                 <span className="hint">{describeSchedule(t.schedule)} · {spaces.find((s) => s.id === t.spaceId)?.name ?? 'SahilBot'}{t.enabled && t.nextRun ? ` · next ${new Date(t.nextRun).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : t.enabled ? '' : ' · paused'}{t.lastStatus ? ` · last: ${t.lastStatus}` : ''}</span>
               </div>

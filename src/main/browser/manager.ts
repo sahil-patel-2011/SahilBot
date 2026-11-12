@@ -51,6 +51,14 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * Tabs are WebContentsViews on a persistent session, attached to the right panel.
  * Agent actions go through the Chrome DevTools Protocol on each tab's debugger.
  */
+/** Only web pages open in a tab; anything else (file:, javascript:, app schemes) is refused. about:blank stays allowed. */
+export function safeUrl(url: string): string {
+  if (url === 'about:blank') return url
+  const u = /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`
+  if (!/^https?:\/\//i.test(u)) throw new Error('Only http and https URLs can be opened.')
+  return u
+}
+
 export class BrowserManager {
   private tabs: WebContentsView[] = []
   private active = -1
@@ -85,10 +93,11 @@ export class BrowserManager {
   }
 
   newTab(url?: string): number {
+    if (url) url = safeUrl(url)
     const view = new WebContentsView({ webPreferences: { session: this.ses, sandbox: true, contextIsolation: true, backgroundThrottling: false } })
     const wc = view.webContents
     wc.setWindowOpenHandler(({ url: u }) => {
-      this.newTab(u)
+      try { this.newTab(u) } catch { /* not a web page */ }
       return { action: 'deny' }
     })
     for (const ev of ['did-navigate', 'did-navigate-in-page', 'page-title-updated', 'did-start-loading', 'did-stop-loading'] as const) {
@@ -128,10 +137,12 @@ export class BrowserManager {
   closeTab(i: number): void {
     const t = this.tabs[i]
     if (!t) throw new Error(`No tab ${i + 1}`)
-    this.detach(t)
+    if (this.view) this.detach(this.view)
     t.webContents.close()
     this.tabs.splice(i, 1)
-    this.active = Math.min(this.active, this.tabs.length - 1)
+    if (i < this.active) this.active--
+    this.active = Math.max(0, Math.min(this.active, this.tabs.length - 1))
+    if (!this.tabs.length) this.active = -1
     this.refs.clear()
     this.attach()
     this.publish()

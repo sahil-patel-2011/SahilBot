@@ -517,6 +517,8 @@ export interface SahilBotApi {
   /** Menu bar commands (File > New Chat, SahilBot > Settings…). */
   onMenu(cb: (action: string) => void): () => void
   budget(): Promise<{ month: string; spent: number; cap: number; requests: number }>
+  /** Cloud spend was recorded: refresh budget(). */
+  onBudgetChanged(cb: () => void): () => void
   /** Finds local model servers already running and the best model on each that fits this Mac. */
   detectProviders(): Promise<Array<{ id: string; name: string; baseUrl: string; models: number; best: string | null }>>
   schedules: {

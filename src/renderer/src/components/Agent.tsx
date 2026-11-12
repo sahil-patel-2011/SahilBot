@@ -62,7 +62,7 @@ function QuestionsCard({ req, onRespond }: { req: PendingRequest; onRespond: (id
             </div>
           )}
           <input className="set-input qcard-input" placeholder={q.options?.length ? 'Or type your own answer' : 'Your answer'} value={q.options?.includes(answers[i]) ? '' : answers[i]} onChange={(e) => set(i, e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && ready) onRespond(req.id, JSON.stringify(answers)) }} data-testid="qcard-input" />
+            onKeyDown={(e) => { if (e.key === 'Escape') e.preventDefault(); if (e.key === 'Enter' && ready) onRespond(req.id, JSON.stringify(answers)) }} data-testid="qcard-input" />
         </div>
       ))}
       <div className="pending-actions">
@@ -87,7 +87,8 @@ function PlanApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: 
       {!!p.risks?.length && <div className="pa-meta risk"><b>Watch out</b> {p.risks.join(' · ')}</div>}
       {changing ? (
         <div className="pa-change">
-          <textarea className="set-input" rows={3} autoFocus placeholder="What should change? e.g. skip step 3, use Notion instead of a PDF…" value={notes} onChange={(e) => setNotes(e.target.value)} data-testid="plan-notes" />
+          <textarea className="set-input" rows={3} autoFocus placeholder="What should change? e.g. skip step 3, use Notion instead of a PDF…" value={notes} onChange={(e) => setNotes(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setChanging(false) } }} data-testid="plan-notes" />
           <div className="pending-actions">
             <button className="btn primary" disabled={!notes.trim()} onClick={() => onRespond(req.id, `revise: ${notes.trim()}`)} data-testid="plan-send-changes">Send changes</button>
             <button className="btn" onClick={() => setChanging(false)}>Back</button>

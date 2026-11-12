@@ -53,7 +53,9 @@ export function Sidebar(p: {
   const isOpen = (k: string): boolean => open[k] !== false
 
   const main = p.spaces.find((s) => s.isMain)
-  const pinnedIds = (p.pinned ?? (main ? [main.id] : [])).filter((id) => p.spaces.some((s) => s.id === id && !s.hidden))
+  // Every saved pin (hidden bots keep theirs); only visible ones are shown.
+  const allPinned = (p.pinned ?? (main ? [main.id] : [])).filter((id) => p.spaces.some((s) => s.id === id))
+  const pinnedIds = allPinned.filter((id) => !p.spaces.find((s) => s.id === id)!.hidden)
   const pinnedSpaces = pinnedIds.map((id) => p.spaces.find((s) => s.id === id)!).filter(Boolean)
   const pinnedChats = p.chats.filter((t) => t.pinned)
   const bots = p.spaces.filter((s) => !s.hidden && s.kind !== 'project' && !pinnedIds.includes(s.id))
@@ -62,12 +64,15 @@ export function Sidebar(p: {
   const colorsOf = (g: Space): string[] => g.members.map((id) => p.spaces.find((s) => s.id === id)?.color).filter((c): c is string => !!c)
   const initials = (p.userName || 'You').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase()
 
-  const pinSpace = (id: string, at?: number): void => {
-    const rest = pinnedIds.filter((x) => x !== id)
-    rest.splice(at ?? rest.length, 0, id)
+  /** Pin, or move onto `target`'s place (after it when dragging down, before it when dragging up). */
+  const pinSpace = (id: string, target?: string): void => {
+    const from = allPinned.indexOf(id)
+    const rest = allPinned.filter((x) => x !== id)
+    const t = target ? rest.indexOf(target) : -1
+    rest.splice(t < 0 ? rest.length : from >= 0 && from <= t ? t + 1 : t, 0, id)
     p.onPinned(rest)
   }
-  const unpinSpace = (id: string): void => p.onPinned(pinnedIds.filter((x) => x !== id))
+  const unpinSpace = (id: string): void => p.onPinned(allPinned.filter((x) => x !== id))
   const pinChat = (id: string, on: boolean): void => void api.threads.update(id, { pinned: on }).then(p.onChanged)
   const openSpace = (s: Space): void => (s.isMain ? p.onOpenMain() : p.onOpenBot(s.id))
 
@@ -116,7 +121,7 @@ export function Sidebar(p: {
   const renameInput = (id: string, value: string, save: (v: string) => Promise<unknown>) => (
     <input className="rename" autoFocus defaultValue={value}
       onBlur={(e) => { const v = e.target.value.trim(); setRenaming(null); if (v && v !== value) void save(v).then(p.onChanged) }}
-      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setRenaming(null) }}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { e.preventDefault(); setRenaming(null) } }}
       data-testid={`rename-${id}`} />
   )
 
@@ -126,9 +131,9 @@ export function Sidebar(p: {
     onDragEnd: () => { setDragging(null); setOver(null) }
   })
 
-  const spaceRow = (s: Space, pinnedRow: boolean, i = 0) => (
+  const spaceRow = (s: Space, pinnedRow: boolean) => (
     <div key={s.id} className={`nav-row${s.id === p.activeSpaceId && (!s.isMain || !p.activeThreadId) && p.view === 'home' ? ' active' : ''}`} onContextMenu={(e) => spaceMenu(s, e)} {...drag('space', s.id)}
-      onDrop={pinnedRow ? (e) => { e.preventDefault(); e.stopPropagation(); setOver(null); if (dragging?.kind === 'space' && dragging.id !== s.id) pinSpace(dragging.id, i); setDragging(null) } : undefined}>
+      onDrop={pinnedRow ? (e) => { e.preventDefault(); e.stopPropagation(); setOver(null); if (dragging?.kind === 'space' && dragging.id !== s.id) pinSpace(dragging.id, s.id); setDragging(null) } : undefined}>
       {renaming === s.id ? renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v })) : (
         <button className="nav-btn" onClick={() => openSpace(s)} data-testid={s.isMain ? 'main-bot' : s.kind === 'project' ? 'project-item' : 'space-item'} title={s.lastPreview ?? s.name}>
           {s.kind === 'project'
@@ -187,7 +192,7 @@ export function Sidebar(p: {
           }}>
           {section('pinned', 'Pinned', (
             <>
-              {pinnedSpaces.map((s, i) => spaceRow(s, true, i))}
+              {pinnedSpaces.map((s) => spaceRow(s, true))}
               {pinnedChats.map(chatRow)}
               {!pinnedSpaces.length && !pinnedChats.length && <div className="nav-empty">Drag bots, projects or chats here</div>}
             </>

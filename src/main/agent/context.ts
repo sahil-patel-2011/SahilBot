@@ -185,8 +185,35 @@ export function toWire(ms: Message[], maxImages = 2, rawSince = 0): WireMessage[
       imagesLeft--
     }
   }
+  // Every tool call needs a result right after its assistant turn (a stop or quit mid-batch leaves gaps),
+  // and every result needs its call: providers reject the whole request otherwise.
+  let open: string[] = []
+  let images: WireMessage[] = []
+  const settle = (): void => {
+    for (const id of open) out.push({ role: 'tool', tool_call_id: id, content: '[Not run: the run was stopped before this tool finished.]' })
+    open = []
+    // Images from tool results ride in one user turn after the whole batch, so tool messages stay contiguous.
+    out.push(...images)
+    images = []
+  }
   for (const m of ms) {
     const withImages = imageBudget.get(m.id) && m.images?.length
+    if (m.role === 'tool') {
+      const at = open.indexOf(m.toolCallId!)
+      if (at < 0) continue
+      open.splice(at, 1)
+      out.push({ role: 'tool', tool_call_id: m.toolCallId!, name: m.toolName, content: m.content + (m.images?.length && !withImages ? '\n[screenshot omitted to save context]' : '') })
+      // Most servers can't take images in tool messages, so they ride in a user turn right after.
+      if (withImages) {
+        images.push({
+          role: 'user',
+          imagesFor: m.toolCallId,
+          content: [{ type: 'text', text: `[Image returned by ${m.toolName}]` }, ...m.images!.map((url) => ({ type: 'image_url' as const, image_url: { url } }))]
+        })
+      }
+      continue
+    }
+    settle()
     if (m.role === 'user') {
       // Notes the app adds for the model (reactions, attached files) ride along with the text.
       const text = m.meta?.note ? `${m.meta.note}\n\n${m.content}` : m.content
@@ -207,17 +234,10 @@ export function toWire(ms: Message[], maxImages = 2, rawSince = 0): WireMessage[
           ? m.toolCalls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.arguments } }))
           : undefined
       })
-    } else if (m.role === 'tool') {
-      out.push({ role: 'tool', tool_call_id: m.toolCallId!, name: m.toolName, content: m.content + (m.images?.length && !withImages ? '\n[screenshot omitted to save context]' : '') })
-      // Most servers can't take images in tool messages, so they ride in a user turn right after.
-      if (withImages) {
-        out.push({
-          role: 'user',
-          content: [{ type: 'text', text: `[Image returned by ${m.toolName}]` }, ...m.images!.map((url) => ({ type: 'image_url' as const, image_url: { url } }))]
-        })
-      }
+      open = m.toolCalls?.map((c) => c.id) ?? []
     }
   }
+  settle()
   return out
 }
 
@@ -288,7 +308,8 @@ export class ContextManager {
     let compacted: Prepared['compacted']
 
     const input = window - OUTPUT_RESERVE
-    if (used > COMPACT_AT * input && opts.allowCompact !== false) {
+    // Claude compacts only when a run starts (keeps its cache), unless the prompt would no longer fit at all.
+    if (used > COMPACT_AT * input && (opts.allowCompact !== false || used > input)) {
       const ts = turns(ms)
       // Don't compact all the way down: keep recent turns verbatim, filling up to KEEP_SHARE of the budget.
       let keep = 0
@@ -308,6 +329,8 @@ export class ContextManager {
         if (text.length > maxChars) text = text.slice(0, maxChars / 2) + '\n…\n' + text.slice(-maxChars / 2)
         let summary = (await this.summarize(text, SUMMARY_MAX_TOKENS)).trim()
         while ((await this.counter.count(summary)) > SUMMARY_MAX_TOKENS) summary = summary.slice(0, Math.floor(summary.length * 0.9))
+        // An empty summary would silently drop the goal and everything before: keep the history instead.
+        if (!summary) return this.finish(opts, ms, used, undefined)
         const before = used
         state.compaction = { boundaryId: old[old.length - 1].id, summary, at: Date.now() }
         ms = this.active(opts.messages, state)
@@ -316,11 +339,15 @@ export class ContextManager {
       }
     }
 
-    if (used > COMPACT_AT * input && !opts.appendOnly) {
+    return this.finish(opts, ms, used, compacted)
+  }
+
+  private async finish(opts: { system: string; toolsJson: string; state: ThreadState; window: number; appendOnly?: boolean }, ms: Message[], used: number, compacted: Prepared['compacted']): Promise<Prepared> {
+    const { system, toolsJson, state, window } = opts
+    if (used > COMPACT_AT * (window - OUTPUT_RESERVE) && (!opts.appendOnly || used > window - OUTPUT_RESERVE)) {
       ms = this.elide(ms)
       used = await this.measure(system, toolsJson, ms, state)
     }
-
     return { wire: [{ role: 'system', content: this.systemText(system, state) }, ...toWire(ms, 2, state.compaction?.at ?? 0)], used, window, compacted }
   }
 }

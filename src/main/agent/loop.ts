@@ -10,7 +10,7 @@ import type { Endpoints } from '../llm/endpoints'
 import { teamCapacity } from '../llm/models'
 import { decide as route, pick } from '../llm/router'
 import { ContextManager, OUTPUT_RESERVE, ResultStore, ServerTokenCounter, SUMMARY_INSTRUCTIONS, wrapToolOutput, type TokenCounter } from './context'
-import { containsSecret, decide, isTainted } from './permissions'
+import { checkTaint, containsSecret, decide } from './permissions'
 import { VOICE_SUFFIX, groupNote, harnessPrompt } from './prompt'
 import type { ToolRegistry } from './registry'
 import type { ThreadState, ToolContext, ToolDef, ToolOutput } from './types'
@@ -103,7 +103,8 @@ export function perspective(messages: Message[], speakerId: string): Message[] {
   return messages.flatMap((m) => {
     const bot = m.meta?.botId as string | undefined
     if (!bot || bot === speakerId) return [m]
-    if (m.role === 'tool') return []
+    // Another bot's tool output, drafts it replaced and the app's notes to it stay private to that bot.
+    if (m.role === 'tool' || m.meta?.hidden || m.meta?.superseded) return []
     if (m.role === 'assistant') return m.content ? [{ ...m, role: 'user' as const, toolCalls: undefined, content: `[${String(m.meta?.botName)}]: ${m.content}` }] : []
     return [m]
   })
@@ -156,7 +157,7 @@ export class Agent {
    */
   async steer(threadId: string, text: string): Promise<'steered' | 'sent'> {
     const run = this.runs.get(threadId)
-    if (!run || run.ctrl.signal.aborted) {
+    if (!run) {
       await this.send({ threadId, text })
       return 'sent'
     }
@@ -303,8 +304,18 @@ export class Agent {
     const lastUser = [...this.d.db.listMessages(threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
     if (!lastUser) throw new Error('Nothing to retry yet.')
     this.d.db.deleteAfter(threadId, lastUser.id)
+    this.rewound(threadId)
     this.d.emit({ threadId, type: 'thread', thread })
     this.start(thread, lastUser.content)
+  }
+
+  /** After retry/edit: the discarded attempt's plan goes, and a summary whose boundary was deleted goes too. */
+  private rewound(threadId: string): void {
+    const st = this.d.db.getState(threadId)
+    st.todos = []
+    const ids = new Set(this.d.db.listMessages(threadId).map((m) => m.id))
+    if (st.compaction && !ids.has(st.compaction.boundaryId)) st.compaction = undefined
+    this.d.db.setState(threadId, st)
   }
 
   /** Edit and resend your last message. */
@@ -316,6 +327,7 @@ export class Agent {
     lastUser.content = text
     this.d.db.updateMessage(lastUser)
     this.d.db.deleteAfter(threadId, lastUser.id)
+    this.rewound(threadId)
     this.d.emit({ threadId, type: 'message', message: lastUser })
     this.start(thread, text)
   }
@@ -338,9 +350,17 @@ export class Agent {
       .catch((e) => { this.notice(thread.id, `Run failed: ${(e as Error).message}`); return 'error' as const })
       .finally(() => {
         if (this.runs.get(thread.id) === run) this.runs.delete(thread.id)
-        // Steered at the very end (or after a stop): nothing is lost, it goes out as the next message.
+        // Steered at the very end: it goes out as the next message. After a Stop it's kept in the chat
+        // (the model sees it next time) but doesn't start new work on its own.
         const left = run.steers?.splice(0) ?? []
-        if (left.length && !run.ctrl.signal.aborted) void this.send({ threadId: thread.id, text: left.join('\n\n') }).catch(() => undefined)
+        if (!left.length) return
+        this.d.emit({ threadId: thread.id, type: 'steer', pending: 0 })
+        const text = left.join('\n\n')
+        if (!run.ctrl.signal.aborted) void this.steer(thread.id, text).catch((e) => this.notice(thread.id, `Couldn't send your message: ${(e as Error).message}`))
+        else {
+          const m = this.d.db.insertMessage({ threadId: thread.id, role: 'user', content: text, kind: 'normal', status: 'done', meta: { steer: true } })
+          this.d.emit({ threadId: thread.id, type: 'message', message: m })
+        }
       })
     return { done }
   }
@@ -610,6 +630,8 @@ export class Agent {
     const system = this.systemFor(thread, state, speaker, group)
     db.setState(thread.id, state)
     const view = (ms: Message[]): Message[] => (speaker ? perspective(ms, speaker.id) : ms)
+    // In a group, the app's nudges belong to the bot they were for.
+    const mine = speaker && run.group ? botMeta(speaker) : {}
 
     const counter = this.d.counter?.(ep.baseUrl, model) ?? new ServerTokenCounter(ep.baseUrl, model)
     const cm = new ContextManager(counter, (text, maxTokens) => this.summarize(model, text, maxTokens, run.ctrl.signal), results)
@@ -645,7 +667,7 @@ export class Agent {
       for (let step = 1; step <= budget; step++) {
         if (run.ctrl.signal.aborted) throw new DOMException('stopped', 'AbortError')
         // The user steered while the last step ran: their message goes in now.
-        if (this.flushSteers(thread.id, run)) budget = Math.max(budget, step + START_BUDGET)
+        if (this.flushSteers(thread.id, run)) budget = Math.max(budget, Math.min(HARD_CAP, step + START_BUDGET))
         const tools = registry.listFor(state)
         const wireTools = registry.wire(tools)
         const prepared = await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: view(db.listMessages(thread.id)), state, window, appendOnly: claude, allowCompact: !claude || step === 1 })
@@ -689,7 +711,7 @@ export class Agent {
           if (unseen.length && !linkChecked && step < HARD_CAP) {
             budget = Math.max(budget, step + 1)
             linkChecked = true
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true }, content: `[From the app] Your reply cites links that don't appear in any source you retrieved in this conversation:\n${unseen.map((u) => `- ${u}`).join('\n')}\nVerify them with fetch_page or web_search, or remove them. Then give your final answer again.` })
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] Your reply cites links that don't appear in any source you retrieved in this conversation:\n${unseen.map((u) => `- ${u}`).join('\n')}\nVerify them with fetch_page or web_search, or remove them. Then give your final answer again.` })
             assistant.meta = { ...assistant.meta, superseded: true }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
@@ -711,7 +733,7 @@ export class Agent {
             assistant.meta = { ...assistant.meta, superseded: true }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true }, content: `[From the app] Before you finish, double-check your work:\n${track.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${track.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${actions >= 8 ? '- If this took a non-obvious procedure or several tries, save what worked with memory(action="save_skill") so next time is faster.\n' : ''}- Fix anything that's wrong.\nThen write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.` })
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] Before you finish, double-check your work:\n${track.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${track.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${actions >= 8 ? '- If this took a non-obvious procedure or several tries, save what worked with memory(action="save_skill") so next time is faster.\n' : ''}- Fix anything that's wrong.\nThen write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.` })
             continue
           }
           // Autonomy: a task stopped to ask "want me to…?" about its own next step. Do it (risky actions still ask).
@@ -719,7 +741,7 @@ export class Agent {
           if (asksToContinue && (actions > 0 || open.length > 0) && !autonomyNudged && !run.unattended && step < HARD_CAP) {
             autonomyNudged = true
             budget = Math.max(budget, step + 6)
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself before anything risky (sending, buying, deleting). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself before anything risky (sending, buying, deleting). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
             continue
           }
           // A steering message arrived while this answer was written: keep going with it.
@@ -729,7 +751,7 @@ export class Agent {
           if (lastUser?.meta?.team && !run.helper && !(this.teamUsed.get(state.rootId ?? thread.id) ?? 0) && !teamNudged && step < HARD_CAP) {
             teamNudged = true
             budget = Math.max(budget, step + 2)
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true }, content: `[From the app] Team of Experts is on for this request, but you haven't used your team. Split the research into at least ${this.teamSize(thread).min} focused parts and send them with the agents tool, then compile their reports into the final answer.` })
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] Team of Experts is on for this request, but you haven't used your team. Split the research into at least ${this.teamSize(thread).min} focused parts and send them with the agents tool, then compile their reports into the final answer.` })
             assistant.meta = { ...assistant.meta, superseded: true }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
@@ -739,7 +761,7 @@ export class Agent {
           if (open.length && !nudged && step < HARD_CAP) {
             budget = Math.max(budget, step + 1)
             nudged = true
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: `[From the app] Your plan still has open items:\n${planText(state)}\nContinue working on them, or update the plan with todo (mark items done, or remove ones that no longer apply) and explain why.`, meta: { hidden: true } })
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: `[From the app] Your plan still has open items:\n${planText(state)}\nContinue working on them, or update the plan with todo (mark items done, or remove ones that no longer apply) and explain why.`, meta: { hidden: true, ...mine } })
             continue
           }
           break
@@ -755,14 +777,18 @@ export class Agent {
         // The budget follows the agent's own plan, and grows while it keeps finishing items.
         const nowDone = state.todos.filter((t) => t.status === 'done').length
         if (state.todos.length) budget = Math.max(budget, Math.min(HARD_CAP, step + (state.todos.length - nowDone) * PER_PLAN_ITEM + 4))
-        if (nowDone > doneItems) budget = Math.min(HARD_CAP, budget + (nowDone - doneItems) * 4)
+        if (nowDone > doneItems) budget = Math.max(budget, Math.min(HARD_CAP, budget + (nowDone - doneItems) * 4))
         doneItems = nowDone
 
         if (step === budget) {
           // Out of room: one text-only turn to report what's done and what's left (adapted from opencode max-steps, MIT).
-          const wrap = await cm.prepare({ system, toolsJson: '[]', messages: view(db.listMessages(thread.id)), state, window })
+          // Claude needs the tool list whenever the history has tool calls (and keeps its cache with it).
+          const wrapTools = claude ? wireTools : []
+          const wrap = await cm.prepare({ system, toolsJson: JSON.stringify(wrapTools), messages: view(db.listMessages(thread.id)), state, window, appendOnly: claude, allowCompact: !claude })
           wrap.wire.push({ role: 'user', content: '[From the app] This run has used its step budget. Do not call tools. Reply with a short summary: what you finished, what is left, and what the user should say to continue.' })
-          await this.stream(thread.id, model, wrap.wire, [], window, run, speaker, routed)
+          const last = await this.stream(thread.id, model, wrap.wire, wrapTools, window, run, speaker, routed)
+          // A tool call here can't run; the reply text is the summary.
+          if (last.toolCalls?.length) { last.toolCalls = undefined; last.meta = { ...last.meta, raw: undefined }; db.updateMessage(last) }
         }
       }
     } catch (e) {
@@ -808,7 +834,8 @@ export class Agent {
         apiKey: ep.apiKey,
         model,
         messages: wire,
-        tools,
+        // A model that can't call tools (Ollama says so) would reject the whole request: plain chat instead.
+        tools: this.d.endpoints.last?.models.find((x) => x.id === model)?.tools === false ? [] : tools,
         sampling: samplingFor(model, s.sampling),
         maxTokens: OUTPUT_RESERVE,
         contextWindow: window,
@@ -830,6 +857,10 @@ export class Agent {
           m.toolCalls = part.calls.map((c) => (c.id.startsWith('toolu_') ? c : { ...c, id: `${c.id || 'call'}-${randomUUID().slice(0, 8)}` }))
         } else if (part.type === 'tool_pending') {
           this.d.emit({ threadId, type: 'drafting', tool: part.name })
+        } else if (part.type === 'reset') {
+          m.content = ''
+          m.reasoning = undefined
+          this.d.emit({ threadId, type: 'message', message: { ...m } })
         } else if (part.type === 'raw') {
           m.meta = { ...m.meta, raw: { provider: part.provider, model: part.model, content: part.content } }
         } else if (part.type === 'usage') {
@@ -871,6 +902,8 @@ export class Agent {
       messages: [{ role: 'system', content: SUMMARY_INSTRUCTIONS }, { role: 'user', content: transcript }],
       sampling: { ...samplingFor(model, s.sampling), temperature: 0.3 },
       maxTokens,
+      // Thinking models would spend the whole budget reasoning and return no summary.
+      effort: 'low',
       signal
     })) {
       if (part.type === 'content') out += part.text
@@ -922,9 +955,9 @@ export class Agent {
     const args = checked.args
 
     // 2. Permission.
-    const effect: ToolEffect = typeof tool.effect === 'function' ? tool.effect(args) : tool.effect
+    const effect: ToolEffect = typeof tool.effect === 'function' ? tool.effect(args, { roots: state.roots ?? [] }) : tool.effect
     const hardStop = tool.hardStop?.(args) ?? null
-    const tainted = (effect === 'write_external' || effect === 'destructive') && isTainted(args, ctx.untrusted, ctx.userText)
+    const tainted = checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText)
     const decision = decide({
       mode,
       effect,
@@ -934,7 +967,7 @@ export class Agent {
       hardStopsEnabled: s.advanced.hardStopsEnabled,
       tainted,
       leaksSecret: containsSecret(args, this.d.secretValues()),
-      consequential: tool.consequential ? tool.consequential(args) : true
+      consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended }) : true
     })
     const baseMeta = { label: tool.label, effect, args: call.arguments }
     if (decision.verdict === 'deny') {
@@ -964,7 +997,9 @@ export class Agent {
       workspaceDir: s.workspaceDir,
       docsDir: this.d.docsDir,
       state,
-      askUser: (question, options) => this.ask(thread.id, run, { kind: 'question', question, options }),
+      askUser: run.unattended
+        ? async () => '(Nobody can answer right now. Use your best judgment, state the assumption you made, and continue.)'
+        : (question, options) => this.ask(thread.id, run, { kind: 'question', question, options }),
       // Nobody to answer on a schedule or in a helper: questions get "use your judgment", plans go ahead.
       askMany: run.unattended ? async () => '[]' : (questions) => this.ask(thread.id, run, { kind: 'questions', questions }),
       proposePlan: run.unattended ? undefined : (plan) => this.ask(thread.id, run, { kind: 'plan', plan }),

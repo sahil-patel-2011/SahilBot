@@ -60,6 +60,9 @@ export function App() {
   const [mini, setMini] = useState<{ on: boolean; threadId?: string }>({ on: false })
   const [teamCap, setTeamCap] = useState<{ maxAgents: number; heavy: boolean; why: string } | null>(null)
   const composer = useRef<ComposerHandle>(null)
+  /** Threads whose queued message is on its way (until that thread's next run event). */
+  const sendingRef = useRef<Set<string>>(new Set())
+  const [miniMsgs, setMiniMsgs] = useState<Message[]>([])
 
   const newChatRef = useRef<() => void>(() => undefined)
   const openAnyChatRef = useRef<(id: string) => void>(() => undefined)
@@ -103,23 +106,28 @@ export function App() {
     setPending([])
     if (!thread) return setMessages([])
     const id = thread.id
-    void api.chat.pending(id).then(setPending)
-    void api.threads.messages(id).then((fetched) => setMessages((cur) => {
+    let alive = true
+    setMessages((cur) => cur.filter((m) => m.threadId === id))
+    void api.chat.pending(id).then((ps) => { if (alive) setPending(ps) })
+    void api.threads.messages(id).then((fetched) => { if (alive) setMessages((cur) => {
       const ids = new Set(fetched.map((m) => m.id))
       const live = cur.filter((m) => m.threadId === id && !ids.has(m.id))
       const merged = fetched.map((m) => cur.find((c) => c.id === m.id && c.content.length > m.content.length) ?? m)
       return [...merged, ...live].sort((a, b) => a.createdAt - b.createdAt)
-    }))
+    }) })
     if (thread.unread) void api.threads.update(id, { unread: false }).then(() => refreshSpaces())
+    return () => { alive = false }
   }, [thread?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => api.chat.onEvent((e: ChatEvent) => {
     if (e.type === 'spaces') { void refreshSpaces(); return }
     if (e.type === 'drafting') { setDrafting((d) => ({ ...d, [e.threadId]: e.tool })); return }
     if (e.type === 'run') {
+      sendingRef.current.delete(e.threadId)
       if (e.status === 'started') setRunSince((r) => ({ ...r, [e.threadId]: Date.now() }))
       else {
         setDrafting((d) => ({ ...d, [e.threadId]: null }))
+        setSteering((s) => ({ ...s, [e.threadId]: 0 }))
         if (e.status === 'error' && e.error) toast(e.error, 'error')
       }
       setRunning((r) => {
@@ -262,9 +270,13 @@ export function App() {
       if (e.metaKey && e.key === '\\') { e.preventDefault(); setPanel((p) => (p ? null : 'progress')) }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); composer.current?.toggleDictation() }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setVoiceOn(true) }
-      // Esc stops speaking, and the current run (when no dialog is open).
+      // Esc stops speaking, and the current run (when no dialog is open and Esc wasn't closing something else).
       if (e.key === 'Escape') void api.voice.stopSpeaking()
-      if (e.key === 'Escape' && !document.querySelector('.scrim, .palette-wrap, .voice-mode') && threadRef.current) void api.chat.stop(threadRef.current)
+      if (e.key !== 'Escape' || e.defaultPrevented || !threadRef.current) return
+      if (document.querySelector('.scrim, .palette-wrap, .voice-mode, .settings-page')) return
+      const el = document.activeElement
+      if (el && el !== document.body && !el.matches('[data-testid="composer-input"]')) return
+      void api.chat.stop(threadRef.current)
     }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
@@ -316,12 +328,34 @@ export function App() {
   // Send the next queued message as soon as the thread is free.
   useEffect(() => {
     for (const [tid, items] of Object.entries(queue)) {
-      if (!items.length || running.has(tid)) continue
-      const [first, ...rest] = items
-      setQueue((q) => ({ ...q, [tid]: rest }))
-      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst }).catch((e: Error) => toast(e.message, 'error'))
+      if (!items.length || running.has(tid) || sendingRef.current.has(tid)) continue
+      const first = items[0]
+      sendingRef.current.add(tid)
+      setQueue((q) => ({ ...q, [tid]: (q[tid] ?? []).filter((x) => x !== first) }))
+      // On failure it goes back to the front and is retried after this thread's next run event (no hot retry loop).
+      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst }).catch((e: Error) => {
+        setQueue((q) => ({ ...q, [tid]: [first, ...(q[tid] ?? [])] }))
+        toast(e.message, 'error')
+      })
     }
   }, [queue, running])
+
+  // The mini window follows the chat it was opened for, even when another chat is open here.
+  const miniOther = mini.on && mini.threadId && mini.threadId !== thread?.id ? mini.threadId : null
+  useEffect(() => {
+    setMiniMsgs([])
+    if (!miniOther) return
+    let alive = true
+    void api.threads.messages(miniOther).then((ms) => { if (alive) setMiniMsgs((cur) => [...ms, ...cur.filter((c) => !ms.some((m) => m.id === c.id))]) })
+    const off = api.chat.onEvent((e: ChatEvent) => {
+      if (e.type === 'message' && e.message.threadId === miniOther) {
+        setMiniMsgs((ms) => { const i = ms.findIndex((m) => m.id === e.message.id); if (i < 0) return [...ms, e.message]; const n = ms.slice(); n[i] = e.message; return n })
+      } else if (e.type === 'delta' && e.threadId === miniOther && e.content) {
+        setMiniMsgs((ms) => ms.map((m) => (m.id === e.messageId ? { ...m, content: m.content + e.content } : m)))
+      }
+    })
+    return () => { alive = false; off() }
+  }, [miniOther])
 
   // How many helper agents this Mac can run with the model in use.
   const capModel = thread?.model ?? draft.model ?? settings?.defaultModel ?? 'auto'
@@ -389,6 +423,7 @@ export function App() {
 
   const composerEl = (
     <Composer
+      key={thread?.id ?? 'new'}
       ref={composer}
       running={isRunning}
       answering={!!question}
@@ -436,7 +471,7 @@ export function App() {
   })()
   // Computer use: a small always-on-top window that shows what SahilBot is doing, with Stop.
   if (mini.on) {
-    const last = [...messages].reverse().find((m) => m.role === 'tool' || (m.role === 'assistant' && m.content))
+    const last = [...(miniOther ? miniMsgs : messages)].reverse().find((m) => m.role === 'tool' || (m.role === 'assistant' && m.content))
     const doing = last?.role === 'tool' ? String(last.meta?.display ?? last.toolName ?? 'Working') : last?.content.replace(/\s+/g, ' ').slice(0, 120) ?? 'Starting…'
     return (
       <div className="mini drag" data-testid="mini">
@@ -452,7 +487,7 @@ export function App() {
   }
 
   const memberColors = space?.kind === 'group' ? space.members.map((id) => spaces.find((s) => s.id === id)?.color ?? '#999') : undefined
-  const modal = showSettings || !!editor || palette || showConnect || showScheduled || !settings.onboarded
+  const modal = showSettings || !!editor || palette || showConnect || showScheduled || voiceOn || !settings.onboarded
 
   return (
     <div className="app">
@@ -493,7 +528,7 @@ export function App() {
             {thread && !isBot && (renamingTitle ? (
               <input className="title-edit" autoFocus defaultValue={thread.title}
                 onBlur={(e) => { setRenamingTitle(false); const v = e.target.value.trim(); if (v && v !== thread.title) void patchThread({ title: v }).then(() => refreshSpaces()) }}
-                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setRenamingTitle(false) }} />
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { e.preventDefault(); setRenamingTitle(false) } }} />
             ) : (
               <span data-testid="thread-title" onDoubleClick={() => setRenamingTitle(true)} title="Double-click to rename">{thread.title}</span>
             ))}

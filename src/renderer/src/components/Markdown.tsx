@@ -11,7 +11,10 @@ marked.use({
   renderer: {
     code({ text, lang }: Tokens.Code) {
       const l = (lang ?? '').split(/\s/)[0]
-      return `<div class="code"><div class="code-head"><span>${escape(l || 'text')}</span><button type="button" data-copy>Copy</button></div><pre><code>${escape(text)}</code></pre></div>`
+      return `<div class="code"><div class="code-head"><span>${escape(l || 'text')}</span><span data-copy-slot></span></div><pre><code>${escape(text)}</code></pre></div>`
+    },
+    checkbox({ checked }: Tokens.Checkbox) {
+      return `<span data-task="${checked ? 'x' : ''}"></span> `
     }
   }
 })
@@ -36,7 +39,15 @@ function onClick(e: React.MouseEvent<HTMLDivElement>): void {
   }
 }
 
+// Model output must not restyle the app (e.g. approval buttons) or add its own controls.
+export const SANITIZE = { FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'], FORBID_ATTR: ['style'] }
+
+/** Our own controls go in after sanitizing: Copy buttons and task-list checkboxes. */
+const render = (text: string): string => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, SANITIZE)
+  .replace(/<span data-copy-slot=""><\/span>/g, '<button type="button" data-copy="">Copy</button>')
+  .replace(/<span data-task="(x?)"><\/span>/g, (_, x: string) => `<input type="checkbox" disabled=""${x ? ' checked=""' : ''}>`)
+
 export const Markdown = memo(function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, { ADD_ATTR: ['data-copy'] }), [text])
+  const html = useMemo(() => render(text), [text])
   return <div className={`md${streaming ? ' cursor' : ''}`} onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />
 })

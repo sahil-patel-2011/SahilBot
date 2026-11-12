@@ -1,5 +1,5 @@
 import type { ToolEffect } from '@shared/types'
-import type { BrowserManager, RefInfo } from '../../browser/manager'
+import { safeUrl, type BrowserManager, type RefInfo } from '../../browser/manager'
 import { originMatches, type Vault } from '../../vault'
 import { CONSEQUENTIAL, looksLikePayment, looksLikeSecurity } from '../permissions'
 import type { ToolDef } from '../types'
@@ -169,8 +169,7 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
     {
       switch (a.action) {
         case 'navigate': {
-          const url = /^[a-z]+:\/\//i.test(a.url!) ? a.url! : `https://${a.url}`
-          if (!/^https?:/i.test(url)) throw new Error('Only http and https URLs can be opened.')
+          const url = safeUrl(a.url!)
           return { text: await b.navigate(url), display: `opened ${safeHost(url)}`, sources: [{ title: safeHost(url), url }], read: true }
         }
         case 'snapshot':
@@ -224,8 +223,9 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
           return { text: await b.getText(), display: `read text of ${safeHost(b.pageUrl())}` }
         case 'tabs': {
           if (a.op === 'new') {
-            await b.control(async () => b.newTab(a.url))
-            return { text: `Opened a new tab.${a.url ? ` Loading ${a.url}.` : ''}\n${b.listTabs()}`, display: 'new tab' }
+            const url = a.url ? safeUrl(a.url) : undefined
+            await b.control(async () => b.newTab(url))
+            return { text: `Opened a new tab.${url ? ` Loading ${url}.` : ''}\n${b.listTabs()}`, display: 'new tab' }
           }
           if (a.op === 'switch') { b.switchTab((a.index ?? 1) - 1); return { text: b.listTabs(), display: `tab ${a.index}` } }
           if (a.op === 'close') { b.closeTab((a.index ?? b.state().active + 1) - 1); return { text: b.listTabs(), display: 'closed tab' } }

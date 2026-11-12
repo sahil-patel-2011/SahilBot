@@ -126,7 +126,6 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
   // One OK per task: after the first approved action in a chat, control continues until it's idle for 15 min.
   const granted = new Map<string, number>()
   const isGranted = (threadId: string): boolean => (granted.get(threadId) ?? 0) > Date.now() - 15 * 60_000
-  let currentThread = ''
 
   return {
     name: 'computer',
@@ -135,7 +134,8 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
     untrusted: true,
     effect: (a) => (['screenshot', 'ui', 'wait', 'apps'].includes(a.action) ? 'read' : 'write_external'),
     // Asks once per task before taking control; then routine clicks and typing run.
-    consequential: (a) => !['screenshot', 'ui', 'wait', 'apps'].includes(a.action) && !isGranted(currentThread),
+    // The OK belongs to the chat that got it; nobody approved anything for a scheduled run or helper.
+    consequential: (a, c) => !['screenshot', 'ui', 'wait', 'apps'].includes(a.action) && (!!c.unattended || !isGranted(c.threadId)),
     describe: (a) => a.action === 'type' ? `Take control of your Mac and type "${(a.text ?? '').slice(0, 80)}"` : a.action === 'open_app' ? `Take control of your Mac: open ${a.app}` : `Take control of your mouse and keyboard (${a.action.replace('_', ' ')}${a.x !== undefined ? ` at ${a.x}, ${a.y}` : ''}). SahilBot shrinks to a small window so you can watch; press Stop anytime.`,
     description: 'Use the Mac like a person: see the screen and control the mouse and keyboard, for apps that have no other tool. Start with screenshot (if you can see images) or ui (a list of the front app\'s buttons, fields and text with their x,y centers). Coordinates are screen points. Actions: click_element(name, role?) clicks a button/field/item by its name from ui (most reliable); menu(path like "File > Export > PDF…", app?) picks a menu item; apps lists open apps; ui(app?) reads an app\'s window (brings it to the front); click/double_click/right_click(x,y), move(x,y), drag(x,y,x2,y2), scroll(x,y,amount: negative = down), type(text), key(keys like "cmd+c", "return", "cmd+shift+t"), open_app(app), wait(seconds). After each action, take a screenshot or ui again to check what happened. Prefer the browser tool for websites and app tools (Notes, Calendar, Cursor) when they exist. Never type passwords; stop and ask the user for CAPTCHAs and 2-factor codes.',
     parameters: {
@@ -165,18 +165,17 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
       ]
     },
     async run(a, ctx) {
-      currentThread = ctx.threadId
       const acting = !['screenshot', 'ui', 'wait', 'apps'].includes(a.action)
       if (acting) {
         if (!d.trusted(true)) throw new Error('SahilBot needs Accessibility permission to use the mouse and keyboard. macOS just showed the prompt: the user should turn SahilBot on in System Settings → Privacy & Security → Accessibility, then you can try again.')
         granted.set(ctx.threadId, Date.now())
-        d.enterMini(ctx.threadId)
+        d.enterMini(ctx.state.rootId ?? ctx.threadId)
       }
       switch (a.action) {
         case 'screenshot': {
           const dir = mkdtempSync(join(tmpdir(), 'sb-shot-'))
           try {
-            d.enterMini(ctx.threadId)
+            d.enterMini(ctx.state.rootId ?? ctx.threadId)
             const shot = await d.capture(join(dir, 'screen.png'))
             return { text: `Screenshot of the screen (${shot.width}×${shot.height} points; use these coordinates).`, display: 'Looked at the screen', images: [shot.dataUrl] }
           } catch (e) {

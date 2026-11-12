@@ -152,18 +152,19 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
   }
 
   type Manage = { op: 'delete' | 'move' | 'copy' | 'mkdir'; path: string; to?: string }
-  const targetExists = (a: Manage): boolean => {
+  // A path outside the workspace and attached folders counts as an existing target (ask).
+  const targetExists = (a: Manage, roots: string[]): boolean => {
     try {
-      return !!a.to && existsSync(resolvePath(a.to, getWorkspace(), []))
+      return !!a.to && existsSync(resolvePath(a.to, getWorkspace(), roots))
     } catch {
-      return false
+      return true
     }
   }
   const fileManage: ToolDef<Manage> = {
     name: 'file_manage',
     label: 'Files',
     core: true,
-    effect: (a) => (a.op === 'delete' || ((a.op === 'move' || a.op === 'copy') && targetExists(a)) ? 'destructive' : 'write_local'),
+    effect: (a, c) => (a.op === 'delete' || ((a.op === 'move' || a.op === 'copy') && targetExists(a, c.roots)) ? 'destructive' : 'write_local'),
     // The user asked that deleting always needs their OK, even in Bypass.
     hardStop: (a) => (a.op === 'delete' ? `deleting ${a.path} (it goes to the Trash)` : null),
     describe: (a) => (a.op === 'delete' ? `Move ${a.path} to the Trash` : a.op === 'mkdir' ? `Create folder ${a.path}` : `${a.op === 'move' ? 'Move' : 'Copy'} ${a.path} to ${a.to}`),
@@ -206,7 +207,7 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     name: 'create_document',
     label: 'Document',
     core: true,
-    effect: (a) => (existsSync(safe(() => resolvePath(a.path, getWorkspace(), [])) ?? '') ? 'destructive' : 'write_local'),
+    effect: (a, c) => { const p = safe(() => resolvePath(a.path, getWorkspace(), c.roots)); return p === undefined || existsSync(p) ? 'destructive' : 'write_local' },
     description: `Create (or rebuild) a formatted document from data:
 - .docx / .pdf: give "markdown" (headings, lists, tables, bold, links).
 - .pptx: give "slides": [{title, subtitle?, bullets?, table?, layout?: title|bullets|two_column|section|quote, right?, notes?}]. First slide is usually layout "title".

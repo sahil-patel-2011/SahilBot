@@ -100,13 +100,14 @@ export function pick(models: ModelInfo[], tier: Tier, o: PickOptions = {}): Mode
     const p = pool.find((m) => m.id === o.prefer)
     if (p && p.tier >= tier) return p
   }
-  // Tool calling matters for anything above small talk.
-  const capable = (m: ModelInfo): boolean => tier === 0 || m.tools !== false
+  // Every run offers tools (even small talk can look things up), so prefer models that can call them.
+  const capable = (m: ModelInfo): boolean => m.tools !== false
   const best = (a: ModelInfo, b: ModelInfo): number =>
     Number(a.note === 'remote') - Number(b.note === 'remote') || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0)
   for (let t = tier; t <= 3; t++) {
     const at = pool.filter((m) => m.tier === t && capable(m)).sort(best)
     if (at.length) return at[0]
   }
-  return [...pool].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))[0]
+  const pool2 = pool.some(capable) ? pool.filter(capable) : pool
+  return [...pool2].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))[0]
 }

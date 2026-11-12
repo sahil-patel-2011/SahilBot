@@ -23,7 +23,8 @@ export function consultTool(d: ConsultDeps): ToolDef<Args> {
     label: 'Ask an expert',
     core: true,
     effect: 'read',
-    available: () => !!d.advisor(),
+    // Helpers don't consult: a team would multiply the paid calls.
+    available: (state) => !!d.advisor() && !state.depth,
     description: 'Ask a stronger cloud model for advice (hybrid mode). Use it before a big or unfamiliar task (a plan), when you are unsure of the best practice, or when you are stuck after two failed attempts. Send a clear question and the context it needs (the goal, what you tried, exact errors). It only advises; you still do the work. Limited per request, so ask well.',
     parameters: {
       type: 'object',
