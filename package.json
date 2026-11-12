@@ -16,7 +16,8 @@
     "test:accept": "electron-vite build && vitest run --config vitest.accept.config.mts",
     "dist": "electron-vite build && electron-builder --mac",
     "voice:setup": "./scripts/voice-setup.sh",
-    "postinstall": "node scripts/brand-dev.mjs"
+    "postinstall": "node scripts/brand-dev.mjs",
+    "install:mac": "node scripts/install-mac.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
@@ -141,7 +142,8 @@
         "width": 550,
         "height": 380
       }
-    }
+    },
+    "afterPack": "scripts/after-pack.cjs"
   },
   "author": "SahilBot"
 }
