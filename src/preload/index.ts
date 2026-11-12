@@ -136,6 +136,7 @@ const api: SahilBotApi = {
   chat: {
     send: call('chat:send') as never,
     stop: call('chat:stop') as never,
+    steer: call('chat:steer') as never,
     respond: call('chat:respond') as never,
     retry: call('chat:retry') as never,
     editLast: call('chat:editLast') as never,

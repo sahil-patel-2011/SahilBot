@@ -288,6 +288,8 @@ export type ChatEvent =
   | { threadId: string; type: 'thread'; thread: Thread }
   | { threadId: string; type: 'pending'; request: PendingRequest }
   | { threadId: string; type: 'resolved'; id: string }
+  /** Steering messages waiting for the agent's next step (0 = delivered). */
+  | { threadId: string; type: 'steer'; pending: number }
   /** Live progress of a Team of Experts call (callId = the agents tool call). */
   | { threadId: string; type: 'team'; callId: string; members: TeamMember[] }
   /** step = model turns so far; plan = position in the agent's own plan, when it wrote one. */
@@ -571,6 +573,8 @@ export interface SahilBotApi {
   chat: {
     send(input: SendInput): Promise<void>
     stop(threadId: string): Promise<void>
+    /** Message a running agent: it takes it into account from its next step (or sends normally if idle). */
+    steer(threadId: string, text: string): Promise<'steered' | 'sent'>
     respond(threadId: string, requestId: string, answer: string): Promise<void>
     /** Drops the last reply and asks again. */
     retry(threadId: string): Promise<void>

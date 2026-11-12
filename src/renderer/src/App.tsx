@@ -54,6 +54,7 @@ export function App() {
   const [renamingTitle, setRenamingTitle] = useState(false)
   const [teams, setTeams] = useState<Record<string, import('@shared/types').TeamMember[]>>({})
   const [teamOn, setTeamOn] = useState(false)
+  const [steering, setSteering] = useState<Record<string, number>>({})
   const [mini, setMini] = useState<{ on: boolean; threadId?: string }>({ on: false })
   const [teamCap, setTeamCap] = useState<{ maxAgents: number; heavy: boolean; why: string } | null>(null)
   const composer = useRef<ComposerHandle>(null)
@@ -136,6 +137,10 @@ export function App() {
     }
     if (e.type === 'progress') {
       setProgress((p) => ({ ...p, [e.threadId]: e }))
+      return
+    }
+    if (e.type === 'steer') {
+      setSteering((s) => ({ ...s, [e.threadId]: e.pending }))
       return
     }
     if (e.type === 'team') {
@@ -321,7 +326,9 @@ export function App() {
       return
     }
     if (thread && running.has(thread.id)) {
-      setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] }))
+      // ⌘Enter (or attachments): wait until it's done. Enter: steer the agent now.
+      if (o.queue || o.attachments.length || o.images.length) setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] }))
+      else await api.chat.steer(thread.id, o.text).catch((e: Error) => toast(e.message, 'error'))
       return
     }
     let t = thread
@@ -374,6 +381,7 @@ export function App() {
       onVoice={() => setVoiceOn(true)}
       placeholder={isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? 'Reply to SahilBot' : 'How can I help you today?'}
       big={!thread}
+      steering={thread ? steering[thread.id] : 0}
       context={!thread && !isBot ? (
         <Popover label={<><I.Folder size={14} />{isProject ? space?.name : 'Project or folder'} <I.Chevron size={13} /></>} className="under-pick" title="Work in a project or a folder" testId="context-picker">
           {(close) => (

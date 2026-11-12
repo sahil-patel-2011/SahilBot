@@ -501,6 +501,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc === win?.webContents))
   session.defaultSession.setPermissionCheckHandler((wc, perm) => perm === 'media' && wc === win?.webContents)
   handle('chat:stop', (threadId: string) => chat.stop(threadId))
+  handle('chat:steer', (threadId: string, text: string) => chat.steer(threadId, String(text).slice(0, 20_000)))
   handle('chat:respond', (threadId: string, id: string, answer: string) => chat.respond(threadId, id, answer))
   handle('chat:pending', (threadId: string) => chat.pending(threadId))
   handle('chat:retry', (threadId: string) => chat.retry(threadId))

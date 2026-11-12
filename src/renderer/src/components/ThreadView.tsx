@@ -387,6 +387,7 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
             )}
             {m.content}
           </div>
+          {!!m.meta?.steer && <div className="steered-tag" data-testid="steered"><I.Reply size={11} style={{ transform: 'scaleX(-1)' }} />Steered while working</div>}
           {reactions.bot && <span className="reaction left" title="SahilBot reacted" data-testid="bot-reaction">{reactions.bot}</span>}
         </div>
       </div>

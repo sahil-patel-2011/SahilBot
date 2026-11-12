@@ -65,6 +65,8 @@ interface Run {
   unattended?: boolean
   /** A helper agent working for another agent (Team of Experts). */
   helper?: boolean
+  /** Messages the user sent while this run works (steering), added at the start of the next step. */
+  steers?: string[]
 }
 
 const HELPER_NOTE = (depth: number): string => `
@@ -145,6 +147,36 @@ export class Agent {
     run!.pending.delete(requestId)
     this.d.emit({ threadId, type: 'resolved', id: requestId })
     p.resolve(answer)
+  }
+
+  /**
+   * Steer a running agent: the message joins the conversation at the start of its next step (after
+   * the current tool results, so the history stays valid) and the agent adjusts without starting over.
+   * Nothing running: it's sent as a normal message.
+   */
+  async steer(threadId: string, text: string): Promise<'steered' | 'sent'> {
+    const run = this.runs.get(threadId)
+    if (!run || run.ctrl.signal.aborted) {
+      await this.send({ threadId, text })
+      return 'sent'
+    }
+    run.steers = [...(run.steers ?? []), text]
+    this.d.emit({ threadId, type: 'steer', pending: run.steers.length })
+    return 'steered'
+  }
+
+  /** Adds waiting steering messages to the conversation. */
+  private flushSteers(threadId: string, run: Run): boolean {
+    const texts = run.steers?.splice(0) ?? []
+    for (const text of texts) {
+      const m = this.d.db.insertMessage({
+        threadId, role: 'user', content: text, kind: 'normal', status: 'done',
+        meta: { steer: true, note: '[The user sent this while you were working. Take it into account from your next step on: change the plan if needed, don\'t redo work that is already done, and keep going.]' }
+      })
+      this.d.emit({ threadId, type: 'message', message: m })
+    }
+    if (texts.length) this.d.emit({ threadId, type: 'steer', pending: 0 })
+    return texts.length > 0
   }
 
   stop(threadId: string): void {
@@ -297,7 +329,12 @@ export class Agent {
     this.d.emit({ threadId: thread.id, type: 'run', status: 'started' })
     const done = this.speakers(thread, run, space, userText)
       .catch((e) => { this.notice(thread.id, `Run failed: ${(e as Error).message}`); return 'error' as const })
-      .finally(() => { if (this.runs.get(thread.id) === run) this.runs.delete(thread.id) })
+      .finally(() => {
+        if (this.runs.get(thread.id) === run) this.runs.delete(thread.id)
+        // Steered at the very end (or after a stop): nothing is lost, it goes out as the next message.
+        const left = run.steers?.splice(0) ?? []
+        if (left.length && !run.ctrl.signal.aborted) void this.send({ threadId: thread.id, text: left.join('\n\n') }).catch(() => undefined)
+      })
     return { done }
   }
 
@@ -578,6 +615,7 @@ export class Agent {
     const guard = new LoopGuard()
     let nudged = false
     let teamNudged = false
+    let autonomyNudged = false
     let linkChecked = false
     let verified = false
     // Set by execute(): did this run change anything or research anything? Then it gets a self-check pass.
@@ -597,6 +635,8 @@ export class Agent {
     try {
       for (let step = 1; step <= budget; step++) {
         if (run.ctrl.signal.aborted) throw new DOMException('stopped', 'AbortError')
+        // The user steered while the last step ran: their message goes in now.
+        if (this.flushSteers(thread.id, run)) budget = Math.max(budget, step + START_BUDGET)
         const tools = registry.listFor(state)
         const wireTools = registry.wire(tools)
         const prepared = await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: view(db.listMessages(thread.id)), state, window, appendOnly: claude, allowCompact: !claude || step === 1 })
@@ -662,6 +702,16 @@ export class Agent {
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true }, content: `[From the app] Before you finish, double-check your work:\n${track.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${track.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${actions >= 8 ? '- If this took a non-obvious procedure or several tries, save what worked with memory(action="save_skill") so next time is faster.\n' : ''}- Fix anything that's wrong.\nThen write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.` })
             continue
           }
+          // Autonomy: a task stopped to ask "want me to…?" about its own next step. Do it (risky actions still ask).
+          const asksToContinue = /\b(want me to|would you like me to|shall i|should i (go ahead|proceed|continue|start|do)|do you want me to|let me know if you(?:'d| would) like me to)\b[^?]{0,200}\?\s*$/i.test(assistant.content.trim())
+          if (asksToContinue && (actions > 0 || open.length > 0) && !autonomyNudged && !run.unattended && step < HARD_CAP) {
+            autonomyNudged = true
+            budget = Math.max(budget, step + 6)
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself before anything risky (sending, buying, deleting). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
+            continue
+          }
+          // A steering message arrived while this answer was written: keep going with it.
+          if (run.steers?.length && step < HARD_CAP) { budget = Math.max(budget, step + 2); continue }
           // Team of Experts on, but no team yet: send one.
           const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
           if (lastUser?.meta?.team && !run.helper && !(this.teamUsed.get(state.rootId ?? thread.id) ?? 0) && !teamNudged && step < HARD_CAP) {

@@ -32,6 +32,8 @@ export interface Outgoing {
   attachments: Attachment[]
   /** Team of Experts for this message. */
   team?: boolean
+  /** While SahilBot works: true = wait until it finishes (⌘Enter); otherwise it steers the running agent. */
+  queue?: boolean
 }
 
 export const Composer = forwardRef<ComposerHandle, {
@@ -57,6 +59,8 @@ export const Composer = forwardRef<ComposerHandle, {
   context?: ReactNode
   /** The big Home version of the box. */
   big?: boolean
+  /** Steering messages waiting for the agent's next step. */
+  steering?: number
   /** Team of Experts capacity for the current model (null = unknown yet). */
   team?: { on: boolean; maxAgents: number; heavy: boolean; why: string } | null
   onTeam?: (on: boolean) => void
@@ -140,9 +144,9 @@ export const Composer = forwardRef<ComposerHandle, {
   }
 
   const canSend = !!(text.trim() || images.length || atts.length)
-  const send = (): void => {
+  const send = (queue = false): void => {
     if (!canSend) return
-    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on })
+    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on, queue })
     setText('')
     setImages([])
     setAtts([])
@@ -206,7 +210,8 @@ export const Composer = forwardRef<ComposerHandle, {
               e.preventDefault()
               // Enter while dictating: finish dictation first, then send what was said.
               if (dictating) { void toggleDictation().then(() => requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-testid="send"]')?.click())); return }
-              send()
+              // While SahilBot works: Enter steers it, ⌘Enter queues for when it's done.
+              send(e.metaKey || e.ctrlKey)
             }
           }}
           data-testid="composer-input"
@@ -237,7 +242,7 @@ export const Composer = forwardRef<ComposerHandle, {
           {p.running && !p.answering && !canSend ? (
             <button className="c-btn primary" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
           ) : canSend ? (
-            <button className="c-btn primary" title="Send" onClick={send} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
+            <button className="c-btn primary" title={p.running && !p.answering ? 'Steer: SahilBot takes this into account right away (⌘Enter queues it instead)' : 'Send'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
           ) : (
             <button className="c-btn ghost" title="Talk with SahilBot (⌘⇧V)" onClick={p.onVoice} data-testid="voice-btn"><I.Wave /></button>
           )}
@@ -274,6 +279,7 @@ export const Composer = forwardRef<ComposerHandle, {
           ))}
         </Popover>
       </div>
+      {p.running && !p.answering && <div className="steer-hint" data-testid="steer-hint"><kbd>Enter</kbd> steers SahilBot now · <kbd>⌘Enter</kbd> queues for when it's done{p.steering ? <span className="steering"> · <span className="spin" /> steering at its next step…</span> : null}</div>}
       {dictError && <div className="bypass-banner">{dictError}</div>}
       {p.mode === 'bypass' && <div className="bypass-banner">Bypass is on for this chat: actions run without asking, except hard stops.</div>}
     </div>

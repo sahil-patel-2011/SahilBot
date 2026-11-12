@@ -133,3 +133,39 @@ describe('human checks', () => {
     await site.close()
   })
 })
+
+describe('steering and queueing', () => {
+  let llm: MockLlm
+  beforeAll(async () => { llm = await startMockLlm() })
+  afterAll(async () => { await llm.close() })
+  const lastUserOf = (req: Record<string, any>): string => String([...req.messages].reverse().find((m: any) => m.role === 'user')?.content ?? '')
+
+  test('Enter while it works steers the running agent; ⌘Enter queues for after', async () => {
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
+    llm.script.push(
+      // A slow first answer, so there's time to steer.
+      { content: 'Painting the logo red, one careful stroke at a time and still going for a while longer now.', delay: 120 },
+      (req) => lastUserOf(req).includes('make it blue') ? { content: 'Switched to blue as you asked.' } : { content: 'missed the steer' },
+      { content: 'Queued one answered.' }
+    )
+    await page.fill('[data-testid="composer-input"]', 'Paint the logo')
+    await page.keyboard.press('Enter')
+    await page.locator('[data-testid="steer-hint"]').waitFor()
+    // Steer with Enter.
+    await page.fill('[data-testid="composer-input"]', 'actually make it blue')
+    await page.keyboard.press('Enter')
+    // Queue with ⌘Enter.
+    await page.fill('[data-testid="composer-input"]', 'then say hi')
+    await page.keyboard.press('Meta+Enter')
+    await expect.poll(() => page.locator('[data-testid="queued"]').count()).toBe(1)
+    await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').allInnerTexts().then((t) => t.join('\n')), { timeout: 20_000 }).toContain('Switched to blue')
+    expect(await page.locator('[data-testid="steered"]').count()).toBe(1)
+    // The steer reached the model in the same run, with a note saying it came mid-task.
+    const steered = llm.requests.find((r) => lastUserOf(r).includes('make it blue'))!
+    expect(JSON.stringify(steered.messages)).toContain('while you were working')
+    // The queued message goes out after the run ends.
+    await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 20_000 }).toContain('Queued one answered')
+    expect(lastUserOf(llm.requests.at(-1)!)).toContain('then say hi')
+    await app.close()
+  })
+})
