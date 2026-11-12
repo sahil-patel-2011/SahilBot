@@ -86,3 +86,16 @@ describe('skills index', () => {
     void mkdirSync; void writeFileSync
   })
 })
+
+describe('setup picks', () => {
+  test('a 24 GB Mac gets the best model that fits, a fast one, and one more', async () => {
+    process.env.FOREMAN_RAM_GB = '24'
+    const { Endpoints } = await import('../../src/main/llm/endpoints')
+    const fake = { get: () => ({ hiddenModels: [], shownModels: [] }) } as never
+    const picks = new Endpoints(fake).setupPicks()
+    delete process.env.FOREMAN_RAM_GB
+    expect(picks.map((p) => p.role)).toEqual(['Best for agent work on this Mac', 'Fast: quick chats and voice', 'Also great'])
+    expect(picks[0].pull).toBe('gemma4:12b')
+    expect(picks[1].pull).toBe('lfm3:1.7b')
+  })
+})

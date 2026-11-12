@@ -106,7 +106,8 @@ export class Endpoints {
     const picks: Array<{ r: typeof RECOMMENDED[number]; role: string }> = []
     const add = (r: typeof RECOMMENDED[number] | undefined, role: string): void => { if (r && !picks.some((p) => p.r === r)) picks.push({ r, role }) }
     add(fit[0], 'Best for agent work on this Mac')
-    add(fit.filter((r) => r.tier <= 1).sort((a, b) => b.rank - a.rank)[0] ?? fit[fit.length - 1], 'Fast: quick chats and voice')
+    // The fast one: the smallest light model that isn't already the best pick.
+    add(fit.filter((r) => r.tier <= 1 && r !== fit[0]).sort((a, b) => a.tier - b.tier || a.sizeGB - b.sizeGB)[0], 'Fast: quick chats and voice')
     for (const r of fit) { if (picks.length >= 3) break; add(r, 'Also great') }
     const installed = new Set((this.last?.models ?? []).filter((m) => m.installed).map((m) => m.id.replace(/:latest$/, '')))
     return picks.map(({ r, role }) => ({ pull: r.pull, label: r.label, blurb: r.blurb, sizeGB: r.sizeGB, tier: r.tier, installed: installed.has(r.pull), role }))

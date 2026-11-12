@@ -632,6 +632,8 @@ export class Agent {
     let budget = START_BUDGET
     let actions = 0
     state.consults = 0
+    // Each new request gets a fresh team budget (helpers of helpers share their root's).
+    if (!run.helper) this.teamUsed.delete(thread.id)
     let doneItems = state.todos.filter((t) => t.status === 'done').length
     const planPos = (): { at: number; of: number } | undefined => {
       if (!state.todos.length) return undefined

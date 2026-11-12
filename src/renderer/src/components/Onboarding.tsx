@@ -93,6 +93,16 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
                 <div className="key-edit"><a className="btn" href="https://ollama.com/download" target="_blank" rel="noreferrer">Get Ollama</a><button className="btn" onClick={detect}>Check again</button></div>
               </div>
             )}
+            {found !== null && !ollama && (picks ?? []).length > 0 && (
+              <div className="setup-pick-list later" data-testid="setup-picks-later">
+                <div className="hint">Then you'll get, picked for this Mac:</div>
+                {(picks ?? []).map((p) => (
+                  <div className="setup-pick" key={p.pull}>
+                    <div className="setup-pick-text"><div className="setup-pick-role">{p.role}</div><b>{p.label}</b> <span className="hint">· {p.sizeGB} GB</span><div className="hint">{p.blurb}</div></div>
+                  </div>
+                ))}
+              </div>
+            )}
             {lmstudio && ollama && <div className="found-banner"><I.Check size={15} /> LM Studio is running with {lmstudio.models} models; they're available too.</div>}
             <div className="onboard-cloud">
               <div><b>Claude (optional)</b> <span className="hint">Add an Anthropic API key for the strongest models, or so your local model can ask Claude for help when it's stuck. Spending is capped (default $200 a month) and you can turn cloud off anytime.</span></div>

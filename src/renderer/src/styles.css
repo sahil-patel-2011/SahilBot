@@ -1024,3 +1024,5 @@ a.btn { text-decoration: none; color: inherit; display: inline-block; }
 .row-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent); border-top-color: var(--accent); animation: ps-spin .8s linear infinite; flex: none; }
 .block .bubble.ai { white-space: pre-line; }
 .block .bubble.ai .md { white-space: normal; }
+.setup-pick-list.later .setup-pick { opacity: .7; padding: 9px 14px; }
+.onboard-card { max-height: 92vh; overflow-y: auto; }
