@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Settings } from '@shared/types'
 import { api } from '../api'
 import { Mascot } from '../brand'
@@ -10,6 +10,14 @@ type Pick = Awaited<ReturnType<typeof api.models.setupPicks>>[number]
  * First run: your name, the three best models for this Mac (one click each), an optional cloud key,
  * and the workspace folder. Anything already running (Ollama, LM Studio) is found automatically.
  */
+const SETUP_TEXT: Record<string, string> = {
+  download: 'Downloading Ollama…',
+  verify: 'Checking it with Apple\'s security check…',
+  install: 'Installing…',
+  start: 'Starting Ollama in the background…',
+  done: 'Ollama is ready.'
+}
+
 export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (s: Settings) => void }) {
   const [step, setStep] = useState(0)
   const [name, setName] = useState(settings.userName)
@@ -20,12 +28,23 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
   const [key, setKey] = useState('')
   const [keyMsg, setKeyMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [ram, setRam] = useState<number | null>(null)
+  const [setup, setSetup] = useState<{ phase: string; pct?: number; error?: string } | null>(null)
+  const picksRef = useRef<Pick[] | null>(null)
+  picksRef.current = picks
 
   const detect = (): void => {
     setFound(null)
     void Promise.all([api.detectProviders(), api.models.setupPicks(), api.system.info()]).then(([f, p, sys]) => { setFound(f); setPicks(p); setRam(sys.totalGB) })
   }
   useEffect(detect, [])
+  // One-click setup: when Ollama is up, the best model for this Mac starts downloading right away.
+  useEffect(() => api.ollama.onSetup((e) => {
+    setSetup(e)
+    if (e.phase !== 'done') return
+    detect()
+    const best = picksRef.current?.find((p) => !p.installed)
+    if (best) { setPull((x) => ({ ...x, [best.pull]: { pct: 0, status: 'starting' } })); void api.models.pull(best.pull) }
+  }), [])
   useEffect(() => api.models.onPull((e) => {
     setPull((p) => ({ ...p, [e.tag]: { pct: e.total ? Math.round(((e.completed ?? 0) / e.total) * 100) : p[e.tag]?.pct ?? 0, status: e.status, error: e.error, done: e.done && !e.error } }))
   }), [])
@@ -88,9 +107,19 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
                 {picks?.length === 0 && <div className="hint">This Mac doesn't have enough memory for the recommended local models. Use a cloud key below.</div>}
               </div>
             ) : (
-              <div className="setup-pick install-ollama">
-                <div className="setup-pick-text"><b>Install Ollama to run models on this Mac</b><div className="hint">It's free and takes a minute. Then press Check again.{lmstudio ? ` LM Studio is running with ${lmstudio.models} models; SahilBot uses those too.` : ''}</div></div>
-                <div className="key-edit"><a className="btn" href="https://ollama.com/download" target="_blank" rel="noreferrer">Get Ollama</a><button className="btn" onClick={detect}>Check again</button></div>
+              <div className="setup-pick install-ollama" data-testid="ollama-setup">
+                <div className="setup-pick-text">
+                  <b>Set up local models</b>
+                  <div className="hint">{setup ? SETUP_TEXT[setup.phase] ?? '' : `SahilBot installs Ollama (free, about 230 MB, no password needed), starts it, and downloads the best model for this Mac.${lmstudio ? ` LM Studio is running with ${lmstudio.models} models; SahilBot uses those too.` : ''}`}</div>
+                  {setup?.phase === 'download' && <div className="meter" style={{ width: '100%', marginTop: 6 }}><i style={{ width: `${setup.pct ?? 0}%` }} /></div>}
+                  {setup?.error && <div className="hint" style={{ color: 'var(--danger)' }}>{setup.error}</div>}
+                </div>
+                <div className="key-edit">
+                  {setup && !setup.error && setup.phase !== 'done'
+                    ? <span className="hint">{setup.phase === 'download' && setup.pct ? `${setup.pct}%` : <span className="spin" />}</span>
+                    : <button className="btn primary" onClick={() => { setSetup({ phase: 'download', pct: 0 }); void api.ollama.setup() }} data-testid="ollama-setup-go">{setup?.error ? 'Try again' : 'Set up for me'}</button>}
+                  <button className="btn" onClick={detect} title="Already installed Ollama or LM Studio yourself?">Check again</button>
+                </div>
               </div>
             )}
             {found !== null && !ollama && (picks ?? []).length > 0 && (

@@ -45,6 +45,7 @@ import { SettingsStore, type SettingsPatch } from './settings'
 import { SpaceFiles } from './spaces'
 import { BrowserManager } from './browser/manager'
 import { Vault } from './vault'
+import { findOllamaBinary, setupOllama, startOllama, stopOllama } from './ollama-setup'
 
 /** Set by the automated tests: run without ever showing a window. */
 const HIDDEN = !!process.env.SAHILBOT_HIDDEN
@@ -391,11 +392,17 @@ app.whenReady().then(() => {
 
   // One-click downloads of recommended models through Ollama, with progress.
   const pulling = new Set<string>()
+  // One click: install Ollama if needed (verified, no admin password) and run it in the background.
+  handle('ollama:setup', () => setupOllama(settings.providers().ollama.baseUrl, (e) => toWin('ollama:setup', e)))
+  handle('ollama:installed', () => !!findOllamaBinary())
+
   handle('models:pull', async (tag: string) => {
     if (!/^[\w.\-/]+(:[\w.\-]+)?$/.test(tag) || pulling.has(tag)) return
     pulling.add(tag)
     const send = (e: Record<string, unknown>): void => toWin('models:pull', { tag, ...e })
     try {
+      // Installed but not running (e.g. after a restart): start it rather than failing.
+      await startOllama(settings.providers().ollama.baseUrl)
       const res = await fetch(`${root(settings.providers().ollama.baseUrl)}/api/pull`, { method: 'POST', body: JSON.stringify({ model: tag, stream: true }) })
       if (!res.ok || !res.body) throw new Error(`Ollama answered ${res.status}`)
       const dec = new TextDecoder()
@@ -414,7 +421,7 @@ app.whenReady().then(() => {
       }
       send({ status: 'done', done: true })
     } catch (e) {
-      send({ status: 'error', done: true, error: (e as Error).message.includes('fetch failed') ? 'Ollama isn\'t running. Open the Ollama app, then try again.' : (e as Error).message })
+      send({ status: 'error', done: true, error: (e as Error).message.includes('fetch failed') ? 'Ollama isn\'t running. Use "Set up local models" in Settings → Models, or open the Ollama app, then try again.' : (e as Error).message })
     } finally {
       pulling.delete(tag)
     }
@@ -605,7 +612,9 @@ app.whenReady().then(() => {
   handle('voice:dictateStart', () => voice.startDictation())
   handle('voice:dictateStop', () => voice.stopDictation())
   ipcMain.on('voice:frame', (_e, buf: Float32Array) => voice.frame(buf))
-  app.on('before-quit', () => { voice.dispose(); scheduler.stop(); browser.dispose() })
+  app.on('before-quit', () => { voice.dispose(); scheduler.stop(); browser.dispose(); stopOllama() })
+  // Local models just work after a restart: start Ollama in the background if it's installed and not running.
+  if (!process.env.FOREMAN_BASE_URL) void startOllama(settings.providers().ollama.baseUrl).catch(() => undefined)
 
   // The app's own window may use the microphone (voice); websites in the browser panel may not.
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc === win?.webContents))

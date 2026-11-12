@@ -38,6 +38,8 @@ export interface ToolContext {
   offerConnect?(query: string): Promise<string[]>
   /** The model this run uses. */
   model?: string
+  /** Tokens this call's output may use before it is cut short (set for tools that size their own output). */
+  outputBudget?: number
   /** Runs helper agents in parallel and returns their reports (Team of Experts). */
   spawnAgents?(tasks: Array<{ title: string; task: string }>): Promise<Array<{ title: string; status: string; report: string }>>
 }

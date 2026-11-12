@@ -1,10 +1,11 @@
+import { tmpdir } from 'node:os'
 // Dev helper: screenshots of the clarifying-questions card and the plan approval card (mock model).
 import { test } from 'vitest'
 import { startMockLlm } from '../fixtures/mock-llm'
 import { launch, tempProfile } from '../accept/app'
 
 test('plan screenshots', async () => {
-  const out = process.env.SHOTS_DIR ?? '.'
+  const out = process.env.SHOTS_DIR ?? tmpdir()
   const llm = await startMockLlm()
   const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
   await page.setViewportSize({ width: 1400, height: 900 })

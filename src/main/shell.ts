@@ -74,7 +74,12 @@ export function buildMenu(send: (a: MenuAction) => void): void {
     { role: 'windowMenu' },
     {
       role: 'help',
-      submenu: [{ label: 'SahilBot Help', click: () => void shell.openExternal('https://ollama.com/download') }]
+      submenu: [
+        { label: 'Local Models and API Keys…', click: () => send('settings') },
+        { label: 'Connect Apps…', click: () => send('connect') },
+        { type: 'separator' },
+        { label: 'Ollama Website', click: () => void shell.openExternal('https://ollama.com') }
+      ]
     }
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))

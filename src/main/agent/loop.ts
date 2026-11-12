@@ -75,7 +75,7 @@ const HELPER_NOTE = (depth: number): string => `
 You are one of several helper agents working in parallel for a lead agent on a bigger job. The message below is your part.
 - You can't see the lead's conversation, and nobody can approve actions for you: anything that needs the user's OK is skipped, so leave it for the lead and say what you would do.
 - Work fully and on your own: look things up, read pages and files, run commands, make files when your part needs it. Don't stop early, and check what you report.
-- Finish with a report for the lead: what you found (with source URLs and exact names, numbers and dates), files you made (full paths), and anything you couldn't do or confirm. Complete but compact.${depth < 2 ? '\n- If your part is itself big, you may split it with the agents tool.' : '\n- Do the work yourself; you can\'t start more helpers.'}`
+- Finish with a report for the lead, key findings first: what you found (with source URLs and exact names, numbers and dates), files you made (full paths), and anything you couldn't do or confirm. Complete but compact.${depth < 2 ? '\n- If your part is itself big, you may split it with the agents tool.' : '\n- Do the work yourself; you can\'t start more helpers.'}`
 
 
 const MAX_BOT_HOPS = 4
@@ -769,7 +769,7 @@ export class Agent {
 
         for (const call of assistant.toolCalls) {
           if (run.ctrl.signal.aborted) throw new DOMException('stopped', 'AbortError')
-          await this.execute(thread, run, state, call, { failures, untrusted, userText, guard, track })
+          await this.execute(thread, run, state, call, { failures, untrusted, userText, guard, track, window })
           db.setState(thread.id, state)
         }
 
@@ -925,7 +925,7 @@ export class Agent {
     run: Run,
     state: ThreadState,
     call: ToolCall,
-    ctx: { failures: Map<string, number>; untrusted: string[]; userText: string; guard: LoopGuard; track: { changed: boolean; researched: boolean } }
+    ctx: { failures: Map<string, number>; untrusted: string[]; userText: string; guard: LoopGuard; track: { changed: boolean; researched: boolean }; window: number }
   ): Promise<void> {
     const { registry } = this.d
     const s = this.d.settings.get()
@@ -1013,6 +1013,7 @@ export class Agent {
         return answer === 'connected' ? registry.search(preset.name, state).map((h) => h.name) : []
       },
       spawnAgents: (tasks) => this.runTeam(thread, run, call.id, tasks),
+      outputBudget: tool.name === 'agents' ? teamShare(ctx.window) : undefined,
       model: this.lastModel.get(thread.id)
     }
     let out: ToolOutput
@@ -1029,7 +1030,8 @@ export class Agent {
     const cep = this.d.endpoints.for(cm)
     const counter = this.d.counter?.(cep.baseUrl, cm) ?? new ServerTokenCounter(cep.baseUrl, cm)
     const id = `r-${call.id.replace(/[^\w-]/g, '').slice(-12)}-${Date.now().toString(36)}`
-    const off = await this.d.results.maybeOffload(out.text, id, counter)
+    // The team's reports are the work itself: the lead must see them whole, so they get a big share of the window.
+    const off = await this.d.results.maybeOffload(out.text, id, counter, tool.name === 'agents' ? teamShare(ctx.window) : undefined)
     if (tool.untrusted) ctx.untrusted.push(out.text)
     ctx.guard.record(call, out.text)
     if (effect !== 'read') ctx.track.changed = true
@@ -1060,6 +1062,9 @@ function planText(state: ThreadState): string {
   const mark = { pending: '[ ]', in_progress: '[>]', done: '[x]' } as const
   return state.todos.map((t) => `${mark[t.status]} ${t.text}`).join('\n')
 }
+
+/** Tokens the lead's team reports may take: about a third of the window. */
+const teamShare = (window: number): number => Math.max(4000, Math.floor(window * 0.33))
 
 function botMeta(b: Space): Record<string, unknown> {
   return { botId: b.id, botName: b.name, botColor: b.color }

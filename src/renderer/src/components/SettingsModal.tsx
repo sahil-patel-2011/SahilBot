@@ -337,6 +337,22 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
 
 // ------------------------------------------------------------------ keys & servers
 
+const SETUP_PHASE: Record<string, string> = { download: 'Downloading Ollama…', verify: 'Checking it with Apple\'s security check…', install: 'Installing…', start: 'Starting Ollama…', done: 'Ollama is running.' }
+
+/** Ollama isn't running: install it if needed and start it, in one click. */
+function OllamaSetup({ onReady }: { onReady: () => void }) {
+  const [st, setSt] = useState<{ phase: string; pct?: number; error?: string } | null>(null)
+  const [installed, setInstalled] = useState<boolean | null>(null)
+  useEffect(() => void api.ollama.installed().then(setInstalled), [])
+  useEffect(() => api.ollama.onSetup((e) => { setSt(e); if (e.phase === 'done') onReady() }), [onReady])
+  const busy = st && !st.error && st.phase !== 'done'
+  return (
+    <Row title={installed ? 'Start Ollama' : 'Set up local models'} sub={st?.error ?? (st ? `${SETUP_PHASE[st.phase] ?? ''}${st.phase === 'download' && st.pct ? ` ${st.pct}%` : ''}` : installed ? 'Ollama is installed but not running. SahilBot can run it in the background.' : 'SahilBot installs Ollama (free, about 230 MB, no password), checks it with Apple\'s security check, and runs it in the background.')}>
+      {busy ? <span className="spin" /> : <button className="btn primary" onClick={() => { setSt({ phase: installed ? 'start' : 'download' }); void api.ollama.setup() }} data-testid="settings-ollama-setup">{st?.error ? 'Try again' : installed ? 'Start' : 'Set up'}</button>}
+    </Row>
+  )
+}
+
 function Keys({ s, patch, onChanged, models }: P & { onChanged: () => void; models: ModelList | null }) {
   // Status, not alarms: a server that isn't running is just "Not running".
   const status = (id: string): string | undefined => {
@@ -356,6 +372,7 @@ function Keys({ s, patch, onChanged, models }: P & { onChanged: () => void; mode
   const local = (id: 'ollama' | 'lmstudio', name: string, sub: string) => (
     <>
       <Row title={<>{name}{status(id) && <span className={`tier-badge${status(id)!.startsWith('Running') ? ' ok' : ''}`}>{status(id)}</span>}</>} sub={sub}><Toggle on={s.providers[id].enabled} onChange={(v) => void patch({ providers: { ...s.providers, [id]: { ...s.providers[id], enabled: v } } }).then(onChanged)} label={name} testId={`provider-${id}`} /></Row>
+      {id === 'ollama' && s.providers.ollama.enabled && status('ollama') === 'Not running' && <OllamaSetup onReady={onChanged} />}
       {s.providers[id].enabled && <Row title="Address"><Field value={s.providers[id].baseUrl} width={260} testId={`${id}-url`} onSave={(v) => void patch({ providers: { ...s.providers, [id]: { ...s.providers[id], baseUrl: v } } }).then(onChanged)} /></Row>}
     </>
   )

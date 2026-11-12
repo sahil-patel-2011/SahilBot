@@ -127,3 +127,14 @@ describe('keyless search fallbacks parse their pages', () => {
       .toEqual([{ title: 'A', url: 'https://example.com/a', snippet: 'snip' }])
   })
 })
+
+describe('team reports', () => {
+  test('the lead sees every report: each gets an even share instead of one cut through the middle', async () => {
+    const { agentsTool } = await import('../../src/main/agent/tools/agents')
+    const reports = Array.from({ length: 12 }, (_, i) => ({ title: `Part ${i + 1}`, status: 'done', report: `FINDING-${i + 1} ` + 'detail '.repeat(3000) }))
+    const out = await agentsTool().run({ tasks: reports.map((r) => ({ title: r.title, task: 'x' })) }, { spawnAgents: async () => reports, outputBudget: 20_000 } as never)
+    for (let i = 1; i <= 12; i++) expect(out.text).toContain(`FINDING-${i} `)
+    expect(out.text.length).toBeLessThan(20_000 * 3.5)
+    expect(out.text).toMatch(/Don't redo their research/)
+  })
+})

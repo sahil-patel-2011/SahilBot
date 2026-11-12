@@ -1,9 +1,10 @@
+import { tmpdir } from 'node:os'
 import { test } from 'vitest'
 import { startMockLlm } from '../fixtures/mock-llm'
 import { launch, tempProfile } from '../accept/app'
 
 test('ui v4 screenshots', async () => {
-  const out = process.env.SHOTS_DIR ?? '.'
+  const out = process.env.SHOTS_DIR ?? tmpdir()
   const llm = await startMockLlm()
   const { app, page } = await launch(tempProfile(), llm.url)
   await page.setViewportSize({ width: 1360, height: 880 })

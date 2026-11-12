@@ -8,7 +8,7 @@ import { startTestSite } from '../fixtures/test-site'
 import { launch, tempProfile } from '../accept/app'
 
 test('ux screenshots', async () => {
-  const out = process.env.SHOTS_DIR ?? '.'
+  const out = process.env.SHOTS_DIR ?? tmpdir()
   const llm = await startMockLlm()
   const site = await startTestSite()
   const ws = mkdtempSync(join(tmpdir(), 'sb-ux-'))

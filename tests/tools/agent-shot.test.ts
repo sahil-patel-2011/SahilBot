@@ -6,7 +6,7 @@ import { startMockLlm } from '../fixtures/mock-llm'
 import { launch, tempProfile } from '../accept/app'
 
 test('agent screenshot', async () => {
-  const out = process.env.SHOTS_DIR ?? '.'
+  const out = process.env.SHOTS_DIR ?? tmpdir()
   const llm = await startMockLlm()
   const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
   await page.evaluate((ws) => window.foreman.settings.set({ workspaceDir: ws, search: { provider: 'none', searxngUrl: '', hasBraveKey: false } }), mkdtempSync(join(tmpdir(), 'ws-')))

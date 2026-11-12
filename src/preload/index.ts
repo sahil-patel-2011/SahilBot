@@ -84,6 +84,15 @@ const api: SahilBotApi = {
     return () => ipcRenderer.removeListener('budget:changed', fn)
   },
   detectProviders: call('detectProviders') as never,
+  ollama: {
+    setup: call('ollama:setup') as never,
+    installed: call('ollama:installed') as never,
+    onSetup: (cb) => {
+      const h = (_e: unknown, ev: Parameters<typeof cb>[0]): void => cb(ev)
+      ipcRenderer.on('ollama:setup', h)
+      return () => { ipcRenderer.removeListener('ollama:setup', h) }
+    }
+  },
   pickFolder: call('pickFolder') as never,
   schedules: {
     list: call('schedules:list') as never,

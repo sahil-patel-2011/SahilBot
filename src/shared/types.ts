@@ -521,6 +521,12 @@ export interface SahilBotApi {
   onBudgetChanged(cb: () => void): () => void
   /** Finds local model servers already running and the best model on each that fits this Mac. */
   detectProviders(): Promise<Array<{ id: string; name: string; baseUrl: string; models: number; best: string | null }>>
+  /** Local models in one click: installs Ollama if needed (checked by Apple's notarization) and runs it in the background. */
+  ollama: {
+    setup(): Promise<void>
+    installed(): Promise<boolean>
+    onSetup(cb: (e: { phase: 'download' | 'verify' | 'install' | 'start' | 'done' | 'error'; pct?: number; error?: string }) => void): () => void
+  }
   schedules: {
     list(): Promise<ScheduledTask[]>
     create(t: { title: string; prompt: string; schedule: Schedule; spaceId: string }): Promise<ScheduledTask>

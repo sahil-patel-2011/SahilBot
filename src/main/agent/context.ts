@@ -69,9 +69,9 @@ export class ResultStore {
     mkdirSync(dir, { recursive: true })
   }
 
-  async maybeOffload(text: string, id: string, counter: TokenCounter): Promise<{ text: string; offloaded: boolean; tokens: number }> {
+  async maybeOffload(text: string, id: string, counter: TokenCounter, limit = RESULT_LIMIT): Promise<{ text: string; offloaded: boolean; tokens: number }> {
     const tokens = await counter.count(text)
-    if (tokens <= RESULT_LIMIT) return { text, offloaded: false, tokens }
+    if (tokens <= limit) return { text, offloaded: false, tokens }
     writeFileSync(join(this.dir, `${id}.txt`), text)
     const lines = text.split('\n').length
     const head = text.slice(0, HEAD_CHARS)

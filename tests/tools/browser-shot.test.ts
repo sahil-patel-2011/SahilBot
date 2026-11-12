@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import { writeFileSync } from 'node:fs'
 import { test } from 'vitest'
 import { startMockLlm } from '../fixtures/mock-llm'
@@ -5,7 +6,7 @@ import { startTestSite } from '../fixtures/test-site'
 import { launch, tempProfile } from '../accept/app'
 
 test('browser panel screenshot (native view included)', async () => {
-  const out = process.env.SHOTS_DIR ?? '.'
+  const out = process.env.SHOTS_DIR ?? tmpdir()
   const [llm, site] = await Promise.all([startMockLlm(), startTestSite()])
   const { app, page } = await launch(tempProfile(), llm.url)
   llm.script.push(
