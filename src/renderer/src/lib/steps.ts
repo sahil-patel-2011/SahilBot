@@ -54,6 +54,10 @@ export function describe(step: Step): [Category, string, string] {
     case 'run_command': return ['write', `Ran ${q(a.command, 44)}`, `Running ${q(a.command, 44)}`]
     case 'agents': return ['other', `Ran ${a.tasks?.length ?? 0} helper agents`, `Running ${a.tasks?.length ?? 0} helper agents`]
     case 'consult': return ['search', 'Asked an expert model', 'Asking an expert model']
+    case 'research': {
+      const where = ({ pubmed: 'PubMed', pubmed_abstract: 'PubMed abstracts', clinical_trials: 'ClinicalTrials.gov', drug_label: 'the FDA label', wikipedia: 'Wikipedia', arxiv: 'arXiv', doi: 'DOI records' } as Record<string, string>)[a.source] ?? a.source
+      return ['search', a.query ? `Searched ${where} for “${q(a.query, 34)}”` : `Read ${where}`, `Searching ${where}`]
+    }
     case 'computer':
       switch (a.action) {
         case 'screenshot': return ['read', 'Looked at the screen', 'Looking at the screen']

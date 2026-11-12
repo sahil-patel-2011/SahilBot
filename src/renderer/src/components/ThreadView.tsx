@@ -154,7 +154,7 @@ const PREPARING: Record<string, string> = {
   file_write: 'Preparing to write a file', create_document: 'Building a document', file_manage: 'Preparing a file change',
   web_search: 'Preparing a web search', fetch_page: 'Opening a page', browser: 'Preparing a browser step', todo: 'Planning',
   memory: 'Updating memory', verify: 'Double-checking the work', ask_user: 'Writing a question', schedule: 'Setting up a schedule', find_tools: 'Looking for tools',
-  run_command: 'Preparing a command', agents: 'Putting together a team', consult: 'Asking an expert', computer: 'Getting ready to use your Mac', cursor: 'Preparing a Cursor task', mac_apps: 'Opening a Mac app'
+  research: 'Searching trusted sources', run_command: 'Preparing a command', agents: 'Putting together a team', consult: 'Asking an expert', computer: 'Getting ready to use your Mac', cursor: 'Preparing a Cursor task', mac_apps: 'Opening a Mac app'
 }
 
 /** "Thinking… 12s" / "Preparing to write a file… 3s" while the model works. */

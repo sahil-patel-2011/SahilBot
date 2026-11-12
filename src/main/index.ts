@@ -36,6 +36,7 @@ import { docxText, pdfText, pptxText } from './docs/read'
 import { RuleStore } from './rules'
 import { cursorTool, macAppsTool } from './agent/tools/apps'
 import { shellTool } from './agent/tools/shell'
+import { researchTool } from './agent/tools/research'
 import { agentsTool } from './agent/tools/agents'
 import { computerTool } from './agent/tools/computer'
 import { consultTool } from './agent/tools/consult'
@@ -181,6 +182,7 @@ app.whenReady().then(() => {
     { ...cursorTool(() => secrets.get('cursorKey')), core: true },
     { ...macAppsTool(), core: true },
     shellTool(),
+    researchTool(),
     agentsTool(),
     computerTool({
       enterMini: (id) => enterMini(id),

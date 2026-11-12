@@ -8,7 +8,8 @@ Built-in tools are always available (no limit on how many). Connected apps' tool
 | todo(items) | Your plan. Send the whole list each time; the user sees it as a checklist | read |
 | ask_user(question, options) | A decision only the user can make | read |
 | web_search(query, count) | Finding pages (falls back across engines automatically) | read |
-| fetch_page(url, chunk) | Reading a page's text in ~1.5k-token chunks | read |
+| fetch_page(url, chunk) | Reading any page's text in ~1.5k-token chunks | read |
+| research(source, query/ids) | PubMed (search, abstracts), ClinicalTrials.gov, FDA drug labels, Wikipedia, arXiv, DOI citations via official APIs | read |
 | browser(action, …) | Real browsing: logins, clicks, forms (`fill_form` does a whole form at once). See browser.md | read → write_external |
 | file_read / file_write / file_manage | Files in the workspace and attached folders (delete always asks) | read / write_local / destructive |
 | create_document(path, …) | .pdf, .docx, .pptx, .xlsx. See office.md | write_local |

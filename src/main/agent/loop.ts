@@ -986,7 +986,7 @@ export class Agent {
     if (tool.untrusted) ctx.untrusted.push(out.text)
     ctx.guard.record(call, out.text)
     if (effect !== 'read') ctx.track.changed = true
-    if (tool.name === 'web_search' || tool.name === 'fetch_page' || (tool.name === 'browser' && /get_text|snapshot|navigate/.test(call.arguments))) ctx.track.researched = true
+    if (tool.name === 'web_search' || tool.name === 'fetch_page' || tool.name === 'research' || (tool.name === 'browser' && /get_text|snapshot|navigate/.test(call.arguments))) ctx.track.researched = true
     const team = this.lastTeam.get(call.id)
     if (team) this.lastTeam.delete(call.id)
     this.toolMessage(thread.id, call, wrapToolOutput(tool.name, off.text, !!tool.untrusted), {
