@@ -653,7 +653,10 @@ export class Agent {
         // Keep the plan in view on long runs (appended at the end, so the cached prefix is untouched).
         const open = state.todos.filter((t) => t.status !== 'done')
         const late = step >= budget - 2 ? ' You are close to this run\'s step budget: finish the current item, then summarize what is done and what is left.' : ''
-        if (open.length && (prepared.compacted || (step > 1 && step % 5 === 0) || late)) prepared.wire.push({ role: 'user', content: `[Plan reminder from the app]${late}\n${planText(state)}` })
+        // Working notes ride along with the plan, and always come back right after a summary.
+        const notes = state.notes ? `\nYour working notes:\n${state.notes}` : ''
+        if (open.length && (prepared.compacted || (step > 1 && step % 5 === 0) || late)) prepared.wire.push({ role: 'user', content: `[Plan reminder from the app]${late}\n${planText(state)}${notes}` })
+        else if (prepared.compacted && notes) prepared.wire.push({ role: 'user', content: `[From the app] Older messages were summarized.${notes}` })
         else if (late) prepared.wire.push({ role: 'user', content: `[From the app]${late}` })
 
         const assistant = await this.stream(thread.id, model, prepared.wire, wireTools, window, run, speaker, routed)

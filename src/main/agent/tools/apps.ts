@@ -37,7 +37,12 @@ function allowed(p: string, ctx: ToolContext): string {
 type CursorArgs = {
   action: 'status' | 'open' | 'agent' | 'cloud_launch' | 'cloud_list' | 'cloud_status' | 'cloud_followup' | 'cloud_stop'
   path?: string; line?: number; task?: string; folder?: string; repo?: string; ref?: string; id?: string; model?: string
+  /** For agent: continue the same Cursor chat in this folder (it remembers what it did). */
+  resume?: boolean
 }
+
+/** Cursor agent chats by project folder, so follow-ups continue the same session. */
+const cursorSessions = new Map<string, string>()
 
 const CURSOR_API = 'https://api.cursor.com'
 
@@ -70,7 +75,7 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
       : a.action === 'cloud_launch' ? `Start a Cursor cloud agent on ${a.repo}: "${(a.task ?? '').slice(0, 160)}"`
         : a.action === 'cloud_followup' ? `Send Cursor agent ${a.id} a follow-up: "${(a.task ?? '').slice(0, 160)}"`
           : a.action === 'cloud_stop' ? `Stop Cursor agent ${a.id}` : a.action === 'open' ? `Open ${a.path} in Cursor` : 'Check Cursor',
-    description: 'Cursor, the AI code editor, and its agents. status: what is installed and connected. open: show a file or folder in Cursor (path, line). agent: run Cursor\'s agent on this Mac in a project folder (task, folder) and get its report. Cloud agents (needs a Cursor API key): cloud_launch(task, repo GitHub URL, ref?, model?) starts an agent that works on the repo and can open a PR; cloud_list; cloud_status(id) shows progress, result and branch/PR; cloud_followup(id, task) sends more instructions; cloud_stop(id).',
+    description: 'Cursor, the AI code editor, and its agents. status: what is installed and connected. open: show a file or folder in Cursor (path, line). agent: run Cursor\'s agent on this Mac in a project folder (task, folder; resume: true continues its previous chat there for follow-ups and fixes) and get its report plus the changed files to review. Cloud agents (needs a Cursor API key): cloud_launch(task, repo GitHub URL, ref?, model?) starts an agent that works on the repo and can open a PR; cloud_list; cloud_status(id) shows progress, result and branch/PR; cloud_followup(id, task) sends more instructions; cloud_stop(id).',
     parameters: {
       type: 'object',
       properties: {
@@ -82,7 +87,8 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
         repo: { type: 'string', description: 'For cloud_launch: GitHub repository URL, e.g. https://github.com/me/app' },
         ref: { type: 'string', description: 'For cloud_launch: branch or ref to start from (default: the default branch)' },
         id: { type: 'string', description: 'For cloud_status, cloud_followup, cloud_stop: the agent id (bc-…)' },
-        model: { type: 'string', description: 'Optional Cursor model id' }
+        model: { type: 'string', description: 'Optional Cursor model id' },
+        resume: { type: 'boolean', description: 'For agent: continue the previous Cursor chat in this folder (follow-ups, fixes)' }
       },
       required: ['action'],
       additionalProperties: false,
@@ -117,9 +123,22 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
           if (!agent) throw new Error('Cursor\'s agent isn\'t installed on this Mac. Tell the user they can install it with: curl https://cursor.com/install -fsS | bash (then sign in with cursor-agent login), or use a Cursor cloud agent.')
           const folder = allowed(a.folder!, ctx)
           if (!statSync(folder).isDirectory()) throw new Error(`${a.folder} is not a folder.`)
-          const args = ['-p', '--force', '--trust', '--output-format', 'text', ...(a.model ? ['--model', a.model] : []), a.task!]
+          const prev = a.resume ? cursorSessions.get(folder) : undefined
+          const args = ['-p', '--force', '--trust', '--output-format', 'json', ...(a.model ? ['--model', a.model] : []), ...(prev ? ['--resume', prev] : []), a.task!]
           const out = await run(agent, args, { cwd: folder, timeout: 20 * 60_000, signal: ctx.signal })
-          return { text: `Cursor's agent finished in ${folder}:\n\n${out.trim() || '(no output)'}`, display: 'Cursor agent finished' }
+          // JSON mode: { result, session_id, … }; fall back to the raw text if the format changes.
+          let result = out.trim()
+          try {
+            const j = JSON.parse(out) as { result?: string; session_id?: string; sessionId?: string; chatId?: string; is_error?: boolean }
+            const sid = j.session_id ?? j.sessionId ?? j.chatId
+            if (sid) cursorSessions.set(folder, sid)
+            if (typeof j.result === 'string') result = j.result
+            if (j.is_error) throw new Error(`Cursor's agent reported an error: ${result.slice(0, 400)}`)
+          } catch (e) { if ((e as Error).message.startsWith('Cursor')) throw e }
+          // Show what changed in the repo so the result can be checked, not just trusted.
+          let diff = ''
+          try { diff = (await run('git', ['diff', '--stat'], { cwd: folder, timeout: 10_000 })).trim() } catch { /* not a git repo */ }
+          return { text: `Cursor's agent finished in ${folder}${prev ? ' (continued its previous chat)' : ''}:\n\n${result || '(no output)'}${diff ? `\n\nChanged files (git diff --stat):\n${diff}\nReview the changes (git diff, run the tests) before telling the user it's done; send a follow-up with resume: true to fix anything.` : ''}`, display: prev ? 'Cursor agent continued' : 'Cursor agent finished' }
         }
         case 'cloud_launch': {
           const r = await cursorApi(key!, 'POST', '/v1/agents', { prompt: { text: a.task }, repos: [{ url: a.repo, ...(a.ref ? { startingRef: a.ref } : {}) }], ...(a.model ? { model: { id: a.model } } : {}), autoCreatePR: true }, ctx.signal)

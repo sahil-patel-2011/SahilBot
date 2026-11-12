@@ -94,6 +94,8 @@ export interface ThreadState {
   rootId?: string
   /** The team card in the root chat that this helper reports into. */
   rootCallId?: string
+  /** The agent's working notes for a long task: key facts, decisions, paths, IDs. Kept through compaction. */
+  notes?: string
   /** Hybrid mode: cloud consultations used in the current request. */
   consults?: number
 }

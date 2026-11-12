@@ -61,6 +61,9 @@ export function describe(step: Step): [Category, string, string] {
         case 'type': return ['type', `Typed "${q(a.text, 30)}"`, 'Typing']
         case 'key': return ['type', `Pressed ${a.keys}`, 'Pressing keys']
         case 'open_app': return ['browse', `Opened ${a.app}`, `Opening ${a.app}`]
+        case 'click_element': return ['click', `Clicked "${q(a.name, 30)}"`, `Clicking "${q(a.name, 30)}"`]
+        case 'menu': return ['click', `Chose ${q(a.path, 40)}`, 'Using a menu']
+        case 'apps': return ['read', 'Checked open apps', 'Checking open apps']
         default: return ['click', `${String(a.action).replace('_', ' ')} on screen`, 'Using the mouse']
       }
     case 'cursor': return ['write', a.action === 'open' ? `Opened in Cursor` : a.action?.startsWith('cloud') ? `Cursor cloud agent: ${String(a.action).slice(6)}` : a.action === 'agent' ? 'Ran Cursor\'s agent' : 'Checked Cursor', 'Working with Cursor']

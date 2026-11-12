@@ -53,12 +53,12 @@ export function coreTools(results: ResultStore): ToolDef[] {
     }
   }
 
-  const todo: ToolDef<{ items: Array<{ text: string; status: 'pending' | 'in_progress' | 'done' }> }> = {
+  const todo: ToolDef<{ items: Array<{ text: string; status: 'pending' | 'in_progress' | 'done' }>; notes?: string }> = {
     name: 'todo',
     label: 'Plan',
     core: true,
     effect: 'read',
-    description: 'Write or update your task plan. Send the full list every time. Use it for any task with 3 or more steps; mark exactly one item in_progress while you work on it. Never mark an item done while it still has errors, and never re-check work you already marked done.',
+    description: 'Write or update your task plan. Send the full list every time. Use it for any task with 3 or more steps; mark exactly one item in_progress while you work on it. Never mark an item done while it still has errors, and never re-check work you already marked done. notes: your working notes for a long task (key facts, decisions, file paths, IDs, numbers you\'ll need later). They replace the previous notes and are kept even when older messages get summarized, so put anything there you must not lose.',
     parameters: {
       type: 'object',
       properties: {
@@ -75,13 +75,15 @@ export function coreTools(results: ResultStore): ToolDef[] {
             required: ['text', 'status'],
             additionalProperties: false
           }
-        }
+        },
+        notes: { type: 'string', description: 'Working notes to keep (replaces the previous notes; up to ~3,000 characters)' }
       },
       required: ['items'],
       additionalProperties: false
     },
-    async run({ items }, ctx) {
+    async run({ items, notes }, ctx) {
       ctx.state.todos = items
+      if (notes !== undefined) ctx.state.notes = notes.slice(0, 3000)
       const mark = { pending: '[ ]', in_progress: '[>]', done: '[x]' } as const
       const done = items.filter((i) => i.status === 'done').length
       return { text: items.map((i) => `${mark[i.status]} ${i.text}`).join('\n'), display: `${done}/${items.length} done` }

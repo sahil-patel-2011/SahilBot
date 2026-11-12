@@ -68,3 +68,21 @@ describe('auto routing: newer versions win ties', () => {
     expect(pick([c('claude-opus-5-5', 3), c('claude-opus-5', 3)], 3)?.id).toBe('claude-opus-5-5')
   })
 })
+
+describe('skills index', () => {
+  test('built-in packs are grouped by topic; your skills keep their descriptions', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { SkillStore } = await import('../../src/main/skills')
+    const mine = mkdtempSync(join(tmpdir(), 'sk-'))
+    const store = new SkillStore(mine, join(process.cwd(), 'packs', 'skills'))
+    store.save({ name: 'weekly-report', description: 'How Sam wants the Friday report done.', body: '1. x', source: 'you' })
+    const idx = store.index()
+    expect(idx).toContain('- weekly-report: How Sam wants the Friday report done.')
+    expect(idx).toMatch(/- Electrical Engineering: .*circuit-analysis/)
+    expect(idx).toMatch(/- Medical: .*medical-evidence-lookup/)
+    expect(idx.length).toBeLessThan(4000)
+    void mkdirSync; void writeFileSync
+  })
+})

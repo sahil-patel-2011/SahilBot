@@ -72,9 +72,17 @@ export class SkillStore {
     rmSync(join(this.dir, slug(name)), { recursive: true, force: true })
   }
 
-  /** The list for the system prompt: names and one-line descriptions only. */
+  /**
+   * The list for the system prompt. Yours and learned ones with their descriptions (they're specific);
+   * built-in packs as names grouped by topic (the names say what they do), so the prompt stays small.
+   */
   index(max = 40): string {
-    return this.list().slice(0, max).map((s) => `- ${s.name}: ${s.description}`).join('\n')
+    const all = this.list()
+    const mine = all.filter((s) => s.source !== 'builtin').slice(0, max).map((s) => `- ${s.name}: ${s.description}`)
+    const groups = new Map<string, string[]>()
+    for (const s of all.filter((x) => x.source === 'builtin')) groups.set(s.category ?? 'General', [...(groups.get(s.category ?? 'General') ?? []), s.name])
+    const packs = [...groups].map(([cat, names]) => `- ${cat}: ${names.join(', ')}`)
+    return [...mine, ...(packs.length ? ['Built-in skills by topic:', ...packs] : [])].join('\n')
   }
 }
 
