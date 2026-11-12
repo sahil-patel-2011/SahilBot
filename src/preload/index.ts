@@ -61,6 +61,22 @@ const api: SahilBotApi = {
     return () => ipcRenderer.removeListener('mini', fn)
   },
   exitMini: call('mini:exit') as never,
+  quick: {
+    ask: call('quick:ask') as never,
+    hide: call('quick:hide') as never,
+    resize: call('quick:resize') as never,
+    open: call('quick:open') as never,
+    onShown(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('quick:shown', fn)
+      return () => ipcRenderer.removeListener('quick:shown', fn)
+    }
+  },
+  onOpenThread(cb) {
+    const fn = (_e: unknown, id: string): void => cb(id)
+    ipcRenderer.on('open-thread', fn)
+    return () => ipcRenderer.removeListener('open-thread', fn)
+  },
   budget: call('budget') as never,
   detectProviders: call('detectProviders') as never,
   pickFolder: call('pickFolder') as never,

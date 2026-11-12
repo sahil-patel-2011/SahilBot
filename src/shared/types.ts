@@ -136,6 +136,8 @@ export interface Settings {
   pinnedBots: string[] | null
   /** Read every reply aloud. */
   speakReplies: boolean
+  /** Global shortcut for Quick Ask ('' = off). */
+  quickKey: string
   /** Thinking level (Low, Medium, High, Extra, Max). Medium by default; adapts to each problem. */
   thinking: Effort
   /**
@@ -425,6 +427,8 @@ export interface SendInput {
   voice?: boolean
   /** Team of Experts: the agent splits the work across many helper agents, then finishes the task. */
   team?: boolean
+  /** Deep Research: a team researches, then the agent writes a cited report saved as a PDF. */
+  deepResearch?: boolean
 }
 
 /** One helper agent in a Team of Experts run, as shown in the chat. */
@@ -491,6 +495,16 @@ export interface SahilBotApi {
     reveal(path: string): Promise<void>
   }
   providers(): Promise<ProviderPreset[]>
+  /** Quick Ask (the floating ⌥Space bar). */
+  quick: {
+    ask(text: string, opts: { screen?: boolean; clipboard?: boolean }): Promise<string>
+    hide(): Promise<void>
+    resize(height: number): Promise<void>
+    open(threadId: string): Promise<void>
+    onShown(cb: () => void): () => void
+  }
+  /** Main window: open a chat (from Quick Ask). */
+  onOpenThread(cb: (threadId: string) => void): () => void
   /** Computer use: the window shrank to a corner (on) or came back (off). */
   onMini(cb: (e: { on: boolean; threadId?: string }) => void): () => void
   exitMini(): Promise<void>

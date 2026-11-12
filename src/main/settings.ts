@@ -19,6 +19,7 @@ export const DEFAULTS: Stored = {
   appearance: DEFAULT_APPEARANCE,
   pinnedBots: null,
   speakReplies: false,
+  quickKey: 'Alt+Space',
   thinking: 'medium',
   cloud: { enabled: true, hybrid: true, advisorModel: '', maxConsultsPerRequest: 3 },
   contextWindow: 0,

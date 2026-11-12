@@ -169,3 +169,41 @@ describe('steering and queueing', () => {
     await app.close()
   })
 })
+
+describe('quick ask and deep research', () => {
+  let llm: MockLlm
+  beforeAll(async () => { llm = await startMockLlm() })
+  afterAll(async () => { await llm.close() })
+
+  test('Quick Ask answers in the floating bar and saves the chat', async () => {
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
+    llm.script.push({ content: 'Paris is the capital of France.' })
+    // Show the bar's view in this (hidden) window.
+    await page.evaluate(() => { location.hash = '#quick' })
+    await page.reload()
+    await page.locator('[data-testid="quick-input"]').waitFor()
+    await page.fill('[data-testid="quick-input"]', 'capital of France?')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => page.locator('.quick-answer').innerText(), { timeout: 15_000 }).toContain('Paris is the capital')
+    // It asked for a brief answer, and the chat is saved for later.
+    expect(JSON.stringify(llm.requests.at(-1)!.messages)).toContain('Quick Ask')
+    const threads = await page.evaluate(async () => (await window.foreman.threads.list()).map((t) => t.title))
+    expect(threads.join('|')).toContain('capital of France?')
+    await app.close()
+  })
+
+  test('Deep Research turns on the team and asks for a cited PDF report', async () => {
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
+    llm.script.push({ content: 'ok' })
+    const before = llm.requests.length
+    await page.click('[data-testid="deep-toggle"]')
+    await page.fill('[data-testid="composer-input"]', 'the market for at-home urology tests')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => llm.requests.length).toBeGreaterThan(before)
+    const sent = JSON.stringify(llm.requests[before].messages)
+    expect(sent).toContain('Deep Research is on')
+    expect(sent).toContain('Team of Experts is on')
+    expect(sent).toContain('Research/')
+    await app.close()
+  })
+})

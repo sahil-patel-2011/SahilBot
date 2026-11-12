@@ -200,6 +200,10 @@ export class Agent {
       if (m.role === 'assistant' && r?.user && (r.userAt ?? 0) > lastUserAt) notes.push(`[The user reacted ${r.user} to your message: "${m.content.replace(/\s+/g, ' ').slice(0, 80)}"]`)
     }
     if (input.note) notes.push(input.note)
+    if (input.deepResearch) {
+      input = { ...input, team: true }
+      notes.push('[Deep Research is on: research this thoroughly with your team, then deliver a report. Write it with create_document as a PDF in the workspace folder "Research" (e.g. "Research/<short title>.pdf"): a title, a 5-8 sentence executive summary up top, sections with clear headings, tables for comparisons and numbers, what is uncertain or disputed, and a numbered Sources list (title and URL) that every [n] in the text points to. Re-open the PDF to check it, then reply with a short summary of the findings and the file path.]')
+    }
     if (input.team) {
       const { min, max } = this.teamSize(thread)
       notes.push(`[Team of Experts is on for this request: 1) Write your plan with todo. 2) Split the research into at least ${min} focused, non-overlapping parts (up to ${max}; different sources, angles, sub-questions, options or sections) and send them all at once with the agents tool; give each helper a complete, self-contained task and say exactly what to report (findings with source URLs, numbers with dates). 3) Compile their reports: compare them, resolve disagreements, check anything important yourself, fill gaps. 4) Then finish the job yourself and double-check it before you answer: one complete, well-organized result, with sources.]`)
@@ -232,7 +236,8 @@ export class Agent {
         ...(notes.length ? { note: notes.join('\n') } : {}),
         ...(att.length ? { files: att.filter((a) => a.kind !== 'folder').map((a) => ({ name: a.name, path: a.path })), folders: att.filter((a) => a.kind === 'folder').map((a) => a.path) } : {}),
         ...(input.meta ?? {}),
-        ...(input.team ? { team: true } : {})
+        ...(input.team ? { team: true } : {}),
+        ...(input.deepResearch ? { deepResearch: true } : {})
       }
     })
     this.d.emit({ threadId: thread.id, type: 'message', message: user })

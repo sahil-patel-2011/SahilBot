@@ -174,6 +174,11 @@ function General({ s, patch }: P) {
       <h2>General</h2>
       <Section>
         <Row title="Your name" sub="What SahilBot calls you."><Field value={s.userName} placeholder="First name" onSave={(v) => void patch({ userName: v })} /></Row>
+        <Row title="Quick Ask shortcut" sub="Opens a small SahilBot bar over any app: ask, optionally with your screen or clipboard.">
+          <select className="set-select" value={s.quickKey} onChange={(e) => void patch({ quickKey: e.target.value })} data-testid="quick-key">
+            <option value="Alt+Space">⌥ Space</option><option value="Control+Space">⌃ Space</option><option value="CommandOrControl+Shift+Space">⌘⇧ Space</option><option value="Alt+Shift+Space">⌥⇧ Space</option><option value="">Off</option>
+          </select>
+        </Row>
         <Row title="Workspace folder" sub="Where SahilBot saves the files it makes."><Field value={s.workspaceDir} width={300} onSave={(v) => void patch({ workspaceDir: v })} /></Row>
       </Section>
       <Section title="Web search" sub="Used to look things up before answering.">

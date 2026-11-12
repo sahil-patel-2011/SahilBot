@@ -60,6 +60,7 @@ export function App() {
   const composer = useRef<ComposerHandle>(null)
 
   const newChatRef = useRef<() => void>(() => undefined)
+  const openAnyChatRef = useRef<(id: string) => void>(() => undefined)
   const threadRef = useRef<string | null>(null)
   threadRef.current = thread?.id ?? null
   // Read-aloud plays here (voice mode has its own player).
@@ -126,6 +127,15 @@ export function App() {
         return n
       })
       if (e.status !== 'started') void refreshSpaces()
+      // Deep Research: open the finished report.
+      if (e.status === 'finished' && e.threadId === threadRef.current) {
+        void api.threads.messages(e.threadId).then((ms) => {
+          const lastUser = [...ms].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+          if (!lastUser?.meta?.deepResearch) return
+          const doc = [...ms].reverse().find((m) => m.role === 'tool' && m.toolName === 'create_document' && m.meta?.path && m.createdAt > lastUser.createdAt)
+          if (doc) window.dispatchEvent(new CustomEvent('sahilbot:open-file', { detail: doc.meta!.path as string }))
+        })
+      }
       // Read the finished reply aloud when that's switched on.
       if (e.status === 'finished' && live.current.speak && !live.current.voiceOn && e.threadId === threadRef.current) {
         void api.threads.messages(e.threadId).then((ms) => {
@@ -189,6 +199,8 @@ export function App() {
   }), [])
 
   useEffect(() => api.onMini(setMini), [])
+  // "Open in SahilBot" from Quick Ask.
+  useEffect(() => api.onOpenThread((id) => { void refreshSpaces().then(() => openAnyChatRef.current(id)) }), [refreshSpaces])
 
   useEffect(() => api.voice.onEvent((e) => {
     if (live.current.voiceOn) return
@@ -210,6 +222,12 @@ export function App() {
     r.classList.toggle('detailed', a.density === 'detailed')
     r.classList.toggle('tinted', a.tint > 0)
   }, [settings?.appearance])
+
+  useEffect(() => {
+    const open = (e: Event): void => { setFile((e as CustomEvent<string>).detail); setPanel('file') }
+    window.addEventListener('sahilbot:open-file', open)
+    return () => window.removeEventListener('sahilbot:open-file', open)
+  }, [])
 
   // The browser comes forward only when you're needed (e.g. a human check to complete).
   useEffect(() => api.browser.onOpenRequest(() => setPanel('browser')), [])
@@ -296,7 +314,7 @@ export function App() {
       if (!items.length || running.has(tid)) continue
       const [first, ...rest] = items
       setQueue((q) => ({ ...q, [tid]: rest }))
-      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team }).catch((e: Error) => toast(e.message, 'error'))
+      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch }).catch((e: Error) => toast(e.message, 'error'))
     }
   }, [queue, running])
 
@@ -342,7 +360,7 @@ export function App() {
       setThread(t)
     }
     try {
-      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team })
+      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch })
       void refreshSpaces()
     } catch (e) {
       toast((e as Error).message, 'error')
@@ -358,6 +376,7 @@ export function App() {
       if (t) { setSpaceId(sp.id); setThread(t); setView('home'); return }
     }
   }
+  openAnyChatRef.current = (id) => void openAnyChat(id)
 
   const composerEl = (
     <Composer
@@ -547,7 +566,8 @@ export function App() {
         ) : isProject && space ? (
           <ProjectHome project={space} onOpen={(t) => setThread(t)} onEdit={() => setEditor({ space, mode: 'project' })} composer={composerEl} />
         ) : (
-          <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={composerEl} refreshKey={running.size} />
+          <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={composerEl} refreshKey={running.size}
+            onIdea={(text, deep) => { composer.current?.replace(text); composer.current?.setDeep(!!deep) }} />
         )}
       </main>
       {panel && (

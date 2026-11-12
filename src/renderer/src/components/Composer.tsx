@@ -21,6 +21,9 @@ const MODES: Array<{ id: PermissionMode; label: string; sub: string }> = [
 
 export interface ComposerHandle {
   insert(text: string): void
+  /** Replace the box's text (starter ideas). */
+  replace(text: string): void
+  setDeep(on: boolean): void
   focus(): void
   toggleDictation(): void
   attach(items: Attachment[]): void
@@ -34,6 +37,8 @@ export interface Outgoing {
   team?: boolean
   /** While SahilBot works: true = wait until it finishes (⌘Enter); otherwise it steers the running agent. */
   queue?: boolean
+  /** Deep Research: a team researches, then a cited PDF report. */
+  deepResearch?: boolean
 }
 
 export const Composer = forwardRef<ComposerHandle, {
@@ -73,9 +78,15 @@ export const Composer = forwardRef<ComposerHandle, {
   const [images, setImages] = useState<string[]>([])
   const [atts, setAtts] = useState<Attachment[]>([])
   const [drag, setDrag] = useState(false)
+  const [deep, setDeep] = useState(false)
   const ta = useRef<HTMLTextAreaElement>(null)
 
   useImperativeHandle(ref, () => ({
+    replace(t: string) {
+      setText(t)
+      requestAnimationFrame(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } })
+    },
+    setDeep(on: boolean) { setDeep(on) },
     insert(t: string) {
       setText((cur) => (cur ? `${cur}\n${t}` : t))
       // Put the caret at the end so the user can just keep typing.
@@ -146,7 +157,8 @@ export const Composer = forwardRef<ComposerHandle, {
   const canSend = !!(text.trim() || images.length || atts.length)
   const send = (queue = false): void => {
     if (!canSend) return
-    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on, queue })
+    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on || deep, deepResearch: deep, queue })
+    setDeep(false)
     setText('')
     setImages([])
     setAtts([])
@@ -225,7 +237,13 @@ export const Composer = forwardRef<ComposerHandle, {
               </>
             )}
           </Popover>
-          {p.team && p.onTeam && (
+          {p.team && (
+            <button className={`team-chip${deep ? ' on' : ''}`} onClick={() => setDeep((d) => !d)} data-testid="deep-toggle"
+              title="Deep Research: a team of helper agents researches in parallel, then SahilBot writes a cited report and saves it as a PDF">
+              <I.Search size={15} />Deep Research
+            </button>
+          )}
+          {p.team && p.onTeam && !deep && (
             <button className={`team-chip${p.team.on ? ' on' : ''}`} onClick={() => p.onTeam!(!p.team!.on)} data-testid="team-toggle"
               title={p.team.on ? `Team of Experts is on: ${Math.min(10, p.team.maxAgents)} to ${p.team.maxAgents} helper agents research in parallel, then SahilBot puts it together (${p.team.why})` : `Team of Experts: at least ${Math.min(10, p.team.maxAgents)} helper agents research in parallel, then SahilBot puts it together (${p.team.why})`}>
               <I.Users size={15} />Team of Experts

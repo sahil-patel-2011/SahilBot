@@ -1,10 +1,10 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, screen, session, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, screen, session, shell, systemPreferences } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { totalmem } from 'node:os'
+import { tmpdir, totalmem } from 'node:os'
 import { writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import type { BotShape, ChatEvent, SendInput, Settings, Space } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 import { INTRO } from './agent/prompt'
@@ -117,6 +117,26 @@ function createWindow(bounds: Partial<Electron.Rectangle> = {}): BrowserWindow {
   return w
 }
 
+/** Quick Ask: a small floating bar over any app (⌥Space by default). Same page, '#quick' view. */
+function createQuickWindow(): BrowserWindow {
+  const w = new BrowserWindow({
+    width: 720, height: 132, show: false, frame: false, resizable: false, movable: true,
+    alwaysOnTop: true, skipTaskbar: true, fullscreenable: false, hasShadow: true,
+    transparent: true, vibrancy: 'popover', visualEffectState: 'active', backgroundColor: '#00000000',
+    webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false }
+  })
+  w.setAlwaysOnTop(true, 'floating')
+  w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  w.webContents.on('will-navigate', (e) => e.preventDefault())
+  if (process.env.ELECTRON_RENDERER_URL) void w.loadURL(`${process.env.ELECTRON_RENDERER_URL}#quick`)
+  else void w.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'quick' })
+  return w
+}
+
 app.whenReady().then(() => {
   setupApp()
   const db = new Db(join(dataDir(), 'foreman.db'))
@@ -136,6 +156,15 @@ app.whenReady().then(() => {
   const results = new ResultStore(sub('results'))
   const docsDir = join(appRoot(), 'docs')
   const listeners = new Set<(e: ChatEvent) => void>()
+  /** Screenshot of the main display, scaled so one image pixel = one screen point. */
+  const captureScreen = async (file: string): Promise<{ dataUrl: string; width: number; height: number }> => {
+    await new Promise<void>((ok, fail) => execFile('screencapture', ['-x', '-C', '-t', 'png', file], { timeout: 15_000 }, (e) => (e ? fail(e) : ok())))
+    const d = screen.getPrimaryDisplay()
+    const img = nativeImage.createFromPath(file).resize({ width: d.size.width, height: d.size.height })
+    if (img.isEmpty()) throw new Error('could not create image (Screen Recording permission)')
+    return { dataUrl: img.toDataURL(), width: d.size.width, height: d.size.height }
+  }
+
   // Computer use: while SahilBot controls the Mac it shrinks to a small window in the top-right corner
   // (always on top, with Stop), and comes back when the task ends.
   let mini: { bounds: Electron.Rectangle; threadId: string } | null = null
@@ -159,8 +188,11 @@ app.whenReady().then(() => {
     // A way out that works whatever app is in front.
     globalShortcut.register('Control+Option+Escape', () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini() })
   }
+  // The Quick Ask bar (created on first use); it follows the same chat events as the main window.
+  let quick: BrowserWindow | null = null
   const emit = (e: ChatEvent): void => {
     win?.webContents.send('chat:event', e)
+    if (quick && !quick.isDestroyed()) quick.webContents.send('chat:event', e)
     for (const l of listeners) l(e)
     if (e.type === 'run' && e.status !== 'started' && mini?.threadId === e.threadId) exitMini()
   }
@@ -191,14 +223,7 @@ app.whenReady().then(() => {
     computerTool({
       enterMini: (id) => enterMini(id),
       trusted: (prompt) => systemPreferences.isTrustedAccessibilityClient(prompt),
-      capture: async (file) => {
-        await new Promise<void>((ok, fail) => execFile('screencapture', ['-x', '-C', '-t', 'png', file], { timeout: 15_000 }, (e) => (e ? fail(e) : ok())))
-        const d = screen.getPrimaryDisplay()
-        // One image pixel = one screen point, so coordinates can be used as-is.
-        const img = nativeImage.createFromPath(file).resize({ width: d.size.width, height: d.size.height })
-        if (img.isEmpty()) throw new Error('could not create image (Screen Recording permission)')
-        return { dataUrl: img.toDataURL(), width: d.size.width, height: d.size.height }
-      }
+      capture: (file) => captureScreen(file)
     }),
     consultTool({
       advisor: () => endpoints.advisor(),
@@ -216,6 +241,7 @@ app.whenReady().then(() => {
     updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' }))
   )
 
+  const registerQuickKeyRef = { current: (): void => undefined }
   // Every model server that's on; the last list tells the agent how much context each model can hold.
   const endpoints = new Endpoints(settings)
   const fitWindow = (model: string, window: number): number => {
@@ -253,11 +279,60 @@ app.whenReady().then(() => {
   handle('settings:get', () => settings.get())
   handle('settings:set', (patch: SettingsPatch) => {
     const s = settings.set(patch)
+    if (patch.quickKey !== undefined) registerQuickKeyRef.current()
     if (patch.theme) applyTheme(s.theme)
     return s
   })
 
   handle('mini:exit', () => exitMini())
+
+  // ---------------------------------------------------------------- Quick Ask (⌥Space)
+  const showQuick = (): void => {
+    if (HIDDEN) return
+    if (!quick || quick.isDestroyed()) quick = createQuickWindow()
+    if (quick.isVisible()) { quick.hide(); return }
+    const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+    const [w] = quick.getSize()
+    quick.setPosition(Math.round(d.workArea.x + (d.workArea.width - w) / 2), Math.round(d.workArea.y + d.workArea.height * 0.2))
+    quick.show()
+    quick.focus()
+    quick.webContents.send('quick:shown')
+  }
+  let quickKey = ''
+  const registerQuickKey = (): void => {
+    if (quickKey) globalShortcut.unregister(quickKey)
+    quickKey = ''
+    const key = settings.get().quickKey
+    if (HIDDEN || !key) return
+    try { if (globalShortcut.register(key, showQuick)) quickKey = key } catch { /* taken by another app */ }
+  }
+  registerQuickKey()
+  registerQuickKeyRef.current = registerQuickKey
+  handle('quick:hide', () => { quick?.hide() })
+  handle('quick:resize', (h: number) => { if (quick && !quick.isDestroyed()) { const [w] = quick.getSize(); quick.setSize(w, Math.max(96, Math.min(640, Math.round(h)))) } })
+  handle('quick:ask', async (text: string, opts: { screen?: boolean; clipboard?: boolean }) => {
+    const main = db.listSpaces().find((sp) => sp.isMain)
+    if (!main) throw new Error('No main bot.')
+    const t = db.createThread(main.id, 'auto', null)
+    const images: string[] = []
+    if (opts.screen) {
+      // Hide the bar so it isn't in the picture.
+      quick?.hide()
+      const dir = mkdtempSync(join(tmpdir(), 'sb-quick-'))
+      try { images.push((await captureScreen(join(dir, 's.png'))).dataUrl) } finally { rmSync(dir, { recursive: true, force: true }); quick?.show() }
+    }
+    const clip = opts.clipboard ? String(await clipboard.readText()).slice(0, 20_000) : ''
+    // Answer quickly and briefly: it's a floating bar.
+    await chat.send({ threadId: t.id, text, images, note: `[Asked from Quick Ask, a small floating bar: answer briefly and directly; the user can open the full chat for more.]${clip ? `\n[The user's clipboard:\n${clip}]` : ''}`, meta: { quick: true } })
+    return t.id
+  })
+  handle('quick:open', (threadId: string) => {
+    quick?.hide()
+    if (!win || win.isDestroyed()) return
+    win.show()
+    win.focus()
+    win.webContents.send('open-thread', threadId)
+  })
   handle('models:list', () => endpoints.list())
   handle('models:setupPicks', async () => { await endpoints.list().catch(() => undefined); return endpoints.setupPicks() })
   // Let the GPU use up to 90% of memory (macOS caps it at about 75%). macOS asks for an admin password;
