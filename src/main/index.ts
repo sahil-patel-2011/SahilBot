@@ -195,6 +195,12 @@ app.whenReady().then(() => {
     if (quick && !quick.isDestroyed()) quick.webContents.send('chat:event', e)
     for (const l of listeners) l(e)
     if (e.type === 'run' && e.status !== 'started' && mini?.threadId === e.threadId) exitMini()
+    // A chat finished while you were in another app: a quiet notification.
+    if (e.type === 'run' && (e.status === 'finished' || e.status === 'error') && win && !win.isDestroyed() && !win.isFocused() && !HIDDEN && Notification.isSupported()) {
+      const n = new Notification({ title: e.status === 'error' ? 'SahilBot hit a problem' : 'SahilBot is done', body: (e.title ?? 'Your task').slice(0, 120), silent: false })
+      n.on('click', () => { win?.show(); win?.focus(); win?.webContents.send('open-thread', e.threadId) })
+      n.show()
+    }
   }
 
   const vault = new Vault(db, secrets)

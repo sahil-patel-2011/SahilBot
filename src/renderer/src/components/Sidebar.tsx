@@ -34,6 +34,9 @@ export function Sidebar(p: {
   pinned: string[] | null
   onPinned: (ids: string[]) => void
   modelLabel?: string
+  /** Chats working right now, and the bots/projects they belong to. */
+  runningThreads?: Set<string>
+  runningSpaces?: Set<string>
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -132,7 +135,7 @@ export function Sidebar(p: {
             ? <span className="row-icon proj" style={{ background: s.color }}><I.Folder size={12} /></span>
             : <span className="row-icon"><SpaceAvatar color={s.color} shape={s.shape} size={22} group={s.kind === 'group' ? colorsOf(s) : undefined} /></span>}
           <span className="t">{s.name}</span>
-          {s.unread && s.id !== p.activeSpaceId && <span className="unread-dot" />}
+          {p.runningSpaces?.has(s.id) ? <span className="row-spin" title="Working" /> : s.unread && s.id !== p.activeSpaceId && <span className="unread-dot" />}
         </button>
       )}
     </div>
@@ -144,7 +147,7 @@ export function Sidebar(p: {
         <button className="nav-btn chat" onClick={() => p.onOpenChat(t.id)} data-testid="thread-item" title={t.title}>
           <span className="t">{t.title.replace(/^⏰ /, '')}</span>
           {t.title.startsWith('⏰') && <I.Clock size={14} className="row-tail" />}
-          {t.unread && t.id !== p.activeThreadId && <span className="unread-dot" />}
+          {p.runningThreads?.has(t.id) ? <span className="row-spin" title="Working" /> : t.unread && t.id !== p.activeThreadId && <span className="unread-dot" />}
         </button>
       )}
     </div>

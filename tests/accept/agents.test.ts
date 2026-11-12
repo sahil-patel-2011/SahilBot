@@ -207,3 +207,62 @@ describe('quick ask and deep research', () => {
     await app.close()
   })
 })
+
+describe('plan, then execute', () => {
+  let llm: MockLlm
+  beforeAll(async () => { llm = await startMockLlm() })
+  afterAll(async () => { await llm.close() })
+  const toolOut = (req: Record<string, any>): string => String([...req.messages].reverse().find((m: any) => m.role === 'tool')?.content ?? '')
+
+  test('Plan first: clarifying questions in one card, a plan to approve, then it executes', async () => {
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
+    llm.script.push(
+      { toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ questions: [{ question: 'Who is the newsletter for?', options: ['Patients', 'Referring doctors'] }, { question: 'How long should it be?' }] }) }] },
+      (req) => toolOut(req).includes('Patients') && toolOut(req).includes('300 words')
+        ? { toolCalls: [{ name: 'propose_plan', arguments: JSON.stringify({ goal: 'A 300-word patient newsletter about BPH.', steps: ['Check the latest guidance', 'Draft the newsletter', 'Proofread it'], risks: ['Medical claims need a doctor\'s review'] }) }] }
+        : { content: 'answers did not arrive' },
+      (req) => toolOut(req).includes('approved the plan') ? { content: 'Plan approved; here is the newsletter draft.' } : { content: 'plan was not approved' }
+    )
+    await page.click('[data-testid="plan-toggle"]')
+    await page.fill('[data-testid="composer-input"]', 'Write our monthly newsletter')
+    await page.keyboard.press('Enter')
+    // One card, two questions: pick an option, type the other answer.
+    const card = page.locator('[data-testid="questions-card"]')
+    await card.waitFor({ timeout: 15_000 })
+    expect(JSON.stringify(llm.requests[0].messages)).toContain('Plan first is on')
+    await card.locator('[data-testid="qcard-option"]', { hasText: 'Patients' }).click()
+    await card.locator('[data-testid="qcard-input"]').nth(1).fill('300 words')
+    await card.locator('[data-testid="qcard-send"]').click()
+    // The plan waits for approval, with its risks.
+    const plan = page.locator('[data-testid="plan-approval"]')
+    await plan.waitFor({ timeout: 15_000 })
+    expect(await plan.innerText()).toContain('Draft the newsletter')
+    expect(await plan.innerText()).toContain("doctor's review")
+    await plan.locator('[data-testid="plan-approve"]').click()
+    await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 15_000 }).toContain('Plan approved')
+    // The approved plan became the checklist.
+    expect(await page.locator('[data-testid="plan-step"]').allInnerTexts()).toEqual(['Check the latest guidance', 'Draft the newsletter', 'Proofread it'])
+    await app.close()
+  })
+
+  test('two chats work at the same time; the sidebar shows which is still working', async () => {
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
+    llm.script.length = 0
+    llm.script.push(
+      { content: 'Long answer that takes a while to write, word by word, so the other chat can finish first while this keeps going for some time.', delay: 150 },
+      { content: 'Quick answer.' }
+    )
+    await page.fill('[data-testid="composer-input"]', 'slow one')
+    await page.keyboard.press('Enter')
+    await page.locator('[data-testid="steer-hint"]').waitFor()
+    await page.click('[data-testid="new-chat"]')
+    await page.fill('[data-testid="composer-input"]', 'fast one')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 15_000 }).toContain('Quick answer')
+    // The first chat is still working in the background, and the sidebar shows it.
+    const slow = page.locator('[data-testid="thread-item"]', { hasText: 'slow one' })
+    expect(await slow.locator('.row-spin').count()).toBe(1)
+    await expect.poll(() => slow.locator('.row-spin').count(), { timeout: 30_000 }).toBe(0)
+    await app.close()
+  })
+})

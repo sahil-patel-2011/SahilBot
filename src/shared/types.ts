@@ -217,7 +217,11 @@ export interface SystemInfo {
 export interface PendingRequest {
   id: string
   threadId: string
-  kind: 'approval' | 'question' | 'connect'
+  kind: 'approval' | 'question' | 'connect' | 'questions' | 'plan'
+  /** For 'questions': several clarifying questions answered together. */
+  questions?: Array<{ question: string; options?: string[] }>
+  /** For 'plan': the plan waiting for approval. */
+  plan?: { goal: string; steps: string[]; assumptions?: string[]; risks?: string[] }
   /** For connect requests: the catalog entry to offer. */
   preset?: ConnectorPreset
   tool?: string
@@ -286,7 +290,7 @@ export interface VaultEntry {
 export type ChatEvent =
   | { threadId: string; type: 'message'; message: Message }
   | { threadId: string; type: 'delta'; messageId: string; content?: string; reasoning?: string }
-  | { threadId: string; type: 'run'; status: 'started' | 'finished' | 'stopped' | 'error'; error?: string }
+  | { threadId: string; type: 'run'; status: 'started' | 'finished' | 'stopped' | 'error'; error?: string; spaceId?: string; title?: string }
   | { threadId: string; type: 'thread'; thread: Thread }
   | { threadId: string; type: 'pending'; request: PendingRequest }
   | { threadId: string; type: 'resolved'; id: string }
@@ -427,6 +431,8 @@ export interface SendInput {
   voice?: boolean
   /** Team of Experts: the agent splits the work across many helper agents, then finishes the task. */
   team?: boolean
+  /** Plan first: ask clarifying questions, propose a plan, and wait for approval before changing anything. */
+  planFirst?: boolean
   /** Deep Research: a team researches, then the agent writes a cited report saved as a PDF. */
   deepResearch?: boolean
 }

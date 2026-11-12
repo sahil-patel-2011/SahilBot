@@ -39,6 +39,8 @@ export interface Outgoing {
   queue?: boolean
   /** Deep Research: a team researches, then a cited PDF report. */
   deepResearch?: boolean
+  /** Plan first: questions and a plan to approve before anything changes. */
+  planFirst?: boolean
 }
 
 export const Composer = forwardRef<ComposerHandle, {
@@ -79,6 +81,7 @@ export const Composer = forwardRef<ComposerHandle, {
   const [atts, setAtts] = useState<Attachment[]>([])
   const [drag, setDrag] = useState(false)
   const [deep, setDeep] = useState(false)
+  const [planFirst, setPlanFirst] = useState(false)
   const ta = useRef<HTMLTextAreaElement>(null)
 
   useImperativeHandle(ref, () => ({
@@ -157,7 +160,7 @@ export const Composer = forwardRef<ComposerHandle, {
   const canSend = !!(text.trim() || images.length || atts.length)
   const send = (queue = false): void => {
     if (!canSend) return
-    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on || deep, deepResearch: deep, queue })
+    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on || deep, deepResearch: deep, planFirst, queue })
     setDeep(false)
     setText('')
     setImages([])
@@ -237,6 +240,12 @@ export const Composer = forwardRef<ComposerHandle, {
               </>
             )}
           </Popover>
+          {p.team && (
+            <button className={`team-chip${planFirst ? ' on' : ''}`} onClick={() => setPlanFirst((x) => !x)} data-testid="plan-toggle"
+              title="Plan first: SahilBot asks what it needs to know, shows you its plan, and starts only when you approve">
+              <I.ListIcon size={15} /><span className="chip-label">Plan first</span>
+            </button>
+          )}
           {p.team && (
             <button className={`team-chip${deep ? ' on' : ''}`} onClick={() => setDeep((d) => !d)} data-testid="deep-toggle"
               title="Deep Research: a team of helper agents researches in parallel, then SahilBot writes a cited report and saves it as a PDF">

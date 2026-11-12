@@ -23,6 +23,10 @@ export interface ToolContext {
   docsDir: string
   /** Pauses the run and asks the user; resolves with their answer. */
   askUser(question: string, options?: string[]): Promise<string>
+  /** Several clarifying questions in one card; resolves with the answers (JSON array of strings). */
+  askMany?(questions: Array<{ question: string; options?: string[] }>): Promise<string>
+  /** Shows a plan for approval; resolves with "approve" or the user's requested changes. */
+  proposePlan?(plan: { goal: string; steps: string[]; assumptions?: string[]; risks?: string[] }): Promise<string>
   /** Per-thread state persisted between runs. */
   state: ThreadState
   /** Load tools by name into the thread's tool set (find_tools). */

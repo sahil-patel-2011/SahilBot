@@ -200,6 +200,7 @@ export class Agent {
       if (m.role === 'assistant' && r?.user && (r.userAt ?? 0) > lastUserAt) notes.push(`[The user reacted ${r.user} to your message: "${m.content.replace(/\s+/g, ' ').slice(0, 80)}"]`)
     }
     if (input.note) notes.push(input.note)
+    if (input.planFirst) notes.push('[Plan first is on: before changing anything, look into it with read-only tools, then ask the clarifying questions you truly need in ONE ask_user call with questions (skip this if nothing is unclear), then call propose_plan and wait. Execute only after the user approves, and follow the approved plan.]')
     if (input.deepResearch) {
       input = { ...input, team: true }
       notes.push('[Deep Research is on: research this thoroughly with your team, then deliver a report. Write it with create_document as a PDF in the workspace folder "Research" (e.g. "Research/<short title>.pdf"): a title, a 5-8 sentence executive summary up top, sections with clear headings, tables for comparisons and numbers, what is uncertain or disputed, and a numbered Sources list (title and URL) that every [n] in the text points to. Re-open the PDF to check it, then reply with a short summary of the findings and the file path.]')
@@ -237,7 +238,8 @@ export class Agent {
         ...(att.length ? { files: att.filter((a) => a.kind !== 'folder').map((a) => ({ name: a.name, path: a.path })), folders: att.filter((a) => a.kind === 'folder').map((a) => a.path) } : {}),
         ...(input.meta ?? {}),
         ...(input.team ? { team: true } : {}),
-        ...(input.deepResearch ? { deepResearch: true } : {})
+        ...(input.deepResearch ? { deepResearch: true } : {}),
+        ...(input.planFirst ? { planFirst: true } : {})
       }
     })
     this.d.emit({ threadId: thread.id, type: 'message', message: user })
@@ -331,7 +333,7 @@ export class Agent {
     const group = space?.kind === 'group'
     const run: Run = { ctrl: new AbortController(), pending: new Map(), group, unattended: opts.unattended }
     this.runs.set(thread.id, run)
-    this.d.emit({ threadId: thread.id, type: 'run', status: 'started' })
+    this.d.emit({ threadId: thread.id, type: 'run', status: 'started', spaceId: thread.spaceId, title: thread.title })
     const done = this.speakers(thread, run, space, userText)
       .catch((e) => { this.notice(thread.id, `Run failed: ${(e as Error).message}`); return 'error' as const })
       .finally(() => {
@@ -379,7 +381,7 @@ export class Agent {
     if (status === 'finished') void this.autoTitle(thread.id)
     const t = this.d.db.updateThread(thread.id, { unread: true }, true)
     this.d.emit({ threadId: thread.id, type: 'thread', thread: t })
-    this.d.emit({ threadId: thread.id, type: 'run', status, error })
+    this.d.emit({ threadId: thread.id, type: 'run', status, error, spaceId: thread.spaceId, title: this.d.db.getThread(thread.id)?.title ?? thread.title })
     return status
   }
 
@@ -961,6 +963,9 @@ export class Agent {
       docsDir: this.d.docsDir,
       state,
       askUser: (question, options) => this.ask(thread.id, run, { kind: 'question', question, options }),
+      // Nobody to answer on a schedule or in a helper: questions get "use your judgment", plans go ahead.
+      askMany: run.unattended ? async () => '[]' : (questions) => this.ask(thread.id, run, { kind: 'questions', questions }),
+      proposePlan: run.unattended ? undefined : (plan) => this.ask(thread.id, run, { kind: 'plan', plan }),
       loadTools: (names) => registry.load(state, names),
       searchTools: (q) => registry.search(q, state),
       readResult: (id) => this.d.results.get(id),

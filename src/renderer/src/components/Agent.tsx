@@ -44,8 +44,69 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
   )
 }
 
+/** Several clarifying questions in one card: pick an option or type your own, then send them all. */
+function QuestionsCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
+  const qs = req.questions ?? []
+  const [answers, setAnswers] = useState<string[]>(() => qs.map(() => ''))
+  const set = (i: number, v: string): void => setAnswers((a) => a.map((x, j) => (j === i ? v : x)))
+  const ready = answers.some((a) => a.trim())
+  return (
+    <div className="pending qcard" data-testid="questions-card">
+      <div className="pending-title"><I.Sparkle size={15} /> A few questions before I start</div>
+      {qs.map((q, i) => (
+        <div key={i} className="qcard-q">
+          <div className="qcard-text"><span className="qcard-n">{i + 1}</span>{q.question}</div>
+          {!!q.options?.length && (
+            <div className="qcard-opts">
+              {q.options.map((o) => <button key={o} className={`qcard-opt${answers[i] === o ? ' on' : ''}`} onClick={() => set(i, answers[i] === o ? '' : o)} data-testid="qcard-option">{o}</button>)}
+            </div>
+          )}
+          <input className="set-input qcard-input" placeholder={q.options?.length ? 'Or type your own answer' : 'Your answer'} value={q.options?.includes(answers[i]) ? '' : answers[i]} onChange={(e) => set(i, e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && ready) onRespond(req.id, JSON.stringify(answers)) }} data-testid="qcard-input" />
+        </div>
+      ))}
+      <div className="pending-actions">
+        <button className="btn primary" disabled={!ready} onClick={() => onRespond(req.id, JSON.stringify(answers))} data-testid="qcard-send">Send answers</button>
+        <button className="btn" onClick={() => onRespond(req.id, JSON.stringify(qs.map(() => '')))}>Skip: use your judgment</button>
+      </div>
+    </div>
+  )
+}
+
+/** The agent's plan, waiting for your OK: approve to start, or say what to change. */
+function PlanApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
+  const p = req.plan!
+  const [changing, setChanging] = useState(false)
+  const [notes, setNotes] = useState('')
+  return (
+    <div className="pending plan-approval" data-testid="plan-approval">
+      <div className="pending-title"><I.ListIcon size={15} /> Here's my plan</div>
+      <div className="pa-goal">{p.goal}</div>
+      <ol className="pa-steps">{p.steps.map((s, i) => <li key={i}><span className="pa-n">{i + 1}</span>{s}</li>)}</ol>
+      {!!p.assumptions?.length && <div className="pa-meta"><b>Assuming</b> {p.assumptions.join(' · ')}</div>}
+      {!!p.risks?.length && <div className="pa-meta risk"><b>Watch out</b> {p.risks.join(' · ')}</div>}
+      {changing ? (
+        <div className="pa-change">
+          <textarea className="set-input" rows={3} autoFocus placeholder="What should change? e.g. skip step 3, use Notion instead of a PDF…" value={notes} onChange={(e) => setNotes(e.target.value)} data-testid="plan-notes" />
+          <div className="pending-actions">
+            <button className="btn primary" disabled={!notes.trim()} onClick={() => onRespond(req.id, `revise: ${notes.trim()}`)} data-testid="plan-send-changes">Send changes</button>
+            <button className="btn" onClick={() => setChanging(false)}>Back</button>
+          </div>
+        </div>
+      ) : (
+        <div className="pending-actions">
+          <button className="btn primary" onClick={() => onRespond(req.id, 'approve')} data-testid="plan-approve">Approve & start</button>
+          <button className="btn" onClick={() => setChanging(true)} data-testid="plan-change">Change…</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function PendingCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
   if (req.kind === 'connect' && req.preset) return <ConnectCard req={req} onRespond={onRespond} />
+  if (req.kind === 'questions' && req.questions) return <QuestionsCard req={req} onRespond={onRespond} />
+  if (req.kind === 'plan' && req.plan) return <PlanApprovalCard req={req} onRespond={onRespond} />
   if (req.kind === 'question') {
     return (
       <div className="question" data-testid="question-card">

@@ -55,6 +55,8 @@ export function App() {
   const [teams, setTeams] = useState<Record<string, import('@shared/types').TeamMember[]>>({})
   const [teamOn, setTeamOn] = useState(false)
   const [steering, setSteering] = useState<Record<string, number>>({})
+  /** Which bot/project each running chat belongs to (for the sidebar's working dots). */
+  const [runSpaces, setRunSpaces] = useState<Record<string, string>>({})
   const [mini, setMini] = useState<{ on: boolean; threadId?: string }>({ on: false })
   const [teamCap, setTeamCap] = useState<{ maxAgents: number; heavy: boolean; why: string } | null>(null)
   const composer = useRef<ComposerHandle>(null)
@@ -127,6 +129,9 @@ export function App() {
         return n
       })
       if (e.status !== 'started') void refreshSpaces()
+      setRunSpaces((m) => { const n = { ...m }; if (e.status === 'started' && e.spaceId) n[e.threadId] = e.spaceId; else delete n[e.threadId]; return n })
+      // A chat you're not looking at finished: say so.
+      if (e.status === 'finished' && e.threadId !== threadRef.current && e.title) toast(`Done: ${e.title.replace(/^⏰ /, '').slice(0, 60)}`, 'ok')
       // Deep Research: open the finished report.
       if (e.status === 'finished' && e.threadId === threadRef.current) {
         void api.threads.messages(e.threadId).then((ms) => {
@@ -314,7 +319,7 @@ export function App() {
       if (!items.length || running.has(tid)) continue
       const [first, ...rest] = items
       setQueue((q) => ({ ...q, [tid]: rest }))
-      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch }).catch((e: Error) => toast(e.message, 'error'))
+      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst }).catch((e: Error) => toast(e.message, 'error'))
     }
   }, [queue, running])
 
@@ -328,7 +333,7 @@ export function App() {
   const model = thread?.model ?? space?.model ?? draft.model ?? settings.defaultModel
   const mode = thread?.permissionMode ?? draft.mode
   const isRunning = !!thread && running.has(thread.id)
-  const question = pending.find((p) => p.kind === 'question')
+  const question = pending.find((p) => p.kind === 'question' || p.kind === 'questions' || p.kind === 'plan')
   const isBot = !!space && !space.isMain && space.kind !== 'project'
   const isProject = space?.kind === 'project'
 
@@ -340,7 +345,11 @@ export function App() {
   const send = async (o: Outgoing): Promise<void> => {
     // A bot asked a question: what you type is the answer.
     if (question && thread) {
-      await api.chat.respond(thread.id, question.id, o.text)
+      // Typing answers the card: one answer for every question, or approval / changes for a plan.
+      const answer = question.kind === 'questions' ? JSON.stringify((question.questions ?? []).map(() => o.text))
+        : question.kind === 'plan' ? (/^(yes|yep|ok|okay|approve|approved|go|go ahead|start|looks good|lgtm|do it)\b/i.test(o.text.trim()) ? 'approve' : `revise: ${o.text}`)
+          : o.text
+      await api.chat.respond(thread.id, question.id, answer)
       return
     }
     if (thread && running.has(thread.id)) {
@@ -360,7 +369,7 @@ export function App() {
       setThread(t)
     }
     try {
-      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch })
+      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst })
       void refreshSpaces()
     } catch (e) {
       toast((e as Error).message, 'error')
@@ -472,6 +481,8 @@ export function App() {
         onConnect={() => setShowConnect(true)}
         onScheduled={() => setShowScheduled(true)}
         onNewProject={() => setEditor({ space: null, mode: 'project' })}
+        runningThreads={running}
+        runningSpaces={new Set(Object.values(runSpaces))}
         pinned={settings.pinnedBots}
         onPinned={(ids) => void api.settings.set({ pinnedBots: ids }).then(setSettings)}
       />
@@ -515,7 +526,7 @@ export function App() {
                 {isRunning && prog?.plan ? `Step ${prog.plan.at} of ${prog.plan.of}` : isRunning && prog ? `${prog.actions} action${prog.actions === 1 ? '' : 's'}` : `${plan.filter((t) => t.status === 'done').length} of ${plan.length} done`}
               </button>
             )}
-            {prog && (
+            {prog && prog.used / prog.window >= 0.2 && (
               <span className="ctx-ring" title={`Conversation memory: ${Math.round((prog.used / prog.window) * 100)}% full (${prog.used.toLocaleString()} of ${prog.window.toLocaleString()} tokens). Older parts are summarized only when it's nearly full.`} data-testid="ctx-ring">
                 <svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--line)" strokeWidth="2.5" />
                   <circle cx="10" cy="10" r="8" fill="none" stroke={prog.used / prog.window > 0.85 ? 'var(--accent)' : 'var(--text-3)'} strokeWidth="2.5" strokeLinecap="round"
@@ -574,7 +585,8 @@ export function App() {
       </main>
       {panel && (
         <RightPanel tab={panel} onTab={setPanel} hidden={modal} messages={messages} file={file}
-          onOpenFile={openFile} browserState={browser} onClose={() => setPanel(null)} />
+          onOpenFile={openFile} browserState={browser} onClose={() => setPanel(null)}
+          running={isRunning} progress={prog ? { used: prog.used, window: prog.window, model: (prog.routed as { label?: string } | undefined)?.label ?? prog.model, actions: prog.actions } : undefined} />
       )}
       {!settings.onboarded && <Onboarding settings={settings} onDone={(s) => { setSettings(s); void refreshModels() }} />}
       {voiceOn && (

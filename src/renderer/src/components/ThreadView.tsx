@@ -55,10 +55,27 @@ export function blocks(messages: Message[]): Block[] {
         if (call.name === 'ask_user') {
           // Questions read as conversation: the bot asks, you answer.
           let q = ''
-          try { q = String(JSON.parse(call.arguments).question ?? '') } catch { /* raw */ }
+          let many: Array<{ question: string }> = []
+          try { const a = JSON.parse(call.arguments); q = String(a.question ?? ''); many = a.questions ?? [] } catch { /* raw */ }
           const r = results.get(call.id)
+          const raw = r?.content.match(/User answered:\s*([\s\S]*?)\n?<\/tool_output>/)?.[1]?.trim() ?? r?.content.match(/User answered: (.*)/)?.[1]
           act = null
-          out.push({ kind: 'qa', id: call.id, question: q, answer: r?.content.match(/User answered: ([\s\S]*?)\n?<\/tool_output>/)?.[1]?.trim() ?? r?.content.match(/User answered: (.*)/)?.[1], at: m.createdAt })
+          if (many.length) {
+            // Several questions: show each with its answer, compactly.
+            const answers = raw ? [...raw.matchAll(/→ (.*)/g)].map((x) => x[1].replace(/^\(no answer.*\)$/, '(your call)')) : undefined
+            out.push({ kind: 'qa', id: call.id, question: many.map((x, i) => `${i + 1}. ${x.question}`).join('\n'), answer: answers ? answers.map((a, i) => `${i + 1}. ${a}`).join('\n') : undefined, at: m.createdAt })
+          } else out.push({ kind: 'qa', id: call.id, question: q, answer: raw, at: m.createdAt })
+          continue
+        }
+        if (call.name === 'propose_plan' && !/approved the plan/.test(results.get(call.id)?.content ?? '')) {
+          // Waiting: the approval card shows it. Changes requested: keep a small record of the exchange.
+          const r = results.get(call.id)
+          if (r) {
+            let goal = ''
+            try { goal = String(JSON.parse(call.arguments).goal ?? '') } catch { /* raw */ }
+            act = null
+            out.push({ kind: 'qa', id: call.id, question: `Proposed plan: ${goal}`, answer: `Change: ${r.content.match(/changes to the plan:\n([\s\S]*?)\nRevise/)?.[1] ?? ''}`, at: m.createdAt })
+          }
           continue
         }
         if (call.name === 'agents') {
@@ -69,9 +86,15 @@ export function blocks(messages: Message[]): Block[] {
           out.push({ kind: 'team', id: call.id, titles, final: r?.meta?.team as TeamMember[] | undefined, summary: r?.meta?.display as string | undefined, at: m.createdAt })
           continue
         }
-        if (call.name === 'todo') {
+        // An approved plan becomes the checklist (later todo updates tick it off).
+        const approved = call.name === 'propose_plan' && /approved the plan/.test(results.get(call.id)?.content ?? '')
+        if (call.name === 'todo' || approved) {
           let items: PlanItem[] = []
-          try { items = (JSON.parse(call.arguments).items ?? []).filter((x: PlanItem) => x && typeof x.text === 'string') } catch { /* partial */ }
+          try {
+            const a = JSON.parse(call.arguments)
+            items = approved ? (a.steps ?? []).map((t: string, i: number) => ({ text: t, status: i === 0 ? 'in_progress' : 'pending' }))
+              : (a.items ?? []).filter((x: PlanItem) => x && typeof x.text === 'string')
+          } catch { /* partial */ }
           if (!items.length) continue
           if (plan) plan.items = items
           else {

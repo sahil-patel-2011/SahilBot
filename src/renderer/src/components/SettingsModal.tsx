@@ -7,16 +7,16 @@ import { toast } from '../lib/toast'
 // Settings: one page per topic. Every change saves right away (keys go to the Keychain).
 
 type Page = 'general' | 'models' | 'keys' | 'appearance' | 'voice' | 'memory' | 'rules' | 'passwords' | 'advanced'
-const PAGES: Array<{ id: Page; label: string; icon: ReactNode }> = [
-  { id: 'general', label: 'General', icon: <I.Gear size={15} /> },
-  { id: 'models', label: 'Models', icon: <I.Cpu size={15} /> },
-  { id: 'keys', label: 'API Keys & Servers', icon: <I.Plug size={15} /> },
-  { id: 'appearance', label: 'Appearance', icon: <I.Sparkle size={15} /> },
-  { id: 'voice', label: 'Voice', icon: <I.Mic size={15} /> },
-  { id: 'memory', label: 'Memory', icon: <I.ListIcon size={15} /> },
-  { id: 'rules', label: 'Rules & Skills', icon: <I.Check size={15} /> },
-  { id: 'passwords', label: 'Passwords', icon: <I.Shield size={15} /> },
-  { id: 'advanced', label: 'Advanced', icon: <I.Edit size={15} /> }
+const PAGES: Array<{ id: Page; label: string; icon: ReactNode; color: string; words: string }> = [
+  { id: 'general', label: 'General', icon: <I.Gear size={14} />, color: '#8e8e93', words: 'name workspace folder quick ask shortcut search cloud budget spending limit hybrid' },
+  { id: 'models', label: 'Models', icon: <I.Cpu size={14} />, color: '#5856d6', words: 'model auto download recommended voice background ollama lm studio' },
+  { id: 'keys', label: 'API Keys & Servers', icon: <I.Plug size={14} />, color: '#007aff', words: 'anthropic claude openai openrouter cursor key base url ollama lm studio custom server' },
+  { id: 'appearance', label: 'Appearance', icon: <I.Sparkle size={14} />, color: '#ff9500', words: 'theme dark light width font tint density code wrap' },
+  { id: 'voice', label: 'Voice', icon: <I.Mic size={14} />, color: '#ff2d55', words: 'speak read aloud dictation whisper kokoro' },
+  { id: 'memory', label: 'Memory', icon: <I.ListIcon size={14} />, color: '#34c759', words: 'remember people places projects facts' },
+  { id: 'rules', label: 'Rules & Skills', icon: <I.Check size={14} />, color: '#30b0c7', words: 'rules skills procedures engineering medical business coding' },
+  { id: 'passwords', label: 'Passwords', icon: <I.Shield size={14} />, color: '#636366', words: 'vault login password' },
+  { id: 'advanced', label: 'Advanced', icon: <I.Edit size={14} />, color: '#af52de', words: 'context window gpu memory sampling hard stops' }
 ]
 
 const WINDOWS: Settings['contextWindow'][] = [0, 16384, 32768, 65536, 131072]
@@ -123,6 +123,8 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   initialPage?: Page
 }) {
   const [page, setPage] = useState<Page>(initialPage ?? 'general')
+  const [find, setFind] = useState('')
+  const pages = PAGES.filter((x) => !find.trim() || `${x.label} ${x.words}`.toLowerCase().includes(find.trim().toLowerCase()))
   const [s, setS] = useState(settings)
   const patch = async (p: SettingsPatchUi): Promise<Settings> => {
     const n = await api.settings.set(p)
@@ -137,17 +139,20 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   }, [onClose])
 
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="settings-win" data-testid="settings">
+    <div className="settings-page" data-testid="settings">
+      <div className="settings-win">
         <nav className="set-nav">
-          <div className="set-nav-title">Settings</div>
-          {PAGES.map((p) => (
-            <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => setPage(p.id)} data-testid={`settings-${p.id}`}>{p.icon}{p.label}</button>
+          <div className="set-nav-top drag">
+            <button className="icon-btn nodrag" onClick={onClose} title="Back (Esc)" data-testid="settings-close"><I.Chevron size={16} style={{ transform: 'rotate(90deg)' }} /></button>
+            <span className="set-nav-title">Settings</span>
+          </div>
+          <div className="set-find nodrag"><I.Search size={14} /><input placeholder="Search settings" value={find} onChange={(e) => { setFind(e.target.value); const first = PAGES.find((x) => `${x.label} ${x.words}`.toLowerCase().includes(e.target.value.trim().toLowerCase())); if (first && e.target.value.trim()) setPage(first.id) }} /></div>
+          {pages.map((p) => (
+            <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => setPage(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{p.label}</button>
           ))}
           {sys && <div className="set-nav-foot">{sys.chip}<br />{sys.totalGB} GB RAM · SahilBot {sys.appVersion}</div>}
         </nav>
         <div className="set-body">
-          <button className="set-close icon-btn" onClick={onClose} title="Close (Esc)" data-testid="settings-close"><I.Close size={16} /></button>
           {page === 'general' && <General s={s} patch={patch} />}
           {page === 'models' && <Models s={s} models={models} patch={patch} onRefresh={onRefreshModels} />}
           {page === 'keys' && <Keys s={s} patch={patch} onChanged={onRefreshModels} models={models} />}
