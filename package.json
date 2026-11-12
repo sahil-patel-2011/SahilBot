@@ -1,0 +1,147 @@
+{
+  "name": "sahilbot",
+  "productName": "SahilBot",
+  "version": "0.1.0",
+  "description": "SahilBot: a private, local-first AI assistant for your Mac",
+  "main": "out/main/index.js",
+  "private": true,
+  "scripts": {
+    "predev": "node scripts/brand-dev.mjs",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "prestart": "node scripts/brand-dev.mjs",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:accept": "electron-vite build && vitest run --config vitest.accept.config.mts",
+    "dist": "electron-vite build && electron-builder --mac",
+    "voice:setup": "./scripts/voice-setup.sh",
+    "postinstall": "node scripts/brand-dev.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@mozilla/readability": "^0.6.0",
+    "ajv": "^8.20.0",
+    "docx": "^9.15.3",
+    "dompurify": "^3.4.17",
+    "exceljs": "^4.4.0",
+    "kokoro-js": "^1.2.1",
+    "linkedom": "^0.18.15",
+    "mammoth": "^1.13.0",
+    "marked": "^18.2.0",
+    "onnxruntime-node": "1.21.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.5.438",
+    "pptxgenjs": "^4.0.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "playwright": "^1.65.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  },
+  "build": {
+    "appId": "app.sahilbot.desktop",
+    "productName": "SahilBot",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "SahilBot uses the microphone for dictation and voice mode. Audio is processed on this Mac and never sent anywhere.",
+        "NSAppleEventsUsageDescription": "SahilBot controls apps like Notes, Reminders, Calendar and System Events when you ask it to use your Mac.",
+        "NSScreenCaptureUsageDescription": "SahilBot looks at your screen only while you have it use your computer for a task."
+      },
+      "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "artifactName": "SahilBot-${version}-${arch}.${ext}",
+      "minimumSystemVersion": "13.0"
+    },
+    "files": [
+      "out/**",
+      "resources/**",
+      "package.json",
+      "!**/*.{map,d.ts,d.mts,d.cts,md,markdown}",
+      "!**/{test,tests,__tests__,example,examples,docs,doc,.github}/**",
+      "!node_modules/onnxruntime-node/bin/napi-v3/{linux,win32}/**",
+      "!node_modules/onnxruntime-node/bin/napi-v3/darwin/x64/**",
+      "!node_modules/pdfjs-dist/{web,types,image_decoders,build}/**",
+      "!node_modules/pdfjs-dist/legacy/web/**",
+      "!node_modules/@huggingface/transformers/dist/*.{min,web}.*",
+      "!node_modules/@huggingface/transformers/src/**",
+      "!node_modules/onnxruntime-web/dist/*.{jsep,webgpu,webgl}.*"
+    ],
+    "extraResources": [
+      {
+        "from": "docs",
+        "to": "docs"
+      },
+      {
+        "from": "vendor/whisper.cpp/build/bin",
+        "to": "whisper",
+        "filter": [
+          "whisper-server",
+          "*.dylib"
+        ]
+      },
+      {
+        "from": "packs",
+        "to": "packs"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**",
+      "node_modules/onnxruntime-common/**"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "dmg": {
+      "title": "SahilBot ${version}",
+      "icon": "build/icon.icns",
+      "contents": [
+        {
+          "x": 150,
+          "y": 200
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 550,
+        "height": 380
+      }
+    }
+  },
+  "author": "SahilBot"
+}
