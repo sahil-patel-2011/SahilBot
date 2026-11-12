@@ -18,7 +18,7 @@ export function setupApp(): void {
   // In development the bundle is Electron's; show SahilBot's icon in the Dock anyway.
   if (!isPackaged() && process.platform === 'darwin') {
     const icon = nativeImage.createFromPath(join(appRoot(), 'resources', 'icon.png'))
-    if (!icon.isEmpty()) app.dock?.setIcon(icon)
+    if (!icon.isEmpty() && !process.env.SAHILBOT_HIDDEN) app.dock?.setIcon(icon)
   }
 }
 

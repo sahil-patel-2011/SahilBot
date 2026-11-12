@@ -46,6 +46,10 @@ import { SpaceFiles } from './spaces'
 import { BrowserManager } from './browser/manager'
 import { Vault } from './vault'
 
+/** Set by the automated tests: run without ever showing a window. */
+const HIDDEN = !!process.env.SAHILBOT_HIDDEN
+if (HIDDEN) app.whenReady().then(() => app.dock?.hide()).catch(() => undefined)
+
 // Tests and side-by-side profiles keep everything (including browser cookies) in their own folder.
 // Otherwise the data folder keeps its original name (Foreman) so chats, memory and keys carry over.
 if (process.env.FOREMAN_DATA_DIR) app.setPath('userData', process.env.FOREMAN_DATA_DIR)
@@ -58,8 +62,7 @@ if (!app.requestSingleInstanceLock()) app.quit()
 app.on('second-instance', () => {
   if (!win) return
   if (win.isMinimized()) win.restore()
-  win.show()
-  win.focus()
+  if (!HIDDEN) { win.show(); win.focus() }
 })
 
 const SPACE_COLORS = ['#FF4D4F', '#1F1F1F', '#7C5CFF', '#13A10E', '#F59E0B', '#0EA5E9', '#EC4899', '#A0612F', '#14B8A6']
@@ -101,7 +104,8 @@ function createWindow(bounds: Partial<Electron.Rectangle> = {}): BrowserWindow {
       plugins: true
     }
   })
-  w.once('ready-to-show', () => w.show())
+  // Automated test runs stay invisible: no window, no Dock icon, no stealing focus.
+  if (!HIDDEN) w.once('ready-to-show', () => w.show())
   // Links in chat open in the user's browser, never inside the app shell.
   w.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) void shell.openExternal(url)
