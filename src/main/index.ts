@@ -1,0 +1,561 @@
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, screen, session, shell, systemPreferences } from 'electron'
+import { execFileSync } from 'node:child_process'
+import { totalmem } from 'node:os'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import type { BotShape, ChatEvent, SendInput, Settings, Space } from '@shared/types'
+import { Attachments, registerScheme } from './attachments'
+import { INTRO } from './agent/prompt'
+import { updateBotTool } from './agent/tools/bots'
+import { PROVIDERS } from './llm/providers'
+import { Budget } from './llm/budget'
+import { isLocal, spendHooks, streamChat } from './llm/client'
+import { Connectors, PRESETS } from './connectors'
+import { VoiceService } from './voice/service'
+import { Scheduler } from './scheduler'
+import { buildMenu, setupApp, windowState } from './shell'
+import { scheduleTool } from './agent/tools/schedule'
+import { ResultStore } from './agent/context'
+import { Agent } from './agent/loop'
+import { ToolRegistry } from './agent/registry'
+import { browserTool } from './agent/tools/browser'
+import { coreTools } from './agent/tools/core'
+import { fileTools } from './agent/tools/files'
+import { memoryTool } from './agent/tools/memory'
+import { webTools } from './agent/tools/web'
+import { Db } from './db'
+import { providerModels, root, teamCapacity, wiredLimitMB } from './llm/models'
+import { Endpoints } from './llm/endpoints'
+import { samplingFor } from './llm/catalog'
+import { MemoryStore } from './memory'
+import { appRoot, dataDir, sub } from './paths'
+import { SkillStore } from './skills'
+import { RuleStore } from './rules'
+import { cursorTool, macAppsTool } from './agent/tools/apps'
+import { shellTool } from './agent/tools/shell'
+import { agentsTool } from './agent/tools/agents'
+import { computerTool } from './agent/tools/computer'
+import { consultTool } from './agent/tools/consult'
+import { Secrets } from './secrets'
+import { SettingsStore, type SettingsPatch } from './settings'
+import { SpaceFiles } from './spaces'
+import { BrowserManager } from './browser/manager'
+import { Vault } from './vault'
+
+// Tests and side-by-side profiles keep everything (including browser cookies) in their own folder.
+// Otherwise the data folder keeps its original name (Foreman) so chats, memory and keys carry over.
+if (process.env.FOREMAN_DATA_DIR) app.setPath('userData', process.env.FOREMAN_DATA_DIR)
+else app.setPath('userData', join(app.getPath('appData'), 'Foreman'))
+
+registerScheme()
+
+// One SahilBot at a time: a second launch focuses the existing window.
+if (!app.requestSingleInstanceLock()) app.quit()
+app.on('second-instance', () => {
+  if (!win) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+})
+
+const SPACE_COLORS = ['#FF4D4F', '#1F1F1F', '#7C5CFF', '#13A10E', '#F59E0B', '#0EA5E9', '#EC4899', '#A0612F', '#14B8A6']
+const SHAPES: BotShape[] = ['blob', 'drop', 'square', 'pebble', 'star', 'triangle', 'circle', 'hex']
+const pick = <T,>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)]
+
+let win: BrowserWindow | null = null
+
+function chip(): string {
+  try {
+    return execFileSync('sysctl', ['-n', 'machdep.cpu.brand_string']).toString().trim()
+  } catch {
+    return process.arch
+  }
+}
+
+function applyTheme(theme: Settings['theme']): void {
+  nativeTheme.themeSource = theme
+}
+
+function createWindow(bounds: Partial<Electron.Rectangle> = {}): BrowserWindow {
+  const w = new BrowserWindow({
+    width: 1320,
+    height: 860,
+    ...bounds,
+    title: 'SahilBot',
+    minWidth: 900,
+    minHeight: 600,
+    show: false,
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 18, y: 18 },
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#161616' : '#FFFFFF',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      // Chromium's PDF viewer for document previews.
+      plugins: true
+    }
+  })
+  w.once('ready-to-show', () => w.show())
+  // Links in chat open in the user's browser, never inside the app shell.
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  w.webContents.on('will-navigate', (e) => e.preventDefault())
+  if (process.env.ELECTRON_RENDERER_URL) void w.loadURL(process.env.ELECTRON_RENDERER_URL)
+  else void w.loadFile(join(__dirname, '../renderer/index.html'))
+  return w
+}
+
+app.whenReady().then(() => {
+  setupApp()
+  const db = new Db(join(dataDir(), 'foreman.db'))
+  db.sweepStreaming()
+  const secrets = new Secrets(db)
+  const settings = new SettingsStore(db, secrets)
+  const spaces = new SpaceFiles()
+  // Cloud spending cap: enforced inside the model client for every paid request (chat, agent, voice, summaries).
+  const budget = new Budget(db, () => settings.get().cloudBudgetUsd)
+  spendHooks.before = (_req, est, maxOutput, pricedAs) => budget.check(pricedAs, est, maxOutput)
+  spendHooks.after = (req, input, output, served) => {
+    budget.record(new URL(req.baseUrl).host, served, input, output)
+    win?.webContents.send('budget:changed')
+  }
+
+  const memory = new MemoryStore(db)
+  const results = new ResultStore(sub('results'))
+  const docsDir = join(appRoot(), 'docs')
+  const listeners = new Set<(e: ChatEvent) => void>()
+  // Computer use: while SahilBot controls the Mac it shrinks to a small window in the top-right corner
+  // (always on top, with Stop), and comes back when the task ends.
+  let mini: { bounds: Electron.Rectangle; threadId: string } | null = null
+  const exitMini = (): void => {
+    if (!mini || !win || win.isDestroyed()) { mini = null; return }
+    globalShortcut.unregister('Control+Option+Escape')
+    win.setAlwaysOnTop(false)
+    win.setMinimumSize(900, 600)
+    win.setBounds(mini.bounds, true)
+    mini = null
+    win.webContents.send('mini', { on: false })
+  }
+  const enterMini = (threadId: string): void => {
+    if (mini || !win || win.isDestroyed()) return
+    mini = { bounds: win.getBounds(), threadId }
+    const { workArea } = screen.getPrimaryDisplay()
+    win.setMinimumSize(260, 150)
+    win.setAlwaysOnTop(true, 'floating')
+    win.setBounds({ x: workArea.x + workArea.width - 300 - 14, y: workArea.y + 14, width: 300, height: 176 }, true)
+    win.webContents.send('mini', { on: true, threadId })
+    // A way out that works whatever app is in front.
+    globalShortcut.register('Control+Option+Escape', () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini() })
+  }
+  const emit = (e: ChatEvent): void => {
+    win?.webContents.send('chat:event', e)
+    for (const l of listeners) l(e)
+    if (e.type === 'run' && e.status !== 'started' && mini?.threadId === e.threadId) exitMini()
+  }
+
+  const vault = new Vault(db, secrets)
+  const browser = new BrowserManager(
+    () => win,
+    (state) => win?.webContents.send('browser:state', state),
+    () => win?.webContents.send('browser:open')
+  )
+
+  // Built-in packs of skills and rules ship in packs/; yours live in the data folder.
+  const skills = new SkillStore(sub('skills'), join(appRoot(), 'packs', 'skills'))
+  const rules = new RuleStore(sub('rules'), join(appRoot(), 'packs', 'rules'))
+  const registry = new ToolRegistry()
+  registry.register(
+    ...coreTools(results),
+    ...fileTools(() => settings.get().workspaceDir, docsDir),
+    ...webTools(() => ({ ...settings.get().search, braveKey: secrets.get('braveKey') })),
+    memoryTool(memory, db, skills, rules),
+    // Built in and always available (connector tools are found with find_tools).
+    { ...browserTool(browser, vault), core: true },
+    { ...cursorTool(() => secrets.get('cursorKey')), core: true },
+    { ...macAppsTool(), core: true },
+    shellTool(),
+    agentsTool(),
+    computerTool({
+      enterMini: (id) => enterMini(id),
+      trusted: (prompt) => systemPreferences.isTrustedAccessibilityClient(prompt),
+      capture: async (file) => {
+        await new Promise<void>((ok, fail) => execFile('screencapture', ['-x', '-C', '-t', 'png', file], { timeout: 15_000 }, (e) => (e ? fail(e) : ok())))
+        const d = screen.getPrimaryDisplay()
+        // One image pixel = one screen point, so coordinates can be used as-is.
+        const img = nativeImage.createFromPath(file).resize({ width: d.size.width, height: d.size.height })
+        if (img.isEmpty()) throw new Error('could not create image (Screen Recording permission)')
+        return { dataUrl: img.toDataURL(), width: d.size.width, height: d.size.height }
+      }
+    }),
+    consultTool({
+      advisor: () => endpoints.advisor(),
+      isCloud: (m) => !isLocal(endpoints.for(m).baseUrl),
+      maxPerRequest: () => settings.get().cloud.maxConsultsPerRequest,
+      ask: async (model, system, user, signal) => {
+        const ep = endpoints.for(model)
+        let out = ''
+        for await (const part of streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, settings.get().sampling), maxTokens: 2000, effort: 'medium', signal })) {
+          if (part.type === 'content') out += part.text
+        }
+        return out
+      }
+    }),
+    updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' }))
+  )
+
+  // Every model server that's on; the last list tells the agent how much context each model can hold.
+  const endpoints = new Endpoints(settings)
+  const fitWindow = (model: string, window: number): number => {
+    const m = endpoints.last?.models.find((x) => x.id === model)
+    if (!m || m.note === 'remote') return window
+    // Never below 16k; otherwise the largest window this Mac's memory allows with this model.
+    return Math.max(16384, Math.min(window, m.maxFittingWindow || 32768))
+  }
+
+  const connectors = new Connectors(db, secrets, registry, () => win?.webContents.send('connectors:changed'))
+
+  const chat = new Agent({
+    connectors,
+    db, settings, endpoints, spaces, memory, skills, rules, registry, results, docsDir, emit, fitWindow,
+    secretValues: () => vault.passwords()
+  })
+
+  if (db.listSpaces().length === 0) db.createSpace('SahilBot', '#1F1F1F', { isMain: true, shape: 'mascot' })
+  const attachments = new Attachments(() => win, () => settings.get().workspaceDir, docsDir)
+  attachments.registerProtocol()
+  applyTheme(settings.get().theme)
+
+  const handle = <A extends unknown[], R>(ch: string, fn: (...args: A) => R | Promise<R>): void => {
+    ipcMain.handle(ch, (_e, ...args) => fn(...(args as A)))
+  }
+
+  handle('system:info', () => ({
+    totalGB: Math.round(totalmem() / 1024 ** 3),
+    chip: chip(),
+    platform: process.platform,
+    // In development app.getVersion() is Electron's own version; read SahilBot's.
+    appVersion: (() => { try { return (JSON.parse(readFileSync(join(appRoot(), 'package.json'), 'utf8')) as { version: string }).version } catch { return app.getVersion() } })()
+  }))
+
+  handle('settings:get', () => settings.get())
+  handle('settings:set', (patch: SettingsPatch) => {
+    const s = settings.set(patch)
+    if (patch.theme) applyTheme(s.theme)
+    return s
+  })
+
+  handle('mini:exit', () => exitMini())
+  handle('models:list', () => endpoints.list())
+  handle('models:setupPicks', async () => { await endpoints.list().catch(() => undefined); return endpoints.setupPicks() })
+  // Let the GPU use up to 90% of memory (macOS caps it at about 75%). macOS asks for an admin password;
+  // it lasts until restart unless kept with a small LaunchDaemon (also only with the user's password).
+  handle('gpu:status', () => ({ totalGB: Math.round(totalmem() / 1024 ** 3), limitMB: wiredLimitMB(true) }))
+  handle('gpu:setLimit', async (percent: number, keep: boolean) => {
+    const mb = percent > 0 ? Math.floor((totalmem() / 1024 ** 2) * Math.min(0.92, percent / 100)) : 0
+    const plist = '/Library/LaunchDaemons/app.sahilbot.gpu-memory.plist'
+    const daemon = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>app.sahilbot.gpu-memory</string><key>ProgramArguments</key><array><string>/usr/sbin/sysctl</string><string>iogpu.wired_limit_mb=${mb}</string></array><key>RunAtLoad</key><true/></dict></plist>`
+    const script = [`/usr/sbin/sysctl iogpu.wired_limit_mb=${mb}`, keep && mb > 0 ? `printf %s '${daemon}' > ${plist} && chmod 644 ${plist}` : `rm -f ${plist}`].join(' && ')
+    await new Promise<void>((ok, fail) => execFile('osascript', ['-e', `do shell script "${script.replace(/"/g, '\\"')}" with administrator privileges with prompt "SahilBot wants to let local AI models use more of your Mac's memory."`], (e) => (e ? fail(new Error(/-128|User canceled/i.test(e.message) ? 'Cancelled.' : e.message)) : ok())))
+    wiredLimitMB(true)
+    void endpoints.list()
+    return { limitMB: wiredLimitMB() }
+  })
+
+  // Team of Experts: how many helper agents this Mac can run with a model.
+  handle('agents:capacity', (model: string) => {
+    const id = model === 'auto' ? endpoints.usable().sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id : model
+    return teamCapacity(endpoints.last?.models.find((m) => m.id === id))
+  })
+
+  handle('models:test', async (baseUrl: string, apiKey?: string) => {
+    const r = await providerModels('custom', 'Test', baseUrl, apiKey || settings.keyFor(baseUrl), settings.get().contextWindow || 32768)
+    return r.ok ? { ok: true, count: r.models.length } : { ok: false, count: 0, error: r.error }
+  })
+
+  // One-click downloads of recommended models through Ollama, with progress.
+  const pulling = new Set<string>()
+  handle('models:pull', async (tag: string) => {
+    if (!/^[\w.\-/]+(:[\w.\-]+)?$/.test(tag) || pulling.has(tag)) return
+    pulling.add(tag)
+    const send = (e: Record<string, unknown>): void => win?.webContents.send('models:pull', { tag, ...e })
+    try {
+      const res = await fetch(`${root(settings.providers().ollama.baseUrl)}/api/pull`, { method: 'POST', body: JSON.stringify({ model: tag, stream: true }) })
+      if (!res.ok || !res.body) throw new Error(`Ollama answered ${res.status}`)
+      const dec = new TextDecoder()
+      let buf = ''
+      for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+        buf += dec.decode(chunk, { stream: true })
+        let i: number
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).trim()
+          buf = buf.slice(i + 1)
+          if (!line) continue
+          const j = JSON.parse(line) as { status?: string; completed?: number; total?: number; error?: string }
+          if (j.error) throw new Error(j.error)
+          send({ status: j.status ?? '', completed: j.completed, total: j.total })
+        }
+      }
+      send({ status: 'done', done: true })
+    } catch (e) {
+      send({ status: 'error', done: true, error: (e as Error).message.includes('fetch failed') ? 'Ollama isn\'t running. Open the Ollama app, then try again.' : (e as Error).message })
+    } finally {
+      pulling.delete(tag)
+    }
+  })
+
+  handle('spaces:list', () => db.listSpaces())
+  handle('spaces:create', (input: { name?: string; color?: string; shape?: BotShape; kind?: 'bot' | 'group' | 'project'; members?: string[]; intro?: boolean; folder?: string }) => {
+    const kind = input.kind ?? 'bot'
+    const name = input.name?.trim() || (kind === 'group' ? 'Group chat' : kind === 'project' ? 'New project' : 'New Bot')
+    if (kind === 'project') {
+      // Only folders the user picked in this session can become project folders.
+      if (!input.folder || !attachments.accept([input.folder]).length) throw new Error('Choose the project folder with the folder picker.')
+      attachments.allow(input.folder)
+    }
+    const space = db.createSpace(name, input.color ?? pick(SPACE_COLORS.slice(2)), { kind, shape: input.shape ?? pick(SHAPES), members: input.members ?? [], folder: input.folder })
+    const thread = db.createThread(space.id, 'auto', null)
+    db.updateThread(thread.id, { title: name })
+    if (kind === 'bot' && input.intro !== false) {
+      // The new bot greets the user and asks what to focus on; it can rename itself afterwards.
+      const state = db.getState(thread.id)
+      state.loaded = ['update_bot']
+      db.setState(thread.id, state)
+      chat.intro(thread.id, INTRO)
+    }
+    return { space, threadId: thread.id }
+  })
+  handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model'>>) => {
+    const s = db.updateSpace(id, patch)
+    // Keep a bot's one conversation titled after it.
+    if (patch.name && s.kind === 'bot' && !s.isMain) for (const t of db.listThreads(id)) db.updateThread(t.id, { title: s.name })
+    return s
+  })
+  handle('spaces:markUnread', (id: string) => {
+    const t = db.listThreads(id)[0]
+    if (t) db.updateThread(t.id, { unread: true })
+  })
+  handle('spaces:remove', (id: string) => {
+    if (db.getSpace(id)?.isMain) throw new Error("The main bot can't be deleted.")
+    for (const t of db.listThreads(id)) chat.stop(t.id)
+    db.deleteSpace(id)
+    for (const g of db.listSpaces().filter((x) => x.kind === 'group' && x.members.includes(id))) db.updateSpace(g.id, { members: g.members.filter((m) => m !== id) })
+  })
+  handle('spaces:getPrompt', (id: string) => spaces.getPrompt(id))
+  handle('spaces:setPrompt', (id: string, text: string) => spaces.setPrompt(id, text))
+  handle('spaces:promptPath', (id: string) => spaces.path(id))
+
+  handle('threads:list', (spaceId?: string) => db.listThreads(spaceId))
+  handle('threads:search', (q: string) => db.searchThreads(q))
+  handle('threads:create', (spaceId: string) => db.createThread(spaceId, 'auto', null))
+  handle('threads:update', (id: string, patch: Parameters<Db['updateThread']>[1]) => db.updateThread(id, patch))
+  handle('threads:remove', (id: string) => {
+    chat.stop(id)
+    db.deleteThread(id)
+  })
+  handle('threads:messages', (id: string) => db.listMessages(id))
+  handle('threads:react', (messageId: string, emoji: string | null) => {
+    const m = db.react(messageId, 'user', emoji)
+    emit({ threadId: m.threadId, type: 'message', message: m })
+    return m
+  })
+
+  // Attachments must be ones the user picked or dropped in this session.
+  handle('chat:send', async (input: SendInput) => {
+    const ok = new Set(attachments.accept((input.attachments ?? []).map((a) => a.path)))
+    await chat.send({ ...input, attachments: (input.attachments ?? []).filter((a) => ok.has(a.path)) })
+  })
+  handle('files:pick', (kind: 'files' | 'folder') => attachments.pick(kind))
+  handle('files:register', (paths: string[]) => attachments.register(paths))
+  handle('files:preview', (path: string) => attachments.preview(path))
+  handle('files:open', async (path: string) => { await attachments.open(path) })
+  handle('files:reveal', (path: string) => attachments.reveal(path))
+  handle('providers', () => PROVIDERS)
+  handle('budget', () => budget.summary())
+  // Zero setup: find model servers already running on this Mac and the best model that fits.
+  handle('detectProviders', async () => {
+    const local = PROVIDERS.filter((p) => !p.needsKey)
+    const found = await Promise.all(local.map(async (p) => {
+      const list = await providerModels(p.id as 'ollama', p.name, p.baseUrl, undefined, settings.get().contextWindow || 32768)
+      if (!list.ok) return null
+      const fits = list.models.filter((m) => m.fits || m.maxFittingWindow >= 16384)
+      // Prefer the largest model that fits (by size on disk, else required memory).
+      const best = [...fits].sort((a, b) => (b.sizeBytes ?? b.requiredGB * 1e9) - (a.sizeBytes ?? a.requiredGB * 1e9))[0]
+      return { id: p.id, name: p.name, baseUrl: p.baseUrl, models: list.models.length, best: best?.id ?? null }
+    }))
+    return found.filter((x): x is NonNullable<typeof x> => !!x)
+  })
+  handle('connectors:presets', () => PRESETS)
+  handle('connectors:list', () => ({ configs: connectors.list(), statuses: connectors.statuses() }))
+  handle('connectors:save', (c: Parameters<Connectors['save']>[0] & { headerValue?: string; clientSecret?: string }) => {
+    const { headerValue, clientSecret, ...rest } = c
+    const saved = connectors.save(rest)
+    if (headerValue) secrets.set(`mcp:${saved.id}:header`, headerValue)
+    if (clientSecret) secrets.set(`mcp:${saved.id}:clientSecret`, clientSecret)
+    return saved
+  })
+  handle('connectors:remove', (id: string) => connectors.remove(id))
+  handle('connectors:connectPreset', (id: string) => connectors.connectPreset(id))
+  handle('connectors:connect', (id: string) => connectors.connect(id, true))
+  handle('connectors:disconnect', (id: string) => connectors.disconnect(id))
+  void connectors.connectAll()
+
+  // ---------------------------------------------------------------- scheduled tasks
+  const scheduler = new Scheduler(db, async (task) => {
+    const space = db.getSpace(task.spaceId)
+    if (!space) return 'error: its bot was deleted'
+    // Bots get reminders in their one conversation; SahilBot and projects keep a thread per task.
+    let threadId = space.isMain || space.kind === 'project' ? task.threadId : db.listThreads(space.id)[0]?.id ?? null
+    if (!threadId || !db.getThread(threadId)) {
+      const t = db.createThread(space.id, 'auto', null)
+      db.updateThread(t.id, { title: space.isMain || space.kind === 'project' ? `⏰ ${task.title}` : space.name })
+      threadId = t.id
+      scheduler.setThread(task.id, threadId)
+    }
+    if (chat.isRunning(threadId)) return 'skipped: the chat was busy'
+    const { done } = await chat.send({ threadId, text: `⏰ ${task.title}\n\n${task.prompt}`, meta: { scheduled: task.id } }, { unattended: true })
+    const status = await done
+    const last = [...db.listMessages(threadId)].reverse().find((m) => m.role === 'assistant' && m.content)
+    if (Notification.isSupported()) new Notification({ title: `${space.isMain ? 'SahilBot' : space.name}: ${task.title}`, body: (last?.content ?? 'Done').replace(/\s+/g, ' ').slice(0, 140) }).show()
+    return status === 'finished' ? 'done' : status
+  }, () => win?.webContents.send('schedules:changed'))
+  registry.register({ ...scheduleTool(scheduler, db), core: true })
+  scheduler.start()
+  handle('schedules:list', () => scheduler.list())
+  handle('schedules:create', (t: Parameters<Scheduler['create']>[0]) => scheduler.create(t))
+  handle('schedules:update', (id: string, patch: Parameters<Scheduler['update']>[1]) => scheduler.update(id, patch))
+  handle('schedules:remove', (id: string) => scheduler.remove(id))
+  handle('schedules:runNow', async (id: string) => {
+    const t = scheduler.get(id)
+    if (t) void scheduler.fire(t)
+  })
+  handle('pickFolder', async () => {
+    const r = win ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] }) : { canceled: true, filePaths: [] }
+    if (r.canceled || !r.filePaths[0]) return null
+    attachments.register([r.filePaths[0]])
+    attachments.accept([r.filePaths[0]])
+    return r.filePaths[0]
+  })
+  // Project folders are previewable and usable by their chats.
+  for (const sp of db.listSpaces()) if (sp.kind === 'project' && sp.folder) attachments.allow(sp.folder)
+
+  // ---------------------------------------------------------------- voice
+  let voiceThread: string | null = null
+  const voice = new VoiceService({
+    emit: (e) => win?.webContents.send('voice:event', e),
+    respond: (text, signal, onText) => new Promise<void>((resolve, reject) => {
+      const tid = voiceThread
+      if (!tid) return reject(new Error('No voice conversation'))
+      const off = (): void => { listeners.delete(l) }
+      const l = (e: ChatEvent): void => {
+        if (e.threadId !== tid) return
+        if (e.type === 'delta' && e.content) onText(e.content)
+        if (e.type === 'run' && e.status !== 'started') { off(); resolve() }
+      }
+      listeners.add(l)
+      signal.addEventListener('abort', () => { chat.stop(tid); off(); resolve() })
+      chat.send({ threadId: tid, text, voice: true }).catch((err: Error) => { off(); reject(err) })
+    })
+  })
+  handle('voice:status', () => voice.status())
+  handle('voice:download', (kind: 'whisper' | 'vad' | 'kokoro') => voice.download(kind))
+  handle('voice:setVoice', (v: string) => voice.setVoice(v))
+  handle('voice:start', async (threadId: string | null, spaceId: string) => {
+    if (!threadId) {
+      const t = db.createThread(spaceId, 'auto', null)
+      db.updateThread(t.id, { title: `Voice chat · ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` })
+      threadId = t.id
+    }
+    const st = db.getState(threadId)
+    st.voice = true
+    db.setState(threadId, st)
+    voiceThread = threadId
+    await voice.startVoice()
+    return threadId
+  })
+  handle('voice:stop', () => { voice.stop(); voiceThread = null })
+  handle('voice:speak', (text: string) => voice.speak(String(text).slice(0, 20_000)))
+  handle('voice:stopSpeaking', () => voice.stopSpeaking())
+  handle('voice:dictateStart', () => voice.startDictation())
+  handle('voice:dictateStop', () => voice.stopDictation())
+  ipcMain.on('voice:frame', (_e, buf: Float32Array) => voice.frame(buf))
+  app.on('before-quit', () => { voice.dispose(); scheduler.stop(); browser.dispose() })
+
+  // The app's own window may use the microphone (voice); websites in the browser panel may not.
+  session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc === win?.webContents))
+  session.defaultSession.setPermissionCheckHandler((wc, perm) => perm === 'media' && wc === win?.webContents)
+  handle('chat:stop', (threadId: string) => chat.stop(threadId))
+  handle('chat:respond', (threadId: string, id: string, answer: string) => chat.respond(threadId, id, answer))
+  handle('chat:pending', (threadId: string) => chat.pending(threadId))
+  handle('chat:retry', (threadId: string) => chat.retry(threadId))
+  handle('chat:editLast', (threadId: string, text: string) => chat.editLast(threadId, text))
+  handle('chat:export', async (threadId: string) => {
+    const t = db.getThread(threadId)
+    if (!t) return null
+    const r = win ? await dialog.showSaveDialog(win, { defaultPath: `${t.title.replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80)}.md`, filters: [{ name: 'Markdown', extensions: ['md'] }] }) : { canceled: true }
+    if (r.canceled || !('filePath' in r) || !r.filePath) return null
+    const lines = [`# ${t.title}`, '', `_Exported from SahilBot on ${new Date().toLocaleString()}_`, '']
+    for (const m of db.listMessages(threadId)) {
+      if (m.meta?.hidden || m.kind !== 'normal' || m.role === 'tool' || !m.content.trim() || m.meta?.superseded) continue
+      lines.push(m.role === 'user' ? `**You:** ${m.content}` : `**${(m.meta?.botName as string) ?? 'SahilBot'}:** ${m.content}`, '')
+    }
+    writeFileSync(r.filePath, lines.join('\n'))
+    return r.filePath
+  })
+
+  handle('vault:list', () => vault.list())
+  handle('vault:set', (e: Parameters<Vault['set']>[0]) => { vault.set(e); return vault.list() })
+  handle('vault:remove', (name: string) => { vault.remove(name); return vault.list() })
+
+  handle('browser:state', () => browser.state())
+  handle('browser:setBounds', (b: Electron.Rectangle | null) => browser.setBounds(b && { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) }))
+  handle('browser:navigate', (url: string) => browser.userNavigate(url))
+  handle('browser:back', () => browser.back())
+  handle('browser:forward', () => browser.forward())
+  handle('browser:reload', () => browser.reload())
+  handle('browser:newTab', () => void browser.newTab('about:blank'))
+  handle('browser:switchTab', (i: number) => browser.switchTab(i))
+  handle('browser:closeTab', (i: number) => browser.closeTab(i))
+  handle('browser:takeOver', (on: boolean) => browser.takeOver(on))
+
+  handle('memory:list', () => memory.list())
+  handle('memory:remove', (id: string) => void memory.remove(id))
+  handle('memory:add', (content: string, projectId: string | null) => memory.save(content, 'other', projectId ?? null).memory)
+  handle('memory:update', (id: string, content: string) => void memory.update(id, content))
+  handle('rules:list', () => rules.list())
+  handle('rules:save', (r: { name: string; text: string; scope?: string; category?: string }) => rules.save(r))
+  handle('rules:setEnabled', (name: string, on: boolean) => rules.setEnabled(name, on))
+  handle('rules:remove', (name: string) => rules.remove(name))
+  handle('skills:list', () => skills.list())
+  handle('skills:save', (sk: { name: string; description: string; body: string }) => skills.save({ ...sk, source: 'you' }))
+  handle('skills:remove', (name: string) => void skills.remove(name))
+
+  // Bypass resets on every launch.
+  db.sql.prepare(`UPDATE threads SET permission_mode = 'auto' WHERE permission_mode = 'bypass'`).run()
+
+  const ws = windowState(db)
+  const open = (): BrowserWindow => {
+    const w = createWindow(ws.bounds)
+    ws.track(w)
+    // Move the page out of a closing window so it (and the agent's work in it) survives.
+    w.on('close', () => browser.setBounds(null))
+    return w
+  }
+  win = open()
+  win.on('resize', () => browser.reflow())
+  win.on('closed', () => { if (process.platform !== 'darwin') app.quit() })
+  buildMenu((action) => win?.webContents.send('menu', action))
+  app.on('activate', () => {
+    // The browser's hidden parking window doesn't count as an open window.
+    if (!win || win.isDestroyed()) { win = open(); win.on('resize', () => browser.reflow()); browser.reflow() }
+  })
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})
