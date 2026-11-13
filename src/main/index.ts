@@ -787,6 +787,7 @@ app.whenReady().then(() => {
   handle('chat:steer', (threadId: string, text: string) => chat.steer(threadId, String(text).slice(0, 20_000)))
   handle('chat:respond', (threadId: string, id: string, answer: string) => chat.respond(threadId, id, answer))
   // The main window asks for a chat's open requests whenever it opens that chat: that's how main knows what you're reading.
+  handle('chat:allPending', () => chat.allPending())
   ipcMain.handle('chat:pending', (ev, threadId: string) => {
     if (win && !win.isDestroyed() && ev.sender === win.webContents) { viewingThread = threadId; refreshBadge() }
     return chat.pending(threadId)

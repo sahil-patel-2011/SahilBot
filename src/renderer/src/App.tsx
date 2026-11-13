@@ -39,6 +39,8 @@ export function App() {
   const [panel, setPanel] = useState<PanelTab | 'details' | null>(null)
   /** Open questions/approvals/plans per chat, for the sidebar's "needs you" dot. */
   const [needs, setNeeds] = useState<Record<string, string[]>>({})
+  // A reopened window picks up chats that were already waiting on you.
+  useEffect(() => void api.chat.allPending().then((all) => setNeeds((x) => ({ ...all, ...x }))), [])
   const [file, setFile] = useState<string | null>(null)
   const [browser, setBrowser] = useState<BrowserState | null>(null)
   const [showSettings, setShowSettings] = useState(false)

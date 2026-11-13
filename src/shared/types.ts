@@ -781,6 +781,8 @@ export interface SahilBotApi {
     /** Saves the conversation as a Markdown file (save dialog). */
     exportThread(threadId: string): Promise<string | null>
     pending(threadId: string): Promise<PendingRequest[]>
+    /** Chats waiting on the user, with their open request ids. */
+    allPending(): Promise<Record<string, string[]>>
     onEvent(cb: (e: ChatEvent) => void): () => void
   }
 }

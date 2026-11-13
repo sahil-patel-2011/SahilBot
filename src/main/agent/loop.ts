@@ -145,6 +145,13 @@ export class Agent {
     return [...(this.runs.get(threadId)?.pending.values() ?? [])].map((p) => p.request)
   }
 
+  /** Every chat waiting on the user right now, with its open request ids (for a reopened window). */
+  allPending(): Record<string, string[]> {
+    const out: Record<string, string[]> = {}
+    for (const [id, run] of this.runs) if (run.pending.size && !run.helper) out[id] = [...run.pending.keys()]
+    return out
+  }
+
   respond(threadId: string, requestId: string, answer: string): void {
     const run = this.runs.get(threadId)
     const p = run?.pending.get(requestId)

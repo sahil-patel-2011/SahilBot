@@ -191,6 +191,7 @@ const api: SahilBotApi = {
     editLast: call('chat:editLast') as never,
     exportThread: call('chat:export') as never,
     pending: call('chat:pending') as never,
+    allPending: call('chat:allPending') as never,
     onEvent(cb) {
       const fn = (_e: unknown, ev: ChatEvent): void => cb(ev)
       ipcRenderer.on('chat:event', fn)
