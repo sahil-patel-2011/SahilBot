@@ -110,29 +110,32 @@
 
 /* ================================================================ chat header */
 .chat-root .main-header { padding: 0 14px 0 20px; }
-.chat-root .header-title { flex: 1; min-width: 0; }
+.chat-root .header-title { flex: 1 1 0; min-width: 0; }
 .crumb { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; font-size: 13.5px; font-weight: 500; color: var(--text-2); max-width: 22vw; transition: background .14s ease-out; }
 .crumb:hover { background: var(--hover); color: var(--text); }
+/* The pill sits in the header's flex row between two equal-growing sides (title | pill | actions), so it is
+   centred whenever there's room and, when there isn't, shrinks (name ellipsized) instead of covering the actions. */
 .chat-pill {
-  position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 5;
-  display: flex; align-items: center; gap: 0; padding: 3px; max-width: min(52%, 520px);
+  position: relative; z-index: 5; flex: 0 1 auto; min-width: 0; margin: 0 8px;
+  display: flex; align-items: center; gap: 0; padding: 3px; max-width: 520px;
   border-radius: 999px; background: var(--panel); box-shadow: var(--shadow); -webkit-app-region: no-drag;
 }
 .chat-pill .bot-pill {
-  position: static; transform: none; box-shadow: none; background: transparent;
+  position: static; transform: none; box-shadow: none; background: transparent; flex: 0 1 auto;
   display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 12px 4px 5px; border-radius: 999px;
   font-size: 14px; font-weight: 600; transition: background .14s ease-out;
 }
 .chat-pill .bot-pill:hover { background: var(--hover); }
 .chat-pill.on .bot-pill { background: var(--selected); }
-.pill-name { white-space: nowrap; flex: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-.chat-pill .pill-title { font-weight: 400; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: none; }
+.pill-name { white-space: nowrap; flex: 0 1 auto; min-width: 2.5em; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.chat-pill .pill-title { font-weight: 400; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 3 auto; min-width: 0; max-width: none; }
+.chat-pill .title-menu { flex: none; }
 .pill-title::before { content: '·'; margin-right: 8px; color: var(--text-3); }
 .chat-pill .title-menu > button { width: 28px; height: 28px; margin-right: 1px; padding: 0; border-radius: 50%; display: grid; place-items: center; color: var(--text-3); }
 .chat-pill .title-menu > button:hover { background: var(--hover); color: var(--text); }
 .chat-pill .title-menu .menu { left: auto; right: -3px; top: calc(100% + 8px); }
-.chat-pill .title-edit { min-width: 280px; border-radius: 999px; padding: 5px 14px; font-size: 14px; }
-.chat-root .header-actions { gap: 2px; flex: none; }
+.chat-pill .title-edit { width: 280px; max-width: 100%; min-width: 0; border-radius: 999px; padding: 5px 14px; font-size: 14px; }
+.chat-root .header-actions { gap: 2px; flex: 1 1 0; justify-content: flex-end; min-width: max-content; }
 .chat-root .header-actions .icon-btn { width: 30px; height: 30px; border-radius: 50%; color: var(--text-3); transition: background .14s ease-out, color .14s ease-out; }
 .chat-root .header-actions .icon-btn:hover { color: var(--text); background: var(--hover); }
 .chat-root .header-actions .icon-btn.on { color: var(--text); background: var(--selected); }
@@ -173,6 +176,9 @@
 .chat-root .bubble.me { background: var(--bot); color: var(--bot-text, #fff); border-radius: 22px; padding: 10px 16px; font-size: 15px; line-height: 1.5; }
 .chat-root .bubble.me .file-pill { color: inherit; }
 .chat-root .speaker { margin: 0 0 4px 12px; font-size: 12px; }
+/* group chats: the speaker's colour, adjusted per theme to read at 4.5:1 (computed in ThreadView) */
+.chat-root .speaker.spk-c { color: var(--spk-l); }
+@media (prefers-color-scheme: dark) { .chat-root .speaker.spk-c { color: var(--spk-d); } }
 
 /* back-to-back replies stack 6px apart, with the joined corners tucked in */
 .thread > .block.cont { margin-top: -16px; }
@@ -252,3 +258,32 @@
 }
 
 .chat-root .thread { container-type: inline-size; }
+
+/* ================================================================ narrow windows
+   The chat column never drops below ~480px: the side panels (bot details 340px, right panel 420px+, next to the
+   288px sidebar) shrink first, then float over the chat below the header instead of squeezing it. The header stays
+   uncovered, so the pill and the panel toggles keep working. */
+.app { position: relative; }
+.app > .right { width: clamp(420px, min(46vw, 100vw - 768px), 760px); min-width: 0; max-width: none; }
+@media (max-width: 1107px) {
+  .app > .bd {
+    position: absolute; top: 52px; right: 0; bottom: 0; height: auto; z-index: 4;
+    border-top: 1px solid var(--line); border-top-left-radius: 14px; box-shadow: -10px 0 32px rgba(0, 0, 0, .14);
+  }
+}
+@media (max-width: 1187px) {
+  .app > .right {
+    position: absolute; top: 52px; right: 0; bottom: 0; width: 420px; z-index: 4;
+    border-top: 1px solid var(--line); border-top-left-radius: 14px; box-shadow: -10px 0 32px rgba(0, 0, 0, .14); overflow: hidden;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .app > .bd, .app > .right { box-shadow: -10px 0 32px rgba(0, 0, 0, .45); }
+}
+
+/* the message box in a narrow column: the bar wraps rather than pushing voice/send out of the box */
+.composer-bar { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+.composer-bar > * { flex-shrink: 0; }
+.composer-bar .spacer { flex: 1 1 0; min-width: 0; }
+.under { row-gap: 2px; }
+.under-pick > button { white-space: nowrap; }

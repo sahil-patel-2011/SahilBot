@@ -38,6 +38,13 @@ export interface ToolContext {
   offerConnect?(query: string): Promise<string[]>
   /** The model this run uses. */
   model?: string
+  /** Group chats: the bot speaking right now (its own memories, rules and work log are its, not shared). */
+  speakerId?: string
+  /**
+   * Where this call's text likely came from: 'web-tainted' when it carries details from, or reads like
+   * instructions after, untrusted content this run read. Recorded with saved memories, skills and rules.
+   */
+  provenance?: 'chat' | 'web-tainted'
   /** Tokens this call's output may use before it is cut short (set for tools that size their own output). */
   outputBudget?: number
   /** Runs helper agents in parallel and returns their reports (Team of Experts). */

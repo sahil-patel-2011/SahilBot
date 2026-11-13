@@ -127,3 +127,15 @@ describe('streamChat against a model server', () => {
     expect(llm.requests).toHaveLength(1)
   })
 })
+
+describe('stream text collection', () => {
+  test('collectText starts over after a retry reset', async () => {
+    const { collectText } = await import('../../src/main/llm/client')
+    async function* parts() {
+      yield { type: 'content' as const, text: 'Partial ans' }
+      yield { type: 'reset' as const }
+      yield { type: 'content' as const, text: 'Full answer.' }
+    }
+    expect(await collectText(parts())).toBe('Full answer.')
+  })
+})

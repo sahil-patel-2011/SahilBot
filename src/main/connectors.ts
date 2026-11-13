@@ -189,6 +189,8 @@ interface Live {
   tools: string[]
   /** Every tool the server offers, as listed. */
   all: ServerTool[]
+  /** Server tool name (as listed) → its collision-free agent tool name. */
+  names: Map<string, string>
 }
 
 type ServerTool = { name: string; description?: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string } }
@@ -201,6 +203,38 @@ function slug(s: string): string {
 export function toolName(server: string, tool: string): string {
   const n = `${slug(server)}__${slug(tool)}`
   return n.length <= MAX_TOOL_NAME ? n : `${n.slice(0, MAX_TOOL_NAME - 9)}_${Buffer.from(n).toString('base64url').slice(0, 8)}`
+}
+
+/**
+ * Agent names for one server's tools, keyed by the server's own names. Names that slug to the same
+ * thing (send-email, send_email) don't collide: the first in the server's order keeps the plain name,
+ * later ones get _2, _3… (the lowest free suffix), so each server tool maps to exactly one agent tool.
+ */
+export function toolNames(server: string, tools: string[]): Map<string, string> {
+  const out = new Map<string, string>()
+  const bases = tools.map((t) => toolName(server, t))
+  const used = new Set<string>()
+  const later: number[] = []
+  // Plain names first, so a tool whose name is naturally "x_2" isn't displaced by a suffixed "x".
+  bases.forEach((b, i) => {
+    if (out.has(tools[i])) return
+    if (used.has(b)) { later.push(i); return }
+    used.add(b)
+    out.set(tools[i], b)
+  })
+  for (const i of later) {
+    if (out.has(tools[i])) continue
+    for (let n = 2; ; n++) {
+      const suffix = `_${n}`
+      const name = `${bases[i].slice(0, MAX_TOOL_NAME - suffix.length)}${suffix}`
+      if (used.has(name) || bases.includes(name)) continue
+      used.add(name)
+      out.set(tools[i], name)
+      break
+    }
+  }
+  // In the server's order.
+  return new Map(tools.filter((t, i) => tools.indexOf(t) === i).map((t) => [t, out.get(t)!]))
 }
 
 /** MCP annotations and verbs decide the effect: reads run, writes follow the permission mode. */
@@ -365,12 +399,14 @@ export class Connectors {
     const l = this.live.get(id)
     if (l) {
       const t = l.all.find((x) => x.name === tool)
-      const name = toolName(c.name, tool)
-      if (!on) {
+      // The agent name for exactly this server tool (never a look-alike's: send-email vs send_email).
+      const name = l.names.get(tool)
+      // A tool the live server doesn't offer: the stored setting applies on the next connect.
+      if (name && !on) {
         this.registry.unregister((d) => d.name === name)
         l.tools = l.tools.filter((n) => n !== name)
-      } else if (t && !l.tools.includes(name)) {
-        this.registry.register(this.toToolDef(next, l.client, t))
+      } else if (name && t && !l.tools.includes(name)) {
+        this.registry.register(this.toToolDef(next, l.client, t, name))
         l.tools.push(name)
       }
       const st = this.status.get(id)
@@ -378,6 +414,19 @@ export class Connectors {
     }
     this.changed()
     return next
+  }
+
+  /**
+   * Agent tool names the user switched off, across connectors. Recovery of misspelled tool calls uses
+   * this so a call to a disabled tool is never "corrected" into a look-alike that's still on.
+   */
+  disabledToolNames(): Set<string> {
+    const out = new Set<string>()
+    for (const c of this.list()) {
+      const names = this.live.get(c.id)?.names
+      for (const t of c.disabledTools ?? []) out.add(names?.get(t) ?? toolName(c.name, t))
+    }
+    return out
   }
 
   async remove(id: string): Promise<void> {
@@ -445,9 +494,10 @@ export class Connectors {
       const { tools } = await client.listTools()
       // Tools the user switched off in Connect apps are never offered to the agent.
       const off = new Set(c.disabledTools ?? [])
-      const defs: ToolDef[] = tools.filter((t) => !off.has(t.name)).map((t) => this.toToolDef(c, client, t))
+      const names = toolNames(c.name, tools.map((t) => t.name))
+      const defs: ToolDef[] = tools.filter((t) => !off.has(t.name)).map((t) => this.toToolDef(c, client, t, names.get(t.name)!))
       this.registry.register(...defs)
-      this.live.set(id, { client, tools: defs.map((d) => d.name), all: tools as ServerTool[] })
+      this.live.set(id, { client, tools: defs.map((d) => d.name), all: tools as ServerTool[], names })
       const st: ConnectorStatus = { id, state: 'connected', tools: defs.length, toolNames: tools.map((t) => t.name) }
       this.setStatus(st)
       return st
@@ -459,10 +509,10 @@ export class Connectors {
     }
   }
 
-  private toToolDef(c: ConnectorConfig, client: Client, t: ServerTool): ToolDef {
+  private toToolDef(c: ConnectorConfig, client: Client, t: ServerTool, name: string): ToolDef {
     const effect = effectFor(t.name, t.annotations)
     return {
-      name: toolName(c.name, t.name),
+      name,
       label: c.name,
       group: c.name,
       effect,

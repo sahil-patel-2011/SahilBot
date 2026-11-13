@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import type { PendingRequest } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
@@ -14,7 +14,7 @@ const EFFECT_TEXT: Record<string, string> = {
 }
 
 /** One click: sign in (browser opens for OAuth), and the agent continues with the new tools. */
-function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
+function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const p = req.preset!
@@ -48,7 +48,7 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
 }
 
 /** Several clarifying questions in one card: pick an option or type your own, then send them all. */
-function QuestionsCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
+function QuestionsCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
   const qs = req.questions ?? []
   const [answers, setAnswers] = useState<string[]>(() => qs.map(() => ''))
   const set = (i: number, v: string): void => setAnswers((a) => a.map((x, j) => (j === i ? v : x)))
@@ -77,7 +77,7 @@ function QuestionsCard({ req, onRespond }: { req: PendingRequest; onRespond: (id
 }
 
 /** The agent's plan, waiting for your OK: approve to start, or say what to change. */
-function PlanApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
+function PlanApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
   const p = req.plan!
   const [changing, setChanging] = useState(false)
   const [notes, setNotes] = useState('')
@@ -107,7 +107,7 @@ function PlanApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: 
   )
 }
 
-export function PendingCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
+export function PendingCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
   if (req.kind === 'connect' && req.preset) return <ConnectCard req={req} onRespond={onRespond} />
   if (req.kind === 'questions' && req.questions) return <QuestionsCard req={req} onRespond={onRespond} />
   if (req.kind === 'plan' && req.plan) return <PlanApprovalCard req={req} onRespond={onRespond} />
@@ -158,7 +158,7 @@ const reasonText = (r?: string): string => {
 }
 
 /** A tool call waiting for your OK: what it will do in words, what kind of action it is, and the details on demand. */
-function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
+function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
   const hardStop = !!req.reason?.startsWith('Hard stop')
   const danger = req.effect === 'destructive' || hardStop
   const warnings = approvalWarnings(req)
@@ -167,10 +167,15 @@ function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
   const [ruleText, setRuleText] = useState(() => (req.summary ?? name).slice(0, RULE_MAX_CHARS))
   const [ruleAction, setRuleAction] = useState<'allow' | 'ask'>('allow')
   const [saving, setSaving] = useState(false)
+  // A second Enter before the first save re-renders must not save the rule twice.
+  const savingRef = useRef(false)
+  const ruleId = useId()
   const reason = reasonText(req.reason)
   const meta = [name, EFFECT_TEXT[req.effect ?? 'read'], reason && !warnings.some((w) => w.toLowerCase().includes(reason.toLowerCase())) ? reason : ''].filter(Boolean)
 
   const saveRule = async (): Promise<void> => {
+    if (savingRef.current) return
+    savingRef.current = true
     setSaving(true)
     try {
       const r = await addRule(ruleText, ruleAction)
@@ -182,6 +187,7 @@ function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
     } catch (e) {
       toast((e as Error).message, 'error')
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
@@ -211,18 +217,23 @@ function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
       <div className="pending-actions">
         <button className="btn primary" onClick={() => onRespond(req.id, 'once')} data-testid="approve-once">Allow once</button>
         <button className="btn" title={`Don't ask again for ${name} in this chat`}
-          onClick={() => { onRespond(req.id, 'always'); toast(`${name} is allowed for the rest of this chat`, 'ok') }} data-testid="approve-always">Always allow</button>
+          onClick={() => {
+            // Say so only once SahilBot has taken it.
+            void Promise.resolve(onRespond(req.id, 'always')).then(
+              () => toast(`${name} is allowed for the rest of this chat`, 'ok'),
+              (e: unknown) => toast((e as Error)?.message ?? String(e), 'error'))
+          }} data-testid="approve-always">Always allow</button>
         <button className="btn danger" onClick={() => onRespond(req.id, 'deny')} data-testid="approve-deny">Deny</button>
         {!danger && !ruleOpen && <button className="link-btn ap-rule-link" onClick={() => setRuleOpen(true)} data-testid="approve-make-rule">Make it a rule…</button>}
       </div>
       {ruleOpen && (
         <div className="ap-rule" data-testid="approval-rule">
-          <label className="ap-rule-label">When SahilBot wants to</label>
-          <input className="set-input ap-rule-input" autoFocus maxLength={RULE_MAX_CHARS} value={ruleText} onChange={(e) => setRuleText(e.target.value)}
+          <label className="ap-rule-label" htmlFor={`${ruleId}-when`}>When SahilBot wants to</label>
+          <input id={`${ruleId}-when`} className="set-input ap-rule-input" autoFocus maxLength={RULE_MAX_CHARS} value={ruleText} onChange={(e) => setRuleText(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setRuleOpen(false) } if (e.key === 'Enter' && ruleText.trim()) void saveRule() }} data-testid="approval-rule-text" />
           <div className="ap-rule-row">
-            <span className="ap-rule-label">it should</span>
-            <select className="set-select" value={ruleAction} onChange={(e) => setRuleAction(e.target.value as 'allow' | 'ask')} data-testid="approval-rule-action">
+            <label className="ap-rule-label" htmlFor={`${ruleId}-action`}>it should</label>
+            <select id={`${ruleId}-action`} className="set-select" value={ruleAction} onChange={(e) => setRuleAction(e.target.value as 'allow' | 'ask')} data-testid="approval-rule-action">
               <option value="allow">Allow automatically</option>
               <option value="ask">Ask first</option>
             </select>

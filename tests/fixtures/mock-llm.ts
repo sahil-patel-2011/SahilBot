@@ -11,6 +11,8 @@ export interface ScriptedReply {
   /** ms between streamed chunks */
   delay?: number
   status?: number
+  /** finish_reason to report (default: tool_calls or stop), e.g. 'length' for a reply cut off by the output limit. */
+  finish?: string
 }
 
 export interface MockLlm {
@@ -106,7 +108,7 @@ export async function startMockLlm(): Promise<MockLlm> {
         send({ tool_calls: [{ index: i, id: `call_${i}`, type: 'function', function: { name: tc.name, arguments: '' } }] })
         send({ tool_calls: [{ index: i, function: { arguments: tc.arguments } }] })
       })
-      send({}, reply.toolCalls?.length ? 'tool_calls' : 'stop')
+      send({}, reply.finish ?? (reply.toolCalls?.length ? 'tool_calls' : 'stop'))
       res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 20 } })}\n\n`)
       res.end('data: [DONE]\n\n')
       return

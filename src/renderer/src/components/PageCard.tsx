@@ -1,9 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { Message, ToolCall } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
 import * as I from '../icons'
-import { PageFrame, usePage } from './PageView'
+import { usePage } from './PageView'
 
 export const PAGE_TOOLS = ['create_page', 'update_page']
 
@@ -25,11 +25,20 @@ export function pagesFromSteps(steps: Array<{ call: Pick<ToolCall, 'id' | 'name'
 const autoOpened = new Set<string>()
 
 /**
- * Inline card for a Page in the chat: title, a small live thumbnail, Open (side panel) and Open in window.
+ * Inline card for a Page in the chat: title, a thumbnail, Open (side panel) and Open in window.
+ * The thumbnail is a picture main renders in the isolated pages session (no live page in the app window).
  * `at` = when the tool result arrived; a just-made page opens in the side panel by itself.
  */
 export function PageCard({ path, title, at, onOpen }: { path: string; title?: string; at?: number; onOpen: (path: string) => void }) {
   const { info, error } = usePage(path)
+  const [thumb, setThumb] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!info) return
+    let alive = true
+    api.pages.thumbnail(info.path).then((t) => { if (alive) setThumb(t) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [info?.path, info?.updatedAt])
 
   useEffect(() => {
     const key = `${path}@${at ?? 0}`
@@ -43,7 +52,7 @@ export function PageCard({ path, title, at, onOpen }: { path: string; title?: st
   return (
     <div className={`page-card${error ? ' missing' : ''}`} data-testid="page-card">
       <button className="page-thumb" onClick={open} disabled={!!error} aria-label={`Open ${name}`} tabIndex={-1}>
-        {info ? <PageFrame info={info} className="page-thumb-frame" thumbnail /> : <span className="page-thumb-icon"><I.Sparkle size={22} /></span>}
+        {thumb && !error ? <img className="page-thumb-img" src={thumb} alt="" draggable={false} /> : <span className="page-thumb-icon"><I.Sparkle size={22} /></span>}
       </button>
       <div className="page-card-text">
         <span className="page-card-kind"><I.Sparkle size={11} /> Page</span>

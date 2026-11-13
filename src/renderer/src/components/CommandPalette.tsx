@@ -44,7 +44,7 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
   useEffect(() => setSel(0), [q])
   useEffect(() => {
     const k = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') { if (!e.defaultPrevented) { e.preventDefault(); onClose() } }
       else if (e.key === 'ArrowDown') { e.preventDefault(); setSel((s) => Math.min(items.length - 1, s + 1)) }
       else if (e.key === 'ArrowUp') { e.preventDefault(); setSel((s) => Math.max(0, s - 1)) }
       else if (e.key === 'Enter' && items[sel]) { e.preventDefault(); onPick(items[sel].a) }
@@ -61,8 +61,8 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
     <div className="palette-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="palette-to">
         <I.Search size={16} />
-        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search bots, chats and commands" data-testid="palette-input" />
-        <button className="icon-btn" onClick={onClose}><I.Close size={16} /></button>
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search bots, chats and commands" aria-label="Search bots, chats and commands" data-testid="palette-input" />
+        <button className="icon-btn" onClick={onClose} aria-label="Close" title="Close (Esc)"><I.Close size={16} /></button>
       </div>
       <div className="palette" data-testid="palette">
         {items.map((it, i) => (

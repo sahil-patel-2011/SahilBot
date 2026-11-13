@@ -27,6 +27,13 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
     label: 'Memory',
     core: true,
     effect: (a) => (a.action === 'search' || a.action === 'list' || a.action === 'read_skill' ? 'read' : 'write_local'),
+    // A standing rule changes what every future chat does: always the user's call, in every mode.
+    // (Memories and skills ask only when their text came from a web page or email: see memoryRisk.)
+    hardStop: (a) => (a.action === 'save_rule' ? `saving a standing rule every chat will follow: "${String(a.rule ?? '').replace(/\s+/g, ' ').slice(0, 160)}"` : null),
+    describe: (a) => a.action === 'save_rule' ? `Save the rule "${a.name}": ${String(a.rule ?? '').slice(0, 200)}`
+      : a.action === 'save_skill' ? `Save the skill "${a.name}": ${String(a.description ?? '').slice(0, 160)}`
+      : a.action === 'save' ? `Remember: ${String(a.fact ?? '').slice(0, 200)}`
+      : a.action === 'forget' ? `Forget ${a.id ?? `"${a.query ?? ''}"`}` : `${a.action} memory`,
     description: 'Long-term memory across chats. Each memory is shared ("me": about the user, every bot sees it) or belongs to this bot ("bot": its job rules, decisions, work log). ' +
       'save: one short self-contained sentence with a category; scope defaults to "me" for facts about the user and "bot" for rule and worklog. After meaningful work, save a worklog entry: what was done and where the output is. ' +
       'list: everything remembered (for "what do you remember about me?"). search: saved memories and past conversations. ' +
@@ -60,19 +67,24 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
     },
     async run(a, ctx) {
       const thread = db.getThread(ctx.threadId)
-      const space = thread ? db.getSpace(thread.spaceId) : undefined
-      // The bot (or project) this chat belongs to. Group chats have no single bot: their saves are shared.
+      // The bot (or project) this chat belongs to; in a group chat, the bot speaking right now. A group
+      // chat without a speaker has no single bot: its saves are shared.
+      const space = (ctx.speakerId ? db.getSpace(ctx.speakerId) : undefined) ?? (thread ? db.getSpace(thread.spaceId) : undefined)
       const botId = space && space.kind !== 'group' ? space.id : null
       const botName = space?.kind === 'project' ? `the ${space.name} project` : space?.name ?? 'this bot'
       const projectId = space?.kind === 'project' ? space.id : null
       const where = (m: Memory): string => (m.spaceId ? (m.spaceId === botId ? 'this bot' : db.getSpace(m.spaceId)?.name ?? 'another bot') : 'shared')
+      // A bot may change shared memories and its own, never another bot's.
+      const mine = (m: Memory): boolean => !m.spaceId || m.spaceId === botId
+      const tainted = ctx.provenance === 'web-tainted'
+      const from = tainted ? ' (source: web-tainted: its wording came from, or followed, a web page or email this chat read)' : ''
 
       if (a.action === 'save_rule') {
         if (!rules) throw new Error('Rules are not available.')
         if (SECRETISH.test(a.rule!)) throw new Error('Rules never hold secrets.')
         const scope = a.applies === 'this_project' && projectId ? `project:${projectId}` : a.applies === 'this_bot' && space && !space.isMain ? `bot:${space.id}` : 'everywhere'
         const r = rules.save({ name: a.name!, text: a.rule!, scope, category: 'Learned', source: 'learned' })
-        return { text: `Saved rule "${r.name}" (${scope === 'everywhere' ? 'all chats' : scope.startsWith('bot') ? 'this bot' : 'this project'}). It applies from the next new chat.`, display: `saved rule "${r.name}"` }
+        return { text: `Saved rule "${r.name}" (${scope === 'everywhere' ? 'all chats' : scope.startsWith('bot') ? 'this bot' : 'this project'}). It applies from the next new chat.${from}`, display: `saved rule "${r.name}"` }
       }
       if (a.action === 'read_skill' || a.action === 'save_skill') {
         if (!skills) throw new Error('Skills are not available.')
@@ -87,7 +99,7 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         // Skills the user wrote are theirs: save an improvement under a new name.
         if (existing?.source === 'you') throw new Error(`"${existing.name}" was written by the user; save an improved version under a new name instead.`)
         const sk = skills.save({ name: a.name!, description: a.description!, body: a.steps!, source: 'learned' })
-        return { text: `${existing ? 'Updated' : 'Saved'} skill "${sk.name}".`, display: `${existing ? 'updated' : 'saved'} skill "${sk.name}"` }
+        return { text: `${existing ? 'Updated' : 'Saved'} skill "${sk.name}".${from}`, display: `${existing ? 'updated' : 'saved'} skill "${sk.name}"` }
       }
 
       const off = !memory.enabled
@@ -102,15 +114,16 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         const spaceId = scope === 'bot' ? botId : null
         if (a.id) {
           const cur = memory.get(a.id.trim())
+          if (cur && !mine(cur)) throw new Error(`Memory ${cur.id} belongs to ${where(cur)}, not to this chat. Save a new memory instead.`)
           if (cur) {
             const m = memory.update(cur.id, a.fact!, { category: a.category ? kind : undefined })!
-            return { text: `Updated memory ${m.id} (was: ${quote(cur.content)}; now: ${quote(m.content)}). Mention the change briefly in your reply.`, display: `updated "${m.content.slice(0, 60)}"` }
+            return { text: `Updated memory ${m.id} (was: ${quote(cur.content)}; now: ${quote(m.content)}).${from} Mention the change briefly in your reply.`, display: `updated "${m.content.slice(0, 60)}"` }
           }
         }
         const { memory: m, replaced } = memory.save(a.fact!, kind, spaceId, 'chat')
         const whereSaved = spaceId ? `for ${botName} only` : 'shared (about the user)'
         return {
-          text: `${replaced ? `Updated memory ${m.id} (was: ${quote(replaced)})` : `Saved memory ${m.id}`} as ${m.category}, ${whereSaved}.${m.category === 'worklog' ? '' : ' Mention it briefly in your reply (e.g. "I\'ll remember that…").'}`,
+          text: `${replaced ? `Updated memory ${m.id} (was: ${quote(replaced)})` : `Saved memory ${m.id}`} as ${m.category}, ${whereSaved}.${from}${m.category === 'worklog' ? '' : ' Mention it briefly in your reply (e.g. "I\'ll remember that…").'}`,
           display: `${m.category === 'worklog' ? 'logged' : replaced ? 'updated' : 'saved'} "${m.content.slice(0, 60)}"`
         }
       }
@@ -144,17 +157,20 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
       if (a.action === 'forget') {
         if (!a.id && !a.query) throw new Error('Give the id of the memory to forget, or a query describing it.')
         if (a.id) {
-          const gone: Memory[] = [], missing: string[] = []
+          const gone: Memory[] = [], missing: string[] = [], others: Memory[] = []
           for (const id of a.id.split(/[\s,]+/).filter(Boolean)) {
             const m = memory.get(id)
-            if (m && memory.remove(id)) gone.push(m)
+            if (m && !mine(m)) others.push(m)
+            else if (m && memory.remove(id)) gone.push(m)
             else missing.push(id)
           }
+          if (others.length && !gone.length && !a.query) throw new Error(`${others.map((m) => m.id).join(', ')} belong${others.length === 1 ? 's' : ''} to ${where(others[0])}, not to this chat; nothing was removed. The user can remove it in Settings → Memory.`)
           // Wrong ids but a description too: fall back to matching the description.
           if (gone.length || !a.query) {
             const parts: string[] = []
             if (gone.length) parts.push(`Forgot ${gone.length === 1 ? quote(gone[0].content) : `${gone.length} memories:\n${gone.map((m) => `- ${quote(m.content)}`).join('\n')}`}. Confirm to the user exactly what you removed.`)
             if (missing.length) parts.push(`No memory with id ${missing.join(', ')}. Try forget with a query describing it.`)
+            if (others.length) parts.push(`Not removed (another bot's): ${others.map((m) => m.id).join(', ')}.`)
             return { text: parts.join('\n'), display: gone.length ? `forgot ${gone.length === 1 ? `"${gone[0].content.slice(0, 50)}"` : `${gone.length} memories`}` : 'nothing to forget' }
           }
         }

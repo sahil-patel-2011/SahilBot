@@ -50,7 +50,7 @@ const api: SahilBotApi = {
     recent: call('files:recent') as never,
     snippet: call('files:snippet') as never
   },
-  pages: { info: call('pages:info') as never, openWindow: call('pages:openWindow') as never, exportPdf: call('pages:exportPdf') as never },
+  pages: { info: call('pages:info') as never, openWindow: call('pages:openWindow') as never, exportPdf: call('pages:exportPdf') as never, show: call('pages:show') as never, thumbnail: call('pages:thumbnail') as never },
   providers: call('providers') as never,
   onMenu(cb) {
     const fn = (_e: unknown, a: string): void => cb(a)

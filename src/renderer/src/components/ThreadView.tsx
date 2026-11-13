@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Message, PendingRequest, TeamMember } from '@shared/types'
 import { api } from '../api'
+import { legibleOn } from '../brand'
 import * as I from '../icons'
 import { describe, duration, stepStatus, summarize, type Step } from '../lib/steps'
 import { Markdown } from './Markdown'
@@ -22,7 +23,7 @@ type PlanItem = { text: string; status: 'pending' | 'in_progress' | 'done' }
 export interface ThreadActions {
   onRetry: () => void
   onEditLast: (text: string) => void
-  onRespond: (id: string, answer: string) => void
+  onRespond: (id: string, answer: string) => void | Promise<unknown>
   onReact: (messageId: string, emoji: string | null) => void
   onReply: (text: string) => void
   onOpenFile: (path: string) => void
@@ -430,10 +431,13 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
   const streaming = m.status === 'streaming'
   const error = m.status === 'error' ? String(m.meta?.error ?? 'Something went wrong') : null
   const speaker = m.meta?.botName as string | undefined
+  // The speaker's name in their colour, nudged toward the text colour until it reads (4.5:1) on the light and dark backgrounds.
+  const spColor = m.meta?.botColor as string | undefined
+  const spStyle = spColor ? { '--spk-l': legibleOn(spColor, '#ffffff', '#121212'), '--spk-d': legibleOn(spColor, '#161616', '#ededec') } as React.CSSProperties : undefined
   return (
     <div className="row ai">
       <div className="bubble-wrap ai-col">
-        {speaker && !cont && <div className="speaker" style={{ color: (m.meta?.botColor as string) ?? undefined }}>{speaker}</div>}
+        {speaker && !cont && <div className={`speaker${spStyle ? ' spk-c' : ''}`} style={spStyle}>{speaker}</div>}
         <div className={`bubble ai${error ? ' err' : ''}`} data-testid="assistant-bubble" data-status={m.status}>
           {m.reasoning && (
             <details className="reasoning" open={streaming && !m.content}>

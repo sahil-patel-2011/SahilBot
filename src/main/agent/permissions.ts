@@ -1,4 +1,13 @@
+import type { PermissionMode } from '@shared/types'
 import type { Decision, PermissionInput } from './types'
+
+const STRICTNESS: Record<PermissionMode, number> = { ask: 2, auto: 1, bypass: 0 }
+
+/** The stricter of two permission modes (ask > auto > bypass). A missing one doesn't loosen anything. */
+export function stricterMode(a: PermissionMode, b?: PermissionMode | null): PermissionMode {
+  if (!b || !(b in STRICTNESS)) return a
+  return STRICTNESS[b] > STRICTNESS[a] ? b : a
+}
 
 /**
  * The single place that decides whether a tool call runs, asks, or is refused.
@@ -128,6 +137,45 @@ export function checkTaint(tool: string, effect: string, args: unknown, untruste
   return !!url && urlTainted(url, untrusted, userText)
 }
 
+// ---------- long-term memory: instructions planted from fetched content ----------
+
+/** Words that make saved text read as a standing instruction (or a place to send things). */
+const INSTRUCTION = /\b(always|never|must|ignore|disregard|override|instead|from now on|whenever|every time|send|forward|cc|bcc|reply|email|e-mail|upload|share|post|transfer|pay|wire|run|execute|download|install|delete)\b/i
+const ADDRESSY = /(https?:\/\/|www\.)\S+|[\w.+-]+@[\w-]+\.[\w.-]+/i
+
+/** Text that would steer future chats: imperatives like "always / never / send / forward", URLs or emails. */
+export function looksInstructionLike(text: string): boolean {
+  return INSTRUCTION.test(text) || ADDRESSY.test(text)
+}
+
+/** Category names that mean the work log (kept in sync with memory.ts normalizeKind). */
+const WORKLOG = /^\s*(worklog|work[ _-]?log|log)\s*$/i
+
+/**
+ * Why a memory-tool call must ask, or null. Saving a standing rule always asks (see the tool's hardStop);
+ * a memory or skill asks when its text was taken from fetched content, or when this run read untrusted
+ * content and the text reads like an instruction. Work-log entries never ask. Ordinary saves of what the
+ * user said stay frictionless.
+ */
+export function memoryRisk(args: unknown, untrusted: string[], userText: string, sawUntrusted: boolean): string | null {
+  const a = (args ?? {}) as Record<string, unknown>
+  if (a.action !== 'save' && a.action !== 'save_skill') return null
+  if (a.action === 'save' && typeof a.category === 'string' && WORKLOG.test(a.category)) return null
+  const text = a.action === 'save' ? String(a.fact ?? '') : [a.name, a.description, a.steps].filter((x) => typeof x === 'string').join('\n')
+  const what = a.action === 'save' ? 'a memory every future chat sees' : 'a skill future chats can follow'
+  if (isTainted(a.action === 'save' ? { fact: a.fact } : { name: a.name, description: a.description, steps: a.steps }, untrusted, userText)) return `saving ${what}, with details taken from a web page or email`
+  if (sawUntrusted && looksInstructionLike(text)) return `saving ${what} after reading a web page or email (it reads like an instruction)`
+  return null
+}
+
+/** Where a saved memory's wording came from, for its provenance. */
+export function memoryProvenance(args: unknown, untrusted: string[], userText: string, sawUntrusted: boolean): 'chat' | 'web-tainted' {
+  const a = (args ?? {}) as Record<string, unknown>
+  const text = [a.fact, a.rule, a.name, a.description, a.steps].filter((x) => typeof x === 'string').join('\n')
+  if (!text) return 'chat'
+  return isTainted(text, untrusted, userText) || (sawUntrusted && looksInstructionLike(text)) ? 'web-tainted' : 'chat'
+}
+
 // ---------- the user's own approval rules ----------
 
 /** Rule limits: per kind (allow / ask) and per rule text. */
@@ -189,17 +237,83 @@ export function parseRule(when: string): ParsedRule {
   return { tools, stems, phrases }
 }
 
+/** An action as rules see it. `target` (optional) is computed from the rest when left out. */
+export interface RuleAction { tool: string; label?: string; summary?: string; args: string; target?: string }
+
 /** Whether one rule matches an action. A rule with nothing significant in it matches nothing. */
-export function ruleMatches(when: string, action: { tool: string; label?: string; summary?: string; args: string }): boolean {
+export function ruleMatches(when: string, action: RuleAction): boolean {
   const r = parseRule(when)
   if (!r.tools.length && !r.stems.length && !r.phrases.length) return false
   const tool = String(action.tool ?? '').toLowerCase()
   if (r.tools.length && !r.tools.some((t) => t.test(tool))) return false
-  const all = [action.tool, action.label, action.summary, action.args].filter(Boolean).join('\n')
+  const all = [action.tool, action.label, action.summary, action.args, action.target].filter(Boolean).join('\n')
   const have = new Set(words(all).map(stem))
   if (!r.stems.every((s) => have.has(s))) return false
   const flat = all.toLowerCase().replace(/\s+/g, ' ')
   return r.phrases.every((p) => flat.includes(p))
+}
+
+/**
+ * An Allow rule that would match (nearly) everything: "tool:*", or a tool pattern with almost no fixed
+ * letters ("tool:s*", "tool:*_*"). Never saved, and ignored if one is found anyway.
+ */
+export function isBroadAllow(when: string): boolean {
+  const text = String(when ?? '').slice(0, RULE_MAX_CHARS)
+  for (const m of text.matchAll(/\btool:\s*([\w.*-]+)/gi)) {
+    const name = m[1]
+    if (name.includes('*') && name.replace(/[*._-]/g, '').length < 3) return true
+  }
+  return false
+}
+
+/** Shell syntax that chains, pipes, substitutes or redirects: an Allow rule never vouches for that. */
+const CHAIN = /&&|\|\||;|\||\$\(|`|>|<\(|\n|\r/
+
+/** Argument fields that name who or what an action is aimed at (not what it says). */
+const TARGET_KEY = /^(to|cc|bcc|recipients?|emails?|address(es)?|phone|number|channel|chat(_?id)?|users?|username|bot|app|apps|url|urls|href|link|links|host|hostname|domain|path|paths|file|files|filename|folder|dir|directory|dest|destination|repo|repository|owner|calendar|calendar_?id|op|action|method|ref|title|name|names|label|labels|account|project|board|list|table|database|page_?id|id)$/i
+const URL_KEY = /^(url|urls|href|link|links)$/i
+
+function hostOf(u: string): string {
+  try { return new URL(/^[a-z][a-z0-9+.-]*:/i.test(u) ? u : `https://${u}`).hostname } catch { return '' }
+}
+
+function targetValues(v: unknown, key: string, out: string[], depth = 0): void {
+  if (depth > 4 || out.length > 40) return
+  if (Array.isArray(v)) { v.forEach((x) => targetValues(x, key, out, depth + 1)); return }
+  if (v && typeof v === 'object') {
+    for (const [k, x] of Object.entries(v)) if (TARGET_KEY.test(k)) targetValues(x, k, out, depth + 1)
+    return
+  }
+  if (typeof v !== 'string' && typeof v !== 'number') return
+  const s = String(v).slice(0, 200)
+  out.push(URL_KEY.test(key) ? hostOf(s) : s)
+}
+
+/**
+ * What an action is aimed at, for Allow rules: the tool's own summary for built-in tools whose summary
+ * names only the target, otherwise recipients, hosts, paths and names from the arguments, and for a
+ * command its first segment. Free-form bodies (message text, email body, typed text) are left out, so
+ * "send email to mom" can't be satisfied by a body that says "hi mom".
+ */
+export function actionTarget(action: RuleAction): string {
+  let args: Record<string, unknown> = {}
+  try { const p = JSON.parse(action.args || '{}'); if (p && typeof p === 'object' && !Array.isArray(p)) args = p } catch { /* not JSON */ }
+  const out: string[] = []
+  if (typeof args.command === 'string') out.push(args.command.split(CHAIN)[0].trim().slice(0, 200))
+  for (const [k, v] of Object.entries(args)) if (k !== 'command' && TARGET_KEY.test(k)) targetValues(v, k, out)
+  // The browser's summary is "Click button "Buy now" on amazon.com": the target itself. Typed text is not.
+  if (action.tool === 'browser' && action.summary && args.action !== 'type' && args.action !== 'fill_form') out.push(action.summary)
+  else if (action.tool === 'browser' && action.summary) out.push(action.summary.replace(/"[^"]*"/, '').trim())
+  return out.filter(Boolean).join('\n')
+}
+
+/** Whether an Allow rule may vouch for this action at all (never for a chained or piped shell command). */
+function allowable(action: RuleAction): boolean {
+  try {
+    const a = JSON.parse(action.args || '{}') as Record<string, unknown>
+    if (a && typeof a.command === 'string' && CHAIN.test(a.command)) return false
+  } catch { /* not JSON */ }
+  return true
 }
 
 /**
@@ -208,15 +322,20 @@ export function ruleMatches(when: string, action: { tool: string; label?: string
  * the agent loop.
  *
  * Matching is case-insensitive: every significant word of the rule (filler words dropped, simple
- * stemming so "send" also matches "sends" / "sending" / "sent") must appear somewhere in the tool
- * name, label, summary or arguments. "tool:run_command" pins a rule to one tool (* is a wildcard), and
- * "quoted text" must appear as written. At most RULE_LIMIT rules of each kind are considered.
+ * stemming so "send" also matches "sends" / "sending" / "sent") must appear. "tool:run_command" pins a
+ * rule to one tool (* is a wildcard), and "quoted text" must appear as written. Ask rules look at
+ * everything (tool, label, summary, arguments): they only add safety. Allow rules look only at the tool
+ * name, its label and what the action is aimed at (actionTarget), never at free-form bodies; they never
+ * vouch for a shell command that chains, pipes, substitutes or redirects; and a near-wildcard rule
+ * ("tool:*") is ignored. At most RULE_LIMIT rules of each kind are considered.
  */
-export function ruleVerdict(rules: import('@shared/types').CustomRule[] | undefined, action: { tool: string; label?: string; summary?: string; args: string }): 'allow' | 'ask' | null {
+export function ruleVerdict(rules: import('@shared/types').CustomRule[] | undefined, action: RuleAction): 'allow' | 'ask' | null {
   if (!Array.isArray(rules) || !rules.length) return null
   const valid = rules.filter((r) => r && typeof r.when === 'string' && (r.action === 'ask' || r.action === 'allow'))
   const of = (kind: 'ask' | 'allow') => valid.filter((r) => r.action === kind).slice(0, RULE_LIMIT)
   if (of('ask').some((r) => ruleMatches(r.when, action))) return 'ask'
-  if (of('allow').some((r) => ruleMatches(r.when, action))) return 'allow'
+  if (!allowable(action)) return null
+  const narrow: RuleAction = { tool: action.tool, label: action.label, args: '', target: action.target ?? actionTarget(action) }
+  if (of('allow').some((r) => !isBroadAllow(r.when) && ruleMatches(r.when, narrow))) return 'allow'
   return null
 }

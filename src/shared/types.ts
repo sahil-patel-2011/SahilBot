@@ -392,11 +392,14 @@ export interface Attachment {
 }
 
 /** A Page (an interactive HTML artifact made with create_page), for the panel and Open in window. */
+/** How the side-panel page is isolated (reported by main, so the UI and tests can check it). */
+export interface PagePanelStatus { isolation: 'webcontentsview'; partition: string; webrtc: string; guard: boolean }
+
 export interface PageInfo {
   path: string
   name: string
   title: string
-  /** foreman-file: URL; served with a strict CSP and `sandbox allow-scripts`. */
+  /** foreman-file: URL; the pages session serves it with a strict CSP and `sandbox allow-scripts`. */
   url: string
   size: number
   updatedAt: number
@@ -637,10 +640,18 @@ export interface SahilBotApi {
   /** Pages (create_page): only files directly in the pages folder; anything else is refused. */
   pages: {
     info(path: string): Promise<PageInfo>
-    /** Opens the page full-size in its own locked-down window (no preload, no network). */
+    /** Opens the page full-size in its own locked-down window (isolated pages session: no app API, no network, no WebRTC). */
     openWindow(path: string): Promise<void>
     /** Saves "<name>.pdf" next to the page, reveals it in Finder, and returns its path. */
     exportPdf(path: string): Promise<string>
+    /**
+     * Shows the page in the side panel: a native view in the isolated pages session laid over `bounds`
+     * (window coordinates; null = keep it loaded but hidden, e.g. under a modal). A new `rev` reloads it.
+     * show(null) closes it.
+     */
+    show(path: string | null, rev?: string, bounds?: { x: number; y: number; width: number; height: number } | null): Promise<PagePanelStatus | null>
+    /** A PNG data: URL of the page's top, for chat cards (null if it couldn't be rendered). */
+    thumbnail(path: string): Promise<string | null>
   }
   providers(): Promise<ProviderPreset[]>
   /** Quick Ask (the floating ⌥Space bar). */

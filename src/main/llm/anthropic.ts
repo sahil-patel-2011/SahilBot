@@ -139,6 +139,8 @@ export async function listAnthropicModels(apiKey: string): Promise<string[]> {
   return ids.sort()
 }
 
+const STREAM_ERROR_STATUS: Record<string, number> = { overloaded_error: 529, rate_limit_error: 429, api_error: 500, timeout_error: 408 }
+
 export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamPart> {
   if (!req.apiKey) throw new Error('Add your Anthropic API key in Settings to use Claude.')
   const { system, messages } = toAnthropic(req.messages, req.model)
@@ -186,12 +188,15 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
     } catch (e) {
       // A tool input that couldn't be parsed at all: re-issue the turn (at most twice). API errors propagate, readably.
       if (e instanceof Anthropic.APIError) {
-        const body = e.error as { error?: { message?: string } } | undefined
+        const body = e.error as { error?: { message?: string; type?: string }; type?: string } | undefined
         const why = body?.error?.message ?? e.message
         const network = e instanceof Anthropic.APIConnectionError && !(e instanceof Anthropic.APIUserAbortError)
-        const err = new Error(e.status === 401 ? 'Anthropic rejected the API key. Check it in Settings.' : e.status === 429 ? 'Claude is rate-limiting requests right now. Try again in a moment.' : e.status === 529 || (e.status ?? 0) >= 500 ? 'Claude is overloaded or unavailable right now. Try again shortly.' : network ? `Couldn't reach Claude: ${why}` : `Claude rejected the request: ${why}`)
+        // Errors sent mid-stream (an SSE "error" event on a 200) carry a type but no status: map it so retries work.
+        const type = body?.error?.type ?? body?.type ?? (e as { type?: string }).type
+        const status = e.status ?? STREAM_ERROR_STATUS[type ?? '']
+        const err = new Error(status === 401 ? 'Anthropic rejected the API key. Check it in Settings.' : status === 429 ? 'Claude is rate-limiting requests right now. Try again in a moment.' : status === 529 || status === 408 || (status ?? 0) >= 500 ? 'Claude is overloaded or unavailable right now. Try again shortly.' : network ? `Couldn't reach Claude: ${why}` : `Claude rejected the request: ${why}`)
         // What streamChat's retry needs: the status, the server's Retry-After, and whether the connection dropped.
-        Object.assign(err, { billed: false, status: e.status, retryAfterMs: retryAfterFrom(e.headers), network })
+        Object.assign(err, { billed: false, status, retryAfterMs: retryAfterFrom(e.headers), network })
         throw err
       }
       if (req.signal?.aborted || attempt >= 2) throw e

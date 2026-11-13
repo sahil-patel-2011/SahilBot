@@ -48,23 +48,49 @@ export function TeachBar({ state, threadId }: { state: TeachState; threadId?: st
     if (!name.trim() || busy) return
     setBusy(true)
     setErr(null)
+    let m: Awaited<ReturnType<typeof api.browser.teachCompose>>
     try {
-      const m = await api.browser.teachCompose(name.trim(), goal.trim() || undefined)
-      const tid = target ?? m.threadId
-      if (tid) {
-        await api.chat.send({ threadId: tid, text: m.text, note: m.note, meta: { teach: { name: name.trim(), steps: state.steps } } })
-      } else {
-        // No chat to send to: hand it over on the clipboard instead of losing it.
-        await navigator.clipboard.writeText(m.text)
-        toast('Recording copied. Paste it into a chat with your bot.', 'ok')
-      }
+      m = await api.browser.teachCompose(name.trim(), goal.trim() || undefined)
     } catch (e) {
+      // Nothing was handed over yet: the recording is still here to try again.
       setErr(errText(e))
       setBusy(false)
+      return
+    }
+    // From here on main has already let go of the recording (this bar goes away), so it must not be lost.
+    const tid = target ?? m.threadId
+    const copy = async (msg: string, kind: 'ok' | 'error'): Promise<void> => {
+      try { await navigator.clipboard.writeText(m.text) } catch { /* toast below still says what happened */ }
+      toast(msg, kind)
+    }
+    if (!tid) {
+      // No chat to send to: hand it over on the clipboard instead of losing it.
+      await copy('Recording copied. Paste it into a chat with your bot.', 'ok')
+      return
+    }
+    try {
+      await api.chat.send({ threadId: tid, text: m.text, note: m.note, meta: { teach: { name: name.trim(), steps: state.steps } } })
+    } catch (e) {
+      // The chat is busy ("still working"): steer it in now, which also sends normally if it just finished.
+      try {
+        if (typeof api.chat.steer !== 'function') throw e
+        const how = await api.chat.steer(tid, m.text)
+        if (how === 'steered') toast('Sent: your bot takes the recording in at its next step.', 'ok')
+      } catch {
+        await copy("Couldn't send — the recording is copied; paste it into the chat", 'error')
+      }
     }
   }
 
-  const cancel = (): void => { void api.browser.teachCancel() }
+  // Throwing a recording away takes a deliberate click, and a confirm when there's something to lose.
+  const cancel = (): void => {
+    if (state.steps > 0 && !confirm(`Discard this recording of ${state.steps} step${state.steps === 1 ? '' : 's'}? This can't be undone.`)) return
+    void api.browser.teachCancel()
+  }
+  // Esc in the name/goal fields just leaves the field; it never discards (or stops the chat's run).
+  const leaveField = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur() }
+  }
 
   if (naming || state.status === 'stopped') {
     const empty = state.steps === 0
@@ -82,9 +108,9 @@ export function TeachBar({ state, threadId }: { state: TeachState; threadId?: st
           <form className="teach-form" onSubmit={(e) => { e.preventDefault(); void send() }}>
             <label className="teach-q" htmlFor="teach-name">What should this be called, and what does it do?</label>
             <input id="teach-name" ref={nameRef} className="teach-input" value={name} maxLength={80} placeholder="e.g. Download this month's invoices"
-              onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') cancel() }} data-testid="teach-name" />
+              onChange={(e) => setName(e.target.value)} onKeyDown={leaveField} data-testid="teach-name" />
             <input className="teach-input" value={goal} maxLength={300} placeholder="What it's for, in one line (optional)"
-              onChange={(e) => setGoal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') cancel() }} data-testid="teach-goal" />
+              onChange={(e) => setGoal(e.target.value)} onKeyDown={leaveField} data-testid="teach-goal" />
             {state.recent.length > 0 && (
               <ol className="teach-recent" start={Math.max(1, state.steps - state.recent.length + 1)}>
                 {state.recent.map((r, i) => <li key={i}>{r}</li>)}

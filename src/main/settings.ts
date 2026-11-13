@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDERS, DEFS, baseUrlOf, keyName } from './llm/providers'
+import { isBroadAllow } from './agent/permissions'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { Appearance, CustomRule, ProviderId, Settings } from '@shared/types'
@@ -35,7 +36,10 @@ export const DEFAULTS: Stored = {
   customRules: []
 }
 
-/** Approval rules as saved: trimmed, at most 1000 characters, 20 of each kind, no duplicates. */
+/**
+ * Approval rules as saved: trimmed, at most 1000 characters, 20 of each kind, no duplicates. An Allow
+ * rule that would match nearly everything ("tool:*") is dropped: it would switch every approval off.
+ */
 export function cleanRules(rules: unknown): CustomRule[] {
   if (!Array.isArray(rules)) return []
   const seen = new Set<string>()
@@ -46,6 +50,7 @@ export function cleanRules(rules: unknown): CustomRule[] {
     const when = r.when.replace(/\s+/g, ' ').trim().slice(0, 1000)
     const key = `${r.action}:${when.toLowerCase()}`
     if (!when || seen.has(key) || count[r.action] >= 20) continue
+    if (r.action === 'allow' && isBroadAllow(when)) continue
     seen.add(key)
     count[r.action]++
     out.push({ id: typeof r.id === 'string' && r.id ? r.id.slice(0, 64) : `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, when, action: r.action })

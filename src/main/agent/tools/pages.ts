@@ -1,17 +1,19 @@
-import { BrowserWindow, session, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, session, shell, WebContentsView } from 'electron'
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { PageInfo } from '@shared/types'
+import type { PageInfo, PagePanelStatus } from '@shared/types'
 import type { ToolDef } from '../types'
 
 // Pages: self-contained interactive HTML (reports, dashboards, charts, calculators) the agent builds and
-// the user sees beside the chat. Every page is locked down three ways:
+// the user sees beside the chat. Every page is locked down in layers:
 //  1. a strict CSP <meta> written into the file (no network, no remote code),
-//  2. the same CSP plus `sandbox allow-scripts` sent as a response header when the app serves it
-//     (so a page edited by hand or by file_write is still locked down), and
-//  3. a sandboxed <iframe> / preload-less window (opaque origin: no window.foreman, no app storage).
+//  2. the same CSP plus `sandbox allow-scripts` sent as a response header when the pages session serves it
+//     (so a page edited by hand or by file_write is still locked down; opaque origin, no app storage),
+//  3. its own session and webContents, never the app window (no window.foreman): a native view in the
+//     side panel, a window, or a hidden renderer for PDF/thumbnails, where only page files load, top-level
+//     navigation is limited to other pages, and WebRTC is removed and has no route out (see pageSession).
 
 export const MAX_PAGE_BYTES = 2_000_000
 const MAX_TITLE = 120
@@ -413,6 +415,7 @@ export function servePage(dir: string, p: string): Response | null {
       'Content-Type': 'text/html; charset=utf-8',
       'Content-Security-Policy': `${PAGE_CSP}; sandbox allow-scripts`,
       'X-Content-Type-Options': 'nosniff',
+      'X-DNS-Prefetch-Control': 'off',
       'Referrer-Policy': 'no-referrer',
       'Cache-Control': 'no-store',
       'Cross-Origin-Opener-Policy': 'same-origin'
@@ -428,43 +431,101 @@ export function pageInfo(dir: string, p: string): PageInfo {
   return { path: full, name: basename(full), title: cleanTitle(pageParts(head).title), url: pageUrl(full), size: st.size, updatedAt: st.mtimeMs }
 }
 
+/**
+ * Where a page's top frame may go: only another page in the pages folder (foreman-file://local/…). Plain
+ * .html/.svg files elsewhere in the workspace are not pages and would run without the page lockdown.
+ */
+export function pageNavAllowed(dir: string, url: string): boolean {
+  let u: URL
+  try { u = new URL(url) } catch { return false }
+  if (u.protocol !== `${SCHEME}:` || u.host !== 'local' || u.username || u.password) return false
+  let p: string
+  try { p = decodeURIComponent(u.pathname) } catch { return false }
+  return isPagePath(dir, p)
+}
+
+/** Frames inside a page may only hold inline documents (the page CSP's frame-src 'none' refuses the rest). */
+export function subframeNavAllowed(url: string): boolean {
+  return url === 'about:blank' || url === 'about:srcdoc'
+}
+
+// Pages render only in their own session ("sahilbot-pages"), never in the app window. That session can
+// reach nothing: CSP + webRequest stop fetches, and WebRTC (STUN/TURN, which neither sees) is shut three ways:
+//  1. a preload strips RTCPeerConnection & co. from every frame's main world before page scripts run,
+//  2. the WebRTC IP policy allows no UDP that isn't proxied, and the session's only proxy is a dead end
+//     (nothing listens on the discard port) with loopback not exempt, so TURN-over-TCP goes nowhere too,
+//  3. every permission check is refused (which also stops ICE from gathering local candidates).
+
 const PARTITION = 'sahilbot-pages'
-let sessionReady = false
+export const WEBRTC_POLICY = 'disable_non_proxied_udp' as const
+const DEAD_END_PROXY = 'socks5://127.0.0.1:9'
+
+/** Runs in each frame's main world before page scripts: removes every WebRTC interface (RTC*, webkitRTC*). */
+export const STRIP_WEBRTC = `function(){var w=window;Object.getOwnPropertyNames(w).forEach(function(n){if(!/^(webkit)?RTC/.test(n))return;try{delete w[n]}catch(e){}if(n in w){try{Object.defineProperty(w,n,{value:undefined,writable:false,configurable:false})}catch(e){}}})}`
+
+/** The page preload: exposes nothing (contextIsolation, sandbox); it only runs STRIP_WEBRTC in the main world. */
+export const GUARD_PRELOAD = `'use strict';
+const { contextBridge, webFrame } = require('electron');
+const strip = ${STRIP_WEBRTC};
+try { contextBridge.executeInMainWorld({ func: strip }) } catch (e) { try { webFrame.executeJavaScript('(' + strip.toString() + ')()') } catch (e2) {} }
+`
+
+let guardFile: string | null = null
+/** Writes the preload once per launch (it's generated here so it can't drift from STRIP_WEBRTC). */
+function guardPreload(): string | undefined {
+  if (guardFile && existsSync(guardFile)) return guardFile
+  for (const d of [app.getPath('userData'), tmpdir()]) {
+    try {
+      mkdirSync(d, { recursive: true })
+      const f = join(d, 'page-guard.js')
+      writeFileSync(f, GUARD_PRELOAD, { mode: 0o600 })
+      return (guardFile = f)
+    } catch { /* try the next folder */ }
+  }
+  return undefined
+}
+
+let sessionReady: Promise<void> | null = null
 
 /** An in-memory session that can load pages and nothing else; every permission request is refused. */
-function pageSession(getDir: () => string): Electron.Session {
+function pageSession(getDir: () => string): { ses: Electron.Session; ready: Promise<void> } {
   const ses = session.fromPartition(PARTITION)
   if (!sessionReady) {
-    sessionReady = true
     ses.protocol.handle(SCHEME, (req) => {
-      const p = decodeURIComponent(new URL(req.url).pathname)
+      let p = ''
+      try { p = decodeURIComponent(new URL(req.url).pathname) } catch { /* refused below */ }
       return servePage(getDir(), p) ?? new Response('Not allowed', { status: 403 })
     })
     ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
     ses.setPermissionCheckHandler(() => false)
     // Belt and braces: the CSP already forbids network; drop anything that isn't the page itself.
     ses.webRequest.onBeforeRequest((d, cb) => cb({ cancel: !/^(foreman-file|data|blob|about|devtools|chrome-extension):/.test(d.url) }))
+    sessionReady = ses.setProxy({ mode: 'fixed_servers', proxyRules: DEAD_END_PROXY, proxyBypassRules: '<-loopback>' }).catch(() => undefined)
   }
-  return ses
+  return { ses, ready: sessionReady }
 }
 
-function lockDown(w: BrowserWindow, url: string): void {
-  const wc = w.webContents
-  wc.setWindowOpenHandler(({ url: u }) => {
-    if (/^https?:/.test(u)) void shell.openExternal(u)
-    return { action: 'deny' }
+/** Navigation, popups and WebRTC rules for anything that shows a page (panel view, window, PDF, thumbnail). */
+function harden(wc: Electron.WebContents, getDir: () => string): void {
+  wc.setWebRTCIPHandlingPolicy(WEBRTC_POLICY)
+  // A page can't open anything, not even the user's browser (that would be a way to send data out).
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }))
+  wc.on('will-navigate', (e) => { if (!pageNavAllowed(getDir(), e.url)) e.preventDefault() })
+  wc.on('will-frame-navigate', (e) => {
+    if (!(e.isMainFrame ? pageNavAllowed(getDir(), e.url) : subframeNavAllowed(e.url))) e.preventDefault()
   })
-  wc.on('will-navigate', (e, u) => { if (u !== url) e.preventDefault() })
-  wc.on('will-frame-navigate', (e) => { if (e.url !== url) e.preventDefault() })
+  wc.on('will-redirect', (e) => { if (!e.isMainFrame || !pageNavAllowed(getDir(), e.url)) e.preventDefault() })
   wc.on('will-attach-webview', (e) => e.preventDefault())
 }
 
 const pageWebPreferences = (ses: Electron.Session): Electron.WebPreferences => ({
   session: ses,
+  preload: guardPreload(),
   sandbox: true,
   contextIsolation: true,
   nodeIntegration: false,
-  nodeIntegrationInSubFrames: false,
+  // Only so the (sandboxed, Node-less) guard preload also runs in frames a page makes (srcdoc, about:blank).
+  nodeIntegrationInSubFrames: true,
   webviewTag: false,
   navigateOnDragDrop: false,
   spellcheck: false,
@@ -474,41 +535,51 @@ const pageWebPreferences = (ses: Electron.Session): Electron.WebPreferences => (
   allowRunningInsecureContent: false
 })
 
-/** "Open in window": the page full-size in its own window (no preload, same lockdown). */
+const pageBg = (): string => (nativeTheme.shouldUseDarkColors ? '#161618' : '#ffffff')
+
+/** "Open in window": the page full-size in its own window (same session and lockdown as the panel). */
 export function openPageWindow(getDir: () => string, p: string, opts: { parent?: BrowserWindow | null; show?: boolean } = {}): BrowserWindow {
   const info = pageInfo(getDir(), p)
-  const url = pageUrl(info.path)
+  const { ses, ready } = pageSession(getDir)
   const w = new BrowserWindow({
-    width: 1100, height: 820, minWidth: 420, minHeight: 320, title: info.title, show: false,
-    webPreferences: pageWebPreferences(pageSession(getDir))
+    width: 1100, height: 820, minWidth: 420, minHeight: 320, title: info.title, show: false, backgroundColor: pageBg(),
+    webPreferences: pageWebPreferences(ses)
   })
-  lockDown(w, url)
+  harden(w.webContents, getDir)
   if (opts.show !== false) w.once('ready-to-show', () => w.show())
-  void w.loadURL(url)
+  void ready.then(() => { if (!w.isDestroyed()) void w.loadURL(pageUrl(info.path)).catch(() => undefined) })
   return w
+}
+
+/** Loads a page in a hidden window and waits for it (and its charts) to settle. */
+async function loadHidden(w: BrowserWindow, url: string, ready: Promise<void>, settleMs: number): Promise<void> {
+  await ready
+  await new Promise<void>((ok, fail) => {
+    const timer = setTimeout(() => fail(new Error('The page took too long to load.')), 20_000)
+    w.webContents.once('did-finish-load', () => { clearTimeout(timer); ok() })
+    w.webContents.once('did-fail-load', (_e, code, desc) => { clearTimeout(timer); fail(new Error(`The page didn't load (${desc || code}).`)) })
+    void w.loadURL(url).catch(() => undefined)
+  })
+  await new Promise((r) => setTimeout(r, settleMs))
 }
 
 /** "Export PDF": renders the page off-screen in light mode and saves "<name>.pdf" next to it. */
 export async function exportPagePdf(getDir: () => string, p: string): Promise<string> {
   const info = pageInfo(getDir(), p)
-  const url = pageUrl(info.path)
-  const w = new BrowserWindow({ width: 1100, height: 1400, show: false, webPreferences: pageWebPreferences(pageSession(getDir)) })
-  lockDown(w, url)
+  const { ses, ready } = pageSession(getDir)
+  const w = new BrowserWindow({ width: 1100, height: 1400, show: false, webPreferences: pageWebPreferences(ses) })
+  harden(w.webContents, getDir)
   try {
     const wc = w.webContents
-    // Print in light mode whatever the Mac's appearance.
+    // Print in light mode whatever the Mac's appearance. (The command only completes once the page has a
+    // renderer, so it's sent now and waited for after the load.)
+    let light: Promise<unknown> = Promise.resolve()
     try {
       wc.debugger.attach('1.3')
-      await wc.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] })
+      light = wc.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] }).catch(() => undefined)
     } catch { /* falls back to the page's @media print rules */ }
-    await new Promise<void>((ok, fail) => {
-      const timer = setTimeout(() => fail(new Error('The page took too long to load.')), 20_000)
-      wc.once('did-finish-load', () => { clearTimeout(timer); ok() })
-      wc.once('did-fail-load', (_e, code, desc) => { clearTimeout(timer); fail(new Error(`The page didn't load (${desc || code}).`)) })
-      void w.loadURL(url).catch(() => undefined)
-    })
-    // Let charts and scripts settle.
-    await new Promise((r) => setTimeout(r, 700))
+    await loadHidden(w, pageUrl(info.path), ready, 700)
+    await Promise.race([light, new Promise((r) => setTimeout(r, 2_000))])
     const pdf = await wc.printToPDF({ printBackground: true, pageSize: 'Letter', margins: { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 }, generateDocumentOutline: true })
     const out = join(dirname(info.path), `${basename(info.path).replace(/\.html?$/i, '')}.pdf`)
     writeFileSync(out, pdf)
@@ -519,9 +590,105 @@ export async function exportPagePdf(getDir: () => string, p: string): Promise<st
   }
 }
 
+// Chat-card thumbnails: a picture of the page, rendered once per version in a hidden page window.
+const thumbs = new Map<string, string>()
+let thumbQueue: Promise<unknown> = Promise.resolve()
+
+/** A PNG data: URL of the page's top (800×514), or null if it couldn't be rendered. Cached per file version and theme. */
+export function pageThumbnail(getDir: () => string, p: string): Promise<string | null> {
+  const info = pageInfo(getDir(), p)
+  const key = `${info.path}|${info.updatedAt}|${nativeTheme.shouldUseDarkColors ? 'dark' : 'light'}`
+  const hit = thumbs.get(key)
+  if (hit) return Promise.resolve(hit)
+  const job = thumbQueue.then(async () => {
+    const again = thumbs.get(key)
+    if (again) return again
+    const { ses, ready } = pageSession(getDir)
+    const w = new BrowserWindow({ width: 800, height: 514, useContentSize: true, show: false, skipTaskbar: true, focusable: false, backgroundColor: pageBg(), webPreferences: pageWebPreferences(ses) })
+    harden(w.webContents, getDir)
+    try {
+      await loadHidden(w, pageUrl(info.path), ready, 500)
+      const shot = await Promise.race([w.webContents.capturePage(), new Promise<never>((_, no) => setTimeout(() => no(new Error('timeout')), 5_000))])
+      if (shot.isEmpty()) return null
+      const url = shot.resize({ width: 320, quality: 'good' }).toDataURL()
+      for (const k of thumbs.keys()) if (k.startsWith(`${info.path}|`)) thumbs.delete(k)
+      thumbs.set(key, url)
+      return url
+    } catch {
+      return null
+    } finally {
+      if (!w.isDestroyed()) w.destroy()
+    }
+  })
+  thumbQueue = job.catch(() => undefined)
+  return job
+}
+
+export interface PanelBounds { x: number; y: number; width: number; height: number }
+
 /**
- * The main window's guard: a page iframe may not navigate anywhere but app files (its own CSP and the
- * window's frame-src already stop most of this). Attach to the main window's webContents.
+ * The side-panel page: a native view in the pages session laid over the panel's page area (like the
+ * browser tab), never an iframe in the app window. One at a time; the renderer sends its bounds.
+ */
+export class PagePanel {
+  private view: WebContentsView | null = null
+  private loaded: { path: string; rev: string } | null = null
+  private gen = 0
+
+  constructor(private win: () => BrowserWindow | null, private getDir: () => string) {}
+
+  /** Shows `p` (version `rev`) at `bounds`; null bounds keeps it loaded but out of sight (a modal is open). */
+  async show(p: string, rev: string, bounds: PanelBounds | null): Promise<PagePanelStatus> {
+    const info = pageInfo(this.getDir(), p)
+    const gen = ++this.gen
+    const { ses, ready } = pageSession(this.getDir)
+    await ready
+    if (gen !== this.gen) return this.status()
+    let v = this.view
+    if (!v || v.webContents.isDestroyed()) {
+      v = this.view = new WebContentsView({ webPreferences: pageWebPreferences(ses) })
+      v.setBackgroundColor(pageBg())
+      harden(v.webContents, this.getDir)
+      this.loaded = null
+    }
+    if (!this.loaded || this.loaded.path !== info.path || this.loaded.rev !== rev) {
+      this.loaded = { path: info.path, rev }
+      void v.webContents.loadURL(pageUrl(info.path)).catch(() => undefined)
+    }
+    const w = this.win()
+    const host = w && !w.isDestroyed() ? w : null
+    if (host && bounds && bounds.width > 0 && bounds.height > 0) {
+      if (!host.contentView.children.includes(v)) host.contentView.addChildView(v)
+      v.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) })
+    } else this.detach()
+    return this.status()
+  }
+
+  /** The panel closed (or moved to another file): drop the page and stop its scripts. */
+  close(): void {
+    this.gen++
+    this.detach()
+    const v = this.view
+    this.view = null
+    this.loaded = null
+    if (v && !v.webContents.isDestroyed()) v.webContents.close()
+  }
+
+  private detach(): void {
+    const v = this.view
+    const w = this.win()
+    if (v && w && !w.isDestroyed() && w.contentView.children.includes(v)) w.contentView.removeChildView(v)
+  }
+
+  private status(): PagePanelStatus {
+    const wc = this.view && !this.view.webContents.isDestroyed() ? this.view.webContents : null
+    return { isolation: 'webcontentsview', partition: PARTITION, webrtc: wc?.getWebRTCIPHandlingPolicy() ?? WEBRTC_POLICY, guard: !!guardFile }
+  }
+}
+
+/**
+ * The main window's guard: its frames (PDF previews) may not navigate anywhere but app files. Pages
+ * never load in the main window; they live in PagePanel's view. Attach to the main window's webContents.
  */
 export function guardFrames(wc: Electron.WebContents): void {
   wc.on('will-frame-navigate', (e) => {

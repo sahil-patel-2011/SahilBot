@@ -67,3 +67,44 @@ export function isLight(hex: string): boolean {
   const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
   return 0.299 * r + 0.587 * g + 0.114 * b > 170
 }
+
+const HEX = /^#?([0-9a-f]{6})$/i
+const rgbOf = (hex: string): [number, number, number] | null => {
+  const m = HEX.exec(hex.trim())
+  if (!m) return null
+  const n = parseInt(m[1], 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+const toHex = ([r, g, b]: [number, number, number]): string => `#${[r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('')}`
+
+/** WCAG relative luminance (0 black … 1 white). */
+export function luminance(hex: string): number {
+  const c = rgbOf(hex)
+  if (!c) return 0
+  const lin = (v: number): number => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4 }
+  return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+}
+
+/** WCAG contrast ratio between two colours (1 … 21). */
+export function contrast(a: string, b: string): number {
+  const x = luminance(a), y = luminance(b)
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+
+/** Text/icon colour for a surface filled with `hex`: near-black or white, whichever reads better (WCAG contrast). */
+export function readableOn(hex: string): '#141414' | '#ffffff' {
+  if (!rgbOf(hex)) return '#ffffff'
+  return contrast(hex, '#141414') >= contrast(hex, '#ffffff') ? '#141414' : '#ffffff'
+}
+
+/** `hex` mixed toward `toward` just enough to reach `min` contrast on `bg` (keeps the hue where it can). */
+export function legibleOn(hex: string, bg: string, toward: string, min = 4.5): string {
+  const a = rgbOf(hex), b = rgbOf(toward)
+  if (!a || !b) return toward
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20
+    const c = toHex([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t])
+    if (contrast(c, bg) >= min) return c
+  }
+  return toward
+}

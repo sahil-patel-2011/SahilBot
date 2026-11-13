@@ -170,9 +170,9 @@ export function Sidebar(p: {
 
   /** Working, needs you, or unread: one quiet mark on the right. */
   const status = (working: boolean, needs: boolean, unread: boolean): ReactNode =>
-    working ? <span className="row-spin" title="Working" />
-      : needs ? <span className="need-dot" title="Needs you" data-testid="needs-you" />
-        : unread ? <span className="unread-dot" title="Unread" /> : null
+    working ? <span className="row-spin" title="Working" role="img" aria-label="Working" />
+      : needs ? <span className="need-dot" title="Needs you" role="img" aria-label="Needs you" data-testid="needs-you" />
+        : unread ? <span className="unread-dot" title="Unread" role="img" aria-label="Unread" /> : null
 
   const avatar = (s: Space, size: number): ReactNode => s.kind === 'project'
     ? <span className="proj-tile" style={{ background: s.color, width: Math.round(size * 0.8), height: Math.round(size * 0.8), borderRadius: Math.round(size * 0.26) }}><I.Folder size={Math.round(size * 0.36)} /></span>
@@ -187,7 +187,13 @@ export function Sidebar(p: {
     <div key={s.id} className={`pin-widget${isActive(s) ? ' active' : ''}${over === `w:${s.id}` ? ' over' : ''}`}
       onContextMenu={(e) => spaceMenu(s, e)} {...drag('space', s.id)}
       onDragOver={(e) => { if (dragging?.kind === 'space' && dragging.id !== s.id) { e.preventDefault(); e.stopPropagation(); setOver(`w:${s.id}`) } }}
-      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setOver(null); if (dragging?.kind === 'space' && dragging.id !== s.id) pinSpace(dragging.id, s.id); setDragging(null) }}>
+      onDrop={(e) => {
+        // Only bots reorder here; a chat dropped on an avatar falls through to the pinned area (which pins it).
+        if (dragging?.kind !== 'space') return
+        e.preventDefault(); e.stopPropagation(); setOver(null)
+        if (dragging.id !== s.id) pinSpace(dragging.id, s.id)
+        setDragging(null)
+      }}>
       {renaming === s.id ? (
         <>
           <span className="pw-avatar">{avatar(s, 64)}</span>

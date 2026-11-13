@@ -37,7 +37,7 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
       </div>
       {tab === 'browser' && <BrowserPane hidden={hidden} threadId={threadId} />}
       {tab === 'progress' && <ProgressPane messages={messages} onOpenFile={onOpenFile} browserState={browserState} onBrowser={() => onTab('browser')} running={!!running} progress={progress} />}
-      {tab === 'file' && (isPageCandidate(file) ? <PageView key={file} path={file} fallback={<FilePane path={file} />} /> : <FilePane path={file} />)}
+      {tab === 'file' && (isPageCandidate(file) ? <PageView key={file} path={file} hidden={hidden} fallback={<FilePane path={file} />} /> : <FilePane path={file} />)}
     </aside>
   )
 }

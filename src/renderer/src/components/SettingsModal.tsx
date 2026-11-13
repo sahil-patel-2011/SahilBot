@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ModelInfo, ModelList, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, VaultEntry, VoiceStatus } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
@@ -137,7 +137,8 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
     return n
   }
   useEffect(() => {
-    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose() }
+    // preventDefault: this Esc is spent closing Settings (the chat's run and the details panel leave it alone).
+    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose() } }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [onClose])
@@ -627,10 +628,14 @@ function ApprovalRulesPage({ patch }: { patch: (p: SettingsPatchUi) => Promise<S
   const [when, setWhen] = useState('')
   const [action, setAction] = useState<'allow' | 'ask'>('ask')
   const [busy, setBusy] = useState(false)
+  // Guards a second Enter that lands before the first add re-renders.
+  const busyRef = useRef(false)
   // Read the saved list fresh: an approval card may have added a rule since Settings opened.
   useEffect(() => { void loadRules().then(setRules) }, [])
   const save = (customRules: NonNullable<Settings['customRules']>): Promise<Settings> => patch({ customRules })
   const add = async (): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusy(true)
     try {
       const r = await addRule(when, action, save)
@@ -638,7 +643,7 @@ function ApprovalRulesPage({ patch }: { patch: (p: SettingsPatchUi) => Promise<S
       setRules(r.rules)
       setWhen('')
       toast('Saved to your approval rules', 'ok')
-    } catch (e) { toast(clean(e), 'error') } finally { setBusy(false) }
+    } catch (e) { toast(clean(e), 'error') } finally { busyRef.current = false; setBusy(false) }
   }
   const del = async (id: string): Promise<void> => {
     try { setRules(await removeRule(id, save)) } catch (e) { toast(clean(e), 'error') }

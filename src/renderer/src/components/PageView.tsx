@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import type { PageInfo } from '@shared/types'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import type { PageInfo, PagePanelStatus } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
 import * as I from '../icons'
@@ -8,27 +8,6 @@ import * as I from '../icons'
 export const isPageCandidate = (p: string | null | undefined): p is string => !!p && /[\\/]pages[\\/][^\\/]+\.html?$/i.test(p)
 
 const errText = (e: unknown): string => String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
-
-/**
- * The page in a sandboxed iframe: scripts run, but with an opaque origin (no allow-same-origin), so it
- * can't reach window.foreman, the app's storage or cookies; no popups, forms or top navigation. The file is
- * served with a strict CSP (no network) as both a header and a <meta>.
- */
-export function PageFrame({ info, className, title, version = 0, thumbnail = false }: { info: PageInfo; className?: string; title?: string; version?: number; thumbnail?: boolean }) {
-  return (
-    <iframe
-      key={`${info.path}:${info.updatedAt}:${version}`}
-      className={className}
-      src={`${info.url}?v=${Math.round(info.updatedAt)}-${version}`}
-      title={title ?? info.title}
-      sandbox="allow-scripts"
-      referrerPolicy="no-referrer"
-      allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; display-capture 'none'"
-      loading={thumbnail ? 'lazy' : 'eager'}
-      {...(thumbnail ? { tabIndex: -1, 'aria-hidden': true } : {})}
-    />
-  )
-}
 
 /** Keeps a page's info fresh: reloads when the agent updates it (update_page) or on demand. */
 export function usePage(path: string | null): { info: PageInfo | null; error: string | null; version: number; reload: () => void } {
@@ -48,8 +27,47 @@ export function usePage(path: string | null): { info: PageInfo | null; error: st
   return { info, error, version, reload: () => { load(); setVersion((v) => v + 1) } }
 }
 
+/**
+ * Where the live page goes. The page itself is not in this window: main lays a native view from the
+ * isolated pages session over this box (no window.foreman, no network, no WebRTC), so we keep its bounds
+ * in sync and hide it while a modal is open. The data-* attributes are what main reports about it.
+ */
+function PageSurface({ info, version, hidden }: { info: PageInfo; version: number; hidden: boolean }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [status, setStatus] = useState<PagePanelStatus | null>(null)
+  const rev = `${Math.round(info.updatedAt)}-${version}`
+  // Leaving the page (another file, another tab, panel closed) closes it and stops its scripts. Declared
+  // first so its cleanup reaches main before the next page's show.
+  useLayoutEffect(() => () => { void api.pages.show(null) }, [info.path])
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    let alive = true
+    const sync = (): void => {
+      const r = el.getBoundingClientRect()
+      const bounds = hidden || r.width < 10 || r.height < 10 ? null : { x: r.left, y: r.top, width: r.width, height: r.height }
+      api.pages.show(info.path, rev, bounds).then((s) => { if (alive && s) setStatus(s) }).catch(() => undefined)
+    }
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    window.addEventListener('resize', sync)
+    return () => {
+      alive = false
+      ro.disconnect()
+      window.removeEventListener('resize', sync)
+    }
+  }, [info.path, rev, hidden])
+  return (
+    <div ref={box} className="page-frame" data-testid="page-view" title={info.title}
+      data-isolation={status?.isolation ?? 'pending'} data-partition={status?.partition} data-webrtc={status?.webrtc} data-guard={status ? String(status.guard) : undefined}>
+      <span className="spin" />
+    </div>
+  )
+}
+
 /** Side-panel view of a Page: toolbar (reload, open in window, export PDF, show in Finder) and the live page. */
-export function PageView({ path, fallback }: { path: string; fallback?: ReactNode }) {
+export function PageView({ path, fallback, hidden = false }: { path: string; fallback?: ReactNode; hidden?: boolean }) {
   const { info, error, version, reload } = usePage(path)
   const [exporting, setExporting] = useState(false)
   if (error) return fallback ? <>{fallback}</> : <div className="right-body">{error}</div>
@@ -80,7 +98,7 @@ export function PageView({ path, fallback }: { path: string; fallback?: ReactNod
         <button className="icon-btn" onClick={() => void api.files.reveal(info.path)} title="Show in Finder" aria-label="Show in Finder"><I.Folder size={15} /></button>
       </div>
       <div className="page-body">
-        <PageFrame info={info} className="page-frame" version={version} />
+        <PageSurface info={info} version={version} hidden={hidden} />
       </div>
     </div>
   )

@@ -67,7 +67,7 @@ describe('platform: templates, handoffs, pages, rules, routines, memory', () => 
     await app.close()
   })
 
-  test('a page the agent builds opens sandboxed in the side panel, with the safety policy in the file', async () => {
+  test('a page the agent builds opens isolated in the side panel, with the safety policy in the file', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'sb-ws-'))
     const { app, page } = await launch(tempProfile(), llm.url)
     await page.evaluate((w) => window.foreman.settings.set({ workspaceDir: w }), ws)
@@ -80,8 +80,14 @@ describe('platform: templates, handoffs, pages, rules, routines, memory', () => 
     const card = page.locator('[data-testid="page-card"]')
     await card.waitFor({ timeout: 10_000 })
     await page.locator('[data-testid="page-pane"]').waitFor({ timeout: 10_000 })
-    const sandbox = await page.locator('[data-testid="page-pane"] iframe').first().getAttribute('sandbox')
-    expect(sandbox).toBe('allow-scripts')
+    // The live page is not in the app window: main lays a native view from the isolated pages session over
+    // the panel and reports how it is locked down (no iframe, own session, WebRTC limited to proxied traffic).
+    const view = page.locator('[data-testid="page-pane"] [data-testid="page-view"]')
+    await expect.poll(() => view.getAttribute('data-isolation'), { timeout: 10_000 }).toBe('webcontentsview')
+    expect(await view.getAttribute('data-partition')).toBe('sahilbot-pages')
+    expect(await view.getAttribute('data-webrtc')).toBe('disable_non_proxied_udp')
+    expect(await view.getAttribute('data-guard')).toBe('true')
+    expect(await page.locator('iframe[src*="/pages/"]').count()).toBe(0)
     const file = join(ws, 'pages', 'q4-dashboard.html')
     expect(existsSync(file)).toBe(true)
     const html = readFileSync(file, 'utf8')

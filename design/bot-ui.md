@@ -36,7 +36,7 @@ Type: 15px body, 13px secondary, 12px labels. Motion: 120–160ms ease-out, noth
 - Floating **header pill** centered at the top: bot avatar (22px) + name, `--panel`, `--shadow`, pill
   radius. Click → opens the bot details panel. The thread title/menu goes inside its popover.
 - Messages are **bubbles**: assistant `--bubble-ai` bubble (max 80% width, 22px radius, 14px 18px
-  padding), user bubble in `--bot` with white text, right-aligned. Tool activity, plan cards, approval
+  padding), user bubble in `--bot` with `--bot-text` (black or white, whichever reads better on that color: `readableOn()` in brand.tsx), right-aligned. Tool activity, plan cards, approval
   cards and team cards stay as cards between bubbles (not inside bubbles).
 - Consecutive assistant bubbles stack with 6px gaps (like short progress messages, e.g.
   "Checking your classes now. I'll be back in a few minutes.").

@@ -51,6 +51,19 @@ describe('tolerant repair of malformed tool arguments', () => {
     expect(repairJson('{"path": "a", "content":')).toBeNull()
     expect(check(tool, '{"path": "a", "content"').ok).toBe(false)
   })
+  test('a reply cut off by the output limit never gets its brackets closed', () => {
+    // Without the flag a missing final brace after a complete value is closed (small models drop it);
+    // with it, the closing brackets mean missing content (an edit list short of items, no mode:'append').
+    expect(repairJson('{"path": "a.md", "content": "hi"')).toBe('{"path": "a.md", "content": "hi"}')
+    expect(repairJson('{"path": "a.md", "content": "hi"', { truncated: true })).toBeNull()
+    expect(repairJson('{"edits": [{"old": "a", "new": "b"}', { truncated: true })).toBeNull()
+    const r = check(tool, '{"path": "a.md", "content": "hi"', { truncated: true })
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error).toMatch(/cut off/)
+    expect(check(tool, '{"path": "a.md", "content": "hi"').ok).toBe(true)
+    // A complete object is fine either way.
+    expect(check(tool, '{"path": "a.md", "content": "hi"}', { truncated: true }).ok).toBe(true)
+  })
   test('nothing object-like is not invented', () => {
     expect(repairJson('path=a')).toBeNull()
     expect(check(tool, 'path=a').ok).toBe(false)

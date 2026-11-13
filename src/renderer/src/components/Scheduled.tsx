@@ -34,7 +34,8 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
   const fail = (e: unknown): void => setErr((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))
   useEffect(() => { load(); return api.schedules.onChange(load) }, [])
   useEffect(() => {
-    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose() }
+    // preventDefault: this Esc is spent closing this (the chat's run and the details panel leave it alone).
+    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose() } }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [onClose])

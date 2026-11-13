@@ -54,7 +54,8 @@ export function VoiceMode({ threadId, space, onClose, onThread }: { threadId: st
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose() }
+    // preventDefault: this Esc is spent closing this (the chat's run and the details panel leave it alone).
+    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose() } }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [onClose])

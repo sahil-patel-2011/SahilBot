@@ -25,7 +25,7 @@ export type Checked =
  * Small models sometimes wrap JSON in fences, leave trailing commas, use single quotes or bare keys,
  * or drop the last closing brace. Strict JSON first, then light fixes, then a tolerant repair.
  */
-export function parseArgs(raw: string): unknown {
+export function parseArgs(raw: string, opts: RepairOptions = {}): unknown {
   let s = raw.trim()
   if (!s) return {}
   s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
@@ -36,7 +36,7 @@ export function parseArgs(raw: string): unknown {
       // Trailing commas, and raw newlines/tabs inside strings (adapted from OpenHands sanitize_json_control_chars, MIT).
       return JSON.parse(escapeControlInStrings(s.replace(/,\s*([}\]])/g, '$1')))
     } catch {
-      const fixed = repairJson(raw)
+      const fixed = repairJson(raw, opts)
       if (fixed === null) throw first
       try { return JSON.parse(fixed) } catch { throw first }
     }
@@ -52,7 +52,15 @@ const KEYWORDS: Record<string, string> = { true: 'true', True: 'true', TRUE: 'tr
  * "\d+"), raw control characters, trailing commas and missing closing brackets. A string that never
  * ends, or text cut mid-word, is a cut-off reply: that returns null rather than a guess.
  */
-export function repairJson(input: string): string | null {
+export interface RepairOptions {
+  /**
+   * The model's reply was cut off by the output limit. Missing closing brackets then mean missing
+   * content (an edit list short of items, a file without its mode), so they are never closed.
+   */
+  truncated?: boolean
+}
+
+export function repairJson(input: string, opts: RepairOptions = {}): string | null {
   const text = input.trim()
   const start = text.search(/[{[]/)
   if (start < 0) return null
@@ -127,7 +135,7 @@ export function repairJson(input: string): string | null {
     i++
   }
   if (!ended) {
-    if (!stack.length) return null
+    if (!stack.length || opts.truncated) return null
     // Cut off before the closing brackets: close them only at a clean value boundary.
     out = out.replace(/,\s*$/, '')
     if (last === 'word' || /:\s*$/.test(out)) return null
@@ -150,16 +158,16 @@ function escapeControlInStrings(s: string): string {
   return out
 }
 
-export function check(tool: ToolDef, raw: string): Checked {
+export function check(tool: ToolDef, raw: string, opts: RepairOptions = {}): Checked {
   const trimmed = raw.trim()
   // A call cut off mid-arguments (output limit hit) must not be "repaired" into something else: only a
   // missing final brace after a complete value is closed; a string or word cut in half is refused.
   const cut = !!trimmed && !/[}\]]\s*(```)?\s*$/.test(trimmed)
   let args: unknown
   try {
-    args = parseArgs(raw)
+    args = parseArgs(raw, opts)
   } catch (e) {
-    if (cut) return { ok: false, error: 'The arguments were cut off before the end (output limit). Send a shorter call, for example split long content into several file_write calls with mode "append".' }
+    if (cut || opts.truncated) return { ok: false, error: 'The arguments were cut off before the end (output limit). Send a shorter call, for example split long content into several file_write calls with mode "append".' }
     return { ok: false, error: `Arguments are not valid JSON (${(e as Error).message}). Send a single JSON object.` }
   }
   if (!args || typeof args !== 'object' || Array.isArray(args)) return { ok: false, error: 'Arguments must be a JSON object.' }

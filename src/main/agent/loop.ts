@@ -1,17 +1,17 @@
 import { randomUUID } from 'node:crypto'
-import type { ApprovalAnswer, Attachment, ChatEvent, Effort, TeamMember, Message, ModelInfo, PendingRequest, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
+import type { ApprovalAnswer, Attachment, ChatEvent, Effort, TeamMember, Message, ModelInfo, PendingRequest, PermissionMode, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
 import type { Db } from '../db'
 import type { MemoryStore } from '../memory'
 import type { SettingsStore } from '../settings'
 import type { SpaceFiles } from '../spaces'
 import { samplingFor } from '../llm/catalog'
-import { isLocal, streamChat, type WireMessage } from '../llm/client'
+import { collectText, isLocal, streamChat, type WireMessage } from '../llm/client'
 import type { Endpoints } from '../llm/endpoints'
 import { teamCapacity } from '../llm/models'
 import { def as providerDef } from '../llm/providers'
 import { decide as route, pick } from '../llm/router'
 import { ContextManager, OUTPUT_RESERVE, ResultStore, ServerTokenCounter, SUMMARY_INSTRUCTIONS, wrapToolOutput, type TokenCounter } from './context'
-import { checkTaint, containsSecret, decide, ruleVerdict } from './permissions'
+import { checkTaint, containsSecret, decide, memoryProvenance, memoryRisk, ruleVerdict, stricterMode } from './permissions'
 import { VOICE_SUFFIX, groupNote, harnessPrompt } from './prompt'
 import type { ToolRegistry } from './registry'
 import type { Decision, PermissionInput, ThreadState, ToolContext, ToolDef, ToolOutput } from './types'
@@ -47,7 +47,7 @@ export interface AgentDeps {
   /** Clamp the window to what the model can actually hold on this Mac. */
   fitWindow: (model: string, window: number) => number
   /** Catalog matches for an unconnected app, and a one-click connect returning the new tool names. */
-  connectors?: { suggest(q: string): import('@shared/types').ConnectorPreset[]; connectPreset(id: string): Promise<{ state: string; toolNames?: string[] }> }
+  connectors?: { suggest(q: string): import('@shared/types').ConnectorPreset[]; connectPreset(id: string): Promise<{ state: string; toolNames?: string[] }>; disabledToolNames?(): Set<string> }
   /** Override for tests. */
   counter?: (baseUrl: string, model: string) => TokenCounter
 }
@@ -71,6 +71,36 @@ interface Run {
   steers?: Array<{ text: string; meta?: Record<string, unknown> }>
   /** Resolves when the run (and its group speakers) has ended. */
   done?: Promise<'finished' | 'stopped' | 'error'>
+  /**
+   * A cap on the permission mode for this run only: a handoff from a bot in a stricter mode, or a helper
+   * of a capped run. The stricter of this and the chat's own mode applies; the chat's mode is unchanged.
+   */
+  modeCap?: PermissionMode
+  /** Every outside action asks as tainted for this run (started by a handoff from a run that read untrusted content). */
+  forceTaint?: boolean
+  /** Taint context a helper agent starts from: its lead's untrusted text and the user's own words. */
+  seed?: { untrusted: string[]; userText: string }
+  /** Live taint state while the run works, for handoffs it sends and helpers it starts. */
+  taint?: { untrusted: string[]; userText: () => string; tainted: () => boolean }
+}
+
+/** Messages that look like the user's but aren't their words: another bot's handoff, or a Teach recording (page strings). */
+export const isRelayed = (m: Pick<Message, 'meta'>): boolean => !!(m.meta?.handoff || m.meta?.teach || m.meta?.helperTask)
+
+/**
+ * The user's own words in a chat, for the taint check. Handoffs, Teach recordings (except the name and
+ * goal lines the user typed in the Teach bar), helper tasks and the app's hidden notes are left out.
+ */
+export function userTextOf(messages: Message[]): string {
+  return messages.filter((m) => m.role === 'user' && !m.meta?.hidden).map((m) => {
+    if (m.meta?.teach) return m.content.split('\n').slice(0, 2).filter((l) => /^(Teach|Goal): /.test(l)).join('\n')
+    return isRelayed(m) ? '' : m.content
+  }).filter(Boolean).join('\n')
+}
+
+/** The untrusted text a relayed message carries (a Teach recording's note has the page's selectors and URLs). */
+export function relayedText(m: Pick<Message, 'content' | 'meta'>): string {
+  return [m.content, m.meta?.teach && typeof m.meta?.note === 'string' ? m.meta.note : ''].filter(Boolean).join('\n')
 }
 
 const HELPER_NOTE = (depth: number): string => `
@@ -177,18 +207,20 @@ export class Agent {
     return 'steered'
   }
 
-  /** Adds waiting steering messages to the conversation. */
-  private flushSteers(threadId: string, run: Run): boolean {
+  /** Adds waiting steering messages to the conversation; returns the messages added. */
+  private flushSteers(threadId: string, run: Run): Message[] {
     const texts = run.steers?.splice(0) ?? []
+    const out: Message[] = []
     for (const { text, meta } of texts) {
       const m = this.d.db.insertMessage({
         threadId, role: 'user', content: text, kind: 'normal', status: 'done',
         meta: { steer: true, note: '[The user sent this while you were working. Take it into account from your next step on: change the plan if needed, don\'t redo work that is already done, and keep going.]', ...(meta ?? {}) }
       })
       this.d.emit({ threadId, type: 'message', message: m })
+      out.push(m)
     }
     if (texts.length) this.d.emit({ threadId, type: 'steer', pending: 0 })
-    return texts.length > 0
+    return out
   }
 
   stop(threadId: string): void {
@@ -292,14 +324,15 @@ export class Agent {
     const reply = ms.find((m) => m.role === 'assistant')?.content ?? ''
     let title = ''
     try {
-      for await (const part of streamChat({
+      // collectText starts over when a retried request resets the stream (no doubled text).
+      title = await collectText(streamChat({
         baseUrl: ep.baseUrl, apiKey: ep.apiKey, model: titleModel, maxTokens: 24, signal: AbortSignal.timeout(20_000),
         sampling: { ...samplingFor(titleModel, s.sampling), temperature: 0.2 },
         messages: [
           { role: 'system', content: 'Write a short title (2-6 words) for this chat. Reply with the title only: no quotes, no punctuation at the end. /no_think' },
           { role: 'user', content: `User: ${firstUser.content.slice(0, 600)}\nAssistant: ${reply.slice(0, 600)}` }
         ]
-      })) if (part.type === 'content') title += part.text
+      }))
     } catch {
       return
     }
@@ -366,12 +399,19 @@ export class Agent {
         const left = run.steers?.splice(0) ?? []
         if (!left.length) return
         this.d.emit({ threadId: thread.id, type: 'steer', pending: 0 })
-        const text = left.map((x) => x.text).join('\n\n')
-        const meta = Object.assign({}, ...left.map((x) => x.meta ?? {})) as Record<string, unknown>
-        if (!run.ctrl.signal.aborted) void this.steer(thread.id, text, Object.keys(meta).length ? meta : undefined).catch((e) => this.notice(thread.id, `Couldn't send your message: ${(e as Error).message}`))
-        else {
-          const m = this.d.db.insertMessage({ threadId: thread.id, role: 'user', content: text, kind: 'normal', status: 'done', meta: { ...meta, steer: true } })
-          this.d.emit({ threadId: thread.id, type: 'message', message: m })
+        // The user's own steers go out together; each handoff stays its own message with its own meta,
+        // so the user's words are never labeled as another bot's (or the other way around).
+        const groups = groupSteers(left)
+        if (!run.ctrl.signal.aborted) {
+          void (async () => {
+            // The first starts a run; the rest steer into it.
+            for (const g of groups) await this.steer(thread.id, g.text, g.meta)
+          })().catch((e) => this.notice(thread.id, `Couldn't send your message: ${(e as Error).message}`))
+        } else {
+          for (const g of groups) {
+            const m = this.d.db.insertMessage({ threadId: thread.id, role: 'user', content: g.text, kind: 'normal', status: 'done', meta: { ...(g.meta ?? {}), steer: true } })
+            this.d.emit({ threadId: thread.id, type: 'message', message: m })
+          }
         }
       })
     run.done = done
@@ -517,7 +557,8 @@ export class Agent {
         if (run.ctrl.signal.aborted) { members[i].status = 'stopped'; results[i] = { title: tasks[i].title, status: 'stopped', report: '' }; continue }
         members[i].status = 'working'
         show()
-        const child = db.createThread(parent.spaceId, parent.permissionMode, model, parent.id)
+        // A helper never runs looser than its lead does right now (a capped handoff run stays capped).
+        const child = db.createThread(parent.spaceId, stricterMode(db.getThread(parent.id)?.permissionMode ?? parent.permissionMode, run.modeCap), model, parent.id)
         children[i] = child.id
         db.updateThread(child.id, { title: tasks[i].title })
         const st = db.getState(child.id)
@@ -527,8 +568,14 @@ export class Agent {
         st.rootCallId = rootCallId
         st.systemSnapshot = this.systemFor(child, { ...st }) + HELPER_NOTE(depth)
         db.setState(child.id, st)
-        db.insertMessage({ threadId: child.id, role: 'user', content: tasks[i].task, kind: 'normal', status: 'done' })
-        const crun: Run = { ctrl: new AbortController(), pending: new Map(), group: false, unattended: true, helper: true }
+        // The task is the lead model's words, not the user's: the helper checks taint against the user's own
+        // words and everything untrusted the lead had read.
+        db.insertMessage({ threadId: child.id, role: 'user', content: tasks[i].task, kind: 'normal', status: 'done', meta: { helperTask: true } })
+        const crun: Run = {
+          ctrl: new AbortController(), pending: new Map(), group: false, unattended: true, helper: true,
+          modeCap: run.modeCap, forceTaint: run.forceTaint,
+          seed: { untrusted: [...(run.taint?.untrusted ?? []).slice(-20), tasks[i].task], userText: run.taint?.userText() ?? run.seed?.userText ?? '' }
+        }
         const stop = (): void => crun.ctrl.abort()
         run.ctrl.signal.addEventListener('abort', stop, { once: true })
         this.runs.set(child.id, crun)
@@ -691,10 +738,39 @@ export class Agent {
     let sincePlan = 0
     let planReminded = false
 
-    // Untrusted text seen in this thread, for the taint check on outside actions.
+    // Untrusted text seen in this thread, for the taint check on outside actions: outside tool output
+    // (pages, email, other bots' replies), other bots' handoffs and Teach recordings. The user's own words
+    // are only what they typed (see userTextOf).
     const history = db.listMessages(thread.id)
-    const untrusted: string[] = history.filter((m) => m.role === 'tool' && m.meta?.untrusted).slice(-20).map((m) => m.content)
-    const userText = history.filter((m) => m.role === 'user').map((m) => m.content).join('\n')
+    const untrusted: string[] = [
+      ...(run.seed?.untrusted ?? []),
+      ...history.filter((m) => m.role === 'tool' && m.meta?.untrusted).slice(-20).map((m) => m.content),
+      ...history.filter((m) => m.role === 'user' && isRelayed(m) && !m.meta?.helperTask).slice(-10).map(relayedText)
+    ]
+    let userText = [run.seed?.userText ?? '', userTextOf(history)].filter(Boolean).join('\n')
+    // Set by execute(): did this run change anything or research anything? Then it gets a self-check pass.
+    // sawUntrusted: this run has untrusted content in view (memory saves that read like instructions ask);
+    // web: it read outside content itself, so handoffs it sends count as tainted.
+    const track = {
+      changed: false, researched: false,
+      web: history.some((m) => m.role === 'tool' && m.meta?.untrusted) || (run.seed?.untrusted.length ?? 0) > 1 || !!run.forceTaint,
+      sawUntrusted: false
+    }
+    // "This turn": a helper inherits its lead's; otherwise only what this run reads (or was handed) counts.
+    track.sawUntrusted = (run.seed?.untrusted.length ?? 0) > 1 || !!run.forceTaint
+    // A handoff caps this run's mode at the stricter of both bots' modes and, when the sender had read
+    // untrusted content, makes every outside action ask. A Teach recording carries page strings.
+    const relayed = (m: Message): void => {
+      track.sawUntrusted = true
+      if (m.meta?.teach) track.web = true
+      if (!m.meta?.handoff) return
+      const mode = m.meta.mode
+      if (mode === 'ask' || mode === 'auto' || mode === 'bypass') run.modeCap = run.modeCap ? stricterMode(run.modeCap, mode) : mode
+      if (m.meta.tainted) { run.forceTaint = true; track.web = true }
+    }
+    const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    if (opener && isRelayed(opener) && !opener.meta?.helperTask) relayed(opener)
+    run.taint = { untrusted, userText: () => userText, tainted: () => !!run.forceTaint || track.web }
     const failures = new Map<string, number>()
     const guard = new LoopGuard()
     let nudged = false
@@ -702,8 +778,6 @@ export class Agent {
     let autonomyNudged = false
     let linkChecked = false
     let verified = false
-    // Set by execute(): did this run change anything or research anything? Then it gets a self-check pass.
-    const track = { changed: false, researched: false }
     const runStart = Date.now()
     let status: 'finished' | 'stopped' | 'error' = 'finished'
     let budget = START_BUDGET
@@ -722,7 +796,13 @@ export class Agent {
       for (let step = 1; step <= budget; step++) {
         if (run.ctrl.signal.aborted) throw new DOMException('stopped', 'AbortError')
         // The user steered while the last step ran: their message goes in now.
-        if (this.flushSteers(thread.id, run)) budget = Math.max(budget, Math.min(HARD_CAP, step + START_BUDGET))
+        const flushed = this.flushSteers(thread.id, run)
+        if (flushed.length) budget = Math.max(budget, Math.min(HARD_CAP, step + START_BUDGET))
+        // A user's steer is their own words; a handoff that steered in is another bot's (untrusted).
+        for (const m of flushed) {
+          if (isRelayed(m)) { untrusted.push(relayedText(m)); relayed(m) }
+          else userText += `\n${m.content}`
+        }
         const tools = registry.listFor(state)
         const wireTools = registry.wire(tools)
         const prepared = await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: view(db.listMessages(thread.id)), state, window, appendOnly: claude, allowCompact: !claude || step === 1 })
@@ -754,10 +834,17 @@ export class Agent {
           if (switchModel(`${modelName()} failed (${(e as Error).message.replace(/\s+/g, ' ').slice(0, 140)})`, true, e as Error)) { step--; continue }
           throw e
         }
-        if (!assistant.toolCalls?.length) {
+        // Cut off by the output limit in the middle of a tool call: the call was dropped (see stream()),
+        // never run with guessed arguments. Ask for a shorter one.
+        if (assistant.meta?.droppedToolCall && step < HARD_CAP) {
+          budget = Math.max(budget, step + 1)
+          db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your last reply hit the output limit in the middle of a tool call, so the call was cut off and not run. Send a shorter call: for example split long content into several file_write calls with mode "append", or do fewer edits per call.' })
+          continue
+        }
+        if (!assistant.toolCalls?.length && !assistant.meta?.truncated) {
           // Some local models write the call as text; recover it rather than ending the run.
           const known = new Set(registry.all().map((t) => t.name))
-          const rec = recoverToolCalls(assistant.content, known)
+          const rec = recoverToolCalls(assistant.content, known, this.d.connectors?.disabledToolNames?.())
           if (rec.calls.length) {
             assistant.toolCalls = rec.calls.map((c) => ({ ...c, id: `${c.id}-${randomUUID().slice(0, 8)}` }))
             assistant.content = rec.rest
@@ -939,7 +1026,7 @@ export class Agent {
           m.content = ''
           m.reasoning = undefined
           m.toolCalls = undefined
-          if (m.meta?.raw) m.meta = { ...m.meta, raw: undefined }
+          if (m.meta?.raw || m.meta?.truncated) m.meta = { ...m.meta, raw: undefined, truncated: undefined }
           head = ''
           headDone = false
           this.d.emit({ threadId, type: 'message', message: { ...m } })
@@ -956,6 +1043,13 @@ export class Agent {
         }
       }
       m.status = 'done'
+      // Cut off by the output limit mid tool call: the arguments are incomplete, and a repair would turn
+      // them into wrong-but-valid ones (an edit list short of items, a write without mode "append").
+      // Drop the calls, as anthropic.ts does for max_tokens; the loop asks for a shorter call.
+      if (m.meta?.truncated && m.toolCalls?.length) {
+        m.toolCalls = undefined
+        m.meta = { ...m.meta, droppedToolCall: true }
+      }
     } catch (e) {
       m.status = run.ctrl.signal.aborted ? 'stopped' : 'error'
       if (m.status === 'error') {
@@ -975,9 +1069,9 @@ export class Agent {
 
   private async summarize(model: string, transcript: string, maxTokens: number, signal: AbortSignal): Promise<string> {
     const s = this.d.settings.get()
-    let out = ''
     const ep = this.d.endpoints.for(model)
-    for await (const part of streamChat({
+    // collectText starts over when a retried request resets the stream (no doubled summary).
+    return collectText(streamChat({
       baseUrl: ep.baseUrl,
       apiKey: ep.apiKey,
       model,
@@ -987,10 +1081,7 @@ export class Agent {
       // Thinking models would spend the whole budget reasoning and return no summary.
       effort: 'low',
       signal
-    })) {
-      if (part.type === 'content') out += part.text
-    }
-    return out
+    }))
   }
 
   private toolMessage(threadId: string, call: ToolCall, content: string, meta: Record<string, unknown>, images?: string[]): void {
@@ -1033,7 +1124,7 @@ export class Agent {
 
   /** The tool a call means, with a misspelled name fixed. */
   private resolve(call: ToolCall): ToolDef | undefined {
-    const fixed = fixName(call.name, new Set(this.d.registry.all().map((t) => t.name)))
+    const fixed = fixName(call.name, new Set(this.d.registry.all().map((t) => t.name)), this.d.connectors?.disabledToolNames?.())
     return fixed ? this.d.registry.get(fixed) : undefined
   }
 
@@ -1055,7 +1146,8 @@ export class Agent {
   /** Effect and verdict for one call: the mode, hard stops, taint, secrets and the user's own rules. */
   private permission(thread: Thread, run: Run, state: ThreadState, tool: ToolDef, call: ToolCall, args: Record<string, unknown>, ctx: ExecCtx): { effect: ToolEffect; decision: Decision; summary?: string } {
     const s = this.d.settings.get()
-    const mode = this.d.db.getThread(thread.id)?.permissionMode ?? thread.permissionMode
+    // A capped run (a handoff from a stricter bot) uses the stricter mode, for this run only.
+    const mode = stricterMode(this.d.db.getThread(thread.id)?.permissionMode ?? thread.permissionMode, run.modeCap)
     const effect: ToolEffect = typeof tool.effect === 'function' ? tool.effect(args, { roots: state.roots ?? [] }) : tool.effect
     let summary: string | undefined
     try { summary = tool.describe?.(args) } catch { summary = undefined }
@@ -1065,9 +1157,11 @@ export class Agent {
       effect,
       tool: tool.name,
       alwaysAllowed: state.alwaysAllow.includes(tool.name),
-      hardStop: tool.hardStop?.(args) ?? null,
+      // Long-term memory: a save whose wording came from (or, after reading, reads like) fetched content asks.
+      hardStop: tool.hardStop?.(args) ?? (tool.name === 'memory' ? memoryRisk(args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted) : null),
       hardStopsEnabled: s.advanced.hardStopsEnabled,
-      tainted: checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText),
+      // A handoff from a run that read untrusted content: every outside action in this run asks.
+      tainted: (!!run.forceTaint && (effect === 'write_external' || effect === 'destructive')) || checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText),
       leaksSecret: containsSecret(args, this.d.secretValues()),
       consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended }) : true
     }, rule)
@@ -1079,7 +1173,12 @@ export class Agent {
     let content = o.content
     if (o.errorFor) content += ctx.guard.error(o.errorFor.tool, o.errorFor.message) ?? ''
     if (o.output) {
-      if (o.output.untrusted) ctx.untrusted.push(o.output.text)
+      if (o.output.untrusted) {
+        ctx.untrusted.push(o.output.text)
+        ctx.track.sawUntrusted = true
+        // A handoff's own receipt ("Handed off to …") isn't outside content; a reply or a page is.
+        if (!(o.call.name === 'message_bot' && /^Handed off to /.test(o.output.text))) ctx.track.web = true
+      }
       ctx.guard.record(o.call, o.output.text)
     }
     this.toolMessage(thread.id, o.call, content, o.meta, o.images)
@@ -1091,7 +1190,7 @@ export class Agent {
     const { registry } = this.d
     const s = this.d.settings.get()
 
-    const fixed = fixName(call.name, new Set(registry.all().map((t) => t.name)))
+    const fixed = fixName(call.name, new Set(registry.all().map((t) => t.name)), this.d.connectors?.disabledToolNames?.())
     if (fixed && fixed !== call.name) call = { ...call, name: fixed }
     const repeat = ctx.guard.check(call)
     if (repeat) return { call, status: 'repeat', content: repeat, meta: { status: 'error', label: call.name, display: 'repeated call skipped' } }
@@ -1138,6 +1237,7 @@ export class Agent {
     }
 
     // 3. Run.
+    const provenance = tool.name === 'memory' ? memoryProvenance(args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted) : undefined
     const toolCtx: ToolContext = {
       threadId: thread.id,
       signal: run.ctrl.signal,
@@ -1161,7 +1261,9 @@ export class Agent {
       },
       spawnAgents: (tasks) => this.runTeam(thread, run, call.id, tasks),
       outputBudget: tool.name === 'agents' ? teamShare(ctx.window) : undefined,
-      model: this.lastModel.get(thread.id)
+      model: this.lastModel.get(thread.id),
+      speakerId: run.group ? run.speaker?.id : undefined,
+      provenance
     }
     let out: ToolOutput
     try {
@@ -1187,7 +1289,7 @@ export class Agent {
       call,
       status: 'ok',
       content: wrapToolOutput(tool.name, off.text, !!tool.untrusted),
-      meta: { ...baseMeta, ...(team ? { team } : {}), status: 'ok', display: out.display, path: out.path, sources: out.sources, read: out.read, untrusted: !!tool.untrusted, offloaded: off.offloaded ? id : undefined, tokens: off.tokens },
+      meta: { ...baseMeta, ...(team ? { team } : {}), ...(provenance && effect !== 'read' ? { provenance } : {}), status: 'ok', display: out.display, path: out.path, sources: out.sources, read: out.read, untrusted: !!tool.untrusted, offloaded: off.offloaded ? id : undefined, tokens: off.tokens },
       images: out.images,
       output: { text: out.text, untrusted: !!tool.untrusted }
     }
@@ -1224,7 +1326,12 @@ export class Agent {
       emit: (e) => this.d.emit(e),
       runInfo: (threadId) => {
         const r = this.runs.get(threadId)
-        return r ? { helper: r.helper, unattended: r.unattended, speaker: r.speaker } : undefined
+        const t = this.d.db.getThread(threadId)
+        return r ? {
+          helper: r.helper, unattended: r.unattended, speaker: r.speaker,
+          mode: t ? stricterMode(t.permissionMode, r.modeCap) : r.modeCap,
+          tainted: !!r.forceTaint || !!r.taint?.tainted()
+        } : undefined
       },
       isRunning: (threadId) => this.runs.has(threadId),
       send: (input, opts) => this.send(input, opts),
@@ -1242,7 +1349,7 @@ interface ExecCtx {
   untrusted: string[]
   userText: string
   guard: LoopGuard
-  track: { changed: boolean; researched: boolean }
+  track: { changed: boolean; researched: boolean; web: boolean; sawUntrusted: boolean }
   window: number
 }
 
@@ -1272,6 +1379,22 @@ const callKey = (c: ToolCall): string => {
   let args = c.arguments
   try { args = JSON.stringify(JSON.parse(c.arguments)) } catch { /* raw */ }
   return `${c.name}:${args}`
+}
+
+/**
+ * Steers left over when a run ends, as the messages to send: the user's own consecutive steers are joined
+ * into one, and each handoff (or other steer with its own meta) stays separate with its meta, so the
+ * user's words never carry another bot's handoff label.
+ */
+export function groupSteers(left: Array<{ text: string; meta?: Record<string, unknown> }>): Array<{ text: string; meta?: Record<string, unknown> }> {
+  const out: Array<{ text: string; meta?: Record<string, unknown> }> = []
+  for (const x of left) {
+    const plain = !x.meta || !Object.keys(x.meta).length
+    const prev = out.at(-1)
+    if (plain && prev && !prev.meta) prev.text += `\n\n${x.text}`
+    else out.push(plain ? { text: x.text } : { text: x.text, meta: x.meta })
+  }
+  return out
 }
 
 /** Runs fn over items with at most `limit` in flight; results keep the input order. */

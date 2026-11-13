@@ -55,6 +55,9 @@ export function browserTool(b: BrowserManager, vault: Vault): ToolDef<Args> {
       case 'fill_form': return a.submit_ref ? clickEffect(b.refInfo(a.submit_ref)) : 'write_local'
       case 'dialog': return a.accept && b.pendingDialog?.type !== 'alert' ? 'write_external' : 'read'
       case 'tabs': return a.op === 'close' ? 'write_local' : 'read'
+      // Starting a recording captures what the user clicks and types, across tabs, for up to 10 minutes:
+      // treated as an outside action so it never starts silently (stop and status only read).
+      case 'recording': return a.op === 'start' ? 'write_external' : 'read'
       default: return 'read'
     }
   }
@@ -62,6 +65,8 @@ export function browserTool(b: BrowserManager, vault: Vault): ToolDef<Args> {
   const hardStop = (a: Args): string | null => {
     const r = a.ref ? b.refInfo(a.ref) : undefined
     const url = b.pageUrl()
+    // The agent starting a recording always asks (the user's own Teach button doesn't go through here).
+    if (a.action === 'recording' && a.op === 'start') return `recording what you click and type in the browser for up to ${MAX_MS / 60_000} minutes`
     if (a.action === 'fill_secret') return `typing the saved login "${a.secret}" (${a.field ?? 'password'}) into ${safeHost(url)}`
     if (a.action === 'type' && r?.password) return 'typing into a password field'
     if (a.action === 'fill_form' && (a.fields ?? []).some((f) => b.refInfo(f.ref)?.password)) return 'typing into a password field'
@@ -87,7 +92,7 @@ export function browserTool(b: BrowserManager, vault: Vault): ToolDef<Args> {
       case 'dialog': return `${a.accept ? 'Accept' : 'Dismiss'} the page's ${b.pendingDialog?.type ?? 'dialog'}: "${b.pendingDialog?.message.slice(0, 120) ?? ''}"`
       case 'tabs': return `${a.op} tab${a.index ? ` ${a.index}` : ''}`
       case 'fill_form': return `Fill ${a.fields?.length ?? 0} fields${a.submit_ref ? ` and click "${b.refInfo(a.submit_ref)?.name ?? a.submit_ref}"` : ''}${on}`
-      case 'recording': return a.op === 'start' ? 'Record what you do in the browser panel (Teach a task)' : a.op === 'stop' ? 'Stop recording and read the steps' : 'Check the Teach recording'
+      case 'recording': return a.op === 'start' ? `Record what you do in the browser for up to ${MAX_MS / 60_000} minutes (Teach a task)` : a.op === 'stop' ? 'Stop recording and read the steps' : 'Check the Teach recording'
       default: return `${a.action}${on}`
     }
   }
@@ -103,6 +108,7 @@ export function browserTool(b: BrowserManager, vault: Vault): ToolDef<Args> {
       const r = a.ref ? b.refInfo(a.ref) : undefined
       if (a.action === 'click') return !r || CONSEQUENTIAL.test(r.name)
       if (a.action === 'type') return false
+      if (a.action === 'recording') return a.op === 'start'
       if (a.action === 'dialog') return CONSEQUENTIAL.test(b.pendingDialog?.message ?? '')
       if (a.action === 'fill_form') { const s = a.submit_ref ? b.refInfo(a.submit_ref) : undefined; return !!a.submit_ref && (!s || CONSEQUENTIAL.test(s.name)) }
       return true
@@ -126,7 +132,7 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['navigate', 'snapshot', 'click', 'type', 'select', 'fill_secret', 'scroll', 'screenshot', 'get_text', 'tabs', 'dialog', 'fill_form'] },
+        action: { type: 'string', enum: ['navigate', 'snapshot', 'click', 'type', 'select', 'fill_secret', 'scroll', 'screenshot', 'get_text', 'tabs', 'dialog', 'fill_form', 'recording'] },
         fields: { type: 'array', maxItems: 40, items: { type: 'object', properties: { ref: { type: 'string', pattern: '^e\\d+$' }, text: { type: 'string' }, option: { type: 'string' } }, required: ['ref'], additionalProperties: false } },
         submit_ref: { type: 'string', pattern: '^e\\d+$' },
         option: { type: 'string', description: 'For select: the option text' },

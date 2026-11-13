@@ -59,10 +59,14 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
   }, [space.id])
   useEffect(() => { void load(); return api.schedules.onChange(() => void load()) }, [load])
 
-  // Escape closes the menu, then the routine view, then the panel.
+  // Escape closes the menu, then the routine view, then the panel. App's run-stopping Esc handler
+  // (registered first, at mount) steps aside while this panel is open, so Esc here never stops a run.
   useEffect(() => {
     const k = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
+      // Not when something else already used this Esc (a menu, a rename, a modal's own close) or a modal is over the panel.
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (document.querySelector('.scrim, .palette-wrap, .voice-mode, .settings-page')) return
+      e.preventDefault()
       if (menuId || confirmId) { setMenuId(null); setConfirmId(null) } else if (openId) setOpenId(null)
       else p.onClose()
     }

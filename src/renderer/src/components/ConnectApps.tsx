@@ -70,7 +70,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     if (view === 'templates' && !templates.length) void api.templates.list().then(setTemplates).catch((e) => setErr(clean(e)))
   }, [view, templates.length])
   useEffect(() => {
-    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose() }
+    // preventDefault: this Esc is spent closing this (the chat's run and the details panel leave it alone).
+    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose() } }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [onClose])
@@ -82,6 +83,12 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const connectedPresetIds = useMemo(() => new Set(connected.map((a) => a.presetId).filter((x): x is string => !!x)), [connected])
   const catalog = useMemo(() => [VAULT, ...presets], [presets])
   const byCategory = (cat: string): ConnectorPreset[] => catalog.filter((p) => p.category === cat)
+
+  /** Runs a connector action and shows why it failed, instead of failing silently. */
+  const guard = async (fn: () => Promise<unknown>): Promise<void> => {
+    setErr('')
+    try { await fn() } catch (e) { setErr(clean(e)); body.current?.scrollTo({ top: 0, behavior: 'smooth' }) }
+  }
 
   const go = (v: View): void => { setErr(''); setView(v); setMoreOpen(false) }
 
@@ -98,7 +105,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     const existing = configOf(p)
     if (existing) {
       if (status(existing.id)?.state === 'connected') { setOpen(existing.id); go('manage'); return }
-      await api.connectors.connect(existing.id)
+      try { await api.connectors.connect(existing.id) } catch (e) { setErr(clean(e)) }
       return
     }
     // Known servers connect in one click; Google needs your client ID; custom needs details.
@@ -204,9 +211,11 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     )
   }
 
+  const openSkill = (): void => { if (onOpenSettings) { onClose(); onOpenSettings('rules') } else toast('SahilBot uses skills on its own when they fit. Manage them in Settings → Rules & Skills.') }
   const skillRow = (s: Skill): ReactNode => (
     <div key={s.name} className="ca-item" role="button" tabIndex={0} data-testid={`skill-${s.name}`}
-      onClick={() => { if (onOpenSettings) { onClose(); onOpenSettings('rules') } else toast('SahilBot uses skills on its own when they fit. Manage them in Settings → Rules & Skills.') }}>
+      onClick={() => openSkill()}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSkill() } }}>
       <span className="ca-icon skill" style={{ width: 44, height: 44, borderRadius: 12 }}><I.Sparkle size={20} /></span>
       <span className="ca-item-text"><b>{prettySkill(s.name)}</b><span>{s.description}</span></span>
       <span className="ca-btn ok">{s.source === 'builtin' ? 'Built in' : 'Yours'}</span>
@@ -290,13 +299,13 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
                   </button>
                 )}
                 {state === 'connected' ? (
-                  <button className="btn" onClick={() => void api.connectors.disconnect(c.id)}>Disconnect</button>
+                  <button className="btn" onClick={() => void guard(() => api.connectors.disconnect(c.id))}>Disconnect</button>
                 ) : (
-                  <button className="btn primary" disabled={busy} onClick={() => void api.connectors.connect(c.id)}>
+                  <button className="btn primary" disabled={busy} onClick={() => void guard(() => api.connectors.connect(c.id))}>
                     {busy ? 'Connecting…' : state === 'needs_auth' ? 'Sign in' : 'Reconnect'}
                   </button>
                 )}
-                <button className="icon-btn" title="Remove" aria-label={`Remove ${c.name}`} onClick={() => { if (confirm(`Remove ${c.name}? You can add it again later.`)) void api.connectors.remove(c.id) }}><I.Trash size={15} /></button>
+                <button className="icon-btn" title="Remove" aria-label={`Remove ${c.name}`} onClick={() => { if (confirm(`Remove ${c.name}? You can add it again later.`)) void guard(() => api.connectors.remove(c.id)) }}><I.Trash size={15} /></button>
               </div>
               {expanded && (
                 <div className="ca-tools" data-testid="connector-tools">

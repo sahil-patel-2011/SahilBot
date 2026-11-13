@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BrowserState, ChatEvent, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
 import { api } from './api'
-import { isLight, SpaceAvatar } from './brand'
+import { readableOn, SpaceAvatar } from './brand'
 import { BotDetails } from './components/BotDetails'
 import { BotEditor } from './components/BotEditor'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
@@ -41,6 +41,8 @@ export function App() {
   const [needs, setNeeds] = useState<Record<string, string[]>>({})
   // A reopened window picks up chats that were already waiting on you.
   useEffect(() => void api.chat.allPending().then((all) => setNeeds((x) => ({ ...all, ...x }))), [])
+  /** Which bot/project each waiting chat belongs to, for chats the sidebar doesn't otherwise know (e.g. a bot's chat after a reopen). */
+  const [needSpaceOf, setNeedSpaceOf] = useState<Record<string, string>>({})
   const [file, setFile] = useState<string | null>(null)
   const [browser, setBrowser] = useState<BrowserState | null>(null)
   const [showSettings, setShowSettings] = useState(false)
@@ -66,6 +68,26 @@ export function App() {
   const [mini, setMini] = useState<{ on: boolean; threadId?: string }>({ on: false })
   const [teamCap, setTeamCap] = useState<{ maxAgents: number; heavy: boolean; why: string } | null>(null)
   const composer = useRef<ComposerHandle>(null)
+  // Resolve the bot/project of every chat that needs you but isn't one we already know about.
+  const needKey = Object.keys(needs).sort().join(',')
+  useEffect(() => {
+    const unknown = Object.keys(needs).filter((t) => !needSpaceOf[t] && !runSpaces[t] && !chats.some((c) => c.id === t))
+    if (!unknown.length) return
+    let alive = true
+    void (async () => {
+      const found: Record<string, string> = {}
+      // All recent chats in one call; then each bot/project for anything older.
+      for (const t of await api.threads.list().catch(() => [] as Thread[])) if (unknown.includes(t.id)) found[t.id] = t.spaceId
+      if (unknown.some((id) => !found[id])) {
+        for (const sp of await api.spaces.list().catch(() => [] as Space[])) {
+          for (const t of await api.threads.list(sp.id).catch(() => [] as Thread[])) if (unknown.includes(t.id)) found[t.id] = t.spaceId
+          if (unknown.every((id) => found[id])) break
+        }
+      }
+      if (alive && Object.keys(found).length) setNeedSpaceOf((m) => ({ ...m, ...found }))
+    })()
+    return () => { alive = false }
+  }, [needKey]) // eslint-disable-line react-hooks/exhaustive-deps
   /** Threads whose queued message is on its way (until that thread's next run event). */
   const sendingRef = useRef<Set<string>>(new Set())
   const [miniMsgs, setMiniMsgs] = useState<Message[]>([])
@@ -290,6 +312,8 @@ export function App() {
       if (e.key === 'Escape') void api.voice.stopSpeaking()
       if (e.key !== 'Escape' || e.defaultPrevented || !threadRef.current) return
       if (document.querySelector('.scrim, .palette-wrap, .voice-mode, .settings-page')) return
+      // The bot details panel is open: Esc closes it (BotDetails' own listener, registered after this one), not the run.
+      if (document.querySelector('[data-testid="bot-details"]')) return
       const el = document.activeElement
       if (el && el !== document.body && !el.matches('[data-testid="composer-input"]')) return
       void api.chat.stop(threadRef.current)
@@ -511,10 +535,11 @@ export function App() {
   const modal = showSettings || !!editor || palette || showConnect || showScheduled || voiceOn || !settings.onboarded
   // The chat's colour: your bubbles, the voice and send buttons. SahilBot itself uses the accent.
   const botColor = chatBot && !chatBot.isMain ? chatBot.color : null
-  const chatStyle = { '--bot': botColor ?? 'var(--accent)', '--bot-text': botColor && isLight(botColor) ? '#141414' : '#ffffff' } as React.CSSProperties
+  // Text and icons on it: near-black or white, whichever has the higher WCAG contrast (#ff6a1a is --accent).
+  const chatStyle = { '--bot': botColor ?? 'var(--accent)', '--bot-text': readableOn(botColor ?? '#ff6a1a') } as React.CSSProperties
   const detailsSpace = chatBot ?? main
   const needThreads = new Set(Object.keys(needs))
-  const needSpaces = new Set(Object.keys(needs).map((t) => runSpaces[t] ?? (t === thread?.id ? thread.spaceId : chats.find((c) => c.id === t)?.spaceId ?? '')).filter(Boolean))
+  const needSpaces = new Set(Object.keys(needs).map((t) => runSpaces[t] ?? (t === thread?.id ? thread.spaceId : chats.find((c) => c.id === t)?.spaceId ?? needSpaceOf[t] ?? '')).filter(Boolean))
 
   return (
     <div className="app">
@@ -628,7 +653,7 @@ export function App() {
               actions={{
                 onRetry: () => void api.chat.retry(thread.id).catch((e: Error) => toast(e.message, 'error')),
                 onEditLast: (text) => void api.chat.editLast(thread.id, text).catch((e: Error) => toast(e.message, 'error')),
-                onRespond: (id, answer) => void api.chat.respond(thread.id, id, answer),
+                onRespond: (id, answer) => api.chat.respond(thread.id, id, answer),
                 onReact: (id, emoji) => void api.threads.react(id, emoji),
                 onReply: (text) => composer.current?.insert(`> ${text.replace(/\s+/g, ' ').slice(0, 220)}\n`),
                 onOpenFile: openFile

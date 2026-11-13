@@ -2,7 +2,7 @@ import type { Sampling, ToolCall } from '@shared/types'
 import { lookup } from './catalog'
 import { isAnthropic } from './providers'
 import { claudeMaxTokens, fallbacks, listAnthropicModels, streamAnthropic } from './anthropic'
-import { httpError, withRetries } from './retry'
+import { httpError, retryInfo, withRetries } from './retry'
 
 export { backoffMs, httpError, parseRetryAfter, retryAfterFrom, retryInfo, retryPolicy, withRetries } from './retry'
 
@@ -320,7 +320,8 @@ async function* paidAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
   } catch (e) {
     // A request the server rejected outright (400/401/429/5xx before any output) isn't billed.
     const status = (e as { status?: number }).status
-    rejected = (e as { billed?: boolean }).billed === false || (!input && !produced && (typeof status === 'number' || /\b(4\d\d|5\d\d)\b/.test((e as Error).message)))
+    // Nor is one that never reached the server (offline, DNS, refused): nothing came back at all.
+    rejected = (e as { billed?: boolean }).billed === false || (!input && !produced && (typeof status === 'number' || /\b(4\d\d|5\d\d)\b/.test((e as Error).message) || (status === undefined && retryInfo(e).retry)))
     throw e
   } finally {
     if (!rejected)
@@ -412,4 +413,14 @@ async function* streamOpenAI(req: ChatRequest): AsyncGenerator<StreamPart> {
     yield { type: 'tool_calls', calls: list }
   }
   yield { type: 'finish', reason: finish }
+}
+
+/** All the text of a stream, starting over when a retry resets it. */
+export async function collectText(stream: AsyncIterable<StreamPart>): Promise<string> {
+  let out = ''
+  for await (const part of stream) {
+    if (part.type === 'reset') out = ''
+    else if (part.type === 'content') out += part.text
+  }
+  return out
 }

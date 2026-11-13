@@ -11,7 +11,7 @@ import { INTRO } from './agent/prompt'
 import { updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget } from './llm/budget'
-import { isLocal, spendHooks, streamChat } from './llm/client'
+import { collectText, isLocal, spendHooks, streamChat } from './llm/client'
 import { ConnectorIcons, Connectors, PRESETS } from './connectors'
 import { addTemplate, loadTemplates } from './templates'
 import { VoiceService } from './voice/service'
@@ -24,7 +24,7 @@ import { ToolRegistry } from './agent/registry'
 import { browserTool } from './agent/tools/browser'
 import { coreTools } from './agent/tools/core'
 import { fileTools } from './agent/tools/files'
-import { exportPagePdf, guardFrames, isPagePath, openPageWindow, pageInfo, pageTools, servePage } from './agent/tools/pages'
+import { exportPagePdf, guardFrames, isPagePath, openPageWindow, PagePanel, pageInfo, pageThumbnail, pageTools, type PanelBounds } from './agent/tools/pages'
 import { memoryTool } from './agent/tools/memory'
 import { webTools } from './agent/tools/web'
 import { Db } from './db'
@@ -49,6 +49,7 @@ import { SpaceFiles } from './spaces'
 import { BrowserManager } from './browser/manager'
 import { Vault } from './vault'
 import { findOllamaBinary, setupOllama, startOllama, stopOllama } from './ollama-setup'
+import { needsYouBody } from './needs-you'
 
 /** Set by the automated tests: run without ever showing a window. */
 const HIDDEN = !!process.env.SAHILBOT_HIDDEN
@@ -137,7 +138,7 @@ function createWindow(bounds: Partial<Electron.Rectangle> = {}): BrowserWindow {
     return { action: 'deny' }
   })
   w.webContents.on('will-navigate', (e) => e.preventDefault())
-  // Page iframes (sandboxed artifacts) can't navigate off to the web.
+  // Frames in the app window (PDF previews) can't navigate off to the web. Pages never load here.
   guardFrames(w.webContents)
   if (process.env.ELECTRON_RENDERER_URL) void w.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void w.loadFile(join(__dirname, '../renderer/index.html'))
@@ -248,19 +249,11 @@ app.whenReady().then(() => {
     return !sp || sp.isMain ? 'SahilBot' : sp.name
   }
   const mainFocused = (): boolean => !!win && !win.isDestroyed() && win.isFocused()
-  /** One short line for a request. Saved-login actions never show their details; saved passwords are masked. */
+  /** One short line for a request, safe for the lock screen (see needsYouBody). */
   const needsYouText = (r: PendingRequest): string => {
-    const secret = /vault|secret|password/i.test(r.tool ?? '') || /"fill_secret"|saved login|password field/i.test(`${r.args ?? ''} ${r.reason ?? ''}`)
-    const lower = (x: string): string => (/^[A-Z][a-z]/.test(x) ? x[0].toLowerCase() + x.slice(1) : x)
-    const n = r.questions?.length ?? 0
-    let t = r.kind === 'approval' ? (secret ? 'Asks to use one of your saved logins' : r.summary ? `Asks to ${lower(r.summary)}` : `Asks to use ${r.label ?? r.tool ?? 'a tool'}`)
-      : r.kind === 'question' ? (r.question ?? 'Has a question for you')
-        : r.kind === 'questions' ? `${r.questions?.[0]?.question ?? 'Has a few questions'}${n > 1 ? ` (+${n - 1} more)` : ''}`
-          : r.kind === 'plan' ? `Plan ready for your OK: ${r.plan?.goal ?? ''}`
-            : r.kind === 'connect' ? `Wants to connect ${r.preset?.name ?? 'an app'}` : 'Waiting for you'
-    try { for (const pw of vault.passwords()) if (pw.length >= 4) t = t.split(pw).join('••••') } catch { /* vault locked */ }
-    t = t.replace(/\s+/g, ' ').trim()
-    return t.length > 140 ? `${t.slice(0, 139)}…` : t
+    let passwords: string[] = []
+    try { passwords = vault.passwords() } catch { /* vault locked */ }
+    return needsYouBody(r, passwords)
   }
   /** Dock badge: chats waiting on you + unread chats (top-level, not hidden bots, not the one you're reading). */
   let badgeTimer: ReturnType<typeof setTimeout> | null = null
@@ -352,11 +345,7 @@ app.whenReady().then(() => {
       maxPerRequest: () => settings.get().cloud.maxConsultsPerRequest,
       ask: async (model, system, user, signal) => {
         const ep = endpoints.for(model)
-        let out = ''
-        for await (const part of streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, settings.get().sampling), maxTokens: 2000, effort: 'medium', signal })) {
-          if (part.type === 'content') out += part.text
-        }
-        return out
+        return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, settings.get().sampling), maxTokens: 2000, effort: 'medium', signal }))
       }
     }),
     updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' }))
@@ -385,7 +374,8 @@ app.whenReady().then(() => {
   if (db.listSpaces().length === 0) db.createSpace('SahilBot', '#1F1F1F', { isMain: true, shape: 'mascot' })
   const attachments = new Attachments(() => win, () => settings.get().workspaceDir, docsDir)
   attachments.registerProtocol()
-  attachments.serve = (p) => servePage(pagesDir(), p)
+  // Pages run only in their own session (the side-panel view, their window, PDF/thumbnail renderers).
+  const pagePanel = new PagePanel(() => win, pagesDir)
   applyTheme(settings.get().theme)
 
   /** Calls that change what's unread refresh the Dock badge. */
@@ -593,6 +583,8 @@ app.whenReady().then(() => {
   handle('pages:info', (path: string) => pageInfo(pagesDir(), path))
   handle('pages:openWindow', (path: string) => { openPageWindow(pagesDir, path, { show: !HIDDEN }) })
   handle('pages:exportPdf', (path: string) => exportPagePdf(pagesDir, path))
+  handle('pages:show', (path: string | null, rev?: string, bounds?: PanelBounds | null) => { if (path) return pagePanel.show(path, String(rev ?? ''), bounds ?? null); pagePanel.close(); return null })
+  handle('pages:thumbnail', (path: string) => pageThumbnail(pagesDir, path))
   // The first lines of a document, for file thumbnails (only files SahilBot made).
   handle('files:snippet', async (path: string) => {
     if (!db.recentFiles(500).some((f) => f.path === path) || !existsSync(path)) return ''
@@ -851,7 +843,7 @@ app.whenReady().then(() => {
     const w = createWindow(ws.bounds)
     ws.track(w)
     // Move the page out of a closing window so it (and the agent's work in it) survives.
-    w.on('close', () => browser.setBounds(null))
+    w.on('close', () => { browser.setBounds(null); pagePanel.close() })
     w.on('resize', () => browser.reflow())
     w.on('closed', () => {
       if (win === w) win = null
