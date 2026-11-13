@@ -941,3 +941,35 @@ export interface SahilBotApi {
     onEvent(cb: (e: ChatEvent) => void): () => void
   }
 }
+
+// ---------------------------------------------------------------------------- markets
+/** Stock data a market tool attaches to its result (tool message meta.stock) so the chat can show a card. */
+export interface StockCardData {
+  symbol: string
+  name?: string
+  currency?: string
+  /** Last close (or live price when a real-time provider is set) and when it's from (ms). */
+  price: number
+  asOf: number
+  change1d?: number
+  /** Daily closes, oldest first: [time ms, close]. Up to ~1 year. */
+  series: Array<[number, number]>
+  stats?: Partial<Record<'open' | 'high52' | 'low52' | 'volume' | 'avgVolume' | 'marketCap' | 'pe' | 'eps' | 'dividendYield' | 'beta' | 'volatility' | 'rsi14' | 'sma50' | 'sma200' | 'maxDrawdown' | 'return1m' | 'return1y', number>>
+  /** Probabilistic forecast: percentile paths over the horizon (trading days), from the model ensemble. */
+  forecast?: {
+    horizonDays: number
+    dates: number[]
+    p5: number[]
+    p25: number[]
+    p50: number[]
+    p75: number[]
+    p95: number[]
+    /** Probability the price ends above today's close at the horizon. */
+    probUp: number
+    model: string
+    /** Walk-forward backtest of this forecaster on this stock: honest skill vs a naive baseline. */
+    skill?: { coverage90: number; pinballVsNaive: number; directionalAccuracy: number; samples: number }
+  }
+  source: string
+  disclaimer: string
+}
