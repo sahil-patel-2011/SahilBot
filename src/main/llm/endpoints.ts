@@ -1,6 +1,9 @@
 import type { ModelInfo, ModelList, ProviderId } from '@shared/types'
 import type { SettingsStore } from '../settings'
+import { cost, priceFor } from './budget'
 import { RECOMMENDED, estimateMemory, prettyName, rankOf, tierOf } from './catalog'
+import { claudeFamily, claudeSpec, isPremiumClaude } from './claude-models'
+import { routingPrefs } from './router'
 import { machine, providerModels } from './models'
 import { DEFS, baseUrlOf, def, isAnthropic } from './providers'
 
@@ -15,9 +18,32 @@ export interface Endpoint {
  * saved); local models go to whichever server listed them last. FOREMAN_BASE_URL sends everything to
  * one server (tests, power users).
  */
+/** A typical agent step on a cloud model (30K in, 32K out): Auto skips models the budget couldn't pay for. */
+export const TYPICAL_STEP = { input: 30_000, output: 32_000 }
+
+/**
+ * Claude models listed by the API that start switched off: every older model of a family once a newer
+ * one is listed (claude-sonnet-4-6 when claude-sonnet-5-5 is there). The picker stays short; the Models
+ * page lists them all and any can be switched on.
+ */
+export function olderClaude(ids: string[]): Set<string> {
+  const newest = new Map<string, { id: string; rank: number }>()
+  for (const id of ids) {
+    const fam = claudeFamily(id)
+    if (!fam) continue
+    const r = rankOf(id)
+    const cur = newest.get(fam)
+    // Same rank (an alias and its dated snapshot): the alias wins.
+    if (!cur || r > cur.rank || (r === cur.rank && id.length < cur.id.length)) newest.set(fam, { id, rank: r })
+  }
+  return new Set(ids.filter((id) => { const fam = claudeFamily(id); return !!fam && newest.get(fam)?.id !== id }))
+}
+
 export class Endpoints {
   private index = new Map<string, ProviderId>()
   last: ModelList | null = null
+  /** Dollars left under this month's cloud cap (set by the app; undefined = no cap known). */
+  budgetLeft?: () => number
 
   constructor(private settings: SettingsStore) {}
 
@@ -79,11 +105,23 @@ export class Endpoints {
       }
     }
 
+    // Cloud models: real context window, output cap and the price the budget charges.
+    for (const m of models) {
+      if (m.note !== 'remote' && m.provider !== 'anthropic') continue
+      const spec = claudeSpec(m.id)
+      if (spec?.contextTokens) m.contextTokens = spec.contextTokens
+      if (spec?.maxOutput) m.maxOutputTokens = spec.maxOutput
+      const p = priceFor(m.id)
+      if (p.known) m.price = { input: p.input, output: p.output, ...(p.cacheRead !== undefined ? { cacheRead: p.cacheRead } : {}) }
+      if (claudeFamily(m.id)) { m.vision = true; m.tools ??= true }
+    }
+    this.older = new Set([...olderClaude(models.filter((m) => m.provider === 'anthropic').map((m) => m.id))].filter((id) => !s.customModels.includes(id)))
+
     // On by default only if it fits this Mac comfortably (or you switched it on yourself).
     const hidden = new Set(s.hiddenModels)
     const shown = new Set(s.shownModels)
     for (const m of models) {
-      if (m.installed) m.enabled = shown.has(m.id) || (!hidden.has(m.id) && (m.fits || m.maxFittingWindow >= 32768))
+      if (m.installed) m.enabled = this.isOn(m, hidden, shown)
       const rec = RECOMMENDED.find((r) => r.pull === m.id || `${r.pull}:latest` === m.id)
       if (rec) { m.label ??= rec.label; m.blurb ??= rec.blurb; m.tier = rec.tier }
       m.rank = rankOf(m.id)
@@ -106,27 +144,53 @@ export class Endpoints {
     const picks: Array<{ r: typeof RECOMMENDED[number]; role: string }> = []
     const add = (r: typeof RECOMMENDED[number] | undefined, role: string): void => { if (r && !picks.some((p) => p.r === r)) picks.push({ r, role }) }
     add(fit[0], 'Best for agent work on this Mac')
-    add(fit.filter((r) => r.tier <= 1).sort((a, b) => b.rank - a.rank)[0] ?? fit[fit.length - 1], 'Fast: quick chats and voice')
+    // The fast one: the smallest light model that isn't already the best pick.
+    add(fit.filter((r) => r.tier <= 1 && r !== fit[0]).sort((a, b) => a.tier - b.tier || a.sizeGB - b.sizeGB)[0], 'Fast: quick chats and voice')
     for (const r of fit) { if (picks.length >= 3) break; add(r, 'Also great') }
     const installed = new Set((this.last?.models ?? []).filter((m) => m.installed).map((m) => m.id.replace(/:latest$/, '')))
     return picks.map(({ r, role }) => ({ pull: r.pull, label: r.label, blurb: r.blurb, sizeGB: r.sizeGB, tier: r.tier, installed: installed.has(r.pull), role }))
   }
 
-  /** The best cloud model to consult (hybrid mode), if cloud is on and a key is saved. */
+  /** Older Claude models (off unless switched on), from the last listing. */
+  private older = new Set<string>()
+
+  private isOn(m: ModelInfo, hidden: Set<string>, shown: Set<string>): boolean {
+    return shown.has(m.id) || (!hidden.has(m.id) && !this.older.has(m.id) && (m.fits || m.maxFittingWindow >= 32768))
+  }
+
+  /** The budget could pay for a typical step on this cloud model (local models are always affordable). */
+  affordable(m: ModelInfo): boolean {
+    if (m.note !== 'remote' || !this.budgetLeft) return true
+    return this.budgetLeft() >= cost(m.id, TYPICAL_STEP.input, TYPICAL_STEP.output)
+  }
+
+  /**
+   * The cloud model a local model consults in hybrid mode. Setting: '' or 'opus' = the best Opus,
+   * 'sonnet' = the best Sonnet (any family name works), or an exact model id. Falls back to the best
+   * non-premium cloud model on, then any.
+   */
   advisor(): string | undefined {
     const s = this.settings.get()
     if (!s.cloud.enabled || !s.cloud.hybrid) return undefined
-    if (s.cloud.advisorModel) return s.cloud.advisorModel
-    const cloud = (this.last?.models ?? []).filter((m) => m.note === 'remote' && !s.hiddenModels.includes(m.id))
-    return cloud.sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id
+    const pref = s.cloud.advisorModel.trim()
+    if (pref && !/^(opus|sonnet|haiku|fable|mythos)$/i.test(pref)) return pref
+    const hidden = new Set(s.hiddenModels)
+    const shown = new Set(s.shownModels)
+    const cloud = (this.last?.models ?? []).filter((m) => m.note === 'remote' && m.installed && this.isOn(m, hidden, shown))
+    const best = (ms: ModelInfo[]): string | undefined => [...ms].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id
+    const family = (pref || 'opus').toLowerCase()
+    return best(cloud.filter((m) => claudeFamily(m.id) === family)) ?? best(cloud.filter((m) => !isPremiumClaude(m.id))) ?? best(cloud)
   }
 
-  /** Models Auto may use: on, downloaded, and fitting this Mac. */
+  /** Models Auto may use: on, downloaded, fitting this Mac, and (cloud ones) allowed and affordable. */
   usable(): ModelInfo[] {
     // On/off choices are read now, not from the last listing, so a change applies to the next message.
     const s = this.settings.get()
     const hidden = new Set(s.hiddenModels)
     const shown = new Set(s.shownModels)
-    return (this.last?.models ?? []).filter((m) => m.installed && (shown.has(m.id) || (!hidden.has(m.id) && (m.fits || m.maxFittingWindow >= 32768))))
+    routingPrefs.preferCloud = s.cloud.enabled && s.cloud.prefer === 'cloud'
+    return (this.last?.models ?? []).filter((m) => m.installed && this.isOn(m, hidden, shown) &&
+      // Cloud switched off (since the last listing): nothing goes to a cloud model.
+      (m.note !== 'remote' || (s.cloud.enabled && this.affordable(m))))
   }
 }

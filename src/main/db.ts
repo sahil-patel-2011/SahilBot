@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
-import type { Message, PermissionMode, Space, Thread } from '@shared/types'
+import type { LibraryItem, Message, PermissionMode, Space, Thread } from '@shared/types'
 import { emptyState, type ThreadState } from './agent/types'
+import { KNOWLEDGE_SCHEMA } from './knowledge/schema'
 
 export const uid = (): string => randomUUID()
 
@@ -47,7 +48,43 @@ const MIGRATIONS: string[] = [
   // Helper agents (Team of Experts) work in their own hidden threads under the chat that started them.
   `ALTER TABLE threads ADD COLUMN parent_id TEXT;`,
   // The main bot wears the hard-hat mascot unless you pick another shape.
-  `UPDATE spaces SET shape = 'mascot' WHERE is_main = 1 AND shape = 'blob';`
+  `UPDATE spaces SET shape = 'mascot' WHERE is_main = 1 AND shape = 'blob';`,
+  // Routines (scheduled tasks) keep a short run history; bots get a label and a notifications switch.
+  `CREATE TABLE routine_runs (
+     id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+     started_at INTEGER NOT NULL, finished_at INTEGER, status TEXT NOT NULL DEFAULT 'running',
+     reason TEXT, thread_id TEXT, test INTEGER NOT NULL DEFAULT 0);
+   CREATE INDEX routine_runs_task ON routine_runs(task_id, started_at DESC);
+   ALTER TABLE spaces ADD COLUMN label TEXT;
+   ALTER TABLE spaces ADD COLUMN notify INTEGER NOT NULL DEFAULT 1;`,
+  // Memory scopes: `scope` is the bot or project a memory belongs to (NULL = shared, about the user).
+  // Memories remember where they came from, 'other' is now 'fact', and a bot's memories go with it.
+  `ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'chat';
+   UPDATE memories SET category = 'fact' WHERE category = 'other' OR category = '';
+   CREATE INDEX memories_scope ON memories(scope, updated_at DESC);
+   CREATE TRIGGER spaces_forget_memories AFTER DELETE ON spaces BEGIN DELETE FROM memories WHERE scope = OLD.id; END;`,
+  // Cloud usage remembers which bot made each request (Settings → Usage). The table is first made by
+  // the budget guard, so a fresh database gets it here (same shape) before the column is added.
+  `CREATE TABLE IF NOT EXISTS usage (
+     id INTEGER PRIMARY KEY AUTOINCREMENT, month TEXT NOT NULL, host TEXT NOT NULL, model TEXT NOT NULL,
+     input INTEGER NOT NULL, output INTEGER NOT NULL, usd REAL NOT NULL, at INTEGER NOT NULL);
+   ALTER TABLE usage ADD COLUMN space_id TEXT;
+   CREATE INDEX IF NOT EXISTS usage_at ON usage(at);`,
+  // Long-running goals (goals/): milestones, journal, queued approvals and the wake log are JSON;
+  // next_wake is a one-time wake-up the scheduler fires. A bot's goals go with it.
+  `CREATE TABLE IF NOT EXISTS goals (
+     id TEXT PRIMARY KEY, space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE, thread_id TEXT,
+     title TEXT NOT NULL, done_when TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', status_reason TEXT,
+     milestones TEXT NOT NULL DEFAULT '[]', journal TEXT NOT NULL DEFAULT '[]', asks TEXT NOT NULL DEFAULT '[]',
+     wake_log TEXT NOT NULL DEFAULT '[]', next_wake INTEGER, wake_note TEXT, end_at INTEGER,
+     max_usd REAL NOT NULL DEFAULT 2, max_runs_per_day INTEGER NOT NULL DEFAULT 6, spent_usd REAL NOT NULL DEFAULT 0,
+     wakes INTEGER NOT NULL DEFAULT 0, last_wake INTEGER, stall INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+   CREATE INDEX IF NOT EXISTS goals_space ON goals(space_id, created_at DESC);
+   CREATE INDEX IF NOT EXISTS goals_wake ON goals(status, next_wake);`,
+  // Knowledge base (knowledge/): indexed files, their passages (with optional embeddings) and a BM25 term
+  // index. The FTS5 table is made at runtime by KnowledgeStore, since not every SQLite build has FTS5.
+  KNOWLEDGE_SCHEMA
 ]
 
 type Row = Record<string, unknown>
@@ -88,6 +125,7 @@ export class Db {
       SELECT s.*, (
         SELECT m.content FROM messages m JOIN threads t ON t.id = m.thread_id
         WHERE t.space_id = s.id AND m.role IN ('user','assistant') AND m.content != '' AND json_extract(m.data, '$.meta.hidden') IS NULL
+          AND json_extract(m.data, '$.meta.routineNotice') IS NULL
         ORDER BY m.created_at DESC, m.seq DESC LIMIT 1) AS last_preview,
         (SELECT MAX(t.updated_at) FROM threads t WHERE t.space_id = s.id) AS last_at,
         (SELECT COUNT(*) FROM threads t WHERE t.space_id = s.id AND t.unread = 1) AS unread_count
@@ -117,13 +155,46 @@ export class Db {
     return r ? toSpace(r) : undefined
   }
 
-  updateSpace(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder'>>): Space {
+  updateSpace(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify'>>): Space {
     const cur = this.getSpace(id)
     if (!cur) throw new Error(`No space ${id}`)
     const n = { ...cur, ...patch }
-    this.sql.prepare('UPDATE spaces SET name = ?, color = ?, shape = ?, pinned = ?, hidden = ?, members = ?, model = ?, folder = ? WHERE id = ?')
-      .run(n.name, n.color, n.shape, n.pinned ? 1 : 0, n.hidden ? 1 : 0, JSON.stringify(n.members), n.model, n.folder, id)
+    const label = typeof n.label === 'string' ? n.label.replace(/\s+/g, ' ').trim().slice(0, 80) || null : null
+    this.sql.prepare('UPDATE spaces SET name = ?, color = ?, shape = ?, pinned = ?, hidden = ?, members = ?, model = ?, folder = ?, label = ?, notify = ? WHERE id = ?')
+      .run(n.name, n.color, n.shape, n.pinned ? 1 : 0, n.hidden ? 1 : 0, JSON.stringify(n.members), n.model, n.folder, label, n.notify === false ? 0 : 1, id)
     return this.getSpace(id)!
+  }
+
+  /** Files and links from one bot's chats, newest first: files it made, sources it cited, links you sent. */
+  spaceLibrary(spaceId: string, limit = 200): LibraryItem[] {
+    const files = this.sql.prepare(`
+      SELECT json_extract(m.data, '$.meta.path') AS path, MAX(m.created_at) AS at, m.thread_id AS threadId
+      FROM messages m JOIN threads t ON t.id = m.thread_id
+      WHERE t.space_id = ? AND m.role = 'tool' AND json_extract(m.data, '$.meta.path') IS NOT NULL AND json_extract(m.data, '$.meta.status') = 'ok'
+        AND json_extract(m.data, '$.toolName') IN ('file_write', 'create_document', 'file_manage', 'create_page', 'update_page')
+      GROUP BY path ORDER BY at DESC LIMIT ?`).all(spaceId, limit) as Row[]
+    const cited = this.sql.prepare(`
+      SELECT json_extract(s.value, '$.url') AS url, json_extract(s.value, '$.title') AS title, MAX(m.created_at) AS at, m.thread_id AS threadId
+      FROM messages m JOIN threads t ON t.id = m.thread_id, json_each(m.data, '$.meta.sources') s
+      WHERE t.space_id = ? AND m.role = 'assistant' AND json_type(m.data, '$.meta.sources') = 'array'
+      GROUP BY url ORDER BY at DESC LIMIT ?`).all(spaceId, limit) as Row[]
+    const sent = this.sql.prepare(`
+      SELECT m.content AS content, m.created_at AS at, m.thread_id AS threadId
+      FROM messages m JOIN threads t ON t.id = m.thread_id
+      WHERE t.space_id = ? AND m.role = 'user' AND m.content LIKE '%http%' AND json_extract(m.data, '$.meta.hidden') IS NULL
+      ORDER BY m.created_at DESC LIMIT 300`).all(spaceId) as Row[]
+    const out: LibraryItem[] = files.map((r) => ({ kind: 'file', title: basenameOf(r.path as string), path: r.path as string, at: r.at as number, threadId: r.threadId as string }))
+    const links = new Map<string, LibraryItem>()
+    const addLink = (url: string, title: string | null, at: number, threadId: string): void => {
+      if (!/^https?:\/\//i.test(url)) return
+      const key = url.replace(/#.*$/, '').replace(/\/$/, '')
+      const cur = links.get(key)
+      if (!cur || cur.at < at) links.set(key, { kind: 'link', title: title?.trim() || hostOf(url), url, at, threadId })
+    }
+    for (const r of cited) if (typeof r.url === 'string') addLink(r.url, (r.title as string | null) ?? null, r.at as number, r.threadId as string)
+    for (const r of sent) for (const u of (r.content as string).match(/https?:\/\/[^\s<>()"'`\]]+/g) ?? []) addLink(u.replace(/[.,;:!?]+$/, ''), null, r.at as number, r.threadId as string)
+    out.push(...links.values())
+    return out.sort((a, b) => b.at - a.at).slice(0, limit)
   }
 
   deleteSpace(id: string): void {
@@ -143,7 +214,7 @@ export class Db {
       SELECT json_extract(m.data, '$.meta.path') AS path, m.thread_id AS threadId, t.title AS threadTitle, MAX(m.created_at) AS createdAt, json_extract(m.data, '$.toolName') AS tool
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE m.role = 'tool' AND json_extract(m.data, '$.meta.path') IS NOT NULL AND json_extract(m.data, '$.meta.status') = 'ok'
-        AND json_extract(m.data, '$.toolName') IN ('file_write', 'create_document')
+        AND json_extract(m.data, '$.toolName') IN ('file_write', 'create_document', 'create_page', 'update_page')
       GROUP BY path ORDER BY createdAt DESC LIMIT ?`).all(limit) as Row[]
     return rows.map((r) => ({ path: r.path as string, threadId: r.threadId as string, threadTitle: r.threadTitle as string, createdAt: r.createdAt as number, tool: r.tool as string }))
   }
@@ -283,8 +354,18 @@ function toSpace(r: Row): Space {
     members: JSON.parse((r.members as string) ?? '[]') as string[],
     model: (r.model as string | null) ?? null,
     folder: (r.folder as string | null) ?? null,
+    label: (r.label as string | null) ?? null,
+    notify: r.notify !== 0,
     createdAt: r.created_at as number
   }
+}
+
+function basenameOf(p: string): string {
+  return p.split(/[\\/]/).filter(Boolean).pop() ?? p
+}
+
+function hostOf(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, '') } catch { return url }
 }
 
 function toThread(r: Row): Thread {

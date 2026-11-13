@@ -2,16 +2,10 @@ import { useEffect, useState } from 'react'
 import type { Schedule, ScheduledTask, Space } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
+import { describeSchedule } from '../routines'
 
-export function describeSchedule(s: Schedule): string {
-  switch (s.type) {
-    case 'once': return `Once, ${new Date(s.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
-    case 'every': return s.minutes % 60 === 0 ? `Every ${s.minutes / 60}h` : `Every ${s.minutes} min`
-    case 'daily': return `Daily at ${s.time}`
-    case 'weekly': return `${s.days.map((d) => d[0].toUpperCase() + d.slice(1, 3)).join(', ')} at ${s.time}`
-    case 'cron': return `Cron ${s.expr}`
-  }
-}
+// Schedules in words live in ../routines (shared with the bot details panel).
+export { describeSchedule }
 
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
@@ -23,17 +17,25 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
   const [prompt, setPrompt] = useState('')
   const [type, setType] = useState<Schedule['type']>('daily')
   const [time, setTime] = useState('09:00')
-  const [at, setAt] = useState(() => new Date(Date.now() + 3600_000).toISOString().slice(0, 16))
+  const [at, setAt] = useState(() => new Date(Date.now() + 3600_000 - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16))
   const [days, setDays] = useState<string[]>(['mon', 'wed', 'fri'])
   const [minutes, setMinutes] = useState(60)
   const [expr, setExpr] = useState('0 9 * * 1-5')
   const [spaceId, setSpaceId] = useState(spaces.find((s) => s.isMain)?.id ?? '')
   const [err, setErr] = useState('')
 
-  const load = (): void => void api.schedules.list().then(setTasks)
+  const [running, setRunning] = useState<Set<string>>(new Set())
+  const load = (): void => void api.schedules.list().then(async (ts) => {
+    setTasks(ts)
+    // A routine is running while its newest run is.
+    const live = await Promise.all(ts.map(async (t) => ((await api.schedules.runs(t.id).catch(() => []))[0]?.status === 'running' ? t.id : null)))
+    setRunning(new Set(live.filter((x): x is string => !!x)))
+  })
+  const fail = (e: unknown): void => setErr((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))
   useEffect(() => { load(); return api.schedules.onChange(load) }, [])
   useEffect(() => {
-    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose() }
+    // preventDefault: this Esc is spent closing this (the chat's run and the details panel leave it alone).
+    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose() } }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [onClose])
@@ -85,17 +87,19 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
         )}
 
         <div style={{ marginTop: 14 }}>
+          {err && !form && <div className="hint" style={{ color: 'var(--danger)', marginBottom: 8 }} role="alert">{err}</div>}
           {tasks.length === 0 && !form && <div className="hint" style={{ padding: '18px 0', textAlign: 'center' }}>Nothing scheduled yet.</div>}
           {tasks.map((t) => (
             <div key={t.id} className="sched-row" data-testid="schedule-row">
               <I.Clock size={17} />
-              <div className="sched-text" onClick={() => t.threadId && onOpen(t)}>
+              <div className="sched-text" onClick={() => t.threadId && onOpen(t)} role="button" tabIndex={t.threadId ? 0 : -1}
+                onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && t.threadId) { e.preventDefault(); onOpen(t) } }}>
                 <b>{t.title}</b>
-                <span className="hint">{describeSchedule(t.schedule)} · {spaces.find((s) => s.id === t.spaceId)?.name ?? 'SahilBot'}{t.enabled && t.nextRun ? ` · next ${new Date(t.nextRun).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : t.enabled ? '' : ' · paused'}{t.lastStatus ? ` · last: ${t.lastStatus}` : ''}</span>
+                <span className="hint">{running.has(t.id) ? 'Running…' : t.enabled ? describeSchedule(t.schedule) : 'Paused'} · {spaces.find((s) => s.id === t.spaceId)?.name ?? 'SahilBot'}{t.enabled && t.nextRun && !running.has(t.id) ? ` · next ${new Date(t.nextRun).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}{t.lastStatus && !running.has(t.id) ? ` · last: ${t.lastStatus}` : ''}</span>
               </div>
-              <label className="switch" title={t.enabled ? 'Pause' : 'Resume'}><input type="checkbox" checked={t.enabled} onChange={(e) => void api.schedules.update(t.id, { enabled: e.target.checked })} /><span /></label>
-              <button className="icon-btn" title="Run now" onClick={() => void api.schedules.runNow(t.id)} data-testid="schedule-run"><I.Play size={15} /></button>
-              <button className="icon-btn" title="Delete" onClick={() => { if (confirm(`Delete "${t.title}"?`)) void api.schedules.remove(t.id) }}><I.Trash size={15} /></button>
+              <label className="switch" title={t.enabled ? 'Pause' : 'Resume'}><input type="checkbox" checked={t.enabled} onChange={(e) => { setErr(''); api.schedules.update(t.id, { enabled: e.target.checked }).catch(fail) }} /><span /></label>
+              <button className="icon-btn" title={running.has(t.id) ? 'Running…' : 'Test (run now)'} disabled={running.has(t.id)} onClick={() => { setErr(''); setRunning((r) => new Set(r).add(t.id)); api.schedules.runNow(t.id).catch(fail) }} data-testid="schedule-run"><I.Play size={15} /></button>
+              <button className="icon-btn" title="Delete" onClick={() => { if (confirm(`Delete "${t.title}"? This can't be undone.`)) api.schedules.remove(t.id).catch(fail) }}><I.Trash size={15} /></button>
             </div>
           ))}
         </div>

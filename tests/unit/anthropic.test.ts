@@ -39,3 +39,19 @@ describe('Claude tool schemas', () => {
     expect(r.description).toContain('When action is "click": also give ref.')
   })
 })
+
+describe('tool images go back into the right tool_result', () => {
+  test('matched by call id, not just the last result', () => {
+    const { messages } = toAnthropic([
+      { role: 'user', content: 'look' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 's', type: 'function', function: { name: 'computer', arguments: '{}' } }, { id: 't', type: 'function', function: { name: 'other', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 's', content: 'shot' },
+      { role: 'tool', tool_call_id: 't', content: 'other' },
+      { role: 'user', imagesFor: 's', content: [{ type: 'text', text: '[Image returned by computer]' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] }
+    ], 'claude-haiku-5-5')
+    const results = messages[2].content as Array<{ tool_use_id: string; content: unknown }>
+    expect(messages).toHaveLength(3)
+    expect(Array.isArray(results.find((r) => r.tool_use_id === 's')!.content)).toBe(true)
+    expect(results.find((r) => r.tool_use_id === 't')!.content).toBe('other')
+  })
+})

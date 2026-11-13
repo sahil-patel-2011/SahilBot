@@ -1,15 +1,16 @@
+import { tmpdir } from 'node:os'
 import { test } from 'vitest'
 import { startMockLlm } from '../fixtures/mock-llm'
 import { launch, tempProfile } from '../accept/app'
 
 test('ui v4 screenshots', async () => {
-  const out = process.env.SHOTS_DIR ?? '.'
+  const out = process.env.SHOTS_DIR ?? tmpdir()
   const llm = await startMockLlm()
   const { app, page } = await launch(tempProfile(), llm.url)
   await page.setViewportSize({ width: 1360, height: 880 })
   await page.evaluate(() => window.foreman.settings.set({ userName: 'Sahil' }))
   await page.reload()
-  await page.waitForSelector('[data-testid="suggestions"]')
+  await page.waitForSelector('[data-testid="ideas"]')
   await page.screenshot({ path: `${out}/v4-home.png` })
   llm.script.push(
     { content: 'Here is a quick script that renames your exports:\n\n```bash\nfor f in *.csv; do mv "$f" "q4-$f"; done\n```\n\nIt prefixes every CSV with `q4-`. See the [bash manual](https://www.gnu.org/software/bash/manual/) for details.' },

@@ -1,7 +1,12 @@
-import { useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import type { PendingRequest } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
+import { toast } from '../lib/toast'
+import { addRule, RULE_MAX_CHARS } from '../lib/approvalRules'
+import '../styles-approvals.css'
+import '../styles-purchase.css'
+import { GoogleSetup } from './ConnectApps'
 
 const EFFECT_TEXT: Record<string, string> = {
   read: 'Reads only',
@@ -11,10 +16,13 @@ const EFFECT_TEXT: Record<string, string> = {
 }
 
 /** One click: sign in (browser opens for OAuth), and the agent continues with the new tools. */
-function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
+function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const p = req.preset!
+  // Gmail, Calendar and Drive need "Set up Google once" first: shown right here in the card.
+  const [googleSetup, setGoogleSetup] = useState(false)
+  useEffect(() => { if (p.auth === 'google') void api.connectors.googleClient().then((c) => setGoogleSetup(!c)).catch(() => undefined) }, [p.auth])
   const go = async (): Promise<void> => {
     setBusy(true)
     setErr(null)
@@ -23,10 +31,23 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
       if (st.state === 'connected') onRespond(req.id, 'connected')
       else setErr(st.error ?? 'Sign-in did not finish.')
     } catch (e) {
-      setErr((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))
+      const m = (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+      if (p.auth === 'google' && /one-time setup/i.test(m)) setGoogleSetup(true)
+      else setErr(m)
     } finally {
       setBusy(false)
     }
+  }
+  if (googleSetup) {
+    return (
+      <div className="pending connect-card" data-testid="connect-card">
+        <div className="pending-title">
+          <span className="conn-logo" style={{ background: p.color }}>{p.name[0]}</span>
+          Set up Google once to connect {p.name}
+        </div>
+        <GoogleSetup compact forApp={p.name} onCancel={() => onRespond(req.id, 'skip')} onDone={() => { setGoogleSetup(false); void go() }} />
+      </div>
+    )
   }
   return (
     <div className="pending connect-card" data-testid="connect-card">
@@ -44,8 +65,186 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
   )
 }
 
-export function PendingCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void }) {
+/** Several clarifying questions in one card: pick an option or type your own, then send them all. */
+function QuestionsCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+  const qs = req.questions ?? []
+  const [answers, setAnswers] = useState<string[]>(() => qs.map(() => ''))
+  const set = (i: number, v: string): void => setAnswers((a) => a.map((x, j) => (j === i ? v : x)))
+  const ready = answers.some((a) => a.trim())
+  return (
+    <div className="pending qcard" data-testid="questions-card">
+      <div className="pending-title"><I.Sparkle size={15} /> A few questions before I start</div>
+      {qs.map((q, i) => (
+        <div key={i} className="qcard-q">
+          <div className="qcard-text"><span className="qcard-n">{i + 1}</span>{q.question}</div>
+          {!!q.options?.length && (
+            <div className="qcard-opts">
+              {q.options.map((o) => <button key={o} className={`qcard-opt${answers[i] === o ? ' on' : ''}`} onClick={() => set(i, answers[i] === o ? '' : o)} data-testid="qcard-option">{o}</button>)}
+            </div>
+          )}
+          <input className="set-input qcard-input" placeholder={q.options?.length ? 'Or type your own answer' : 'Your answer'} value={q.options?.includes(answers[i]) ? '' : answers[i]} onChange={(e) => set(i, e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') e.preventDefault(); if (e.key === 'Enter' && ready) onRespond(req.id, JSON.stringify(answers)) }} data-testid="qcard-input" />
+        </div>
+      ))}
+      <div className="pending-actions">
+        <button className="btn primary" disabled={!ready} onClick={() => onRespond(req.id, JSON.stringify(answers))} data-testid="qcard-send">Send answers</button>
+        <button className="btn" onClick={() => onRespond(req.id, JSON.stringify(qs.map(() => '')))}>Skip: use your judgment</button>
+      </div>
+    </div>
+  )
+}
+
+/** The agent's plan, waiting for your OK: approve to start, or say what to change. */
+function PlanApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+  const p = req.plan!
+  const [changing, setChanging] = useState(false)
+  const [notes, setNotes] = useState('')
+  return (
+    <div className="pending plan-approval" data-testid="plan-approval">
+      <div className="pending-title"><I.ListIcon size={15} /> Here's my plan</div>
+      <div className="pa-goal">{p.goal}</div>
+      <ol className="pa-steps">{p.steps.map((s, i) => <li key={i}><span className="pa-n">{i + 1}</span>{s}</li>)}</ol>
+      {!!p.assumptions?.length && <div className="pa-meta"><b>Assuming</b> {p.assumptions.join(' · ')}</div>}
+      {!!p.risks?.length && <div className="pa-meta risk"><b>Watch out</b> {p.risks.join(' · ')}</div>}
+      {changing ? (
+        <div className="pa-change">
+          <textarea className="set-input" rows={3} autoFocus placeholder="What should change? e.g. skip step 3, use Notion instead of a PDF…" value={notes} onChange={(e) => setNotes(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setChanging(false) } }} data-testid="plan-notes" />
+          <div className="pending-actions">
+            <button className="btn primary" disabled={!notes.trim()} onClick={() => onRespond(req.id, `revise: ${notes.trim()}`)} data-testid="plan-send-changes">Send changes</button>
+            <button className="btn" onClick={() => setChanging(false)}>Back</button>
+          </div>
+        </div>
+      ) : (
+        <div className="pending-actions">
+          <button className="btn primary" onClick={() => onRespond(req.id, 'approve')} data-testid="plan-approve">Approve & start</button>
+          <button className="btn" onClick={() => setChanging(true)} data-testid="plan-change">Change…</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Counts down to `at` (ms since epoch); true once it's reached. */
+function useReady(at: number): boolean {
+  const [ready, setReady] = useState(() => Date.now() >= at)
+  useEffect(() => {
+    if (ready) return
+    const t = setTimeout(() => setReady(true), Math.max(0, at - Date.now()) + 20)
+    return () => clearTimeout(t)
+  }, [at, ready])
+  return ready
+}
+
+/**
+ * A purchase waiting for your click. Everything on it comes from main: the store is the page's own
+ * address, the total and items were read from the page, the card and address are your saved nicknames.
+ * Nothing the assistant writes appears here. It approves exactly this one step, once.
+ */
+function PurchaseCard({ req }: { req: PendingRequest }) {
+  const p = req.purchase!
+  const ready = useReady(p.readyAt)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const answer = async (a: 'approve' | 'deny'): Promise<void> => {
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await api.purchase.respond(req.threadId, req.id, p.nonce, a)
+      if (!r.ok) setErr(r.error ?? 'Not accepted.')
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const fill = p.step === 'fill'
+  return (
+    <div className="pending purchase-card" data-testid="purchase-card" data-id={req.id} data-step={p.step} role="group" aria-label="Purchase approval">
+      <div className="pc-head">
+        <span className="pc-icon" aria-hidden="true"><I.Shield size={15} /></span>
+        <div className="pc-head-text">
+          <div className="pc-kicker">{fill ? 'Use a saved card?' : 'Approve this purchase?'}</div>
+          <div className="pc-merchant" data-testid="purchase-merchant">
+            {p.merchant}
+            <span className={`pc-secure${p.secure ? '' : ' warn'}`}>{p.secure ? 'secure connection' : 'not secure (http)'}</span>
+          </div>
+        </div>
+      </div>
+      {p.changed && <div className="pc-changed" data-testid="purchase-changed">The page changed after you approved. Check the details again.</div>}
+      <div className="pc-total" data-testid="purchase-total">
+        {p.total
+          ? <><span className="pc-total-label">Total</span><span className="pc-total-amount">{p.total.display}</span><span className="pc-total-cur">{p.total.currency}</span></>
+          : <span className="pc-total-missing">Total not found — check the page (the browser panel is open)</span>}
+      </div>
+      {p.items.length > 0 && (
+        <ul className="pc-items" data-testid="purchase-items" aria-label="Items (from the page)">
+          {p.items.map((it, i) => <li key={i}><span>{it.name}</span>{it.price && <span className="pc-price">{it.price}</span>}</li>)}
+        </ul>
+      )}
+      <dl className="pc-facts">
+        <dt>Pay with</dt><dd data-testid="purchase-payment">{p.payment}</dd>
+        <dt>Ship to</dt><dd data-testid="purchase-shipping">{p.shipping}</dd>
+        <dt>Action</dt><dd data-testid="purchase-action">{p.action}</dd>
+      </dl>
+      {!!p.typed?.length && (
+        <dl className="pc-facts pc-typed" data-testid="purchase-typed" aria-label="Already typed into the form">
+          {p.typed.map((t, i) => <Fragment key={i}><dt>{t.field}</dt><dd>{t.value}</dd></Fragment>)}
+        </dl>
+      )}
+      <div className="hint pc-note">Approves this one step only. Assistants and web pages can't approve purchases; only this button can.</div>
+      {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}
+      <div className="pending-actions">
+        <button className="btn primary" disabled={!ready || busy} onClick={() => void answer('approve')} data-testid="purchase-approve">{fill ? 'Use this card' : p.total ? `Buy for ${p.total.display}` : 'Approve purchase'}</button>
+        <button className="btn danger" disabled={busy} onClick={() => void answer('deny')} data-testid="purchase-deny">{fill ? "Don't use it" : "Don't buy"}</button>
+      </div>
+    </div>
+  )
+}
+
+const OTP_SOURCE: Record<string, string> = { authenticator: 'your saved authenticator key', email: 'your email', sms: 'your text messages' }
+
+/** Using a one-time sign-in code on a site: once for this chat, or always for this site. */
+function OtpCard({ req }: { req: PendingRequest }) {
+  const o = req.otp!
+  const ready = useReady(o.readyAt)
+  const [err, setErr] = useState<string | null>(null)
+  const answer = (a: 'approve' | 'always' | 'deny'): void => {
+    void api.purchase.respond(req.threadId, req.id, o.nonce, a).then((r) => { if (!r.ok) setErr(r.error ?? 'Not accepted.') }, (e: Error) => setErr(e.message))
+  }
+  return (
+    <div className="pending otp-card" data-testid="otp-card" data-id={req.id}>
+      <div className="pc-head">
+        <span className="pc-icon otp" aria-hidden="true"><I.Key size={15} /></span>
+        <div className="pc-head-text">
+          <div className="pc-kicker">One-time sign-in code</div>
+          <div className="pc-merchant">Use a code from {OTP_SOURCE[o.source] ?? o.source} to sign in to {o.site}?</div>
+        </div>
+      </div>
+      {o.sender && (
+        <dl className="pc-facts" data-testid="otp-sender">
+          <dt>From</dt><dd>{o.sender}</dd>
+          {o.snippet && <><dt>Message</dt><dd>{o.snippet}</dd></>}
+        </dl>
+      )}
+      {o.unverifiedSender && <div className="pc-changed" data-testid="otp-unverified">This message isn't from {o.site}'s own domain. Only allow it if you know this sender is {o.site}.</div>}
+      <div className="hint">SahilBot types the code straight into the page; the assistant never sees it.{o.source === 'sms' ? ' Reads only messages from the last 10 minutes.' : ''}</div>
+      {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}
+      <div className="pending-actions">
+        <button className="btn primary" disabled={!ready} onClick={() => answer('approve')} data-testid="otp-approve">Allow in this chat</button>
+        <button className="btn" disabled={!ready} onClick={() => answer('always')} data-testid="otp-always">Always for {o.site}</button>
+        <button className="btn danger" onClick={() => answer('deny')} data-testid="otp-deny">Deny</button>
+      </div>
+    </div>
+  )
+}
+
+export function PendingCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+  if (req.kind === 'purchase' && req.purchase) return <PurchaseCard req={req} />
+  if (req.kind === 'otp' && req.otp) return <OtpCard req={req} />
   if (req.kind === 'connect' && req.preset) return <ConnectCard req={req} onRespond={onRespond} />
+  if (req.kind === 'questions' && req.questions) return <QuestionsCard req={req} onRespond={onRespond} />
+  if (req.kind === 'plan' && req.plan) return <PlanApprovalCard req={req} onRespond={onRespond} />
   if (req.kind === 'question') {
     return (
       <div className="question" data-testid="question-card">
@@ -64,21 +263,120 @@ export function PendingCard({ req, onRespond }: { req: PendingRequest; onRespond
       </div>
     )
   }
-  const danger = req.effect === 'destructive' || req.reason?.startsWith('Hard stop')
+  return <ApprovalCard req={req} onRespond={onRespond} />
+}
+
+// ---------------------------------------------------------------- approvals
+
+const words = (...xs: Array<string | undefined>): string => xs.filter(Boolean).join(' ').replace(/[_.:/-]+/g, ' ')
+const SENDS = /\b(send|sends|sending|post|posts|posting|publish|share|sharing|upload|reply|replies|forward|tweet|comment|email|e-mail|message|dm|submit|invite|sms)\b/i
+const SECURITY = /\b(account or security settings|security settings|account settings|change (your |the )?password|password (change|reset)|reset (your |the )?password|2fa|two[- ]factor|mfa|recovery (email|phone)|api keys?|sign[- ]in settings|login settings|permission settings)\b/i
+const SECRET = /\b(fill secret|saved login|password field|vault)\b/i
+
+/** Plain-English warnings for the risky parts of an action. */
+function approvalWarnings(req: PendingRequest): string[] {
+  const text = words(req.tool, req.label, req.summary, req.reason)
+  const out: string[] = []
+  if (req.effect === 'destructive') out.push(/\btrash\b/i.test(text) ? 'This moves it to the Trash' : "This can't be undone")
+  if (req.effect === 'write_external' && SENDS.test(text) && !SECRET.test(text)) out.push('This shares your data outside this chat')
+  if (SECURITY.test(text)) out.push('This changes sign-in or security settings')
+  else if (SECRET.test(text)) out.push('This types one of your saved passwords')
+  if (/payment|checkout|purchase|\bbuy\b|\bpay\b/i.test(req.reason ?? '')) out.push('This may spend money')
+  return out
+}
+
+/** "Hard stop: payment or checkout" → "Payment or checkout". */
+const reasonText = (r?: string): string => {
+  const t = (r ?? '').replace(/^Hard stop:\s*/i, '').trim()
+  return t ? t[0].toUpperCase() + t.slice(1) : ''
+}
+
+/** A tool call waiting for your OK: what it will do in words, what kind of action it is, and the details on demand. */
+function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+  const hardStop = !!req.reason?.startsWith('Hard stop')
+  const danger = req.effect === 'destructive' || hardStop
+  const warnings = approvalWarnings(req)
+  const name = req.label ?? req.tool ?? 'this action'
+  const [ruleOpen, setRuleOpen] = useState(false)
+  const [ruleText, setRuleText] = useState(() => (req.summary ?? name).slice(0, RULE_MAX_CHARS))
+  const [ruleAction, setRuleAction] = useState<'allow' | 'ask'>('allow')
+  const [saving, setSaving] = useState(false)
+  // A second Enter before the first save re-renders must not save the rule twice.
+  const savingRef = useRef(false)
+  const ruleId = useId()
+  const reason = reasonText(req.reason)
+  const meta = [name, EFFECT_TEXT[req.effect ?? 'read'], reason && !warnings.some((w) => w.toLowerCase().includes(reason.toLowerCase())) ? reason : ''].filter(Boolean)
+
+  const saveRule = async (): Promise<void> => {
+    if (savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    try {
+      const r = await addRule(ruleText, ruleAction)
+      if ('error' in r) { toast(r.error, 'error'); return }
+      toast('Saved to your approval rules', 'ok')
+      setRuleOpen(false)
+      // An Allow rule also lets this one through, once: the rule (not the whole tool) covers the rest.
+      if (ruleAction === 'allow') onRespond(req.id, 'once')
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      savingRef.current = false
+      setSaving(false)
+    }
+  }
+
   return (
-    <div className={`pending${danger ? ' danger' : ''}`} data-testid="approval-card" data-id={req.id}>
-      <div className="pending-title"><I.Shield size={15} /> Allow {req.label ?? req.tool}?</div>
-      {req.summary && <div className="pending-q" data-testid="approval-summary">{req.summary}</div>}
-      <div className="hint">{EFFECT_TEXT[req.effect ?? 'read']}{req.reason ? ` · ${req.reason}` : ''}</div>
-      <details className="pending-details" open={!req.summary}>
-        <summary className="hint">Details</summary>
-        <pre className="pending-args">{req.args}</pre>
-      </details>
+    <div className={`pending ap-card${danger ? ' danger' : ''}`} data-testid="approval-card" data-id={req.id}>
+      <div className="ap-head">
+        <span className={`ap-icon${danger ? ' danger' : ''}`}><I.Shield size={15} /></span>
+        <div className="ap-head-text">
+          {req.summary
+            ? <div className="ap-summary" data-testid="approval-summary">{req.summary}</div>
+            : <div className="ap-summary">Allow {name}?</div>}
+          <div className="ap-meta" data-testid="approval-meta">{meta.join(' · ')}</div>
+        </div>
+      </div>
+      {warnings.length > 0 && (
+        <ul className="ap-warnings" data-testid="approval-warnings">
+          {warnings.map((w) => <li key={w} className={danger ? 'danger' : undefined}>{w}</li>)}
+        </ul>
+      )}
+      {!!req.args && (
+        <details className="pending-details ap-details" open={!req.summary}>
+          <summary className="hint">{req.summary ? 'Show details' : 'Details'}</summary>
+          <pre className="pending-args">{req.args}</pre>
+        </details>
+      )}
       <div className="pending-actions">
         <button className="btn primary" onClick={() => onRespond(req.id, 'once')} data-testid="approve-once">Allow once</button>
-        <button className="btn" onClick={() => onRespond(req.id, 'always')} data-testid="approve-always">Always in this thread</button>
+        <button className="btn" title={`Don't ask again for ${name} in this chat`}
+          onClick={() => {
+            // Say so only once SahilBot has taken it.
+            void Promise.resolve(onRespond(req.id, 'always')).then(
+              () => toast(`${name} is allowed for the rest of this chat`, 'ok'),
+              (e: unknown) => toast((e as Error)?.message ?? String(e), 'error'))
+          }} data-testid="approve-always">Always allow</button>
         <button className="btn danger" onClick={() => onRespond(req.id, 'deny')} data-testid="approve-deny">Deny</button>
+        {!danger && !ruleOpen && <button className="link-btn ap-rule-link" onClick={() => setRuleOpen(true)} data-testid="approve-make-rule">Make it a rule…</button>}
       </div>
+      {ruleOpen && (
+        <div className="ap-rule" data-testid="approval-rule">
+          <label className="ap-rule-label" htmlFor={`${ruleId}-when`}>When SahilBot wants to</label>
+          <input id={`${ruleId}-when`} className="set-input ap-rule-input" autoFocus maxLength={RULE_MAX_CHARS} value={ruleText} onChange={(e) => setRuleText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setRuleOpen(false) } if (e.key === 'Enter' && ruleText.trim()) void saveRule() }} data-testid="approval-rule-text" />
+          <div className="ap-rule-row">
+            <label className="ap-rule-label" htmlFor={`${ruleId}-action`}>it should</label>
+            <select id={`${ruleId}-action`} className="set-select" value={ruleAction} onChange={(e) => setRuleAction(e.target.value as 'allow' | 'ask')} data-testid="approval-rule-action">
+              <option value="allow">Allow automatically</option>
+              <option value="ask">Ask first</option>
+            </select>
+            <button className="btn primary" disabled={saving || !ruleText.trim()} onClick={() => void saveRule()} data-testid="approval-rule-save">{saving ? 'Saving…' : 'Save rule'}</button>
+            <button className="btn" onClick={() => setRuleOpen(false)}>Cancel</button>
+          </div>
+          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”. Manage rules in Settings → Approval rules.</div>
+        </div>
+      )}
     </div>
   )
 }

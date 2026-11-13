@@ -1,10 +1,11 @@
+import { tmpdir } from 'node:os'
 // Dev helper: screenshots of the Settings pages, the pinned bots and a plan, against the mock server.
 import { startMockLlm } from '../fixtures/mock-llm'
 import { launch, tempProfile } from '../accept/app'
 import { test } from 'vitest'
 
 test('settings screenshots', async () => {
-  const out = process.env.SHOTS_DIR ?? '.'
+  const out = process.env.SHOTS_DIR ?? tmpdir()
   const llm = await startMockLlm()
   const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
   await page.setViewportSize({ width: 1320, height: 860 })

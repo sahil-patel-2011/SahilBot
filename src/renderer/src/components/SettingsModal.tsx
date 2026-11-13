@@ -1,22 +1,34 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { MemoryItem, ModelInfo, ModelList, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, VaultEntry, VoiceStatus } from '@shared/types'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { AddressEntry, CardEntry, ModelInfo, ModelList, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, VaultEntry, VoiceStatus } from '@shared/types'
+import { BRAND_NAME, cardProblem, digitsOnly, formatCardNumber, normalizeExpiry, type CardBrand } from '@shared/cards'
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
+import { MemoryManager } from './MemoryManager'
+import { KnowledgeSettings } from './KnowledgeSettings'
+import { UsagePage } from './UsagePage'
+import { McpSettings } from './McpSettings'
+import { addRule, loadRules, removeRule, RULE_LIMIT, RULE_MAX_CHARS } from '../lib/approvalRules'
+import '../styles-approvals.css'
+import '../styles-purchase.css'
 
 // Settings: one page per topic. Every change saves right away (keys go to the Keychain).
 
-type Page = 'general' | 'models' | 'keys' | 'appearance' | 'voice' | 'memory' | 'rules' | 'passwords' | 'advanced'
-const PAGES: Array<{ id: Page; label: string; icon: ReactNode }> = [
-  { id: 'general', label: 'General', icon: <I.Gear size={15} /> },
-  { id: 'models', label: 'Models', icon: <I.Cpu size={15} /> },
-  { id: 'keys', label: 'API Keys & Servers', icon: <I.Plug size={15} /> },
-  { id: 'appearance', label: 'Appearance', icon: <I.Sparkle size={15} /> },
-  { id: 'voice', label: 'Voice', icon: <I.Mic size={15} /> },
-  { id: 'memory', label: 'Memory', icon: <I.ListIcon size={15} /> },
-  { id: 'rules', label: 'Rules & Skills', icon: <I.Check size={15} /> },
-  { id: 'passwords', label: 'Passwords', icon: <I.Shield size={15} /> },
-  { id: 'advanced', label: 'Advanced', icon: <I.Edit size={15} /> }
+type Page = 'general' | 'usage' | 'models' | 'keys' | 'appearance' | 'voice' | 'memory' | 'knowledge' | 'rules' | 'approvals' | 'passwords' | 'privacy' | 'advanced'
+const PAGES: Array<{ id: Page; label: string; icon: ReactNode; color: string; words: string }> = [
+  { id: 'general', label: 'General', icon: <I.Gear size={14} />, color: '#8e8e93', words: 'name workspace folder quick ask shortcut search cloud budget spending limit hybrid' },
+  { id: 'usage', label: 'Usage', icon: <I.Clock size={14} />, color: '#ff6a1a', words: 'usage spend spending cost cap budget tokens requests local cloud model bot csv export' },
+  { id: 'models', label: 'Models', icon: <I.Cpu size={14} />, color: '#5856d6', words: 'model auto download recommended voice background ollama lm studio' },
+  { id: 'keys', label: 'API Keys & Servers', icon: <I.Plug size={14} />, color: '#007aff', words: 'anthropic claude openai openrouter cursor key base url ollama lm studio custom server' },
+  { id: 'appearance', label: 'Appearance', icon: <I.Sparkle size={14} />, color: '#ff9500', words: 'theme dark light width font tint density code wrap' },
+  { id: 'voice', label: 'Voice', icon: <I.Mic size={14} />, color: '#ff2d55', words: 'speak read aloud dictation whisper kokoro' },
+  { id: 'memory', label: 'Memory', icon: <I.ListIcon size={14} />, color: '#34c759', words: 'remember people places projects facts import chatgpt claude forget work log' },
+  { id: 'knowledge', label: 'Knowledge', icon: <I.Search size={14} />, color: '#0a84ff', words: 'knowledge search files folders documents index pdf notes embeddings rebuild' },
+  { id: 'rules', label: 'Rules & Skills', icon: <I.Check size={14} />, color: '#30b0c7', words: 'rules skills procedures engineering medical business coding' },
+  { id: 'approvals', label: 'Approval rules', icon: <I.Shield size={14} />, color: '#34aadc', words: 'approval approve allow ask first permission always automatically confirm' },
+  { id: 'passwords', label: 'Passwords', icon: <I.Key size={14} />, color: '#636366', words: 'vault login password' },
+  { id: 'privacy', label: 'Privacy & Permissions', icon: <I.Shield size={14} />, color: '#5ac8fa', words: 'privacy permissions accessibility screen recording microphone full disk access automation notifications macos system settings mcp connected apps cursor claude code desktop token server' },
+  { id: 'advanced', label: 'Advanced', icon: <I.Edit size={14} />, color: '#af52de', words: 'context window gpu memory sampling hard stops' }
 ]
 
 const WINDOWS: Settings['contextWindow'][] = [0, 16384, 32768, 65536, 131072]
@@ -123,6 +135,8 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   initialPage?: Page
 }) {
   const [page, setPage] = useState<Page>(initialPage ?? 'general')
+  const [find, setFind] = useState('')
+  const pages = PAGES.filter((x) => !find.trim() || `${x.label} ${x.words}`.toLowerCase().includes(find.trim().toLowerCase()))
   const [s, setS] = useState(settings)
   const patch = async (p: SettingsPatchUi): Promise<Settings> => {
     const n = await api.settings.set(p)
@@ -131,31 +145,39 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
     return n
   }
   useEffect(() => {
-    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose() }
+    // preventDefault: this Esc is spent closing Settings (the chat's run and the details panel leave it alone).
+    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose() } }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [onClose])
 
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="settings-win" data-testid="settings">
+    <div className="settings-page" data-testid="settings">
+      <div className="settings-win">
         <nav className="set-nav">
-          <div className="set-nav-title">Settings</div>
-          {PAGES.map((p) => (
-            <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => setPage(p.id)} data-testid={`settings-${p.id}`}>{p.icon}{p.label}</button>
+          <div className="set-nav-top drag">
+            <button className="icon-btn nodrag" onClick={onClose} title="Back (Esc)" data-testid="settings-close"><I.Chevron size={16} style={{ transform: 'rotate(90deg)' }} /></button>
+            <span className="set-nav-title">Settings</span>
+          </div>
+          <div className="set-find nodrag"><I.Search size={14} /><input placeholder="Search settings" value={find} onChange={(e) => { setFind(e.target.value); const first = PAGES.find((x) => `${x.label} ${x.words}`.toLowerCase().includes(e.target.value.trim().toLowerCase())); if (first && e.target.value.trim()) setPage(first.id) }} /></div>
+          {pages.map((p) => (
+            <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => setPage(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{p.label}</button>
           ))}
           {sys && <div className="set-nav-foot">{sys.chip}<br />{sys.totalGB} GB RAM · SahilBot {sys.appVersion}</div>}
         </nav>
         <div className="set-body">
-          <button className="set-close icon-btn" onClick={onClose} title="Close (Esc)" data-testid="settings-close"><I.Close size={16} /></button>
           {page === 'general' && <General s={s} patch={patch} />}
+          {page === 'usage' && <UsagePage />}
           {page === 'models' && <Models s={s} models={models} patch={patch} onRefresh={onRefreshModels} />}
           {page === 'keys' && <Keys s={s} patch={patch} onChanged={onRefreshModels} models={models} />}
           {page === 'appearance' && <AppearancePage s={s} patch={patch} />}
           {page === 'voice' && <VoicePage s={s} models={models} patch={patch} />}
           {page === 'memory' && <MemoryPage spaces={spaces ?? []} />}
+          {page === 'knowledge' && <KnowledgeSettings />}
           {page === 'rules' && <RulesPage spaces={spaces ?? []} />}
+          {page === 'approvals' && <ApprovalRulesPage patch={patch} />}
           {page === 'passwords' && <Passwords />}
+          {page === 'privacy' && <PrivacyPage />}
           {page === 'advanced' && <Advanced s={s} models={models} patch={patch} />}
         </div>
       </div>
@@ -165,15 +187,88 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
 
 type P = { s: Settings; patch: (p: SettingsPatchUi) => Promise<Settings> }
 
+const CATCH_UP = [[0, 'Off'], [1, '1 hour'], [6, '6 hours'], [12, '12 hours'], [24, '1 day'], [72, '3 days'], [168, '1 week']] as const
+
+/** Menu bar, login, keep-awake and missed routines: SahilBot keeps working when the window is closed. */
+function AlwaysOn({ s, patch }: P) {
+  const [login, setLogin] = useState<string | null>(null)
+  useEffect(() => void api.alwaysOn.status().then((st) => setLogin(st.loginItem)), [s.openAtLogin])
+  const loginHint = login === 'requires-approval' ? 'Allow SahilBot in System Settings → General → Login Items.'
+    : login === 'unsupported' ? 'Works in the installed app.' : 'Starts in the menu bar with the window hidden.'
+  return (
+    <Section title="Always on" sub="Closing the window doesn't stop SahilBot: bots keep working and routines keep running until you quit.">
+      <Row title="Show SahilBot in the menu bar" sub="See which bots are working or need you, from any app."><Toggle on={s.menuBarIcon ?? true} onChange={(v) => void patch({ menuBarIcon: v })} label="Show SahilBot in the menu bar" testId="menu-bar-icon" /></Row>
+      <Row title="Open at login" sub={loginHint}><Toggle on={s.openAtLogin ?? false} onChange={(v) => void patch({ openAtLogin: v })} label="Open at login" testId="open-at-login" /></Row>
+      <Row title="Keep the Mac awake while bots work" sub="Only while a chat or routine is running. Closing the lid still sleeps."><Toggle on={s.keepAwakeWhileWorking ?? true} onChange={(v) => void patch({ keepAwakeWhileWorking: v })} label="Keep the Mac awake while bots work" testId="keep-awake" /></Row>
+      <Row title="Catch up on missed routines" sub="If SahilBot was closed or the Mac was asleep, each missed routine runs once if it was due within this window.">
+        <select className="set-select" value={s.catchUpHours ?? 12} onChange={(e) => void patch({ catchUpHours: Number(e.target.value) })} data-testid="catch-up">
+          {CATCH_UP.map(([h, label]) => <option key={h} value={h}>{label}</option>)}
+        </select>
+      </Row>
+      <Row title="Pause all routines" sub="Nothing runs on a schedule until you turn this off."><Toggle on={s.routinesPaused ?? false} onChange={(v) => void patch({ routinesPaused: v })} label="Pause all routines" testId="routines-paused" /></Row>
+    </Section>
+  )
+}
+
+const PERM_BADGE: Record<string, string> = { granted: 'Allowed', denied: 'Not allowed', 'not-determined': 'Not set', unknown: 'Unknown' }
+const AUTOMATION_APPS = ['Notes', 'Calendar', 'Reminders', 'Mail', 'Finder', 'Music']
+
+/** What macOS lets SahilBot do, and one click to the exact System Settings pane. Nothing is granted from here. */
+function PrivacyPage() {
+  const [rows, setRows] = useState<Awaited<ReturnType<typeof api.permissions.status>> | null>(null)
+  const [app, setApp] = useState(AUTOMATION_APPS[0])
+  const [auto, setAuto] = useState<{ app: string; state: string; detail?: string } | null>(null)
+  const refresh = (): void => void api.permissions.status().then(setRows).catch(() => setRows([]))
+  useEffect(() => {
+    refresh()
+    // Back from System Settings: show the new state.
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [])
+  return (
+    <>
+      <h2>Privacy &amp; Permissions</h2>
+      <p className="hint">macOS decides what SahilBot can reach. Only you can turn these on, in System Settings; SahilBot asks before it uses any of them for a task.</p>
+      <Section>
+        {rows === null ? <Row title="Checking…" /> : rows.filter((r) => r.kind !== 'automation').map((r) => (
+          <Row key={r.kind} title={<>{r.title}<span className={`tier-badge${r.state === 'granted' ? ' ok' : ''}`}>{PERM_BADGE[r.state] ?? r.state}</span></>} sub={<>{r.enables}{r.detail ? <> · {r.detail}</> : null}</>} testId={`perm-${r.kind}`}>
+            <button className="btn" onClick={() => void api.permissions.open(r.kind)} title={r.how}>Open Settings</button>
+          </Row>
+        ))}
+      </Section>
+      <Section title="Automation" sub="Lets SahilBot control another app (Notes, Calendar, Mail…) when a task needs it. macOS asks once per app.">
+        <Row title="Check an app" sub={auto ? `${auto.app}: ${PERM_BADGE[auto.state] ?? auto.state}${auto.detail ? ` · ${auto.detail}` : ''}` : 'Checking may show macOS\'s one-time prompt for that app.'}>
+          <div className="key-edit">
+            <select className="set-select" value={app} onChange={(e) => { setApp(e.target.value); setAuto(null) }} data-testid="perm-auto-app">
+              {AUTOMATION_APPS.map((a) => <option key={a}>{a}</option>)}
+            </select>
+            <button className="btn" onClick={() => void api.permissions.automation(app).then(setAuto).catch((e) => setAuto({ app, state: 'unknown', detail: clean(e) }))} data-testid="perm-auto-check">Check</button>
+            <button className="btn" onClick={() => void api.permissions.open('automation')}>Open Settings</button>
+          </div>
+        </Row>
+      </Section>
+      <McpSettings />
+    </>
+  )
+}
+
 function General({ s, patch }: P) {
   const [braveKey, setBraveKey] = useState('')
   const [spend, setSpend] = useState<{ spent: number; cap: number; requests: number } | null>(null)
-  useEffect(() => void api.budget().then(setSpend), [])
+  useEffect(() => {
+    void api.budget().then(setSpend)
+    return api.onBudgetChanged(() => void api.budget().then(setSpend))
+  }, [])
   return (
     <>
       <h2>General</h2>
       <Section>
         <Row title="Your name" sub="What SahilBot calls you."><Field value={s.userName} placeholder="First name" onSave={(v) => void patch({ userName: v })} /></Row>
+        <Row title="Quick Ask shortcut" sub="Opens a small SahilBot bar over any app: ask, optionally with your screen or clipboard.">
+          <select className="set-select" value={s.quickKey} onChange={(e) => void patch({ quickKey: e.target.value })} data-testid="quick-key">
+            <option value="Alt+Space">⌥ Space</option><option value="Control+Space">⌃ Space</option><option value="CommandOrControl+Shift+Space">⌘⇧ Space</option><option value="Alt+Shift+Space">⌥⇧ Space</option><option value="">Off</option>
+          </select>
+        </Row>
         <Row title="Workspace folder" sub="Where SahilBot saves the files it makes."><Field value={s.workspaceDir} width={300} onSave={(v) => void patch({ workspaceDir: v })} /></Row>
       </Section>
       <Section title="Web search" sub="Used to look things up before answering.">
@@ -209,6 +304,7 @@ function General({ s, patch }: P) {
           </>
         )}
       </Section>
+      <AlwaysOn s={s} patch={patch} />
       <Section title="Cloud spending limit" sub="SahilBot prices every cloud request before sending it and refuses anything that would go past this monthly cap. Requests the provider rejects aren't counted.">
         <Row title="Monthly cap" sub={spend ? `This month: $${spend.spent.toFixed(2)} of $${spend.cap.toFixed(2)} · ${spend.requests} cloud requests` : undefined}>
           <div className="key-edit"><span className="hint">$</span><Field value={String(s.cloudBudgetUsd)} width={90} type="number" testId="budget-cap" onSave={(v) => void patch({ cloudBudgetUsd: Math.max(0, Number(v) || 0) }).then(() => void api.budget().then(setSpend))} /></div>
@@ -221,6 +317,13 @@ function General({ s, patch }: P) {
 // ------------------------------------------------------------------ models
 
 function modelName(m: ModelInfo): string { return m.label || m.id }
+
+/** Cloud model facts for the Models page: "1M context · $4 / $20 per M tokens". */
+function cloudFacts(m: ModelInfo): string {
+  const tok = (n: number): string => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${Math.round(n / 1000)}K`)
+  const usd = (n: number): string => `$${n < 1 ? n.toFixed(2) : n}`
+  return [m.contextTokens ? `${tok(m.contextTokens)} context` : '', m.price ? `${usd(m.price.input)} / ${usd(m.price.output)} per M tokens` : ''].filter(Boolean).map((x) => ` · ${x}`).join('')
+}
 
 function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null; onRefresh: () => void }) {
   const [q, setQ] = useState('')
@@ -259,6 +362,25 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
           </select>
         </Row>
       </Section>
+      {s.cloud.enabled && installed.some((m) => m.note === 'remote') && (
+        <Section title="Cloud models" sub="How Auto and hybrid mode use cloud models. Every cloud request is still priced against your monthly cap first.">
+          <Row title="Auto prefers" sub="Cloud first: Haiku for quick questions, Sonnet for everyday tasks, Opus for the hardest ones. Local first: free, private local models whenever one is strong enough.">
+            <select className="set-select" value={s.cloud.prefer ?? 'local'} onChange={(e) => void patch({ cloud: { ...s.cloud, prefer: e.target.value as 'local' | 'cloud' } })} data-testid="cloud-prefer">
+              <option value="local">Local first</option>
+              <option value="cloud">Cloud first</option>
+            </select>
+          </Row>
+          {s.cloud.hybrid && (
+            <Row title="Hybrid advisor" sub="The cloud model your local model asks for plans and help.">
+              <select className="set-select" value={s.cloud.advisorModel} onChange={(e) => void patch({ cloud: { ...s.cloud, advisorModel: e.target.value } })} data-testid="advisor-model">
+                <option value="">Best Opus (recommended)</option>
+                <option value="sonnet">Best Sonnet (cheaper)</option>
+                {installed.filter((m) => m.note === 'remote' && m.enabled).map((m) => <option key={m.id} value={m.id}>{modelName(m)}</option>)}
+              </select>
+            </Row>
+          )}
+        </Section>
+      )}
       <Section title="Task models">
         <Row title="Voice conversations" sub="A light, fast model so spoken replies start right away.">
           <select className="set-select" value={s.taskModels.voice} onChange={(e) => void patch({ taskModels: { ...s.taskModels, voice: e.target.value } })} data-testid="voice-model">
@@ -286,7 +408,7 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
           <div className="set-row" key={m.id} data-testid="model-row">
             <div className="set-row-text">
               <div className="set-row-title">{modelName(m)}</div>
-              <div className="set-row-sub">{m.providerName} · {TIER[m.tier]}{m.vision ? ' · sees images' : ''}{m.note === 'remote' ? ' · cloud' : m.requiredGB ? ` · ${m.requiredGB} GB` : ''}{!m.fits && m.note && m.note !== 'remote' ? ` · ${m.note}` : ''}</div>
+              <div className="set-row-sub">{m.providerName} · {TIER[m.tier]}{m.vision ? ' · sees images' : ''}{m.note === 'remote' ? ` · cloud${cloudFacts(m)}` : m.requiredGB ? ` · ${m.requiredGB} GB` : ''}{!m.fits && m.note && m.note !== 'remote' ? ` · ${m.note}` : ''}</div>
             </div>
             <Toggle on={m.enabled} onChange={(v) => setOn(m.id, v)} label={`Show ${m.id}`} testId={`model-toggle-${m.id}`} />
           </div>
@@ -324,6 +446,22 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
 
 // ------------------------------------------------------------------ keys & servers
 
+const SETUP_PHASE: Record<string, string> = { download: 'Downloading Ollama…', verify: 'Checking it with Apple\'s security check…', install: 'Installing…', start: 'Starting Ollama…', done: 'Ollama is running.' }
+
+/** Ollama isn't running: install it if needed and start it, in one click. */
+function OllamaSetup({ onReady }: { onReady: () => void }) {
+  const [st, setSt] = useState<{ phase: string; pct?: number; error?: string } | null>(null)
+  const [installed, setInstalled] = useState<boolean | null>(null)
+  useEffect(() => void api.ollama.installed().then(setInstalled), [])
+  useEffect(() => api.ollama.onSetup((e) => { setSt(e); if (e.phase === 'done') onReady() }), [onReady])
+  const busy = st && !st.error && st.phase !== 'done'
+  return (
+    <Row title={installed ? 'Start Ollama' : 'Set up local models'} sub={st?.error ?? (st ? `${SETUP_PHASE[st.phase] ?? ''}${st.phase === 'download' && st.pct ? ` ${st.pct}%` : ''}` : installed ? 'Ollama is installed but not running. SahilBot can run it in the background.' : 'SahilBot installs Ollama (free, about 230 MB, no password), checks it with Apple\'s security check, and runs it in the background.')}>
+      {busy ? <span className="spin" /> : <button className="btn primary" onClick={() => { setSt({ phase: installed ? 'start' : 'download' }); void api.ollama.setup() }} data-testid="settings-ollama-setup">{st?.error ? 'Try again' : installed ? 'Start' : 'Set up'}</button>}
+    </Row>
+  )
+}
+
 function Keys({ s, patch, onChanged, models }: P & { onChanged: () => void; models: ModelList | null }) {
   // Status, not alarms: a server that isn't running is just "Not running".
   const status = (id: string): string | undefined => {
@@ -343,6 +481,7 @@ function Keys({ s, patch, onChanged, models }: P & { onChanged: () => void; mode
   const local = (id: 'ollama' | 'lmstudio', name: string, sub: string) => (
     <>
       <Row title={<>{name}{status(id) && <span className={`tier-badge${status(id)!.startsWith('Running') ? ' ok' : ''}`}>{status(id)}</span>}</>} sub={sub}><Toggle on={s.providers[id].enabled} onChange={(v) => void patch({ providers: { ...s.providers, [id]: { ...s.providers[id], enabled: v } } }).then(onChanged)} label={name} testId={`provider-${id}`} /></Row>
+      {id === 'ollama' && s.providers.ollama.enabled && status('ollama') === 'Not running' && <OllamaSetup onReady={onChanged} />}
       {s.providers[id].enabled && <Row title="Address"><Field value={s.providers[id].baseUrl} width={260} testId={`${id}-url`} onSave={(v) => void patch({ providers: { ...s.providers, [id]: { ...s.providers[id], baseUrl: v } } }).then(onChanged)} /></Row>}
     </>
   )
@@ -361,6 +500,21 @@ function Keys({ s, patch, onChanged, models }: P & { onChanged: () => void; mode
       </Section>
       <Section title="OpenRouter API Key" sub={<>Put in <a href={link('openrouter')} target="_blank" rel="noreferrer">your OpenRouter key</a>, then add models by name (like "qwen/qwen3.8-27b") on the Models page.</>}>
         <Row title="API Key"><KeyField saved={s.keys.openrouter} placeholder="sk-or-…" testId="key-openrouter" onSave={saveKey('openrouter')} onTest={test('https://openrouter.ai/api/v1')} /></Row>
+      </Section>
+      <Section title="Market data" sub="Stock prices for the stock tools, cards and alerts. SEC filings and financials need no key. A free Tiingo key gives full daily history; the others add live or delayed quotes.">
+        {([['tiingo', 'Tiingo', 'https://www.tiingo.com/account/api/token', 'Free: full daily price history (recommended)'], ['polygon', 'Polygon', 'https://polygon.io/dashboard/api-keys', 'Daily history and delayed quotes'], ['alphavantage', 'Alpha Vantage', 'https://www.alphavantage.co/support/#api-key', 'Quotes and history (small free limit)'], ['finnhub', 'Finnhub', 'https://finnhub.io/dashboard', 'Live quotes and company news']] as const).map(([id, name, url, sub]) => (
+          <Row key={id} title={<a href={url} target="_blank" rel="noreferrer">{name}</a>} sub={sub}>
+            <KeyField saved={!!s.markets?.keys?.[id]} placeholder={`${name} key`} testId={`key-market-${id}`} onSave={async (k) => { await patch({ marketKeys: { [id]: k } } as never) }} />
+          </Row>
+        ))}
+        <Row title="Quotes from" sub="Auto uses the first source above that has a key. Without one, prices are the last daily close, with its date.">
+          <select className="set-select" value={s.markets?.quoteProvider ?? 'auto'} onChange={(e) => void patch({ markets: { ...(s.markets ?? { secContact: '' }), quoteProvider: e.target.value as never } } as never)} data-testid="quote-provider">
+            {['auto', 'none', 'tiingo', 'polygon', 'alphavantage', 'finnhub'].map((v) => <option key={v} value={v}>{v === 'auto' ? 'Auto' : v === 'none' ? 'Daily closes only' : v === 'alphavantage' ? 'Alpha Vantage' : v[0].toUpperCase() + v.slice(1)}</option>)}
+          </select>
+        </Row>
+      </Section>
+      <Section title="The Blue Alliance (FRC)" sub={<>A free read key from <a href="https://www.thebluealliance.com/account" target="_blank" rel="noreferrer">your TBA account</a> lets the FRC bots pull match schedules, results and rankings. Statbotics works without a key.</>}>
+        <Row title="Read API Key"><KeyField saved={!!s.hasTbaKey} placeholder="TBA read key" testId="key-tba" onSave={async (k) => { await patch({ tbaKey: k }) }} /></Row>
       </Section>
       <Section title="Cursor API Key" sub={<>Lets SahilBot start and manage <a href="https://cursor.com/dashboard" target="_blank" rel="noreferrer">Cursor cloud agents</a> on your GitHub repos (Cursor dashboard → API Keys). Opening files in Cursor and its agent on this Mac need no key.</>}>
         <Row title="API Key"><KeyField saved={s.hasCursorKey} placeholder="key_…" testId="key-cursor" onSave={async (k) => { await patch({ cursorKey: k }) }} /></Row>
@@ -489,48 +643,11 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
 // ------------------------------------------------------------------ memory bank
 
 function MemoryPage({ spaces }: { spaces: Space[] }) {
-  const [mem, setMem] = useState<MemoryItem[]>([])
-  const [adding, setAdding] = useState('')
-  const reload = (): void => { void api.memory.list().then(setMem) }
-  useEffect(reload, [])
-  const projects = spaces.filter((x) => x.kind === 'project')
-  const about = mem.filter((m) => !m.projectId)
-  const byProject = useMemo(() => projects.map((p) => ({ p, items: mem.filter((m) => m.projectId === p.id) })).filter((x) => x.items.length), [mem, projects])
-
-  const row = (m: MemoryItem) => (
-    <div className="set-row" key={m.id} data-testid="memory-row">
-      <div className="set-row-text"><div className="set-row-title mem-text" contentEditable suppressContentEditableWarning
-        onBlur={(e) => { const t = e.currentTarget.textContent?.trim() ?? ''; if (t && t !== m.content) void api.memory.update(m.id, t).then(reload) }}>{m.content}</div>
-        <div className="set-row-sub">{m.category} · {new Date(m.updatedAt).toLocaleDateString()}</div></div>
-      <button className="icon-btn" title="Forget" onClick={() => void api.memory.remove(m.id).then(reload)}><I.Trash size={14} /></button>
-    </div>
-  )
-
   return (
     <>
       <h2>Memory</h2>
-      <div className="set-sub" style={{ marginTop: -6 }}>What SahilBot remembers: you, the people and places in your life, your projects. Everything stays on this Mac. Click a memory to edit it.</div>
-      <Section title="About you" sub="Shared by every chat, whichever model you use. SahilBot saves these as you talk.">
-        {about.length === 0 && <div className="set-empty">Nothing yet.</div>}
-        {(['profile', 'work', 'preference', 'person', 'location', 'project', 'trip', 'link', 'date', 'other'] as const).map((c) => {
-          const items = about.filter((m) => (m.category || 'other') === c)
-          if (!items.length) return null
-          return (
-            <div key={c}>
-              <div className="mem-cat">{({ profile: 'You', work: 'Work', preference: 'Preferences', person: 'People', location: 'Places', project: 'Projects', trip: 'Trips', link: 'Links', date: 'Dates', other: 'Other' } as Record<string, string>)[c]}</div>
-              {items.map(row)}
-            </div>
-          )
-        })}
-        {about.filter((m) => !['profile', 'work', 'preference', 'person', 'location', 'project', 'trip', 'link', 'date', 'other'].includes(m.category)).map(row)}
-        <div className="set-search">
-          <input className="set-input" placeholder="Add something SahilBot should know about you" value={adding} onChange={(e) => setAdding(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && adding.trim()) void api.memory.add(adding.trim(), null).then(() => { setAdding(''); reload() }) }} data-testid="memory-add" />
-        </div>
-      </Section>
-      {byProject.map(({ p, items }) => (
-        <Section key={p.id} title={`Project: ${p.name}`} sub="Shared by every chat in this project.">{items.map(row)}</Section>
-      ))}
+      <div className="set-sub" style={{ marginTop: -6 }}>What your bots remember: facts about you that every bot shares, and each bot's own rules and work log. Everything stays on this Mac. Click a memory to edit it.</div>
+      <MemoryManager spaces={spaces} />
     </>
   )
 }
@@ -614,20 +731,160 @@ function RulesPage({ spaces }: { spaces: Space[] }) {
 
 // ------------------------------------------------------------------ passwords
 
+// ------------------------------------------------------------------ approval rules
+
+const RULE_EXAMPLES: Array<{ when: string; action: 'allow' | 'ask' }> = [
+  { when: 'send email', action: 'ask' },
+  { when: 'npm install', action: 'allow' },
+  { when: 'post', action: 'ask' },
+  { when: 'tool:run_command git status', action: 'allow' }
+]
+
+/** "When SahilBot wants to …, it should allow automatically / ask first." Ask first wins when both match. */
+function ApprovalRulesPage({ patch }: { patch: (p: SettingsPatchUi) => Promise<Settings> }) {
+  const [rules, setRules] = useState<NonNullable<Settings['customRules']> | null>(null)
+  const [when, setWhen] = useState('')
+  const [action, setAction] = useState<'allow' | 'ask'>('ask')
+  const [busy, setBusy] = useState(false)
+  // Guards a second Enter that lands before the first add re-renders.
+  const busyRef = useRef(false)
+  // Read the saved list fresh: an approval card may have added a rule since Settings opened.
+  useEffect(() => { void loadRules().then(setRules) }, [])
+  const save = (customRules: NonNullable<Settings['customRules']>): Promise<Settings> => patch({ customRules })
+  const add = async (): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      const r = await addRule(when, action, save)
+      if ('error' in r) { toast(r.error, 'error'); return }
+      setRules(r.rules)
+      setWhen('')
+      toast('Saved to your approval rules', 'ok')
+    } catch (e) { toast(clean(e), 'error') } finally { busyRef.current = false; setBusy(false) }
+  }
+  const del = async (id: string): Promise<void> => {
+    try { setRules(await removeRule(id, save)) } catch (e) { toast(clean(e), 'error') }
+  }
+  const list = rules ?? []
+  const of = (k: 'allow' | 'ask') => list.filter((r) => r.action === k)
+  const full = of(action).length >= RULE_LIMIT
+  const ruleLabel = (t: string): ReactNode => t.split(/(tool:\S+)/g).map((part, i) => (/^tool:/.test(part) ? <code key={i}>{part}</code> : part))
+  const group = (k: 'allow' | 'ask', title: string, sub: string) => (
+    <Section title={`${title} (${of(k).length}/${RULE_LIMIT})`} sub={sub}>
+      <div className="ar-card" data-testid={`rules-${k}`}>
+        {of(k).length === 0 && <div className="ar-empty">None yet.</div>}
+        {of(k).map((r) => (
+          <div key={r.id} className="ar-item" data-testid="rule-item">
+            <div className="ar-item-text">{ruleLabel(r.when)}</div>
+            <button className="ar-del" title="Delete rule" aria-label={`Delete rule: ${r.when}`} onClick={() => void del(r.id)} data-testid="rule-delete"><I.Close size={14} /></button>
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+  return (
+    <>
+      <h2>Approval rules</h2>
+      <div className="set-sub">Decide ahead of time which actions SahilBot can take on its own and which always need your OK. A rule matches when every word in it appears in the action (its name, what it will do, or its details); “sends”, “sending” and “sent” all count as “send”. If an Ask first rule and an Allow rule both match, SahilBot asks.</div>
+      <Section>
+        <div className="ar-form">
+          <label htmlFor="rule-when">When SahilBot wants to:</label>
+          <textarea id="rule-when" className="set-input" rows={2} maxLength={RULE_MAX_CHARS} value={when} placeholder="e.g. send email, npm install, click Buy, tool:run_command"
+            onChange={(e) => setWhen(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (when.trim() && !full) void add() } }} data-testid="rule-when" />
+          <div className="ar-form-row">
+            <label htmlFor="rule-action">It should:</label>
+            <select id="rule-action" className="set-select" value={action} onChange={(e) => setAction(e.target.value as 'allow' | 'ask')} data-testid="rule-action">
+              <option value="allow">Allow automatically</option>
+              <option value="ask">Ask first</option>
+            </select>
+            <button className="btn primary" disabled={busy || !when.trim() || full} onClick={() => void add()} data-testid="rule-add">Add rule</button>
+            <span className="ar-count">{full ? `You have ${RULE_LIMIT} of these. Delete one to add another.` : when.length > RULE_MAX_CHARS - 100 ? `${when.length}/${RULE_MAX_CHARS}` : ''}</span>
+          </div>
+          <div className="ar-examples">Try:
+            {RULE_EXAMPLES.map((x) => <button key={x.when} onClick={() => { setWhen(x.when); setAction(x.action) }}>{x.action === 'ask' ? 'Ask first' : 'Allow'}: {x.when}</button>)}
+          </div>
+        </div>
+      </Section>
+      {rules === null ? <div className="hint">Loading…</div> : (
+        <>
+          {group('ask', 'Ask first', 'SahilBot stops and asks before these, even in Auto mode.')}
+          {group('allow', 'Allow automatically', 'SahilBot does these without asking. Deleting, payments and sign-in changes still ask, and saved passwords are never sent anywhere.')}
+        </>
+      )}
+      <div className="set-sub">Tip: <code>tool:run_command</code> matches one tool by name (<code>*</code> is a wildcard), and “quoted words” must appear exactly as written.</div>
+    </>
+  )
+}
+
 function Passwords() {
-  const [vault, setVault] = useState<VaultEntry[]>([])
-  const [draft, setDraft] = useState({ name: '', origin: '', username: '', password: '' })
-  const [err, setErr] = useState('')
-  useEffect(() => void api.vault.list().then(setVault), [])
+  const [tab, setTab] = useState<'logins' | 'cards' | 'addresses'>('logins')
   return (
     <>
       <h2>Passwords</h2>
-      <Section sub="Logins SahilBot can type into a site without ever seeing them. Stored encrypted in your Keychain, only for the site they belong to.">
-        {vault.length === 0 && <div className="set-empty">No saved logins.</div>}
+      <div className="set-sub">Logins, cards and addresses SahilBot can type into a site without ever showing them to the assistant. Stored encrypted in your Keychain. Every purchase still waits for your click on a Purchase card.</div>
+      <div className="pw-tabs" role="tablist">
+        {(['logins', 'cards', 'addresses'] as const).map((t) => (
+          <button key={t} role="tab" aria-selected={tab === t} className={`pw-tab${tab === t ? ' on' : ''}`} onClick={() => setTab(t)} data-testid={`pw-tab-${t}`}>{t[0].toUpperCase() + t.slice(1)}</button>
+        ))}
+      </div>
+      {tab === 'logins' && <Logins />}
+      {tab === 'cards' && <Cards />}
+      {tab === 'addresses' && <Addresses />}
+    </>
+  )
+}
+
+/** The live authenticator code, shown only after an explicit click, hidden again after 30 seconds. */
+function RevealCode({ name }: { name: string }) {
+  const [code, setCode] = useState<{ code: string; remaining: number } | null>(null)
+  useEffect(() => {
+    if (!code) return
+    const hide = setTimeout(() => setCode(null), 30_000)
+    const tick = setTimeout(() => void api.vault.totpCode(name).then((c) => setCode((cur) => (cur ? c : cur))), Math.max(1, code.remaining) * 1000)
+    return () => { clearTimeout(hide); clearTimeout(tick) }
+  }, [code, name])
+  return code
+    ? <span className="pw-code" title={`Changes in ${code.remaining}s`} data-testid="totp-code">{code.code}</span>
+    : <button className="link-btn" onClick={() => void api.vault.totpCode(name).then(setCode)} data-testid="totp-reveal">Show code</button>
+}
+
+function Logins() {
+  const [vault, setVault] = useState<VaultEntry[]>([])
+  const [draft, setDraft] = useState({ name: '', origin: '', username: '', password: '', totp: '' })
+  const [keyFor, setKeyFor] = useState<string | null>(null)
+  const [key, setKey] = useState('')
+  const [grants, setGrants] = useState<string[]>([])
+  const [err, setErr] = useState('')
+  useEffect(() => { void api.vault.list().then(setVault); void api.vault.otpGrants().then(setGrants) }, [])
+  const saveKey = (v: VaultEntry, clear = false): void => {
+    setErr('')
+    void api.vault.set({ name: v.name, origin: v.origin, username: v.username, ...(clear ? { clearTotp: true } : { totp: key }) })
+      .then((x) => { setVault(x); setKeyFor(null); setKey('') }).catch((e) => setErr(clean(e)))
+  }
+  return (
+    <>
+      <Section title="Saved logins">
+        {vault.length === 0 && <div className="set-empty">No saved logins yet. Add one below.</div>}
         {vault.map((v) => (
-          <div className="set-row" key={v.name} data-testid="vault-row">
-            <div className="set-row-text"><div className="set-row-title">{v.name}</div><div className="set-row-sub">{v.username} · {v.origin}</div></div>
-            <button className="icon-btn" title="Remove" onClick={() => void api.vault.remove(v.name).then(setVault)}><I.Trash size={14} /></button>
+          <div key={v.name}>
+            <div className="set-row" data-testid="vault-row">
+              <span className="vault-row-icon" aria-hidden="true">{v.name.slice(0, 1)}</span>
+              <div className="set-row-text"><div className="set-row-title">{v.name}</div><div className="set-row-sub" title={`${v.username} · ${v.origin}`}>{v.username} · {v.origin}{v.hasTotp ? ` · authenticator${v.totpIssuer ? ` (${v.totpIssuer})` : ''}` : ''}</div></div>
+              {v.hasTotp && <RevealCode name={v.name} />}
+              <button className="link-btn" onClick={() => { setKeyFor(keyFor === v.name ? null : v.name); setKey('') }} data-testid="totp-edit">{v.hasTotp ? 'Authenticator…' : 'Add authenticator'}</button>
+              <button className="icon-btn" title="Remove" aria-label={`Remove ${v.name}`} onClick={() => void api.vault.remove(v.name).then(setVault)}><I.Trash size={14} /></button>
+            </div>
+            {keyFor === v.name && (
+              <div className="pw-form">
+                <input className="set-input wide" type="password" placeholder="Authenticator key: paste the setup key or otpauth:// link" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" spellCheck={false} data-testid="totp-input" />
+                <div className="pw-form-actions">
+                  {v.hasTotp && <button className="btn danger" onClick={() => saveKey(v, true)}>Remove key</button>}
+                  <button className="btn" onClick={() => setKeyFor(null)}>Cancel</button>
+                  <button className="btn primary" disabled={!key.trim()} onClick={() => saveKey(v)} data-testid="totp-save">Save key</button>
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </Section>
@@ -637,10 +894,132 @@ function Passwords() {
           <input className="set-input" placeholder="Site (github.com)" value={draft.origin} onChange={(e) => setDraft({ ...draft, origin: e.target.value })} />
           <input className="set-input" placeholder="Username" value={draft.username} onChange={(e) => setDraft({ ...draft, username: e.target.value })} autoComplete="off" />
           <input className="set-input" placeholder="Password" type="password" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} autoComplete="new-password" />
-          <button className="btn" onClick={() => { setErr(''); void api.vault.set(draft).then((v) => { setVault(v); setDraft({ name: '', origin: '', username: '', password: '' }) }).catch((e) => setErr(clean(e))) }}>Save login</button>
+          <input className="set-input" placeholder="Authenticator key (optional)" type="password" value={draft.totp} onChange={(e) => setDraft({ ...draft, totp: e.target.value })} autoComplete="off" spellCheck={false} />
+          <button className="btn primary" disabled={!draft.name.trim() || !draft.origin.trim()} onClick={() => { setErr(''); void api.vault.set({ name: draft.name, origin: draft.origin, username: draft.username, password: draft.password, ...(draft.totp.trim() ? { totp: draft.totp } : {}) }).then((v) => { setVault(v); setDraft({ name: '', origin: '', username: '', password: '', totp: '' }) }).catch((e) => setErr(clean(e))) }}>Save login</button>
         </div>
         {err && <div className="set-empty" style={{ color: 'var(--danger)' }}>{err}</div>}
       </Section>
+      {grants.length > 0 && (
+        <Section title="One-time codes allowed without asking" sub="Sites where you chose “Always” for sign-in codes. Removing one makes SahilBot ask again.">
+          {grants.map((g) => (
+            <div className="set-row" key={g}>
+              <div className="set-row-text"><div className="set-row-title">{g}</div></div>
+              <button className="icon-btn" title="Remove" aria-label={`Stop allowing ${g}`} onClick={() => void api.vault.revokeOtpGrant(g).then(setGrants)}><I.Trash size={14} /></button>
+            </div>
+          ))}
+        </Section>
+      )}
+    </>
+  )
+}
+
+const EMPTY_CARD = { id: '', nickname: '', number: '', month: '', year: '', cvc: '', holder: '', billing: '' }
+
+function Cards() {
+  const [cards, setCards] = useState<CardEntry[]>([])
+  const [addrs, setAddrs] = useState<AddressEntry[]>([])
+  const [d, setD] = useState<typeof EMPTY_CARD | null>(null)
+  const [numFocus, setNumFocus] = useState(false)
+  const [err, setErr] = useState('')
+  useEffect(() => { void api.vault.cards().then(setCards); void api.vault.addresses().then(setAddrs) }, [])
+  const editing = cards.find((c) => c.id === d?.id)
+  const digits = digitsOnly(d?.number ?? '')
+  // Typed digits show while you type; afterwards only the last four.
+  const shownNumber = numFocus ? formatCardNumber(digits) : digits ? `•••• •••• •••• ${digits.slice(-4)}` : ''
+  const problem = d ? (digits || !editing ? cardProblem({ number: digits, month: d.month, year: d.year, cvc: d.cvc }) : normalizeExpiry(d.month, d.year) ? null : 'The expiry date is not valid or has passed.') : null
+  const save = (): void => {
+    if (!d) return
+    setErr('')
+    void api.vault.setCard({ id: d.id || undefined, nickname: d.nickname, number: digits || undefined, cvc: d.cvc || undefined, expMonth: d.month, expYear: d.year, holder: d.holder, billing: d.billing || undefined })
+      .then((c) => { setCards(c); setD(null) }).catch((e) => setErr(clean(e)))
+  }
+  return (
+    <>
+      <Section title="Saved cards" sub="The assistant only ever sees a card's nickname and last four digits. Card details are typed into the payment form by SahilBot itself, after you approve.">
+        {cards.length === 0 && <div className="set-empty">No saved cards yet.</div>}
+        {cards.map((c) => (
+          <div className="set-row" key={c.id} data-testid="card-row">
+            <span className="vault-row-icon" aria-hidden="true">{(BRAND_NAME[c.brand as CardBrand] ?? 'Card').slice(0, 1)}</span>
+            <div className="set-row-text"><div className="set-row-title">{c.nickname}</div><div className="set-row-sub">{BRAND_NAME[c.brand as CardBrand] ?? 'Card'} •••• {c.last4} · expires {String(c.expMonth).padStart(2, '0')}/{String(c.expYear).slice(-2)} · {c.holder}{c.hasCvc ? '' : ' · no CVV saved'}</div></div>
+            <button className="link-btn" onClick={() => { setErr(''); setD({ id: c.id, nickname: c.nickname, number: '', month: String(c.expMonth).padStart(2, '0'), year: String(c.expYear), cvc: '', holder: c.holder, billing: c.billing ?? '' }) }}>Edit</button>
+            <button className="icon-btn" title="Remove" aria-label={`Remove ${c.nickname}`} onClick={() => void api.vault.removeCard(c.id).then(setCards)}><I.Trash size={14} /></button>
+          </div>
+        ))}
+        {!d && <div className="pw-form-actions" style={{ padding: '10px 0' }}><button className="btn primary" onClick={() => { setErr(''); setD({ ...EMPTY_CARD }) }} data-testid="card-add">Add a card</button></div>}
+      </Section>
+      {d && (
+        <Section title={editing ? `Edit ${editing.nickname}` : 'Add a card'}>
+          <div className="pw-form">
+            <input className="set-input wide" placeholder="Nickname (e.g. Personal Visa)" value={d.nickname} onChange={(e) => setD({ ...d, nickname: e.target.value })} data-testid="card-nickname" />
+            <input className="set-input wide" inputMode="numeric" autoComplete="off" spellCheck={false} placeholder={editing ? `•••• ${editing.last4} (leave empty to keep)` : 'Card number'}
+              value={shownNumber} onFocus={() => setNumFocus(true)} onBlur={() => setNumFocus(false)} onChange={(e) => setD({ ...d, number: digitsOnly(e.target.value).slice(0, 19) })} data-testid="card-number" />
+            <div className="row">
+              <input className="set-input" inputMode="numeric" placeholder="MM" maxLength={2} value={d.month} onChange={(e) => setD({ ...d, month: digitsOnly(e.target.value) })} data-testid="card-month" />
+              <input className="set-input" inputMode="numeric" placeholder="YYYY" maxLength={4} value={d.year} onChange={(e) => setD({ ...d, year: digitsOnly(e.target.value) })} data-testid="card-year" />
+            </div>
+            <input className="set-input" type="password" inputMode="numeric" autoComplete="off" maxLength={4} placeholder={editing?.hasCvc ? 'CVV saved (type to replace)' : 'CVV (optional)'} value={d.cvc} onChange={(e) => setD({ ...d, cvc: digitsOnly(e.target.value) })} data-testid="card-cvc" />
+            <input className="set-input" placeholder="Name on card" value={d.holder} onChange={(e) => setD({ ...d, holder: e.target.value })} data-testid="card-holder" />
+            <select className="set-select" value={d.billing} onChange={(e) => setD({ ...d, billing: e.target.value })}>
+              <option value="">No billing address</option>
+              {addrs.map((a) => <option key={a.id} value={a.id}>Billing: {a.nickname}</option>)}
+            </select>
+            {(err || (problem && (digits || d.month || d.year))) && <div className="pw-err">{err || problem}</div>}
+            <div className="pw-form-actions">
+              <button className="btn" onClick={() => setD(null)}>Cancel</button>
+              <button className="btn primary" disabled={!!problem || !d.holder.trim()} onClick={save} data-testid="card-save">Save card</button>
+            </div>
+          </div>
+        </Section>
+      )}
+    </>
+  )
+}
+
+const EMPTY_ADDR: Omit<AddressEntry, 'id'> & { id?: string } = { nickname: '', name: '', line1: '', line2: '', city: '', region: '', postal: '', country: '', phone: '', email: '' }
+
+function Addresses() {
+  const [addrs, setAddrs] = useState<AddressEntry[]>([])
+  const [d, setD] = useState<typeof EMPTY_ADDR | null>(null)
+  const [err, setErr] = useState('')
+  useEffect(() => void api.vault.addresses().then(setAddrs), [])
+  const f = (k: keyof typeof EMPTY_ADDR, placeholder: string, wide = false) => (
+    <input className={`set-input${wide ? ' wide' : ''}`} placeholder={placeholder} value={String(d?.[k] ?? '')} onChange={(e) => d && setD({ ...d, [k]: e.target.value })} data-testid={`addr-${k}`} />
+  )
+  return (
+    <>
+      <Section title="Saved addresses" sub="For shipping and billing forms. The assistant refers to them by nickname.">
+        {addrs.length === 0 && <div className="set-empty">No saved addresses yet.</div>}
+        {addrs.map((a) => (
+          <div className="set-row" key={a.id} data-testid="address-row">
+            <span className="vault-row-icon" aria-hidden="true">{a.nickname.slice(0, 1)}</span>
+            <div className="set-row-text"><div className="set-row-title">{a.nickname}</div><div className="set-row-sub">{[a.name, a.line1, a.city, a.region, a.postal, a.country].filter(Boolean).join(', ')}</div></div>
+            <button className="link-btn" onClick={() => { setErr(''); setD({ ...EMPTY_ADDR, ...a }) }}>Edit</button>
+            <button className="icon-btn" title="Remove" aria-label={`Remove ${a.nickname}`} onClick={() => void api.vault.removeAddress(a.id).then(setAddrs)}><I.Trash size={14} /></button>
+          </div>
+        ))}
+        {!d && <div className="pw-form-actions" style={{ padding: '10px 0' }}><button className="btn primary" onClick={() => { setErr(''); setD({ ...EMPTY_ADDR }) }} data-testid="address-add">Add an address</button></div>}
+      </Section>
+      {d && (
+        <Section title={d.id ? `Edit ${d.nickname}` : 'Add an address'}>
+          <div className="pw-form">
+            {f('nickname', 'Nickname (e.g. Home)', true)}
+            {f('name', 'Full name', true)}
+            {f('line1', 'Street address', true)}
+            {f('line2', 'Apartment, suite (optional)', true)}
+            {f('city', 'City')}
+            {f('region', 'State / region')}
+            {f('postal', 'ZIP / postal code')}
+            {f('country', 'Country')}
+            {f('phone', 'Phone (optional)')}
+            {f('email', 'Email (optional)')}
+            {err && <div className="pw-err">{err}</div>}
+            <div className="pw-form-actions">
+              <button className="btn" onClick={() => setD(null)}>Cancel</button>
+              <button className="btn primary" onClick={() => { setErr(''); void api.vault.setAddress(d).then((x) => { setAddrs(x); setD(null) }).catch((e) => setErr(clean(e))) }} data-testid="address-save">Save address</button>
+            </div>
+          </div>
+        </Section>
+      )}
     </>
   )
 }

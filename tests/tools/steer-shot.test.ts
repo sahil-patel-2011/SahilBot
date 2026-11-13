@@ -1,10 +1,11 @@
+import { tmpdir } from 'node:os'
 // Dev helper: what steering looks like while SahilBot works (mock model).
 import { test } from 'vitest'
 import { startMockLlm } from '../fixtures/mock-llm'
 import { launch, tempProfile } from '../accept/app'
 
 test('steer screenshot', async () => {
-  const out = process.env.SHOTS_DIR ?? '.'
+  const out = process.env.SHOTS_DIR ?? tmpdir()
   const llm = await startMockLlm()
   const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
   await page.setViewportSize({ width: 1400, height: 880 })

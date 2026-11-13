@@ -7,7 +7,7 @@ import { startMockLlm } from '../fixtures/mock-llm'
 import { launch, tempProfile } from '../accept/app'
 
 test('redesign screenshots', async () => {
-  const out = process.env.SHOTS_DIR ?? '.'
+  const out = process.env.SHOTS_DIR ?? tmpdir()
   const llm = await startMockLlm()
   const ws = mkdtempSync(join(tmpdir(), 'sb-shots-'))
   for (const scheme of ['light', 'dark'] as const) {

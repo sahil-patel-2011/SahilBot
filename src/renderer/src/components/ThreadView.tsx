@@ -1,10 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Message, PendingRequest, TeamMember } from '@shared/types'
 import { api } from '../api'
+import { toast } from '../lib/toast'
+import { legibleOn } from '../brand'
 import * as I from '../icons'
 import { describe, duration, stepStatus, summarize, type Step } from '../lib/steps'
 import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
+import { PageCard, pagesFromSteps } from './PageCard'
+import { StockCard, stocksFromSteps } from './StockCard'
 
 type Block =
   | { kind: 'user'; m: Message }
@@ -21,7 +25,7 @@ type PlanItem = { text: string; status: 'pending' | 'in_progress' | 'done' }
 export interface ThreadActions {
   onRetry: () => void
   onEditLast: (text: string) => void
-  onRespond: (id: string, answer: string) => void
+  onRespond: (id: string, answer: string) => void | Promise<unknown>
   onReact: (messageId: string, emoji: string | null) => void
   onReply: (text: string) => void
   onOpenFile: (path: string) => void
@@ -42,7 +46,8 @@ export function blocks(messages: Message[]): Block[] {
     if (m.role === 'user') {
       if (m.meta?.hidden) continue
       act = null
-      plan = null
+      // Steering mid-run continues the same request: keep its plan card.
+      if (!m.meta?.steer) plan = null
       out.push({ kind: 'user', m })
       continue
     }
@@ -55,10 +60,27 @@ export function blocks(messages: Message[]): Block[] {
         if (call.name === 'ask_user') {
           // Questions read as conversation: the bot asks, you answer.
           let q = ''
-          try { q = String(JSON.parse(call.arguments).question ?? '') } catch { /* raw */ }
+          let many: Array<{ question: string }> = []
+          try { const a = JSON.parse(call.arguments); q = String(a.question ?? ''); many = a.questions ?? [] } catch { /* raw */ }
           const r = results.get(call.id)
+          const raw = r?.content.match(/User answered:\s*([\s\S]*?)\n?<\/tool_output>/)?.[1]?.trim() ?? r?.content.match(/User answered: (.*)/)?.[1]
           act = null
-          out.push({ kind: 'qa', id: call.id, question: q, answer: r?.content.match(/User answered: ([\s\S]*?)\n?<\/tool_output>/)?.[1]?.trim() ?? r?.content.match(/User answered: (.*)/)?.[1], at: m.createdAt })
+          if (many.length) {
+            // Several questions: show each with its answer, compactly.
+            const answers = raw ? [...raw.matchAll(/→ (.*)/g)].map((x) => x[1].replace(/^\(no answer.*\)$/, '(your call)')) : undefined
+            out.push({ kind: 'qa', id: call.id, question: many.map((x, i) => `${i + 1}. ${x.question}`).join('\n'), answer: answers ? answers.map((a, i) => `${i + 1}. ${a}`).join('\n') : undefined, at: m.createdAt })
+          } else out.push({ kind: 'qa', id: call.id, question: q, answer: raw, at: m.createdAt })
+          continue
+        }
+        if (call.name === 'propose_plan' && !/approved the plan/.test(results.get(call.id)?.content ?? '')) {
+          // Waiting: the approval card shows it. Changes requested: keep a small record of the exchange.
+          const r = results.get(call.id)
+          if (r) {
+            let goal = ''
+            try { goal = String(JSON.parse(call.arguments).goal ?? '') } catch { /* raw */ }
+            act = null
+            out.push({ kind: 'qa', id: call.id, question: `Proposed plan: ${goal}`, answer: `Change: ${r.content.match(/changes to the plan:\n([\s\S]*?)\nRevise/)?.[1] ?? ''}`, at: m.createdAt })
+          }
           continue
         }
         if (call.name === 'agents') {
@@ -69,9 +91,15 @@ export function blocks(messages: Message[]): Block[] {
           out.push({ kind: 'team', id: call.id, titles, final: r?.meta?.team as TeamMember[] | undefined, summary: r?.meta?.display as string | undefined, at: m.createdAt })
           continue
         }
-        if (call.name === 'todo') {
+        // An approved plan becomes the checklist (later todo updates tick it off).
+        const approved = call.name === 'propose_plan' && /approved the plan/.test(results.get(call.id)?.content ?? '')
+        if (call.name === 'todo' || approved) {
           let items: PlanItem[] = []
-          try { items = (JSON.parse(call.arguments).items ?? []).filter((x: PlanItem) => x && typeof x.text === 'string') } catch { /* partial */ }
+          try {
+            const a = JSON.parse(call.arguments)
+            items = approved ? (a.steps ?? []).map((t: string, i: number) => ({ text: t, status: i === 0 ? 'in_progress' : 'pending' }))
+              : (a.items ?? []).filter((x: PlanItem) => x && typeof x.text === 'string')
+          } catch { /* partial */ }
           if (!items.length) continue
           if (plan) plan.items = items
           else {
@@ -152,20 +180,20 @@ function PlanCard({ items, live }: { items: PlanItem[]; live: boolean }) {
 
 const PREPARING: Record<string, string> = {
   file_write: 'Preparing to write a file', create_document: 'Building a document', file_manage: 'Preparing a file change',
-  web_search: 'Preparing a web search', fetch_page: 'Opening a page', browser: 'Preparing a browser step', todo: 'Planning',
+  web_search: 'Preparing a web search', create_page: 'Building a page', update_page: 'Updating the page', message_bot: 'Handing off to another bot', fetch_page: 'Opening a page', browser: 'Preparing a browser step', todo: 'Planning',
   memory: 'Updating memory', verify: 'Double-checking the work', ask_user: 'Writing a question', schedule: 'Setting up a schedule', find_tools: 'Looking for tools',
-  run_command: 'Preparing a command', agents: 'Putting together a team', consult: 'Asking an expert', computer: 'Getting ready to use your Mac', cursor: 'Preparing a Cursor task', mac_apps: 'Opening a Mac app'
+  research: 'Searching trusted sources', run_command: 'Preparing a command', agents: 'Putting together a team', consult: 'Asking an expert', computer: 'Getting ready to use your Mac', cursor: 'Preparing a Cursor task', mac_apps: 'Opening a Mac app'
 }
 
 /** "Thinking… 12s" / "Preparing to write a file… 3s" while the model works. */
-function StatusLine({ drafting, since }: { drafting: string | null; since: number }) {
+function StatusLine({ drafting, since, progress }: { drafting: string | null; since: number; progress?: string | null }) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 500)
     return () => clearInterval(t)
   }, [])
   const secs = Math.max(0, Math.round((now - since) / 1000))
-  const label = drafting ? (PREPARING[drafting] ?? `Preparing ${drafting.replace(/__/g, ' · ').replace(/_/g, ' ')}`) : 'Thinking'
+  const label = progress ? progress.replace(/\s+/g, ' ').slice(0, 120) : drafting ? (PREPARING[drafting] ?? `Preparing ${drafting.replace(/__/g, ' · ').replace(/_/g, ' ')}`) : 'Thinking'
   return (
     <div className="status-line" data-testid="status-line">
       <span className="activity-dots live"><i /><i /><i /><i /></span>
@@ -175,7 +203,7 @@ function StatusLine({ drafting, since }: { drafting: string | null; since: numbe
   )
 }
 
-export function ThreadView({ messages, running, pending, actions, drafting, since, teams }: {
+export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress }: {
   messages: Message[]
   /** Live Team of Experts boards by agents call id. */
   teams?: Record<string, TeamMember[]>
@@ -184,6 +212,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   actions: ThreadActions
   drafting?: string | null
   since?: number
+  /** Live progress from a long-running tool (tests, builds, a Cursor agent). */
+  progress?: string | null
 }) {
   const scroller = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
@@ -223,8 +253,11 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
             const at = atOf(b)
             const prevAt = prev ? atOf(prev) : undefined
             const time = stamp(at, prevAt)
+            // Back-to-back replies from the same bot stack tightly, like short progress messages.
+            const cont = !time && b.kind === 'text' && prev?.kind === 'text' && (b.m.meta?.botName ?? '') === (prev.m.meta?.botName ?? '')
             return (
-              <div key={b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.m.id} className="block">
+              <div key={b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.m.id}
+                className={`block b-${b.kind}${cont ? ' cont' : ''}`}>
                 {time && <div className="stamp">{time}</div>}
                 {b.kind === 'qa' ? (
                   <>
@@ -236,15 +269,19 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                 ) : b.kind === 'plan' ? (
                   <PlanCard items={b.items} live={running && b === lastPlan} />
                 ) : b.kind === 'activity' ? (
-                  <Activity steps={b.steps} live={running && b === lastActivity && tail === b} waitingApproval={approvalWaiting && b === lastActivity} onOpenFile={actions.onOpenFile} />
+                  <>
+                    <Activity steps={b.steps} live={running && b === lastActivity && tail === b} waitingApproval={approvalWaiting && b === lastActivity} onOpenFile={actions.onOpenFile} />
+                    {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
+                    {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
+                  </>
                 ) : (
-                  <Row b={b} actions={actions} editable={!running && b.kind === 'user' && b.m.id === lastUserId} />
+                  <Row b={b} actions={actions} editable={!running && b.kind === 'user' && b.m.id === lastUserId} cont={cont} />
                 )}
               </div>
             )
           })}
           {pending.map((p) => <PendingCard key={p.id} req={p} onRespond={actions.onRespond} />)}
-          {running && !pending.length && (waiting || drafting) && <StatusLine drafting={drafting ?? null} since={since ?? Date.now()} />}
+          {running && !pending.length && (waiting || drafting || progress) && <StatusLine drafting={drafting ?? null} since={since ?? Date.now()} progress={progress} />}
           {!running && lastText && !pending.length && (
             <div className="after-actions">
               <button className="chip-btn" onClick={actions.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>
@@ -287,7 +324,9 @@ function Activity({ steps, live, waitingApproval, onOpenFile }: { steps: Step[];
         <span className="activity-title">{title}</span>
         {!live && failures > 0 && <span className="activity-warn">{failures} skipped or failed</span>}
         {live && steps.some((x) => x.call.name === 'browser') && (
-          <span className="watch" role="button" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('foreman:watch-browser')) }}>Watch</span>
+          <span className="watch" role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('foreman:watch-browser')) }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); window.dispatchEvent(new CustomEvent('foreman:watch-browser')) } }}
+            onKeyUp={(e) => { if (e.key === ' ') { e.preventDefault(); e.stopPropagation() } }}>Watch</span>
         )}
         <span className="activity-meta">{live ? `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}` : duration(end - steps[0].at)}</span>
         <I.Chevron size={14} style={{ transform: open ? 'rotate(180deg)' : undefined, transition: 'transform .15s' }} />
@@ -338,7 +377,7 @@ function StepDetail({ s, onOpenFile }: { s: Step; onOpenFile: (p: string) => voi
 const QUICK = ['👍', '😄', '👎', '❤️', '🤐']
 const MORE = ['🔥', '🎉', '🙏', '👀', '🤔', '😂', '😮', '💯', '✅', '🚀', '😢', '👏']
 
-function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' }>; actions: ThreadActions; editable?: boolean }) {
+function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' }>; actions: ThreadActions; editable?: boolean; cont?: boolean }) {
   const m = b.m
   const [editing, setEditing] = useState<string | null>(null)
   if (b.kind === 'compacted') {
@@ -350,7 +389,16 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
       </details>
     )
   }
-  if (b.kind === 'notice') return <div className="notice">{m.content}</div>
+  if (b.kind === 'notice') {
+    // Work cut off by the app closing: one click picks it up where it stopped.
+    if (m.meta?.interrupted && m.meta?.resumable) return (
+      <div className="notice sys-line interrupted" role="status" data-testid="interrupted">
+        {m.content}
+        <button className="link-btn" onClick={() => void api.chat.resume(m.threadId).catch((e) => toast((e as Error).message, 'error'))} data-testid="resume-run">Continue</button>
+      </div>
+    )
+    return <div className="notice sys-line" role="status">{m.content}</div>
+  }
   const reactions = (m.meta?.reactions ?? {}) as { user?: string; bot?: string }
 
   if (b.kind === 'user') {
@@ -362,7 +410,7 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
           <div className="edit-box">
             <textarea autoFocus value={editing} onChange={(e) => setEditing(e.target.value)} data-testid="edit-input"
               onKeyDown={(e) => {
-                if (e.key === 'Escape') setEditing(null)
+                if (e.key === 'Escape') { e.preventDefault(); setEditing(null) }
                 if (e.key === 'Enter' && !e.shiftKey && editing.trim()) { e.preventDefault(); actions.onEditLast(editing.trim()); setEditing(null) }
               }} />
             <div className="pending-actions" style={{ justifyContent: 'flex-end' }}>
@@ -397,10 +445,13 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
   const streaming = m.status === 'streaming'
   const error = m.status === 'error' ? String(m.meta?.error ?? 'Something went wrong') : null
   const speaker = m.meta?.botName as string | undefined
+  // The speaker's name in their colour, nudged toward the text colour until it reads (4.5:1) on the light and dark backgrounds.
+  const spColor = m.meta?.botColor as string | undefined
+  const spStyle = spColor ? { '--spk-l': legibleOn(spColor, '#ffffff', '#121212'), '--spk-d': legibleOn(spColor, '#161616', '#ededec') } as React.CSSProperties : undefined
   return (
-    <div className="row">
-      <div className="bubble-wrap">
-        {speaker && <div className="speaker" style={{ color: (m.meta?.botColor as string) ?? undefined }}>{speaker}</div>}
+    <div className="row ai">
+      <div className="bubble-wrap ai-col">
+        {speaker && !cont && <div className={`speaker${spStyle ? ' spk-c' : ''}`} style={spStyle}>{speaker}</div>}
         <div className={`bubble ai${error ? ' err' : ''}`} data-testid="assistant-bubble" data-status={m.status}>
           {m.reasoning && (
             <details className="reasoning" open={streaming && !m.content}>
@@ -412,19 +463,21 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
           {m.status === 'stopped' && <div className="hint">Stopped</div>}
           {error && <div>{error}</div>}
         </div>
-        {!!m.meta?.routed && !streaming && m.model && (
-          <div className="routed" title={`Auto chose this model: ${(m.meta.routed as { why: string }).why}`} data-testid="routed">
-            Auto · {(m.meta.routed as { label?: string }).label || m.model}
-          </div>
-        )}
         {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && (
           <div className="sources" data-testid="sources">
-            {(m.meta!.sources as Array<{ title: string; url: string }>).slice(0, 6).map((src) => {
+            {(m.meta!.sources as Array<{ title: string; url: string }>).filter((src, i, all) => {
+              // One chip per site.
+              const h = (u: string): string => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
+              return all.findIndex((x) => h(x.url) === h(src.url)) === i
+            }).slice(0, 6).map((src, i) => {
               let host = src.url
               try { host = new URL(src.url).hostname.replace(/^www\./, '') } catch { /* keep url */ }
+              const hue = [...host].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
               return (
-                <a key={src.url} className="source-pill" href={src.url} target="_blank" rel="noreferrer" title={src.title}>
-                  <span className="source-ico">{host[0]?.toUpperCase()}</span>{src.title.length > 38 ? `${src.title.slice(0, 36)}…` : src.title || host}
+                <a key={src.url} className="source-pill" href={src.url} target="_blank" rel="noreferrer" title={`${src.title}\n${src.url}`}>
+                  <span className="source-ico" style={{ background: `hsl(${hue} 55% 45%)` }}>{host[0]?.toUpperCase()}</span>
+                  <span className="source-host">{host}</span>
+                  <span className="source-n">{i + 1}</span>
                 </a>
               )
             })}
@@ -434,7 +487,17 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
           <button className="reaction" onClick={() => actions.onReact(m.id, null)} title="Remove reaction" data-testid="user-reaction">{reactions.user}</button>
         )}
       </div>
-      {m.content && !streaming && <MessageTools m={m} actions={actions} side="right" />}
+      {/* Beside the bubble (so stacked replies stay close): react, copy, read aloud, more; shown on hover. */}
+      {m.content && !streaming && (
+        <div className="ai-foot">
+          <MessageTools m={m} actions={actions} side="right" />
+          {!!m.meta?.routed && m.model && (
+            <span className="routed" title={`Auto chose this model: ${(m.meta.routed as { why: string }).why}`} data-testid="routed">
+              {(m.meta.routed as { label?: string }).label || m.model}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -459,6 +522,7 @@ function MessageTools({ m, actions, side, onEdit }: { m: Message; actions: Threa
       {canReact && <button className="icon-btn" title="React" onClick={() => setPicker(picker ? null : 'quick')} data-testid="react-btn"><I.Smile size={17} /></button>}
       {onEdit && <button className="icon-btn" title="Edit and resend" onClick={onEdit} data-testid="edit-last"><I.Edit size={16} /></button>}
       <button className="icon-btn" title="Reply" onClick={() => actions.onReply(m.content)}><I.Reply size={17} /></button>
+      {canReact && m.content && <button className="icon-btn" title={copied ? 'Copied' : 'Copy'} onClick={() => { void navigator.clipboard.writeText(m.content); setCopied(true); setTimeout(() => setCopied(false), 900) }} data-testid="copy-msg">{copied ? <I.Check size={15} /> : <I.Copy size={15} />}</button>}
       {canReact && m.content && <button className="icon-btn" title="Read aloud (Esc stops)" onClick={() => void api.voice.speak(m.content)} data-testid="read-aloud"><I.Speaker size={16} /></button>}
       <button className="icon-btn" title="More" onClick={() => setMenu((x) => !x)}><span className="more">···</span></button>
       {picker && (

@@ -65,12 +65,20 @@ export class Attachments {
     return `${SCHEME}://local${pathToFileURL(p).pathname}`
   }
 
-  /** Serves allowed local files to the renderer (images, PDFs in the File panel). */
+  /**
+   * Serves allowed local files to the renderer (images, PDFs in the File panel). Nothing served here can
+   * run: every file but a PDF gets INERT_CSP (so an .html/.svg in the workspace is a dead document even if
+   * something navigates to it). Pages run only in their own session (agent/tools/pages.ts), never via this.
+   */
   registerProtocol(): void {
-    protocol.handle(SCHEME, (req) => {
-      const p = decodeURIComponent(new URL(req.url).pathname)
-      if (!this.isAllowed(p) || !existsSync(p)) return new Response('Not allowed', { status: 403 })
-      return net.fetch(pathToFileURL(p).toString())
+    protocol.handle(SCHEME, async (req) => {
+      let p = ''
+      try { p = decodeURIComponent(new URL(req.url).pathname) } catch { /* refused below */ }
+      if (!p || !this.isAllowed(p) || !existsSync(p)) return new Response('Not allowed', { status: 403 })
+      const res = await net.fetch(pathToFileURL(p).toString())
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(fileHeaders(p))) headers.set(k, v)
+      return new Response(res.body, { status: res.status, statusText: res.statusText, headers })
     })
   }
 
@@ -104,6 +112,21 @@ export class Attachments {
   reveal(p: string): void {
     if (this.isAllowed(p)) shell.showItemInFolder(p)
   }
+}
+
+/** No script (sandbox without allow-scripts, opaque origin) and no network; inline styles and data: images still show. */
+export const INERT_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:"
+
+/**
+ * Response headers for a file served over foreman-file: in the app session. PDFs keep working in
+ * Chromium's viewer (a sandboxed document can't host it) but are always typed as PDF; everything else,
+ * whatever its extension or sniffed type, is an inert document when opened as one. (Images, audio and video
+ * shown by <img>/<video> ignore a CSP header, so the File panel and thumbnails are unaffected.)
+ */
+export function fileHeaders(p: string): Record<string, string> {
+  const base = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' }
+  if (extname(p).toLowerCase() === '.pdf') return { ...base, 'Content-Type': 'application/pdf' }
+  return { ...base, 'Content-Security-Policy': INERT_CSP }
 }
 
 export function registerScheme(): void {

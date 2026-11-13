@@ -139,3 +139,35 @@ describe('wire format', () => {
     expect(String(wire.find((w) => w.role === 'tool')!.content)).toContain('[screenshot omitted')
   })
 })
+
+describe('toWire keeps tool history valid', () => {
+  test('a call with no result (stopped mid-batch) gets a stub right after its turn', () => {
+    const ms = [
+      msg('user', 'do two things'),
+      msg('assistant', '', { toolCalls: [{ id: 'a', name: 'x', arguments: '{}' }, { id: 'b', name: 'y', arguments: '{}' }] }),
+      msg('tool', 'done a', { toolCallId: 'a', toolName: 'x' }),
+      msg('user', 'next question')
+    ]
+    const wire = toWire(ms)
+    expect(wire.map((w) => w.role)).toEqual(['user', 'assistant', 'tool', 'tool', 'user'])
+    expect(wire[3]).toMatchObject({ tool_call_id: 'b' })
+    expect(String(wire[3].content)).toMatch(/Not run/)
+  })
+
+  test('a result with no call is dropped', () => {
+    const wire = toWire([msg('user', 'hi'), msg('tool', 'orphan', { toolCallId: 'zz', toolName: 'x' }), msg('assistant', 'hello')])
+    expect(wire.map((w) => w.role)).toEqual(['user', 'assistant'])
+  })
+
+  test('screenshot images ride after the whole batch, tagged with their call', () => {
+    const ms = [
+      msg('user', 'look'),
+      msg('assistant', '', { toolCalls: [{ id: 's', name: 'computer', arguments: '{}' }, { id: 't', name: 'other', arguments: '{}' }] }),
+      msg('tool', 'shot', { toolCallId: 's', toolName: 'computer', images: ['data:image/png;base64,AAAA'] }),
+      msg('tool', 'other', { toolCallId: 't', toolName: 'other' })
+    ]
+    const wire = toWire(ms)
+    expect(wire.map((w) => w.role)).toEqual(['user', 'assistant', 'tool', 'tool', 'user'])
+    expect(wire[4].imagesFor).toBe('s')
+  })
+})

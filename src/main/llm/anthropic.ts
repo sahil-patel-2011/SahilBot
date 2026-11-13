@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { ToolCall } from '@shared/types'
 import type { ChatRequest, StreamPart, WireMessage } from './client'
+import { retryAfterFrom } from './retry'
+import { CACHE_WRITE_FACTOR, cacheReadFactor, claudeSpec, claudeThinking } from './claude-models'
 
 // Native Claude path (Anthropic SDK). Follows the Messages API rules for current models:
 // - assistant turns are sent back exactly as Claude returned them (thinking blocks included),
@@ -39,14 +41,16 @@ async function client(key: string): Promise<Anthropic> {
 type Block = Anthropic.Beta.Messages.BetaContentBlockParam
 type Param = Anthropic.Beta.Messages.BetaMessageParam
 
-/** Models that accept adaptive thinking (all current ones except Haiku 4.5). */
-const adaptive = (model: string): boolean => !/haiku-4-5|^claude-3/.test(model)
 /**
  * Output ceiling actually sent for Claude (the budget check prices this worst case). Higher effort
- * thinks longer, so it gets more room (Anthropic suggests 64k at xhigh/max for agent work).
+ * thinks longer, so it gets more room (Anthropic suggests 64k at xhigh/max for agent work), never past
+ * what the model accepts (Haiku 4.5: 64K; current models: 128K).
  */
-export const claudeMaxTokens = (requested: number, effort?: import('@shared/types').Effort): number =>
-  Math.max(requested, effort === 'max' || effort === 'xhigh' ? 64000 : effort === 'high' ? 32000 : 16000)
+export const claudeMaxTokens = (requested: number, effort?: import('@shared/types').Effort, model?: string): number => {
+  const want = Math.max(requested, effort === 'max' || effort === 'xhigh' ? 64000 : effort === 'high' ? 32000 : 16000)
+  const cap = model ? claudeSpec(model)?.maxOutput : undefined
+  return cap ? Math.min(want, cap) : want
+}
 
 /** Server-side refusal fallbacks (Claude API): Opus 5/5.5, Fable 5.1, Sonnet 5.5. */
 export const fallbacks = (model: string): boolean => /^claude-(opus-5|fable-5-1|sonnet-5-5)/.test(model)
@@ -101,7 +105,8 @@ export function toAnthropic(wire: WireMessage[], model: string): { system: strin
     // user: tool images ride inside the preceding tool_result when there is one
     const { text: t, images } = text(m.content)
     const last = out[out.length - 1]
-    const prevResult = last?.role === 'user' && Array.isArray(last.content) ? [...(last.content as Block[])].reverse().find((b) => b.type === 'tool_result') : undefined
+    const results = last?.role === 'user' && Array.isArray(last.content) ? (last.content as Block[]).filter((b) => b.type === 'tool_result') : []
+    const prevResult = results.find((b) => (b as { tool_use_id?: string }).tool_use_id === m.imagesFor) ?? results[results.length - 1]
     if (prevResult && images.length && /^\[Image returned by /.test(t)) {
       const r = prevResult as Anthropic.Beta.Messages.BetaToolResultBlockParam
       r.content = [{ type: 'text', text: typeof r.content === 'string' ? r.content : '' }, ...(images as Anthropic.Beta.Messages.BetaImageBlockParam[])]
@@ -137,6 +142,19 @@ export async function listAnthropicModels(apiKey: string): Promise<string[]> {
   return ids.sort()
 }
 
+/** Input tokens in billing terms (what the budget prices at the input rate). */
+export function billedInput(model: string, u: { input_tokens?: number | null; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }): number {
+  return Math.round((u.input_tokens ?? 0) + CACHE_WRITE_FACTOR * (u.cache_creation_input_tokens ?? 0) + cacheReadFactor(model) * (u.cache_read_input_tokens ?? 0))
+}
+
+/** What the user sees when Claude's safety classifiers decline (stop_details is set only for refusals). */
+export function refusalNote(d: { category?: string | null; explanation?: string | null } | null | undefined): string {
+  const why = d?.category ? ` (${d.category.replace(/_/g, ' ')})` : ''
+  return `_Claude declined this request${why}._${d?.explanation ? ` ${d.explanation}` : ''} You can rephrase it, or pick another model for this chat.`
+}
+
+const STREAM_ERROR_STATUS: Record<string, number> = { overloaded_error: 529, rate_limit_error: 429, api_error: 500, timeout_error: 408 }
+
 export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamPart> {
   if (!req.apiKey) throw new Error('Add your Anthropic API key in Settings to use Claude.')
   const { system, messages } = toAnthropic(req.messages, req.model)
@@ -152,63 +170,73 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
   })
   const params: Anthropic.Beta.Messages.MessageCreateParamsStreaming = {
     model: req.model,
-    max_tokens: claudeMaxTokens(req.maxTokens, req.effort),
+    max_tokens: claudeMaxTokens(req.maxTokens, req.effort, req.model),
     system,
     messages,
     stream: true,
     // Caches the whole prefix; resent history then costs about a tenth.
     cache_control: { type: 'ephemeral' },
     ...(tools.length ? { tools, tool_choice: { type: 'auto' } } : {}),
-    ...(adaptive(req.model) ? { thinking: { type: 'adaptive', display: 'summarized' } } : {}),
-    ...(adaptive(req.model) ? { output_config: { effort: req.effort ?? 'medium' } } : {}),
+    // Adaptive thinking + the app's thinking level as effort, mapped to what this model accepts.
+    ...claudeThinking(req.model, req.effort),
     ...(fallbacks(req.model) ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : {})
   } as Anthropic.Beta.Messages.MessageCreateParamsStreaming
   const { stream: _s, ...streamParams } = params
 
   for (let attempt = 0; ; attempt++) {
-    const stream = (await client(req.apiKey)).beta.messages.stream(streamParams, { signal: req.signal })
-    const deltas: StreamPart[] = []
+    // The SDK's own retries are off here: streamChat retries transient failures (with a reset when
+    // something already streamed), so a failure is never retried twice over.
+    const stream = (await client(req.apiKey)).beta.messages.stream(streamParams, { signal: req.signal, maxRetries: 0 })
+    let streamed = false
     stream.on('text', () => undefined)
     let final: Anthropic.Beta.Messages.BetaMessage
     try {
       for await (const ev of stream) {
         if (ev.type === 'content_block_start' && ev.content_block.type === 'tool_use') yield { type: 'tool_pending', name: ev.content_block.name }
         if (ev.type === 'content_block_delta') {
-          if (ev.delta.type === 'text_delta') yield { type: 'content', text: ev.delta.text }
-          else if (ev.delta.type === 'thinking_delta') yield { type: 'reasoning', text: ev.delta.thinking }
+          if (ev.delta.type === 'text_delta') { streamed = true; yield { type: 'content', text: ev.delta.text } }
+          else if (ev.delta.type === 'thinking_delta') { streamed = true; yield { type: 'reasoning', text: ev.delta.thinking } }
         }
       }
       final = await stream.finalMessage()
     } catch (e) {
       // A tool input that couldn't be parsed at all: re-issue the turn (at most twice). API errors propagate, readably.
       if (e instanceof Anthropic.APIError) {
-        const body = e.error as { error?: { message?: string } } | undefined
+        const body = e.error as { error?: { message?: string; type?: string }; type?: string } | undefined
         const why = body?.error?.message ?? e.message
-        const err = new Error(e.status === 401 ? 'Anthropic rejected the API key. Check it in Settings.' : e.status === 429 ? 'Claude is rate-limiting requests right now. Try again in a moment.' : e.status === 529 || (e.status ?? 0) >= 500 ? 'Claude is overloaded or unavailable right now. Try again shortly.' : `Claude rejected the request: ${why}`)
-        ;(err as Error & { billed?: boolean }).billed = false
+        const network = e instanceof Anthropic.APIConnectionError && !(e instanceof Anthropic.APIUserAbortError)
+        // Errors sent mid-stream (an SSE "error" event on a 200) carry a type but no status: map it so retries work.
+        const type = body?.error?.type ?? body?.type ?? (e as { type?: string }).type
+        const status = e.status ?? STREAM_ERROR_STATUS[type ?? '']
+        const err = new Error(status === 401 ? 'Anthropic rejected the API key. Check it in Settings.' : status === 429 ? 'Claude is rate-limiting requests right now. Try again in a moment.' : status === 529 || status === 408 || (status ?? 0) >= 500 ? 'Claude is overloaded or unavailable right now. Try again shortly.' : network ? `Couldn't reach Claude: ${why}` : `Claude rejected the request: ${why}`)
+        // What streamChat's retry needs: the status, the server's Retry-After, and whether the connection dropped.
+        Object.assign(err, { billed: false, status, retryAfterMs: retryAfterFrom(e.headers), network })
         throw err
       }
       if (req.signal?.aborted || attempt >= 2) throw e
-      void deltas
+      if (streamed) yield { type: 'reset' }
       continue
     }
 
     const u = final.usage
     yield {
       type: 'usage',
-      // Billing-equivalent input: cache writes cost 1.25x, cache reads 0.1x.
-      promptTokens: Math.round((u.input_tokens ?? 0) + 1.25 * (u.cache_creation_input_tokens ?? 0) + 0.1 * (u.cache_read_input_tokens ?? 0)),
+      // Billing-equivalent input: cache writes cost 1.25x; cache reads 0.1x (0.05x Opus 5.5, 0.025x Fable 5.1).
+      promptTokens: billedInput(final.model ?? req.model, u),
       completionTokens: u.output_tokens ?? 0
     }
-    yield { type: 'raw', provider: 'anthropic', model: final.model ?? req.model, content: final.content }
+    // Cut off mid tool call: keep the text, drop the half-written tool_use (it would have no tool_result).
+    const cut = final.stop_reason === 'max_tokens'
+    const content = cut ? final.content.filter((b) => b.type !== 'tool_use' && b.type !== 'server_tool_use') : final.content
+    if (content.some((b) => b.type === 'text' || b.type === 'tool_use')) yield { type: 'raw', provider: 'anthropic', model: final.model ?? req.model, content }
 
     if (final.stop_reason === 'refusal') {
-      yield { type: 'content', text: '\n\n_Claude declined this request._' }
+      yield { type: 'content', text: `\n\n${refusalNote(final.stop_details)}` }
       yield { type: 'finish', reason: 'refusal' }
       return
     }
     // A reply cut off mid tool call must not run that tool.
-    const calls: ToolCall[] = final.stop_reason === 'max_tokens' ? [] : final.content
+    const calls: ToolCall[] = cut ? [] : final.content
       .filter((b): b is Anthropic.Beta.Messages.BetaToolUseBlock => b.type === 'tool_use')
       .map((b) => ({ id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}) }))
     if (calls.length) yield { type: 'tool_calls', calls }

@@ -5,7 +5,7 @@ import { appRoot, isPackaged } from './paths'
 
 // The app around the window: name, icon, About panel, menu bar, and remembered window size.
 
-export type MenuAction = 'new-chat' | 'new-bot' | 'new-project' | 'settings' | 'scheduled' | 'connect' | 'toggle-panel' | 'export' | 'search'
+export type MenuAction = 'new-chat' | 'new-bot' | 'new-project' | 'settings' | 'scheduled' | 'connect' | 'toggle-panel' | 'export' | 'search' | 'import-bot'
 
 export function setupApp(): void {
   app.setName('SahilBot')
@@ -18,7 +18,7 @@ export function setupApp(): void {
   // In development the bundle is Electron's; show SahilBot's icon in the Dock anyway.
   if (!isPackaged() && process.platform === 'darwin') {
     const icon = nativeImage.createFromPath(join(appRoot(), 'resources', 'icon.png'))
-    if (!icon.isEmpty()) app.dock?.setIcon(icon)
+    if (!icon.isEmpty() && !process.env.SAHILBOT_HIDDEN) app.dock?.setIcon(icon)
   }
 }
 
@@ -48,6 +48,7 @@ export function buildMenu(send: (a: MenuAction) => void): void {
         { label: 'New Chat', accelerator: 'CmdOrCtrl+N', click: () => send('new-chat') },
         { label: 'New Bot', accelerator: 'CmdOrCtrl+Shift+B', click: () => send('new-bot') },
         { label: 'New Project', accelerator: 'CmdOrCtrl+Shift+P', click: () => send('new-project') },
+        { label: 'Import Bot…', click: () => send('import-bot') },
         { type: 'separator' },
         { label: 'Scheduled Tasks', accelerator: 'CmdOrCtrl+Shift+S', click: () => send('scheduled') },
         { label: 'Export Chat as Markdown…', accelerator: 'CmdOrCtrl+Shift+E', click: () => send('export') },
@@ -74,7 +75,12 @@ export function buildMenu(send: (a: MenuAction) => void): void {
     { role: 'windowMenu' },
     {
       role: 'help',
-      submenu: [{ label: 'SahilBot Help', click: () => void shell.openExternal('https://ollama.com/download') }]
+      submenu: [
+        { label: 'Local Models and API Keys…', click: () => send('settings') },
+        { label: 'Connect Apps…', click: () => send('connect') },
+        { type: 'separator' },
+        { label: 'Ollama Website', click: () => void shell.openExternal('https://ollama.com') }
+      ]
     }
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))

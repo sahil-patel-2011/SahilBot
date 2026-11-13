@@ -1,0 +1,342 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import type { LibraryItem, RoutineRun, ScheduledTask, Space } from '@shared/types'
+import { api } from '../api'
+import { SpaceAvatar } from '../brand'
+import * as I from '../icons'
+import { describeSchedule, groupLibrary, host, when } from '../routines'
+import { BotShareRows } from './BotShare'
+import { BotGoals } from './TasksView'
+
+type Tab = 'details' | 'library'
+type Filter = 'all' | 'file' | 'link'
+
+/** The bot's color for accents, unless it's so dark or light it would vanish in one of the themes. */
+function accentOf(color: string | undefined): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(color ?? '')
+  if (!m) return 'var(--accent)'
+  const n = parseInt(m[1], 16)
+  const lum = (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255
+  return lum < 0.18 || lum > 0.9 ? 'var(--accent)' : `#${m[1]}`
+}
+
+const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+
+const More = ({ size = 16 }: { size?: number }): ReactNode => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
+)
+
+function Toggle({ on, onChange, label, testId }: { on: boolean; onChange: (v: boolean) => void; label: string; testId?: string }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} title={label} className={`rt-switch${on ? ' on' : ''}`} data-testid={testId}
+      onClick={(e) => { e.stopPropagation(); onChange(!on) }}>
+      <i />
+    </button>
+  )
+}
+
+/** Bot details panel (right side): profile, routines, library. Spec: design/bot-ui.md. */
+export function BotDetails(p: { space: Space; threadId: string | null; onClose: () => void; onCustomize: () => void; onChanged: () => void; onEditRoutine: (text: string) => void }) {
+  const { space } = p
+  const [tab, setTab] = useState<Tab>('details')
+  const [tasks, setTasks] = useState<ScheduledTask[]>([])
+  const [runs, setRuns] = useState<Record<string, RoutineRun[]>>({})
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [menuId, setMenuId] = useState<string | null>(null)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [starting, setStarting] = useState<Set<string>>(new Set())
+  const [err, setErr] = useState('')
+  const [name, setName] = useState(space.name)
+  const [label, setLabel] = useState(space.label ?? '')
+  const [notify, setNotify] = useState(space.notify !== false)
+
+  useEffect(() => { setName(space.name); setLabel(space.label ?? ''); setNotify(space.notify !== false) }, [space.id, space.name, space.label, space.notify])
+  useEffect(() => { setOpenId(null); setMenuId(null); setConfirmId(null); setErr(''); setTab('details') }, [space.id])
+
+  const load = useCallback(async (): Promise<void> => {
+    const all = (await api.schedules.list()).filter((t) => t.spaceId === space.id).sort((a, b) => a.createdAt - b.createdAt)
+    setTasks(all)
+    const hist = await Promise.all(all.map(async (t) => [t.id, await api.schedules.runs(t.id).catch(() => [])] as const))
+    setRuns(Object.fromEntries(hist))
+    setStarting(new Set())
+  }, [space.id])
+  useEffect(() => { void load(); return api.schedules.onChange(() => void load()) }, [load])
+
+  // Escape closes the menu, then the routine view, then the panel. App's run-stopping Esc handler
+  // (registered first, at mount) steps aside while this panel is open, so Esc here never stops a run.
+  useEffect(() => {
+    const k = (e: KeyboardEvent): void => {
+      // Not when something else already used this Esc (a menu, a rename, a modal's own close) or a modal is over the panel.
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (document.querySelector('.scrim, .palette-wrap, .voice-mode, .settings-page')) return
+      e.preventDefault()
+      if (menuId || confirmId) { setMenuId(null); setConfirmId(null) } else if (openId) setOpenId(null)
+      else p.onClose()
+    }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
+  }, [menuId, confirmId, openId, p])
+
+  const saveSpace = async (patch: Parameters<typeof api.spaces.update>[1]): Promise<void> => {
+    try {
+      await api.spaces.update(space.id, patch)
+      p.onChanged()
+    } catch (e) { setErr(clean(e)) }
+  }
+  const commitName = (): void => {
+    const n = name.replace(/\s+/g, ' ').trim()
+    if (!n) { setName(space.name); return }
+    if (n !== space.name) void saveSpace({ name: n })
+  }
+  const commitLabel = (): void => {
+    const l = label.replace(/\s+/g, ' ').trim()
+    if (l !== (space.label ?? '')) void saveSpace({ label: l || null })
+  }
+
+  const running = (id: string): boolean => starting.has(id) || runs[id]?.[0]?.status === 'running'
+  const act = async (fn: () => Promise<unknown>): Promise<void> => {
+    setErr('')
+    try { await fn() } catch (e) { setErr(clean(e)) }
+  }
+  const setEnabled = (t: ScheduledTask, on: boolean): Promise<void> => act(() => api.schedules.update(t.id, { enabled: on }))
+  const test = (t: ScheduledTask): Promise<void> => {
+    setStarting((s) => new Set(s).add(t.id))
+    return act(() => api.schedules.runNow(t.id))
+  }
+  const edit = (t: ScheduledTask): void => { setMenuId(null); p.onEditRoutine(`Edit routine "${t.title}": `) }
+  const remove = (t: ScheduledTask): Promise<void> => act(async () => {
+    await api.schedules.remove(t.id)
+    setConfirmId(null)
+    if (openId === t.id) setOpenId(null)
+  })
+
+  const open = tasks.find((t) => t.id === openId) ?? null
+
+  return (
+    <aside className="bd" data-testid="bot-details" style={{ '--bot': accentOf(space.color) } as CSSProperties} aria-label={`${space.name} details`}>
+      <div className="bd-bar">
+        {open ? (
+          <button className="bd-back" onClick={() => setOpenId(null)} data-testid="routine-back"><I.Chevron size={15} /> Routines</button>
+        ) : <span />}
+        <button className="bd-icon" onClick={p.onClose} aria-label="Close" title="Close"><I.Close size={15} /></button>
+      </div>
+
+      {open ? (
+        <RoutineView task={open} runs={runs[open.id] ?? []} running={running(open.id)} confirming={confirmId === open.id}
+          onPause={() => void setEnabled(open, !open.enabled)} onTest={() => void test(open)} onEdit={() => edit(open)}
+          onDelete={() => setConfirmId(open.id)} onCancelDelete={() => setConfirmId(null)} onConfirmDelete={() => void remove(open)} err={err} />
+      ) : (
+        <>
+          <div className="bd-hero">
+            <div className="bd-avatar"><SpaceAvatar color={space.color} shape={space.shape} size={88} /></div>
+            <input className="bd-name" value={name} onChange={(e) => setName(e.target.value)} onBlur={commitName} maxLength={60} aria-label="Bot name"
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setName(space.name); e.stopPropagation(); e.currentTarget.blur() } }} />
+            <input className="bd-label" value={label} onChange={(e) => setLabel(e.target.value)} onBlur={commitLabel} placeholder="Add a label" maxLength={80} aria-label="Label" data-testid="bot-label"
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setLabel(space.label ?? ''); e.stopPropagation(); e.currentTarget.blur() } }} />
+          </div>
+
+          <div className="bd-tabs" role="tablist">
+            {(['details', 'library'] as const).map((t) => (
+              <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)} data-testid={`bot-tab-${t}`}>
+                {t === 'details' ? 'Details' : 'Library'}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'details' ? (
+            <div className="bd-body">
+              {space.kind !== 'group' && <BotGoals spaceId={space.id} />}
+              <div className="bd-section-title">Routines</div>
+              <div className="bd-card">
+                {tasks.length === 0 && <div className="bd-empty">Ask in chat to set a routine.</div>}
+                {tasks.map((t) => (
+                  <div key={t.id} className={`rt-row${t.enabled ? '' : ' paused'}`} data-testid="routine-row">
+                    <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }} title={t.title}>
+                      <span className="rt-icon"><I.Clock size={16} /></span>
+                      <span className="rt-text">
+                        <b>{t.title}</b>
+                        <span>{running(t.id) ? 'Running…' : t.enabled ? describeSchedule(t.schedule) : 'Paused'}</span>
+                      </span>
+                    </button>
+                    <Toggle on={t.enabled} onChange={(v) => void setEnabled(t, v)} label={t.enabled ? 'Pause routine' : 'Resume routine'} testId="routine-toggle" />
+                    <div className="rt-menu-wrap">
+                      <button className="bd-icon" aria-label="Routine menu" aria-haspopup="menu" aria-expanded={menuId === t.id} onClick={() => setMenuId(menuId === t.id ? null : t.id)} data-testid="routine-menu"><More /></button>
+                      {menuId === t.id && (
+                        <Menu onClose={() => setMenuId(null)}>
+                          <button role="menuitem" disabled={running(t.id)} onClick={() => { setMenuId(null); void test(t) }} data-testid="routine-test"><I.Play size={14} /> {running(t.id) ? 'Running…' : 'Test'}</button>
+                          <button role="menuitem" onClick={() => edit(t)} data-testid="routine-edit"><I.Edit size={14} /> Edit</button>
+                          <button role="menuitem" className="danger" onClick={() => { setMenuId(null); setConfirmId(t.id) }} data-testid="routine-delete"><I.Trash size={14} /> Delete</button>
+                        </Menu>
+                      )}
+                    </div>
+                    {confirmId === t.id && (
+                      <div className="rt-confirm" role="alertdialog" aria-label="Delete routine">
+                        <span>Delete “{t.title}”? This can’t be undone.</span>
+                        <button className="bd-btn" onClick={() => setConfirmId(null)}>Cancel</button>
+                        <button className="bd-btn danger" onClick={() => void remove(t)} data-testid="routine-delete-confirm">Delete</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {err && <div className="bd-err" role="alert">{err}</div>}
+
+              <div className="bd-section-title">Settings</div>
+              <div className="bd-card">
+                <div className="bd-row">
+                  <span className="bd-row-text">Notify me when this bot finishes or needs me</span>
+                  <Toggle on={notify} onChange={(v) => { setNotify(v); void saveSpace({ notify: v }) }} label="Notifications" testId="bot-notify" />
+                </div>
+                <div className="bd-row">
+                  <span className="bd-row-text">Model</span>
+                  <span className="bd-row-value" title={space.model ?? 'Auto'}>{space.model ?? 'Auto'}</span>
+                </div>
+                <button className="bd-row bd-row-btn" onClick={p.onCustomize} data-testid="bot-customize">
+                  <span className="bd-row-text">Customize…</span>
+                  <span className="bd-chev"><I.Chevron size={14} /></span>
+                </button>
+              </div>
+              <BotShareRows space={space} />
+            </div>
+          ) : (
+            <Library spaceId={space.id} />
+          )}
+        </>
+      )}
+    </aside>
+  )
+}
+
+/** A small popover menu that closes on outside clicks. */
+function Menu({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const down = (e: MouseEvent): void => { if (ref.current && !ref.current.contains(e.target as Node)) onClose() }
+    // Next tick, so the click that opened it doesn't close it.
+    const id = setTimeout(() => window.addEventListener('mousedown', down))
+    return () => { clearTimeout(id); window.removeEventListener('mousedown', down) }
+  }, [onClose])
+  return <div className="rt-menu" role="menu" ref={ref}>{children}</div>
+}
+
+function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: boolean; confirming: boolean; err: string; onPause: () => void; onTest: () => void; onEdit: () => void; onDelete: () => void; onCancelDelete: () => void; onConfirmDelete: () => void }) {
+  const t = p.task
+  return (
+    <div className="bd-body rt-detail" data-testid="routine-detail">
+      <div className="rt-head">
+        <span className="rt-icon big"><I.Clock size={20} /></span>
+        <div>
+          <h3>{t.title}</h3>
+          <span className={`rt-state${p.running ? ' running' : t.enabled ? ' on' : ''}`}>{p.running ? 'Running…' : t.enabled ? 'Active' : 'Paused'}</span>
+        </div>
+      </div>
+
+      <div className="bd-card rt-facts">
+        <div className="rt-fact"><label>Instruction</label><p className="rt-prompt">{t.prompt}</p></div>
+        <div className="rt-fact"><label>When to run</label><p>{describeSchedule(t.schedule)}</p></div>
+        <div className="rt-fact"><label>Next run</label><p>{t.enabled && t.nextRun ? when(t.nextRun) : t.enabled ? 'Not scheduled' : 'Paused'}</p></div>
+      </div>
+
+      <div className="rt-actions">
+        <button className="bd-btn" onClick={p.onPause}>{t.enabled ? 'Pause' : 'Resume'}</button>
+        <button className="bd-btn" onClick={p.onTest} disabled={p.running} data-testid="routine-test">{p.running ? 'Running…' : 'Test'}</button>
+        <button className="bd-btn" onClick={p.onEdit} data-testid="routine-edit">Edit</button>
+        <button className="bd-btn danger" onClick={p.onDelete} data-testid="routine-delete">Delete</button>
+      </div>
+      {p.confirming && (
+        <div className="rt-confirm block" role="alertdialog" aria-label="Delete routine">
+          <span>Delete “{t.title}”? This can’t be undone.</span>
+          <button className="bd-btn" onClick={p.onCancelDelete}>Cancel</button>
+          <button className="bd-btn danger" onClick={p.onConfirmDelete} data-testid="routine-delete-confirm">Delete</button>
+        </div>
+      )}
+      {p.err && <div className="bd-err" role="alert">{p.err}</div>}
+
+      <div className="bd-section-title">Run history</div>
+      <div className="bd-card rt-history" data-testid="routine-history">
+        {p.runs.length === 0 && <div className="bd-empty">No runs yet</div>}
+        {p.runs.map((r) => (
+          <div key={r.id} className={`rt-run ${r.status}`}>
+            <span className="rt-dot" aria-hidden="true" />
+            <div className="rt-run-text">
+              <b>{r.status === 'running' ? 'Running' : r.status === 'succeeded' ? 'Succeeded' : 'Failed'}{r.test ? <em> · Test</em> : null}</b>
+              <span>{when(r.startedAt)}{r.finishedAt && r.status !== 'running' ? ` · ${duration(r.finishedAt - r.startedAt)}` : ''}</span>
+              {r.reason && <span className="rt-reason">{r.reason}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function duration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.round(s / 60)
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+const PER_GROUP = 5
+
+function Library({ spaceId }: { spaceId: string }) {
+  const [items, setItems] = useState<LibraryItem[] | null>(null)
+  const [filter, setFilter] = useState<Filter>('all')
+  const [shown, setShown] = useState<Record<string, number>>({})
+
+  useEffect(() => {
+    let live = true
+    setItems(null)
+    api.spaces.library(spaceId).then((xs) => { if (live) setItems(xs) }).catch(() => { if (live) setItems([]) })
+    return () => { live = false }
+  }, [spaceId])
+  useEffect(() => setShown({}), [filter, spaceId])
+
+  const groups = useMemo(() => groupLibrary((items ?? []).filter((x) => filter === 'all' || x.kind === filter)), [items, filter])
+
+  const openItem = (it: LibraryItem): void => {
+    if (it.kind === 'link' && it.url) window.open(it.url, '_blank', 'noopener')
+    else if (it.path) void api.files.open(it.path).catch(() => api.files.reveal(it.path!))
+  }
+
+  return (
+    <div className="bd-body lib" data-testid="bot-library">
+      <div className="lib-filters" role="tablist" aria-label="Show">
+        {([['all', 'All'], ['file', 'Files'], ['link', 'Links']] as const).map(([k, l]) => (
+          <button key={k} role="tab" aria-selected={filter === k} className={filter === k ? 'on' : ''} onClick={() => setFilter(k)} data-testid={`library-filter-${k}`}>{l}</button>
+        ))}
+      </div>
+      {items === null && <div className="bd-empty">Loading…</div>}
+      {items !== null && groups.length === 0 && (
+        <div className="bd-empty">{filter === 'link' ? 'No links yet.' : filter === 'file' ? 'No files yet.' : 'Files and links from this chat show up here.'}</div>
+      )}
+      {groups.map((g) => {
+        const n = shown[g.key] ?? PER_GROUP
+        return (
+          <div key={g.key} className="lib-group">
+            <div className="bd-section-title">{g.label}</div>
+            <div className="bd-card">
+              {g.items.slice(0, n).map((it) => (
+                <button key={`${it.kind}:${it.path ?? it.url}`} className="lib-item" onClick={() => openItem(it)} title={it.path ?? it.url} data-testid="library-item">
+                  <span className={`lib-icon ${it.kind}`}>{it.kind === 'file' ? <I.File size={16} /> : <I.Globe size={16} />}</span>
+                  <span className="lib-text">
+                    <b>{it.title}</b>
+                    <span>{it.kind === 'link' && it.url ? host(it.url) : folderOf(it.path ?? '')}</span>
+                  </span>
+                  <span className="lib-time">{when(it.at).replace(/^Today at /, '')}</span>
+                </button>
+              ))}
+              {g.items.length > n && (
+                <button className="lib-more" onClick={() => setShown((s) => ({ ...s, [g.key]: n + PER_GROUP }))}>Show more</button>
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function folderOf(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  return parts.length > 1 ? parts[parts.length - 2] : ''
+}

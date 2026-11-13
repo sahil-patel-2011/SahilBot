@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 // Dev helper: launches the app against the mock server and saves screenshots.
 import { startMockLlm } from '../fixtures/mock-llm'
 import { launch, tempProfile } from '../accept/app'
@@ -5,7 +6,7 @@ import { launch, tempProfile } from '../accept/app'
 import { test } from 'vitest'
 
 test('screenshots', async () => {
-const out = process.env.SHOTS_DIR ?? '.'
+const out = process.env.SHOTS_DIR ?? tmpdir()
 const llm = await startMockLlm()
 for (const scheme of ['light', 'dark'] as const) {
   const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })

@@ -2,6 +2,8 @@ import { shell } from 'electron'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { randomUUID } from 'node:crypto'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
@@ -13,6 +15,7 @@ import type { ToolDef } from './agent/types'
 import { CONSEQUENTIAL } from './agent/permissions'
 import type { Db } from './db'
 import type { Secrets } from './secrets'
+import { gmailPolicy, type ToolPolicy } from './mail/gmail'
 
 // MCP connectors: remote servers with OAuth sign-in (browser + loopback callback, tokens in
 // the Keychain) and local stdio servers. Each server's tools become agent tools loaded on
@@ -20,15 +23,16 @@ import type { Secrets } from './secrets'
 
 // Verified live on 2026-11-11 (each answered an MCP initialize: open, or 401 = sign-in required).
 export const PRESETS: ConnectorPreset[] = [
-  { id: 'cursor-app', name: 'Cursor', url: 'app:cursor', color: '#111111', category: 'No setup', auth: 'app', description: 'Built in. SahilBot opens files in Cursor and can hand coding tasks to Cursor\'s agent.' },
-  { id: 'apple-notes', name: 'Notes, Reminders & Calendar', url: 'app:mac_apps', color: '#F5B400', category: 'No setup', auth: 'app', description: 'Built in. Your Mac\'s own apps; macOS asks once to allow access.' },
-  { id: 'gmail-web', name: 'Gmail (no setup)', url: 'https://mail.google.com/', color: '#EA4335', category: 'No setup', auth: 'browser', description: 'Sign in once in SahilBot\'s browser; SahilBot uses Gmail like you do.' },
-  { id: 'gcal-web', name: 'Google Calendar (no setup)', url: 'https://calendar.google.com/', color: '#4285F4', category: 'No setup', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
-  { id: 'gdrive-web', name: 'Google Drive (no setup)', url: 'https://drive.google.com/', color: '#0F9D58', category: 'No setup', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
-  { id: 'linkedin-web', name: 'LinkedIn (no setup)', url: 'https://www.linkedin.com/', color: '#0A66C2', category: 'No setup', auth: 'browser', description: 'Any site works this way: sign in once in SahilBot\'s browser.' },
-  { id: 'gmail', name: 'Gmail', url: 'https://gmailmcp.googleapis.com/mcp/v1', color: '#EA4335', category: 'Google', auth: 'google', description: 'Search, read, draft and send email.' },
-  { id: 'gcal', name: 'Google Calendar', url: 'https://calendarmcp.googleapis.com/mcp/v1', color: '#4285F4', category: 'Google', auth: 'google', description: 'Events, availability and invites.' },
-  { id: 'gdrive', name: 'Google Drive', url: 'https://drivemcp.googleapis.com/mcp/v1', color: '#0F9D58', category: 'Google', auth: 'google', description: 'Find and read Docs, Sheets and files.' },
+  { id: 'cursor-app', name: 'Cursor', url: 'app:cursor', color: '#111111', category: 'Built in', domain: 'cursor.com', auth: 'app', description: 'SahilBot opens files in Cursor and can hand coding tasks to Cursor\'s agent.' },
+  { id: 'apple-notes', name: 'Notes, Reminders & Calendar', url: 'app:mac_apps', color: '#F5B400', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Your Mac\'s own apps; macOS asks once to allow access.' },
+  { id: 'apple-mail', name: 'Mail (all your accounts)', url: 'app:mail', color: '#1A8CFF', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Apple Mail on this Mac: Gmail, iCloud, Outlook and more, no sign-in. macOS asks once.' },
+  { id: 'gmail-web', name: 'Gmail (no setup)', url: 'https://mail.google.com/', color: '#EA4335', category: 'Built in', domain: 'mail.google.com/mail/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser; SahilBot uses Gmail like you do.' },
+  { id: 'gcal-web', name: 'Google Calendar (no setup)', url: 'https://calendar.google.com/', color: '#4285F4', category: 'Built in', domain: 'calendar.google.com/calendar/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
+  { id: 'gdrive-web', name: 'Google Drive (no setup)', url: 'https://drive.google.com/', color: '#0F9D58', category: 'Built in', domain: 'drive.google.com/drive/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
+  { id: 'linkedin-web', name: 'LinkedIn (no setup)', url: 'https://www.linkedin.com/', color: '#0A66C2', category: 'Built in', auth: 'browser', description: 'Any site works this way: sign in once in SahilBot\'s browser.' },
+  { id: 'gmail', name: 'Gmail', url: 'https://gmailmcp.googleapis.com/mcp/v1', color: '#EA4335', category: 'Communication', domain: 'mail.google.com/mail/', auth: 'google', description: 'Search, read, label and draft email; sending always asks.' },
+  { id: 'gcal', name: 'Google Calendar', url: 'https://calendarmcp.googleapis.com/mcp/v1', color: '#4285F4', category: 'Productivity', domain: 'calendar.google.com/calendar/', auth: 'google', description: 'Events, availability and invites.' },
+  { id: 'gdrive', name: 'Google Drive', url: 'https://drivemcp.googleapis.com/mcp/v1', color: '#0F9D58', category: 'Productivity', domain: 'drive.google.com/drive/', auth: 'google', description: 'Find and read Docs, Sheets and files.' },
   { id: 'notion', name: 'Notion', url: 'https://mcp.notion.com/mcp', color: '#111111', category: 'Productivity', auth: 'oauth', description: 'Pages, databases and comments.' },
   { id: 'linear', name: 'Linear', url: 'https://mcp.linear.app/mcp', color: '#5E6AD2', category: 'Productivity', auth: 'oauth', description: 'Issues, projects and cycles.' },
   { id: 'asana', name: 'Asana', url: 'https://mcp.asana.com/v2/mcp', color: '#F06A6A', category: 'Productivity', auth: 'oauth', description: 'Tasks, projects and portfolios.' },
@@ -36,16 +40,16 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'monday', name: 'monday.com', url: 'https://mcp.monday.com/mcp', color: '#FF3D57', category: 'Productivity', auth: 'oauth', description: 'Boards, items and updates.' },
   { id: 'clickup', name: 'ClickUp', url: 'https://mcp.clickup.com/mcp', color: '#7B68EE', category: 'Productivity', auth: 'oauth', description: 'Tasks, docs and spaces.' },
   { id: 'airtable', name: 'Airtable', url: 'https://mcp.airtable.com/mcp', color: '#18BFFF', category: 'Productivity', auth: 'oauth', description: 'Bases, tables and records.' },
-  { id: 'slack', name: 'Slack', url: 'https://mcp.slack.com/mcp', color: '#4A154B', category: 'Productivity', auth: 'oauth', description: 'Search and post in channels.' },
-  { id: 'miro', name: 'Miro', url: 'https://mcp.miro.com/', color: '#FFD02F', category: 'Productivity', auth: 'oauth', description: 'Boards, stickies and diagrams.' },
+  { id: 'slack', name: 'Slack', url: 'https://mcp.slack.com/mcp', color: '#4A154B', category: 'Communication', auth: 'oauth', description: 'Search and post in channels.' },
+  { id: 'miro', name: 'Miro', url: 'https://mcp.miro.com/', color: '#FFD02F', category: 'Design', auth: 'oauth', description: 'Boards, stickies and diagrams.' },
   { id: 'box', name: 'Box', url: 'https://mcp.box.com', color: '#0061D5', category: 'Productivity', auth: 'oauth', description: 'Files and folders in Box.' },
   { id: 'dropbox', name: 'Dropbox', url: 'https://mcp.dropbox.com/mcp', color: '#0061FF', category: 'Productivity', auth: 'oauth', description: 'Files and folders in Dropbox.' },
   { id: 'zapier', name: 'Zapier', url: 'https://mcp.zapier.com/api/mcp/mcp', color: '#FF4F00', category: 'Productivity', auth: 'oauth', description: 'Thousands of app actions via your Zaps.' },
-  { id: 'granola', name: 'Granola', url: 'https://mcp.granola.ai/mcp', color: '#1E1E1E', category: 'Productivity', auth: 'oauth', description: 'Meeting notes and transcripts.' },
-  { id: 'fireflies', name: 'Fireflies', url: 'https://mcp.fireflies.ai/mcp', color: '#E1308A', category: 'Productivity', auth: 'oauth', description: 'Meeting recordings and summaries.' },
-  { id: 'gamma', name: 'Gamma', url: 'https://mcp.gamma.app/mcp', color: '#7C3AED', category: 'Productivity', auth: 'oauth', description: 'Generate decks and docs.' },
-  { id: 'canva', name: 'Canva', url: 'https://mcp.canva.com/mcp', color: '#00C4CC', category: 'Productivity', auth: 'oauth', description: 'Designs, templates and exports.' },
-  { id: 'figma', name: 'Figma', url: 'https://mcp.figma.com/mcp', color: '#A259FF', category: 'Productivity', auth: 'oauth', description: 'Design files and components.' },
+  { id: 'granola', name: 'Granola', url: 'https://mcp.granola.ai/mcp', color: '#1E1E1E', category: 'Productivity', domain: 'granola.ai', auth: 'oauth', description: 'Meeting notes and transcripts.' },
+  { id: 'fireflies', name: 'Fireflies', url: 'https://mcp.fireflies.ai/mcp', color: '#E1308A', category: 'Productivity', domain: 'fireflies.ai', auth: 'oauth', description: 'Meeting recordings and summaries.' },
+  { id: 'gamma', name: 'Gamma', url: 'https://mcp.gamma.app/mcp', color: '#7C3AED', category: 'Design', domain: 'gamma.app', auth: 'oauth', description: 'Generate decks and docs.' },
+  { id: 'canva', name: 'Canva', url: 'https://mcp.canva.com/mcp', color: '#00C4CC', category: 'Design', auth: 'oauth', description: 'Designs, templates and exports.' },
+  { id: 'figma', name: 'Figma', url: 'https://mcp.figma.com/mcp', color: '#A259FF', category: 'Design', auth: 'oauth', description: 'Design files and components.' },
   { id: 'jotform', name: 'Jotform', url: 'https://mcp.jotform.com/', color: '#FF6100', category: 'Productivity', auth: 'oauth', description: 'Forms and submissions.' },
   { id: 'docusign', name: 'Docusign', url: 'https://mcp.docusign.com/mcp', color: '#4C00FF', category: 'Productivity', auth: 'oauth', description: 'Agreements and envelopes.' },
   { id: 'hubspot', name: 'HubSpot', url: 'https://mcp.hubspot.com/', color: '#FF7A59', category: 'Sales & marketing', auth: 'oauth', description: 'Contacts, deals and companies.' },
@@ -59,37 +63,141 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'ahrefs', name: 'Ahrefs', url: 'https://api.ahrefs.com/mcp/mcp', color: '#FF8800', category: 'Sales & marketing', auth: 'oauth', description: 'Backlinks and keyword research.' },
   { id: 'similarweb', name: 'Similarweb', url: 'https://mcp.similarweb.com/mcp', color: '#092540', category: 'Sales & marketing', auth: 'oauth', description: 'Website traffic and market data.' },
   { id: 'crunchbase', name: 'Crunchbase', url: 'https://mcp.crunchbase.com/mcp', color: '#146AFF', category: 'Sales & marketing', auth: 'oauth', description: 'Companies, funding and people.' },
-  { id: 'intercom', name: 'Intercom', url: 'https://mcp.intercom.com/mcp', color: '#1F8DED', category: 'Sales & marketing', auth: 'oauth', description: 'Conversations and help center.' },
+  { id: 'intercom', name: 'Intercom', url: 'https://mcp.intercom.com/mcp', color: '#1F8DED', category: 'Communication', auth: 'oauth', description: 'Conversations and help center.' },
   { id: 'stripe', name: 'Stripe', url: 'https://mcp.stripe.com', color: '#635BFF', category: 'Finance & commerce', auth: 'oauth', description: 'Payments, customers and invoices.' },
   { id: 'paypal', name: 'PayPal', url: 'https://mcp.paypal.com/mcp', color: '#003087', category: 'Finance & commerce', auth: 'oauth', description: 'Invoices, orders and disputes.' },
-  { id: 'square', name: 'Square', url: 'https://mcp.squareup.com/sse', color: '#3E4348', category: 'Finance & commerce', auth: 'oauth', description: 'Payments, orders and catalog.' },
+  { id: 'square', name: 'Square', url: 'https://mcp.squareup.com/sse', color: '#3E4348', category: 'Finance & commerce', domain: 'squareup.com', auth: 'oauth', description: 'Payments, orders and catalog.' },
   { id: 'plaid', name: 'Plaid', url: 'https://mcp.plaid.com/mcp', color: '#111111', category: 'Finance & commerce', auth: 'oauth', description: 'Bank-data integrations.' },
   { id: 'xero', name: 'Xero', url: 'https://mcp.xero.com/mcp', color: '#13B5EA', category: 'Finance & commerce', auth: 'oauth', description: 'Accounting: invoices and contacts.' },
-  { id: 'github', name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', color: '#24292F', category: 'Dev & data', auth: 'oauth', description: 'Repos, issues and pull requests.' },
-  { id: 'sentry', name: 'Sentry', url: 'https://mcp.sentry.dev/mcp', color: '#362D59', category: 'Dev & data', auth: 'oauth', description: 'Errors and performance issues.' },
-  { id: 'vercel', name: 'Vercel', url: 'https://mcp.vercel.com', color: '#000000', category: 'Dev & data', auth: 'oauth', description: 'Deployments, logs and domains.' },
-  { id: 'netlify', name: 'Netlify', url: 'https://mcp.netlify.com/mcp', color: '#00AD9F', category: 'Dev & data', auth: 'oauth', description: 'Sites and deploys.' },
-  { id: 'supabase', name: 'Supabase', url: 'https://mcp.supabase.com/mcp', color: '#3ECF8E', category: 'Dev & data', auth: 'oauth', description: 'Databases, auth and storage.' },
-  { id: 'neon', name: 'Neon', url: 'https://mcp.neon.tech/mcp', color: '#00E599', category: 'Dev & data', auth: 'oauth', description: 'Serverless Postgres.' },
-  { id: 'posthog', name: 'PostHog', url: 'https://mcp.posthog.com/mcp', color: '#F54E00', category: 'Dev & data', auth: 'oauth', description: 'Product analytics and flags.' },
-  { id: 'amplitude', name: 'Amplitude', url: 'https://mcp.amplitude.com/mcp', color: '#1E61F0', category: 'Dev & data', auth: 'oauth', description: 'Product analytics.' },
-  { id: 'webflow', name: 'Webflow', url: 'https://mcp.webflow.com/mcp', color: '#4353FF', category: 'Dev & data', auth: 'oauth', description: 'Sites and CMS collections.' },
-  { id: 'wix', name: 'Wix', url: 'https://mcp.wix.com/mcp', color: '#0C6EFC', category: 'Dev & data', auth: 'oauth', description: 'Sites, stores and bookings.' },
-  { id: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', color: '#FFD21E', category: 'Dev & data', auth: 'oauth', description: 'Models, datasets and Spaces.' },
+  { id: 'github', name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', color: '#24292F', category: 'Code', domain: 'github.com', auth: 'oauth', description: 'Repos, issues and pull requests.' },
+  { id: 'sentry', name: 'Sentry', url: 'https://mcp.sentry.dev/mcp', color: '#362D59', category: 'Code', domain: 'sentry.io', auth: 'oauth', description: 'Errors and performance issues.' },
+  { id: 'vercel', name: 'Vercel', url: 'https://mcp.vercel.com', color: '#000000', category: 'Code', domain: 'vercel.com', auth: 'oauth', description: 'Deployments, logs and domains.' },
+  { id: 'netlify', name: 'Netlify', url: 'https://mcp.netlify.com/mcp', color: '#00AD9F', category: 'Code', auth: 'oauth', description: 'Sites and deploys.' },
+  { id: 'supabase', name: 'Supabase', url: 'https://mcp.supabase.com/mcp', color: '#3ECF8E', category: 'Code', auth: 'oauth', description: 'Databases, auth and storage.' },
+  { id: 'neon', name: 'Neon', url: 'https://mcp.neon.tech/mcp', color: '#00E599', category: 'Code', auth: 'oauth', description: 'Serverless Postgres.' },
+  { id: 'posthog', name: 'PostHog', url: 'https://mcp.posthog.com/mcp', color: '#F54E00', category: 'Data & analytics', auth: 'oauth', description: 'Product analytics and flags.' },
+  { id: 'amplitude', name: 'Amplitude', url: 'https://mcp.amplitude.com/mcp', color: '#1E61F0', category: 'Data & analytics', auth: 'oauth', description: 'Product analytics.' },
+  { id: 'webflow', name: 'Webflow', url: 'https://mcp.webflow.com/mcp', color: '#4353FF', category: 'Design', auth: 'oauth', description: 'Sites and CMS collections.' },
+  { id: 'wix', name: 'Wix', url: 'https://mcp.wix.com/mcp', color: '#0C6EFC', category: 'Design', auth: 'oauth', description: 'Sites, stores and bookings.' },
+  { id: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', color: '#FFD21E', category: 'Code', domain: 'huggingface.co', auth: 'oauth', description: 'Models, datasets and Spaces.' },
   { id: 'exa', name: 'Exa search', url: 'https://mcp.exa.ai/mcp', color: '#1F40ED', category: 'Research', auth: 'none', description: 'High-quality web search and page contents. No sign-in.' },
-  { id: 'deepwiki', name: 'DeepWiki', url: 'https://mcp.deepwiki.com/mcp', color: '#0F172A', category: 'Research', auth: 'none', description: 'Explains any public GitHub repo. No sign-in.' },
-  { id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', color: '#059669', category: 'Research', auth: 'none', description: 'Up-to-date library docs. No sign-in.' },
-  { id: 'mslearn', name: 'Microsoft Learn', url: 'https://learn.microsoft.com/api/mcp', color: '#0078D4', category: 'Research', auth: 'none', description: 'Official Microsoft docs. No sign-in.' },
+  { id: 'deepwiki', name: 'DeepWiki', url: 'https://mcp.deepwiki.com/mcp', color: '#0F172A', category: 'Code', auth: 'none', description: 'Explains any public GitHub repo. No sign-in.' },
+  { id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', color: '#059669', category: 'Code', auth: 'none', description: 'Up-to-date library docs. No sign-in.' },
+  { id: 'mslearn', name: 'Microsoft Learn', url: 'https://learn.microsoft.com/api/mcp', color: '#0078D4', category: 'Code', domain: 'learn.microsoft.com', auth: 'none', description: 'Official Microsoft docs. No sign-in.' },
   { id: 'custom', name: 'Custom MCP server', url: '', color: '#7C5CFF', category: 'Other', auth: 'oauth', description: 'Any MCP server: a URL, or a local command.' }
 ]
 
+/** The site whose icon represents a preset: its explicit domain (may include a path), else the server URL's host minus mcp./api./www. */
+export function iconDomain(p: Pick<ConnectorPreset, 'url' | 'domain'>): string | null {
+  if (p.domain) return p.domain
+  let host: string
+  try { host = new URL(p.url).hostname.toLowerCase() } catch { return null }
+  if (!host || !host.includes('.') || /^(\d+\.){3}\d+$/.test(host) || host === 'localhost') return null
+  const labels = host.split('.')
+  while (labels.length > 2 && /^(www|mcp|api|app)$/.test(labels[0])) labels.shift()
+  return labels.slice(-2).join('.')
+}
+
+/** Favicon services; a site with a path (mail.google.com/mail/) gets that page's icon, not the domain's. */
+const ICON_SOURCES = (site: string): string[] => [
+  site.includes('/')
+    ? `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(`https://${site}`)}&sz=128`
+    : `https://www.google.com/s2/favicons?domain=${encodeURIComponent(site)}&sz=128`,
+  `https://icons.duckduckgo.com/ip3/${encodeURIComponent(site.split('/')[0])}.ico`
+]
+const ICON_RETRY_MS = 3 * 24 * 3600_000
+const ICON_TYPES: Record<string, string> = { png: 'image/png', ico: 'image/x-icon', svg: 'image/svg+xml', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }
+
+/**
+ * App icons for the catalog: fetched once per preset from a favicon service, kept as files in the
+ * data folder and handed to the renderer as data: URLs (it can't load remote images).
+ */
+export class ConnectorIcons {
+  private urls = new Map<string, string>()
+  private running: Promise<void> | null = null
+  private misses: Record<string, number>
+
+  constructor(private dir: string, private presets: ConnectorPreset[], private changed: () => void, private fetcher: typeof fetch = fetch) {
+    this.misses = this.readMisses()
+    for (const f of existsSync(dir) ? readdirSync(dir) : []) {
+      const m = /^(.+)\.(png|ico|svg|jpg|webp|gif)$/.exec(f)
+      if (!m) continue
+      try { this.urls.set(m[1], `data:${ICON_TYPES[m[2]]};base64,${readFileSync(join(dir, f)).toString('base64')}`) } catch { /* unreadable: refetch */ }
+    }
+  }
+
+  /** What's cached now; missing icons are fetched in the background and `changed` fires as they land. */
+  all(): Record<string, string> {
+    void this.fill()
+    return Object.fromEntries(this.urls)
+  }
+
+  private readMisses(): Record<string, number> {
+    try { return JSON.parse(readFileSync(join(this.dir, 'misses.json'), 'utf8')) as Record<string, number> } catch { return {} }
+  }
+
+  private fill(): Promise<void> {
+    if (this.running) return this.running
+    const now = Date.now()
+    const todo = this.presets.filter((p) => !this.urls.has(p.id) && iconDomain(p) && !(this.misses[p.id] && now - this.misses[p.id] < ICON_RETRY_MS))
+    if (!todo.length) return Promise.resolve()
+    let dirty = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const notify = (): void => {
+      dirty = true
+      timer ??= setTimeout(() => { timer = null; if (dirty) { dirty = false; this.changed() } }, 250)
+    }
+    const queue = [...todo]
+    const worker = async (): Promise<void> => {
+      for (let p = queue.shift(); p; p = queue.shift()) {
+        const got = await this.fetchOne(iconDomain(p)!).catch(() => null)
+        if (got) {
+          try { writeFileSync(join(this.dir, `${p.id}.${got.ext}`), got.bytes) } catch { /* cache is best effort */ }
+          this.urls.set(p.id, `data:${ICON_TYPES[got.ext]};base64,${got.bytes.toString('base64')}`)
+          delete this.misses[p.id]
+          notify()
+        } else this.misses[p.id] = Date.now()
+      }
+    }
+    this.running = Promise.all(Array.from({ length: 6 }, worker)).then(() => {
+      try { writeFileSync(join(this.dir, 'misses.json'), JSON.stringify(this.misses)) } catch { /* best effort */ }
+    }).finally(() => { this.running = null })
+    return this.running
+  }
+
+  private async fetchOne(domain: string): Promise<{ bytes: Buffer; ext: string } | null> {
+    for (const url of ICON_SOURCES(domain)) {
+      try {
+        const r = await this.fetcher(url, { signal: AbortSignal.timeout(8000), redirect: 'follow' })
+        if (!r.ok) continue
+        const type = (r.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+        const bytes = Buffer.from(await r.arrayBuffer())
+        // Tiny responses are the services' "no icon" placeholders.
+        if (bytes.length < 120 || bytes.length > 400_000) continue
+        const ext = type.includes('png') ? 'png' : type.includes('icon') || url.endsWith('.ico') ? 'ico' : type.includes('svg') ? 'svg' : type.includes('jpeg') ? 'jpg' : type.includes('webp') ? 'webp' : type.includes('gif') ? 'gif' : null
+        if (ext) return { bytes, ext }
+      } catch { /* try the next source */ }
+    }
+    return null
+  }
+}
+
 const MAX_TOOL_NAME = 64
 const SAFE_ENV_BLOCK = /^(NODE_OPTIONS|DYLD_|LD_|ELECTRON_)/
+/** Everyday words that don't say which app a request needs. */
+const SUGGEST_STOP = new Set(['and', 'the', 'for', 'with', 'your', 'you', 'any', 'all', 'from', 'into', 'files', 'file', 'data', 'sign', 'needs', 'setup', 'more', 'own', 'one', 'via', 'app', 'apps', 'read', 'find', 'search', 'get', 'list', 'make', 'new'])
 
 interface Live {
   client: Client
+  /** Registered agent tool names (enabled tools only). */
   tools: string[]
+  /** Every tool the server offers, as listed. */
+  all: ServerTool[]
+  /** Server tool name (as listed) → its collision-free agent tool name. */
+  names: Map<string, string>
 }
+
+type ServerTool = { name: string; description?: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string } }
 
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
@@ -101,12 +209,95 @@ export function toolName(server: string, tool: string): string {
   return n.length <= MAX_TOOL_NAME ? n : `${n.slice(0, MAX_TOOL_NAME - 9)}_${Buffer.from(n).toString('base64url').slice(0, 8)}`
 }
 
+/**
+ * Agent names for one server's tools, keyed by the server's own names. Names that slug to the same
+ * thing (send-email, send_email) don't collide: the first in the server's order keeps the plain name,
+ * later ones get _2, _3… (the lowest free suffix), so each server tool maps to exactly one agent tool.
+ */
+export function toolNames(server: string, tools: string[]): Map<string, string> {
+  const out = new Map<string, string>()
+  const bases = tools.map((t) => toolName(server, t))
+  const used = new Set<string>()
+  const later: number[] = []
+  // Plain names first, so a tool whose name is naturally "x_2" isn't displaced by a suffixed "x".
+  bases.forEach((b, i) => {
+    if (out.has(tools[i])) return
+    if (used.has(b)) { later.push(i); return }
+    used.add(b)
+    out.set(tools[i], b)
+  })
+  for (const i of later) {
+    if (out.has(tools[i])) continue
+    for (let n = 2; ; n++) {
+      const suffix = `_${n}`
+      const name = `${bases[i].slice(0, MAX_TOOL_NAME - suffix.length)}${suffix}`
+      if (used.has(name) || bases.includes(name)) continue
+      used.add(name)
+      out.set(tools[i], name)
+      break
+    }
+  }
+  // In the server's order.
+  return new Map(tools.filter((t, i) => tools.indexOf(t) === i).map((t) => [t, out.get(t)!]))
+}
+
 /** MCP annotations and verbs decide the effect: reads run, writes follow the permission mode. */
 export function effectFor(name: string, ann?: { readOnlyHint?: boolean; destructiveHint?: boolean }): ToolEffect {
   if (ann?.readOnlyHint) return 'read'
-  if (ann?.destructiveHint || /(^|_)(delete|remove|trash|archive|destroy)/.test(name)) return 'destructive'
-  if (/(^|_)(get|list|search|read|fetch|query|find|lookup|describe|view|show|retrieve|count|stats|report|overview|research)/.test(name)) return 'read'
+  if (ann?.destructiveHint || /(^|[_\-.])(delete|remove|trash|archive|destroy)/i.test(name)) return 'destructive'
+  // Only the leading verb counts (create_report, update_view are writes), and a write verb anywhere wins (find_and_replace).
+  if (/(^|[_\-.])(create|update|replace|set|add|write|edit|send|post|put|patch|insert|upsert|modify|move|rename|upload|submit|assign|merge|publish|share|invite|apply)([_\-.]|$)/i.test(name) ||
+    /[a-z](Create|Update|Replace|Set|Add|Write|Edit|Send|Post|Put|Patch|Insert|Upsert|Modify|Move|Rename|Upload|Submit|Assign|Merge|Publish|Share|Invite|Apply)([A-Z]|$)/.test(name)) return 'write_external'
+  // Servers often prefix their own name (notion-search, slack_list_channels); write verbs were already caught above.
+  if (/^([a-z0-9]+[_\-.])?(get|list|search|read|fetch|query|find|lookup|describe|view|show|retrieve|count|stats|report|overview|research)([_\-.]|$)/i.test(name) ||
+    /^(get|list|search|read|fetch|query|find|lookup|describe|view|show|retrieve|count)[A-Z]/.test(name)) return 'read'
   return 'write_external'
+}
+
+/**
+ * What one connector tool may do. Gmail's tools are mapped by name (read vs. labels vs. trash vs.
+ * send, and sending always asks); other servers go by annotations and verbs.
+ */
+export function toolPolicy(preset: string | undefined, name: string, ann?: { readOnlyHint?: boolean; destructiveHint?: boolean }, args?: unknown): ToolPolicy {
+  if (preset === 'gmail') return gmailPolicy(name, ann)
+  const effect = effectFor(name, ann)
+  // Tool names use underscores (send_email), which regex word boundaries don't split on.
+  return { effect, consequential: effect !== 'read' && CONSEQUENTIAL.test(`${name.replace(/[_\-.]+/g, ' ')} ${JSON.stringify(args ?? {}).slice(0, 200)}`) }
+}
+
+// ---------------------------------------------------------------- Google: one OAuth client for Gmail, Calendar and Drive
+
+export const GOOGLE_PRESETS = ['gmail', 'gcal', 'gdrive']
+const GOOGLE_CLIENT_KEY = 'google:oauthClient'
+export const GOOGLE_SETUP_NEEDED = 'Google apps need a one-time setup (about 5 minutes): open Connect apps → Gmail → "Set up Google once", then connect again.'
+
+/** Problems with a pasted Google OAuth client, or null when it looks right. */
+export function validateGoogleClient(clientId: string, clientSecret?: string): string | null {
+  const id = String(clientId ?? '').trim()
+  if (!id) return 'Paste the client ID.'
+  if (/\s/.test(id)) return 'The client ID has spaces in it; copy it again.'
+  if (!/^\d{5,}-[a-z0-9_]{8,}\.apps\.googleusercontent\.com$/i.test(id)) return 'That doesn\'t look like a Google OAuth client ID. It ends in .apps.googleusercontent.com (e.g. 1234567890-abc123….apps.googleusercontent.com).'
+  const sec = String(clientSecret ?? '').trim()
+  if (!sec) return 'Paste the client secret too (Google asks for it from Desktop apps; it starts with GOCSPX-).'
+  if (/\s/.test(sec) || sec.length < 16 || sec.length > 80 || (!/^GOCSPX-/.test(sec) && !/^[A-Za-z0-9_-]{20,40}$/.test(sec))) return 'That doesn\'t look like a Google client secret (it usually starts with GOCSPX-).'
+  return null
+}
+
+// ---------------------------------------------------------------- health
+
+/** Wait before reconnect attempt n (1-based): 5s, 15s, 45s, 2m15s… capped at 10 minutes. */
+export function backoffMs(attempt: number): number {
+  return Math.min(10 * 60_000, 5000 * 3 ** Math.max(0, attempt - 1))
+}
+export const MAX_RECONNECTS = 8
+
+/** Errors that mean the connection dropped (not that the tool itself failed). */
+export function isConnectionError(message: string): boolean {
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|socket hang up|Not connected|Connection closed|other side closed|network (error|is down)|SSE stream disconnected/i.test(String(message ?? ''))
+}
+
+function portOf(uri?: string): number | undefined {
+  try { return uri ? Number(new URL(uri).port) || undefined : undefined } catch { return undefined }
 }
 
 class Oauth implements OAuthClientProvider {
@@ -115,7 +306,7 @@ class Oauth implements OAuthClientProvider {
   private waiter: { resolve: (code: string) => void; reject: (e: Error) => void } | null = null
   private stateValue = randomUUID()
 
-  constructor(private id: string, private secrets: Secrets, private staticClient?: { client_id: string; client_secret?: string }) {}
+  constructor(private id: string, private secrets: Secrets, private staticClient?: { client_id: string; client_secret?: string }, private interactive = true) {}
 
   private key(k: string): string { return `mcp:${this.id}:${k}` }
   private read<T>(k: string): T | undefined {
@@ -138,8 +329,21 @@ class Oauth implements OAuthClientProvider {
       if (err) this.waiter?.reject(new Error(`Sign-in failed: ${err}`))
       else this.waiter?.resolve(code!)
     })
-    await new Promise<void>((ok) => this.server!.listen(this.port, '127.0.0.1', ok))
+    // The registered client's redirect_uris name this port, so keep it across connects.
+    const saved = this.read<number>('port') ?? portOf(this.read<{ redirect_uris?: string[] }>('client')?.redirect_uris?.[0])
+    const bind = (port: number): Promise<boolean> => new Promise((ok) => {
+      const s = this.server!
+      const fail = (): void => { s.off('listening', done); ok(false) }
+      const done = (): void => { s.off('error', fail); ok(true) }
+      s.once('error', fail).once('listening', done).listen(port, '127.0.0.1')
+    })
+    if (!saved || !(await bind(saved))) {
+      if (!(await bind(0))) throw new Error('Could not open a local port for sign-in')
+      // A client registered for another port would be rejected (redirect_uri mismatch): register again.
+      if (saved) this.write('client', undefined)
+    }
     this.port = (this.server.address() as AddressInfo).port
+    if (this.port !== saved) this.write('port', this.port)
   }
 
   close(): void {
@@ -166,16 +370,18 @@ class Oauth implements OAuthClientProvider {
   }
   state(): string { return this.stateValue }
   clientInformation() { return this.staticClient ?? this.read<any>('client') }
-  saveClientInformation(info: unknown): void { this.write('client', info) }
+  saveClientInformation(info: unknown): void { this.write('client', info); this.write('port', this.port) }
   tokens() { return this.read<any>('tokens') }
   saveTokens(t: unknown): void { this.write('tokens', t) }
-  async redirectToAuthorization(url: URL): Promise<void> { await shell.openExternal(url.toString()) }
+  // Background connects (at launch) never open the browser; the connector shows "needs sign-in" instead.
+  async redirectToAuthorization(url: URL): Promise<void> { if (this.interactive) await shell.openExternal(url.toString()) }
   saveCodeVerifier(v: string): void { this.write('verifier', v) }
   codeVerifier(): string { return this.read<string>('verifier') ?? '' }
   invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): void {
     if (scope === 'all' || scope === 'client') this.write('client', undefined)
     if (scope === 'all' || scope === 'tokens') this.write('tokens', undefined)
     if (scope === 'all' || scope === 'verifier') this.write('verifier', undefined)
+    if (scope === 'all') this.write('port', undefined)
   }
   hasTokens(): boolean { return !!this.read('tokens') }
 }
@@ -183,6 +389,10 @@ class Oauth implements OAuthClientProvider {
 export class Connectors {
   private live = new Map<string, Live>()
   private status = new Map<string, ConnectorStatus>()
+  /** Pending automatic reconnects and how many tries each has had. */
+  private timers = new Map<string, ReturnType<typeof setTimeout>>()
+  private attempts = new Map<string, number>()
+  private healthTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(private db: Db, private secrets: Secrets, private registry: ToolRegistry, private changed: () => void) {}
 
@@ -190,21 +400,64 @@ export class Connectors {
     return this.db.getSetting<ConnectorConfig[]>('connectors') ?? []
   }
 
-  /** Catalog entries that match a request and aren't connected yet (for in-chat connect cards). */
+  /** Catalog entries that match a request and aren't connected yet (for in-chat connect cards): by name first, then by what they do ("seo" → Semrush). */
   suggest(query: string): ConnectorPreset[] {
     const q = query.toLowerCase()
     const connected = new Set(this.list().filter((c) => this.status.get(c.id)?.state === 'connected').map((c) => c.preset))
-    return PRESETS.filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app' &&
-      q.split(/[^a-z0-9.]+/).some((w) => w.length > 2 && (p.name.toLowerCase().includes(w) || p.id.startsWith(w))))
+    const words = q.split(/[^a-z0-9.]+/).filter((w) => w.length > 2)
+    const open = PRESETS.filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app')
+    const byName = open.filter((p) => words.some((w) => p.name.toLowerCase().includes(w) || p.id.startsWith(w)))
+    const byUse = open.filter((p) => !byName.includes(p) && words.some((w) => !SUGGEST_STOP.has(w) && p.description.toLowerCase().split(/[^a-z0-9]+/).includes(w)))
+    return [...byName, ...byUse]
   }
 
-  /** One-click connect for a catalog entry (OAuth opens the browser). */
+  /** One-click connect for a catalog entry (OAuth opens the browser). Google apps use the shared client from "Set up Google once". */
   async connectPreset(id: string): Promise<ConnectorStatus> {
     const p = PRESETS.find((x) => x.id === id)
-    if (!p || p.auth === 'google' || p.auth === 'browser' || p.auth === 'app' || !p.url) throw new Error('This connector needs setup in Connect apps.')
+    if (!p || p.auth === 'browser' || p.auth === 'app' || !p.url) throw new Error('This connector needs setup in Connect apps.')
+    if (p.auth === 'google' && !this.googleClient()) throw new Error(GOOGLE_SETUP_NEEDED)
     const existing = this.list().find((c) => c.preset === id)
     const cfg = existing ?? this.save({ name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true })
     return this.connect(cfg.id, true)
+  }
+
+  // ---------------------------------------------------------------- Google OAuth client (shared by Gmail, Calendar, Drive)
+
+  /** The saved Google client (the ID only; the secret stays in the Keychain). */
+  googleClient(): { clientId: string; hasSecret: boolean } | null {
+    const raw = this.secrets.get(GOOGLE_CLIENT_KEY)
+    if (!raw) return null
+    try {
+      const v = JSON.parse(raw) as { clientId?: string; clientSecret?: string }
+      return v.clientId ? { clientId: v.clientId, hasSecret: !!v.clientSecret } : null
+    } catch { return null }
+  }
+
+  /** Saves the Google client once for every Google app; already-added Google connectors pick it up on their next connect. */
+  setGoogleClient(clientId: string, clientSecret?: string): { clientId: string; hasSecret: boolean } {
+    const problem = validateGoogleClient(clientId, clientSecret)
+    if (problem) throw new Error(problem)
+    const prev = this.googleClient()
+    const id = clientId.trim()
+    this.secrets.set(GOOGLE_CLIENT_KEY, JSON.stringify({ clientId: id, clientSecret: clientSecret!.trim() }))
+    // A different client can't use the old one's tokens: Google connectors without their own client sign in again.
+    if (prev && prev.clientId !== id) {
+      for (const c of this.list()) if (GOOGLE_PRESETS.includes(c.preset ?? '') && !c.clientId) new Oauth(c.id, this.secrets).invalidateCredentials('all')
+    }
+    this.changed()
+    return { clientId: id, hasSecret: true }
+  }
+
+  clearGoogleClient(): void {
+    this.secrets.set(GOOGLE_CLIENT_KEY, null)
+    this.changed()
+  }
+
+  private sharedGoogle(): { clientId: string; clientSecret?: string } | null {
+    try {
+      const v = JSON.parse(this.secrets.get(GOOGLE_CLIENT_KEY) ?? 'null') as { clientId?: string; clientSecret?: string } | null
+      return v?.clientId ? { clientId: v.clientId, clientSecret: v.clientSecret } : null
+    } catch { return null }
   }
 
   statuses(): ConnectorStatus[] {
@@ -218,12 +471,55 @@ export class Connectors {
 
   save(c: Omit<ConnectorConfig, 'id'> & { id?: string }): ConnectorConfig {
     if (c.kind === 'remote' && !/^https?:\/\//.test(c.url ?? '')) throw new Error('Enter the server URL (https://…).')
-    if (PRESETS.find((p) => p.id === c.preset)?.auth === 'google' && !c.clientId) throw new Error('Google needs your OAuth client ID (Google Cloud Console → Credentials → Create OAuth client → Desktop app).')
+    if (PRESETS.find((p) => p.id === c.preset)?.auth === 'google' && !c.clientId && !this.googleClient()) throw new Error(GOOGLE_SETUP_NEEDED)
     if (c.kind === 'stdio' && !c.command?.trim()) throw new Error('Enter the command that starts the server.')
     const all = this.list()
     const full: ConnectorConfig = { ...c, id: c.id ?? `${slug(c.name)}-${randomUUID().slice(0, 4)}`, enabled: c.enabled ?? true } as ConnectorConfig
     this.db.setSetting('connectors', [...all.filter((x) => x.id !== full.id), full])
     return full
+  }
+
+  /** Switches one server tool on or off; a live connection picks it up without reconnecting. */
+  setToolEnabled(id: string, tool: string, on: boolean): ConnectorConfig {
+    const c = this.list().find((x) => x.id === id)
+    if (!c) throw new Error('Unknown connector')
+    const off = new Set(c.disabledTools ?? [])
+    if (on) off.delete(tool)
+    else off.add(tool)
+    const next: ConnectorConfig = { ...c, disabledTools: [...off].sort() }
+    if (!next.disabledTools!.length) delete next.disabledTools
+    this.db.setSetting('connectors', this.list().map((x) => (x.id === id ? next : x)))
+    const l = this.live.get(id)
+    if (l) {
+      const t = l.all.find((x) => x.name === tool)
+      // The agent name for exactly this server tool (never a look-alike's: send-email vs send_email).
+      const name = l.names.get(tool)
+      // A tool the live server doesn't offer: the stored setting applies on the next connect.
+      if (name && !on) {
+        this.registry.unregister((d) => d.name === name)
+        l.tools = l.tools.filter((n) => n !== name)
+      } else if (name && t && !l.tools.includes(name)) {
+        this.registry.register(this.toToolDef(next, l.client, t, name))
+        l.tools.push(name)
+      }
+      const st = this.status.get(id)
+      if (st) this.status.set(id, { ...st, tools: l.tools.length })
+    }
+    this.changed()
+    return next
+  }
+
+  /**
+   * Agent tool names the user switched off, across connectors. Recovery of misspelled tool calls uses
+   * this so a call to a disabled tool is never "corrected" into a look-alike that's still on.
+   */
+  disabledToolNames(): Set<string> {
+    const out = new Set<string>()
+    for (const c of this.list()) {
+      const names = this.live.get(c.id)?.names
+      for (const t of c.disabledTools ?? []) out.add(names?.get(t) ?? toolName(c.name, t))
+    }
+    return out
   }
 
   async remove(id: string): Promise<void> {
@@ -234,25 +530,39 @@ export class Connectors {
     this.changed()
   }
 
+  /** Closes the connection and stops any automatic reconnect. */
   async disconnect(id: string): Promise<void> {
+    await this.teardown(id)
+    this.attempts.delete(id)
+    this.setStatus({ id, state: 'disconnected', tools: 0 })
+  }
+
+  /** Drops the live connection (its tools leave the registry) and any pending reconnect. */
+  private async teardown(id: string): Promise<void> {
+    const timer = this.timers.get(id)
+    if (timer) { clearTimeout(timer); this.timers.delete(id) }
     const l = this.live.get(id)
     if (l) {
+      // Out of the map first, so the client's onclose doesn't read this as a dropped connection.
+      this.live.delete(id)
       this.registry.unregister((t) => l.tools.includes(t.name))
       await l.client.close().catch(() => undefined)
-      this.live.delete(id)
     }
-    this.setStatus({ id, state: 'disconnected', tools: 0 })
   }
 
   async connectAll(): Promise<void> {
     await Promise.all(this.list().filter((c) => c.enabled).map((c) => this.connect(c.id, false).catch(() => undefined)))
   }
 
-  /** Connects; with interactive=true a remote server that needs auth opens the browser to sign in. */
-  async connect(id: string, interactive = true): Promise<ConnectorStatus> {
+  /**
+   * Connects; with interactive=true a remote server that needs auth opens the browser to sign in.
+   * A connection that fails for network reasons (offline at launch, server hiccup) retries with backoff.
+   */
+  async connect(id: string, interactive = true, fromRetry = false): Promise<ConnectorStatus> {
     const c = this.list().find((x) => x.id === id)
     if (!c) throw new Error('Unknown connector')
-    await this.disconnect(id)
+    await this.teardown(id)
+    if (!fromRetry) this.attempts.delete(id)
     this.setStatus({ id, state: 'connecting', tools: 0 })
     const client = new Client({ name: 'SahilBot', version: '0.1.0' })
     try {
@@ -260,8 +570,12 @@ export class Connectors {
         const env = Object.fromEntries(Object.entries({ ...process.env, ...(c.env ?? {}) }).filter(([k, v]) => v !== undefined && !SAFE_ENV_BLOCK.test(k))) as Record<string, string>
         await client.connect(new StdioClientTransport({ command: c.command!, args: c.args ?? [], env, stderr: 'ignore' }))
       } else {
-        const secret = this.secrets.get(`mcp:${id}:clientSecret`)
-        const auth = new Oauth(id, this.secrets, c.clientId ? { client_id: c.clientId, ...(secret ? { client_secret: secret } : {}) } : undefined)
+        // Google apps share the client from "Set up Google once" unless this connector has its own.
+        const shared = PRESETS.find((p) => p.id === c.preset)?.auth === 'google' ? this.sharedGoogle() : null
+        const clientId = c.clientId ?? shared?.clientId
+        const secret = this.secrets.get(`mcp:${id}:clientSecret`) ?? (c.clientId ? undefined : shared?.clientSecret)
+        if (PRESETS.find((p) => p.id === c.preset)?.auth === 'google' && !clientId) throw new Error(GOOGLE_SETUP_NEEDED)
+        const auth = new Oauth(id, this.secrets, clientId ? { client_id: clientId, ...(secret ? { client_secret: secret } : {}) } : undefined, interactive)
         await auth.listen()
         const url = new URL(c.url!)
         const headers = c.headerName && this.secrets.get(`mcp:${id}:header`) ? { [c.headerName]: this.secrets.get(`mcp:${id}:header`)! } : undefined
@@ -278,7 +592,7 @@ export class Connectors {
           await attempt()
         } catch (e) {
           if (!(e instanceof UnauthorizedError)) throw e
-          if (!interactive) { this.setStatus({ id, state: 'needs_auth', tools: 0 }); auth.close(); return this.status.get(id)! }
+          if (!interactive) { this.attempts.delete(id); this.setStatus({ id, state: 'needs_auth', tools: 0 }); auth.close(); return this.status.get(id)! }
           this.setStatus({ id, state: 'signing_in', tools: 0 })
           const code = await auth.waitForCode()
           const t = new StreamableHTTPClientTransport(url, { authProvider: auth })
@@ -289,41 +603,168 @@ export class Connectors {
         }
       }
       const { tools } = await client.listTools()
-      const defs: ToolDef[] = tools.map((t) => this.toToolDef(c, client, t))
+      // Tools the user switched off in Connect apps are never offered to the agent.
+      const off = new Set(c.disabledTools ?? [])
+      const names = toolNames(c.name, tools.map((t) => t.name))
+      const defs: ToolDef[] = tools.filter((t) => !off.has(t.name)).map((t) => this.toToolDef(c, client, t, names.get(t.name)!))
       this.registry.register(...defs)
-      this.live.set(id, { client, tools: defs.map((d) => d.name) })
-      const st: ConnectorStatus = { id, state: 'connected', tools: defs.length, toolNames: tools.map((t) => t.name) }
+      this.live.set(id, { client, tools: defs.map((d) => d.name), all: tools as ServerTool[], names })
+      // A local server that exits, or a stream that closes, reconnects on its own.
+      client.onclose = () => { if (this.live.get(id)?.client === client) this.lost(id, 'Connection closed') }
+      this.attempts.delete(id)
+      const st: ConnectorStatus = { id, state: 'connected', tools: defs.length, toolNames: tools.map((t) => t.name), checkedAt: Date.now() }
       this.setStatus(st)
       return st
     } catch (e) {
       await client.close().catch(() => undefined)
-      const st: ConnectorStatus = { id, state: 'error', tools: 0, error: (e as Error).message.slice(0, 300) }
+      const msg = (e as Error).message
+      const st: ConnectorStatus = { id, state: 'error', tools: 0, error: msg.slice(0, 300) }
       this.setStatus(st)
-      return st
+      if (fromRetry || isConnectionError(msg)) this.scheduleReconnect(id, msg)
+      return this.status.get(id) ?? st
     }
   }
 
-  private toToolDef(c: ConnectorConfig, client: Client, t: { name: string; description?: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string } }): ToolDef {
-    const effect = effectFor(t.name, t.annotations)
+  // ---------------------------------------------------------------- health and reconnect
+
+  /** A live connection dropped: its tools leave the agent until it's back, and reconnecting starts. */
+  private lost(id: string, reason: string): void {
+    const l = this.live.get(id)
+    if (!l) return
+    this.live.delete(id)
+    this.registry.unregister((t) => l.tools.includes(t.name))
+    void l.client.close().catch(() => undefined)
+    this.scheduleReconnect(id, reason)
+  }
+
+  private scheduleReconnect(id: string, reason: string): void {
+    const c = this.list().find((x) => x.id === id)
+    if (!c || !c.enabled || this.timers.has(id)) return
+    const attempt = (this.attempts.get(id) ?? 0) + 1
+    const why = reason.replace(/\s+/g, ' ').slice(0, 160)
+    if (attempt > MAX_RECONNECTS) {
+      this.attempts.delete(id)
+      this.setStatus({ id, state: 'error', tools: 0, error: `${why} (stopped retrying; press Reconnect)` })
+      return
+    }
+    this.attempts.set(id, attempt)
+    const wait = backoffMs(attempt)
+    this.setStatus({ id, state: 'reconnecting', tools: 0, error: why, attempt, retryAt: Date.now() + wait })
+    const t = setTimeout(() => { this.timers.delete(id); void this.connect(id, false, true).catch(() => undefined) }, wait)
+    t.unref?.()
+    this.timers.set(id, t)
+  }
+
+  /**
+   * "Test connection": lists the server's tools and times it. A connector that isn't live tries to
+   * connect (without opening the browser); a dropped one starts reconnecting.
+   */
+  async test(id: string): Promise<ConnectorStatus> {
+    const c = this.list().find((x) => x.id === id)
+    if (!c) throw new Error('Unknown connector')
+    const l = this.live.get(id)
+    if (!l) return this.connect(id, false)
+    const t0 = Date.now()
+    try {
+      const { tools } = await l.client.listTools(undefined, { timeout: 20_000 })
+      const latencyMs = Date.now() - t0
+      const now = tools.map((t) => t.name).sort().join('\n')
+      // The server changed its tools: connect again so the agent sees the current set.
+      if (now !== l.all.map((t) => t.name).sort().join('\n')) return this.connect(id, false)
+      const st: ConnectorStatus = { id, state: 'connected', tools: l.tools.length, toolNames: tools.map((t) => t.name), checkedAt: Date.now(), latencyMs }
+      this.setStatus(st)
+      return st
+    } catch (e) {
+      const msg = (e as Error).message
+      if (e instanceof UnauthorizedError || /\b401\b|unauthori[sz]ed|invalid_token|invalid_grant/i.test(msg)) {
+        await this.teardown(id)
+        this.setStatus({ id, state: 'needs_auth', tools: 0, error: 'Sign-in expired', checkedAt: Date.now() })
+        return this.status.get(id)!
+      }
+      this.lost(id, msg)
+      return this.status.get(id)!
+    }
+  }
+
+  /** Checks every live connector now and then (each check is one tools/list call). */
+  startHealth(everyMs = 5 * 60_000): void {
+    if (this.healthTimer) return
+    this.healthTimer = setInterval(() => void this.checkAll(), everyMs)
+    this.healthTimer.unref?.()
+  }
+
+  stopHealth(): void {
+    if (this.healthTimer) clearInterval(this.healthTimer)
+    this.healthTimer = null
+    for (const t of this.timers.values()) clearTimeout(t)
+    this.timers.clear()
+  }
+
+  async checkAll(): Promise<void> {
+    for (const id of [...this.live.keys()]) await this.test(id).catch(() => undefined)
+  }
+
+  // ---------------------------------------------------------------- calls from SahilBot itself (not the model)
+
+  /** True when a connector made from this catalog entry is live. */
+  presetConnected(preset: string): boolean {
+    return this.list().some((c) => c.preset === preset && this.live.has(c.id))
+  }
+
+  /**
+   * Calls one of a connected app's tools from main (e.g. reading an emailed sign-in code). The text
+   * stays in main. Tools the user switched off stay off here too.
+   */
+  async callPresetTool(preset: string, tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+    const c = this.list().find((x) => x.preset === preset && this.live.has(x.id))
+    if (!c) throw new Error(`${preset} is not connected`)
+    if (c.disabledTools?.includes(tool)) throw new Error(`${c.name}'s ${tool} is switched off`)
+    const l = this.live.get(c.id)!
+    if (!l.all.some((t) => t.name === tool)) throw new Error(`${c.name} has no ${tool} tool`)
+    const r = await l.client.callTool({ name: tool, arguments: args }, undefined, { signal, timeout: 30_000 })
+    const { text } = contentOf(r)
+    if (r.isError) throw new Error(text || `${tool} failed`)
+    return text
+  }
+
+  private toToolDef(c: ConnectorConfig, client: Client, t: ServerTool, name: string): ToolDef {
+    const policy = toolPolicy(c.preset, t.name, t.annotations)
+    const lost = (reason: string): void => { if (this.live.get(c.id)?.client === client) this.lost(c.id, reason) }
     return {
-      name: toolName(c.name, t.name),
+      name,
       label: c.name,
       group: c.name,
-      effect,
+      effect: policy.effect,
       untrusted: true,
-      // Tool names use underscores (send_email), which regex word boundaries don't split on.
-      consequential: (args) => effect !== 'read' && CONSEQUENTIAL.test(`${t.name.replace(/[_\-.]+/g, ' ')} ${JSON.stringify(args).slice(0, 200)}`),
+      consequential: (args) => toolPolicy(c.preset, t.name, t.annotations, args).consequential,
+      ...(policy.hardStop ? { hardStop: () => policy.hardStop! } : {}),
       describe: (args) => `${c.name}: ${t.annotations?.title ?? t.name.replace(/_/g, ' ')} ${JSON.stringify(args).slice(0, 160)}`,
       description: `[${c.name}] ${(t.description ?? t.name).slice(0, 900)}`,
       parameters: t.inputSchema && Object.keys(t.inputSchema).length ? t.inputSchema : { type: 'object', properties: {} },
       async run(args, ctx) {
-        const r = await client.callTool({ name: t.name, arguments: args as Record<string, unknown> }, undefined, { signal: ctx.signal, timeout: 120_000 })
-        const parts = (r.content ?? []) as Array<{ type: string; text?: string; data?: string; mimeType?: string; resource?: { text?: string; uri?: string } }>
-        const text = parts.map((p) => (p.type === 'text' ? p.text : p.type === 'resource' ? (p.resource?.text ?? p.resource?.uri) : p.type === 'image' ? '[image attached]' : '')).filter(Boolean).join('\n')
-        const images = parts.filter((p) => p.type === 'image' && p.data).map((p) => `data:${p.mimeType ?? 'image/png'};base64,${p.data}`)
+        let r: Awaited<ReturnType<Client['callTool']>>
+        try {
+          r = await client.callTool({ name: t.name, arguments: args as Record<string, unknown> }, undefined, { signal: ctx.signal, timeout: 120_000 })
+        } catch (e) {
+          const m = (e as Error).message
+          if (!ctx.signal.aborted && isConnectionError(m)) {
+            lost(m)
+            throw new Error(`${c.name} lost its connection (${m.slice(0, 80)}). SahilBot is reconnecting on its own: try again in a minute, or tell the user to check Connect apps.`)
+          }
+          throw e
+        }
+        const { text, images } = contentOf(r)
         if (r.isError) throw new Error(text || `${t.name} failed`)
         return { text: text || '(no output)', images: images.length ? images : undefined, display: t.annotations?.title ?? t.name.replace(/_/g, ' ') }
       }
     }
   }
+}
+
+/** Text and images from an MCP tool result. */
+function contentOf(r: object): { text: string; images: string[] } {
+  const parts = ((r as { content?: unknown }).content ?? []) as Array<{ type: string; text?: string; data?: string; mimeType?: string; resource?: { text?: string; uri?: string } }>
+  const text = parts.map((p) => (p.type === 'text' ? p.text : p.type === 'resource' ? (p.resource?.text ?? p.resource?.uri) : p.type === 'image' ? '[image attached]' : '')).filter(Boolean).join('\n')
+  const images = parts.filter((p) => p.type === 'image' && p.data).map((p) => `data:${p.mimeType ?? 'image/png'};base64,${p.data}`)
+  return { text, images }
 }

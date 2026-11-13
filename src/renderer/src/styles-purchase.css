@@ -1,0 +1,38 @@
+/* Purchase and one-time-code cards: distinct from ordinary approvals so they can't be mistaken for one. */
+.purchase-card, .otp-card { gap: 10px; border: 1.5px solid color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.otp-card { border-color: var(--line); }
+.pc-head { display: flex; gap: 10px; align-items: flex-start; }
+.pc-icon { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.pc-icon.otp { background: var(--hover); color: var(--text); }
+.pc-head-text { min-width: 0; }
+.pc-kicker { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; opacity: .7; }
+.pc-merchant { font-size: 16px; font-weight: 650; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.pc-secure { font-size: 11px; font-weight: 500; opacity: .65; }
+.pc-secure.warn { color: var(--danger); opacity: 1; }
+.pc-changed { font-size: 13px; font-weight: 600; color: var(--danger); }
+.pc-total { display: flex; align-items: baseline; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--hover); }
+.pc-total-label { font-size: 13px; opacity: .7; }
+.pc-total-amount { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pc-total-cur { font-size: 12px; opacity: .6; }
+.pc-total-missing { font-weight: 600; color: var(--danger); }
+.pc-items { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.pc-items li { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-top: 1px solid var(--line); }
+.pc-items li:first-child { border-top: 0; }
+.pc-price { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pc-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+.pc-facts dt { opacity: .65; }
+.pc-facts dd { margin: 0; overflow-wrap: anywhere; }
+.pc-note { font-size: 12px; }
+
+/* Settings → Passwords */
+.pw-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--hover); margin: 4px 0 10px; }
+.pw-tab { border: 0; background: transparent; padding: 5px 14px; border-radius: 7px; font: inherit; font-size: 13px; color: inherit; cursor: pointer; }
+.pw-tab.on { background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); font-weight: 600; }
+.pw-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 0; }
+.pw-form .wide { grid-column: 1 / -1; }
+.pw-form .set-input { width: auto; min-width: 0; }
+.pw-form .row { display: flex; gap: 8px; }
+.pw-form .row .set-input { flex: 1; }
+.pw-form-actions { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; }
+.pw-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; letter-spacing: .12em; }
+.pw-err { color: var(--danger); font-size: 13px; grid-column: 1 / -1; }

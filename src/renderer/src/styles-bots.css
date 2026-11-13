@@ -1,0 +1,290 @@
+/* bots: see design/bot-ui.md (Sidebar (bots) + Chat). Tokens only, so light and dark both work. */
+
+/* ================================================================ sidebar */
+.sidebar.sb2 { width: 288px; }
+.settings-page { inset: 0 0 0 288px; }
+
+/* top bar: room for the traffic lights on the left, round buttons on the right */
+.sb-top { height: 54px; flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 14px 0 84px; }
+.sb-circle {
+  width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: var(--panel); box-shadow: var(--shadow); color: var(--text);
+  transition: background .14s ease-out, transform .14s ease-out;
+}
+.sb-circle:hover { background: var(--hover); }
+.sb-circle:active { transform: scale(.96); }
+.sb2 .side-scroll { padding: 2px 12px 12px; }
+
+/* pinned bots: big avatars with their names, in a centered wrapping row */
+.pin-grid {
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start;
+  padding: 4px 0 10px; border-radius: 18px; outline: 1.5px dashed transparent; outline-offset: -2px;
+  transition: background .14s ease-out, outline-color .14s ease-out;
+}
+.pin-grid.empty { padding: 0; }
+.pin-grid.dragging { outline-color: color-mix(in srgb, var(--text) 22%, transparent); }
+.pin-grid.empty.dragging { min-height: 84px; align-items: center; margin-bottom: 8px; }
+.pin-grid.drop { background: color-mix(in srgb, var(--accent) 8%, transparent); outline-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.pin-drop-hint { font-size: 12px; color: var(--text-3); pointer-events: none; }
+.pin-widget { width: 33.333%; padding: 2px; }
+.pw-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%;
+  padding: 8px 4px 9px; border-radius: 16px; transition: background .14s ease-out;
+}
+.pw-btn:hover { background: var(--hover); }
+.pin-widget.active .pw-btn { background: var(--selected); }
+.pin-widget.over .pw-btn { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.pin-widget .rename { margin-top: 4px; font-size: 12.5px; text-align: center; padding: 3px 6px; }
+.pin-widget > .pw-avatar { margin: 8px auto 0; }
+.pw-avatar { position: relative; width: 64px; height: 64px; display: grid; place-items: center; flex: none; }
+.pw-name { font-size: 12.5px; font-weight: 500; line-height: 1.3; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.pw-star {
+  position: absolute; right: 2px; bottom: 4px; width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--accent); color: #fff; box-shadow: 0 0 0 2.5px var(--sidebar);
+}
+.pw-status {
+  position: absolute; top: 2px; right: 0; width: 18px; height: 18px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--sidebar);
+}
+.pin-widget.active .pw-status { background: var(--selected); }
+
+/* the bot list: one 64px row per bot */
+.bot-list { display: flex; flex-direction: column; gap: 2px; }
+.bot-row { border-radius: 14px; transition: background .14s ease-out; text-align: left; width: 100%; }
+.bot-row:hover { background: var(--hover); }
+.bot-row.active { background: var(--selected); }
+.br-btn { display: flex; align-items: center; gap: 12px; width: 100%; height: 64px; padding: 0 12px 0 10px; text-align: left; min-width: 0; }
+.br-avatar { width: 40px; height: 40px; display: grid; place-items: center; flex: none; }
+.br-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.br-name { font-size: 15px; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.br-preview { font-size: 13px; line-height: 1.35; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.br-btn .rename { flex: 1; min-width: 0; }
+.bot-row.ghost .ghost-avatar { border-radius: 50%; border: 1.5px dashed color-mix(in srgb, var(--text) 25%, transparent); color: var(--text-3); }
+.bot-row.ghost .br-name { font-weight: 500; color: var(--text-2); }
+.bot-row.ghost .br-preview { color: var(--text-3); }
+
+/* status marks: spinner (working), accent dot (needs you), small dot (unread) */
+.sb2 .unread-dot { width: 8px; height: 8px; }
+.need-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.sb2 .row-spin { width: 13px; height: 13px; }
+
+/* Projects + Chats */
+.sb2 .nav-section { margin-top: 14px; }
+.sb2 .nav-label { padding: 2px 4px 4px 10px; min-height: 28px; }
+.sb2 .nav-label > button:first-child { font-size: 12.5px; font-weight: 600; color: var(--text-3); }
+.nav-label-actions { display: inline-flex; gap: 2px; opacity: .6; transition: opacity .14s ease-out; }
+.sb-section:hover .nav-label-actions, .nav-label-actions:focus-within { opacity: 1; }
+.sb2 .nav-add { width: 24px; height: 24px; border-radius: 7px; color: var(--text-3); transition: background .14s ease-out, color .14s ease-out; }
+.sb2 .nav-add:hover, .sb2 .nav-add.on { background: var(--hover); color: var(--text); }
+.sb2 .nav-row { border-radius: 10px; transition: background .14s ease-out; }
+.sb2 .nav-btn { padding: 7px 10px; font-size: 14px; gap: 10px; }
+.sb2 .nav-btn.chat { padding: 7px 10px; }
+.sb2 .nav-btn .t { color: var(--text); }
+.sb2 .nav-empty { font-size: 12.5px; color: var(--text-3); padding: 2px 10px 6px; }
+.row-pin { color: var(--text-3); flex: none; margin-right: -2px; }
+.proj-tile { display: grid; place-items: center; color: #fff; flex: none; }
+.sb-lists { border-radius: 14px; }
+
+/* hidden bots, at the very bottom */
+.sb-hidden { margin-top: 16px; padding-top: 8px; border-top: 1px solid var(--line); }
+.sb-hidden-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 10px; border-radius: 9px; font-size: 12.5px; font-weight: 500; color: var(--text-3); transition: background .14s ease-out, color .14s ease-out; }
+.sb-hidden-toggle:hover { color: var(--text-2); background: var(--hover); }
+.sb-hidden .nav-btn .t { color: var(--text-2); }
+
+/* bottom bar: you + Connect apps */
+.sb-bottom { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 14px 14px; }
+.sb-me {
+  width: 40px; height: 40px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: var(--panel); box-shadow: var(--shadow); color: var(--text); font-size: 13.5px; font-weight: 600; letter-spacing: .02em;
+  transition: background .14s ease-out;
+}
+.sb-connect {
+  flex: 1; min-width: 0; height: 40px; padding: 0 16px; border-radius: 999px; display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--panel); box-shadow: var(--shadow); color: var(--text); font-size: 14px; font-weight: 500; white-space: nowrap;
+  transition: background .14s ease-out;
+}
+.sb-me:hover, .sb-connect:hover { background: var(--hover); }
+.sb-connect .connected-icons { order: -1; }
+.sb-connect .sb-plug { color: var(--text-2); }
+.sb-connect:has(.connected-icons > *) .sb-plug { display: none; }
+
+/* ================================================================ chat header */
+.chat-root .main-header { padding: 0 14px 0 20px; }
+.chat-root .header-title { flex: 1 1 0; min-width: 0; }
+.crumb { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; font-size: 13.5px; font-weight: 500; color: var(--text-2); max-width: 22vw; transition: background .14s ease-out; }
+.crumb:hover { background: var(--hover); color: var(--text); }
+/* The pill sits in the header's flex row between two equal-growing sides (title | pill | actions), so it is
+   centred whenever there's room and, when there isn't, shrinks (name ellipsized) instead of covering the actions. */
+.chat-pill {
+  position: relative; z-index: 5; flex: 0 1 auto; min-width: 0; margin: 0 8px;
+  display: flex; align-items: center; gap: 0; padding: 3px; max-width: 520px;
+  border-radius: 999px; background: var(--panel); box-shadow: var(--shadow); -webkit-app-region: no-drag;
+}
+.chat-pill .bot-pill {
+  position: static; transform: none; box-shadow: none; background: transparent; flex: 0 1 auto;
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 12px 4px 5px; border-radius: 999px;
+  font-size: 14px; font-weight: 600; transition: background .14s ease-out;
+}
+.chat-pill .bot-pill:hover { background: var(--hover); }
+.chat-pill.on .bot-pill { background: var(--selected); }
+.pill-name { white-space: nowrap; flex: 0 1 auto; min-width: 2.5em; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.chat-pill .pill-title { font-weight: 400; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 3 auto; min-width: 0; max-width: none; }
+.chat-pill .title-menu { flex: none; }
+.pill-title::before { content: '·'; margin-right: 8px; color: var(--text-3); }
+.chat-pill .title-menu > button { width: 28px; height: 28px; margin-right: 1px; padding: 0; border-radius: 50%; display: grid; place-items: center; color: var(--text-3); }
+.chat-pill .title-menu > button:hover { background: var(--hover); color: var(--text); }
+.chat-pill .title-menu .menu { left: auto; right: -3px; top: calc(100% + 8px); }
+.chat-pill .title-edit { width: 280px; max-width: 100%; min-width: 0; border-radius: 999px; padding: 5px 14px; font-size: 14px; }
+.chat-root .header-actions { gap: 2px; flex: 1 1 0; justify-content: flex-end; min-width: max-content; }
+.chat-root .header-actions .icon-btn { width: 30px; height: 30px; border-radius: 50%; color: var(--text-3); transition: background .14s ease-out, color .14s ease-out; }
+.chat-root .header-actions .icon-btn:hover { color: var(--text); background: var(--hover); }
+.chat-root .header-actions .icon-btn.on { color: var(--text); background: var(--selected); }
+.chat-root .progress-chip { color: var(--text-2); }
+
+/* ================================================================ messages as bubbles */
+.chat-root .row.ai { display: flex; align-items: flex-end; gap: 6px; flex-wrap: wrap; }
+/* The bubble keeps a readable width; in a narrow column the actions wrap below it instead of squeezing it. */
+.chat-root .row.ai > .ai-col { width: auto !important; max-width: 80% !important; min-width: min(100%, 300px); flex: 0 1 auto; align-items: flex-start; }
+@container (max-width: 560px) { .chat-root .row.ai > .ai-col { max-width: 100% !important; } }
+.chat-root .bubble.ai {
+  background: var(--bubble-ai); padding: 14px 18px; border-radius: 22px; max-width: 100%;
+  font-size: 15px; line-height: 1.6;
+}
+.chat-root .bubble.ai.err { background: color-mix(in srgb, var(--danger) 10%, var(--bubble-ai)); color: var(--danger); }
+.chat-root .bubble.ai > .hint { margin-top: 6px; }
+/* markdown inside a bubble */
+.chat-root .bubble.ai .md p { margin: 0 0 10px; }
+.chat-root .bubble.ai .md > :last-child { margin-bottom: 0; }
+.chat-root .bubble.ai .md h1, .chat-root .bubble.ai .md h2 { font-size: 17px; margin: 18px 0 8px; }
+.chat-root .bubble.ai .md h3 { font-size: 15.5px; margin: 14px 0 6px; }
+.chat-root .bubble.ai .md ul, .chat-root .bubble.ai .md ol { margin: 4px 0 10px; padding-left: 22px; }
+.chat-root .bubble.ai .md li { margin: 3px 0; }
+.chat-root .bubble.ai .md .code { background: var(--bg); margin: 8px 0 12px; border-radius: 12px; }
+.chat-root .bubble.ai .md pre { max-width: 100%; }
+.chat-root .bubble.ai .md table { background: var(--bg); margin: 8px 0 12px; font-size: 14px; }
+.chat-root .bubble.ai .md th { background: color-mix(in srgb, var(--text) 4%, var(--bg)); }
+.chat-root .bubble.ai .md th, .chat-root .bubble.ai .md td { padding: 8px 12px; }
+.chat-root .bubble.ai .md hr { margin: 14px 0; }
+.chat-root .bubble.ai .md blockquote { margin: 6px 0 10px; }
+.chat-root .bubble.ai .reasoning { margin: -2px 0 8px -6px; }
+.chat-root .bubble.ai .reasoning:only-child { margin-bottom: -2px; }
+.chat-root .bubble.ai .reasoning summary { padding: 2px 8px 2px 6px; }
+.chat-root .bubble.ai .reasoning summary:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+
+/* your messages: in the bot's colour */
+.chat-root .row.me .bubble-wrap { max-width: 80%; }
+.chat-root .bubble.me { background: var(--bot); color: var(--bot-text, #fff); border-radius: 22px; padding: 10px 16px; font-size: 15px; line-height: 1.5; }
+.chat-root .bubble.me .file-pill { color: inherit; }
+.chat-root .speaker { margin: 0 0 4px 12px; font-size: 12px; }
+/* group chats: the speaker's colour, adjusted per theme to read at 4.5:1 (computed in ThreadView) */
+.chat-root .speaker.spk-c { color: var(--spk-l); }
+@media (prefers-color-scheme: dark) { .chat-root .speaker.spk-c { color: var(--spk-d); } }
+
+/* back-to-back replies stack 6px apart, with the joined corners tucked in */
+.thread > .block.cont { margin-top: -16px; }
+.block.cont .bubble.ai { border-top-left-radius: 8px; }
+.block:has(+ .block.cont) .bubble.ai { border-bottom-left-radius: 8px; }
+
+/* message actions sit beside the bubble and show on hover / keyboard focus */
+.chat-root .ai-foot { flex: none; margin: 0 0 2px; min-height: 0; gap: 2px; }
+.chat-root .row.ai .ai-foot .msg-actions { opacity: 0; transition: opacity .14s ease-out; }
+.chat-root .row.ai:hover .ai-foot .msg-actions,
+.chat-root .row.ai .ai-foot .msg-actions:focus-within,
+.chat-root .row.ai .ai-foot .msg-actions.pinned { opacity: 1; }
+.chat-root .ai-foot .routed { margin: 0 0 0 2px; opacity: 0; transition: opacity .14s ease-out; white-space: nowrap; }
+.chat-root .row.ai:hover .ai-foot .routed { opacity: 1; }
+.chat-root .ai-foot .icon-btn { width: 28px; height: 28px; border-radius: 50%; }
+.chat-root .row.me .msg-actions .icon-btn { width: 28px; height: 28px; border-radius: 50%; color: var(--text-3); }
+.chat-root .row.me .msg-actions .icon-btn:hover { color: var(--text); }
+.chat-root .sources { margin: 6px 0 0 4px; }
+
+/* system lines: "Created routine · …" */
+.chat-root .notice.sys-line {
+  display: block; align-self: center; max-width: 80%; text-align: center;
+  font-size: 12px; line-height: 1.4; color: var(--text-3);
+}
+.chat-root .notice.sys-line::before, .chat-root .notice.sys-line::after { display: none; }
+.chat-root .stamp { font-size: 12px; }
+
+/* cards between bubbles keep the card look */
+.chat-root .activity { padding-left: 4px; }
+
+/* ================================================================ composer */
+.chat-root .composer .c-btn { width: 34px; height: 34px; }
+.chat-root .c-btn.voice { background: var(--bot); color: var(--bot-text, #fff); transition: filter .14s ease-out, transform .14s ease-out; }
+.chat-root .c-btn.voice:hover { background: var(--bot); color: var(--bot-text, #fff); filter: brightness(1.08); }
+.chat-root .c-btn.voice:active { transform: scale(.95); }
+.chat-root .c-btn.send { background: var(--bot); color: var(--bot-text, #fff); }
+.chat-root .c-btn.send:hover { background: var(--bot); color: var(--bot-text, #fff); opacity: .9; }
+.chat-root .composer .plus-pop > button { width: 34px; height: 34px; }
+
+/* very dark bot colours on the dark theme: a hairline so the shape still reads */
+@media (prefers-color-scheme: dark) {
+  .chat-root .bubble.me, .chat-root .c-btn.voice, .chat-root .c-btn.send { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); }
+}
+
+/* ================================================================ ⌘K palette */
+.palette-wrap { padding: 10vh 24px 24px; }
+.palette-to {
+  width: min(640px, 100%); padding: 12px 10px 12px 18px; gap: 10px; color: var(--text-3);
+  background: var(--panel); border: 1px solid var(--line); border-bottom: 0; border-radius: 20px 20px 0 0; box-shadow: var(--shadow);
+}
+.palette-to input { font-size: 16px; }
+.palette {
+  width: min(640px, 100%); max-height: min(62vh, 560px); overflow-y: auto; gap: 0; padding: 6px 8px 8px;
+  border-radius: 0 0 20px 20px; border-top: 1px solid var(--line);
+}
+.pal-group { font-size: 12px; font-weight: 600; color: var(--text-3); padding: 10px 12px 4px; }
+.pal-entry:first-child .pal-group { padding-top: 4px; }
+.pal-item { width: 100%; padding: 8px 12px; gap: 12px; font-size: 15px; border-radius: 12px; }
+.pal-label { min-width: 0; display: flex; flex-direction: column; }
+.pal-sub { font-size: 12.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pal-item .kbd { opacity: 0; transition: opacity .12s ease-out; }
+.pal-item.on .kbd { opacity: 1; }
+.pal-empty { padding: 20px; text-align: center; font-size: 14px; color: var(--text-3); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-circle, .pw-btn, .bot-row, .c-btn.voice { transition: none; }
+}
+
+/* dark: the floating round buttons and the header pill need a surface that reads on the dark sidebar/background */
+@media (prefers-color-scheme: dark) {
+  .sb-circle, .sb-me, .sb-connect { background: var(--hover); }
+  .sb-circle:hover, .sb-me:hover, .sb-connect:hover { background: var(--selected); }
+  .chat-pill { background: var(--bubble-ai); }
+  .chat-pill .bot-pill:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+  .chat-pill.on .bot-pill { background: color-mix(in srgb, var(--text) 10%, transparent); }
+  .pw-star { box-shadow: 0 0 0 2.5px var(--sidebar); }
+}
+
+.chat-root .thread { container-type: inline-size; }
+
+/* ================================================================ narrow windows
+   The chat column never drops below ~480px: the side panels (bot details 340px, right panel 420px+, next to the
+   288px sidebar) shrink first, then float over the chat below the header instead of squeezing it. The header stays
+   uncovered, so the pill and the panel toggles keep working. */
+.app { position: relative; }
+.app > .right { width: clamp(420px, min(46vw, 100vw - 768px), 760px); min-width: 0; max-width: none; }
+@media (max-width: 1107px) {
+  .app > .bd {
+    position: absolute; top: 52px; right: 0; bottom: 0; height: auto; z-index: 4;
+    border-top: 1px solid var(--line); border-top-left-radius: 14px; box-shadow: -10px 0 32px rgba(0, 0, 0, .14);
+  }
+}
+@media (max-width: 1187px) {
+  .app > .right {
+    position: absolute; top: 52px; right: 0; bottom: 0; width: 420px; z-index: 4;
+    border-top: 1px solid var(--line); border-top-left-radius: 14px; box-shadow: -10px 0 32px rgba(0, 0, 0, .14); overflow: hidden;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .app > .bd, .app > .right { box-shadow: -10px 0 32px rgba(0, 0, 0, .45); }
+}
+
+/* the message box in a narrow column: the bar wraps rather than pushing voice/send out of the box */
+.composer-bar { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+.composer-bar > * { flex-shrink: 0; }
+.composer-bar .spacer { flex: 1 1 0; min-width: 0; }
+.under { row-gap: 2px; }
+.under-pick > button { white-space: nowrap; }
+.chat-root .notice.interrupted { display: flex; gap: 10px; justify-content: center; align-items: center; }

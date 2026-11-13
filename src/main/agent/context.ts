@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Message } from '@shared/types'
 import type { WireMessage } from '../llm/client'
+import { contextBlock, seenLines, type ContextSection } from './prompt'
 import type { ThreadState } from './types'
 
 // ---------------------------------------------------------------------------
@@ -10,27 +12,50 @@ import type { ThreadState } from './types'
 
 export interface TokenCounter {
   count(text: string): Promise<number>
+  /** An exact count already known (no request), if any. */
+  cached?(text: string): number | undefined
 }
 
 export const IMAGE_TOKENS = 1200
 export const estimate = (text: string): number => Math.ceil(text.length / 3.5)
+/**
+ * An estimate that rarely undercounts: ~3 chars per token for ASCII (code and JSON run denser than
+ * prose) and about one token per other character (CJK, emoji). Used to decide when exact counts matter.
+ */
+export function upperEstimate(text: string): number {
+  let other = 0
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) > 127) other++
+  return Math.ceil((text.length - other) / 3 + other * 1.1)
+}
+
+/** Counts per server and model, shared by every run (a new run doesn't re-tokenize the whole history). */
+const counterState = new Map<string, { supported?: boolean; cache: Map<string, number> }>()
+const cacheKey = (text: string): string => (text.length <= 256 ? text : `${text.length}:${createHash('sha1').update(text).digest('base64')}`)
 
 export class ServerTokenCounter implements TokenCounter {
-  private supported: boolean | undefined
-  private cache = new Map<string, number>()
+  private s: { supported?: boolean; cache: Map<string, number> }
 
-  constructor(private baseUrl: string, private model: string) {}
+  constructor(private baseUrl: string, private model: string) {
+    const key = `${this.root}|${model}`
+    this.s = counterState.get(key) ?? { cache: new Map() }
+    counterState.set(key, this.s)
+  }
 
   private get root(): string {
     return this.baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '')
   }
 
+  cached(text: string): number | undefined {
+    return text ? this.s.cache.get(cacheKey(text)) : 0
+  }
+
   async count(text: string): Promise<number> {
     if (!text) return 0
-    const hit = this.cache.get(text)
+    const key = cacheKey(text)
+    const hit = this.s.cache.get(key)
     if (hit !== undefined) return hit
     let n: number | undefined
-    if (this.supported !== false && text.length > 200) {
+    if (this.s.supported !== false && text.length > 200) {
       try {
         // llama.cpp: {content} -> {tokens}; vLLM: {model, prompt} -> {count}
         const res = await fetch(`${this.root}/tokenize`, {
@@ -42,15 +67,16 @@ export class ServerTokenCounter implements TokenCounter {
         if (res.ok) {
           const j = (await res.json()) as { tokens?: unknown[]; count?: number }
           n = j.count ?? j.tokens?.length
-          this.supported = n !== undefined
-        } else this.supported = false
+          this.s.supported = n !== undefined
+        } else this.s.supported = false
       } catch {
-        this.supported = false
+        this.s.supported = false
       }
     }
-    n ??= estimate(text)
-    if (this.cache.size > 5000) this.cache.clear()
-    this.cache.set(text, n)
+    // Only exact counts are cached: an estimate after a failed request shouldn't stick.
+    if (n === undefined) return estimate(text)
+    if (this.s.cache.size > 5000) this.s.cache.clear()
+    this.s.cache.set(key, n)
     return n
   }
 }
@@ -69,9 +95,11 @@ export class ResultStore {
     mkdirSync(dir, { recursive: true })
   }
 
-  async maybeOffload(text: string, id: string, counter: TokenCounter): Promise<{ text: string; offloaded: boolean; tokens: number }> {
+  async maybeOffload(text: string, id: string, counter: TokenCounter, limit = RESULT_LIMIT): Promise<{ text: string; offloaded: boolean; tokens: number }> {
+    // Clearly under the limit: no tokenizer request between steps.
+    if (upperEstimate(text) <= limit) return { text, offloaded: false, tokens: counter.cached?.(text) ?? estimate(text) }
     const tokens = await counter.count(text)
-    if (tokens <= RESULT_LIMIT) return { text, offloaded: false, tokens }
+    if (tokens <= limit) return { text, offloaded: false, tokens }
     writeFileSync(join(this.dir, `${id}.txt`), text)
     const lines = text.split('\n').length
     const head = text.slice(0, HEAD_CHARS)
@@ -152,6 +180,19 @@ export function wrapToolOutput(tool: string, text: string, untrusted: boolean): 
   return `<tool_output tool="${tool}" trust="${untrusted ? 'untrusted' : 'local'}">\n${safe}\n</tool_output>${note}`
 }
 
+/** Runs fn over items, at most `limit` at a time, keeping order. */
+async function mapLimitSimple<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i])
+    }
+  }))
+  return out
+}
+
 function turns(ms: Message[]): Message[][] {
   const out: Message[][] = []
   for (const m of ms) {
@@ -185,8 +226,35 @@ export function toWire(ms: Message[], maxImages = 2, rawSince = 0): WireMessage[
       imagesLeft--
     }
   }
+  // Every tool call needs a result right after its assistant turn (a stop or quit mid-batch leaves gaps),
+  // and every result needs its call: providers reject the whole request otherwise.
+  let open: string[] = []
+  let images: WireMessage[] = []
+  const settle = (): void => {
+    for (const id of open) out.push({ role: 'tool', tool_call_id: id, content: '[Not run: the run was stopped before this tool finished.]' })
+    open = []
+    // Images from tool results ride in one user turn after the whole batch, so tool messages stay contiguous.
+    out.push(...images)
+    images = []
+  }
   for (const m of ms) {
     const withImages = imageBudget.get(m.id) && m.images?.length
+    if (m.role === 'tool') {
+      const at = open.indexOf(m.toolCallId!)
+      if (at < 0) continue
+      open.splice(at, 1)
+      out.push({ role: 'tool', tool_call_id: m.toolCallId!, name: m.toolName, content: m.content + (m.images?.length && !withImages ? '\n[screenshot omitted to save context]' : '') })
+      // Most servers can't take images in tool messages, so they ride in a user turn right after.
+      if (withImages) {
+        images.push({
+          role: 'user',
+          imagesFor: m.toolCallId,
+          content: [{ type: 'text', text: `[Image returned by ${m.toolName}]` }, ...m.images!.map((url) => ({ type: 'image_url' as const, image_url: { url } }))]
+        })
+      }
+      continue
+    }
+    settle()
     if (m.role === 'user') {
       // Notes the app adds for the model (reactions, attached files) ride along with the text.
       const text = m.meta?.note ? `${m.meta.note}\n\n${m.content}` : m.content
@@ -207,17 +275,10 @@ export function toWire(ms: Message[], maxImages = 2, rawSince = 0): WireMessage[
           ? m.toolCalls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.arguments } }))
           : undefined
       })
-    } else if (m.role === 'tool') {
-      out.push({ role: 'tool', tool_call_id: m.toolCallId!, name: m.toolName, content: m.content + (m.images?.length && !withImages ? '\n[screenshot omitted to save context]' : '') })
-      // Most servers can't take images in tool messages, so they ride in a user turn right after.
-      if (withImages) {
-        out.push({
-          role: 'user',
-          content: [{ type: 'text', text: `[Image returned by ${m.toolName}]` }, ...m.images!.map((url) => ({ type: 'image_url' as const, image_url: { url } }))]
-        })
-      }
+      open = m.toolCalls?.map((c) => c.id) ?? []
     }
   }
+  settle()
   return out
 }
 
@@ -229,6 +290,69 @@ export interface Prepared {
 }
 
 export const KEEP_TOOL_OUTPUTS = 6
+/** Below this share of the input budget (by upperEstimate), the prompt is measured without the server's tokenizer. */
+export const EXACT_AT = 0.6
+
+/** Messages after the compaction boundary that belong in the prompt. */
+export function activeMessages(messages: Message[], state: ThreadState): Message[] {
+  let ms = messages.filter((m) => m.kind === 'normal' && m.status !== 'error' && !(m.status === 'streaming' && !m.content && !m.toolCalls))
+  if (state.compaction) {
+    const i = ms.findIndex((m) => m.id === state.compaction!.boundaryId)
+    if (i >= 0) ms = ms.slice(i + 1)
+  }
+  return ms
+}
+
+// ---------------------------------------------------------------------------
+// Pinned context: the per-run <context> block (date, memories, project notes) rides at the start of
+// the user message that started the run. It is stored with the thread so it is byte-identical on every
+// later step and turn; the system prompt and tools stay the same for the whole chat.
+// ---------------------------------------------------------------------------
+
+const pinId = (messageId: string, speakerId?: string): string => (speakerId ? `${speakerId}/${messageId}` : messageId)
+
+/** Messages with their pinned context blocks in front (for the request; the database is untouched). */
+export function withPinned(ms: Message[], state: ThreadState, speakerId?: string): Message[] {
+  const pins = state.pins
+  if (!pins) return ms
+  return ms.map((m) => {
+    const p = m.role === 'user' ? pins[pinId(m.id, speakerId)] : undefined
+    return p ? { ...m, content: `${p}\n\n${m.content}` } : m
+  })
+}
+
+/**
+ * Pins the context block for the run started by `openerId`: only what the model hasn't seen in the system
+ * prompt or in earlier blocks still in the prompt. Once per message (a retry reuses it); `refresh` after a
+ * compaction, which dropped earlier blocks. Returns true when it changed the thread state.
+ */
+export function pinRunContext(o: {
+  state: ThreadState
+  messages: Message[]
+  openerId: string
+  speakerId?: string
+  system: string
+  sections: () => ContextSection[]
+  refresh?: boolean
+}): boolean {
+  const { state } = o
+  const pins = (state.pins ??= {})
+  const key = pinId(o.openerId, o.speakerId)
+  if (key in pins && !o.refresh) return false
+  const earlier = activeMessages(o.messages, state)
+    .filter((m) => m.role === 'user' && m.id !== o.openerId)
+    .map((m) => pins[pinId(m.id, o.speakerId)])
+    .filter((p): p is string => !!p)
+  const block = contextBlock(o.sections(), seenLines(o.system, ...earlier))
+  if (key in pins && pins[key] === block) return false
+  pins[key] = block
+  // Blocks for messages that are gone (retried or edited away) go too.
+  if (Object.keys(pins).length > 40) {
+    const ids = new Set(o.messages.map((m) => m.id))
+    for (const k of Object.keys(pins)) if (!ids.has(k.slice(k.indexOf('/') + 1))) delete pins[k]
+  }
+  return true
+}
 
 export class ContextManager {
   constructor(private counter: TokenCounter, private summarize: Summarize, private store?: ResultStore) {}
@@ -263,18 +387,39 @@ export class ContextManager {
 
   /** Messages after the compaction boundary that belong in the prompt. */
   active(messages: Message[], state: ThreadState): Message[] {
-    let ms = messages.filter((m) => m.kind === 'normal' && m.status !== 'error' && !(m.status === 'streaming' && !m.content && !m.toolCalls))
-    if (state.compaction) {
-      const i = ms.findIndex((m) => m.id === state.compaction!.boundaryId)
-      if (i >= 0) ms = ms.slice(i + 1)
-    }
-    return ms
+    return activeMessages(messages, state)
   }
 
-  async measure(system: string, toolsJson: string, ms: Message[], state: ThreadState): Promise<number> {
-    let used = (await this.counter.count(this.systemText(system, state))) + (await this.counter.count(toolsJson))
-    for (const m of ms) used += await this.size(m)
-    return used
+  /**
+   * Prompt size in tokens. Well under `limit` (by a deliberately high estimate) it answers from cached
+   * counts and estimates, so the server's tokenizer is never on the way to the first token; near the
+   * limit, where compaction decisions need it, every piece is counted exactly (in parallel).
+   */
+  async measure(system: string, toolsJson: string, ms: Message[], state: ThreadState, limit?: number): Promise<number> {
+    const sys = this.systemText(system, state)
+    if (limit !== undefined) {
+      const known = (t: string): number | undefined => (t ? this.counter.cached?.(t) : 0)
+      let est = 0
+      let upper = 0
+      const add = (t: string): void => {
+        const k = known(t)
+        est += k ?? estimate(t)
+        upper += k ?? upperEstimate(t)
+      }
+      add(sys)
+      add(toolsJson)
+      for (const m of ms) {
+        const fixed = 4 + (m.images?.length ?? 0) * IMAGE_TOKENS
+        est += fixed
+        upper += fixed
+        add(m.content)
+        for (const c of m.toolCalls ?? []) add(c.name + c.arguments)
+      }
+      if (upper < EXACT_AT * limit) return est
+    }
+    const [a, b] = await Promise.all([this.counter.count(sys), this.counter.count(toolsJson)])
+    const sizes = await mapLimitSimple(ms, 8, (m) => this.size(m))
+    return a + b + sizes.reduce((n, x) => n + x, 0)
   }
 
   /**
@@ -283,12 +428,13 @@ export class ContextManager {
    */
   async prepare(opts: { system: string; toolsJson: string; messages: Message[]; state: ThreadState; window: number; appendOnly?: boolean; allowCompact?: boolean }): Promise<Prepared> {
     const { system, toolsJson, state, window } = opts
+    const input = window - OUTPUT_RESERVE
     let ms = this.active(opts.messages, state)
-    let used = await this.measure(system, toolsJson, ms, state)
+    let used = await this.measure(system, toolsJson, ms, state, input)
     let compacted: Prepared['compacted']
 
-    const input = window - OUTPUT_RESERVE
-    if (used > COMPACT_AT * input && opts.allowCompact !== false) {
+    // Claude compacts only when a run starts (keeps its cache), unless the prompt would no longer fit at all.
+    if (used > COMPACT_AT * input && (opts.allowCompact !== false || used > input)) {
       const ts = turns(ms)
       // Don't compact all the way down: keep recent turns verbatim, filling up to KEEP_SHARE of the budget.
       let keep = 0
@@ -308,19 +454,25 @@ export class ContextManager {
         if (text.length > maxChars) text = text.slice(0, maxChars / 2) + '\n…\n' + text.slice(-maxChars / 2)
         let summary = (await this.summarize(text, SUMMARY_MAX_TOKENS)).trim()
         while ((await this.counter.count(summary)) > SUMMARY_MAX_TOKENS) summary = summary.slice(0, Math.floor(summary.length * 0.9))
+        // An empty summary would silently drop the goal and everything before: keep the history instead.
+        if (!summary) return this.finish(opts, ms, used, undefined)
         const before = used
         state.compaction = { boundaryId: old[old.length - 1].id, summary, at: Date.now() }
         ms = this.active(opts.messages, state)
-        used = await this.measure(system, toolsJson, ms, state)
+        used = await this.measure(system, toolsJson, ms, state, input)
         compacted = { ...state.compaction, before, after: used }
       }
     }
 
-    if (used > COMPACT_AT * input && !opts.appendOnly) {
-      ms = this.elide(ms)
-      used = await this.measure(system, toolsJson, ms, state)
-    }
+    return this.finish(opts, ms, used, compacted)
+  }
 
+  private async finish(opts: { system: string; toolsJson: string; state: ThreadState; window: number; appendOnly?: boolean }, ms: Message[], used: number, compacted: Prepared['compacted']): Promise<Prepared> {
+    const { system, toolsJson, state, window } = opts
+    if (used > COMPACT_AT * (window - OUTPUT_RESERVE) && (!opts.appendOnly || used > window - OUTPUT_RESERVE)) {
+      ms = this.elide(ms)
+      used = await this.measure(system, toolsJson, ms, state, window - OUTPUT_RESERVE)
+    }
     return { wire: [{ role: 'system', content: this.systemText(system, state) }, ...toWire(ms, 2, state.compaction?.at ?? 0)], used, window, compacted }
   }
 }

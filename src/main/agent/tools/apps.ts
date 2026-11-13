@@ -1,8 +1,15 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, resolve, sep } from 'node:path'
+import { runCheck } from '../../code/checks'
+import { backoff, cloudRunning, composeCursorPrompt, type CursorBrief, describeCloud, newRunState, prUrlsOf, readCursorEvent, readCursorJson, type RepoFacts } from '../../code/cursor'
+import { formatFindings, gh, ghInstalled, git, scanDiffForSecrets } from '../../code/git'
+import { clip, runProcess, stripAnsi } from '../../code/proc'
+import { detectProject } from '../../code/project'
+import { isGitRepo } from '../../code/search'
 import type { ToolContext, ToolDef } from '../types'
+import { classify } from './shell'
 
 // Apps on this Mac that work with no setup: Cursor (open files, hand coding tasks to Cursor's agent)
 // and Apple Notes, Reminders and Calendar (through their own scripting, so macOS asks once per app).
@@ -23,10 +30,11 @@ const CURSOR_CLI = `${CURSOR_APP}/Contents/Resources/app/bin/cursor`
 const AGENT_PATHS = [join(homedir(), '.local/bin/cursor-agent'), '/usr/local/bin/cursor-agent', '/opt/homebrew/bin/cursor-agent', join(homedir(), '.local/bin/agent')]
 
 export const cursorInstalled = (): boolean => existsSync(CURSOR_APP)
-const agentPath = (): string | undefined => AGENT_PATHS.find((p) => existsSync(p))
+/** CURSOR_AGENT_PATH points at a cursor-agent installed somewhere else. */
+const agentPath = (): string | undefined => [process.env.CURSOR_AGENT_PATH, ...AGENT_PATHS].find((p): p is string => !!p && existsSync(p))
 
 /** Paths the agent may hand to Cursor: the workspace and anything the user attached. */
-function allowed(p: string, ctx: ToolContext): string {
+function allowed(p: string, ctx: Pick<ToolContext, 'workspaceDir' | 'state'>): string {
   const abs = isAbsolute(p) ? p : resolve(ctx.workspaceDir, p)
   const real = existsSync(abs) ? realpathSync(abs) : abs
   const roots = [ctx.workspaceDir, ...(ctx.state.roots ?? [])].map((r) => (existsSync(r) ? realpathSync(r) : r))
@@ -34,10 +42,23 @@ function allowed(p: string, ctx: ToolContext): string {
   return real
 }
 
-type CursorArgs = {
-  action: 'status' | 'open' | 'agent' | 'cloud_launch' | 'cloud_list' | 'cloud_status' | 'cloud_followup' | 'cloud_stop'
+export type CursorArgs = {
+  action: 'status' | 'open' | 'prompt' | 'agent' | 'cloud_launch' | 'cloud_list' | 'cloud_status' | 'cloud_wait' | 'cloud_followup' | 'cloud_stop' | 'cloud_review'
   path?: string; line?: number; task?: string; folder?: string; repo?: string; ref?: string; id?: string; model?: string
+  /** For agent: continue the same Cursor chat in this folder (it remembers what it did). */
+  resume?: boolean
+  /** Structured brief: turned into a complete Cursor prompt (shown in the approval). */
+  goal?: string; context?: string; files?: string[]; errors?: string; constraints?: string[]; dont_change?: string[]; acceptance?: string[]; tests?: string[]
+  /** agent: run the tests/type check afterwards (default true). */
+  verify?: boolean
+  /** cloud_launch/cloud_followup: wait (bounded) for the run to finish. */
+  wait?: boolean
+  /** Minutes to wait (cloud) or to let the local agent run. */
+  minutes?: number
 }
+
+/** Cursor agent chats by project folder, so follow-ups continue the same session. */
+const cursorSessions = new Map<string, string>()
 
 const CURSOR_API = 'https://api.cursor.com'
 
@@ -52,46 +73,87 @@ async function cursorApi(key: string, method: string, path: string, body?: unkno
   const text = await res.text()
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) throw new Error('Cursor rejected the API key. Add a valid one in Settings → API Keys & Servers (Cursor dashboard → API Keys).')
+    if (res.status === 404) throw new Error(`Cursor has no agent or run at ${path.split('?')[0]}. Check the id with cloud_list.`)
     if (res.status === 409) throw new Error('That Cursor agent is still working. Check its status, or wait before sending a follow-up.')
+    if (res.status === 429) throw new Error('Cursor is rate-limiting requests. Wait a minute before checking again.')
     throw new Error(`Cursor API ${res.status}: ${text.slice(0, 300)}`)
   }
   return text ? JSON.parse(text) : {}
 }
 
-export function cursorTool(cursorKey: () => string | undefined = () => undefined): ToolDef<CursorArgs> {
+/** The prompt a Cursor agent gets: the composed brief when a goal is given, else the raw task. */
+function promptFor(a: CursorArgs, mode: CursorBrief['mode'], folder?: string): string {
+  if (!a.goal?.trim()) return (a.task ?? '').trim()
+  const facts: RepoFacts = {}
+  if (folder && existsSync(folder)) {
+    try {
+      const info = detectProject(folder)
+      facts.project = info
+      facts.name = basename(folder)
+      try { facts.branch = execFileSync('git', ['branch', '--show-current'], { cwd: folder, timeout: 3000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null } catch { /* not a repo */ }
+      facts.existing = Object.fromEntries((a.files ?? []).map((f) => [f, existsSync(isAbsolute(f) ? f : join(folder, f))]))
+    } catch { /* best effort */ }
+  } else if (a.repo) facts.name = a.repo.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
+  const brief = composeCursorPrompt({ goal: a.goal, context: a.context, files: a.files, errors: a.errors, constraints: a.constraints, dontChange: a.dont_change, acceptance: a.acceptance, tests: a.tests, mode }, facts)
+  return a.task?.trim() ? `${brief}\n\n# More instructions\n${a.task.trim()}` : brief
+}
+
+export function cursorTool(cursorKey: () => string | undefined = () => undefined, getWorkspace: () => string = () => homedir()): ToolDef<CursorArgs> {
+  const folderOf = (a: CursorArgs): string | undefined => (a.folder ? (isAbsolute(a.folder) ? a.folder : resolve(getWorkspace(), a.folder)) : undefined)
+  const shownPrompt = (a: CursorArgs, mode: CursorBrief['mode']): string => {
+    const p = promptFor(a, mode, mode === 'local' ? folderOf(a) : undefined)
+    return p.length > 4000 ? `${p.slice(0, 4000)}\n…` : p
+  }
   return {
     name: 'cursor',
     label: 'Cursor',
     group: 'Cursor (code editor and agents)',
-    effect: (a) => (['status', 'cloud_list', 'cloud_status'].includes(a.action) ? 'read' : a.action === 'open' ? 'write_local' : 'write_external'),
-    // Cursor agents can change code and run commands: always confirm in Auto.
-    consequential: (a) => ['agent', 'cloud_launch', 'cloud_followup', 'cloud_stop'].includes(a.action),
-    describe: (a) => a.action === 'agent' ? `Ask Cursor's agent to work in ${a.folder}: "${(a.task ?? '').slice(0, 160)}"`
-      : a.action === 'cloud_launch' ? `Start a Cursor cloud agent on ${a.repo}: "${(a.task ?? '').slice(0, 160)}"`
-        : a.action === 'cloud_followup' ? `Send Cursor agent ${a.id} a follow-up: "${(a.task ?? '').slice(0, 160)}"`
-          : a.action === 'cloud_stop' ? `Stop Cursor agent ${a.id}` : a.action === 'open' ? `Open ${a.path} in Cursor` : 'Check Cursor',
-    description: 'Cursor, the AI code editor, and its agents. status: what is installed and connected. open: show a file or folder in Cursor (path, line). agent: run Cursor\'s agent on this Mac in a project folder (task, folder) and get its report. Cloud agents (needs a Cursor API key): cloud_launch(task, repo GitHub URL, ref?, model?) starts an agent that works on the repo and can open a PR; cloud_list; cloud_status(id) shows progress, result and branch/PR; cloud_followup(id, task) sends more instructions; cloud_stop(id).',
+    effect: (a) => (['status', 'prompt', 'cloud_list', 'cloud_status', 'cloud_wait', 'cloud_review'].includes(a.action) ? 'read' : a.action === 'open' || a.action === 'agent' ? 'write_local' : 'write_external'),
+    // Cloud agents change a GitHub repo and open PRs: always confirm in Auto.
+    consequential: (a) => ['cloud_launch', 'cloud_followup', 'cloud_stop'].includes(a.action),
+    describe: (a) => a.action === 'agent' ? `Cursor's agent will work in ${a.folder}${a.resume ? ' (continuing its last chat)' : ''} with this prompt:\n\n${shownPrompt(a, 'local')}`
+      : a.action === 'cloud_launch' ? `Start a Cursor cloud agent on ${a.repo}${a.ref ? ` (${a.ref})` : ''}; it works on a branch and opens a PR. Prompt:\n\n${shownPrompt(a, 'cloud')}`
+        : a.action === 'cloud_followup' ? `Send Cursor agent ${a.id} a follow-up:\n\n${shownPrompt(a, 'followup')}`
+          : a.action === 'cloud_stop' ? `Stop Cursor agent ${a.id}` : a.action === 'open' ? `Open ${a.path} in Cursor` : a.action === 'prompt' ? 'Draft a Cursor prompt' : `Cursor ${a.action.replace('_', ' ')}`,
+    description: `Cursor, the AI code editor, and its agents. Delegate well-scoped coding work; review what comes back before calling it done.
+- status: what is installed and connected. open(path, line?): show a file or folder in Cursor.
+- prompt(goal, context?, files?, errors?, constraints?, dont_change?, acceptance?, tests?, folder?): draft the complete prompt a Cursor agent would get (goal, constraints, files, acceptance criteria, commands to verify, definition of done) so you can show or refine it. agent and cloud_launch take the same fields and build this prompt themselves (or take a raw task).
+- agent(folder, goal… or task, resume?, verify?, minutes?): run Cursor's agent on this Mac in a project folder with live progress; returns its summary, the exact diff it made (against a restore point taken before it started), and the test/type-check results (verify, default on). resume: true continues its previous chat there (follow-ups, fixes).
+- Cloud agents (need a Cursor API key): cloud_launch(repo GitHub URL, goal… or task, ref?, model?, wait?) works on a branch and opens a PR; cloud_status(id); cloud_wait(id, minutes?) checks with backoff until the run ends (bounded; then use cloud_status later or a schedule); cloud_followup(id, goal… or task, wait?); cloud_stop(id); cloud_review(id): the run's result, PR, checks and diff (via gh) for review; cloud_list.`,
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['status', 'open', 'agent', 'cloud_launch', 'cloud_list', 'cloud_status', 'cloud_followup', 'cloud_stop'] },
+        action: { type: 'string', enum: ['status', 'open', 'prompt', 'agent', 'cloud_launch', 'cloud_list', 'cloud_status', 'cloud_wait', 'cloud_followup', 'cloud_stop', 'cloud_review'] },
         path: { type: 'string', description: 'For open: file or folder (absolute, or relative to the workspace)' },
         line: { type: 'integer', minimum: 1, description: 'For open: line to jump to' },
-        task: { type: 'string', description: 'For agent, cloud_launch, cloud_followup: the instructions, specific and complete' },
-        folder: { type: 'string', description: 'For agent: the project folder to work in' },
+        goal: { type: 'string', description: 'What must be true when the agent is done, specific and complete' },
+        context: { type: 'string', description: 'What you found already: relevant code, search results, how things fit together, the user\'s words' },
+        files: { type: 'array', items: { type: 'string' }, description: 'Files to read or change first' },
+        errors: { type: 'string', description: 'Error output or failing tests to fix' },
+        constraints: { type: 'array', items: { type: 'string' } },
+        dont_change: { type: 'array', items: { type: 'string' }, description: 'Files, APIs or behaviour that must stay as they are' },
+        acceptance: { type: 'array', items: { type: 'string' }, description: 'Checkable acceptance criteria' },
+        tests: { type: 'array', items: { type: 'string' }, description: 'Commands that must pass (default: the project\'s type check and tests)' },
+        task: { type: 'string', description: 'A raw prompt instead of (or added to) the structured brief' },
+        folder: { type: 'string', description: 'For agent and prompt: the project folder' },
         repo: { type: 'string', description: 'For cloud_launch: GitHub repository URL, e.g. https://github.com/me/app' },
         ref: { type: 'string', description: 'For cloud_launch: branch or ref to start from (default: the default branch)' },
-        id: { type: 'string', description: 'For cloud_status, cloud_followup, cloud_stop: the agent id (bc-…)' },
-        model: { type: 'string', description: 'Optional Cursor model id' }
+        id: { type: 'string', description: 'Cloud agent id (bc-…)' },
+        model: { type: 'string', description: 'Optional Cursor model id' },
+        resume: { type: 'boolean', description: 'For agent: continue the previous Cursor chat in this folder (follow-ups, fixes)' },
+        verify: { type: 'boolean', description: 'For agent: run the checks afterwards (default true)' },
+        wait: { type: 'boolean', description: 'For cloud_launch/cloud_followup: wait for the run to finish (bounded by minutes)' },
+        minutes: { type: 'integer', minimum: 1, maximum: 60, description: 'agent: time limit (default 20). cloud_wait/wait: how long to wait (default 10, max 30)' }
       },
       required: ['action'],
       additionalProperties: false,
       allOf: [
         { if: { properties: { action: { const: 'open' } } }, then: { required: ['path'] } },
-        { if: { properties: { action: { const: 'agent' } } }, then: { required: ['task', 'folder'] } },
-        { if: { properties: { action: { const: 'cloud_launch' } } }, then: { required: ['task', 'repo'] } },
-        { if: { properties: { action: { enum: ['cloud_status', 'cloud_stop'] } } }, then: { required: ['id'] } },
-        { if: { properties: { action: { const: 'cloud_followup' } } }, then: { required: ['id', 'task'] } }
+        { if: { properties: { action: { const: 'prompt' } } }, then: { required: ['goal'] } },
+        { if: { properties: { action: { const: 'agent' } } }, then: { required: ['folder'], anyOf: [{ required: ['task'] }, { required: ['goal'] }] } },
+        { if: { properties: { action: { const: 'cloud_launch' } } }, then: { required: ['repo'], anyOf: [{ required: ['task'] }, { required: ['goal'] }] } },
+        { if: { properties: { action: { enum: ['cloud_status', 'cloud_stop', 'cloud_wait', 'cloud_review'] } } }, then: { required: ['id'] } },
+        { if: { properties: { action: { const: 'cloud_followup' } } }, then: { required: ['id'], anyOf: [{ required: ['task'] }, { required: ['goal'] }] } }
       ]
     },
     async run(a, ctx) {
@@ -101,7 +163,7 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
         case 'status': {
           const agent = agentPath()
           return {
-            text: `Cursor app: ${cursorInstalled() ? 'installed' : 'not installed (cursor.com/download)'}\nCursor agent on this Mac: ${agent ? `installed (${agent})` : 'not installed. The user can install it with: curl https://cursor.com/install -fsS | bash'}\nCursor cloud agents: ${key ? 'connected (API key saved)' : 'not connected (add a Cursor API key in Settings)'}`,
+            text: `Cursor app: ${cursorInstalled() ? 'installed' : 'not installed (cursor.com/download)'}\nCursor agent on this Mac: ${agent ? `installed (${agent})` : 'not installed. The user can install it with: curl https://cursor.com/install -fsS | bash'}\nCursor cloud agents: ${key ? 'connected (API key saved)' : 'not connected (add a Cursor API key in Settings)'}\nGitHub CLI for reviewing PRs: ${ghInstalled() ? 'installed' : 'not installed (brew install gh)'}`,
             display: cursorInstalled() ? 'Cursor is installed' : 'Cursor not installed'
           }
         }
@@ -112,46 +174,190 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
           else await run('open', ['-a', 'Cursor', p], { timeout: 15_000 })
           return { text: `Opened ${p} in Cursor.`, display: `opened ${p.split('/').pop()}`, path: p }
         }
-        case 'agent': {
-          const agent = agentPath()
-          if (!agent) throw new Error('Cursor\'s agent isn\'t installed on this Mac. Tell the user they can install it with: curl https://cursor.com/install -fsS | bash (then sign in with cursor-agent login), or use a Cursor cloud agent.')
-          const folder = allowed(a.folder!, ctx)
-          if (!statSync(folder).isDirectory()) throw new Error(`${a.folder} is not a folder.`)
-          const args = ['-p', '--force', '--trust', '--output-format', 'text', ...(a.model ? ['--model', a.model] : []), a.task!]
-          const out = await run(agent, args, { cwd: folder, timeout: 20 * 60_000, signal: ctx.signal })
-          return { text: `Cursor's agent finished in ${folder}:\n\n${out.trim() || '(no output)'}`, display: 'Cursor agent finished' }
+        case 'prompt': {
+          const folder = a.folder ? allowed(a.folder, ctx) : undefined
+          const text = promptFor(a, a.repo && !folder ? 'cloud' : 'local', folder)
+          return { text: `Draft Cursor prompt (${text.length} characters). Show it to the user if they want to see it, then pass the same fields to cursor(action="agent") or cloud_launch:\n\n${text}`, display: 'drafted a Cursor prompt' }
         }
+        case 'agent': return localAgent(a, ctx)
         case 'cloud_launch': {
-          const r = await cursorApi(key!, 'POST', '/v1/agents', { prompt: { text: a.task }, repos: [{ url: a.repo, ...(a.ref ? { startingRef: a.ref } : {}) }], ...(a.model ? { model: { id: a.model } } : {}), autoCreatePR: true }, ctx.signal)
-          return { text: `Started Cursor cloud agent ${r.agent?.id} (${r.run?.status ?? 'creating'}). Watch it at ${r.agent?.url ?? 'cursor.com/agents'}. Check progress with cloud_status.`, display: `started ${r.agent?.id}` }
+          const prompt = promptFor(a, 'cloud')
+          const r = await cursorApi(key!, 'POST', '/v1/agents', { prompt: { text: prompt }, repos: [{ url: a.repo, ...(a.ref ? { startingRef: a.ref } : {}) }], ...(a.model ? { model: { id: a.model } } : {}), autoCreatePR: true }, ctx.signal)
+          const id = r.agent?.id ?? r.id
+          const started = `Started Cursor cloud agent ${id} (${r.run?.status ?? 'creating'}). Watch it at ${r.agent?.url ?? 'cursor.com/agents'}.`
+          if (!a.wait || !id) return { text: `${started} Check it with cloud_wait (bounded wait with backoff) or cloud_status; then review the PR with cloud_review before reporting.`, display: `started ${id}` }
+          const w = await waitCloud(key!, id, a.minutes, ctx)
+          return { text: `${started}\n\n${w.text}`, display: w.display }
         }
         case 'cloud_list': {
           const r = await cursorApi(key!, 'GET', '/v1/agents?limit=20', undefined, ctx.signal)
-          const items = (r.items ?? []) as Array<{ id: string; name?: string; status: string; repos?: Array<{ url: string }>; updatedAt?: string }>
+          const items = (r.items ?? r.agents ?? []) as Array<{ id: string; name?: string; status: string; repos?: Array<{ url: string }>; updatedAt?: string }>
           return { text: items.length ? items.map((x) => `- ${x.id} · ${x.name ?? ''} · ${x.status} · ${x.repos?.map((rp) => rp.url).join(', ') ?? ''} · ${x.updatedAt ?? ''}`).join('\n') : 'No Cursor cloud agents.', display: `${items.length} Cursor agents` }
         }
         case 'cloud_status': {
-          const ag = await cursorApi(key!, 'GET', `/v1/agents/${encodeURIComponent(a.id!)}`, undefined, ctx.signal)
-          const runInfo = ag.latestRunId ? await cursorApi(key!, 'GET', `/v1/agents/${encodeURIComponent(a.id!)}/runs/${encodeURIComponent(ag.latestRunId)}`, undefined, ctx.signal) : null
-          const branches = (runInfo?.git?.branches ?? []) as Array<{ repoUrl: string; branch: string; prUrl?: string }>
-          return {
-            text: `Agent ${ag.id} (${ag.name ?? ''}): ${ag.status}\nLatest run: ${runInfo?.status ?? 'none'}${runInfo?.durationMs ? ` · ${Math.round(runInfo.durationMs / 1000)}s` : ''}\n${branches.map((b) => `Branch ${b.branch} on ${b.repoUrl}${b.prUrl ? ` · PR ${b.prUrl}` : ''}`).join('\n')}\n${runInfo?.result ? `Result:\n${typeof runInfo.result === 'string' ? runInfo.result : JSON.stringify(runInfo.result).slice(0, 4000)}` : ''}\nOpen: ${ag.url ?? ''}`,
-            display: `${ag.id} · ${runInfo?.status ?? ag.status}`
-          }
+          const { agent, run: latest } = await cloudState(key!, a.id!, ctx.signal)
+          return { text: describeCloud(agent, latest), display: `${agent.id} · ${latest?.status ?? agent.status}` }
+        }
+        case 'cloud_wait': {
+          const w = await waitCloud(key!, a.id!, a.minutes, ctx)
+          return { text: w.text, display: w.display }
         }
         case 'cloud_followup': {
-          const r = await cursorApi(key!, 'POST', `/v1/agents/${encodeURIComponent(a.id!)}/runs`, { prompt: { text: a.task } }, ctx.signal)
-          return { text: `Sent the follow-up to ${a.id} (run ${r.run?.id ?? r.id ?? ''}, ${r.run?.status ?? r.status ?? 'queued'}).`, display: `follow-up sent to ${a.id}` }
+          const r = await cursorApi(key!, 'POST', `/v1/agents/${encodeURIComponent(a.id!)}/runs`, { prompt: { text: promptFor(a, 'followup') } }, ctx.signal)
+          const sent = `Sent the follow-up to ${a.id} (run ${r.run?.id ?? r.id ?? ''}, ${r.run?.status ?? r.status ?? 'queued'}).`
+          if (!a.wait) return { text: `${sent} Check it with cloud_wait or cloud_status.`, display: `follow-up sent to ${a.id}` }
+          const w = await waitCloud(key!, a.id!, a.minutes, ctx)
+          return { text: `${sent}\n\n${w.text}`, display: w.display }
         }
         case 'cloud_stop': {
-          const ag = await cursorApi(key!, 'GET', `/v1/agents/${encodeURIComponent(a.id!)}`, undefined, ctx.signal)
-          if (!ag.latestRunId) return { text: `${a.id} has no running work.`, display: 'nothing to stop' }
-          await cursorApi(key!, 'POST', `/v1/agents/${encodeURIComponent(a.id!)}/runs/${encodeURIComponent(ag.latestRunId)}/cancel`, {}, ctx.signal)
+          const { agent, run: latest } = await cloudState(key!, a.id!, ctx.signal)
+          if (!latest || !cloudRunning(latest.status)) return { text: `${a.id} has no running work${latest ? ` (last run: ${latest.status})` : ''}.`, display: 'nothing to stop' }
+          await cursorApi(key!, 'POST', `/v1/agents/${encodeURIComponent(a.id!)}/runs/${encodeURIComponent(agent.latestRunId)}/cancel`, {}, ctx.signal)
           return { text: `Stopped ${a.id}'s current run.`, display: `stopped ${a.id}` }
+        }
+        case 'cloud_review': {
+          const { agent, run: latest } = await cloudState(key!, a.id!, ctx.signal)
+          const parts = [describeCloud(agent, latest)]
+          if (cloudRunning(latest?.status)) parts.push('\nThe run is still going: review once it finishes (cloud_wait).')
+          const prs = prUrlsOf(latest)
+          if (!prs.length) parts.push('\nNo pull request yet.')
+          else if (!ghInstalled()) parts.push(`\nThe GitHub CLI (gh) isn't installed, so the diff can't be fetched here. Open ${prs[0]} in the browser, or ask the user to "brew install gh".`)
+          else {
+            const cwd = ctx.workspaceDir
+            for (const url of prs.slice(0, 2)) {
+              try {
+                const view = await gh(cwd, ['pr', 'view', url, '--json', 'title,state,additions,deletions,changedFiles,statusCheckRollup,files'], { signal: ctx.signal })
+                const v = JSON.parse(view)
+                const checks = (v.statusCheckRollup ?? []) as Array<{ name?: string; context?: string; conclusion?: string; state?: string; status?: string }>
+                parts.push(`\nPR ${url}: ${v.title} (${v.state}) +${v.additions} −${v.deletions} in ${v.changedFiles} files`)
+                if (checks.length) parts.push(`Checks: ${checks.map((c) => `${c.name ?? c.context}=${c.conclusion || c.state || c.status}`).join(', ')}`)
+                const diff = await gh(cwd, ['pr', 'diff', url, '--color', 'never'], { signal: ctx.signal, timeoutMs: 90_000 })
+                parts.push(`Diff:\n${clip(diff.trim(), 40_000)}`)
+              } catch (e) { parts.push(`\nCouldn't read ${url} with gh: ${(e as Error).message}`) }
+            }
+            parts.push('\nReview: does the diff do exactly the goal, nothing more? Any failing checks, missing tests, secrets, or risky changes? Send fixes with cloud_followup; tell the user what you verified.')
+          }
+          return { text: parts.join('\n'), display: prs.length ? 'reviewed PR' : `${agent.id} · ${latest?.status ?? agent.status}` }
         }
       }
     }
   }
+}
+
+async function cloudState(key: string, id: string, signal?: AbortSignal): Promise<{ agent: any; run: any }> {
+  const agent = await cursorApi(key, 'GET', `/v1/agents/${encodeURIComponent(id)}`, undefined, signal)
+  const latest = agent.latestRunId ? await cursorApi(key, 'GET', `/v1/agents/${encodeURIComponent(id)}/runs/${encodeURIComponent(agent.latestRunId)}`, undefined, signal) : null
+  return { agent, run: latest }
+}
+
+const sleep = (ms: number, signal: AbortSignal): Promise<void> => new Promise((ok, fail) => {
+  if (signal.aborted) return fail(new Error('Stopped.'))
+  const t = setTimeout(() => { signal.removeEventListener('abort', onAbort); ok() }, ms)
+  const onAbort = (): void => { clearTimeout(t); fail(new Error('Stopped.')) }
+  signal.addEventListener('abort', onAbort, { once: true })
+})
+
+/** Polls a cloud agent with growing gaps (10s → 60s) until its run ends or the time is up. */
+async function waitCloud(key: string, id: string, minutes: number | undefined, ctx: ToolContext): Promise<{ text: string; display: string }> {
+  const deadline = Date.now() + Math.min(minutes ?? 10, 30) * 60_000
+  let last = ''
+  for (let attempt = 0; ; attempt++) {
+    const { agent, run: latest } = await cloudState(key, id, ctx.signal)
+    const st = latest?.status ?? agent.status
+    if (st !== last) { ctx.progress?.(`Cursor cloud agent ${id}: ${st}`); last = st }
+    if (!cloudRunning(st)) {
+      const prs = prUrlsOf(latest)
+      return { text: `${describeCloud(agent, latest)}\n\n${prs.length ? `Next: review the PR with cursor(action="cloud_review", id="${id}") (diff and checks) before telling the user it's done.` : 'No PR was opened; read the result above.'}`, display: `${id} · ${st}` }
+    }
+    const wait = backoff(attempt) * 1000
+    if (Date.now() + wait > deadline) {
+      return { text: `${describeCloud(agent, latest)}\n\nStill ${st} after waiting. Check again later with cloud_wait or cloud_status (or schedule a check); don't loop on it.`, display: `${id} still ${st}` }
+    }
+    await sleep(wait, ctx.signal)
+  }
+}
+
+/** Runs cursor-agent headless with live progress, then shows exactly what it changed and checks it. */
+async function localAgent(a: CursorArgs, ctx: ToolContext): Promise<{ text: string; display: string }> {
+  const agent = agentPath()
+  if (!agent) throw new Error('Cursor\'s agent isn\'t installed on this Mac. Tell the user they can install it with: curl https://cursor.com/install -fsS | bash (then sign in with cursor-agent login), or use a Cursor cloud agent.')
+  const folder = allowed(a.folder!, ctx)
+  if (!statSync(folder).isDirectory()) throw new Error(`${a.folder} is not a folder.`)
+  const prompt = promptFor(a, 'local', folder)
+  if (!prompt) throw new Error('Give the agent a goal (or task).')
+  // A restore point: the working tree as it is now, so the report shows only what Cursor changed.
+  const repo = await isGitRepo(folder)
+  let basePoint: string | undefined
+  let untrackedBefore = new Set<string>()
+  if (repo) {
+    basePoint = (await git(folder, ['stash', 'create'], { signal: ctx.signal }).catch(() => '')).trim() || (await git(folder, ['rev-parse', 'HEAD'], { signal: ctx.signal }).catch(() => '')).trim() || undefined
+    untrackedBefore = new Set((await git(folder, ['ls-files', '--others', '--exclude-standard'], { signal: ctx.signal }).catch(() => '')).split('\n').filter(Boolean))
+  }
+  const prev = a.resume ? cursorSessions.get(folder) : undefined
+  const args = ['-p', '--force', '--trust', '--output-format', 'stream-json', ...(a.model ? ['--model', a.model] : []), ...(prev ? ['--resume', prev] : []), prompt]
+  const st = newRunState()
+  // Cursor's events are few (a line per tool call or message): pass each one on, none dropped.
+  const tick = { push: (l: string): void => { try { ctx.progress?.(l) } catch { /* progress is best-effort */ } }, flush: (): void => undefined }
+  ctx.progress?.(`Cursor agent starting in ${basename(folder)}…`)
+  const r = await runProcess(agent, args, {
+    cwd: folder,
+    timeoutMs: Math.min(a.minutes ?? 20, 60) * 60_000,
+    signal: ctx.signal,
+    maxChars: 8_000_000,
+    onLine: (l, stream) => {
+      const p = stream === 'stdout' ? readCursorEvent(l, st) : null
+      if (p) tick.push(p)
+    }
+  })
+  tick.flush()
+  readCursorJson(r.stdout, st)
+  if (st.sessionId) cursorSessions.set(folder, st.sessionId)
+  if (r.stopped) throw new Error('Stopped. Cursor\'s agent was stopped part-way; check git diff for partial changes.')
+  const summary = (st.result ?? st.lastText ?? '').trim()
+  if ((r.code !== 0 && !summary) || st.isError) {
+    const why = stripAnsi(r.stderr || r.stdout).trim().split('\n').slice(-8).join('\n')
+    if (/login|auth|unauthori/i.test(why)) throw new Error('Cursor\'s agent isn\'t signed in. Ask the user to run "cursor-agent login" in Terminal once.')
+    throw new Error(`Cursor's agent ${r.timedOut ? `ran out of time (${Math.min(a.minutes ?? 20, 60)} min)` : 'failed'}: ${(summary || why).slice(0, 800)}`)
+  }
+  const parts = [`Cursor's agent finished in ${folder}${prev ? ' (continued its previous chat)' : ''}${st.durationMs ? ` after ${Math.round(st.durationMs / 1000)}s` : ''}${r.timedOut ? ' (time limit reached)' : ''}.`, '', 'Its summary (verify it; don\'t just trust it):', summary || '(no summary)']
+  let changed = false
+  if (repo && basePoint) {
+    const stat = (await git(folder, ['diff', '--stat', basePoint], { signal: ctx.signal }).catch(() => '')).trim()
+    const diff = (await git(folder, ['diff', basePoint], { signal: ctx.signal, timeoutMs: 60_000 }).catch(() => '')).trim()
+    const fresh = (await git(folder, ['ls-files', '--others', '--exclude-standard'], { signal: ctx.signal }).catch(() => '')).split('\n').filter((f) => f && !untrackedBefore.has(f))
+    changed = !!stat || fresh.length > 0
+    parts.push('', `What it changed (against restore point ${basePoint.slice(0, 10)}; undo with: git stash && git checkout ${basePoint.slice(0, 10)} -- . if needed, which asks the user):`)
+    parts.push(stat || '(no changes to tracked files)')
+    if (fresh.length) parts.push(`New files: ${fresh.slice(0, 40).join(', ')}`)
+    if (diff) parts.push('', clip(diff, 30_000))
+    const secrets = scanDiffForSecrets(diff)
+    if (secrets.length) parts.push('', `Warning: the changes may contain secrets:\n${formatFindings(secrets)}`)
+  } else {
+    changed = st.filesTouched.size > 0
+    parts.push('', st.filesTouched.size ? `Files it wrote: ${[...st.filesTouched].slice(0, 40).join(', ')}` : '(not a git repo: no diff available)')
+  }
+  if (st.commands.length) parts.push('', `Commands it ran: ${st.commands.slice(0, 15).map((c) => `\`${c.slice(0, 100)}\``).join(', ')}`)
+  let verdict = ''
+  if (a.verify !== false && changed) {
+    const info = detectProject(folder)
+    const specs = (a.tests?.length ? a.tests : [...info.typecheck.map((t) => t.command), ...(info.test ? [info.test.command] : [])])
+      .filter((c) => ['read', 'write_local'].includes(classify(c).effect))
+    if (specs.length) {
+      parts.push('', 'Verification:')
+      let ok = true
+      for (const cmd of specs.slice(0, 4)) {
+        const tool = info.test?.command === cmd ? info.test.tool : info.typecheck.find((t) => t.command === cmd)?.tool ?? (/tsc/.test(cmd) ? 'tsc' : /pytest/.test(cmd) ? 'pytest' : 'generic')
+        const kind = info.typecheck.some((t) => t.command === cmd) || /\btsc\b|mypy|cargo check|go vet/.test(cmd) ? 'typecheck' as const : 'test' as const
+        const res = await runCheck({ cwd: folder, kind, spec: { command: cmd, tool, kind }, timeoutMs: 10 * 60_000, signal: ctx.signal, progress: ctx.progress, tailLines: 20 })
+        parts.push(res.text)
+        ok &&= res.ok
+        if (res.stopped) break
+      }
+      verdict = ok ? 'checks passed' : 'checks failed'
+      parts.push('', ok ? 'All checks passed. Still read the diff for scope and style before reporting.' : 'Checks failed: send Cursor a follow-up with the failures (agent with resume: true and errors), or fix it yourself with the code tool.')
+    } else parts.push('', 'No test or type-check command found: review the diff by reading it, and run the app if you can.')
+  }
+  return { text: parts.join('\n'), display: `Cursor agent ${changed ? 'made changes' : 'finished (no changes)'}${verdict ? ` · ${verdict}` : ''}` }
 }
 
 // ------------------------------------------------------------------ Apple Notes, Reminders, Calendar

@@ -83,7 +83,7 @@ describe('phase 3: browser pane + browser tools + vault', () => {
 
     // Credentials were hard stops (asked, even in Auto). Sending the form is consequential and asked;
     // clicking "Sign in" and typing into fields are routine, so Auto ran them without interrupting.
-    expect(asked.filter((a) => a.includes('Hard stop: typing the saved login'))).toHaveLength(2)
+    expect(asked.filter((a) => /typing the saved login/i.test(a) && a.includes('This types one of your saved passwords'))).toHaveLength(2)
     expect(asked.some((a) => a.includes('Send message'))).toBe(true)
     expect(asked.some((a) => a.includes('Click button "Sign in"'))).toBe(false)
     expect(asked).toHaveLength(3)

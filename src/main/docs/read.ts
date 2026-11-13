@@ -51,6 +51,18 @@ export async function xlsxSheets(path: string, maxRows = 2000): Promise<Array<{ 
   const ExcelJS = (await import('exceljs')).default
   const wb = new ExcelJS.Workbook()
   await wb.xlsx.readFile(path)
+  return sheetsOf(wb, maxRows)
+}
+
+/** The same, from the file's bytes (the knowledge base reads a file once, without following links). */
+export async function xlsxSheetsFrom(data: Buffer, maxRows = 2000): Promise<Array<{ name: string; rows: Cell[][] }>> {
+  const ExcelJS = (await import('exceljs')).default
+  const wb = new ExcelJS.Workbook()
+  await wb.xlsx.load(data as unknown as ArrayBuffer)
+  return sheetsOf(wb, maxRows)
+}
+
+function sheetsOf(wb: import('exceljs').Workbook, maxRows: number): Array<{ name: string; rows: Cell[][] }> {
   return wb.worksheets.map((ws) => {
     const rows: Cell[][] = []
     ws.eachRow({ includeEmpty: false }, (row, n) => {
@@ -79,8 +91,13 @@ export async function xlsxText(path: string): Promise<string> {
 }
 
 export async function pptxSlides(path: string): Promise<Array<{ n: number; texts: string[]; notes: string }>> {
+  return pptxSlidesFrom(readFileSync(path))
+}
+
+/** The same, from the file's bytes. */
+export async function pptxSlidesFrom(data: Buffer): Promise<Array<{ n: number; texts: string[]; notes: string }>> {
   const JSZip = (await import('jszip')).default
-  const zip = await JSZip.loadAsync(readFileSync(path))
+  const zip = await JSZip.loadAsync(data)
   const slideFiles = Object.keys(zip.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))
     .sort((a, b) => Number(a.match(/(\d+)\.xml$/)![1]) - Number(b.match(/(\d+)\.xml$/)![1]))
   const texts = (xml: string): string[] =>

@@ -54,9 +54,16 @@ describe('attached folders', () => {
     writeFileSync(join(ws, 'b.txt'), '2')
     const manage = fileTools(() => ws, ws).find((t) => t.name === 'file_manage')!
     expect(manage.hardStop!({ op: 'delete', path: 'a.txt' })).toMatch(/Trash/)
-    expect((manage.effect as (a: unknown) => string)({ op: 'delete', path: 'a.txt' })).toBe('destructive')
-    expect((manage.effect as (a: unknown) => string)({ op: 'move', path: 'a.txt', to: 'b.txt' })).toBe('destructive')
-    expect((manage.effect as (a: unknown) => string)({ op: 'move', path: 'a.txt', to: 'c.txt' })).toBe('write_local')
+    const effect = manage.effect as (a: unknown, c: { roots: string[] }) => string
+    expect(effect({ op: 'delete', path: 'a.txt' }, { roots: [] })).toBe('destructive')
+    expect(effect({ op: 'move', path: 'a.txt', to: 'b.txt' }, { roots: [] })).toBe('destructive')
+    expect(effect({ op: 'move', path: 'a.txt', to: 'c.txt' }, { roots: [] })).toBe('write_local')
+    // Inside an attached folder: a new name is a plain write, an existing one is an overwrite.
+    const att = mkdtempSync(join(tmpdir(), 'att-'))
+    writeFileSync(join(att, 'kept.txt'), '3')
+    expect(effect({ op: 'copy', path: 'a.txt', to: join(att, 'new.txt') }, { roots: [att] })).toBe('write_local')
+    expect(effect({ op: 'copy', path: 'a.txt', to: join(att, 'kept.txt') }, { roots: [att] })).toBe('destructive')
+    expect(effect({ op: 'copy', path: 'a.txt', to: join(att, 'new.txt') }, { roots: [] })).toBe('destructive')
   })
 })
 
@@ -118,5 +125,16 @@ describe('keyless search fallbacks parse their pages', () => {
       .toEqual([{ title: 'Anthropic - Wikipedia', url: 'https://en.wikipedia.org/wiki/Anthropic', snippet: 'An AI company.' }])
     expect(parseMojeek('<ul class="results-standard"><li><a class="title" href="https://example.com/a">A</a><p class="s">snip</p></li></ul>'))
       .toEqual([{ title: 'A', url: 'https://example.com/a', snippet: 'snip' }])
+  })
+})
+
+describe('team reports', () => {
+  test('the lead sees every report: each gets an even share instead of one cut through the middle', async () => {
+    const { agentsTool } = await import('../../src/main/agent/tools/agents')
+    const reports = Array.from({ length: 12 }, (_, i) => ({ title: `Part ${i + 1}`, status: 'done', report: `FINDING-${i + 1} ` + 'detail '.repeat(3000) }))
+    const out = await agentsTool().run({ tasks: reports.map((r) => ({ title: r.title, task: 'x' })) }, { spawnAgents: async () => reports, outputBudget: 20_000 } as never)
+    for (let i = 1; i <= 12; i++) expect(out.text).toContain(`FINDING-${i} `)
+    expect(out.text.length).toBeLessThan(20_000 * 3.5)
+    expect(out.text).toMatch(/Don't redo their research/)
   })
 })

@@ -6,7 +6,8 @@ uses: 0
 category: Research
 ---
 
-1. Break the question into 2-5 specific sub-questions. For big topics, send each to a helper with the agents tool.
+1. Use the research tool first where it fits: research(source="pubmed") then "pubmed_abstract" for papers, "clinical_trials" for trials, "drug_label" for official FDA labels, "arxiv" for preprints, "doi" for citations. Then:
+   Break the question into 2-5 specific sub-questions. For big topics, send each to a helper with the agents tool.
 2. For each: web_search with specific queries (names, dates, "official", site: filters). Open the best 2-3 results with fetch_page; prefer official sites, primary sources and recent dates.
 3. Cross-check every important claim in at least two independent sources. Note disagreements and dates.
 4. If search is unavailable, fetch well-known pages directly (official site, Wikipedia) and say so.

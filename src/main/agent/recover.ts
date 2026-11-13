@@ -1,4 +1,6 @@
 import type { ToolCall } from '@shared/types'
+import { repairJson } from './validate'
+import { familyToolCalls } from '../llm/tool-adapters'
 
 // Local models on OpenAI-compatible servers sometimes write the tool call into the
 // text instead of the tool_calls field (Hermes/Qwen <tool_call> tags, fenced JSON,
@@ -12,10 +14,10 @@ const FENCED = /```(?:json|tool_call)?\s*(\{[\s\S]*?\})\s*```/g
 
 interface RawCall { name?: string; arguments?: unknown; parameters?: unknown; args?: unknown; function?: { name?: string; arguments?: unknown } }
 
-function toCall(raw: RawCall, known: Set<string>, i: number): ToolCall | null {
+function toCall(raw: RawCall, known: Set<string>, i: number, disabled?: Set<string>): ToolCall | null {
   const name = raw.name ?? raw.function?.name
   if (!name) return null
-  const fixed = fixName(name, known)
+  const fixed = fixName(name, known, disabled)
   if (!fixed) return null
   const args = raw.arguments ?? raw.parameters ?? raw.args ?? raw.function?.arguments ?? {}
   return { id: `text_${i}`, name: fixed, arguments: typeof args === 'string' ? args : JSON.stringify(args) }
@@ -28,13 +30,16 @@ function tryJson(s: string): RawCall | RawCall[] | null {
     try {
       return JSON.parse(s.replace(/,\s*([}\]])/g, '$1')) as RawCall
     } catch {
-      return null
+      // Single quotes, bare keys, Python literals, a missing final brace: the same repair tool arguments get.
+      const fixed = repairJson(s)
+      if (fixed === null) return null
+      try { return JSON.parse(fixed) as RawCall } catch { return null }
     }
   }
 }
 
-/** Pulls tool calls out of text. Returns the calls and the text with them removed. */
-export function recoverToolCalls(content: string, known: Set<string>): { calls: ToolCall[]; rest: string } {
+/** Pulls tool calls out of text. Returns the calls and the text with them removed. `disabled`: see fixName. */
+export function recoverToolCalls(content: string, known: Set<string>, disabled?: Set<string>): { calls: ToolCall[]; rest: string } {
   const calls: ToolCall[] = []
   // A model that stopped at "</function" or forgot the closing tag (adapted from OpenHands _fix_stopword, MIT).
   if ((content.match(/<function=/g) ?? []).length === 1 && !/<\/function>\s*$/.test(content.trim())) {
@@ -45,7 +50,7 @@ export function recoverToolCalls(content: string, known: Set<string>): { calls: 
     rest = rest.replace(re, (whole, body: string) => {
       const parsed = tryJson(body)
       const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : []
-      const found = list.map((r) => toCall(r, known, calls.length)).filter((c): c is ToolCall => !!c)
+      const found = list.map((r) => toCall(r, known, calls.length, disabled)).filter((c): c is ToolCall => !!c)
       if (!found.length) return whole
       calls.push(...found)
       return ''
@@ -54,16 +59,27 @@ export function recoverToolCalls(content: string, known: Set<string>): { calls: 
   take(TAGGED)
   if (!calls.length) {
     rest = rest.replace(XMLISH, (whole, name: string, body: string) => {
-      const fixed = fixName(name, known)
+      const fixed = fixName(name, known, disabled)
       if (!fixed) return whole
-      const args: Record<string, unknown> = {}
+      let args: Record<string, unknown> = {}
       for (const m of body.matchAll(/<parameter=([\w.-]+)>\s*([\s\S]*?)\s*<\/parameter>/g)) {
         const v = m[2]
         try { args[m[1]] = JSON.parse(v) } catch { args[m[1]] = v }
       }
+      // Llama 3.1's variant: <function=name>{json}</function>.
+      if (!Object.keys(args).length && body.trim().startsWith('{')) {
+        const parsed = tryJson(body.trim())
+        if (parsed && !Array.isArray(parsed)) args = parsed as Record<string, unknown>
+      }
       calls.push({ id: `text_${calls.length}`, name: fixed, arguments: JSON.stringify(args) })
       return ''
     })
+  }
+  // Model families' own call syntaxes (Llama, Mistral, Gemma, LFM, DeepSeek, gpt-oss, ReAct…): see llm/tool-adapters.ts.
+  if (!calls.length) {
+    const fam = familyToolCalls(content, known)
+    const found = fam.calls.map((c) => toCall(c, known, calls.length, disabled)).filter((c): c is ToolCall => !!c)
+    if (found.length) { calls.push(...found.map((c, i) => ({ ...c, id: `text_${i}` }))); rest = fam.rest }
   }
   // A fenced block only counts when it is (almost) the whole reply; JSON shown to the user stays text.
   if (!calls.length && content.replace(FENCED, '').trim().length < 40) take(FENCED)
@@ -71,7 +87,7 @@ export function recoverToolCalls(content: string, known: Set<string>): { calls: 
     const t = content.trim()
     if (t.startsWith('{') && t.endsWith('}')) {
       const parsed = tryJson(t)
-      const c = parsed && !Array.isArray(parsed) ? toCall(parsed, known, 0) : null
+      const c = parsed && !Array.isArray(parsed) ? toCall(parsed, known, 0, disabled) : null
       if (c && ('arguments' in (parsed as object) || 'parameters' in (parsed as object))) {
         calls.push(c)
         rest = ''
@@ -90,15 +106,27 @@ function lev(a: string, b: string): number {
   return d[a.length][b.length]
 }
 
-/** "File-Write", "filewrite", "file_wirte" → "file_write". Null if nothing is close. */
-export function fixName(name: string, known: Set<string>): string | null {
+/**
+ * "File-Write", "filewrite", "file_wirte" → "file_write". Null if nothing is close.
+ * `disabled` holds tool names the user switched off (connector tools): a call naming one of those is
+ * never redirected to a look-alike that's still on (send_email off must not become send_email_2).
+ * Connector tools (server__tool) are only matched up to case and punctuation, never by edit distance:
+ * a call to a connector tool that isn't offered is not turned into a different one that is.
+ */
+export function fixName(name: string, known: Set<string>, disabled?: Set<string>): string | null {
   if (known.has(name)) return name
   const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '')
-  const n = norm(name.replace(/^functions?\./, ''))
-  for (const k of known) if (norm(k) === n) return k
+  const raw = name.replace(/^functions?\./, '')
+  const n = norm(raw)
+  if (disabled) for (const d of disabled) if (d === name || d === raw || norm(d) === n) return null
+  const same = [...known].filter((k) => norm(k) === n)
+  if (same.length === 1) return same[0]
+  if (same.length > 1) return null
+  if (raw.includes('__')) return null
   let best: string | null = null
   let bestD = 3
   for (const k of known) {
+    if (k.includes('__')) continue
     const dd = lev(norm(k), n)
     if (dd < bestD) { best = k; bestD = dd }
   }

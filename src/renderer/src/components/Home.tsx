@@ -55,7 +55,18 @@ export function FileCard({ f, onOpen }: { f: RecentFile; onOpen: (path: string) 
   )
 }
 
-export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey }: {
+/** Starter ideas under the box: one click fills it in. */
+const IDEAS: Array<{ icon: ReactNode; label: string; text: string; deep?: boolean }> = [
+  { icon: <I.Globe size={14} />, label: 'Plan a trip', text: 'Plan a 4-day trip to ' },
+  { icon: <I.Clock size={14} />, label: 'Morning brief', text: 'Every weekday at 8am, give me a short morning brief: today\'s calendar and reminders, the weather where I live, and the most important news about my work and interests.' },
+  { icon: <I.Search size={14} />, label: 'Watch a page', text: 'Every morning, check https:// and tell me only if something important changed (price, availability, new posts).' },
+  { icon: <I.Cpu size={14} />, label: 'Build an app', text: 'Build me a small web app that ' },
+  { icon: <I.File size={14} />, label: 'Make a deck', text: 'Make a polished 8-slide deck about ' },
+  { icon: <I.Sparkle size={14} />, label: 'Use my Mac', text: 'On my Mac, ' }
+]
+
+export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, onIdea }: {
+  onIdea?: (text: string, deep?: boolean) => void
   userName: string
   onOpenFile: (path: string) => void
   onViewFiles: () => void
@@ -69,6 +80,11 @@ export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey }
       <div className="home-hero">
         <div className="welcome"><Mascot size={46} /><h1>{greeting(userName)}</h1></div>
         {composer}
+        {onIdea && (
+          <div className="ideas" data-testid="ideas">
+            {IDEAS.map((x) => <button key={x.label} className="idea" onClick={() => onIdea(x.text, x.deep)}>{x.icon}{x.label}</button>)}
+          </div>
+        )}
         {files.length > 0 && (
           <section className="home-files">
             <div className="home-files-head"><span>Recent files</span><button className="link-btn" onClick={onViewFiles}>View all</button></div>

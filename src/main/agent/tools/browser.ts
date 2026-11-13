@@ -1,10 +1,19 @@
-import type { ToolEffect } from '@shared/types'
-import type { BrowserManager, RefInfo } from '../../browser/manager'
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
+import type { PurchaseInfo, ToolEffect } from '@shared/types'
+import { benignClickLabel, classifyPurchase, clean, isCheckoutUrl, labelHasPrice, purchaseWording, PURCHASES_NEED_YOU, redactCards, type PurchaseGate, type PurchaseSignals } from '../../browser/checkout'
+import { safeUrl, type BrowserManager, type Expected, type PageCommerce, type RefInfo } from '../../browser/manager'
+import { MAX_MS, MAX_STEPS, stepDetails, stepsToText, SECRET } from '../../browser/teach'
+import { codeCandidate, codeSnippet, pickCode, senderDomain, type CodeMessage } from '../../otp'
 import { originMatches, type Vault } from '../../vault'
-import { CONSEQUENTIAL, looksLikePayment, looksLikeSecurity } from '../permissions'
-import type { ToolDef } from '../types'
+import { CONSEQUENTIAL, looksLikePayment, looksLikeSecurity, OTP_STOP, PURCHASE_STOP } from '../permissions'
+import type { ToolContext, ToolDef, ToolOutput } from '../types'
+import { resolvePath } from './files'
 
-type Action = 'navigate' | 'snapshot' | 'click' | 'type' | 'select' | 'fill_secret' | 'scroll' | 'screenshot' | 'get_text' | 'tabs' | 'dialog' | 'fill_form'
+type Action = 'navigate' | 'snapshot' | 'click' | 'type' | 'select' | 'fill_secret' | 'fill_payment' | 'fill_address' | 'fill_otp' | 'wallet' | 'upload' | 'downloads' | 'wait'
+  | 'scroll' | 'screenshot' | 'get_text' | 'tabs' | 'dialog' | 'fill_form' | 'recording'
+  /** Internal only (never in the schema): Enter in a field whose text was already typed. */
+  | 'enter'
 interface Args {
   action: Action
   url?: string
@@ -15,56 +24,146 @@ interface Args {
   field?: 'username' | 'password'
   direction?: 'up' | 'down'
   amount?: number
-  op?: 'list' | 'new' | 'switch' | 'close'
+  /** tabs: list|new|switch|close; recording: start|stop|status; downloads: list|save */
+  op?: 'list' | 'new' | 'switch' | 'close' | 'start' | 'stop' | 'status' | 'save'
   index?: number
   option?: string
   accept?: boolean
   /** fill_form: several fields in one step (text for inputs, option for dropdowns), then optionally a submit click. */
   fields?: Array<{ ref: string; text?: string; option?: string }>
   submit_ref?: string
+  /** fill_payment: a saved card's nickname (or "Visa ending 4242"). */
+  card?: string
+  /** fill_address: a saved address's nickname; section picks shipping or billing fields. */
+  address?: string
+  section?: 'shipping' | 'billing'
+  /** fill_otp: where the code comes from. */
+  source?: 'authenticator' | 'email' | 'sms'
+  /** upload: files from the workspace or the chat's attached folders. */
+  paths?: string[]
+  /** wait: seconds (default 10). */
+  timeout?: number
+}
+
+export interface BrowserDeps {
+  /** Purchase and one-time-code cards. Without one, purchases and codes are refused (fail closed). */
+  gate?: PurchaseGate
+  /** Recent emails (the Gmail connector, else Mail.app) for codes sent by email; `site` ranks that site's mail first. */
+  email?: (minutes: number, site?: string) => Promise<CodeMessage[]>
+  /** Recent text messages (Messages) for codes sent by SMS. */
+  sms?: (sinceMs: number) => Promise<CodeMessage[]>
 }
 
 const DESTRUCTIVE = /\b(delete|remove|erase|destroy|discard|close account|deactivate|unsubscribe all|empty trash)\b/i
 const BENIGN = /^(search|go|next|previous|prev|more|show|hide|expand|collapse|close|cancel|back|menu|filter|sort|open|view|load more|see (all|more)|read more|accept( all)?( cookies)?|reject( all)?|dismiss|ok|got it|skip|toggle|play|pause|zoom|×|x)\b/i
-const NAV_ROLES = new Set(['link', 'tab'])
 const LOCAL_ROLES = new Set(['checkbox', 'radio', 'option', 'combobox', 'listbox', 'switch', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'slider', 'spinbutton'])
+const REF_ACTIONS = new Set<Action>(['click', 'type', 'select', 'fill_secret', 'upload', 'scroll'])
 
-/** What a click on this element can do, judged from its role and label. */
+/** Words of money or consequence in a label: such a click is never a plain read. */
+function weighty(name: string): boolean {
+  return looksLikePayment(name) || CONSEQUENTIAL.test(name) || purchaseWording(name) || labelHasPrice(name)
+}
+
+/**
+ * What a click on this element can do, judged from its role and label. Only a real <a href> to another
+ * http(s) page is plain navigation (a read); "#", "javascript:", role=link on something else, and any
+ * link or tab whose label speaks of paying, ordering, sending… or names a price, are outside actions.
+ */
 export function clickEffect(r: RefInfo | undefined): ToolEffect {
   if (!r) return 'write_external'
   if (DESTRUCTIVE.test(r.name)) return 'destructive'
-  if (NAV_ROLES.has(r.role)) return 'read'
-  if (LOCAL_ROLES.has(r.role)) return 'write_local'
-  if (BENIGN.test(r.name.trim())) return 'write_local'
+  const heavy = weighty(r.name)
+  const money = looksLikePayment(r.name) || purchaseWording(r.name) || labelHasPrice(r.name)
+  if (r.role === 'link') return r.navLink === true && !heavy ? 'read' : 'write_external'
+  if (r.role === 'tab') return heavy ? 'write_external' : 'read'
+  if (LOCAL_ROLES.has(r.role)) return money ? 'write_external' : 'write_local'
+  if (BENIGN.test(r.name.trim()) && !money) return 'write_local'
   return 'write_external'
 }
 
-export function browserTool(b: BrowserManager, vault: Vault): ToolDef<Args> {
+export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps = {}): ToolDef<Args> {
+  /** Per tab: the card and address SahilBot filled, for the Purchase card's "Pay with" / "Ship to". */
+  const filled = new Map<number, { host: string; card?: string; address?: string }>()
+  /** The tab and site an approved fill was decided for (set when the permission check sees it). */
+  const decidedFor = new WeakMap<object, Expected>()
+  const expectNow = (): Expected | undefined => { try { return b.expectation?.() } catch { return undefined } }
+  /** Purchase steps the user declined (the submit after them doesn't run). */
+  const declined = new WeakSet<ToolOutput>()
+
   const effect = (a: Args): ToolEffect => {
     switch (a.action) {
       case 'click': return clickEffect(b.refInfo(a.ref!))
       case 'type': {
         const r = b.refInfo(a.ref!)
         if (!a.submit) return 'write_local'
-        return r?.role === 'searchbox' ? 'read' : 'write_external'
+        return r?.role === 'searchbox' && !isCheckoutUrl(b.pageUrl()) ? 'read' : 'write_external'
       }
-      case 'fill_secret': return 'write_external'
+      case 'enter': return 'write_external'
+      case 'fill_secret': case 'fill_payment': case 'fill_address': case 'fill_otp': case 'upload': return 'write_external'
+      case 'downloads': return a.op === 'save' ? 'write_local' : 'read'
       case 'select': return 'write_local'
       case 'fill_form': return a.submit_ref ? clickEffect(b.refInfo(a.submit_ref)) : 'write_local'
       case 'dialog': return a.accept && b.pendingDialog?.type !== 'alert' ? 'write_external' : 'read'
       case 'tabs': return a.op === 'close' ? 'write_local' : 'read'
+      // Starting a recording captures what the user clicks and types, across tabs, for up to 10 minutes:
+      // treated as an outside action so it never starts silently (stop and status only read).
+      case 'recording': return a.op === 'start' ? 'write_external' : 'read'
       default: return 'read'
     }
+  }
+
+  /** The purchase signals an action carries, judged without touching the page (for the permission check). */
+  const quickSignals = (a: Args): PurchaseSignals | null => {
+    if (!['fill_payment', 'dialog', 'type', 'fill_form', 'click', 'enter'].includes(a.action)) return null
+    const url = b.pageUrl()
+    const page = b.commerce()
+    const tracked = filled.get(b.tabKey())
+    const payFilled = page.payFilled || (!!tracked?.card && tracked.host === safeHost(url))
+    if (a.action === 'fill_payment') return { kind: 'fill_payment', url }
+    if (a.action === 'dialog') return a.accept ? { kind: 'dialog', dialogText: b.pendingDialog?.message, url } : null
+    if (a.action === 'type' || a.action === 'fill_form') {
+      const refs = a.action === 'type' ? [a.ref!] : (a.fields ?? []).filter((f) => f.text !== undefined).map((f) => f.ref)
+      if (refs.some((x) => b.refInfo(x)?.payment === 'number')) return { kind: 'type_card', url }
+    }
+    if (a.action === 'click' || a.action === 'fill_form') {
+      const ref = a.action === 'click' ? a.ref : a.submit_ref
+      if (!ref) return null
+      const r = b.refInfo(ref)
+      return { kind: 'click', label: r?.name, role: r?.role, url, payFields: page.payFields, payFilled, navLink: r?.navLink }
+    }
+    if ((a.action === 'type' && a.submit) || a.action === 'enter') {
+      const r = b.refInfo(a.ref!)
+      return { kind: 'enter', label: r?.name, role: r?.role, url, payFields: page.payFields, payFilled, inPayForm: !!r?.payment }
+    }
+    return null
+  }
+
+  const purchaseStop = (a: Args): string | null => {
+    const sig = quickSignals(a)
+    if (!sig) return null
+    const c = classifyPurchase(sig)
+    return c.purchase ? `${PURCHASE_STOP}${c.reasons[0]} on ${safeHost(b.pageUrl())}` : null
   }
 
   const hardStop = (a: Args): string | null => {
     const r = a.ref ? b.refInfo(a.ref) : undefined
     const url = b.pageUrl()
+    // A login, address or code goes only to the tab and site the user saw when this was decided.
+    if (['fill_secret', 'fill_address', 'fill_otp', 'fill_payment'].includes(a.action) && a && typeof a === 'object') { const e = expectNow(); if (e) decidedFor.set(a, e) }
+    // Purchases and one-time codes ask with their own cards inside run() (see checkout.ts).
+    const p = purchaseStop(a)
+    if (p) return p
+    if (a.action === 'fill_otp') return `${OTP_STOP}from ${a.source ?? 'authenticator'} on ${safeHost(url)}`
+    // The agent starting a recording always asks (the user's own Teach button doesn't go through here).
+    if (a.action === 'recording' && a.op === 'start') return `recording what you click and type in the browser for up to ${MAX_MS / 60_000} minutes`
     if (a.action === 'fill_secret') return `typing the saved login "${a.secret}" (${a.field ?? 'password'}) into ${safeHost(url)}`
+    if (a.action === 'fill_address') return `typing your saved address "${a.address}" into ${safeHost(url)}`
+    if (a.action === 'upload') return `uploading ${(a.paths ?? []).map((x) => `"${x.split(/[\\/]/).pop()}"`).join(', ')} to ${safeHost(url)}`
+    if (a.action === 'downloads' && a.op === 'save') return `saving a download ("${b.offeredDownloads()[(a.index ?? 1) - 1]?.filename ?? '?'}") from ${b.offeredDownloads()[(a.index ?? 1) - 1]?.host ?? 'the web'} into your workspace`
     if (a.action === 'type' && r?.password) return 'typing into a password field'
     if (a.action === 'fill_form' && (a.fields ?? []).some((f) => b.refInfo(f.ref)?.password)) return 'typing into a password field'
     if (a.action === 'dialog' && a.accept && (looksLikePayment(b.pendingDialog?.message) || DESTRUCTIVE.test(b.pendingDialog?.message ?? ''))) return `confirming "${b.pendingDialog?.message.slice(0, 80)}"`
-    if (a.action === 'click' || (a.action === 'type' && a.submit)) {
+    if (a.action === 'click' || (a.action === 'type' && a.submit) || a.action === 'enter') {
       if (looksLikePayment(r?.name, url)) return 'payment or checkout'
       if (DESTRUCTIVE.test(r?.name ?? '') && /\b(permanent|forever|account)\b/i.test(r?.name ?? '')) return 'permanent delete'
       if (looksLikeSecurity(url, r?.name) && clickEffect(r) !== 'read') return 'account or security settings'
@@ -80,13 +179,28 @@ export function browserTool(b: BrowserManager, vault: Vault): ToolDef<Args> {
       case 'click': return `Click ${el}${on}`
       case 'type': return `Type "${(a.text ?? '').slice(0, 80)}" into ${el}${a.submit ? ' and press Enter' : ''}${on}`
       case 'fill_secret': return `Type the saved ${a.field ?? 'password'} for "${a.secret}" into ${el}${on}`
+      case 'fill_payment': return `Fill the saved card "${a.card}" into the payment form${on}`
+      case 'fill_address': return `Fill the saved address "${a.address}" into the ${a.section ?? 'shipping'} fields${on}`
+      case 'fill_otp': return `Fill a one-time code from ${a.source ?? 'the authenticator'}${on}`
+      case 'upload': return `Upload ${(a.paths ?? []).join(', ')} into ${el}${on}`
+      case 'downloads': return a.op === 'save' ? `Save download ${a.index ?? 1} into the workspace` : 'List offered downloads'
+      case 'wait': return `Wait for ${a.text ? `"${a.text}"` : a.url ? `the address to contain "${a.url}"` : 'the page to settle'}`
+      case 'wallet': return 'List saved cards and addresses (nicknames only)'
       case 'navigate': return `Open ${a.url}`
       case 'select': return `Choose "${a.option}" in ${el}${on}`
       case 'dialog': return `${a.accept ? 'Accept' : 'Dismiss'} the page's ${b.pendingDialog?.type ?? 'dialog'}: "${b.pendingDialog?.message.slice(0, 120) ?? ''}"`
       case 'tabs': return `${a.op} tab${a.index ? ` ${a.index}` : ''}`
       case 'fill_form': return `Fill ${a.fields?.length ?? 0} fields${a.submit_ref ? ` and click "${b.refInfo(a.submit_ref)?.name ?? a.submit_ref}"` : ''}${on}`
+      case 'recording': return a.op === 'start' ? `Record what you do in the browser for up to ${MAX_MS / 60_000} minutes (Teach a task)` : a.op === 'stop' ? 'Stop recording and read the steps' : 'Check the Teach recording'
       default: return `${a.action}${on}`
     }
+  }
+
+  /** Card numbers and recent one-time codes never appear in anything the model reads. */
+  const redact = (text: string): string => {
+    let t = redactCards(text, safeCall(() => vault.cardNumbers(), []))
+    for (const c of b.hiddenValues()) if (c.length >= 4) t = t.replace(new RegExp(`(?<!\\d)${c}(?!\\d)`, 'g'), '••••')
+    return t
   }
 
   return {
@@ -96,33 +210,46 @@ export function browserTool(b: BrowserManager, vault: Vault): ToolDef<Args> {
     effect,
     hardStop,
     describe,
+    // A click counts as consequential unless its label is clearly harmless ("Sign in", "Next", "Search"…);
+    // pressing Enter to submit a form does too.
     consequential: (a) => {
       const r = a.ref ? b.refInfo(a.ref) : undefined
-      if (a.action === 'click') return !r || CONSEQUENTIAL.test(r.name)
-      if (a.action === 'type') return false
+      if (a.action === 'click') return !r || !benignClickLabel(r.name)
+      if (a.action === 'type' || a.action === 'enter') return a.action === 'enter' || !!a.submit
+      if (a.action === 'recording') return a.op === 'start'
       if (a.action === 'dialog') return CONSEQUENTIAL.test(b.pendingDialog?.message ?? '')
-      if (a.action === 'fill_form') { const s = a.submit_ref ? b.refInfo(a.submit_ref) : undefined; return !!a.submit_ref && (!s || CONSEQUENTIAL.test(s.name)) }
+      if (a.action === 'fill_form') { const s = a.submit_ref ? b.refInfo(a.submit_ref) : undefined; return !!a.submit_ref && (!s || !benignClickLabel(s.name)) }
+      if (a.action === 'wait' || a.action === 'wallet' || (a.action === 'downloads' && a.op !== 'save')) return false
       return true
     },
     untrusted: true,
     description: `Control the built-in web browser (persistent logins, visible to the user). Actions:
-- navigate {url}: open a URL
+- navigate {url}: open a URL (declines cookie banners when there's a reject option)
 - snapshot: page structure with element refs like e12 (call after every page change)
 - click {ref}
 - type {ref, text, submit?}: replace a field's text; submit presses Enter
 - select {ref, option}: choose an option in a dropdown (snapshot lists them)
 - dialog {accept, text?}: answer an alert/confirm/prompt the page opened
 - fill_secret {ref, secret, field}: type a saved login's username or password; you never see it
-- scroll {direction, amount?}: amount is in screens (default 1)
+- fill_otp {secret?, source}: type a one-time sign-in code: source "authenticator" (the saved login's authenticator key; secret = login name), "email" or "sms" (a code the site just sent). You never see the code. The user approves using codes on each site.
+- wallet: nicknames of the user's saved cards and addresses
+- fill_payment {card}: put a saved card (nickname, or "Visa ending 4242") into the page's card fields; you never see it. The user approves it on a Purchase card.
+- fill_address {address, section?}: put a saved address into the shipping (default) or billing fields
+- upload {ref, paths}: attach files from the workspace or attached folders to a file field (asks first)
+- downloads {op: list|save, index?}: files pages offered; nothing is saved until the user approves
+- wait {text?, url?, timeout?}: wait for text to appear, the address to change, or the page to settle
+- scroll {direction, amount?} or {ref}: amount is in screens (default 1); ref scrolls that element into view
 - screenshot: image of the visible page
 - get_text: readable text of the page
 - tabs {op: list|new|switch|close, index?, url?}
 - fill_form {fields: [{ref, text} or {ref, option}], submit_ref?}: fill a whole form in one step (fastest), optionally click submit
-Speed: navigate already returns a snapshot; act by ref; use fill_form for forms; use get_text to read long pages. For CAPTCHAs or 2-factor codes, stop and ask the user to take over in the browser panel.`,
+- recording {op: start|stop|status, text?}: "Teach a task". start records what the USER does in the browser panel (text = what you asked them to show); stop returns their steps (secret values hidden). Use it when the user wants to show you a web workflow once so you can repeat it.
+Buying: go all the way to the final Place order / Pay button and click it. SahilBot then shows the user a Purchase card with the store, items and total, and only their click there lets it go through; nothing you write can approve it, and if they decline, stop. Never type card numbers yourself.
+Speed: navigate already returns a snapshot; act by ref; use fill_form for forms; use get_text to read long pages. CAPTCHAs and "are you human" checks are always the user's: ask them to take over in the browser panel.`,
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['navigate', 'snapshot', 'click', 'type', 'select', 'fill_secret', 'scroll', 'screenshot', 'get_text', 'tabs', 'dialog', 'fill_form'] },
+        action: { type: 'string', enum: ['navigate', 'snapshot', 'click', 'type', 'select', 'fill_secret', 'fill_payment', 'fill_address', 'fill_otp', 'wallet', 'upload', 'downloads', 'wait', 'scroll', 'screenshot', 'get_text', 'tabs', 'dialog', 'fill_form', 'recording'] },
         fields: { type: 'array', maxItems: 40, items: { type: 'object', properties: { ref: { type: 'string', pattern: '^e\\d+$' }, text: { type: 'string' }, option: { type: 'string' } }, required: ['ref'], additionalProperties: false } },
         submit_ref: { type: 'string', pattern: '^e\\d+$' },
         option: { type: 'string', description: 'For select: the option text' },
@@ -133,10 +260,16 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
         submit: { type: 'boolean' },
         secret: { type: 'string', description: 'Name of a saved login' },
         field: { type: 'string', enum: ['username', 'password'] },
+        card: { type: 'string', description: 'fill_payment: saved card nickname' },
+        address: { type: 'string', description: 'fill_address: saved address nickname' },
+        section: { type: 'string', enum: ['shipping', 'billing'] },
+        source: { type: 'string', enum: ['authenticator', 'email', 'sms'], description: 'fill_otp: where the code comes from' },
+        paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10, description: 'upload: workspace-relative paths or files in attached folders' },
+        timeout: { type: 'number', minimum: 1, maximum: 60, description: 'wait: seconds' },
         direction: { type: 'string', enum: ['up', 'down'] },
         amount: { type: 'number', minimum: 0.1, maximum: 10 },
-        op: { type: 'string', enum: ['list', 'new', 'switch', 'close'] },
-        index: { type: 'integer', minimum: 1, description: '1-based tab number' }
+        op: { type: 'string', enum: ['list', 'new', 'switch', 'close', 'start', 'stop', 'status', 'save'], description: 'tabs: list|new|switch|close; recording: start|stop|status; downloads: list|save' },
+        index: { type: 'integer', minimum: 1, description: '1-based tab or download number' }
       },
       required: ['action'],
       additionalProperties: false,
@@ -145,99 +278,491 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
         { if: { properties: { action: { const: 'click' } } }, then: { required: ['ref'] } },
         { if: { properties: { action: { const: 'type' } } }, then: { required: ['ref', 'text'] } },
         { if: { properties: { action: { const: 'fill_secret' } } }, then: { required: ['ref', 'secret', 'field'] } },
-        { if: { properties: { action: { const: 'scroll' } } }, then: { required: ['direction'] } },
+        { if: { properties: { action: { const: 'fill_payment' } } }, then: { required: ['card'] } },
+        { if: { properties: { action: { const: 'fill_address' } } }, then: { required: ['address'] } },
+        { if: { properties: { action: { const: 'upload' } } }, then: { required: ['ref', 'paths'] } },
+        { if: { properties: { action: { const: 'downloads' } } }, then: { required: ['op'] } },
         { if: { properties: { action: { const: 'tabs' } } }, then: { required: ['op'] } },
+        { if: { properties: { action: { const: 'recording' } } }, then: { required: ['op'] } },
         { if: { properties: { action: { const: 'select' } } }, then: { required: ['ref', 'option'] } },
         { if: { properties: { action: { const: 'dialog' } } }, then: { required: ['accept'] } },
         { if: { properties: { action: { const: 'fill_form' } } }, then: { required: ['fields'] } }
       ]
     },
-    async run(a) {
-      const out = await act(a)
-      // A CAPTCHA or "verify you are human" page: never solved by SahilBot. The user does it, then the agent continues.
-      if (['navigate', 'click', 'snapshot', 'fill_form', 'type', 'get_text'].includes(a.action)) {
+    async run(input, ctx) {
+      if (input.action === 'recording') return recording(input, ctx?.threadId)
+      if (input.action === 'wallet') return wallet()
+      if ((input.action as string) === 'enter') throw new Error('Unknown action enter.')
+      // The tab and site this step was decided for (fills only go there).
+      const expected = decidedFor.get(input) ?? expectNow()
+      const notes: string[] = []
+      const a = await freshRefs(input, notes)
+      let out: ToolOutput
+      if (a.action === 'fill_otp') out = await fillOtp(a, ctx, expected)
+      else if ((a.action === 'fill_form' && a.submit_ref) || (a.action === 'type' && a.submit)) out = await typeThenSubmit(input, a, ctx, expected)
+      // Judged before stale refs are re-found too: a purchase as the permission check saw it stays one.
+      else out = await step(a, ctx, !!purchaseStop(input), expected)
+      const blocked = b.takeBlockedCard()
+      if (blocked.length) notes.push(`SahilBot stopped ${blocked.join(', ')} from receiving your saved card details: that only happens during a purchase step the user approved.`)
+      const leaks = b.takeCardLeaks?.() ?? []
+      if (leaks.length) notes.push(`Warning: the page sent your saved card number over an already-open connection to ${leaks.join(', ')}. Stop here and tell the user, so they can check the card with their bank.`)
+      out = { ...out, text: redact([out.text, ...notes].filter(Boolean).join('\n')), display: out.display ? redact(out.display) : out.display }
+      // CAPTCHAs, 2-factor screens and bank checks (3-D Secure): never solved or worked around by SahilBot.
+      if (['navigate', 'click', 'snapshot', 'fill_form', 'type', 'get_text', 'fill_payment', 'fill_address', 'fill_secret', 'wait'].includes(a.action)) {
         const check = await b.humanCheck()
         if (check) {
-          b.showToUser()
-          return { ...out, text: `${out.text}\n\n[This page is showing a human check (${check}). Don't try to solve it or get around it. The browser panel is now open for the user: call ask_user with the question "Please complete the check in the browser panel, then press Done." and options ["Done", "Skip"]. After Done, take a snapshot and continue; after Skip, try another source.]`, display: `${out.display ?? ''} · waiting for you to pass a human check` }
+          const code = check === 'verification code'
+          if (!code) b.showToUser()
+          const tail = code
+            ? `\n\n[This page asks for a verification code. If it's for the user's own sign-in, use fill_otp (source "authenticator" with the saved login, or "email" / "sms" for a code the site just sent). Never guess codes. If none of those works, open the panel and call ask_user with "Please enter the code in the browser panel, then press Done." and options ["Done", "Skip"].]`
+            : `\n\n[This page is showing a ${check}. Don't try to solve it or get around it. The browser panel is now open for the user: call ask_user with the question "Please complete the check in the browser panel, then press Done." and options ["Done", "Skip"]. After Done, take a snapshot and continue; after Skip, try another source.]`
+          return { ...out, text: `${out.text}${tail}`, display: `${out.display ?? ''} · ${code ? 'needs a sign-in code' : `waiting for you (${check})`}` }
         }
       }
       return out
     }
   }
-  async function act(a: Args): Promise<import('../types').ToolOutput> {
-    {
-      switch (a.action) {
-        case 'navigate': {
-          const url = /^[a-z]+:\/\//i.test(a.url!) ? a.url! : `https://${a.url}`
-          if (!/^https?:/i.test(url)) throw new Error('Only http and https URLs can be opened.')
-          return { text: await b.navigate(url), display: `opened ${safeHost(url)}`, sources: [{ title: safeHost(url), url }], read: true }
-        }
-        case 'snapshot':
-          return { text: await b.snapshot(), display: `read ${safeHost(b.pageUrl())}` }
-        case 'select': {
-          const r = b.refInfo(a.ref!)
-          return { text: await b.select(a.ref!, a.option!), display: `chose "${a.option}" in "${(r?.name || a.ref!).slice(0, 30)}"` }
-        }
-        case 'dialog':
-          return { text: await b.answerDialog(!!a.accept, a.text), display: `${a.accept ? 'accepted' : 'dismissed'} a dialog` }
-        case 'fill_form': {
-          const done: string[] = []
-          for (const f of a.fields ?? []) {
-            const r = b.refInfo(f.ref)
-            const label = (r?.name || f.ref).slice(0, 30)
-            if (f.option !== undefined) { await b.select(f.ref, f.option); done.push(`chose "${f.option}" in "${label}"`) }
-            else { await b.type(f.ref, f.text ?? ''); done.push(`typed into "${label}"`) }
-          }
-          const tail = a.submit_ref ? await b.click(a.submit_ref) : await b.snapshot()
-          return { text: `${done.join('; ')}.\n${tail}`, display: `filled ${done.length} fields${a.submit_ref ? ' and submitted' : ''}` }
-        }
-        case 'click': {
-          const r = b.refInfo(a.ref!)
-          return { text: await b.click(a.ref!), display: `clicked "${(r?.name || a.ref!).slice(0, 40)}"` }
-        }
-        case 'type': {
-          const r = b.refInfo(a.ref!)
-          return { text: await b.type(a.ref!, a.text!, a.submit), display: `typed in "${(r?.name || a.ref!).slice(0, 30)}"${a.submit ? ' + Enter' : ''}` }
-        }
-        case 'fill_secret': {
-          const cred = vault.credential(a.secret!)
-          if (!cred) {
-            const names = vault.names().map((n) => `${n.name} (${n.origin})`).join(', ')
-            throw new Error(`No saved login named "${a.secret}". Saved logins: ${names || 'none'}. Ask the user to add one in Settings > Passwords, or to sign in themselves in the browser panel.`)
-          }
-          const r = b.refInfo(a.ref!)
-          if (!r) throw new Error(`Unknown ref "${a.ref}". Call snapshot again.`)
-          if (!originMatches(cred.origin, b.pageUrl())) throw new Error(`The login "${a.secret}" is saved for ${cred.origin}, but this page is ${safeOrigin(b.pageUrl())}. It will only be typed on its own site.`)
-          if (a.field === 'password' && !r.password) throw new Error(`Element ${a.ref} is not a password field. Passwords only go into password fields.`)
-          if (a.field === 'username' && (r.password || !['textbox', 'combobox', 'searchbox'].includes(r.role))) throw new Error(`Element ${a.ref} is not a text field for a username.`)
-          await b.fillSecretValue(a.ref!, a.field === 'password' ? cred.password : cred.username)
-          return { text: `Filled the ${a.field} for "${a.secret}". (The value is hidden from you.)`, display: `filled ${a.field} for ${a.secret}` }
-        }
-        case 'scroll':
-          return { text: await b.scroll(a.direction!, a.amount), display: `scrolled ${a.direction}` }
-        case 'screenshot': {
-          const img = await b.screenshot()
-          return { text: `Screenshot of ${b.pageUrl()}`, images: [img], display: `screenshot of ${safeHost(b.pageUrl())}` }
-        }
-        case 'get_text':
-          return { text: await b.getText(), display: `read text of ${safeHost(b.pageUrl())}` }
-        case 'tabs': {
-          if (a.op === 'new') {
-            await b.control(async () => b.newTab(a.url))
-            return { text: `Opened a new tab.${a.url ? ` Loading ${a.url}.` : ''}\n${b.listTabs()}`, display: 'new tab' }
-          }
-          if (a.op === 'switch') { b.switchTab((a.index ?? 1) - 1); return { text: b.listTabs(), display: `tab ${a.index}` } }
-          if (a.op === 'close') { b.closeTab((a.index ?? b.state().active + 1) - 1); return { text: b.listTabs(), display: 'closed tab' } }
-          return { text: b.listTabs(), display: 'listed tabs' }
-        }
+
+  /** One step: a purchase goes through the Purchase card; anything else runs (after the commerce check). */
+  async function step(a: Args, ctx: ToolContext, sticky: boolean, expected?: Expected, typed?: PurchaseInfo['typed']): Promise<ToolOutput> {
+    const sig = await liveSignals(a)
+    const verdict = sig ? classifyPurchase(sig.signals) : { purchase: false, reasons: [] }
+    if (sticky || verdict.purchase) {
+      return gated(a, ctx, sig?.page, verdict.reasons.length ? verdict.reasons : [purchaseStop(a)?.replace(PURCHASE_STOP, '') ?? 'Looks like a purchase step'], expected, typed)
+    }
+    await commerceGuard(a, ctx, sig?.page)
+    return act(a, ctx, expected)
+  }
+
+  /**
+   * fill_form with a submit button, or type + Enter: the typing happens first (typing isn't a purchase;
+   * a card number still asks on its own card), then the submit is judged on the page as it is AFTER the
+   * typing, so the Purchase card shows the real total and what was typed, and is re-checked right
+   * before the click or Enter.
+   */
+  async function typeThenSubmit(input: Args, a: Args, ctx: ToolContext, expected?: Expected): Promise<ToolOutput> {
+    const typing: Args = a.action === 'fill_form' ? { ...a, submit_ref: undefined } : { ...a, submit: false }
+    const typingInput: Args = input.action === 'fill_form' ? { ...input, submit_ref: undefined } : { ...input, submit: false }
+    const first = await step(typing, ctx, !!purchaseStop(typingInput), expected)
+    if (declined.has(first)) return first
+    const submit: Args = a.action === 'fill_form' ? { action: 'click', ref: a.submit_ref } : { action: 'enter', ref: a.ref }
+    const submitInput: Args = input.action === 'fill_form' ? { action: 'click', ref: input.submit_ref } : { action: 'enter', ref: input.ref }
+    const second = await step(submit, ctx, !!purchaseStop(submitInput) || !!purchaseStop(submit), expected, typedFields(typing))
+    return { ...second, text: `${first.text}\n${second.text}`, display: [first.display, second.display].filter(Boolean).join(' · ') }
+  }
+
+  /** What was typed in a step, for the Purchase card: field names and values, secrets as dots. */
+  function typedFields(a: Args): PurchaseInfo['typed'] {
+    const rows = a.action === 'fill_form' ? (a.fields ?? []).map((f) => ({ ref: f.ref, value: f.option ?? f.text ?? '' })) : a.ref ? [{ ref: a.ref, value: a.text ?? '' }] : []
+    return rows.slice(0, 12).map(({ ref, value }) => {
+      const r = b.refInfo(ref)
+      const secret = !!r?.password || !!r?.payment || /\d[\d\s-]{11,}\d/.test(value) || b.hiddenValues().some((c) => c.length >= 4 && value.includes(c))
+      return { field: clean(r?.name || ref, 40) || ref, value: secret ? '••••' : clean(value, 60) }
+    })
+  }
+
+  /**
+   * Runs nobody is watching, or didn't start (routines, helpers, handoffs, apps): no outside click or
+   * Enter at all on a page with shopping signs (a cart or checkout address, a total, card fields, items).
+   */
+  async function commerceGuard(a: Args, ctx: ToolContext, page?: PageCommerce): Promise<void> {
+    const target = a.action === 'click' || a.action === 'enter' ? a.ref : undefined
+    if (!target) return
+    if (a.action === 'click' && clickEffect(b.refInfo(target)) === 'read') return
+    const refuse = deps.gate ? deps.gate.refusal(ctx.threadId) : `${PURCHASES_NEED_YOU}: nobody can approve purchases here.`
+    if (!refuse) return
+    let p = page
+    if (!p) { try { p = await b.purchaseContext(target) } catch { p = undefined } }
+    const url = p?.url ?? b.pageUrl()
+    const shop = isCheckoutUrl(url) || !!p?.total || (p?.payFields ?? 0) > 0 || (p?.items.length ?? 0) > 0 || b.commerce().payFields
+    if (shop) throw new Error(`${refuse.split(':')[0]}: this run can't click or submit on a shopping or payment page (${safeHost(url)}) because nobody is here to approve a purchase. Do not retry or work around it. Tell the user what you were about to do so they can do it from a chat they are watching.`)
+  }
+
+  /** Re-finds refs that went stale (the page re-rendered) by role and name, once. */
+  async function freshRefs(a: Args, notes: string[]): Promise<Args> {
+    const fix = async (ref: string): Promise<string> => {
+      const r = await b.ensureRef(ref)
+      if (r.note) notes.push(r.note)
+      return r.ref
+    }
+    let out = a
+    if (a.ref && REF_ACTIONS.has(a.action)) out = { ...out, ref: await fix(a.ref) }
+    if (a.action === 'fill_form') {
+      const fields: NonNullable<Args['fields']> = []
+      for (const f of a.fields ?? []) fields.push({ ...f, ref: await fix(f.ref) })
+      out = { ...out, fields, ...(a.submit_ref ? { submit_ref: await fix(a.submit_ref) } : {}) }
+    }
+    return out
+  }
+
+  /** The purchase signals of an action, read from the live page (its total, card fields, the target's form). */
+  async function liveSignals(a: Args): Promise<{ signals: PurchaseSignals; page: PageCommerce } | null> {
+    const url = b.pageUrl()
+    const tracked = filled.get(b.tabKey())
+    const mine = !!tracked?.card && tracked.host === safeHost(url)
+    if (a.action === 'fill_payment') return { signals: { kind: 'fill_payment', url }, page: await b.purchaseContext() }
+    if (a.action === 'dialog') {
+      if (!a.accept || !b.pendingDialog) return null
+      const signals: PurchaseSignals = { kind: 'dialog', dialogText: b.pendingDialog.message, url }
+      return classifyPurchase(signals).purchase ? { signals, page: await b.purchaseContext() } : null
+    }
+    if (a.action === 'type' || a.action === 'fill_form') {
+      const refs = a.action === 'type' ? [a.ref!] : (a.fields ?? []).filter((f) => f.text !== undefined).map((f) => f.ref)
+      if (refs.some((x) => b.refInfo(x)?.payment === 'number')) return { signals: { kind: 'type_card', url }, page: await b.purchaseContext() }
+    }
+    const target = a.action === 'click' || a.action === 'enter' ? a.ref : a.action === 'fill_form' ? a.submit_ref : a.action === 'type' && a.submit ? a.ref : undefined
+    if (!target) return null
+    const page = await b.purchaseContext(target)
+    const t = page.target
+    const r = b.refInfo(target)
+    return {
+      page,
+      signals: {
+        kind: a.action === 'type' || a.action === 'enter' ? 'enter' : 'click',
+        label: t?.label || r?.name, role: r?.role, url: page.url,
+        submit: !!t?.submit, inPayForm: !!t?.inPayForm,
+        payFilled: page.payFilled || !!t?.formFilled || mine, payFields: page.payFields > 0,
+        hasTotal: !!page.total,
+        navLink: t?.navLink ?? r?.navLink
       }
     }
   }
+
+  /**
+   * A purchase step: shows the Purchase card (built from the live page and the vault), waits for the
+   * user's click, re-reads the page, and runs the action once only if URL, total and target are
+   * unchanged. Otherwise it asks again.
+   */
+  async function gated(a: Args, ctx: ToolContext, page0: PageCommerce | undefined, reasons: string[], expected?: Expected, typed?: PurchaseInfo['typed']): Promise<ToolOutput> {
+    const gate = deps.gate
+    const refuse = gate ? gate.refusal(ctx.threadId) : `${PURCHASES_NEED_YOU}: purchases can't be approved here. Tell the user what you were about to buy.`
+    if (refuse) throw new Error(refuse)
+    const target = a.action === 'click' || a.action === 'enter' || (a.action === 'type' && a.submit) ? a.ref : a.action === 'fill_form' ? a.submit_ref : undefined
+    const tab = b.tabKey()
+    let card: ReturnType<Vault['findCard']>
+    if (a.action === 'fill_payment') {
+      card = vault.findCard(a.card!)
+      if (!card) throw new Error(noCard(a.card!))
+    }
+    let page = page0 ?? (await b.purchaseContext(target))
+    let changed = false
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const info = { ...cardInfo(a, page, reasons, changed, card?.label), ...(typed?.length ? { typed } : {}) }
+      if (!info.total) b.showToUser()
+      const answer = await gate!.request(ctx.threadId, info, ctx.signal)
+      if (answer !== 'approve') {
+        const no: ToolOutput = { text: 'The user did not approve this purchase step, so nothing was clicked, filled or sent. Do not retry it or look for another way to buy. Ask what they would like instead.', display: 'purchase not approved' }
+        declined.add(no)
+        return no
+      }
+      // A popup or script switched tabs while the card was open: nothing runs on the other tab.
+      if (b.tabKey() !== tab) throw new Error('The active tab changed while the Purchase card was open, so nothing was clicked or filled. Snapshot and check the page.')
+      // Bound to what the card showed, re-read right before the click: same address, same total, same button.
+      const now = await b.purchaseContext(target)
+      if (samePurchase(page, now) && b.tabKey() === tab) return run(a, ctx, info, { tab, origin: safeOrigin(now.url) })
+      page = now
+      changed = true
+    }
+    throw new Error('The page kept changing (address or total) while waiting for approval, so nothing was bought. Snapshot and check the page.')
+  }
+
+  async function run(a: Args, ctx: ToolContext, info: Omit<PurchaseInfo, 'nonce' | 'readyAt' | 'expiresAt'>, expected: Expected): Promise<ToolOutput> {
+    // Card details may go to this merchant and payment processors only, for this step.
+    b.openPurchaseWindow(expected.origin)
+    let out: ToolOutput
+    try {
+      out = await act(a, ctx, expected)
+    } finally {
+      b.closePurchaseWindow()
+    }
+    // A submitted order consumes the card bookkeeping: the next order fills (and asks) again.
+    if (info.step === 'submit') filled.delete(b.tabKey())
+    const total = info.total ? ` (total ${info.total.display})` : ''
+    return { ...out, text: `The user approved this purchase step on ${info.merchant}${total}.\n${out.text}` }
+  }
+
+  function cardInfo(a: Args, page: PageCommerce, reasons: string[], changed: boolean, cardLabel?: string): Omit<PurchaseInfo, 'nonce' | 'readyAt' | 'expiresAt'> {
+    const host = safeHost(page.url)
+    const tracked = filled.get(b.tabKey())
+    const mine = tracked && tracked.host === host ? tracked : undefined
+    const label = clean(page.target?.label ?? '', 60)
+    const action = a.action === 'fill_payment' ? `Put ${cardLabel} into the payment form`
+      : a.action === 'dialog' ? `Answer OK to the page's question "${clean(b.pendingDialog?.message ?? '', 80)}"`
+        : (a.action === 'type' && a.submit) || a.action === 'enter' ? 'Press Enter in the form (submits it)'
+          : a.action === 'type' || (a.action === 'fill_form' && !a.submit_ref) ? 'Type a card number into the payment form'
+            : `Click "${label || 'the button'}"`
+    return {
+      step: a.action === 'fill_payment' || a.action === 'type' || (a.action === 'fill_form' && !a.submit_ref) ? 'fill' : 'submit',
+      merchant: host || 'this page',
+      url: page.url,
+      secure: page.url.startsWith('https:'),
+      action,
+      items: page.items.map((i) => ({ name: clean(i.name, 80), price: i.price ? clean(i.price, 24) : undefined })),
+      total: page.total,
+      payment: cardLabel ?? mine?.card ?? 'Not filled by SahilBot (check the page)',
+      shipping: mine?.address ?? 'Not filled by SahilBot (check the page)',
+      reasons: reasons.map((r) => clean(r, 120)),
+      ...(changed ? { changed: true } : {})
+    }
+  }
+
+  async function fillOtp(a: Args, ctx: ToolContext, expected?: Expected): Promise<ToolOutput> {
+    const url = b.pageUrl()
+    // Grants and cards are per origin (scheme + host): http://bank.test is not https://bank.test.
+    const site = safeOrigin(url)
+    const host = safeHostname(url)
+    const source = a.source ?? 'authenticator'
+    if (!host || !/^https?:/.test(site)) throw new Error('Open the sign-in page first.')
+    const gate = deps.gate
+    if (!gate) throw new Error('One-time codes need you: they can\'t be approved here. Ask the user for the code.')
+    const tid = ctx.threadId
+    // First: may this run use a code at all? (Runs the user didn't start only with a permanent grant.)
+    const refuse = gate.otpRefusal(tid, site)
+    if (refuse) throw new Error(refuse)
+    const canAsk = gate.attended(tid)
+    const notAllowed = (): ToolOutput => ({ text: `The user didn't allow a one-time code on ${site}. Ask them to enter it in the browser panel, or continue without signing in.`, display: 'code not allowed' })
+    let code: string | null = null
+    let from = ''
+    if (source === 'authenticator') {
+      if (!gate.otpAllowed(tid, site)) {
+        if (!canAsk) throw new Error(`One-time codes need you: this run can't ask about ${site}. Tell the user the sign-in needs a code.`)
+        const answer = await gate.requestOtp(tid, { site, source, ...(a.secret ? { login: a.secret } : {}) }, ctx.signal)
+        if (answer === 'deny') return notAllowed()
+      }
+      const name = a.secret ?? vault.names().find((n) => originMatches(n.origin, url, { subdomains: !!n.subdomains }))?.name
+      if (!name) throw new Error(`No saved login for ${host} has an authenticator key. Ask the user to add one in Settings > Passwords, or use source "email" / "sms".`)
+      const cred = vault.credential(name)
+      if (!cred) throw new Error(`No saved login named "${name}".`)
+      if (!originMatches(cred.origin, url, { subdomains: !!cred.subdomains })) throw new Error(`The login "${name}" is saved for ${cred.origin}, but this page is ${site}. Its codes are only typed on its own site.`)
+      let t = vault.totpCode(name)
+      if (!t) throw new Error(`The login "${name}" has no authenticator key. Ask the user to add one in Settings > Passwords (Authenticator key), or use source "email" / "sms".`)
+      // A code about to expire: wait for the next one rather than race the clock.
+      if (t.remaining < 5) { await new Promise((r) => setTimeout(r, t!.remaining * 1000 + 300)); t = vault.totpCode(name) ?? t }
+      code = t.code
+      from = 'the authenticator key saved with that login'
+    } else {
+      const since = Date.now() - 10 * 60_000
+      const getter = source === 'email' ? deps.email && (() => deps.email!(10, host)) : deps.sms && (() => deps.sms!(since))
+      if (!getter) throw new Error(`Reading codes from ${source === 'email' ? 'email' : 'text messages'} isn't available on this Mac. Ask the user for the code.`)
+      const msgs = await getter()
+      // Only a message from the site's own domain (Public Suffix List), or a sender the user confirmed for it.
+      const picked = pickCode(msgs, host, since, gate.confirmedSenders(tid, site))
+      let use: { code: string; from: string } | null = picked && gate.otpAllowed(tid, site) ? picked : null
+      if (!use) {
+        const cand = picked ?? codeCandidate(msgs, host, since)
+        if (!cand) throw new Error(`No ${source === 'email' ? 'email' : 'text message'} from the last 10 minutes has a code for ${host}. Wait a moment and try again, or ask the user for the code.`)
+        if (!canAsk) throw new Error(`One-time codes need you: the newest code isn't from ${host}'s own domain or a sender the user confirmed for it, and nobody is here to check it. Tell the user the sign-in needs a code.`)
+        // The card shows who sent it and a snippet (code hidden), so the user can tell a real one from a lookalike.
+        const answer = await gate.requestOtp(tid, { site, source, sender: clean(cand.from, 80) || (source === 'sms' ? 'unknown number' : 'unknown sender'), snippet: codeSnippet(cand.text, cand.code), ...(picked ? {} : { unverifiedSender: true }) }, ctx.signal)
+        if (answer === 'deny') return notAllowed()
+        use = cand
+      }
+      code = use.code
+      from = source === 'email' ? `an email from ${senderDomain(use.from) || use.from.replace(/<.*>/, '').trim().slice(0, 40)}` : `a text message${use.from ? ` from ${use.from.slice(0, 20)}` : ''}`
+    }
+    const r = await b.fillOtp(code, expected)
+    code = null
+    if (!r.filled) {
+      b.showToUser()
+      return { text: `Couldn't find the code field on ${host}. The browser panel is open: call ask_user with "Please enter the sign-in code in the browser panel, then press Done." and options ["Done", "Skip"].`, display: 'code field not found' }
+    }
+    return { text: `Filled a one-time code from ${from} into ${host}. (The code is hidden from you.) Now submit the form if the page didn't do it by itself.`, display: `code filled on ${host}` }
+  }
+
+  function wallet(): ToolOutput {
+    const cards = safeCall(() => vault.cardNames(), [])
+    const addrs = safeCall(() => vault.addressNames(), [])
+    return {
+      text: `Saved cards: ${cards.map((c) => c.label).join('; ') || 'none'}.\nSaved addresses: ${addrs.join('; ') || 'none'}.\nUse fill_payment {card} and fill_address {address} with these names. Details stay hidden from you.`,
+      display: 'read saved cards and addresses'
+    }
+  }
+
+  async function act(a: Args, ctx?: ToolContext, expected?: Expected): Promise<ToolOutput> {
+    switch (a.action) {
+      case 'navigate': {
+        const url = safeUrl(a.url!)
+        return { text: await b.navigate(url), display: `opened ${safeHost(url)}`, sources: [{ title: safeHost(url), url }], read: true }
+      }
+      case 'snapshot':
+        return { text: await b.snapshot(), display: `read ${safeHost(b.pageUrl())}` }
+      case 'select': {
+        const r = b.refInfo(a.ref!)
+        return { text: await b.select(a.ref!, a.option!), display: `chose "${a.option}" in "${(r?.name || a.ref!).slice(0, 30)}"` }
+      }
+      case 'dialog':
+        return { text: await b.answerDialog(!!a.accept, a.text), display: `${a.accept ? 'accepted' : 'dismissed'} a dialog` }
+      case 'fill_form': {
+        const done: string[] = []
+        for (const f of a.fields ?? []) {
+          const r = b.refInfo(f.ref)
+          const label = (r?.name || f.ref).slice(0, 30)
+          if (f.option !== undefined) { await b.select(f.ref, f.option); done.push(`chose "${f.option}" in "${label}"`) }
+          else { await b.type(f.ref, f.text ?? ''); done.push(`typed into "${label}"`) }
+        }
+        const tail = a.submit_ref ? await b.click(a.submit_ref) : await b.snapshot()
+        return { text: `${done.join('; ')}.\n${tail}`, display: `filled ${done.length} fields${a.submit_ref ? ' and submitted' : ''}` }
+      }
+      case 'click': {
+        const r = b.refInfo(a.ref!)
+        return { text: await b.click(a.ref!), display: `clicked "${(r?.name || a.ref!).slice(0, 40)}"` }
+      }
+      case 'type': {
+        const r = b.refInfo(a.ref!)
+        return { text: await b.type(a.ref!, a.text!, a.submit), display: `typed in "${(r?.name || a.ref!).slice(0, 30)}"${a.submit ? ' + Enter' : ''}` }
+      }
+      case 'enter': {
+        const r = b.refInfo(a.ref!)
+        return { text: await b.pressEnter(a.ref!), display: `pressed Enter in "${(r?.name || a.ref!).slice(0, 30)}"` }
+      }
+      case 'fill_secret': {
+        const cred = vault.credential(a.secret!)
+        if (!cred) {
+          const names = vault.names().map((n) => `${n.name} (${n.origin})`).join(', ')
+          throw new Error(`No saved login named "${a.secret}". Saved logins: ${names || 'none'}. Ask the user to add one in Settings > Passwords, or to sign in themselves in the browser panel.`)
+        }
+        const r = b.refInfo(a.ref!)
+        if (!r) throw new Error(`Unknown ref "${a.ref}". Call snapshot again.`)
+        if (!originMatches(cred.origin, b.pageUrl(), { subdomains: !!cred.subdomains })) throw new Error(`The login "${a.secret}" is saved for ${cred.origin}, but this page is ${safeOrigin(b.pageUrl())}. It will only be typed on its own site.`)
+        if (expected && expected.origin !== safeOrigin(b.pageUrl())) throw new Error(`The page changed to ${safeOrigin(b.pageUrl())} since this step was approved for ${expected.origin}, so nothing was typed.`)
+        if (a.field === 'password' && !r.password) throw new Error(`Element ${a.ref} is not a password field. Passwords only go into password fields.`)
+        if (a.field === 'username' && (r.password || !['textbox', 'combobox', 'searchbox'].includes(r.role))) throw new Error(`Element ${a.ref} is not a text field for a username.`)
+        await b.fillSecretValue(a.ref!, a.field === 'password' ? cred.password : cred.username, expected)
+        return { text: `Filled the ${a.field} for "${a.secret}". (The value is hidden from you.)`, display: `filled ${a.field} for ${a.secret}` }
+      }
+      case 'fill_payment': {
+        const card = vault.findCard(a.card!)
+        if (!card) throw new Error(noCard(a.card!))
+        const billing = card.billing ? vault.addresses().find((x) => x.id === card.billing) : undefined
+        const r = await b.fillCard({ number: card.number, cvc: card.cvc, month: card.expMonth, year: card.expYear, holder: card.holder, brand: card.brand, postal: billing?.postal }, expected)
+        if (!r.filled.includes('number')) {
+          b.showToUser()
+          const where = r.unreachable.length ? ` The card fields seem to be inside a frame from ${r.unreachable.join(', ')}, which SahilBot doesn't type into.` : ''
+          return { text: `Couldn't find card fields to fill on ${safeHost(b.pageUrl())}.${where} The browser panel is open: call ask_user with "Please enter your card in the browser panel, then press Done." and options ["Done", "Skip"].`, display: 'card fields not found' }
+        }
+        const host = safeHost(b.pageUrl())
+        const prev = filled.get(b.tabKey())
+        filled.set(b.tabKey(), { host, card: card.label, address: prev?.host === host ? prev.address : undefined })
+        const cvcNote = r.found.includes('cvc') && !r.filled.includes('cvc') ? ' The security code (CVV) isn\'t saved: ask the user to type it in the browser panel before placing the order.' : ''
+        const billNote = billing ? ` Its billing address is saved as "${billing.nickname}" (fill_address with section "billing" if the form asks).` : ''
+        return { text: `Filled ${card.label}: ${r.filled.join(', ')}. (The card details are hidden from you.)${cvcNote}${billNote}`, display: `filled ${card.label}` }
+      }
+      case 'fill_address': {
+        const addr = vault.findAddress(a.address!)
+        if (!addr) throw new Error(`No saved address named "${a.address}". Saved addresses: ${vault.addressNames().join(', ') || 'none'}. Ask the user to add one in Settings > Passwords > Addresses.`)
+        const section = a.section ?? 'shipping'
+        const r = await b.fillAddress(addr, section, expected)
+        if (!r.filled.length) throw new Error(`Couldn't find ${section} address fields on this page. Snapshot and fill them with type or fill_form instead.`)
+        const host = safeHost(b.pageUrl())
+        if (section === 'shipping') {
+          const prev = filled.get(b.tabKey())
+          filled.set(b.tabKey(), { host, card: prev?.host === host ? prev.card : undefined, address: addr.nickname })
+        }
+        return { text: `Filled the ${section} address "${addr.nickname}": ${r.filled.join(', ')}. Snapshot to check the fields.`, display: `filled address ${addr.nickname}` }
+      }
+      case 'upload': {
+        if (!ctx) throw new Error('Uploads need a chat.')
+        const files = (a.paths ?? []).map((p) => {
+          const full = resolvePath(p, ctx.workspaceDir, ctx.state.roots ?? [])
+          let st
+          try { st = statSync(full) } catch { throw new Error(`"${p}" doesn't exist.`) }
+          if (!st.isFile()) throw new Error(`"${p}" is not a file.`)
+          return full
+        })
+        return { text: await b.upload(a.ref!, files), display: `uploaded ${files.length} file${files.length === 1 ? '' : 's'}` }
+      }
+      case 'downloads': {
+        const list = b.offeredDownloads()
+        if (a.op === 'save') {
+          if (!ctx) throw new Error('Saving needs a chat.')
+          const r = await b.saveDownload((a.index ?? 1) - 1, join(ctx.workspaceDir, 'Downloads'))
+          if (r.state !== 'completed') throw new Error(`The download ${r.state}.`)
+          return { text: `Saved to ${r.path}.`, display: 'saved a download', path: r.path }
+        }
+        return { text: list.length ? list.map((d, i) => `${i + 1}. "${d.filename}" from ${d.host}${d.size > 0 ? `, ${Math.round(d.size / 1024)} KB` : ''}`).join('\n') : 'No downloads were offered.', display: 'listed downloads' }
+      }
+      case 'wait':
+        return { text: await b.waitFor({ text: a.text, url: a.url, timeoutMs: Math.round((a.timeout ?? 10) * 1000) }), display: 'waited' }
+      case 'scroll':
+        if (a.ref) return { text: await b.scrollTo(a.ref), display: 'scrolled into view' }
+        return { text: await b.scroll(a.direction ?? 'down', a.amount), display: `scrolled ${a.direction ?? 'down'}` }
+      case 'screenshot': {
+        const img = await b.screenshot()
+        return { text: `Screenshot of ${b.pageUrl()}`, images: [img], display: `screenshot of ${safeHost(b.pageUrl())}` }
+      }
+      case 'get_text':
+        return { text: await b.getText(), display: `read text of ${safeHost(b.pageUrl())}` }
+      case 'tabs': {
+        if (a.op === 'new') {
+          const url = a.url ? safeUrl(a.url) : undefined
+          await b.control(async () => b.newTab(url))
+          return { text: `Opened a new tab.${url ? ` Loading ${url}.` : ''}\n${b.listTabs()}`, display: 'new tab' }
+        }
+        // The bot's own tab changes aren't part of a lesson being recorded.
+        if (a.op === 'switch') { quietly(() => b.switchTab((a.index ?? 1) - 1)); return { text: b.listTabs(), display: `tab ${a.index}` } }
+        if (a.op === 'close') { quietly(() => b.closeTab((a.index ?? b.state().active + 1) - 1)); return { text: b.listTabs(), display: 'closed tab' } }
+        return { text: b.listTabs(), display: 'listed tabs' }
+      }
+      default:
+        return { text: `Unknown action ${a.action}.`, display: 'unknown action' }
+    }
+  }
+
+  function noCard(name: string): string {
+    const names = safeCall(() => vault.cardNames().map((c) => c.label), [] as string[])
+    return `No saved card "${name}". Saved cards: ${names.join(', ') || 'none'}. Ask the user to add one in Settings > Passwords > Cards, or to enter it themselves in the browser panel.`
+  }
+
+  function quietly(fn: () => void): void {
+    b.teach.hold()
+    try { fn() } finally { b.teach.release() }
+  }
+
+  async function recording(a: Args, threadId?: string): Promise<ToolOutput> {
+    const st = b.teach.state()
+    if (a.op === 'start') {
+      if (st?.status === 'recording') return { text: `Already recording (${st.steps} steps so far, started by ${st.by === 'user' ? 'the user' : 'you'}). Call recording op=stop when the user is done.`, display: 'already recording' }
+      await b.teachStart('agent', { name: a.text?.slice(0, 80), threadId })
+      b.showToUser()
+      return {
+        text: `Recording started (up to ${MAX_MS / 60_000} minutes or ${MAX_STEPS} steps). The browser panel is open with a red Teach bar.\nTell the user: "Show me once: do the task in the browser panel, then press Done in the Teach bar." Then end your turn: their recorded steps arrive as their next message. If they tell you in chat that they're done instead, call recording op=stop to get the steps. Don't use the browser yourself while they record.`,
+        display: 'recording your steps'
+      }
+    }
+    if (a.op === 'stop') {
+      if (!st) return { text: 'Nothing is being recorded. Start with recording op=start.', display: 'not recording' }
+      if (st.by === 'user') return { text: `The user is recording a lesson themselves (${st.steps} steps so far). They'll press Done in the Teach bar and send it to you; don't stop it.`, display: 'user is recording' }
+      const steps = b.teachSteps()
+      b.teachCancel()
+      if (!steps.length) return { text: 'Recording stopped. No steps were captured: ask the user to try again in the browser panel.', display: 'no steps recorded' }
+      const secrets = steps.some((x) => x.secret)
+      return {
+        text: `Recording stopped: ${steps.length} step${steps.length === 1 ? '' : 's'}${st.limit ? ` (stopped at the ${st.limit === 'time' ? 'time' : 'step'} limit)` : ''}.\n${stepsToText(steps)}\n\nDetails (selector hints are for cross-checking; act by snapshot refs):\n${stepDetails(steps)}${secrets ? `\n\nValues shown as ${SECRET} were hidden on purpose: never put them in a skill; use fill_secret with a saved login, or ask the user.` : ''}`,
+        display: `recorded ${steps.length} steps`
+      }
+    }
+    if (!st) return { text: 'Not recording.', display: 'not recording' }
+    const latest = st.recent.length ? `\nLatest:\n${st.recent.map((r) => `- ${r}`).join('\n')}` : ''
+    return { text: `${st.status === 'recording' ? 'Recording' : 'Stopped'} (started by ${st.by === 'user' ? 'the user' : 'you'}): ${st.steps} steps, ${Math.round(((st.stoppedAt ?? Date.now()) - st.startedAt) / 1000)}s.${latest}`, display: 'checked recording' }
+  }
 }
 
+/** Same page, same total, same target: the approval still describes what will happen. */
+export function samePurchase(a: Pick<PageCommerce, 'url' | 'total' | 'target'>, b: Pick<PageCommerce, 'url' | 'total' | 'target'>): boolean {
+  if (a.url !== b.url) return false
+  const t = (x: PageCommerce['total']): string => (x ? `${x.currency}:${x.amount.toFixed(2)}` : 'none')
+  if (t(a.total) !== t(b.total)) return false
+  return (a.target?.label ?? '') === (b.target?.label ?? '')
+}
+
+function safeCall<T>(fn: () => T, fallback: T): T {
+  try { return fn() } catch { return fallback }
+}
 function safeHost(u: string): string {
   try { return new URL(u).host } catch { return u.slice(0, 40) }
+}
+function safeHostname(u: string): string {
+  try { return new URL(u).hostname } catch { return '' }
 }
 function safeOrigin(u: string): string {
   try { return new URL(u).origin } catch { return u }

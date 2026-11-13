@@ -1,4 +1,5 @@
 import type { Attachment, ModelInfo, Tier } from '@shared/types'
+import { isPremiumClaude } from './claude-models'
 
 // Auto mode: decide how hard a request is, then send it to the cheapest model that is strong enough.
 // Rules first (instant, free, predictable). When the rules don't clearly decide, it goes one tier UP:
@@ -81,7 +82,16 @@ export function decide(input: RouteInput): Route {
   return { ...r, tier, why: r.confident ? r.why : `${r.why} (not sure, so a stronger model)` }
 }
 
+/**
+ * Auto's standing preference, refreshed from Settings by Endpoints.usable() (which the agent reads right
+ * before every pick): 'cloud' sends each tier to the cloud model first (Claude Haiku for light requests,
+ * Sonnet for standard ones, Opus for the hardest), 'local' keeps free, private local models first.
+ */
+export const routingPrefs: { preferCloud: boolean } = { preferCloud: false }
+
 export interface PickOptions {
+  /** Cloud models before local ones at the same tier (default: routingPrefs.preferCloud). */
+  preferCloud?: boolean
   needsVision?: boolean
   /** Over the cloud budget: local models only. */
   localOnly?: boolean
@@ -91,7 +101,9 @@ export interface PickOptions {
 
 /**
  * The model for a tier: the best model AT that tier (local before cloud when equally good: free and
- * private); if none, the best one at the next tier up. Nothing strong enough: the strongest available.
+ * private, unless cloud is preferred); if none, the best one at the next tier up. Nothing strong enough:
+ * the strongest available. Premium cloud models (Claude Fable/Mythos, priced well above Opus) come last
+ * at their tier: Auto uses them only when nothing else is there; picking one by name always works.
  */
 export function pick(models: ModelInfo[], tier: Tier, o: PickOptions = {}): ModelInfo | undefined {
   let pool = models.filter((m) => (!o.localOnly || m.note !== 'remote') && (!o.needsVision || m.vision))
@@ -100,13 +112,17 @@ export function pick(models: ModelInfo[], tier: Tier, o: PickOptions = {}): Mode
     const p = pool.find((m) => m.id === o.prefer)
     if (p && p.tier >= tier) return p
   }
-  // Tool calling matters for anything above small talk.
-  const capable = (m: ModelInfo): boolean => tier === 0 || m.tools !== false
+  // Every run offers tools (even small talk can look things up), so prefer models that can call them.
+  const capable = (m: ModelInfo): boolean => m.tools !== false
+  const cloudFirst = o.preferCloud ?? routingPrefs.preferCloud
+  const remote = (m: ModelInfo): number => Number(m.note === 'remote') * (cloudFirst ? -1 : 1)
+  const premium = (m: ModelInfo): number => Number(m.note === 'remote' && isPremiumClaude(m.id))
   const best = (a: ModelInfo, b: ModelInfo): number =>
-    Number(a.note === 'remote') - Number(b.note === 'remote') || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0)
+    premium(a) - premium(b) || remote(a) - remote(b) || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0)
   for (let t = tier; t <= 3; t++) {
     const at = pool.filter((m) => m.tier === t && capable(m)).sort(best)
     if (at.length) return at[0]
   }
-  return [...pool].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))[0]
+  const pool2 = pool.some(capable) ? pool.filter(capable) : pool
+  return [...pool2].sort((a, b) => b.tier - a.tier || premium(a) - premium(b) || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))[0]
 }

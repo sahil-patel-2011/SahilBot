@@ -46,6 +46,7 @@ export class RuleStore {
   }
 
   remove(name: string): void {
+    if (!slug(name)) throw new Error('Unknown rule.')
     rmSync(join(this.dir, `${slug(name)}.md`), { force: true })
   }
 

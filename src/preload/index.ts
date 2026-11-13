@@ -28,7 +28,8 @@ const api: SahilBotApi = {
     markUnread: call('spaces:markUnread') as never,
     getPrompt: call('spaces:getPrompt') as never,
     setPrompt: call('spaces:setPrompt') as never,
-    promptPath: call('spaces:promptPath') as never
+    promptPath: call('spaces:promptPath') as never,
+    library: call('spaces:library') as never
   },
   threads: {
     list: call('threads:list') as never,
@@ -49,6 +50,7 @@ const api: SahilBotApi = {
     recent: call('files:recent') as never,
     snippet: call('files:snippet') as never
   },
+  pages: { info: call('pages:info') as never, openWindow: call('pages:openWindow') as never, exportPdf: call('pages:exportPdf') as never, show: call('pages:show') as never, thumbnail: call('pages:thumbnail') as never },
   providers: call('providers') as never,
   onMenu(cb) {
     const fn = (_e: unknown, a: string): void => cb(a)
@@ -61,8 +63,38 @@ const api: SahilBotApi = {
     return () => ipcRenderer.removeListener('mini', fn)
   },
   exitMini: call('mini:exit') as never,
+  quick: {
+    ask: call('quick:ask') as never,
+    hide: call('quick:hide') as never,
+    resize: call('quick:resize') as never,
+    open: call('quick:open') as never,
+    onShown(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('quick:shown', fn)
+      return () => ipcRenderer.removeListener('quick:shown', fn)
+    }
+  },
+  onOpenThread(cb) {
+    const fn = (_e: unknown, id: string): void => cb(id)
+    ipcRenderer.on('open-thread', fn)
+    return () => ipcRenderer.removeListener('open-thread', fn)
+  },
   budget: call('budget') as never,
+  onBudgetChanged(cb) {
+    const fn = (): void => cb()
+    ipcRenderer.on('budget:changed', fn)
+    return () => ipcRenderer.removeListener('budget:changed', fn)
+  },
   detectProviders: call('detectProviders') as never,
+  ollama: {
+    setup: call('ollama:setup') as never,
+    installed: call('ollama:installed') as never,
+    onSetup: (cb) => {
+      const h = (_e: unknown, ev: Parameters<typeof cb>[0]): void => cb(ev)
+      ipcRenderer.on('ollama:setup', h)
+      return () => { ipcRenderer.removeListener('ollama:setup', h) }
+    }
+  },
   pickFolder: call('pickFolder') as never,
   schedules: {
     list: call('schedules:list') as never,
@@ -70,10 +102,22 @@ const api: SahilBotApi = {
     update: call('schedules:update') as never,
     remove: call('schedules:remove') as never,
     runNow: call('schedules:runNow') as never,
+    runs: call('schedules:runs') as never,
     onChange(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('schedules:changed', fn)
       return () => ipcRenderer.removeListener('schedules:changed', fn)
+    }
+  },
+  // Long-running goals (Tasks board, bot details).
+  goals: {
+    list: call('goals:list') as never,
+    update: call('goals:update') as never,
+    runNow: call('goals:runNow') as never,
+    onChange(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('goals:changed', fn)
+      return () => ipcRenderer.removeListener('goals:changed', fn)
     }
   },
   voice: {
@@ -101,13 +145,30 @@ const api: SahilBotApi = {
     connect: call('connectors:connect') as never,
     connectPreset: call('connectors:connectPreset') as never,
     disconnect: call('connectors:disconnect') as never,
+    icons: call('connectors:icons') as never,
+    setToolEnabled: call('connectors:setToolEnabled') as never,
+    test: call('connectors:test') as never,
+    googleClient: call('connectors:googleClient') as never,
+    setGoogleClient: call('connectors:setGoogleClient') as never,
+    clearGoogleClient: call('connectors:clearGoogleClient') as never,
+    onIcons(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('connectors:icons', fn)
+      return () => ipcRenderer.removeListener('connectors:icons', fn)
+    },
     onChange(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('connectors:changed', fn)
       return () => ipcRenderer.removeListener('connectors:changed', fn)
     }
   },
-  vault: { list: call('vault:list') as never, set: call('vault:set') as never, remove: call('vault:remove') as never },
+  vault: {
+    list: call('vault:list') as never, set: call('vault:set') as never, remove: call('vault:remove') as never,
+    totpCode: call('vault:totpCode') as never, otpGrants: call('vault:otpGrants') as never, revokeOtpGrant: call('vault:revokeOtpGrant') as never,
+    cards: call('vault:cards') as never, setCard: call('vault:setCard') as never, removeCard: call('vault:removeCard') as never,
+    addresses: call('vault:addresses') as never, setAddress: call('vault:setAddress') as never, removeAddress: call('vault:removeAddress') as never
+  },
+  purchase: { respond: call('purchase:respond') as never },
   browser: {
     state: call('browser:state') as never,
     setBounds: call('browser:setBounds') as never,
@@ -119,6 +180,10 @@ const api: SahilBotApi = {
     switchTab: call('browser:switchTab') as never,
     closeTab: call('browser:closeTab') as never,
     takeOver: call('browser:takeOver') as never,
+    teachStart: call('browser:teachStart') as never,
+    teachStop: call('browser:teachStop') as never,
+    teachCancel: call('browser:teachCancel') as never,
+    teachCompose: call('browser:teachCompose') as never,
     onState(cb) {
       const fn = (_e: unknown, s: BrowserState): void => cb(s)
       ipcRenderer.on('browser:state', fn)
@@ -130,10 +195,50 @@ const api: SahilBotApi = {
       return () => ipcRenderer.removeListener('browser:open', fn)
     }
   },
-  memory: { list: call('memory:list') as never, remove: call('memory:remove') as never, add: call('memory:add') as never, update: call('memory:update') as never },
+  memory: {
+    list: call('memory:list') as never, remove: call('memory:remove') as never, add: call('memory:add') as never, update: call('memory:update') as never,
+    importPreview: call('memory:importPreview') as never, importCommit: call('memory:importCommit') as never,
+    getEnabled: call('memory:getEnabled') as never, setEnabled: call('memory:setEnabled') as never
+  },
   rules: { list: call('rules:list') as never, save: call('rules:save') as never, setEnabled: call('rules:setEnabled') as never, remove: call('rules:remove') as never },
+  templates: { list: call('templates:list') as never, add: call('templates:add') as never },
+  bots: { exportFile: call('bots:export') as never, importPick: call('bots:importPick') as never, importConfirm: call('bots:importConfirm') as never, duplicate: call('bots:duplicate') as never },
+  checkin: { get: call('checkin:get') as never, set: call('checkin:set') as never },
+  watchlist: { get: call('watchlist:get') as never, set: call('watchlist:set') as never },
+  markets: { quotes: call('markets:quotes') as never, card: call('markets:card') as never, search: call('markets:search') as never },
+  usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never },
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
+  alwaysOn: { status: call('alwaysOn:status') as never, pauseRoutines: call('alwaysOn:pauseRoutines') as never },
+  permissions: { status: call('permissions:status') as never, open: call('permissions:open') as never, automation: call('permissions:automation') as never },
+  knowledge: {
+    status: call('knowledge:status') as never,
+    addFolder: call('knowledge:addFolder') as never,
+    addAttached: call('knowledge:addAttached') as never,
+    removeFolder: call('knowledge:removeFolder') as never,
+    setPaused: call('knowledge:setPaused') as never,
+    rebuild: call('knowledge:rebuild') as never,
+    search: call('knowledge:search') as never,
+    reveal: call('knowledge:reveal') as never,
+    open: call('knowledge:open') as never,
+    onChanged(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('knowledge:changed', fn)
+      return () => { ipcRenderer.removeListener('knowledge:changed', fn) }
+    }
+  },
+  // Connected apps (MCP server): Settings → Privacy & Permissions.
+  mcp: {
+    status: call('mcp:status') as never, setEnabled: call('mcp:setEnabled') as never,
+    createClient: call('mcp:createClient') as never, revokeClient: call('mcp:revokeClient') as never,
+    onChange(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('mcp:changed', fn)
+      return () => ipcRenderer.removeListener('mcp:changed', fn)
+    }
+  },
   chat: {
+    resume: call('chat:resume') as never,
+    interrupted: call('chat:interrupted') as never,
     send: call('chat:send') as never,
     stop: call('chat:stop') as never,
     steer: call('chat:steer') as never,
@@ -142,6 +247,7 @@ const api: SahilBotApi = {
     editLast: call('chat:editLast') as never,
     exportThread: call('chat:export') as never,
     pending: call('chat:pending') as never,
+    allPending: call('chat:allPending') as never,
     onEvent(cb) {
       const fn = (_e: unknown, ev: ChatEvent): void => cb(ev)
       ipcRenderer.on('chat:event', fn)

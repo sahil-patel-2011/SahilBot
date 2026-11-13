@@ -2,6 +2,11 @@ import type { Sampling, ToolCall } from '@shared/types'
 import { lookup } from './catalog'
 import { isAnthropic } from './providers'
 import { claudeMaxTokens, fallbacks, listAnthropicModels, streamAnthropic } from './anthropic'
+import { httpError, retryInfo, withRetries } from './retry'
+import { timer } from './timing'
+import { toolTurnSampling, withToolPrimer } from './local-tools'
+
+export { backoffMs, httpError, parseRetryAfter, retryAfterFrom, retryInfo, retryPolicy, withRetries } from './retry'
 
 // Minimal OpenAI-compatible client over fetch. Works with Ollama, llama.cpp
 // server, LM Studio, vLLM and hosted OpenAI-style APIs.
@@ -16,6 +21,8 @@ export interface WireMessage {
   name?: string
   /** Provider-native content for this turn (Claude's blocks), sent back unchanged when the model matches. */
   raw?: unknown
+  /** A user turn carrying the images a tool returned (so Claude can put them back in that tool_result). */
+  imagesFor?: string
 }
 
 export interface WireTool {
@@ -35,6 +42,44 @@ export interface ChatRequest {
   signal?: AbortSignal
   /** How hard to think (Claude effort; 'low' turns thinking off on local thinking models). */
   effort?: import('@shared/types').Effort
+  /** Ollama: how long the model stays loaded after this request (default localDefaults.keepAlive). */
+  keepAlive?: string
+}
+
+/** Defaults for local servers. keepAlive follows the localKeepAlive setting (the agent passes it per request). */
+export const localDefaults = { keepAlive: '30m' }
+
+// ---------------------------------------------------------------------------
+// Context size per loaded local model. Ollama reloads a model whenever num_ctx changes (seconds for a
+// big model, and the prompt cache is lost), and a request without num_ctx gets the server default
+// (often 4k, silently cutting the prompt from the front). So the agent pins the window it runs a model
+// at, and every request to that model (summaries, titles, voice) reuses it unless it needs more.
+// ---------------------------------------------------------------------------
+
+const ctxPins = new Map<string, number>()
+const pinKey = (baseUrl: string, model: string): string => `${trim(baseUrl).replace(/\/v1$/, '')}|${model}`
+
+/** The agent's window for this model on this server (the main chat window, set every step). */
+export function pinContextWindow(baseUrl: string, model: string, window: number): void {
+  if (window > 0) ctxPins.set(pinKey(baseUrl, model), window)
+}
+
+export function contextPin(baseUrl: string, model: string): number | undefined {
+  return ctxPins.get(pinKey(baseUrl, model))
+}
+
+export function clearContextPins(): void {
+  ctxPins.clear()
+}
+
+/**
+ * num_ctx to send: the pinned window when it's at least what this request needs (no reload), else
+ * what it needs. A request that doesn't say borrows the pin (or leaves it to the server).
+ */
+export function numCtxFor(baseUrl: string, model: string, want?: number): number | undefined {
+  const pin = contextPin(baseUrl, model)
+  if (!want) return pin
+  return pin && pin >= want ? pin : want
 }
 
 /** Hooks for paid (non-local) endpoints: `before` may throw to block a request; `after` records usage. */
@@ -54,6 +99,8 @@ export type StreamPart =
   | { type: 'raw'; provider: 'anthropic'; model: string; content: unknown }
   /** A tool call has started streaming: its name is known, its arguments aren't yet. */
   | { type: 'tool_pending'; name: string }
+  /** The provider re-issued the turn: discard the text and reasoning streamed so far. */
+  | { type: 'reset' }
 
 export function isLocal(baseUrl: string): boolean {
   // Tests stand in a local mock for a paid cloud endpoint.
@@ -91,10 +138,15 @@ export async function listModels(baseUrl: string, apiKey?: string, signal?: Abor
 }
 
 export function buildBody(req: ChatRequest): Record<string, unknown> {
-  const s = req.sampling
+  // Small local models with tools: a cooler temperature and a short tool-call primer (local-tools.ts).
+  const local = isLocal(req.baseUrl)
+  const tools = !!req.tools?.length
+  const s = local ? toolTurnSampling(req.model, req.sampling, tools) : req.sampling
+  const messages = local ? withToolPrimer(req.messages, req.model, tools) : req.messages
   const body: Record<string, unknown> = {
     model: req.model,
-    messages: req.messages,
+    // App-only fields stay home: strict servers reject unknown message keys.
+    messages: messages.map(({ raw: _r, imagesFor: _i, ...m }) => m),
     stream: true,
     stream_options: { include_usage: true },
     max_tokens: req.maxTokens
@@ -114,7 +166,12 @@ export function buildBody(req: ChatRequest): Record<string, unknown> {
       body.repetition_penalty = s.repeat_penalty
     }
     // Ollama honors options.num_ctx on its OpenAI route in recent versions; others ignore it.
-    if (req.contextWindow) body.options = { num_ctx: req.contextWindow }
+    const numCtx = numCtxFor(req.baseUrl, req.model, req.contextWindow)
+    if (numCtx) body.options = { num_ctx: numCtx }
+    // llama.cpp: reuse the KV cache for the shared prefix (its default, but older builds need asking).
+    body.cache_prompt = true
+    // Quick replies skip thinking on local thinking models (Qwen3-style templates read enable_thinking).
+    if (req.effort === 'low' && lookup(req.model)?.thinks) body.chat_template_kwargs = { enable_thinking: false, reasoning_effort: 'low' }
   }
   if (req.tools?.length) {
     body.tools = req.tools
@@ -175,12 +232,15 @@ interface Delta {
   tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>
 }
 
-const ollamaCache = new Map<string, boolean>()
+const ollamaCache = new Map<string, { yes: boolean; at: number }>()
+/** A "no" is re-checked after this long: Ollama may simply not have been started yet. */
+const OLLAMA_NO_TTL = 30_000
 
 /** True when the endpoint is an Ollama server (it answers /api/version). Cached per base URL. */
 export async function isOllama(baseUrl: string): Promise<boolean> {
   const key = trim(baseUrl)
-  if (ollamaCache.has(key)) return ollamaCache.get(key)!
+  const hit = ollamaCache.get(key)
+  if (hit && (hit.yes || Date.now() - hit.at < OLLAMA_NO_TTL)) return hit.yes
   let yes = false
   if (isLocal(baseUrl)) {
     try {
@@ -190,7 +250,7 @@ export async function isOllama(baseUrl: string): Promise<boolean> {
       yes = false
     }
   }
-  ollamaCache.set(key, yes)
+  ollamaCache.set(key, { yes, at: Date.now() })
   return yes
 }
 
@@ -220,22 +280,63 @@ export function toOllamaMessages(messages: WireMessage[]): Array<Record<string, 
  * Ollama's /v1 route can't set the context size per request and silently truncates long prompts
  * from the front (where the system prompt lives). Its native /api/chat honors options.num_ctx.
  */
-async function* streamOllama(req: ChatRequest): AsyncGenerator<StreamPart> {
-  const s = req.sampling
+/** Ollama takes a duration string ("30m") or seconds as a number (negative: keep loaded). */
+export function keepAliveValue(v: string): string | number {
+  return /^-?\d+$/.test(v.trim()) ? Number(v.trim()) : v.trim()
+}
+
+/** What the server reported about a request (Ollama's durations, llama.cpp's timings). */
+export interface ServerStats {
+  loadMs?: number
+  promptEvalMs?: number
+  promptEvalCount?: number
+  /** llama.cpp: prompt tokens served from its cache. */
+  cachedTokens?: number
+  numCtx?: number
+}
+
+/** Ollama's `think`: off for quick replies on thinking models; gpt-oss can't turn it off, only down. */
+export function ollamaThink(model: string, effort?: ChatRequest['effort']): boolean | 'low' | undefined {
+  if (effort !== 'low' || !lookup(model)?.thinks) return undefined
+  return /gpt-oss/i.test(model) ? 'low' : false
+}
+
+/** The request body for Ollama's native /api/chat. */
+export function ollamaBody(req: ChatRequest): Record<string, unknown> {
+  const tools = !!req.tools?.length
+  const s = toolTurnSampling(req.model, req.sampling, tools)
   const options: Record<string, unknown> = { temperature: s.temperature, top_p: s.top_p, num_predict: req.maxTokens }
-  if (req.contextWindow) options.num_ctx = req.contextWindow
+  const numCtx = numCtxFor(req.baseUrl, req.model, req.contextWindow)
+  if (numCtx) options.num_ctx = numCtx
   if (s.top_k) options.top_k = s.top_k
   if (s.min_p) options.min_p = s.min_p
   if (s.repeat_penalty && s.repeat_penalty !== 1) options.repeat_penalty = s.repeat_penalty
   if (s.presence_penalty) options.presence_penalty = s.presence_penalty
+  const think = ollamaThink(req.model, req.effort)
+  return {
+    model: req.model,
+    messages: toOllamaMessages(withToolPrimer(req.messages, req.model, tools)),
+    tools: req.tools?.length ? req.tools : undefined,
+    stream: true,
+    options,
+    // Keep a chat model in memory between messages (Ollama's default is 5 minutes). Side models (titles)
+    // that nothing pinned keep the server's default, so they don't sit in memory next to the chat model.
+    ...(req.keepAlive || contextPin(req.baseUrl, req.model) ? { keep_alive: keepAliveValue(req.keepAlive || localDefaults.keepAlive) } : {}),
+    // Quick chats skip thinking on models that think (only sent to those: others reject the flag).
+    ...(think !== undefined ? { think } : {})
+  }
+}
+
+async function* streamOllama(req: ChatRequest, stats: ServerStats = {}): AsyncGenerator<StreamPart> {
+  const body = ollamaBody(req)
+  stats.numCtx = (body.options as { num_ctx?: number }).num_ctx
   const res = await fetch(`${trim(req.baseUrl).replace(/\/v1$/, '')}/api/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    // Quick chats skip thinking on models that think (only sent to those: others reject the flag).
-    body: JSON.stringify({ model: req.model, messages: toOllamaMessages(req.messages), tools: req.tools?.length ? req.tools : undefined, stream: true, options, ...(req.effort === 'low' && lookup(req.model)?.thinks ? { think: false } : {}) }),
+    body: JSON.stringify(body),
     signal: req.signal
   })
-  if (!res.ok || !res.body) throw new Error(`Ollama returned ${res.status}: ${(await res.text().catch(() => '')).slice(0, 500)}`)
+  if (!res.ok || !res.body) throw httpError(`Ollama returned ${res.status}: ${(await res.text().catch(() => '')).slice(0, 500)}`, res.status, res.headers)
   const splitter = new ThinkSplitter()
   const calls: ToolCall[] = []
   const decoder = new TextDecoder()
@@ -246,6 +347,7 @@ async function* streamOllama(req: ChatRequest): AsyncGenerator<StreamPart> {
     const j = JSON.parse(line) as {
       message?: { content?: string; thinking?: string; tool_calls?: Array<{ function: { name: string; arguments: unknown } }> }
       done?: boolean; done_reason?: string; prompt_eval_count?: number; eval_count?: number; error?: string
+      load_duration?: number; prompt_eval_duration?: number
     }
     if (j.error) throw new Error(j.error)
     if (j.message?.thinking) yield { type: 'reasoning', text: j.message.thinking }
@@ -255,6 +357,10 @@ async function* streamOllama(req: ChatRequest): AsyncGenerator<StreamPart> {
     }
     if (j.done) {
       finish = j.done_reason ?? 'stop'
+      // Nanoseconds. A long load means the model was (re)loaded; few prompt tokens mean the cache was reused.
+      if (j.load_duration !== undefined) stats.loadMs = Math.round(j.load_duration / 1e6)
+      if (j.prompt_eval_duration !== undefined) stats.promptEvalMs = Math.round(j.prompt_eval_duration / 1e6)
+      if (j.prompt_eval_count !== undefined) stats.promptEvalCount = j.prompt_eval_count
       if (j.prompt_eval_count !== undefined) yield { type: 'usage', promptTokens: j.prompt_eval_count, completionTokens: j.eval_count ?? 0 }
     }
   }
@@ -276,19 +382,41 @@ async function* streamOllama(req: ChatRequest): AsyncGenerator<StreamPart> {
 }
 
 export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> {
+  // Time to first token (anything the UI can show) and the server's own numbers, at debug level.
+  const t = timer('llm')
+  const stats: ServerStats = {}
+  let usage: { promptTokens: number; completionTokens: number } | undefined
+  let ok = false
+  try {
+    for await (const part of route(req, stats)) {
+      if (part.type === 'content' || part.type === 'reasoning' || part.type === 'tool_pending' || part.type === 'tool_calls') t.mark('first_token')
+      if (part.type === 'usage') usage = part
+      yield part
+    }
+    ok = true
+  } finally {
+    t.end({ model: req.model, ok, messages: req.messages.length, tools: req.tools?.length ?? 0, prompt: usage?.promptTokens, completion: usage?.completionTokens, ...stats })
+  }
+}
+
+async function* route(req: ChatRequest, stats: ServerStats): AsyncGenerator<StreamPart> {
   if (await isOllama(req.baseUrl)) {
-    yield* streamOllama(req)
+    yield* withRetries(() => streamOllama(req, stats), req.signal)
     return
   }
   if (isLocal(req.baseUrl)) {
-    yield* streamOpenAI(req)
+    yield* withRetries(() => streamOpenAI(req, stats), req.signal)
     return
   }
-  // Paid endpoint: priced and checked against the monthly cap before anything is sent.
+  // Paid endpoint: each attempt is priced and checked against the monthly cap before anything is sent.
+  yield* withRetries(() => paidAttempt(req), req.signal)
+}
+
+async function* paidAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
   const chars = JSON.stringify(req.messages).length + JSON.stringify(req.tools ?? []).length
   const estimatedInput = Math.ceil((chars / 3) * 1.1)
   const claude = isAnthropic(req.baseUrl)
-  const maxOutput = claude ? claudeMaxTokens(req.maxTokens, req.effort) : req.maxTokens
+  const maxOutput = claude ? claudeMaxTokens(req.maxTokens, req.effort, req.model) : req.maxTokens
   // If a refusal fallback could answer instead, price the worst case at the most expensive tier.
   spendHooks.before?.(req, estimatedInput, maxOutput, claude && fallbacks(req.model) ? 'claude-fable-5-1' : req.model)
   let input = 0
@@ -297,8 +425,9 @@ export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> 
   let served = req.model
   let rejected = false
   try {
-    for await (const part of isAnthropic(req.baseUrl) ? streamAnthropic(req) : streamOpenAI(req)) {
+    for await (const part of claude ? streamAnthropic(req) : streamOpenAI(req)) {
       if (part.type === 'usage') { input = part.promptTokens; output = part.completionTokens }
+      if (part.type === 'reset') produced = 0
       if (part.type === 'content' || part.type === 'reasoning') produced += part.text.length
       if (part.type === 'tool_calls') produced += JSON.stringify(part.calls).length
       if (part.type === 'raw') served = part.model
@@ -306,7 +435,9 @@ export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> 
     }
   } catch (e) {
     // A request the server rejected outright (400/401/429/5xx before any output) isn't billed.
-    rejected = (e as { billed?: boolean }).billed === false || (!input && !produced && /\b(4\d\d|5\d\d)\b/.test((e as Error).message))
+    const status = (e as { status?: number }).status
+    // Nor is one that never reached the server (offline, DNS, refused): nothing came back at all.
+    rejected = (e as { billed?: boolean }).billed === false || (!input && !produced && (typeof status === 'number' || /\b(4\d\d|5\d\d)\b/.test((e as Error).message) || (status === undefined && retryInfo(e).retry)))
     throw e
   } finally {
     if (!rejected)
@@ -315,7 +446,7 @@ export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> 
   }
 }
 
-async function* streamOpenAI(req: ChatRequest): AsyncGenerator<StreamPart> {
+async function* streamOpenAI(req: ChatRequest, stats: ServerStats = {}): AsyncGenerator<StreamPart> {
   const res = await fetch(`${trim(req.baseUrl)}/chat/completions`, {
     method: 'POST',
     headers: headers(req.apiKey, req.baseUrl),
@@ -324,7 +455,7 @@ async function* streamOpenAI(req: ChatRequest): AsyncGenerator<StreamPart> {
   })
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '')
-    throw new Error(`Model server returned ${res.status}: ${text.slice(0, 500)}`)
+    throw httpError(`Model server returned ${res.status}: ${text.slice(0, 500)}`, res.status, res.headers)
   }
 
   const splitter = new ThinkSplitter()
@@ -338,14 +469,23 @@ async function* streamOpenAI(req: ChatRequest): AsyncGenerator<StreamPart> {
     let json: {
       choices?: Array<{ delta?: Delta; finish_reason?: string | null }>
       usage?: { prompt_tokens: number; completion_tokens: number }
-      error?: { message?: string }
+      error?: { message?: string; code?: unknown; type?: string }
+      /** llama.cpp server: per-request timings, including how much of the prompt came from its cache. */
+      timings?: { prompt_n?: number; prompt_ms?: number; cache_n?: number }
     }
     try {
       json = JSON.parse(data)
     } catch {
       return
     }
-    if (json.error) throw new Error(json.error.message ?? 'Model server error')
+    if (json.error) {
+      // An error event mid-stream: overloads and rate limits are worth another try.
+      const code = Number(json.error.code)
+      const why = `${json.error.type ?? ''} ${json.error.message ?? ''}`
+      const status = code >= 400 && code < 600 ? code : /overload/i.test(why) ? 529 : /rate.?limit/i.test(why) ? 429 : undefined
+      const err = new Error(json.error.message ?? 'Model server error')
+      throw status ? Object.assign(err, { status }) : err
+    }
     const choice = json.choices?.[0]
     const d = choice?.delta
     if (d) {
@@ -368,6 +508,11 @@ async function* streamOpenAI(req: ChatRequest): AsyncGenerator<StreamPart> {
       }
     }
     if (choice?.finish_reason) finish = choice.finish_reason
+    if (json.timings) {
+      if (json.timings.prompt_ms !== undefined) stats.promptEvalMs = Math.round(json.timings.prompt_ms)
+      if (json.timings.prompt_n !== undefined) stats.promptEvalCount = json.timings.prompt_n
+      if (json.timings.cache_n !== undefined) stats.cachedTokens = json.timings.cache_n
+    }
     if (json.usage) yield { type: 'usage', promptTokens: json.usage.prompt_tokens, completionTokens: json.usage.completion_tokens }
   }
 
@@ -391,4 +536,14 @@ async function* streamOpenAI(req: ChatRequest): AsyncGenerator<StreamPart> {
     yield { type: 'tool_calls', calls: list }
   }
   yield { type: 'finish', reason: finish }
+}
+
+/** All the text of a stream, starting over when a retry resets it. */
+export async function collectText(stream: AsyncIterable<StreamPart>): Promise<string> {
+  let out = ''
+  for await (const part of stream) {
+    if (part.type === 'reset') out = ''
+    else if (part.type === 'content') out += part.text
+  }
+  return out
 }

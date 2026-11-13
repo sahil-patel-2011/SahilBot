@@ -8,3 +8,4 @@ vendor/whisper.cpp
 .env.*
 test-results/
 playwright-report/
+.claude/worktrees/

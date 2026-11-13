@@ -1,0 +1,107 @@
+/* Settings → Memory (MemoryManager). Tokens from styles.css only, so light and dark both work. */
+
+.mm { max-width: 760px; }
+.mm .set-section { margin: 18px 0; }
+.mm-grow { flex: 1; }
+
+/* Search + import */
+.mm-toolbar { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; }
+.mm-search {
+  flex: 1; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--text-3);
+  transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
+}
+.mm-search:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+.mm-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 13.5px; color: var(--text); }
+.mm-clear { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: var(--text-3); }
+.mm-clear:hover { background: var(--hover); color: var(--text); }
+
+/* Buttons */
+.mm-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 9px; font-size: 13px; font-weight: 500;
+  background: var(--hover); color: var(--text); white-space: nowrap; transition: background 120ms ease-out, opacity 120ms ease-out;
+}
+.mm-btn:hover { background: var(--selected); }
+.mm-btn.on { background: var(--selected); }
+.mm-btn.primary { background: var(--text); color: var(--bg); }
+.mm-btn.primary:hover { background: color-mix(in srgb, var(--text) 85%, var(--bg)); }
+.mm-btn.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.mm-btn.danger:hover { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+.mm-btn:disabled { opacity: .45; cursor: default; }
+.mm-btn:focus-visible, .mm-chip:focus-visible, .mm-text:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }
+
+/* Filter chips */
+.mm-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 4px; }
+.mm-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12.5px;
+  color: var(--text-2); border: 1px solid var(--line); background: var(--panel); transition: background 120ms ease-out, color 120ms ease-out;
+}
+.mm-chip span { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.mm-chip:hover { background: var(--hover); color: var(--text); }
+.mm-chip.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.mm-chip.on span { color: color-mix(in srgb, var(--bg) 70%, transparent); }
+.mm-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mm-dot, var(--text-3)); flex: none; display: inline-block; }
+
+/* Groups and rows */
+.mm-group { margin: 0 0 16px; }
+.mm-group-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 6px 4px; }
+.mm-count { font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.mm-row { display: flex; align-items: flex-start; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
+.set-card > .mm-row:first-child { border-top: 0; }
+.mm-main { flex: 1; min-width: 0; }
+.mm-text { display: block; width: 100%; text-align: left; font-size: 14.5px; line-height: 1.45; color: var(--text); border-radius: 6px; padding: 1px 4px; margin: -1px -4px; overflow-wrap: anywhere; cursor: text; }
+.mm-text:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.mm-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 3px; font-size: 12px; color: var(--text-3); }
+.mm-meta > span + span::before { content: '·'; margin-right: 10px; color: var(--text-3); }
+.mm-scope { display: inline-flex; align-items: center; gap: 5px; }
+.mm-scope.bot { color: var(--text-2); }
+.mm-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 120ms ease-out; }
+.mm-row:hover .mm-actions, .mm-row:focus-within .mm-actions { opacity: 1; }
+@media (hover: none) { .mm-actions { opacity: 1; } }
+.mm-confirm { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); flex: none; }
+.mm-more { margin: 2px 0 10px; }
+
+/* Inline editing */
+.mm-row.editing { padding: 10px 0 12px; }
+.mm-edit {
+  width: 100%; resize: vertical; min-height: 34px; padding: 7px 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); background: var(--panel); color: var(--text); font-size: 14.5px; line-height: 1.45; outline: none;
+}
+.mm-edit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.mm-select { padding: 5px 26px 5px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font-size: 12.5px; max-width: 220px; }
+
+.mm-empty { padding: 18px 2px; color: var(--text-3); font-size: 13.5px; line-height: 1.5; }
+.mm-empty .link-btn { padding: 0; font-size: inherit; }
+
+/* Add */
+.mm-add { display: flex; align-items: center; gap: 8px; padding: 12px 0; }
+.mm-add .set-input { flex: 1; width: auto; }
+
+/* Import */
+.mm-import .set-card { padding: 14px 16px; }
+.mm-import-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+.mm-import-head > div { flex: 1; }
+.mm-paste {
+  width: 100%; resize: vertical; min-height: 140px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); font-family: var(--mono); font-size: 12.5px; line-height: 1.5; outline: none;
+}
+.mm-paste:focus { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+.mm-import-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.mm-hint { font-size: 12.5px; color: var(--text-3); }
+.mm-import-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 13px; color: var(--text-2); margin: 2px 0 8px; }
+.mm-sel { margin-left: auto; display: inline-flex; gap: 2px; }
+.mm-preview { max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.mm-prow { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-top: 1px solid var(--line); cursor: pointer; }
+.mm-prow:first-child { border-top: 0; }
+.mm-prow input[type=checkbox] { accent-color: var(--text); width: 15px; height: 15px; flex: none; }
+.mm-pinput { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13.5px; padding: 3px 4px; border-radius: 6px; }
+.mm-pinput:focus { background: var(--hover); }
+.mm-prow.off .mm-pinput { color: var(--text-3); text-decoration: line-through; }
+.mm-prow.off .mm-select { opacity: .5; }
+
+/* Memory switched off: the list is still there to manage, just quieter. */
+.mm.off .mm-list { opacity: .6; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-btn, .mm-chip, .mm-actions, .mm-search { transition: none; }
+}

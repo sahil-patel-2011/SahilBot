@@ -74,9 +74,10 @@ describe('phase 2: agent loop + permissions + context', () => {
     await page.click('[data-testid="main-bot"]')
     await send(page, 'Who is my main client?')
     await idle(page)
-    const sys = String((llm.requests.at(-1)!.messages as Array<{ content: string }>)[0].content)
-    expect(sys).toContain('Main client is Acme Co, launching Dec 1.')
-    expect(sys).toContain("The user's name is Sam Rivera.")
+    const msgs = llm.requests.at(-1)!.messages as Array<{ role: string; content: string }>
+    // Memories ride in the <context> block on the new chat's message (the system prompt stays cacheable).
+    expect(String(msgs.find((m) => m.role === 'user')!.content)).toContain('Main client is Acme Co, launching Dec 1.')
+    expect(String(msgs[0].content)).toContain("The user's name is Sam Rivera.")
     await app.close()
   })
 
@@ -165,7 +166,8 @@ describe('phase 2: agent loop + permissions + context', () => {
     expect(last[0].content).toContain('PELICAN')
     // Compacted turns are gone from the prompt; the current one is verbatim.
     expect(last.filter((m) => m.role === 'user').length).toBeLessThan(4)
-    expect(last.at(-1)!.content).toMatch(/^Part 3: /)
+    // The app's context block leads the message that started the run.
+    expect(String(last.at(-1)!.content).replace(/^<context from="app">[\s\S]*?<\/context>\n\n/, '')).toMatch(/^Part 3: /)
     // The prompt now fits under the threshold.
     expect(JSON.stringify(last).length / 3.5).toBeLessThan(0.97 * (16384 - 4096))
     await app.close()

@@ -1,14 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import DOMPurify from 'dompurify'
-import type { BrowserState, FilePreview, Message } from '@shared/types'
+import type { BrowserState, FilePreview, Message, TeamMember } from '@shared/types'
 import { prettyName } from '../lib/steps'
-import { Markdown } from './Markdown'
+import { Markdown, SANITIZE } from './Markdown'
 import { api } from '../api'
 import * as I from '../icons'
+import { TeachBar } from './TeachBar'
+import { isPageCandidate, PageView } from './PageView'
+import { Watchlist } from './Watchlist'
+import { ChartIcon } from './StockCard'
+import { useWatchlist } from '../lib/stocks'
 
-export type PanelTab = 'progress' | 'browser' | 'file'
+export type PanelTab = 'progress' | 'browser' | 'file' | 'watchlist'
 
-export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, browserState, onClose }: {
+export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, browserState, onClose, running, progress, threadId, stocks }: {
   tab: PanelTab
   onTab: (t: PanelTab) => void
   hidden: boolean
@@ -17,93 +22,163 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
   onOpenFile: (p: string) => void
   browserState: BrowserState | null
   onClose: () => void
+  running?: boolean
+  progress?: { used: number; window: number; model?: string; actions?: number }
+  /** The open chat: a recording made with Teach goes there. */
+  threadId?: string | null
+  /** A stock bot's chat: always offer the Watchlist tab. */
+  stocks?: boolean
 }) {
+  const watch = useWatchlist()
+  // The Watchlist tab appears once stocks are in play: a stock bot, a stock card in this chat, or a saved list.
+  const showWatch = tab === 'watchlist' || !!stocks || watch.length > 0 || messages.some((m) => m.role === 'tool' && !!m.meta?.stock)
   return (
     <aside className="right" data-testid="right-panel">
       <div className="right-tabs drag">
-        <button className={`tab${tab === 'progress' ? ' on' : ''}`} onClick={() => onTab('progress')} data-testid="tab-progress"><I.ListIcon size={14} /> Progress</button>
-        <button className={`tab${tab === 'browser' ? ' on' : ''}`} onClick={() => onTab('browser')}><I.Globe size={14} /> Browser</button>
-        <button className={`tab${tab === 'file' ? ' on' : ''}`} onClick={() => onTab('file')} data-testid="tab-file"><I.File size={14} /> File</button>
+        <div className="seg-tabs nodrag">
+          <button className={tab === 'progress' ? 'on' : ''} onClick={() => onTab('progress')} data-testid="tab-progress"><I.ListIcon size={14} />Overview</button>
+          <button className={tab === 'browser' ? 'on' : ''} onClick={() => onTab('browser')}><I.Globe size={14} />Browser</button>
+          <button className={tab === 'file' ? 'on' : ''} onClick={() => onTab('file')} data-testid="tab-file"><I.File size={14} />File</button>
+          {showWatch && <button className={tab === 'watchlist' ? 'on' : ''} onClick={() => onTab('watchlist')} data-testid="tab-watchlist"><ChartIcon size={14} />Watchlist</button>}
+        </div>
         <span style={{ flex: 1 }} />
-        <button className="icon-btn" onClick={onClose} title="Close panel"><I.Close size={15} /></button>
+        <button className="icon-btn nodrag" onClick={onClose} title="Close panel (⌘\\)"><I.Close size={15} /></button>
       </div>
-      {tab === 'browser' && <BrowserPane hidden={hidden} />}
-      {tab === 'progress' && <ProgressPane messages={messages} onOpenFile={onOpenFile} browserState={browserState} onBrowser={() => onTab('browser')} />}
-      {tab === 'file' && <FilePane path={file} />}
+      {tab === 'browser' && <BrowserPane hidden={hidden} threadId={threadId} />}
+      {tab === 'progress' && <ProgressPane messages={messages} onOpenFile={onOpenFile} browserState={browserState} onBrowser={() => onTab('browser')} running={!!running} progress={progress} />}
+      {tab === 'watchlist' && <Watchlist />}
+      {tab === 'file' && (isPageCandidate(file) ? <PageView key={file} path={file} hidden={hidden} fallback={<FilePane path={file} />} /> : <FilePane path={file} />)}
     </aside>
   )
 }
 
-// ---------------------------------------------------------------- progress
+// ---------------------------------------------------------------- overview
 
-function ProgressPane({ messages, onOpenFile, browserState, onBrowser }: { messages: Message[]; onOpenFile: (p: string) => void; browserState: BrowserState | null; onBrowser: () => void }) {
+function hostOf(u: string): string { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
+
+function ProgressPane({ messages, onOpenFile, browserState, onBrowser, running, progress }: {
+  messages: Message[]; onOpenFile: (p: string) => void; browserState: BrowserState | null; onBrowser: () => void
+  running: boolean; progress?: { used: number; window: number; model?: string; actions?: number }
+}) {
   const steps = messages.flatMap((m) => m.toolCalls ?? [])
   const results = new Map(messages.filter((m) => m.role === 'tool').map((m) => [m.toolCallId, m]))
-  const lastTodo = [...steps].reverse().find((c) => c.name === 'todo')
+  // The latest plan: a todo update, or a plan the user approved.
+  const lastTodo = [...steps].reverse().find((c) => c.name === 'todo' || (c.name === 'propose_plan' && /approved the plan/.test(results.get(c.id)?.content ?? '')))
   let plan: Array<{ text: string; status: string }> = []
-  try { plan = lastTodo ? JSON.parse(lastTodo.arguments).items ?? [] : [] } catch { plan = [] }
-  const outputs = [...new Map(messages.filter((m) => m.role === 'tool' && m.meta?.status === 'ok' && typeof m.meta?.path === 'string')
+  try {
+    const a = lastTodo ? JSON.parse(lastTodo.arguments) : null
+    plan = !a ? [] : lastTodo!.name === 'todo' ? a.items ?? [] : (a.steps ?? []).map((t: string, i: number) => ({ text: t, status: i === 0 ? 'in_progress' : 'pending' }))
+  } catch { plan = [] }
+  const outputs = [...new Map(messages.filter((m) => m.role === 'tool' && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && ['file_write', 'create_document', 'create_page', 'update_page'].includes(m.toolName ?? ''))
     .map((m) => [m.meta!.path as string, m])).values()].reverse()
   const attached = messages.flatMap((m) => [
     ...((m.meta?.files ?? []) as Array<{ name: string; path: string }>).map((f) => ({ ...f, folder: false })),
     ...((m.meta?.folders ?? []) as string[]).map((f) => ({ name: f.split('/').pop()!, path: f, folder: true }))
   ])
+  const sources = [...new Map(messages.flatMap((m) => ((m.meta?.sources ?? []) as Array<{ title: string; url: string }>)).map((s) => [s.url, s])).values()]
+  const team = messages.flatMap((m) => (m.meta?.team ?? []) as TeamMember[])
   const used = new Map<string, number>()
   for (const c of steps) {
     const label = (results.get(c.id)?.meta?.label as string | undefined) ?? prettyName(c.name)
     used.set(label, (used.get(label) ?? 0) + 1)
   }
   const done = plan.filter((t) => t.status === 'done').length
+  const current = plan.find((t) => t.status === 'in_progress')
+  const pct = progress ? Math.min(100, Math.round((progress.used / progress.window) * 100)) : null
+  const lastAi = [...messages].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal')
+  const status = running ? 'Working' : lastAi?.status === 'error' ? 'Stopped with an error' : messages.length ? 'Done' : 'Ready'
 
   return (
     <div className="progress-pane" data-testid="progress-pane">
-      <section>
-        <h4>Plan {plan.length > 0 && <span className="hint">{done} of {plan.length}</span>}</h4>
-        {plan.length === 0 ? <div className="hint">SahilBot writes a plan here for tasks with several steps.</div> : (
-          <ol className="plan">
-            {plan.map((t, i) => (
-              <li key={i} className={`plan-${t.status}`}>
-                <span className="plan-dot">{t.status === 'done' ? <I.Check size={12} /> : ''}</span>
-                <span>{t.text}</span>
-              </li>
-            ))}
-          </ol>
+      <section className="ov-card ov-status">
+        <div className="ov-status-row">
+          <span className={`ov-dot${running ? ' live' : ''}`} />
+          <b>{status}</b>
+          <span className="spacer" />
+          {pct !== null && <span className="hint">{pct}% memory used</span>}
+        </div>
+        {running && current && <div className="ov-now">Now: {current.text}</div>}
+        <div className="ov-facts">
+          {progress?.model && <span><I.Cpu size={12} />{progress.model}</span>}
+          <span><I.ListIcon size={12} />{steps.length} action{steps.length === 1 ? '' : 's'}</span>
+          {outputs.length > 0 && <span><I.File size={12} />{outputs.length} file{outputs.length === 1 ? '' : 's'}</span>}
+          {sources.length > 0 && <span><I.Globe size={12} />{sources.length} source{sources.length === 1 ? '' : 's'}</span>}
+        </div>
+        {pct !== null && <div className="ov-meter"><i style={{ width: `${pct}%` }} className={pct > 85 ? 'hot' : ''} /></div>}
+      </section>
+
+      <section className="ov-card">
+        <div className="ov-head"><span>Plan</span>{plan.length > 0 && <span className="hint">{done} of {plan.length}</span>}</div>
+        {plan.length === 0 ? <div className="ov-empty">For tasks with several steps, SahilBot writes its plan here and ticks it off as it works.</div> : (
+          <>
+            <div className="ov-meter"><i style={{ width: `${(done / plan.length) * 100}%` }} /></div>
+            <ol className="ov-plan">
+              {plan.map((t, i) => (
+                <li key={i} className={`ps-${t.status}${running && t.status === 'in_progress' ? ' live' : ''}`}>
+                  <span className="ps-mark">{t.status === 'done' ? <I.Check size={11} /> : null}</span><span>{t.text}</span>
+                </li>
+              ))}
+            </ol>
+          </>
         )}
       </section>
-      <section>
-        <h4>Outputs</h4>
-        {outputs.length === 0 ? <div className="hint">Files SahilBot creates show up here.</div> : (
-          <div className="outputs-grid">
+
+      {team.length > 0 && (
+        <section className="ov-card">
+          <div className="ov-head"><span>Team of Experts</span><span className="hint">{team.filter((x) => x.status === 'done').length} of {team.length} done</span></div>
+          <div className="ov-team">{team.map((x) => <span key={x.id} className={`ov-member tm-${x.status}`} title={x.detail}><span className="tm-dot" />{x.title}</span>)}</div>
+        </section>
+      )}
+
+      <section className="ov-card">
+        <div className="ov-head"><span>Files made</span></div>
+        {outputs.length === 0 ? <div className="ov-empty">Documents and files SahilBot creates show up here.</div> : (
+          <div className="ov-files">
             {outputs.map((m) => {
               const path = m.meta!.path as string
-              const ext = path.split('.').pop()?.toUpperCase()
+              const ext = path.split('.').pop()?.toLowerCase() ?? ''
               return (
-                <button key={path} className="output-card" onClick={() => onOpenFile(path)} data-testid="output-card">
-                  <span className={`ext ext-${ext?.toLowerCase()}`}>{ext}</span>
-                  <span className="output-name">{path.split('/').pop()}</span>
+                <button key={path} className="ov-file" onClick={() => onOpenFile(path)} data-testid="output-card" title={path}>
+                  <span className={`ov-ext t-${ext}`}>{ext.toUpperCase()}</span>
+                  <span className="ov-file-name">{path.split('/').pop()}</span>
+                  <I.Chevron size={12} style={{ transform: 'rotate(-90deg)' }} />
                 </button>
               )
             })}
           </div>
         )}
       </section>
-      <button className="progress-row" onClick={onBrowser}>
-        <I.Globe size={15} /><span>Built-in browser</span>
-        <span className="hint">{browserState?.tabs.length ? `${browserState.tabs.length} tab${browserState.tabs.length > 1 ? 's' : ''}${browserState.controlling ? ' · in use' : ''}` : 'idle'}</span>
-        <I.Chevron size={13} style={{ transform: 'rotate(-90deg)' }} />
-      </button>
-      <section>
-        <h4>Used in this chat</h4>
-        {attached.map((a) => (
-          <div key={a.path} className="used-row" title={a.path} onClick={() => !a.folder && onOpenFile(a.path)}>
-            {a.folder ? <I.Folder size={15} /> : <I.Paperclip size={15} />}<span>{a.folder ? 'Folder' : 'Upload'}</span><span className="hint">{a.name}</span>
+
+      {sources.length > 0 && (
+        <section className="ov-card">
+          <div className="ov-head"><span>Sources</span><span className="hint">{sources.length}</span></div>
+          <div className="ov-sources">
+            {sources.slice(0, 12).map((s, i) => (
+              <a key={s.url} className="ov-source" href={s.url} target="_blank" rel="noreferrer" title={s.url}>
+                <span className="ov-n">{i + 1}</span>
+                <span className="ov-source-text"><span className="ov-source-title">{s.title || hostOf(s.url)}</span><span className="hint">{hostOf(s.url)}</span></span>
+              </a>
+            ))}
           </div>
-        ))}
-        {[...used.entries()].map(([label, n]) => (
-          <div key={label} className="used-row"><I.Cpu size={15} /><span>{label}</span><span className="hint">{n}×</span></div>
-        ))}
-        {used.size === 0 && attached.length === 0 && <div className="hint">Nothing yet.</div>}
+        </section>
+      )}
+
+      <section className="ov-card ov-click" onClick={onBrowser} role="button">
+        <div className="ov-head"><span><I.Globe size={14} /> Browser</span>
+          <span className="hint">{browserState?.tabs.length ? `${browserState.tabs.length} tab${browserState.tabs.length > 1 ? 's' : ''}${browserState.controlling ? ' · in use' : ''}` : 'idle'} ›</span></div>
+        {browserState?.tabs[browserState.active] && <div className="ov-empty">{browserState.tabs[browserState.active].title}</div>}
       </section>
+
+      {(used.size > 0 || attached.length > 0) && (
+        <section className="ov-card">
+          <div className="ov-head"><span>Used in this chat</span></div>
+          <div className="ov-chips">
+            {attached.map((a) => <span key={a.path} className="ov-chip" title={a.path} onClick={() => !a.folder && onOpenFile(a.path)}
+              {...(a.folder ? {} : { role: 'button', tabIndex: 0, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenFile(a.path) } } })}>{a.folder ? <I.Folder size={12} /> : <I.Paperclip size={12} />}{a.name}</span>)}
+            {[...used.entries()].map(([label, n]) => <span key={label} className="ov-chip">{label}<span className="hint">{n}</span></span>)}
+          </div>
+        </section>
+      )}
     </div>
   )
 }
@@ -118,7 +193,9 @@ function FilePane({ path }: { path: string | null }) {
     setP(null)
     setErr(null)
     setSheet(0)
-    if (path) api.files.preview(path).then(setP).catch((e: Error) => setErr(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')))
+    let alive = true
+    if (path) api.files.preview(path).then((x) => { if (alive) setP(x) }).catch((e: Error) => { if (alive) setErr(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')) })
+    return () => { alive = false }
   }, [path])
   if (!path) return <div className="right-body">Open a file from the chat or the Progress tab to preview it here.</div>
   if (err) return <div className="right-body">{err}</div>
@@ -133,7 +210,7 @@ function FilePane({ path }: { path: string | null }) {
       <div className="file-body">
         {p.kind === 'pdf' && <iframe className="pdf-frame" src={p.url} title={p.name} />}
         {p.kind === 'image' && <img className="file-img" src={p.url} alt={p.name} />}
-        {p.kind === 'html' && <div className="doc-page md" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(p.html ?? '') }} />}
+        {p.kind === 'html' && <div className="doc-page md" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(p.html ?? '', SANITIZE) }} />}
         {p.kind === 'markdown' && <div className="doc-page"><Markdown text={p.text ?? ''} /></div>}
         {p.kind === 'text' && <pre className="file-text">{p.text}</pre>}
         {p.kind === 'sheets' && p.sheets && (
@@ -162,7 +239,8 @@ function FilePane({ path }: { path: string | null }) {
   )
 }
 
-function BrowserPane({ hidden }: { hidden: boolean }) {
+/** threadId: the chat a "Teach a task" recording is sent to (the bot's current thread). */
+function BrowserPane({ hidden, threadId }: { hidden: boolean; threadId?: string | null }) {
   const [s, setS] = useState<BrowserState | null>(null)
   const [url, setUrl] = useState('')
   const [editing, setEditing] = useState(false)
@@ -195,7 +273,7 @@ function BrowserPane({ hidden }: { hidden: boolean }) {
       window.removeEventListener('resize', sync)
       void api.browser.setBounds(null)
     }
-  }, [hidden, s?.controlling, s?.takenOver, s?.tabs.length])
+  }, [hidden, s?.controlling, s?.takenOver, s?.tabs.length, s?.teach?.status, !!s?.teach])
 
   return (
     <div className="browser">
@@ -218,7 +296,14 @@ function BrowserPane({ hidden }: { hidden: boolean }) {
             onChange={(e) => setUrl(e.target.value)} data-testid="browser-url" />
         </form>
         <button className="icon-btn" onClick={() => void api.browser.newTab()} title="New tab"><I.Plus size={16} /></button>
+        {!s?.teach && (
+          <button className="teach-btn" disabled={!!s?.controlling} onClick={() => void api.browser.teachStart()}
+            title="Teach a task: do it once here while SahilBot records, and your bot learns to repeat it" data-testid="teach-start">
+            <span className="teach-dot" aria-hidden />Teach
+          </button>
+        )}
       </div>
+      {s?.teach && <TeachBar key={s.teach.startedAt} state={s.teach} threadId={threadId} />}
       {(s?.controlling || s?.takenOver) && (
         <div className={`bcontrol${s.takenOver ? ' you' : ''}`} data-testid="browser-overlay">
           {s.takenOver ? (

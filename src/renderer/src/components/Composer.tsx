@@ -14,13 +14,18 @@ const THINKING: Array<{ id: Effort; label: string; sub: string }> = [
 ]
 
 const MODES: Array<{ id: PermissionMode; label: string; sub: string }> = [
-  { id: 'ask', label: 'Ask', sub: 'Approve every action that changes something' },
-  { id: 'auto', label: 'Auto', sub: 'Runs reads, edits and routine steps; asks before sending, buying, posting or deleting' },
-  { id: 'bypass', label: 'Bypass', sub: 'Everything runs except hard stops. Resets on restart.' }
+  { id: 'ask', label: 'Ask first', sub: 'Approve every action that changes something' },
+  { id: 'auto', label: 'Auto-approve', sub: 'Runs reads, edits and routine steps; asks before sending, buying, posting or deleting' },
+  { id: 'bypass', label: 'Full access', sub: 'Bypass: everything runs except hard stops. Resets on restart.' }
 ]
 
 export interface ComposerHandle {
   insert(text: string): void
+  /** Replace the box's text (starter ideas). */
+  replace(text: string): void
+  /** Text from a sahilbot:// link: shown with a "review before sending" banner, marked if sent unedited. */
+  prefillFromLink(text: string): void
+  setDeep(on: boolean): void
   focus(): void
   toggleDictation(): void
   attach(items: Attachment[]): void
@@ -34,6 +39,12 @@ export interface Outgoing {
   team?: boolean
   /** While SahilBot works: true = wait until it finishes (⌘Enter); otherwise it steers the running agent. */
   queue?: boolean
+  /** Deep Research: a team researches, then a cited PDF report. */
+  deepResearch?: boolean
+  /** Plan first: questions and a plan to approve before anything changes. */
+  planFirst?: boolean
+  /** The text came from a sahilbot:// link and was sent as it was (not edited): it isn't the user's own words. */
+  fromLink?: boolean
 }
 
 export const Composer = forwardRef<ComposerHandle, {
@@ -73,9 +84,24 @@ export const Composer = forwardRef<ComposerHandle, {
   const [images, setImages] = useState<string[]>([])
   const [atts, setAtts] = useState<Attachment[]>([])
   const [drag, setDrag] = useState(false)
+  const [deep, setDeep] = useState(false)
+  const [planFirst, setPlanFirst] = useState(false)
+  /** Text a sahilbot:// link put in the box (null: none). Cleared when the box is emptied or sent. */
+  const [linkText, setLinkText] = useState<string | null>(null)
   const ta = useRef<HTMLTextAreaElement>(null)
 
   useImperativeHandle(ref, () => ({
+    replace(t: string) {
+      setLinkText(null)
+      setText(t)
+      requestAnimationFrame(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } })
+    },
+    prefillFromLink(t: string) {
+      setLinkText(t)
+      setText(t)
+      requestAnimationFrame(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } })
+    },
+    setDeep(on: boolean) { setDeep(on) },
     insert(t: string) {
       setText((cur) => (cur ? `${cur}\n${t}` : t))
       // Put the caret at the end so the user can just keep typing.
@@ -109,6 +135,13 @@ export const Composer = forwardRef<ComposerHandle, {
     if (!mic.current) return
     if (e.type === 'partial') setText(base.current + e.text)
   }), [])
+  // Leaving this chat (or the app) ends dictation.
+  useEffect(() => () => {
+    if (!mic.current) return
+    mic.current.stop()
+    mic.current = null
+    void api.voice.dictateStop()
+  }, [])
   const toggleDictation = async (): Promise<void> => {
     setDictError(null)
     if (dictating) {
@@ -146,7 +179,17 @@ export const Composer = forwardRef<ComposerHandle, {
   const canSend = !!(text.trim() || images.length || atts.length)
   const send = (queue = false): void => {
     if (!canSend) return
-    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on, queue })
+    if (mic.current) {
+      mic.current.stop()
+      mic.current = null
+      setDictating(false)
+      void api.voice.dictateStop()
+    }
+    // Sent exactly as the link had it: not the user's own words (the agent treats it as relayed text).
+    const fromLink = linkText !== null && text.trim() === linkText.trim()
+    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on || deep, deepResearch: deep, planFirst, queue, ...(fromLink ? { fromLink } : {}) })
+    setDeep(false)
+    setLinkText(null)
     setText('')
     setImages([])
     setAtts([])
@@ -217,7 +260,7 @@ export const Composer = forwardRef<ComposerHandle, {
           data-testid="composer-input"
         />
         <div className="composer-bar">
-          <Popover label={<I.Plus />} className="plus-pop" title="Attach files or a folder">
+          <Popover label={<I.Plus size={19} />} className="plus-pop" title="Attach files or a folder">
             {(close) => (
               <>
                 <button className="menu-item" onClick={() => { close(); void api.files.pick('files').then(addAtts) }} data-testid="attach-files"><I.Paperclip size={15} />Upload files or photos</button>
@@ -225,10 +268,22 @@ export const Composer = forwardRef<ComposerHandle, {
               </>
             )}
           </Popover>
-          {p.team && p.onTeam && (
+          {p.team && (
+            <button className={`team-chip${planFirst ? ' on' : ''}`} onClick={() => setPlanFirst((x) => !x)} data-testid="plan-toggle"
+              title="Plan first: SahilBot asks what it needs to know, shows you its plan, and starts only when you approve">
+              <I.ListIcon size={15} /><span className="chip-label">Plan first</span>
+            </button>
+          )}
+          {p.team && (
+            <button className={`team-chip${deep ? ' on' : ''}`} onClick={() => setDeep((d) => !d)} data-testid="deep-toggle"
+              title="Deep Research: a team of helper agents researches in parallel, then SahilBot writes a cited report and saves it as a PDF">
+              <I.Search size={15} /><span className="chip-label">Deep Research</span>
+            </button>
+          )}
+          {p.team && p.onTeam && !deep && (
             <button className={`team-chip${p.team.on ? ' on' : ''}`} onClick={() => p.onTeam!(!p.team!.on)} data-testid="team-toggle"
               title={p.team.on ? `Team of Experts is on: ${Math.min(10, p.team.maxAgents)} to ${p.team.maxAgents} helper agents research in parallel, then SahilBot puts it together (${p.team.why})` : `Team of Experts: at least ${Math.min(10, p.team.maxAgents)} helper agents research in parallel, then SahilBot puts it together (${p.team.why})`}>
-              <I.Users size={15} />Team of Experts
+              <I.Users size={15} /><span className="chip-label">Team of Experts</span>
             </button>
           )}
           <span className="spacer" />
@@ -240,22 +295,22 @@ export const Composer = forwardRef<ComposerHandle, {
           )}
           <button className={`c-btn${dictating ? ' recording' : ''}`} title={dictating ? 'Stop dictation (⌘⇧D) · Esc cancels' : 'Dictate (⌘⇧D)'} onClick={() => void toggleDictation()} data-testid="dictate"><I.Mic /></button>
           {p.running && !p.answering && !canSend ? (
-            <button className="c-btn primary" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
+            <button className="c-btn primary stop" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
           ) : canSend ? (
-            <button className="c-btn primary" title={p.running && !p.answering ? 'Steer: SahilBot takes this into account right away (⌘Enter queues it instead)' : 'Send'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
+            <button className="c-btn primary send" title={p.running && !p.answering ? 'Steer: SahilBot takes this into account right away (⌘Enter queues it instead)' : 'Send'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
           ) : (
-            <button className="c-btn ghost" title="Talk with SahilBot (⌘⇧V)" onClick={p.onVoice} data-testid="voice-btn"><I.Wave /></button>
+            <button className="c-btn voice" title="Voice chat (⌘⇧V)" aria-label="Voice chat" onClick={p.onVoice} data-testid="voice-btn"><I.Wave size={17} /></button>
           )}
         </div>
       </div>
       <div className="under">
         {p.context}
         <span className="spacer" />
-        <Popover label={<>{modelLabel}</>} className="under-pick" title="Model" testId="model-picker" menuClass="right">
+        <Popover label={<><I.Cpu size={14} />{modelLabel}</>} className="under-pick" title="Model" testId="model-picker" menuClass="right">
           {(close) => <ModelMenu list={p.models} model={p.model} onPick={(id) => { p.onModel(id); close() }} onRefresh={p.onRefreshModels} onManage={p.onManageModels ? () => { close(); p.onManageModels!() } : undefined} />}
         </Popover>
         {p.thinking && p.onThinking && (
-          <Popover label={<span className="dim">{THINKING.find((t) => t.id === p.thinking)?.label}</span>} className="under-pick" title="Thinking (adapts to each problem)" testId="thinking-picker" menuClass="right">
+          <Popover label={<><I.Sparkle size={14} /><span className="dim">{THINKING.find((t) => t.id === p.thinking)?.label}</span></>} className="under-pick" title="Thinking (adapts to each problem)" testId="thinking-picker" menuClass="right">
             {(close) => (
               <>
                 <div className="menu-head">Thinking · adapts to each problem</div>
@@ -281,6 +336,13 @@ export const Composer = forwardRef<ComposerHandle, {
       </div>
       {p.running && !p.answering && <div className="steer-hint" data-testid="steer-hint"><kbd>Enter</kbd> steers SahilBot now · <kbd>⌘Enter</kbd> queues for when it's done{p.steering ? <span className="steering"> · <span className="spin" /> steering at its next step…</span> : null}</div>}
       {dictError && <div className="bypass-banner">{dictError}</div>}
+      {linkText !== null && text.trim() !== '' && (
+        <div className="bypass-banner" data-testid="link-prefill-banner">
+          {text.trim() === linkText.trim()
+            ? 'Text from a link — review before sending. Sent as is, SahilBot treats it as coming from the link, not from you.'
+            : 'Text from a link, edited by you — review before sending.'}
+        </div>
+      )}
       {p.mode === 'bypass' && <div className="bypass-banner">Bypass is on for this chat: actions run without asking, except hard stops.</div>}
     </div>
   )
