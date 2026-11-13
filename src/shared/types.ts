@@ -49,6 +49,10 @@ export interface Space {
   members: string[]
   /** Model override for this bot; null = the app default. */
   model: string | null
+  /** One-line label under the bot's name ("Add a label"). */
+  label?: string | null
+  /** Desktop notifications when this bot finishes or needs you (default on). */
+  notify?: boolean
   createdAt: number
   /** Derived for the sidebar. */
   lastPreview?: string
@@ -114,6 +118,13 @@ export interface TaskModels {
   background: string
 }
 
+export interface CustomRule {
+  id: string
+  /** Plain words matched against the action, e.g. "send email", "run npm install", "click Buy". */
+  when: string
+  action: 'allow' | 'ask'
+}
+
 export interface Settings {
   /** Fallback endpoint for models no provider claims (and the legacy single-server setting). */
   baseUrl: string
@@ -160,6 +171,8 @@ export interface Settings {
   onboarded: boolean
   /** Hard monthly cap (USD) on cloud model spending; local models are free and unaffected. */
   cloudBudgetUsd: number
+  /** The user's own approval rules: "When SahilBot wants to …, it should allow automatically / ask first". Ask first wins. */
+  customRules?: CustomRule[]
 }
 
 export type Tier = 0 | 1 | 2 | 3
@@ -349,6 +362,8 @@ export interface ConnectorPreset {
   category: string
   /** oauth: sign in in the browser; none: open server; google: needs your Google OAuth client ID; app: built into SahilBot. */
   auth: 'oauth' | 'none' | 'google' | 'browser' | 'app'
+  /** The app's own site, for its icon, when the server URL's host doesn't map to it (gmailmcp.googleapis.com → mail.google.com/mail/). */
+  domain?: string
 }
 
 export interface ConnectorConfig {
@@ -365,6 +380,25 @@ export interface ConnectorConfig {
   clientId?: string
   preset?: string
   enabled: boolean
+  /** Tool names (as the server names them) the user switched off; they aren't offered to the agent. */
+  disabledTools?: string[]
+}
+
+/** A ready-made bot from packs/templates (Connect apps → Bot templates). */
+export interface BotTemplate {
+  id: string
+  name: string
+  color: string
+  shape: BotShape
+  description: string
+  /** The bot's job: becomes its instructions (system.md). */
+  instructions: string
+  /** What the bot says first in its chat. */
+  starterMessage: string
+  /** Suggested routines; created paused until the user turns them on. */
+  routines: Array<{ title: string; prompt: string; schedule: Schedule }>
+  /** Names of built-in skills (packs/skills) this bot leans on. */
+  skills?: string[]
 }
 
 export interface ConnectorStatus {
@@ -415,6 +449,29 @@ export interface ScheduledTask {
   lastRun: number | null
   lastStatus: string | null
   createdAt: number
+}
+
+/** One run of a routine (scheduled task); the last 20 per routine are kept. */
+export interface RoutineRun {
+  id: string
+  taskId: string
+  startedAt: number
+  finishedAt: number | null
+  status: 'running' | 'succeeded' | 'failed'
+  reason: string | null
+  threadId: string | null
+  /** Started with Test (Run now) rather than by the schedule. */
+  test: boolean
+}
+
+/** A file or link from a bot's chats (bot details → Library). */
+export interface LibraryItem {
+  kind: 'file' | 'link'
+  title: string
+  path?: string
+  url?: string
+  at: number
+  threadId: string
 }
 
 export interface SendInput {
@@ -472,7 +529,9 @@ export interface SahilBotApi {
   spaces: {
     list(): Promise<Space[]>
     create(input: { name?: string; color?: string; shape?: BotShape; kind?: 'bot' | 'group' | 'project'; members?: string[]; intro?: boolean; folder?: string }): Promise<{ space: Space; threadId: string }>
-    update(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder'>>): Promise<Space>
+    update(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify'>>): Promise<Space>
+    /** Files and links from this bot's chats, newest first. */
+    library(spaceId: string): Promise<LibraryItem[]>
     markUnread(id: string): Promise<void>
     remove(id: string): Promise<void>
     getPrompt(id: string): Promise<string>
@@ -532,7 +591,10 @@ export interface SahilBotApi {
     create(t: { title: string; prompt: string; schedule: Schedule; spaceId: string }): Promise<ScheduledTask>
     update(id: string, patch: { enabled?: boolean; title?: string; prompt?: string; schedule?: Schedule }): Promise<ScheduledTask>
     remove(id: string): Promise<void>
+    /** Test: runs it now without moving its schedule; progress arrives through onChange and runs(). */
     runNow(id: string): Promise<void>
+    /** Run history, newest first (last 20). */
+    runs(taskId: string): Promise<RoutineRun[]>
     onChange(cb: () => void): () => void
   }
   pickFolder(): Promise<string | null>
@@ -560,6 +622,11 @@ export interface SahilBotApi {
     /** One-click connect for a catalog entry (OAuth opens the browser). */
     connectPreset(id: string): Promise<ConnectorStatus>
     disconnect(id: string): Promise<void>
+    /** App icons as data: URLs by preset id: cached ones now; onIcons fires when more have been fetched. */
+    icons(): Promise<Record<string, string>>
+    onIcons(cb: () => void): () => void
+    /** Switch one of a connector's tools on or off (persisted; off tools aren't offered to the agent). */
+    setToolEnabled(id: string, tool: string, on: boolean): Promise<ConnectorConfig>
     onChange(cb: () => void): () => void
   }
   vault: {
@@ -592,6 +659,12 @@ export interface SahilBotApi {
     save(r: { name: string; text: string; scope?: string; category?: string }): Promise<Rule>
     setEnabled(name: string, on: boolean): Promise<void>
     remove(name: string): Promise<void>
+  }
+  /** Ready-made bots (Connect apps → Bot templates). */
+  templates: {
+    list(): Promise<BotTemplate[]>
+    /** Creates the bot, its routines (paused) and a chat that opens with the bot's intro. */
+    add(id: string): Promise<{ spaceId: string; threadId: string }>
   }
   skills: {
     list(): Promise<Skill[]>

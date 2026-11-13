@@ -127,3 +127,12 @@ export function checkTaint(tool: string, effect: string, args: unknown, untruste
   const url = URL_READS[tool]?.(args)
   return !!url && urlTainted(url, untrusted, userText)
 }
+
+/**
+ * The user's custom rules for one action: 'ask' if any Ask-first rule matches, else 'allow' if an
+ * Allow rule matches, else null (normal permissions apply). Contract shared by the approvals UI and
+ * the agent loop; matching is implemented by the approvals work.
+ */
+export function ruleVerdict(_rules: import('@shared/types').CustomRule[] | undefined, _action: { tool: string; label?: string; summary?: string; args: string }): 'allow' | 'ask' | null {
+  return null
+}
