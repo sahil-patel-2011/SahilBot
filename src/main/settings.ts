@@ -33,7 +33,22 @@ export const DEFAULTS: Stored = {
   advanced: { hardStopsEnabled: true },
   onboarded: false,
   cloudBudgetUsd: 200,
-  customRules: []
+  customRules: [],
+  // Always on
+  menuBarIcon: true,
+  openAtLogin: false,
+  keepAwakeWhileWorking: true,
+  catchUpHours: 12,
+  routinesPaused: false,
+  // Local models stay loaded this long between messages (Ollama's own default is 5 minutes).
+  localKeepAlive: '30m'
+}
+
+/** Missed-routine catch-up window in hours: a whole number from 0 (off) to 168 (a week); anything else is the default. */
+export function cleanCatchUpHours(v: unknown): number {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN
+  if (!Number.isFinite(n)) return DEFAULTS.catchUpHours!
+  return Math.max(0, Math.min(168, Math.round(n)))
 }
 
 /**
@@ -88,7 +103,8 @@ export class SettingsStore {
       cloud: { ...DEFAULTS.cloud, ...s.cloud },
       appearance: { ...DEFAULT_APPEARANCE, ...s.appearance },
       search: { ...DEFAULTS.search, ...s.search }, advanced: { ...DEFAULTS.advanced, ...s.advanced },
-      customRules: cleanRules(s.customRules)
+      customRules: cleanRules(s.customRules),
+      catchUpHours: cleanCatchUpHours(s.catchUpHours)
     }
   }
 
@@ -119,6 +135,7 @@ export class SettingsStore {
       taskModels: { ...cur.taskModels, ...rest.taskModels },
       cloud: { ...cur.cloud, ...rest.cloud },
       customRules: rest.customRules !== undefined ? cleanRules(rest.customRules) : cur.customRules,
+      catchUpHours: rest.catchUpHours !== undefined ? cleanCatchUpHours(rest.catchUpHours) : cur.catchUpHours,
       providers: rest.providers ? {
         ollama: { ...cur.providers.ollama, ...rest.providers.ollama },
         lmstudio: { ...cur.providers.lmstudio, ...rest.providers.lmstudio },

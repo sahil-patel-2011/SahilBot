@@ -287,3 +287,4 @@
 .composer-bar .spacer { flex: 1 1 0; min-width: 0; }
 .under { row-gap: 2px; }
 .under-pick > button { white-space: nowrap; }
+.chat-root .notice.interrupted { display: flex; gap: 10px; justify-content: center; align-items: center; }

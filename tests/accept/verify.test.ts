@@ -409,8 +409,10 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
     await page.evaluate(() => window.foreman.spaces.create({ name: 'Researcher', color: '#0EA5E9', shape: 'blob', intro: false }))
     llm.script.push(
       call('message_bot', { bot: 'Researcher', message: 'Find the boiling point of water at sea level in °C.' }),
-      { content: 'I asked the Researcher; its answer will show in its chat.' },
-      { content: 'Water boils at 100 °C at sea level.' }
+      // The two bots run at the same time: answer by who's asking, not by arrival order.
+      ...[0, 1].map(() => (req: Record<string, any>) => String(req.messages[0]?.content).includes('Bot: Researcher')
+        ? { content: 'Water boils at 100 °C at sea level.' }
+        : { content: 'I asked the Researcher; its answer will show in its chat.' })
     )
     await send(page, 'Ask the Researcher bot for the boiling point of water')
     await idle(page)

@@ -41,7 +41,7 @@ describe('platform: templates, handoffs, pages, rules, routines, memory', () => 
     expect(routines.every((r) => !r.enabled)).toBe(true)
     await page.click('[data-testid="bot-pill"]')
     await page.locator('[data-testid="bot-details"]').waitFor()
-    expect(await page.locator('[data-testid="routine-row"]').count()).toBe(routines.length)
+    await expect.poll(() => page.locator('[data-testid="routine-row"]').count(), { timeout: 5_000 }).toBe(routines.length)
     await app.close()
   })
 

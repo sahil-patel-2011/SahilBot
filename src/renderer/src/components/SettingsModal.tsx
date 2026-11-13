@@ -179,6 +179,29 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
 
 type P = { s: Settings; patch: (p: SettingsPatchUi) => Promise<Settings> }
 
+const CATCH_UP = [[0, 'Off'], [1, '1 hour'], [6, '6 hours'], [12, '12 hours'], [24, '1 day'], [72, '3 days'], [168, '1 week']] as const
+
+/** Menu bar, login, keep-awake and missed routines: SahilBot keeps working when the window is closed. */
+function AlwaysOn({ s, patch }: P) {
+  const [login, setLogin] = useState<string | null>(null)
+  useEffect(() => void api.alwaysOn.status().then((st) => setLogin(st.loginItem)), [s.openAtLogin])
+  const loginHint = login === 'requires-approval' ? 'Allow SahilBot in System Settings → General → Login Items.'
+    : login === 'unsupported' ? 'Works in the installed app.' : 'Starts in the menu bar with the window hidden.'
+  return (
+    <Section title="Always on" sub="Closing the window doesn't stop SahilBot: bots keep working and routines keep running until you quit.">
+      <Row title="Show SahilBot in the menu bar" sub="See which bots are working or need you, from any app."><Toggle on={s.menuBarIcon ?? true} onChange={(v) => void patch({ menuBarIcon: v })} label="Show SahilBot in the menu bar" testId="menu-bar-icon" /></Row>
+      <Row title="Open at login" sub={loginHint}><Toggle on={s.openAtLogin ?? false} onChange={(v) => void patch({ openAtLogin: v })} label="Open at login" testId="open-at-login" /></Row>
+      <Row title="Keep the Mac awake while bots work" sub="Only while a chat or routine is running. Closing the lid still sleeps."><Toggle on={s.keepAwakeWhileWorking ?? true} onChange={(v) => void patch({ keepAwakeWhileWorking: v })} label="Keep the Mac awake while bots work" testId="keep-awake" /></Row>
+      <Row title="Catch up on missed routines" sub="If SahilBot was closed or the Mac was asleep, each missed routine runs once if it was due within this window.">
+        <select className="set-select" value={s.catchUpHours ?? 12} onChange={(e) => void patch({ catchUpHours: Number(e.target.value) })} data-testid="catch-up">
+          {CATCH_UP.map(([h, label]) => <option key={h} value={h}>{label}</option>)}
+        </select>
+      </Row>
+      <Row title="Pause all routines" sub="Nothing runs on a schedule until you turn this off."><Toggle on={s.routinesPaused ?? false} onChange={(v) => void patch({ routinesPaused: v })} label="Pause all routines" testId="routines-paused" /></Row>
+    </Section>
+  )
+}
+
 function General({ s, patch }: P) {
   const [braveKey, setBraveKey] = useState('')
   const [spend, setSpend] = useState<{ spent: number; cap: number; requests: number } | null>(null)
@@ -231,6 +254,7 @@ function General({ s, patch }: P) {
           </>
         )}
       </Section>
+      <AlwaysOn s={s} patch={patch} />
       <Section title="Cloud spending limit" sub="SahilBot prices every cloud request before sending it and refuses anything that would go past this monthly cap. Requests the provider rejects aren't counted.">
         <Row title="Monthly cap" sub={spend ? `This month: $${spend.spent.toFixed(2)} of $${spend.cap.toFixed(2)} · ${spend.requests} cloud requests` : undefined}>
           <div className="key-edit"><span className="hint">$</span><Field value={String(s.cloudBudgetUsd)} width={90} type="number" testId="budget-cap" onSave={(v) => void patch({ cloudBudgetUsd: Math.max(0, Number(v) || 0) }).then(() => void api.budget().then(setSpend))} /></div>

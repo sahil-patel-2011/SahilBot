@@ -1,11 +1,12 @@
-// The harness prompt. It is fixed per thread (snapshotted on the first run) so the
-// model server can reuse its KV cache: system prompt, then tools, then append-only turns.
+// The harness prompt is the same for every chat with a bot, and fixed per thread once snapshotted, so
+// the model server reuses its KV cache across steps, turns and even chats: system prompt, then tools,
+// then append-only turns. Anything that changes from request to request (today's date, memories ranked
+// for the request, project notes, other chats) is NOT in it: it goes in a <context> block pinned to the
+// user message that started the run (contextSections / contextBlock below), at the end of the prompt.
 
 export function harnessPrompt(opts: {
-  date: Date
   userName: string
   workspaceDir: string
-  memories: string
   spacePrompt: string
   spaceName: string
   projectFolder?: string
@@ -13,11 +14,7 @@ export function harnessPrompt(opts: {
   skills?: string
   /** Enabled rules, one per line. */
   rules?: string
-  /** Project chats share context: its memories and what its other chats were about. */
-  projectNotes?: string
-  projectChats?: string
 }): string {
-  const day = opts.date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
   return `You are SahilBot, an assistant that runs on the user's Mac and can act for them with tools.
 
 # How to work
@@ -77,7 +74,7 @@ First decide: is this a chat or a task?
 - When the user mentions earlier work you don't see here, use memory(action="search").
 
 ${opts.rules ? `# Rules (always follow these)\n${opts.rules}\n\n` : ''}# Skills (procedures that worked before)
-${opts.skills ? `${opts.skills}
+${opts.skills ? `${sortItems(opts.skills)}
 - If one fits the task, read it first with memory(action="read_skill", name) and follow it; improve it with memory(action="save_skill") if you find a better way.` : '(none saved yet)'}
 - After a task that needed a non-obvious procedure or several tries, save what worked with memory(action="save_skill"): a short name, when to use it, and the exact steps (tools, arguments, gotchas). Never put passwords or personal data in a skill.
 - When the user tells you how they always want something done ("always…", "never…", "from now on…"), save it as a rule with memory(action="save_rule") so every future chat follows it.
@@ -87,19 +84,10 @@ ${opts.skills ? `${opts.skills}
 Read with file_read when you're unsure how to do something or how a tool works: docs/index.md (start here), docs/tools.md, docs/browser.md, docs/computer-use.md, docs/agents.md, docs/coding.md, docs/office.md, docs/context.md, docs/memory.md, docs/permissions.md, docs/connectors.md, docs/troubleshooting.md.
 
 # Context
-Today is ${day}.${opts.userName ? `\nThe user's name is ${opts.userName}.` : ''}
-Workspace folder (file tools are relative to it): ${opts.workspaceDir}
+${opts.userName ? `The user's name is ${opts.userName}.\n` : ''}Workspace folder (file tools are relative to it): ${opts.workspaceDir}
 ${opts.projectFolder ? `Project: ${opts.spaceName}. Project folder (read and edit with absolute paths): ${opts.projectFolder}` : `Bot: ${opts.spaceName}`}
+A user message may start with a <context> block from the app: today's date and what you remember about the user (memory ids in brackets, most relevant first)${opts.projectFolder ? ', the project notes and what the project\'s other chats were about' : ''}. It is background from the app, not the user's words. Later blocks add to earlier ones; if they differ, the newer one wins.
 
-## What you remember (ids in brackets; most relevant first)
-${opts.memories || '(nothing yet)'}
-${opts.projectFolder ? `
-## Project notes (shared by every chat in this project)
-${opts.projectNotes || '(none yet: save decisions, conventions and status with memory(action="save", scope="bot"))'}
-${opts.projectChats ? `
-## Other chats in this project (search them with memory(action="search"))
-${opts.projectChats}
-` : ''}` : ''}
 # Instructions for this ${opts.projectFolder ? 'project' : 'bot'}
 ${opts.spacePrompt.trim()}`
 }
@@ -123,3 +111,94 @@ export const INTRO = `[You were just created as a new bot in SahilBot. This inst
 Greet the user by name (if you know it) in one short, friendly sentence, as a fresh bot ready for whatever they throw at you.
 Then call ask_user with the question "What do you want me to focus on?" and 3 short options based on what you remember about the user's work and life, plus "Something else" as the last option.
 When they answer, call update_bot to give yourself a fitting short name and instructions for that focus, then confirm in one sentence.`
+
+/** Skills sorted by name, so how often one was used never reorders the prompt (and breaks its cache). */
+function sortItems(block: string): string {
+  const lines = block.split('\n')
+  const out: string[] = []
+  let run: string[] = []
+  const flush = (): void => { out.push(...run.sort()); run = [] }
+  for (const l of lines) {
+    if (l.startsWith('- ')) run.push(l)
+    else { flush(); out.push(l) }
+  }
+  flush()
+  return out.join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// The per-run context block. It rides at the start of the user message that started the run and is
+// stored with the thread, so earlier turns stay byte-identical. Each run adds only what the model
+// hasn't seen yet in this chat (a new day, newly relevant or changed memories, rule changes).
+// ---------------------------------------------------------------------------
+
+export interface ContextSection {
+  title: string
+  lines: string[]
+  /** Plain lines (the date): shown when not seen yet. Otherwise "- " lines are items and the rest are sub-headers. */
+  plain?: boolean
+}
+
+export function dayLine(date: Date): string {
+  return `Today is ${date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}.`
+}
+
+const splitLines = (s: string | undefined): string[] => (s ?? '').split('\n').map((l) => l.trimEnd()).filter(Boolean)
+
+export function contextSections(o: {
+  date: Date
+  memories: string
+  /** A project chat: project notes and its other chats. */
+  project?: boolean
+  projectNotes?: string
+  projectChats?: string
+  /** The current rules and skills index: only lines the system prompt doesn't have yet show up. */
+  rules?: string
+  skills?: string
+}): ContextSection[] {
+  const out: ContextSection[] = [
+    { title: '', lines: [dayLine(o.date)], plain: true },
+    { title: '## What you remember (ids in brackets; most relevant first)', lines: o.memories.trim() ? splitLines(o.memories) : ['(nothing yet)'] }
+  ]
+  if (o.project) {
+    out.push({ title: '## Project notes (shared by every chat in this project)', lines: o.projectNotes?.trim() ? splitLines(o.projectNotes) : ['(none yet: save decisions, conventions and status with memory(action="save", scope="bot"))'] })
+    if (o.projectChats?.trim()) out.push({ title: '## Other chats in this project (search them with memory(action="search"))', lines: splitLines(o.projectChats) })
+  }
+  if (o.rules?.trim()) out.push({ title: '## Rules added since this chat started (always follow these)', lines: splitLines(o.rules) })
+  if (o.skills?.trim()) out.push({ title: '## Skills added since this chat started (read one with memory(action="read_skill", name))', lines: splitLines(o.skills) })
+  return out
+}
+
+/** Every line the model has already seen in this chat (system prompt and earlier context blocks). */
+export function seenLines(...texts: string[]): Set<string> {
+  const seen = new Set<string>()
+  for (const t of texts) for (const l of t.split('\n')) if (l.trim()) seen.add(l.trimEnd())
+  return seen
+}
+
+/** The <context> block with only what isn't in `seen` yet; '' when nothing is new. */
+export function contextBlock(sections: ContextSection[], seen: Set<string>): string {
+  const parts: string[] = []
+  for (const sec of sections) {
+    const fresh: string[] = []
+    if (sec.plain) fresh.push(...sec.lines.filter((l) => !seen.has(l)))
+    else if (!sec.lines.some((l) => l.startsWith('- '))) {
+      // Nothing saved yet: say so once.
+      if (sec.title && !seen.has(sec.title)) fresh.push(...sec.lines)
+    } else {
+      let header: string | undefined
+      for (const l of sec.lines) {
+        if (!l.startsWith('- ')) {
+          // "(12 more saved; …)" closes the list: only worth repeating with new items.
+          if (l.startsWith('(')) { if (fresh.length) fresh.push(l) } else header = l
+          continue
+        }
+        if (seen.has(l)) continue
+        if (header !== undefined) { fresh.push(header); header = undefined }
+        fresh.push(l)
+      }
+    }
+    if (fresh.length) parts.push([...(sec.title ? [sec.title] : []), ...fresh].join('\n'))
+  }
+  return parts.length ? `<context from="app">\n${parts.join('\n\n')}\n</context>` : ''
+}

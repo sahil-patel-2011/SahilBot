@@ -185,7 +185,10 @@ const api: SahilBotApi = {
   checkin: { get: call('checkin:get') as never, set: call('checkin:set') as never },
   usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never },
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
+  alwaysOn: { status: call('alwaysOn:status') as never, pauseRoutines: call('alwaysOn:pauseRoutines') as never },
   chat: {
+    resume: call('chat:resume') as never,
+    interrupted: call('chat:interrupted') as never,
     send: call('chat:send') as never,
     stop: call('chat:stop') as never,
     steer: call('chat:steer') as never,

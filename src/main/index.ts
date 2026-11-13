@@ -1,11 +1,11 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, screen, session, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, shell, systemPreferences } from 'electron'
 import { execFileSync } from 'node:child_process'
 import { tmpdir, totalmem } from 'node:os'
 import { writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
-import type { BotShape, ChatEvent, CheckinSettings, PendingRequest, SendInput, Settings, Space, UsageRow } from '@shared/types'
+import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, PendingRequest, SendInput, Settings, Space, UsageRow } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 import { INTRO } from './agent/prompt'
 import { updateBotTool } from './agent/tools/bots'
@@ -34,6 +34,7 @@ import { Db } from './db'
 import { providerModels, root, teamCapacity, wiredLimitMB } from './llm/models'
 import { Endpoints } from './llm/endpoints'
 import { samplingFor } from './llm/catalog'
+import { Warmup, lastUsedModel, warmupAllowed } from './llm/warmup'
 import { MemoryStore } from './memory'
 import { appRoot, dataDir, sub } from './paths'
 import { SkillStore } from './skills'
@@ -53,6 +54,9 @@ import { BrowserManager } from './browser/manager'
 import { Vault } from './vault'
 import { findOllamaBinary, setupOllama, startOllama, stopOllama } from './ollama-setup'
 import { needsYouBody } from './needs-you'
+import { MenuBarIcon, type TrayItem } from './tray'
+import { KeepAwake, RESUME_NEXT_NOTE, RESUME_NOTE, WorkTracker, wantAwake } from './resume'
+import type { MenuAction } from './shell'
 
 /** Set by the automated tests: run without ever showing a window. */
 const HIDDEN = !!process.env.SAHILBOT_HIDDEN
@@ -177,6 +181,12 @@ app.whenReady().then(() => {
   setupApp()
   const db = new Db(join(dataDir(), 'foreman.db'))
   db.sweepStreaming()
+  // ---------------------------------------------------------------- always on: runs cut off last time
+  // Before anything can run: chats whose run was cut off by a quit or crash get a notice with Continue.
+  const work = new WorkTracker(db)
+  const recovered = work.recover()
+  /** The menu bar icon (created once the window and Quick Ask exist; never in hidden test runs). */
+  let menuBar: MenuBarIcon | null = null
   const secrets = new Secrets(db)
   const settings = new SettingsStore(db, secrets)
   const spaces = new SpaceFiles()
@@ -307,6 +317,9 @@ app.whenReady().then(() => {
     if (quick && !quick.isDestroyed()) quick.webContents.send('chat:event', e)
     for (const l of listeners) l(e)
     try { needsYou(e) } catch { /* notifications are best-effort */ }
+    // Always on: which chats are running (resume after a quit, keep awake, menu bar icon).
+    if (e.type === 'run' && e.threadId) { if (e.status === 'started') work.started(e.threadId); else work.ended(e.threadId) }
+    if (e.type === 'run' || e.type === 'pending' || e.type === 'resolved' || e.type === 'thread') menuBar?.refresh()
     if (e.type === 'run' && e.status !== 'started' && mini?.threadId === e.threadId) exitMini()
     const fromQuick = e.type === 'run' && e.status !== 'started' && quickRuns.delete(e.threadId)
     const fromRoutine = e.type === 'run' && e.status !== 'started' && scheduledRuns.delete(e.threadId)
@@ -363,6 +376,8 @@ app.whenReady().then(() => {
   )
 
   const registerQuickKeyRef = { current: (): void => undefined }
+  /** Applies Always-on settings changes (menu bar icon, login item, keep awake, paused routines); set further down. */
+  const alwaysOnChanged = { current: (_patch: SettingsPatch): void => undefined }
   // Every model server that's on; the last list tells the agent how much context each model can hold.
   const endpoints = new Endpoints(settings)
   const fitWindow = (model: string, window: number): number => {
@@ -381,6 +396,10 @@ app.whenReady().then(() => {
   })
   // Bot-to-bot handoffs need the agent itself (to start or steer the other bot's run).
   registry.register(handoffTool(() => chat.handoffHost()))
+  // Local models: load the one we expect to use (and read its prompt prefix) in the background, so the
+  // first reply after launch or a model switch doesn't wait for it.
+  const warmup = new Warmup({ endpoints, settings, fitWindow, recentModel: () => lastUsedModel(db), prefix: () => chat.warmPrefix(), busy: () => chat.busy() })
+  if (warmupAllowed()) setTimeout(() => warmup.soon(), 4000)
   // Paid requests made during a run are recorded against that run's bot.
 
   if (db.listSpaces().length === 0) db.createSpace('SahilBot', '#1F1F1F', { isMain: true, shape: 'mascot' })
@@ -408,8 +427,10 @@ app.whenReady().then(() => {
   handle('settings:get', () => settings.get())
   handle('settings:set', (patch: SettingsPatch) => {
     const s = settings.set(patch)
+    if (warmupAllowed() && (patch.defaultModel !== undefined || patch.contextWindow !== undefined || patch.localKeepAlive !== undefined)) warmup.soon()
     if (patch.quickKey !== undefined) registerQuickKeyRef.current()
     if (patch.theme) applyTheme(s.theme)
+    alwaysOnChanged.current(patch)
     return s
   })
 
@@ -570,7 +591,11 @@ app.whenReady().then(() => {
   handle('threads:list', (spaceId?: string) => db.listThreads(spaceId))
   handle('threads:search', (q: string) => db.searchThreads(q))
   handle('threads:create', (spaceId: string) => db.createThread(spaceId, 'auto', null))
-  handle('threads:update', (id: string, patch: Parameters<Db['updateThread']>[1]) => db.updateThread(id, patch))
+  handle('threads:update', (id: string, patch: Parameters<Db['updateThread']>[1]) => {
+    // A local model picked for this chat: load it while the user types.
+    if (patch.model && warmupAllowed()) warmup.soon(patch.model)
+    return db.updateThread(id, patch)
+  })
   handle('threads:remove', (id: string) => {
     chat.stop(id)
     db.deleteThread(id)
@@ -585,7 +610,11 @@ app.whenReady().then(() => {
   // Attachments must be ones the user picked or dropped in this session.
   handle('chat:send', async (input: SendInput) => {
     const ok = new Set(attachments.accept((input.attachments ?? []).map((a) => a.path)))
-    await chat.send({ ...input, attachments: (input.attachments ?? []).filter((a) => ok.has(a.path)) })
+    // The chat was cut off by SahilBot closing: "continue" picks the task up where it stopped.
+    const resumed = !chat.isRunning(input.threadId) && work.isInterrupted(input.threadId)
+    const note = resumed ? [input.note, RESUME_NEXT_NOTE].filter(Boolean).join('\n') : input.note
+    await chat.send({ ...input, ...(note ? { note } : {}), attachments: (input.attachments ?? []).filter((a) => ok.has(a.path)) })
+    if (resumed) { const m = work.clearNotice(input.threadId); if (m) emit({ threadId: input.threadId, type: 'message', message: m }) }
   })
   handle('files:pick', (kind: 'files' | 'folder') => attachments.pick(kind))
   handle('files:register', (paths: string[]) => attachments.register(paths))
@@ -643,7 +672,7 @@ app.whenReady().then(() => {
   void connectors.connectAll()
 
   // ---------------------------------------------------------------- scheduled tasks
-  const scheduler = new Scheduler(db, async (task) => {
+  const scheduler = new Scheduler(db, async (task, info) => {
     const space = db.getSpace(task.spaceId)
     if (!space) return 'error: its bot was deleted'
     // Bots get reminders in their one conversation; SahilBot and projects keep a thread per task.
@@ -659,7 +688,9 @@ app.whenReady().then(() => {
     scheduledRuns.add(threadId)
     let status: Awaited<Awaited<ReturnType<typeof chat.send>>['done']>
     try {
-      const { done } = await chat.send({ threadId, text: `⏰ ${task.title}\n\n${task.prompt}`, meta: { scheduled: task.id } }, { unattended: true })
+      // A missed run catching up: the bot knows it's late (time-sensitive steps may need adjusting).
+      const late = info.late !== undefined ? { note: `[This routine was due at ${new Date(info.late).toLocaleString()} but SahilBot was closed or the Mac was asleep, so it is running late now. Adjust anything time-sensitive.]` } : {}
+      const { done } = await chat.send({ threadId, text: `⏰ ${task.title}\n\n${task.prompt}`, ...late, meta: { scheduled: task.id, ...(info.late !== undefined ? { late: info.late } : {}) } }, { unattended: true })
       status = await done
     } finally { scheduledRuns.delete(threadId) }
     const after = db.listMessages(threadId).filter((m) => m.createdAt >= startedAt)
@@ -681,13 +712,22 @@ app.whenReady().then(() => {
     const own = ev.threadId ?? ev.task.threadId
     const threadId = own && db.getThread(own) ? own : db.listThreads(space.id)[0]?.id
     if (!threadId) return
-    const verb = { created: 'Created', paused: 'Paused', resumed: 'Resumed', deleted: 'Deleted', changed: 'Changed', failed: 'Routine failed' }[ev.type]
-    const text = ev.type === 'failed' ? `Routine failed · ${ev.task.title}${ev.reason ? `: ${ev.reason}` : ''}` : `${verb} routine · ${ev.task.title}`
+    const verb = { created: 'Created', paused: 'Paused', resumed: 'Resumed', deleted: 'Deleted', changed: 'Changed', failed: 'Routine failed', late: 'Ran late', missed: 'Missed' }[ev.type]
+    const when = (ms: number): string => new Date(ms).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    const text = ev.type === 'failed' ? `Routine failed · ${ev.task.title}${ev.reason ? `: ${ev.reason}` : ''}`
+      : ev.type === 'late' ? `Ran late · ${ev.task.title}: was due at ${when(ev.dueAt ?? Date.now())}`
+        : ev.type === 'missed' ? `Missed routine · ${ev.task.title}: was due at ${when(ev.dueAt ?? Date.now())} while SahilBot was closed${ev.task.enabled && ev.task.nextRun ? `. Next run ${when(ev.task.nextRun)}` : ''}`
+          : `${verb} routine · ${ev.task.title}`
     const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', meta: { routineNotice: ev.type, routine: ev.task.id } })
     emit({ threadId, type: 'message', message: m })
   }
   registry.register({ ...scheduleTool(scheduler, db), core: true })
+  // Missed runs (closed or asleep) catch up once within Settings → General → "Catch up on missed routines".
+  scheduler.catchUpHours = () => settings.get().catchUpHours ?? 12
+  scheduler.paused = () => !!settings.get().routinesPaused
   scheduler.start()
+  // Waking from sleep: check for due (missed) routines now rather than at the next tick, once the network is back.
+  powerMonitor.on('resume', () => { setTimeout(() => void scheduler.tick().catch(() => undefined), 5000) })
   // Dock badge: right from launch (unread chats carry over), and again whenever SahilBot comes forward.
   refreshBadge()
   app.on('browser-window-focus', () => refreshBadge())
@@ -858,7 +898,8 @@ app.whenReady().then(() => {
   handle('voice:dictateStart', () => voice.startDictation())
   handle('voice:dictateStop', () => voice.stopDictation())
   ipcMain.on('voice:frame', (_e, buf: Float32Array) => voice.frame(buf))
-  app.on('before-quit', () => { voice.dispose(); scheduler.stop(); browser.dispose(); stopOllama() })
+  // Runs still going at quit were cut off: their rows stay so the next launch offers Continue.
+  app.on('before-quit', () => { work.quitting(); menuBar?.dispose(); voice.dispose(); scheduler.stop(); browser.dispose(); stopOllama() })
   // Local models just work after a restart: start Ollama in the background if it's installed and not running.
   if (!process.env.FOREMAN_BASE_URL) void startOllama(settings.providers().ollama.baseUrl).catch(() => undefined)
 
@@ -875,6 +916,15 @@ app.whenReady().then(() => {
     return chat.pending(threadId)
   })
   handle('chat:retry', (threadId: string) => chat.retry(threadId))
+  // Continue a chat cut off by SahilBot closing: a hidden note, then a normal run from the current history.
+  handle('chat:resume', (threadId: string) => {
+    if (!db.getThread(threadId)) throw new Error('That chat no longer exists.')
+    if (chat.isRunning(threadId)) throw new Error('SahilBot is already working in this chat.')
+    const m = work.clearNotice(threadId)
+    if (m) emit({ threadId, type: 'message', message: m })
+    chat.intro(threadId, RESUME_NOTE)
+  })
+  handle('chat:interrupted', () => work.interrupted())
   handle('chat:editLast', (threadId: string, text: string) => chat.editLast(threadId, text))
   handle('chat:export', async (threadId: string) => {
     const t = db.getThread(threadId)
@@ -942,8 +992,81 @@ app.whenReady().then(() => {
     return w
   }
   reopen = () => { const w = open(); win = w; browser.reflow(); return w }
-  win = open()
+  // Opened by logging in (Settings → General → Open at login): stay in the menu bar and Dock, window hidden.
+  const openedAtLogin = !HIDDEN && process.platform === 'darwin' && (() => { try { return app.getLoginItemSettings().wasOpenedAtLogin } catch { return false } })()
+  if (!openedAtLogin) win = open()
   buildMenu((action) => toWin('menu', action))
+
+  // ---------------------------------------------------------------- always on: menu bar icon, login, keep awake
+  /** A menu command for the main window, reopening it first if it was closed. */
+  const sendMenu = (action: MenuAction): void => {
+    const w = showMain()
+    if (w?.webContents.isLoading()) w.webContents.once('did-finish-load', () => toWin('menu', action))
+    else toWin('menu', action)
+  }
+  const chatLabel = (threadId: string): string => {
+    const t = db.getThread(threadId)
+    const sp = t ? db.getSpace(t.spaceId) : undefined
+    if (!t || !sp) return 'SahilBot'
+    // Bots have one conversation named after them; SahilBot and projects keep a chat per task.
+    return sp.kind === 'bot' && !sp.isMain ? sp.name : `${botName(sp.id)} — ${t.title}`
+  }
+  const setRoutinesPaused = (paused: boolean): void => {
+    settings.set({ routinesPaused: paused })
+    alwaysOnChanged.current({ routinesPaused: paused })
+  }
+  const awake = new KeepAwake(powerSaveBlocker)
+  const refreshAwake = (): void => { awake.set(!HIDDEN && wantAwake(settings.get().keepAwakeWhileWorking, work.working().length)) }
+  work.onChange = () => { refreshAwake(); menuBar?.refresh() }
+  menuBar = new MenuBarIcon(() => ({
+    working: work.working().filter((id) => db.getThread(id)).map((id): TrayItem => ({ threadId: id, label: chatLabel(id) })),
+    needsYou: [...waiting].filter(([id, ids]) => ids.size && db.getThread(id)).map(([id]): TrayItem => ({ threadId: id, label: chatLabel(id) })),
+    routinesPaused: !!settings.get().routinesPaused,
+    quickKey: settings.get().quickKey
+  }), {
+    open: (id) => openThread(id),
+    quickAsk: () => showQuick(),
+    newChat: () => sendMenu('new-chat'),
+    setRoutinesPaused,
+    showMain: () => { showMain() },
+    settings: () => sendMenu('settings'),
+    quit: () => app.quit()
+  })
+  // Hidden (test) runs never put anything on the user's screen: no menu bar icon.
+  if (!HIDDEN) menuBar.setEnabled(settings.get().menuBarIcon !== false)
+  /** Login items only for the installed app: in development it would register Electron itself. */
+  const applyLoginItem = (on: boolean): void => {
+    if (HIDDEN || process.platform !== 'darwin' || !app.isPackaged) return
+    try { app.setLoginItemSettings({ openAtLogin: on }) } catch { /* not allowed here */ }
+  }
+  alwaysOnChanged.current = (patch) => {
+    const s = settings.get()
+    if (patch.menuBarIcon !== undefined && !HIDDEN) menuBar?.setEnabled(s.menuBarIcon !== false)
+    if (patch.openAtLogin !== undefined) applyLoginItem(!!s.openAtLogin)
+    if (patch.keepAwakeWhileWorking !== undefined) refreshAwake()
+    if (patch.routinesPaused !== undefined) {
+      // Resuming: due routines follow the catch-up rules right away.
+      if (!s.routinesPaused) void scheduler.tick().catch(() => undefined)
+      toWin('schedules:changed')
+    }
+    if (patch.quickKey !== undefined || patch.routinesPaused !== undefined) menuBar?.refresh()
+  }
+  const alwaysOnStatus = (): AlwaysOnStatus => {
+    const s = settings.get()
+    let loginItem: AlwaysOnStatus['loginItem'] = 'unsupported'
+    if (process.platform === 'darwin' && app.isPackaged) { try { loginItem = app.getLoginItemSettings().status } catch { /* unknown */ } }
+    return { loginItem, openedAtLogin, working: work.working().length, keepingAwake: awake.on, menuBarIcon: !!menuBar?.shown, routinesPaused: !!s.routinesPaused }
+  }
+  handle('alwaysOn:status', () => alwaysOnStatus())
+  handle('alwaysOn:pauseRoutines', (paused: boolean) => { setRoutinesPaused(!!paused); return alwaysOnStatus() })
+  // One notification for chats cut off last time (each also has a Continue notice in the chat).
+  if (recovered.length) {
+    refreshBadge()
+    if (!QUIET && Notification.isSupported()) {
+      const n = recovered.length
+      showNote(new Notification({ title: 'SahilBot was closed while working', body: n === 1 ? `${chatLabel(recovered[0].threadId)}: open the chat and press Continue.` : `${n} chats were cut off. Open them and press Continue.` }), recovered[0].threadId)
+    }
+  }
   app.on('activate', () => {
     // The browser's hidden parking window doesn't count as an open window.
     if (!win || win.isDestroyed()) reopen()

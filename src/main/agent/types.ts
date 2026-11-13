@@ -112,6 +112,16 @@ export interface ThreadState {
   notes?: string
   /** Hybrid mode: cloud consultations used in the current request. */
   consults?: number
+  /**
+   * Per-run <context> blocks (date, memories, project notes) pinned to the user message that started
+   * each run, by message id (`speakerId/messageId` in groups). Kept so earlier turns stay byte-identical.
+   */
+  pins?: Record<string, string>
+  /**
+   * 'quick': only small talk so far, so requests carry the small tool set (registry QUICK_TOOLS). Once a
+   * request needs more it becomes 'full' for good, so the tool list (and the cached prefix) stays put.
+   */
+  toolMode?: 'quick' | 'full'
 }
 
 export const emptyState = (): ThreadState => ({ loaded: [], alwaysAllow: [], todos: [] })

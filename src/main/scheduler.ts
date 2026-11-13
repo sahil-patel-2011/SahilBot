@@ -102,8 +102,55 @@ const toTask = (r: Row): ScheduledTask => ({
 /** Runs kept per routine. */
 export const RUNS_KEPT = 20
 
-/** A change worth a system line in the bot's chat ("Paused routine · …"). */
-export type RoutineEvent = { type: 'created' | 'paused' | 'resumed' | 'deleted' | 'changed' | 'failed'; task: ScheduledTask; reason?: string; threadId?: string | null }
+/**
+ * A change worth a system line in the bot's chat ("Paused routine · …"). 'late': a missed run is running
+ * now ("Ran late: was due at …"); 'missed': a missed run was skipped (older than the catch-up window).
+ * dueAt is when the missed run was due (the latest missed slot).
+ */
+export type RoutineEvent = { type: 'created' | 'paused' | 'resumed' | 'deleted' | 'changed' | 'failed' | 'late' | 'missed'; task: ScheduledTask; reason?: string; threadId?: string | null; dueAt?: number }
+
+/** A run due less than this long ago is on time, not "missed" (the scheduler ticks every 20 seconds). */
+export const LATE_GRACE_MS = 2 * 60_000
+
+/**
+ * The latest slot of a recurring schedule that fell due at or before `now`, starting from `firstDue`
+ * (its stored next run). A daily 9:00 routine missed for three days was last due today at 9:00.
+ */
+export function lastDue(s: Schedule, firstDue: number, now: number): number {
+  if (firstDue >= now || s.type === 'once') return firstDue
+  if (s.type === 'every') {
+    const step = Math.max(1, s.minutes) * 60_000
+    return firstDue + Math.floor((now - firstDue) / step) * step
+  }
+  let d = firstDue
+  // Bounded: an every-minute cron missed for a week stops early at an older slot, which is still "late".
+  for (let i = 0; i < 2000; i++) {
+    let n: Date | null
+    try { n = nextRun(s, new Date(d)) } catch { break }
+    if (!n || n.getTime() > now) break
+    d = n.getTime()
+  }
+  return d
+}
+
+/**
+ * What to do with a routine that is due now.
+ * - 'run': on time (or delayed only because it was still busy while the scheduler kept ticking).
+ * - 'late': missed while SahilBot was closed, the Mac slept or routines were paused, and due within the
+ *   catch-up window: run it once now and say it ran late.
+ * - 'skip': missed and older than the window (or catch-up is off, catchUpHours 0): don't run it.
+ * catchUpHours null = no window (every missed routine runs once).
+ * lastTickAt = when the scheduler last checked (null on the first check after launch).
+ */
+export function catchUp(o: { dueAt: number; now: number; lastTickAt: number | null; catchUpHours: number | null }): 'run' | 'late' | 'skip' {
+  // The scheduler was checking when it fell due: it only waited for its previous run to finish.
+  if (o.lastTickAt !== null && o.lastTickAt >= o.dueAt) return 'run'
+  const late = o.now - o.dueAt
+  if (late <= LATE_GRACE_MS) return 'run'
+  if (o.catchUpHours === null) return 'late'
+  if (o.catchUpHours <= 0) return 'skip'
+  return late <= o.catchUpHours * 3_600_000 ? 'late' : 'skip'
+}
 
 /** What a run reported, as a run-history outcome. */
 export function runOutcome(status: string): { status: 'succeeded' | 'failed'; reason: string | null } {
@@ -135,8 +182,15 @@ export class Scheduler {
   private busy = new Set<string>()
   /** Routine changes and failures (main turns these into system lines in the bot's chat). */
   events?: (e: RoutineEvent) => void
+  /** Catch-up window for missed runs, in hours (0 = never catch up; null = no window). Main wires it to Settings. */
+  catchUpHours: () => number | null = () => null
+  /** "Pause all routines": nothing fires while true; missed runs follow the catch-up rules on resume. */
+  paused: () => boolean = () => false
+  /** When the scheduler last checked for due routines (null until the first check after launch). */
+  private lastTickAt: number | null = null
 
-  constructor(private db: Db, private run: (task: ScheduledTask, run: { id: string; test: boolean }) => Promise<RunResult>, private changed: () => void, private now = () => new Date()) {
+  /** `late` (on a run) = when a missed run was due; it is running late now. */
+  constructor(private db: Db, private run: (task: ScheduledTask, run: { id: string; test: boolean; late?: number }) => Promise<RunResult>, private changed: () => void, private now = () => new Date()) {
     // Runs cut short by a quit or crash can't still be running.
     this.db.sql.prepare(`UPDATE routine_runs SET status = 'failed', finished_at = COALESCE(finished_at, started_at), reason = 'SahilBot closed before it finished' WHERE status = 'running'`).run()
   }
@@ -214,11 +268,35 @@ export class Scheduler {
     if (this.timer) clearInterval(this.timer)
   }
 
-  /** Runs everything due now. Overdue tasks run once, then advance from now. */
+  /**
+   * Runs everything due now. Overdue tasks run once, then advance from now. A run missed while SahilBot
+   * was closed or the Mac slept runs once if it was due within the catch-up window ("Ran late"), and is
+   * skipped otherwise; a skipped one-off is turned off. Never more than one run per routine per check.
+   */
   async tick(): Promise<void> {
+    // Paused: nothing fires and the last check time stays put, so resuming applies the catch-up rules.
+    if (this.paused()) return
     const now = this.now()
+    const lastTickAt = this.lastTickAt
+    this.lastTickAt = now.getTime()
     const due = this.list().filter((t) => t.enabled && t.nextRun !== null && t.nextRun <= now.getTime() && !this.busy.has(t.id))
-    await Promise.all(due.map((t) => this.fire(t)))
+    const window = this.catchUpHours()
+    await Promise.all(due.map((t) => {
+      const dueAt = lastDue(t.schedule, t.nextRun!, now.getTime())
+      const plan = catchUp({ dueAt, now: now.getTime(), lastTickAt, catchUpHours: window })
+      if (plan === 'skip') { this.skip(t, dueAt); return Promise.resolve() }
+      return this.fire(t, plan === 'late' ? dueAt : undefined)
+    }))
+  }
+
+  /** A missed run older than the catch-up window: advance without running (a one-off turns off). */
+  private skip(t: ScheduledTask, dueAt: number): void {
+    const next = nextRun(t.schedule, this.now())
+    const when = new Date(dueAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })
+    this.db.sql.prepare('UPDATE scheduled_tasks SET next_run = ?, enabled = ?, last_status = ? WHERE id = ?')
+      .run(next?.getTime() ?? null, next ? 1 : 0, `skipped: missed while SahilBot was closed (due ${when})`, t.id)
+    this.changed()
+    this.emit({ type: 'missed', task: this.get(t.id) ?? t, dueAt })
   }
 
   /** Test: runs a routine now without touching its schedule. Returns the run id at once (null if it's already running). */
@@ -228,17 +306,19 @@ export class Scheduler {
     return this.begin(t, true)
   }
 
-  async fire(t: ScheduledTask): Promise<void> {
+  /** `late` = when a missed run was due (it runs now, once, and says so). */
+  async fire(t: ScheduledTask, late?: number): Promise<void> {
     if (this.busy.has(t.id)) return
     // Advance first (at-most-once), so a crash mid-run can't fire it again.
     const next = nextRun(t.schedule, this.now())
     this.db.sql.prepare('UPDATE scheduled_tasks SET next_run = ?, last_run = ?, enabled = ? WHERE id = ?')
       .run(next?.getTime() ?? null, Date.now(), next ? (t.enabled ? 1 : 0) : 0, t.id)
-    await this.begin(t, false).done
+    if (late !== undefined) this.emit({ type: 'late', task: t, dueAt: late })
+    await this.begin(t, false, late).done
   }
 
   /** Records the run (synchronously, so callers can return at once), then runs it. */
-  private begin(t: ScheduledTask, test: boolean): { runId: string; done: Promise<void> } {
+  private begin(t: ScheduledTask, test: boolean, late?: number): { runId: string; done: Promise<void> } {
     this.busy.add(t.id)
     const runId = randomUUID()
     this.db.sql.prepare('INSERT INTO routine_runs(id, task_id, started_at, status, thread_id, test) VALUES(?,?,?,?,?,?)')
@@ -248,7 +328,7 @@ export class Scheduler {
     const done = (async () => {
       let result: RunResult
       try {
-        result = await this.run(t, { id: runId, test })
+        result = await this.run(t, { id: runId, test, ...(late !== undefined ? { late } : {}) })
       } catch (e) {
         result = `error: ${(e as Error).message}`
       }

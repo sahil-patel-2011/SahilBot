@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Message, PendingRequest, TeamMember } from '@shared/types'
 import { api } from '../api'
+import { toast } from '../lib/toast'
 import { legibleOn } from '../brand'
 import * as I from '../icons'
 import { describe, duration, stepStatus, summarize, type Step } from '../lib/steps'
@@ -384,7 +385,16 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
       </details>
     )
   }
-  if (b.kind === 'notice') return <div className="notice sys-line" role="status">{m.content}</div>
+  if (b.kind === 'notice') {
+    // Work cut off by the app closing: one click picks it up where it stopped.
+    if (m.meta?.interrupted && m.meta?.resumable) return (
+      <div className="notice sys-line interrupted" role="status" data-testid="interrupted">
+        {m.content}
+        <button className="link-btn" onClick={() => void api.chat.resume(m.threadId).catch((e) => toast((e as Error).message, 'error'))} data-testid="resume-run">Continue</button>
+      </div>
+    )
+    return <div className="notice sys-line" role="status">{m.content}</div>
+  }
   const reactions = (m.meta?.reactions ?? {}) as { user?: string; bot?: string }
 
   if (b.kind === 'user') {

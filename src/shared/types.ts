@@ -173,6 +173,44 @@ export interface Settings {
   cloudBudgetUsd: number
   /** The user's own approval rules: "When SahilBot wants to …, it should allow automatically / ask first". Ask first wins. */
   customRules?: CustomRule[]
+  // ---- Always on (Settings → General). Optional so older saved settings and test fixtures still type-check;
+  // SettingsStore.get() always fills them in.
+  /** Menu bar icon with what's working and who needs you (default on). */
+  menuBarIcon?: boolean
+  /** Open SahilBot when you log in, with its window hidden (default off). */
+  openAtLogin?: boolean
+  /** Keep the Mac from idle-sleeping while a chat or routine is running (default on). */
+  keepAwakeWhileWorking?: boolean
+  /** Routines missed while SahilBot was closed or the Mac slept run once on launch/wake if due within this many hours (0 = never catch up). */
+  catchUpHours?: number
+  /** "Pause all routines" from the menu bar icon: no routine fires until resumed. */
+  routinesPaused?: boolean
+  /** How long a local model stays loaded after a message (Ollama keep_alive: '30m', '2h', or seconds; '-1' = always). */
+  localKeepAlive?: string
+}
+
+/** Always-on status for Settings → General (main process view). */
+export interface AlwaysOnStatus {
+  /** macOS login item state: 'requires-approval' means the user must allow it in System Settings → General → Login Items. */
+  loginItem: 'not-registered' | 'enabled' | 'requires-approval' | 'not-found' | 'unsupported'
+  /** This launch was started by logging in (the window stayed hidden). */
+  openedAtLogin: boolean
+  /** Chats running right now (routines included). */
+  working: number
+  /** The Mac is being kept awake for that work. */
+  keepingAwake: boolean
+  /** The menu bar icon is showing. */
+  menuBarIcon: boolean
+  routinesPaused: boolean
+}
+
+/** A chat whose run was cut off by SahilBot closing or crashing (it shows a Continue button on its notice). */
+export interface InterruptedRun {
+  threadId: string
+  /** The notice message carrying meta.interrupted (render a Continue button on it while meta.resumable is true). */
+  noticeId: string
+  startedAt: number
+  at: number
 }
 
 export type Tier = 0 | 1 | 2 | 3
@@ -872,7 +910,20 @@ export interface SahilBotApi {
     save(s: { name: string; description: string; body: string }): Promise<Skill>
     remove(name: string): Promise<void>
   }
+  /** Always on: menu bar icon, open at login, keep awake, missed routines. */
+  alwaysOn: {
+    status(): Promise<AlwaysOnStatus>
+    /** Pause or resume every routine at once (same as the menu bar icon's item). */
+    pauseRoutines(paused: boolean): Promise<AlwaysOnStatus>
+  }
   chat: {
+    /**
+     * Continue a chat that was cut off by SahilBot closing: re-runs from the current history with a hidden
+     * note to check what's already done first. Clears the Continue button (the notice's meta.resumable).
+     */
+    resume(threadId: string): Promise<void>
+    /** Chats still showing a Continue button from an interrupted run. */
+    interrupted(): Promise<InterruptedRun[]>
     send(input: SendInput): Promise<void>
     stop(threadId: string): Promise<void>
     /** Message a running agent: it takes it into account from its next step (or sends normally if idle). */

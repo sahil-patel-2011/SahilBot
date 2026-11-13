@@ -6,16 +6,17 @@ import type { MemoryStore } from '../memory'
 import type { SettingsStore } from '../settings'
 import type { SpaceFiles } from '../spaces'
 import { samplingFor } from '../llm/catalog'
-import { collectText, isLocal, streamChat, type WireMessage } from '../llm/client'
+import { collectText, isLocal, pinContextWindow, streamChat, type WireMessage, type WireTool } from '../llm/client'
+import { timer } from '../llm/timing'
 import type { Endpoints } from '../llm/endpoints'
 import { teamCapacity } from '../llm/models'
 import { def as providerDef } from '../llm/providers'
 import { decide as route, pick } from '../llm/router'
-import { ContextManager, OUTPUT_RESERVE, ResultStore, ServerTokenCounter, SUMMARY_INSTRUCTIONS, wrapToolOutput, type TokenCounter } from './context'
+import { ContextManager, OUTPUT_RESERVE, ResultStore, ServerTokenCounter, SUMMARY_INSTRUCTIONS, pinRunContext, withPinned, wrapToolOutput, type TokenCounter } from './context'
 import { checkTaint, containsSecret, decide, memoryProvenance, memoryRisk, ruleVerdict, stricterMode } from './permissions'
-import { VOICE_SUFFIX, groupNote, harnessPrompt } from './prompt'
-import type { ToolRegistry } from './registry'
-import type { Decision, PermissionInput, ThreadState, ToolContext, ToolDef, ToolOutput } from './types'
+import { VOICE_SUFFIX, contextSections, groupNote, harnessPrompt, type ContextSection } from './prompt'
+import { chooseToolMode, quickEligible, type ToolRegistry } from './registry'
+import { emptyState, type Decision, type PermissionInput, type ThreadState, type ToolContext, type ToolDef, type ToolOutput } from './types'
 import type { HandoffHost } from './tools/handoff'
 import { check, repairPrompt } from './validate'
 import { LoopGuard, fixName, recoverToolCalls } from './recover'
@@ -462,34 +463,71 @@ export class Agent {
 
   // -------------------------------------------------------------------------
 
+  /**
+   * A bot's system prompt. Nothing in it changes per request (no date, no memories ranked for the
+   * request), so every chat with the bot sends the same prefix and the model server reuses its cache
+   * across steps, turns and chats. Per-request context goes in the pinned <context> block instead.
+   */
+  private baseSystem(bot: Space | undefined, spaceId: string): string {
+    const s = this.d.settings.get()
+    return harnessPrompt({
+      userName: s.userName,
+      workspaceDir: s.workspaceDir,
+      spacePrompt: this.d.spaces.getPrompt(bot?.id ?? spaceId),
+      spaceName: bot?.name ?? 'SahilBot',
+      projectFolder: bot?.kind === 'project' ? bot.folder ?? undefined : undefined,
+      skills: this.d.skills?.index(),
+      rules: this.d.rules?.block(bot?.id ?? spaceId, bot?.kind === 'project' ? bot.id : undefined)
+    })
+  }
+
   private systemFor(thread: Thread, state: ThreadState, speaker?: Space, group?: Space): string {
-    // Memories ranked for this request: shared ones plus the speaking bot's own (each group member gets its own).
-    const query = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.content ?? ''
-    const build = (bot: Space | undefined): string => {
-      const s = this.d.settings.get()
-      return harnessPrompt({
-        date: new Date(),
-        userName: s.userName,
-        workspaceDir: s.workspaceDir,
-        memories: this.d.memory.block({ spaceId: bot?.kind === 'bot' ? bot.id : null, spaceName: bot?.name, query }),
-        spacePrompt: this.d.spaces.getPrompt(bot?.id ?? thread.spaceId),
-        spaceName: bot?.name ?? 'SahilBot',
-        projectFolder: bot?.kind === 'project' ? bot.folder ?? undefined : undefined,
-        skills: this.d.skills?.index(),
-        rules: this.d.rules?.block(bot?.id ?? thread.spaceId, bot?.kind === 'project' ? bot.id : undefined),
-        ...(bot?.kind === 'project' ? this.projectContext(bot.id, thread.id) : {})
-      })
-    }
     if (group && speaker) {
       state.snapshots ??= {}
       if (!state.snapshots[speaker.id]) {
         const others = group.members.map((id) => this.d.db.getSpace(id)?.name).filter((n): n is string => !!n && n !== speaker.name)
-        state.snapshots[speaker.id] = build(speaker) + groupNote(speaker.name, group.name, others)
+        state.snapshots[speaker.id] = this.baseSystem(speaker, thread.spaceId) + groupNote(speaker.name, group.name, others)
       }
       return state.snapshots[speaker.id]
     }
-    if (!state.systemSnapshot) state.systemSnapshot = build(this.d.db.getSpace(thread.spaceId)) + (state.voice ? VOICE_SUFFIX : '')
+    if (!state.systemSnapshot) state.systemSnapshot = this.baseSystem(this.d.db.getSpace(thread.spaceId), thread.spaceId) + (state.voice ? VOICE_SUFFIX : '')
     return state.systemSnapshot
+  }
+
+  /**
+   * A run's context: today's date, memories ranked for this request (shared ones plus the speaking
+   * bot's own), project notes and chats, and the current rules and skills (only changes since the
+   * snapshot show up). pinRunContext keeps just what the model hasn't seen yet.
+   */
+  private contextSections(thread: Thread, speaker: Space | undefined, query: string): ContextSection[] {
+    const bot = speaker ?? this.d.db.getSpace(thread.spaceId)
+    const project = bot?.kind === 'project' ? bot : undefined
+    return contextSections({
+      date: new Date(),
+      memories: this.d.memory.block({ spaceId: bot?.kind === 'bot' ? bot.id : null, spaceName: bot?.name, query }),
+      project: !!project,
+      ...(project ? this.projectContext(project.id, thread.id) : {}),
+      rules: this.d.rules?.block(bot?.id ?? thread.spaceId, project?.id),
+      skills: this.d.skills?.index()
+    })
+  }
+
+  /** Pins the <context> block on the message that opened this run (see pinRunContext). True when the state changed. */
+  private pinContext(thread: Thread, state: ThreadState, messages: Message[], opener: Message, system: string, speaker?: Space, refresh = false): boolean {
+    return pinRunContext({ state, messages, openerId: opener.id, speakerId: speaker?.id, system, refresh, sections: () => this.contextSections(thread, speaker, opener.content) })
+  }
+
+  /** A chat (or routine, or helper) is running. */
+  busy(): boolean {
+    return this.runs.size > 0
+  }
+
+  /** Warm-up: what a new chat with the main bot sends first (its system prompt and full tool list). */
+  warmPrefix(): { system: string; tools: WireTool[] } | undefined {
+    const main = this.d.db.listSpaces().find((sp) => sp.isMain)
+    if (!main) return undefined
+    const st = emptyState()
+    return { system: this.baseSystem(main, main.id), tools: this.d.registry.wire(this.d.registry.listFor(st)) }
   }
 
   /** Team of Experts size for this Mac and model: at least 10 helpers when it can run them. */
@@ -805,9 +843,21 @@ export class Agent {
           if (isRelayed(m)) { untrusted.push(relayedText(m)); relayed(m) }
           else userText += `\n${m.content}`
         }
+        // The request: the same system prompt and tools as every other step (the server's cached
+        // prefix), then the history with this chat's pinned <context> blocks.
+        const built = timer('step')
+        const all = db.listMessages(thread.id)
+        const opener = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+        // Small talk on a local model gets the small tool set; anything more, every tool from then on.
+        if (step === 1) chooseToolMode(state, quickEligible({ tier: routed?.tier, local: isLocal(ep.baseUrl), state, flags: opener?.meta, helper: run.helper, unattended: run.unattended, group: run.group, newChat: !all.some((m) => m.role === 'assistant') }))
+        // This run's context (date, memories): pinned once to the message that opened it (or a steer).
+        if (opener && this.pinContext(thread, state, all, opener, system, speaker)) db.setState(thread.id, state)
+        // Every request to this local model (summaries too) uses this window: a change would reload it.
+        if (isLocal(ep.baseUrl) && !state.voice) pinContextWindow(ep.baseUrl, model, window)
         const tools = registry.listFor(state)
         const wireTools = registry.wire(tools)
-        const prepared = await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: view(db.listMessages(thread.id)), state, window, appendOnly: claude, allowCompact: !claude || step === 1 })
+        const withContext = (): Message[] => withPinned(view(db.listMessages(thread.id)), state, speaker?.id)
+        let prepared = await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: claude, allowCompact: !claude || step === 1 })
         if (prepared.compacted) {
           db.setState(thread.id, state)
           const marker = db.insertMessage({
@@ -815,7 +865,13 @@ export class Agent {
             meta: { before: prepared.compacted.before, after: prepared.compacted.after, boundaryId: prepared.compacted.boundaryId }
           })
           this.d.emit({ threadId: thread.id, type: 'message', message: marker })
+          // Earlier context blocks were summarized away: this run's block carries everything again.
+          if (opener && this.pinContext(thread, state, db.listMessages(thread.id), opener, system, speaker, true)) {
+            db.setState(thread.id, state)
+            prepared = { ...(await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: claude, allowCompact: false })), compacted: prepared.compacted }
+          }
         }
+        built.end({ step, used: prepared.used, window, tools: wireTools.length, mode: state.toolMode })
         this.d.emit({ threadId: thread.id, type: 'progress', step, actions, plan: planPos(), used: prepared.used, window, model, routed })
 
         // Keep the plan in view on long runs (appended at the end, so the cached prefix is untouched).
@@ -879,7 +935,7 @@ export class Agent {
           }
           // Double-check real work: anything that changed something, and research beyond a quick lookup.
           // A quick answer or one search stays fast (the link check above still guards citations).
-          if ((track.changed || (track.researched && (actions >= 3 || state.todos.length > 0))) && !verified && !run.helper && step < HARD_CAP && !process.env.FOREMAN_NO_VERIFY) {
+          if ((track.changed || (track.researched && (actions >= 3 || state.todos.length > 0))) && !verified && !run.helper && state.toolMode !== 'quick' && step < HARD_CAP && !process.env.FOREMAN_NO_VERIFY) {
             budget = Math.max(budget, step + 1)
             verified = true
             this.d.emit({ threadId: thread.id, type: 'drafting', tool: 'verify' })
@@ -921,6 +977,8 @@ export class Agent {
         }
 
         const ran = await this.executeAll(thread, run, state, assistant.toolCalls, { failures, untrusted, userText, guard, track, window })
+        // Small talk turned into real work: every tool from the next step on.
+        registry.escalate(state, assistant.toolCalls.map((c) => c.name))
 
         actions += assistant.toolCalls.length
         // A local model that keeps calling tools that don't exist or with broken arguments: a stronger model takes over.
@@ -951,7 +1009,7 @@ export class Agent {
           // Out of room: one text-only turn to report what's done and what's left (adapted from opencode max-steps, MIT).
           // Claude needs the tool list whenever the history has tool calls (and keeps its cache with it).
           const wrapTools = claude ? wireTools : []
-          const wrap = await cm.prepare({ system, toolsJson: JSON.stringify(wrapTools), messages: view(db.listMessages(thread.id)), state, window, appendOnly: claude, allowCompact: !claude })
+          const wrap = await cm.prepare({ system, toolsJson: JSON.stringify(wrapTools), messages: withPinned(view(db.listMessages(thread.id)), state, speaker?.id), state, window, appendOnly: claude, allowCompact: !claude })
           wrap.wire.push({ role: 'user', content: '[From the app] This run has used its step budget. Do not call tools. Reply with a short summary: what you finished, what is left, and what the user should say to continue.' })
           const last = await this.stream(thread.id, model, wrap.wire, wrapTools, window, run, speaker, routed)
           // A tool call here can't run; the reply text is the summary.
@@ -980,7 +1038,8 @@ export class Agent {
     // A reply may open with <react>emoji</react> to react to the user's message; strip it from the text.
     let head = ''
     let headDone = false
-    const reactTo = [...this.d.db.listMessages(threadId)].reverse().find((x) => x.role === 'user')
+    // Looked up only when a reaction actually comes (not on the way to the first token).
+    const reactTarget = (): Message | undefined => [...this.d.db.listMessages(threadId)].reverse().find((x) => x.role === 'user')
     const takeHead = (text: string): string | null => {
       if (headDone) return text
       head += text
@@ -988,6 +1047,7 @@ export class Agent {
       const done = t.match(/^<react>\s*([^<\s]{1,12})\s*<\/react>\s*/)
       if (done) {
         headDone = true
+        const reactTo = reactTarget()
         if (reactTo) this.d.emit({ threadId, type: 'message', message: this.d.db.react(reactTo.id, 'bot', done[1]) })
         return t.slice(done[0].length) || null
       }
@@ -1008,7 +1068,9 @@ export class Agent {
         contextWindow: window,
         signal: run.ctrl.signal,
         // Voice answers right away; otherwise thinking adapts to the problem around the chosen level.
-        effort: this.d.db.getState(threadId).voice ? 'low' : adaptiveEffort(s.thinking, routed?.tier)
+        effort: this.d.db.getState(threadId).voice ? 'low' : adaptiveEffort(s.thinking, routed?.tier),
+        // Local models stay loaded between messages.
+        keepAlive: s.localKeepAlive
       })) {
         if (part.type === 'content') {
           const text = takeHead(part.text)

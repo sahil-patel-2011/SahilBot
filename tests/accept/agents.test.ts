@@ -36,7 +36,7 @@ describe('agent platform', () => {
     expect(JSON.stringify(lead.messages)).toContain('Team of Experts is on')
     const helpers = llm.requests.filter((r) => sys(r).includes('You are a helper agent'))
     // (Each helper may be sent back once: its made-up link was never opened, so the link check catches it.)
-    expect([...new Set(helpers.map((r) => r.messages.find((m: any) => m.role === 'user')?.content))].sort()).toEqual(CITIES.map((c) => `Find the population of ${c}.`).sort())
+    expect([...new Set(helpers.map((r) => String(r.messages.find((m: any) => m.role === 'user')?.content).replace(/^<context from="app">[\s\S]*?<\/context>\n\n/, '')))].sort()).toEqual(CITIES.map((c) => `Find the population of ${c}.`).sort())
     expect(JSON.stringify(lead.messages)).toContain('at least 10')
     // The team card shows both helpers finished; helper threads don't appear as chats.
     await expect.poll(() => page.locator('[data-testid="team-member"].tm-done').count()).toBe(10)
