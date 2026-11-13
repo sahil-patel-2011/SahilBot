@@ -8,6 +8,7 @@ import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
 import { ConnectApps } from './components/ConnectApps'
 import { FilesView, Home, ProjectsView } from './components/Home'
+import { TasksView } from './components/TasksView'
 import { Onboarding } from './components/Onboarding'
 import { RightPanel, type PanelTab } from './components/RightPanel'
 import { SettingsModal } from './components/SettingsModal'
@@ -56,6 +57,7 @@ export function App() {
   // Model and mode picked on the home screen before a chat exists.
   const [draft, setDraft] = useState<{ model: string | null; mode: PermissionMode }>({ model: null, mode: 'auto' })
   const [drafting, setDrafting] = useState<Record<string, string | null>>({})
+  const [toolProgress, setToolProgress] = useState<Record<string, string | null>>({})
   const [runSince, setRunSince] = useState<Record<string, number>>({})
   // Messages typed while SahilBot is working wait here and go out when the run ends.
   const [queue, setQueue] = useState<Record<string, Outgoing[]>>({})
@@ -150,6 +152,9 @@ export function App() {
   useEffect(() => api.chat.onEvent((e: ChatEvent) => {
     if (e.type === 'spaces') { void refreshSpaces(); return }
     if (e.type === 'drafting') { setDrafting((d) => ({ ...d, [e.threadId]: e.tool })); return }
+    if (e.type === 'tool_progress') { setToolProgress((p) => ({ ...p, [e.threadId]: e.text })); return }
+    // A tool finished or the run ended: its progress line goes.
+    if ((e.type === 'message' && e.message.role === 'tool') || (e.type === 'run' && e.status !== 'started')) setToolProgress((p) => (p[e.threadId] ? { ...p, [e.threadId]: null } : p))
     if (e.type === 'run') {
       sendingRef.current.delete(e.threadId)
       if (e.status === 'started') setRunSince((r) => ({ ...r, [e.threadId]: Date.now() }))
@@ -300,6 +305,18 @@ export function App() {
     return () => window.removeEventListener('foreman:open-link', open)
   }, [])
 
+  // Stock cards and the watchlist hand the next step to you: prefill the composer, or show the watchlist.
+  useEffect(() => {
+    const fill = (e: Event): void => { composer.current?.replace((e as CustomEvent<string>).detail); requestAnimationFrame(() => composer.current?.focus()) }
+    // sahilbot:// links: the composer shows where the text came from (main/mcp-server/url-scheme.ts).
+    const fillLink = (e: Event): void => { const t = (e as CustomEvent<unknown>).detail; if (typeof t === 'string') composer.current?.prefillFromLink(t); requestAnimationFrame(() => composer.current?.focus()) }
+    const watch = (): void => setPanel('watchlist')
+    window.addEventListener('sahilbot:compose', fill)
+    window.addEventListener('sahilbot:compose-link', fillLink)
+    window.addEventListener('sahilbot:open-watchlist', watch)
+    return () => { window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch) }
+  }, [])
+
   useEffect(() => {
     const k = (e: KeyboardEvent): void => {
       if (e.metaKey && e.key === 'n') { e.preventDefault(); newChatRef.current() }
@@ -351,7 +368,8 @@ export function App() {
       ts = [await api.threads.update(t.id, { title: s?.name ?? 'Chat' })]
     }
     setSpaceId(id)
-    setThread(ts[0])
+    // Chats other apps opened with this bot ("From Cursor") aren't the user's own conversation.
+    setThread(ts.find((t) => !/^From .+/.test(t.title)) ?? ts[0])
     void refreshSpaces()
   }
 
@@ -362,7 +380,7 @@ export function App() {
     else if (a.kind === 'new-group') setEditor({ space: null, mode: 'group' })
     else if (a.kind === 'new-project') setEditor({ space: null, mode: 'project' })
     else if (a.kind === 'scheduled') setShowScheduled(true)
-    else if (a.kind === 'projects' || a.kind === 'files') { setView(a.kind); setThread(null) }
+    else if (a.kind === 'projects' || a.kind === 'files' || a.kind === 'tasks') { setView(a.kind); setThread(null) }
     else if (a.kind === 'connect') setShowConnect(true)
     else if (a.kind === 'settings') setShowSettings(true)
     else if (a.kind === 'chat') void openAnyChat(a.id)
@@ -377,7 +395,7 @@ export function App() {
       sendingRef.current.add(tid)
       setQueue((q) => ({ ...q, [tid]: (q[tid] ?? []).filter((x) => x !== first) }))
       // On failure it goes back to the front and is retried after this thread's next run event (no hot retry loop).
-      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst }).catch((e: Error) => {
+      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst, ...(first.fromLink ? { meta: { fromLink: true } } : {}) }).catch((e: Error) => {
         setQueue((q) => ({ ...q, [tid]: [first, ...(q[tid] ?? [])] }))
         toast(e.message, 'error')
       })
@@ -423,7 +441,8 @@ export function App() {
   }
 
   const send = async (o: Outgoing): Promise<void> => {
-    // A bot asked a question: what you type is the answer.
+    // A bot asked a question: what you type is the answer (but never unedited text from a link).
+    if (question && thread && o.fromLink) { toast('Text from a link can\'t answer this. Edit it, or answer the card above.', 'error'); return }
     if (question && thread) {
       // Typing answers the card: one answer for every question, or approval / changes for a plan.
       const answer = question.kind === 'questions' ? JSON.stringify((question.questions ?? []).map(() => o.text))
@@ -434,7 +453,8 @@ export function App() {
     }
     if (thread && running.has(thread.id)) {
       // ⌘Enter (or attachments): wait until it's done. Enter: steer the agent now.
-      if (o.queue || o.attachments.length || o.images.length) setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] }))
+      // Link text waits too: a steer can't carry its "from a link" mark.
+      if (o.queue || o.fromLink || o.attachments.length || o.images.length) setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] }))
       else await api.chat.steer(thread.id, o.text).catch((e: Error) => toast(e.message, 'error'))
       return
     }
@@ -449,7 +469,7 @@ export function App() {
       setThread(t)
     }
     try {
-      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst })
+      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst, ...(o.fromLink ? { meta: { fromLink: true } } : {}) })
       void refreshSpaces()
     } catch (e) {
       toast((e as Error).message, 'error')
@@ -642,14 +662,16 @@ export function App() {
           </div>
         )}
 
-        {view === 'files' && !thread ? (
+        {view === 'tasks' && !thread ? (
+          <TasksView spaces={spaces} onOpenChat={(threadId) => void openAnyChat(threadId)} />
+        ) : view === 'files' && !thread ? (
           <FilesView onOpenFile={openFile} onOpenChat={(id) => void openAnyChat(id)} />
         ) : view === 'projects' && !thread ? (
           <ProjectsView spaces={spaces} onOpen={(id) => void openBot(id)} onNew={() => setEditor({ space: null, mode: 'project' })} />
         ) : thread ? (
           <>
             <ThreadView messages={messages} running={isRunning} pending={pending} teams={teams}
-              drafting={drafting[thread.id] ?? null} since={runSince[thread.id]}
+              drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id] ?? null}
               actions={{
                 onRetry: () => void api.chat.retry(thread.id).catch((e: Error) => toast(e.message, 'error')),
                 onEditLast: (text) => void api.chat.editLast(thread.id, text).catch((e: Error) => toast(e.message, 'error')),
@@ -685,7 +707,8 @@ export function App() {
       ) : panel && panel !== 'details' && (
         <RightPanel tab={panel} onTab={setPanel} hidden={modal} messages={messages} file={file}
           onOpenFile={openFile} browserState={browser} onClose={() => setPanel(null)} threadId={thread?.id ?? null}
-          running={isRunning} progress={prog ? { used: prog.used, window: prog.window, model: (prog.routed as { label?: string } | undefined)?.label ?? prog.model, actions: prog.actions } : undefined} />
+          running={isRunning} progress={prog ? { used: prog.used, window: prog.window, model: (prog.routed as { label?: string } | undefined)?.label ?? prog.model, actions: prog.actions } : undefined}
+          stocks={!!chatBot && !chatBot.isMain && /stock|market|invest|portfolio/i.test(chatBot.name)} />
       )}
       {!settings.onboarded && <Onboarding settings={settings} onDone={(s) => { setSettings(s); void refreshModels() }} />}
       {voiceOn && (

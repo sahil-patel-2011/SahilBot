@@ -132,9 +132,9 @@ describe('bot templates', () => {
   const skillNames = readdirSync(resolve('packs/skills')).filter((d) => existsSync(join(resolve('packs/skills'), d, 'SKILL.md')))
   const files = readdirSync(dir).filter((f) => f.endsWith('.json'))
 
-  test('8–10 templates, each valid, named after its file', () => {
+  test('8–16 templates, each valid, named after its file', () => {
     expect(files.length).toBeGreaterThanOrEqual(8)
-    expect(files.length).toBeLessThanOrEqual(10)
+    expect(files.length).toBeLessThanOrEqual(16)
     for (const f of files) {
       const t = JSON.parse(readFileSync(join(dir, f), 'utf8')) as BotTemplate
       expect(templateProblems(t, skillNames), f).toEqual([])

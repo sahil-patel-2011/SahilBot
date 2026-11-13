@@ -3,7 +3,7 @@ import { MAX_HANDOFF_HOPS, findBot, handOff, handoffTool, type HandoffHost } fro
 import { Db } from '../../src/main/db'
 import type { SendInput, Space } from '../../src/shared/types'
 
-function setup(opts: { busy?: string[]; helper?: boolean; unattended?: boolean; mode?: 'ask' | 'auto' | 'bypass'; tainted?: boolean } = {}) {
+function setup(opts: { busy?: string[]; helper?: boolean; unattended?: boolean; mode?: 'ask' | 'auto' | 'bypass'; tainted?: boolean; fromApp?: string } = {}) {
   const db = new Db(':memory:')
   const alpha = db.createSpace('Alpha', '#000000')
   const beta = db.createSpace('Research Bot', '#111111')
@@ -13,7 +13,7 @@ function setup(opts: { busy?: string[]; helper?: boolean; unattended?: boolean; 
   const host: HandoffHost = {
     db,
     emit: () => undefined,
-    runInfo: () => ({ helper: opts.helper, unattended: opts.unattended, mode: opts.mode, tainted: opts.tainted }),
+    runInfo: () => ({ helper: opts.helper, unattended: opts.unattended, mode: opts.mode, tainted: opts.tainted, fromApp: opts.fromApp }),
     isRunning: (id) => (opts.busy ?? []).includes(id),
     send: async (input, o) => {
       sent.push({ input, opts: o })
@@ -111,6 +111,11 @@ describe('handing off', () => {
     expect(dirty.sent[0].input.note).toMatch(/had read web pages or email/)
     // A sender capped to Ask (in an Auto chat) starts the target's new chat in Ask too.
     expect(dirty.db.listThreads(dirty.beta.id)[0].permissionMode).toBe('ask')
+  })
+  test('a connected app\'s request stays an app request in the next bot', async () => {
+    const t = setup({ tainted: true, mode: 'ask', fromApp: 'Cursor' })
+    await handOff(t.host, t.from.id, { bot: 'Research Bot', message: 'Read my notes and summarize.' }, t.signal)
+    expect(t.sent[0].input.meta).toMatchObject({ handoff: true, fromApp: 'Cursor' })
   })
   test('message_bot is an outside action (taint-checked) that Auto runs without asking when clean', () => {
     const tool = handoffTool(() => undefined)

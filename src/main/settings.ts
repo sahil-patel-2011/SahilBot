@@ -2,11 +2,11 @@ import { DEFAULT_PROVIDERS, DEFS, baseUrlOf, keyName } from './llm/providers'
 import { isBroadAllow } from './agent/permissions'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import type { Appearance, CustomRule, ProviderId, Settings } from '@shared/types'
+import type { Appearance, CustomRule, MarketKeyProvider, MarketsSettings, McpServerSettings, ProviderId, Settings } from '@shared/types'
 import type { Db } from './db'
 import type { Secrets } from './secrets'
 
-type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
+type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
 
 export const DEFAULT_APPEARANCE: Appearance = { density: 'compact', chatWidth: 780, codeWrap: false, hue: 30, tint: 0, reduceTransparency: false, fontSize: 15 }
 
@@ -41,7 +41,30 @@ export const DEFAULTS: Stored = {
   catchUpHours: 12,
   routinesPaused: false,
   // Local models stay loaded this long between messages (Ollama's own default is 5 minutes).
-  localKeepAlive: '30m'
+  localKeepAlive: '30m',
+  // Markets: keyless data (Stooq, SEC EDGAR) by default; API keys are optional (Settings → Markets).
+  markets: { quoteProvider: 'auto', secContact: '' },
+  // Connected apps (MCP): off until the user turns it on; port 0 = pick a free one on first start.
+  mcpServer: { enabled: false, port: 0 }
+}
+
+/** The MCP server settings as saved: on/off, and a port in the unprivileged range (0 = pick one). */
+export function cleanMcpServer(v: unknown): McpServerSettings {
+  const x = (v ?? {}) as Partial<McpServerSettings>
+  const port = typeof x.port === 'number' && Number.isInteger(x.port) && x.port >= 1024 && x.port <= 65535 ? x.port : 0
+  return { enabled: x.enabled === true, port }
+}
+
+export const MARKET_KEY_PROVIDERS: MarketKeyProvider[] = ['tiingo', 'polygon', 'alphavantage', 'finnhub']
+/** Keychain name of a market data provider's API key. */
+export const marketKeyName = (p: MarketKeyProvider): string => `market:${p}`
+
+/** Markets settings as saved: known quote providers only, a short one-line contact. */
+export function cleanMarkets(m: unknown): MarketsSettings {
+  const x = (m ?? {}) as Partial<MarketsSettings>
+  const quoteProvider = x.quoteProvider === 'none' || x.quoteProvider === 'auto' || MARKET_KEY_PROVIDERS.includes(x.quoteProvider as MarketKeyProvider) ? x.quoteProvider! : 'auto'
+  const secContact = typeof x.secContact === 'string' ? x.secContact.replace(/[\r\n]+/g, ' ').trim().slice(0, 120) : ''
+  return { quoteProvider, secContact }
 }
 
 /** Missed-routine catch-up window in hours: a whole number from 0 (off) to 168 (a week); anything else is the default. */
@@ -81,6 +104,10 @@ export type SettingsPatch = Partial<Settings> & {
   braveKey?: string | null
   /** Cursor Cloud Agents API key. */
   cursorKey?: string | null
+  /** The Blue Alliance read API key (FRC scouting in the frc_code tool); kept in the Keychain like the others. */
+  tbaKey?: string | null
+  /** Market data API keys (Settings → Markets); null removes one. */
+  marketKeys?: Partial<Record<MarketKeyProvider, string | null>>
 }
 
 export class SettingsStore {
@@ -104,7 +131,9 @@ export class SettingsStore {
       appearance: { ...DEFAULT_APPEARANCE, ...s.appearance },
       search: { ...DEFAULTS.search, ...s.search }, advanced: { ...DEFAULTS.advanced, ...s.advanced },
       customRules: cleanRules(s.customRules),
-      catchUpHours: cleanCatchUpHours(s.catchUpHours)
+      catchUpHours: cleanCatchUpHours(s.catchUpHours),
+      markets: cleanMarkets(s.markets),
+      mcpServer: cleanMcpServer(s.mcpServer)
     }
   }
 
@@ -117,14 +146,20 @@ export class SettingsStore {
       onboarded: s.onboarded || !!process.env.FOREMAN_SKIP_ONBOARDING,
       hasApiKey: !!this.keyFor(process.env.FOREMAN_BASE_URL || s.baseUrl),
       hasCursorKey: this.secrets.has('cursorKey'),
+      hasTbaKey: this.secrets.has('tbaKey'),
       keys: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers))])) as Record<ProviderId, boolean>,
-      search: { ...s.search, hasBraveKey: this.secrets.has('braveKey') }
+      search: { ...s.search, hasBraveKey: this.secrets.has('braveKey') },
+      markets: { ...cleanMarkets(s.markets), keys: Object.fromEntries(MARKET_KEY_PROVIDERS.map((p) => [p, this.secrets.has(marketKeyName(p))])) as Record<MarketKeyProvider, boolean> }
     }
   }
 
   set(patch: SettingsPatch): Settings {
-    const { apiKey, setKeys, braveKey, cursorKey, hasApiKey: _a, keys: _k, hasCursorKey: _c, ...rest } = patch
+    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, marketKeys, hasApiKey: _a, keys: _k, hasCursorKey: _c, hasTbaKey: _t, ...rest } = patch
+    for (const [p, k] of Object.entries(marketKeys ?? {}) as Array<[MarketKeyProvider, string | null]>) {
+      if (MARKET_KEY_PROVIDERS.includes(p)) this.secrets.set(marketKeyName(p), k ? k.trim() : null)
+    }
     if (cursorKey !== undefined) this.secrets.set('cursorKey', cursorKey)
+    if (tbaKey !== undefined) this.secrets.set('tbaKey', tbaKey ? tbaKey.trim() : null)
     if (braveKey !== undefined) this.secrets.set('braveKey', braveKey)
     const cur = this.stored()
     const search = rest.search ? { provider: rest.search.provider, searxngUrl: rest.search.searxngUrl } : cur.search
@@ -136,6 +171,8 @@ export class SettingsStore {
       cloud: { ...cur.cloud, ...rest.cloud },
       customRules: rest.customRules !== undefined ? cleanRules(rest.customRules) : cur.customRules,
       catchUpHours: rest.catchUpHours !== undefined ? cleanCatchUpHours(rest.catchUpHours) : cur.catchUpHours,
+      markets: rest.markets !== undefined ? cleanMarkets({ ...cur.markets, ...rest.markets }) : cur.markets,
+      mcpServer: rest.mcpServer !== undefined ? cleanMcpServer({ ...cur.mcpServer, ...rest.mcpServer }) : cur.mcpServer,
       providers: rest.providers ? {
         ollama: { ...cur.providers.ollama, ...rest.providers.ollama },
         lmstudio: { ...cur.providers.lmstudio, ...rest.providers.lmstudio },
@@ -150,6 +187,13 @@ export class SettingsStore {
     // A key belongs to the endpoint it was entered for (after this patch's endpoint change).
     if (apiKey !== undefined) this.secrets.set(keyName(this.get().baseUrl), apiKey)
     return this.get()
+  }
+
+  /** Saved market data API keys (main process only; never sent to the renderer or the model). */
+  marketKeys(): Partial<Record<MarketKeyProvider, string>> {
+    const out: Partial<Record<MarketKeyProvider, string>> = {}
+    for (const p of MARKET_KEY_PROVIDERS) { const k = this.secrets.get(marketKeyName(p)); if (k) out[p] = k }
+    return out
   }
 
   providers(): Stored['providers'] {

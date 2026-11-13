@@ -14,6 +14,11 @@ export interface ToolOutput {
   /** Web pages this call surfaced (search results) or read (read=true), for citations. */
   sources?: Array<{ title: string; url: string }>
   read?: boolean
+  /**
+   * Structured data for the UI, stored on the tool message's meta (e.g. { stock: StockCardData } for a
+   * stock card). Never shown to the model; can't override the loop's own meta keys.
+   */
+  meta?: Record<string, unknown>
 }
 
 export interface ToolContext {
@@ -45,10 +50,20 @@ export interface ToolContext {
    * instructions after, untrusted content this run read. Recorded with saved memories, skills and rules.
    */
   provenance?: 'chat' | 'web-tainted'
+  /**
+   * This run has untrusted content in view: it read a web page, email or another bot's or app's message,
+   * started from a relayed message or link, or is a goal wake-up (always treated as tainted).
+   */
+  tainted?: boolean
   /** Tokens this call's output may use before it is cut short (set for tools that size their own output). */
   outputBudget?: number
   /** Runs helper agents in parallel and returns their reports (Team of Experts). */
   spawnAgents?(tasks: Array<{ title: string; task: string }>): Promise<Array<{ title: string; status: string; report: string }>>
+  /**
+   * Live progress from a long-running call (a test run's latest output line, what a Cursor agent is
+   * doing right now). Optional: tools must work without it. Shown on the tool's chip while it runs.
+   */
+  progress?(text: string): void
 }
 
 export interface ToolDef<A = any> {

@@ -6,8 +6,9 @@ import * as I from '../icons'
 import { ConnectedIcons } from './ConnectedIcons'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { duplicateBot, importBot, shareBot } from './BotShare'
+import { Target, useGoalsNeedingYou } from './TasksView'
 
-export type MainView = 'home' | 'projects' | 'files'
+export type MainView = 'home' | 'projects' | 'files' | 'tasks'
 
 const Star = ({ size = 10 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2.8 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 16.8l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z" fill="currentColor" /></svg>
@@ -52,6 +53,8 @@ export function Sidebar(p: {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [dragging, setDragging] = useState<{ kind: 'space' | 'chat'; id: string } | null>(null)
   const [over, setOver] = useState<string | null>(null)
+  /** Goals waiting on you: a dot on the Tasks button. */
+  const goalsNeedYou = useGoalsNeedingYou()
   const [open, setOpen] = useState<Record<string, boolean>>(() => {
     try { return JSON.parse(localStorage.getItem('sb-sections') ?? '{}') as Record<string, boolean> } catch { return {} }
   })
@@ -155,6 +158,7 @@ export function Sidebar(p: {
         { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects') },
         { label: 'Files', icon: <I.File size={15} />, run: () => p.onView('files') },
         { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled },
+        { label: 'Tasks', icon: <Target size={15} />, run: () => p.onView('tasks') },
         { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect },
         'sep',
         { label: 'Import bot…', icon: <I.Users size={15} />, run: () => void importBot() }
@@ -287,6 +291,7 @@ export function Sidebar(p: {
     <aside className={`sidebar sb2${dragging ? ' is-dragging' : ''}`} onDragOver={(e) => { if (dragging) e.preventDefault() }}>
       <div className="sb-top drag">
         <button className="sb-circle" onClick={p.onSearch} title="Search (⌘K)" aria-label="Search" data-testid="nav-search"><I.Search size={17} /></button>
+        <button className={`sb-circle tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')} title={goalsNeedYou ? `Tasks: ${goalsNeedYou} need${goalsNeedYou === 1 ? 's' : ''} you` : 'Tasks (long-running goals)'} aria-label="Tasks" data-testid="nav-tasks"><Target size={17} />{goalsNeedYou > 0 && <span className="tk-nav-dot" aria-hidden="true" />}</button>
         <button className="sb-circle" onClick={p.onNewBot} title="New bot" aria-label="New bot" data-testid="new-bot"><I.Plus size={18} /></button>
       </div>
 

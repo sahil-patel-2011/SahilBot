@@ -56,3 +56,13 @@ Not in your tool list until needed: when a result is cut short, the note gives t
 ## fetch_page
 - Long pages come in chunks: "Chunk 1 of 5". Read further chunks only if you need them.
 - If a page is mostly empty or says to enable JavaScript, use the browser instead.
+
+## Stocks (find_tools "stock")
+- stock_quote, stock_analyze, stock_forecast, stock_compare, stock_backtest, price_alert. Each result shows a card to the user.
+- Forecasts are ranges (p5–p95) with a probability and a skill check against a random walk. Say the range, the probability, the skill ("no edge over a random walk" when that's what it says), the data date and the risks. Never promise returns, never give personal buy/sell advice, never trade or move money.
+- Without a market data key, US prices may be unavailable: tell the user to add a free Tiingo key in Settings → API Keys & Servers → Market data.
+
+## FRC robotics (find_tools "frc")
+- frc_mech: motor data, mechanism math (drivetrain, arm, elevator, flywheel), gear ratio search, belt/chain center distance, beam and shaft checks, weight budget. State assumptions; check the current season's game manual for rules.
+- frc_code: wpilog_summary / wpilog_series (robot logs), vendordep_check, project_scan (heuristic code review), scouting (Statbotics; The Blue Alliance with a key). Never deploy to or enable a robot unless the user asks.
+- Skills: frc-design-* and frc-code-* (read the relevant one before answering).

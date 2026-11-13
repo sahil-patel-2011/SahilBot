@@ -12,3 +12,4 @@ category: Mechanical Engineering
 4. Sheet metal: bend radius at least the thickness, holes at least 2x thickness from bends, bend reliefs, consistent bend directions.
 5. 3D printing (FDM): orient for strength and few supports, 45 degree overhang rule, about 0.2 mm clearance for fits, at least 2 perimeters.
 6. Report each change, why, and the expected savings.
+7. FRC robot parts (router plates, printed brackets, team machine tolerances): also follow frc-design-manufacturing.

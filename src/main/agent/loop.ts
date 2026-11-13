@@ -6,14 +6,15 @@ import type { MemoryStore } from '../memory'
 import type { SettingsStore } from '../settings'
 import type { SpaceFiles } from '../spaces'
 import { samplingFor } from '../llm/catalog'
-import { collectText, isLocal, pinContextWindow, streamChat, type WireMessage, type WireTool } from '../llm/client'
+import { collectText, contextPin, isLocal, isOllama, pinContextWindow, streamChat, type WireMessage, type WireTool } from '../llm/client'
+import { constrainedArgs } from '../llm/constrained'
 import { timer } from '../llm/timing'
 import type { Endpoints } from '../llm/endpoints'
 import { teamCapacity } from '../llm/models'
 import { def as providerDef } from '../llm/providers'
 import { decide as route, pick } from '../llm/router'
 import { ContextManager, OUTPUT_RESERVE, ResultStore, ServerTokenCounter, SUMMARY_INSTRUCTIONS, pinRunContext, withPinned, wrapToolOutput, type TokenCounter } from './context'
-import { checkTaint, containsSecret, decide, memoryProvenance, memoryRisk, ruleVerdict, stricterMode } from './permissions'
+import { appReadRisk, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, ruleVerdict, stricterMode } from './permissions'
 import { VOICE_SUFFIX, contextSections, groupNote, harnessPrompt, type ContextSection } from './prompt'
 import { chooseToolMode, quickEligible, type ToolRegistry } from './registry'
 import { emptyState, type Decision, type PermissionInput, type ThreadState, type ToolContext, type ToolDef, type ToolOutput } from './types'
@@ -52,6 +53,11 @@ export interface AgentDeps {
   connectors?: { suggest(q: string): import('@shared/types').ConnectorPreset[]; connectPreset(id: string): Promise<{ state: string; toolNames?: string[] }>; disabledToolNames?(): Set<string> }
   /** Override for tests. */
   counter?: (baseUrl: string, model: string) => TokenCounter
+  /**
+   * Goals (goals/manager.ts): an unattended goal wake-up's call that needs approval is queued on the
+   * goal's "Needs you" list. Returns the tool result the model sees, or undefined to skip it as usual.
+   */
+  onUnattendedAsk?: (threadId: string, info: { tool: string; label: string; summary?: string; reason?: string }) => string | undefined
 }
 
 interface Pending {
@@ -84,10 +90,17 @@ interface Run {
   seed?: { untrusted: string[]; userText: string }
   /** Live taint state while the run works, for handoffs it sends and helpers it starts. */
   taint?: { untrusted: string[]; userText: () => string; tainted: () => boolean }
+  /**
+   * A connected app (MCP) started this run or steered into it: its name. Every read of private data
+   * asks (appReadRisk), because the reply goes back to that app.
+   */
+  fromApp?: string
+  /** An unattended goal wake-up (the goal's id): tainted for outside actions, its own bookkeeping allowed. */
+  goalWake?: string
 }
 
 /** Messages that look like the user's but aren't their words: another bot's handoff, or a Teach recording (page strings). */
-export const isRelayed = (m: Pick<Message, 'meta'>): boolean => !!(m.meta?.handoff || m.meta?.teach || m.meta?.helperTask)
+export const isRelayed = (m: Pick<Message, 'meta'>): boolean => !!(m.meta?.handoff || m.meta?.teach || m.meta?.helperTask || m.meta?.fromLink)
 
 /**
  * The user's own words in a chat, for the taint check. Handoffs, Teach recordings (except the name and
@@ -613,7 +626,7 @@ export class Agent {
         db.insertMessage({ threadId: child.id, role: 'user', content: tasks[i].task, kind: 'normal', status: 'done', meta: { helperTask: true } })
         const crun: Run = {
           ctrl: new AbortController(), pending: new Map(), group: false, unattended: true, helper: true,
-          modeCap: run.modeCap, forceTaint: run.forceTaint,
+          modeCap: run.modeCap, forceTaint: run.forceTaint, fromApp: run.fromApp,
           seed: { untrusted: [...(run.taint?.untrusted ?? []).slice(-20), tasks[i].task], userText: run.taint?.userText() ?? run.seed?.userText ?? '' }
         }
         const stop = (): void => crun.ctrl.abort()
@@ -803,6 +816,8 @@ export class Agent {
     const relayed = (m: Message): void => {
       track.sawUntrusted = true
       if (m.meta?.teach) track.web = true
+      // A connected app's message (as the opener or steered in): private reads ask from here on.
+      if (typeof m.meta?.mcpClientId === 'string' || typeof m.meta?.fromApp === 'string') run.fromApp = String(m.meta?.fromApp || 'A connected app').slice(0, 60)
       if (!m.meta?.handoff) return
       const mode = m.meta.mode
       if (mode === 'ask' || mode === 'auto' || mode === 'bypass') run.modeCap = run.modeCap ? stricterMode(run.modeCap, mode) : mode
@@ -810,6 +825,16 @@ export class Agent {
     }
     const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
     if (opener && isRelayed(opener) && !opener.meta?.helperTask) relayed(opener)
+    // A goal wake-up runs unattended on notes and journal text earlier runs wrote: tainted for outside
+    // actions, and the goal's tagged text (written by runs that read outside content) is untrusted.
+    if (opener && typeof opener.meta?.goalRun === 'string' && run.unattended) {
+      run.goalWake = opener.meta.goalRun
+      run.forceTaint = true
+      track.web = true
+      track.sawUntrusted = true
+      const seeded = opener.meta.goalUntrusted
+      if (Array.isArray(seeded)) for (const t of seeded.slice(-20)) if (typeof t === 'string' && t) untrusted.push(t)
+    }
     run.taint = { untrusted, userText: () => userText, tainted: () => !!run.forceTaint || track.web }
     const failures = new Map<string, number>()
     const guard = new LoopGuard()
@@ -1230,7 +1255,24 @@ export class Agent {
       leaksSecret: containsSecret(args, this.d.secretValues()),
       consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended }) : true
     }, rule)
-    return { effect, decision, summary }
+    return { effect, decision: this.runRisks(run, tool, effect, args, ctx, decision), summary }
+  }
+
+  /**
+   * Run-level checks on top of decide(): a connected app's run asks before any private read (no rule or
+   * "Always" skips that), and goal changes after reading outside content ask (starting a goal is refused).
+   */
+  private runRisks(run: Run, tool: ToolDef, effect: ToolEffect, args: Record<string, unknown>, ctx: ExecCtx, decision: Decision): Decision {
+    if (decision.verdict === 'deny') return decision
+    const goal = goalChangeRisk(tool.name, args, { tainted: !!run.forceTaint || ctx.track.sawUntrusted, wake: !!run.goalWake })
+    if (goal?.verdict === 'deny') return { verdict: 'deny', reason: goal.reason }
+    // A wake-up's own bookkeeping (milestones, journal, follow_up) runs even in an Ask-mode chat: nobody
+    // is there to approve it, it only touches the goal, and its entries are tagged as tainted.
+    if (run.goalWake && !run.fromApp && isGoalMutation(tool.name, args) && decision.verdict === 'ask' && !decision.reason) return { verdict: 'allow' }
+    const reason = appReadRisk(run.fromApp, tool.name, effect) ?? goal?.reason
+    if (reason && decision.verdict === 'allow') return { verdict: 'ask', reason }
+    if (reason && !decision.reason) return { ...decision, reason }
+    return decision
   }
 
   /** Stores a call's result. Loop-guard and taint bookkeeping happen here, in call order. */
@@ -1248,6 +1290,19 @@ export class Agent {
     }
     this.toolMessage(thread.id, o.call, content, o.meta, o.images)
     return o.status
+  }
+
+  /** Constrained retry of a local model's invalid tool arguments (llm/constrained.ts); null when not possible. */
+  private async constrainedRepair(threadId: string, tool: ToolDef, bad: string, error: string, request: string | undefined, signal: AbortSignal): Promise<string | null> {
+    const model = this.lastModel.get(threadId)
+    if (!model) return null
+    const ep = this.d.endpoints.for(model)
+    if (!isLocal(ep.baseUrl)) return null
+    try {
+      return await constrainedArgs({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, ollama: await isOllama(ep.baseUrl), tool: { name: tool.name, description: tool.description, parameters: tool.parameters }, bad, error, request, signal, numCtx: contextPin(ep.baseUrl, model) })
+    } catch {
+      return null
+    }
   }
 
   /** Validates, checks permission (asking if needed) and runs one call. Nothing is stored yet. */
@@ -1269,7 +1324,13 @@ export class Agent {
     if (!tool.core && !state.loaded.includes(tool.name)) registry.load(state, [tool.name])
 
     // 1. Schema check, with one repair retry per tool.
-    const checked = check(tool, call.arguments)
+    let checked = check(tool, call.arguments)
+    // Local models: one constrained re-generation of the arguments (the server forces the tool's schema).
+    if (!checked.ok && !(ctx.failures.get(tool.name) ?? 0)) {
+      const repaired = await this.constrainedRepair(thread.id, tool, call.arguments, checked.error, ctx.userText, run.ctrl.signal)
+      const again = repaired ? check(tool, repaired) : undefined
+      if (again?.ok) { call = { ...call, arguments: repaired! }; checked = again }
+    }
     if (!checked.ok) {
       const n = (ctx.failures.get(tool.name) ?? 0) + 1
       ctx.failures.set(tool.name, n)
@@ -1285,6 +1346,8 @@ export class Agent {
       return { call, status: 'denied', content: `Blocked: ${decision.reason}`, meta: { ...baseMeta, status: 'denied', display: 'blocked' } }
     }
     if (decision.verdict === 'ask' && run.unattended) {
+      const queued = run.helper ? undefined : this.d.onUnattendedAsk?.(thread.id, { tool: tool.name, label: tool.label, summary, reason: decision.reason })
+      if (queued) return { call, status: 'denied', content: queued, meta: { ...baseMeta, status: 'denied', display: 'Queued for you (needs approval)' } }
       const why = run.helper
         ? 'Skipped: helper agents can\'t get the user\'s approval. Do not retry. In your report, say exactly what you would do so the lead agent can do it.'
         : 'Skipped: this ran on a schedule with nobody to approve it. Do not retry. In your summary, tell the user exactly what you would do so they can approve it later.'
@@ -1325,10 +1388,12 @@ export class Agent {
         return answer === 'connected' ? registry.search(preset.name, state).map((h) => h.name) : []
       },
       spawnAgents: (tasks) => this.runTeam(thread, run, call.id, tasks),
+      progress: (text) => this.d.emit({ threadId: thread.id, type: 'tool_progress', callId: call.id, tool: tool.name, text: text.slice(0, 300) }),
       outputBudget: tool.name === 'agents' ? teamShare(ctx.window) : undefined,
       model: this.lastModel.get(thread.id),
       speakerId: run.group ? run.speaker?.id : undefined,
-      provenance
+      provenance,
+      tainted: !!run.forceTaint || ctx.track.sawUntrusted
     }
     let out: ToolOutput
     try {
@@ -1354,7 +1419,8 @@ export class Agent {
       call,
       status: 'ok',
       content: wrapToolOutput(tool.name, off.text, !!tool.untrusted),
-      meta: { ...baseMeta, ...(team ? { team } : {}), ...(provenance && effect !== 'read' ? { provenance } : {}), status: 'ok', display: out.display, path: out.path, sources: out.sources, read: out.read, untrusted: !!tool.untrusted, offloaded: off.offloaded ? id : undefined, tokens: off.tokens },
+      // out.meta first: a tool's UI data (e.g. meta.stock) never replaces the loop's own keys.
+      meta: { ...(out.meta ?? {}), ...baseMeta, ...(team ? { team } : {}), ...(provenance && effect !== 'read' ? { provenance } : {}), status: 'ok', display: out.display, path: out.path, sources: out.sources, read: out.read, untrusted: !!tool.untrusted, offloaded: off.offloaded ? id : undefined, tokens: off.tokens },
       images: out.images,
       output: { text: out.text, untrusted: !!tool.untrusted }
     }
@@ -1395,7 +1461,8 @@ export class Agent {
         return r ? {
           helper: r.helper, unattended: r.unattended, speaker: r.speaker,
           mode: t ? stricterMode(t.permissionMode, r.modeCap) : r.modeCap,
-          tainted: !!r.forceTaint || !!r.taint?.tainted()
+          tainted: !!r.forceTaint || !!r.taint?.tainted(),
+          fromApp: r.fromApp
         } : undefined
       },
       isRunning: (threadId) => this.runs.has(threadId),

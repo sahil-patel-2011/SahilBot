@@ -1,241 +1,694 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ToolDef } from '../types'
+import type { ToolDef, ToolContext, ToolOutput } from '../types'
+import { buildSnapshot, byRef, describeChange, elementAt, formatSnapshot, guardAction, redactClipboard, relocate, sameState, selfTarget, short, type AxElement, type AxSnapshot, type Guard, type RawSnapshot, type SelfInfo, type UiState } from '../../computer/ax'
+import { center, clipToDisplays, describeDisplays, displayAt, displayByNumber, fitImage, imageLimits, makeFrame, ordered, toScreen, type DisplayInfo, type Frame, type Rect } from '../../computer/geometry'
+import { parseCombo, riskyCombo, type KeyCombo } from '../../computer/keys'
+import { ACTIVATE, APPS, ELEMENT, KEY, MENU, MOUSE, QUIT, SNAPSHOT, STATE, TYPE, WINDOWS, wrap } from '../../computer/scripts'
+import { waitForSettle } from '../../computer/settle'
 
-// Computer use: SahilBot sees the screen and moves the mouse and keyboard, like a person would.
-// Screenshots come from macOS `screencapture` (Screen Recording permission); input goes through
-// CoreGraphics events and System Events (Accessibility permission). Coordinates are screen points:
-// screenshots are scaled so one image pixel = one point, and `ui` lists elements with their centers.
+// Computer use: SahilBot sees the screen and drives the Mac like a person would, for apps that have no
+// other tool. Accessibility first: `ui` reads the app's windows through the macOS Accessibility API and
+// gives every button, field and item a ref (e1, e2…); actions target refs (click_ref, type_ref,
+// set_value, press) and fall back to coordinates. Every action reads the screen state before and after,
+// waits for the UI to settle, and reports what changed (or that nothing did).
+// Screenshots: macOS `screencapture` (Screen Recording permission), of a display, a window or a region,
+// sized for the model; each records how its pixels map to screen points (Retina, several displays).
+// Input: CoreGraphics events and System Events (Accessibility permission).
+// Safety: one OK per task (per chat); quitting apps and risky shortcuts always ask; password fields,
+// system password/Touch ID prompts, Apple Pay sheets and buy/subscribe buttons are handed to the user.
+// The mini window's Stop and Ctrl+Option+Esc stop the run (the abort signal is checked between steps).
+
+type Action =
+  | 'screenshot' | 'ui' | 'apps' | 'windows' | 'wait' | 'clipboard_read'
+  | 'click' | 'double_click' | 'triple_click' | 'right_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key'
+  | 'click_ref' | 'type_ref' | 'set_value' | 'press' | 'click_element'
+  | 'open_app' | 'activate_app' | 'quit_app' | 'focus_window' | 'menu' | 'clipboard_write'
 
 type Args = {
-  action: 'screenshot' | 'ui' | 'click' | 'double_click' | 'right_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'click_element' | 'menu' | 'apps'
-  x?: number; y?: number; x2?: number; y2?: number; amount?: number; text?: string; keys?: string; app?: string; seconds?: number
-  /** click_element: the button/field/item's name as shown by ui (and optionally its role). */
+  action: Action
+  ref?: string; ref2?: string
+  x?: number; y?: number; x2?: number; y2?: number
+  /** x/y are pixels of the latest screenshot (default once there is one) or global screen points. */
+  coords?: 'screenshot' | 'screen'
+  amount?: number; dx?: number
+  text?: string; clear?: boolean; submit?: boolean
+  keys?: string
+  /** Held during a click: "cmd", "shift", "cmd+shift"… */
+  modifiers?: string
+  app?: string
+  /** A window: its ref from `windows` (w3) or part of its title. */
+  window?: string
+  display?: number
+  region?: number[]
+  /** set_value: the new value. */
+  value?: string
+  /** press: the AX action (AXPress, AXShowMenu, AXIncrement, AXDecrement, AXConfirm, AXCancel, AXPick, AXRaise). */
+  ax_action?: string
+  /** ui: only elements whose name/value contains this. */
+  query?: string
+  /** click_element (older form): element name and role. */
   name?: string; role?: string
-  /** menu: the menu path, e.g. "File > Export > Export as PDF…". */
+  /** menu: "File > Export > Export as PDF…". */
   path?: string
+  seconds?: number
 }
 
 export interface ComputerDeps {
   /** Shrink SahilBot to a small window in the corner while it works (once per task). */
   enterMini(threadId: string): void
-  /** Screenshot of the main display, scaled to points; PNG data URL plus size. */
-  capture(file: string): Promise<{ dataUrl: string; width: number; height: number }>
+  /**
+   * Screenshot. With rect (global points): that area, resized to width×height pixels. Without: the main
+   * display scaled to points. PNG data URL plus the image size.
+   */
+  capture(file: string, opts?: { rect?: Rect; width?: number; height?: number }): Promise<{ dataUrl: string; width: number; height: number }>
   /** Accessibility permission (macOS shows its prompt when asked). */
   trusted(prompt: boolean): boolean
+  /** Displays in global points (Electron's screen); optional so older callers still work. */
+  displays?(): DisplayInfo[]
+  /** SahilBot's own processes and windows: never clicked, typed into or driven by computer use. */
+  self?(): SelfInfo
 }
 
+const READ = new Set<Action>(['screenshot', 'ui', 'apps', 'windows', 'wait', 'clipboard_read'])
+/** Apps SahilBot never quits (itself, and parts of macOS). */
+const NO_QUIT = /^(sahilbot|electron|finder|dock|systemuiserver|windowserver|loginwindow|controlcenter|notificationcenter)$/i
+/** Menu items that always ask, even mid-task. */
+const RISKY_MENU = /^(quit|force quit|log out|shut down|restart|sleep|lock screen|empty trash|erase|delete (all|account|permanently)|secure empty trash|close all)/i
+const MOD_FLAGS: Record<string, number> = { cmd: 0x100000, command: 0x100000, shift: 0x20000, option: 0x80000, alt: 0x80000, opt: 0x80000, ctrl: 0x40000, control: 0x40000 }
+
 function sh(cmd: string, args: string[], timeout = 15_000): Promise<string> {
-  return new Promise((ok, fail) => execFile(cmd, args, { timeout, maxBuffer: 8 * 1024 * 1024 }, (e, out, err) => (e ? fail(new Error((err || e.message).toString().trim().slice(0, 400))) : ok(out.toString()))))
+  return new Promise((ok, fail) => execFile(cmd, args, { timeout, maxBuffer: 16 * 1024 * 1024 }, (e, out, err) => (e ? fail(new Error((err || e.message).toString().trim().slice(0, 400))) : ok(out.toString()))))
+}
+
+/** Runs a command with text on stdin (pbcopy). */
+function shIn(cmd: string, args: string[], input: string): Promise<void> {
+  return new Promise((ok, fail) => {
+    const p = spawn(cmd, args, { stdio: ['pipe', 'ignore', 'pipe'] })
+    let err = ''
+    p.stderr.on('data', (d) => { err += String(d) })
+    p.on('error', fail)
+    p.on('close', (code) => (code === 0 ? ok() : fail(new Error(err.trim().slice(0, 200) || `${cmd} failed`))))
+    p.stdin.end(input)
+  })
 }
 
 /** Runs a JXA function with JSON input (never string-spliced into the script). */
-async function jxa(fn: string, input: unknown): Promise<unknown> {
-  const script = `ObjC.import('CoreGraphics'); ObjC.import('AppKit'); function run(argv) { const a = JSON.parse(argv[0]); return JSON.stringify((${fn})(a)); }`
-  const out = await sh('osascript', ['-l', 'JavaScript', '-e', script, JSON.stringify(input)])
-  return JSON.parse(out || 'null')
+async function jxa<T = unknown>(fn: string, input: unknown, timeout = 20_000): Promise<T> {
+  const out = await sh('osascript', ['-l', 'JavaScript', '-e', wrap(fn), JSON.stringify(input ?? {})], timeout)
+  return JSON.parse(out || 'null') as T
 }
 
-// CoreGraphics mouse events. Types: 1/2 left down/up, 3/4 right down/up, 5 moved, 6 left dragged.
-const MOUSE = `(a) => {
-  const post = (type, x, y, button, clicks) => {
-    const e = $.CGEventCreateMouseEvent(null, type, $.CGPointMake(x, y), button)
-    if (clicks) $.CGEventSetIntegerValueField(e, 1, clicks)
-    $.CGEventPost(0, e)
+/** Modifier flags for a click ("cmd+shift" → CGEvent flags). */
+export function clickFlags(mods?: string): number {
+  if (!mods) return 0
+  let f = 0
+  for (const m of mods.toLowerCase().split(/[+\s,]+/).filter(Boolean)) {
+    if (MOD_FLAGS[m] === undefined) throw new Error(`Unknown modifier "${m}". Use cmd, shift, option or ctrl.`)
+    f |= MOD_FLAGS[m]
   }
-  const pause = (ms) => { const t = Date.now() + ms; while (Date.now() < t) {} }
-  if (a.kind === 'move') post(5, a.x, a.y, 0)
-  if (a.kind === 'click' || a.kind === 'double') {
-    post(5, a.x, a.y, 0); pause(30)
-    post(1, a.x, a.y, 0, 1); post(2, a.x, a.y, 0, 1)
-    if (a.kind === 'double') { pause(60); post(1, a.x, a.y, 0, 2); post(2, a.x, a.y, 0, 2) }
-  }
-  if (a.kind === 'right') { post(5, a.x, a.y, 1); pause(30); post(3, a.x, a.y, 1); post(4, a.x, a.y, 1) }
-  if (a.kind === 'drag') {
-    post(5, a.x, a.y, 0); pause(40); post(1, a.x, a.y, 0, 1)
-    const steps = 12
-    for (let i = 1; i <= steps; i++) { post(6, a.x + (a.x2 - a.x) * i / steps, a.y + (a.y2 - a.y) * i / steps, 0); pause(15) }
-    post(2, a.x2, a.y2, 0, 1)
-  }
-  if (a.kind === 'scroll') {
-    post(5, a.x, a.y, 0); pause(30)
-    const e = $.CGEventCreateScrollWheelEvent(null, 1, 1, a.amount)
-    $.CGEventPost(0, e)
-  }
-  return true
-}`
+  return f
+}
 
-// Elements of the frontmost app's windows with their centers, for models that can't see images.
-const UI = `(a) => {
-  const se = Application('System Events')
-  if (a.app) { try { Application(a.app).activate(); delay(0.6) } catch (e) {} }
-  const p = se.processes.whose({ frontmost: true })[0]
-  const out = { app: p.name(), elements: [] }
-  const seen = (el, depth) => {
-    if (out.elements.length >= a.max || depth > 8) return
-    let role = '', name = '', pos = null, size = null
-    try { role = el.role() } catch (e) {}
-    try { name = el.name() || el.description() || el.title() || '' } catch (e) {}
-    try { pos = el.position(); size = el.size() } catch (e) {}
-    if (pos && size && size[0] > 2 && size[1] > 2 && /Button|TextField|TextArea|CheckBox|RadioButton|PopUpButton|MenuButton|Link|Tab|Cell|StaticText|ComboBox|Slider|MenuItem|Row|Image|Heading|Toolbar|SearchField|DisclosureTriangle|Stepper|ColorWell|Incrementor/.test(role) && (name || /TextField|TextArea|SearchField/.test(role))) {
-      let value = ''
-      try { value = String(el.value() ?? '').slice(0, 60) } catch (e) {}
-      out.elements.push({ role: role.replace(/^AX/, ''), name: String(name).slice(0, 80), value, x: Math.round(pos[0] + size[0] / 2), y: Math.round(pos[1] + size[1] / 2) })
-    }
-    let kids = []
-    try { kids = el.uiElements() } catch (e) {}
-    for (const k of kids) seen(k, depth + 1)
-  }
-  for (const w of p.windows()) seen(w, 0)
+/** Splits text for typing: short chunks so apps don't drop characters, never splitting a surrogate pair. */
+export function typingChunks(text: string, size = 60): string[] {
+  const chars = Array.from(text)
+  const out: string[] = []
+  for (let i = 0; i < chars.length; i += size) out.push(chars.slice(i, i + size).join(''))
   return out
-}`
-
-// Click an app menu item by its path through System Events (works without coordinates).
-const MENU = `(a) => {
-  const se = Application('System Events')
-  if (a.app) { try { Application(a.app).activate(); delay(0.5) } catch (e) {} }
-  const p = se.processes.whose({ frontmost: true })[0]
-  const parts = a.path.split('>').map((s) => s.trim()).filter(Boolean)
-  let item = p.menuBars[0].menuBarItems.byName(parts[0])
-  let menu = item.menus[0]
-  for (let i = 1; i < parts.length; i++) {
-    const it = menu.menuItems.byName(parts[i])
-    if (i === parts.length - 1) { it.click(); return { app: p.name(), clicked: parts.join(' > ') } }
-    menu = it.menus[0]
-  }
-  item.click()
-  return { app: p.name(), clicked: parts[0] }
-}`
-
-const APPS = `() => Application('System Events').processes.whose({ backgroundOnly: false })().map((p) => ({ name: p.name(), front: p.frontmost() }))`
-
-const KEYCODES: Record<string, number> = { return: 36, enter: 36, tab: 48, space: 49, delete: 51, backspace: 51, escape: 53, esc: 53, left: 123, right: 124, down: 125, up: 126, pageup: 116, pagedown: 121, home: 115, end: 119, forwarddelete: 117, f1: 122, f2: 120, f3: 99, f4: 118, f5: 96 }
-
-async function pressKeys(combo: string): Promise<void> {
-  const parts = combo.toLowerCase().split('+').map((p) => p.trim()).filter(Boolean)
-  const key = parts.pop() ?? ''
-  const mods = parts.map((m) => ({ cmd: 'command down', command: 'command down', shift: 'shift down', alt: 'option down', option: 'option down', opt: 'option down', ctrl: 'control down', control: 'control down', fn: 'function down' } as Record<string, string>)[m]).filter(Boolean)
-  const using = mods.length ? ` using {${mods.join(', ')}}` : ''
-  const stmt = KEYCODES[key] !== undefined ? `key code ${KEYCODES[key]}${using}` : `keystroke ${JSON.stringify(key)}${using}`
-  await sh('osascript', ['-e', `tell application "System Events" to ${stmt}`])
 }
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+const pad = (r: Rect, p: number): Rect => ({ x: r.x - p, y: r.y - p, width: r.width + 2 * p, height: r.height + 2 * p })
 
 export function computerTool(d: ComputerDeps): ToolDef<Args> {
   // One OK per task: after the first approved action in a chat, control continues until it's idle for 15 min.
   const granted = new Map<string, number>()
   const isGranted = (threadId: string): boolean => (granted.get(threadId) ?? 0) > Date.now() - 15 * 60_000
+  /** Per chat: the last ui snapshot (refs), the last screenshot's frame, the last windows list. */
+  const snapshots = new Map<string, AxSnapshot>()
+  const frames = new Map<string, Frame>()
+  const windowLists = new Map<string, Array<{ ref: string; app: string; pid?: number; index: number; title: string; rect?: Rect }>>()
+
+  const alive = (ctx: ToolContext): void => { if (ctx.signal.aborted) throw new DOMException('Stopped by the user.', 'AbortError') }
+  const displays = (): DisplayInfo[] => { try { return d.displays?.() ?? [] } catch { return [] } }
+
+  const probe = (target?: { pid?: number; path: number[] }): Promise<UiState> => jxa<UiState>(STATE, { target })
+
+  /**
+   * Refuses any action that would land on SahilBot itself: its process (or helpers), its app name, its
+   * window titles, or a point on one of its windows (the mini window with Stop included).
+   */
+  async function notSelf(a: Args, tid: string): Promise<void> {
+    let self: SelfInfo | undefined
+    try { self = d.self?.() } catch { self = undefined }
+    if (!self) return
+    const why: Array<string | null> = []
+    const snap = snapshots.get(tid)
+    const el = a.ref ? byRef(snap, a.ref) : undefined
+    const el2 = a.ref2 ? byRef(snap, a.ref2) : undefined
+    if (['click_ref', 'press', 'type_ref', 'set_value'].includes(a.action) || (a.ref && ['click', 'double_click', 'triple_click', 'right_click', 'move', 'drag', 'scroll'].includes(a.action))) {
+      why.push(selfTarget(self, { app: snap?.app, pid: snap?.pid, window: el?.window }))
+      if (el?.rect) why.push(selfTarget(self, { point: center(el.rect) }))
+      if (el2?.rect) why.push(selfTarget(self, { point: center(el2.rect) }))
+    }
+    if (['click', 'double_click', 'triple_click', 'right_click', 'move', 'drag', 'scroll'].includes(a.action) && !a.ref && a.x !== undefined && a.y !== undefined) {
+      try { why.push(selfTarget(self, { point: pointOf(tid, a, 1) })) } catch { /* reported by the action */ }
+      if (a.action === 'drag' && a.x2 !== undefined) { try { why.push(selfTarget(self, { point: pointOf(tid, a, 2) })) } catch { /* reported by the action */ } }
+    }
+    if (['open_app', 'activate_app', 'quit_app', 'ui', 'click_element', 'menu', 'focus_window'].includes(a.action) && a.app) why.push(selfTarget(self, { app: a.app }))
+    if (a.action === 'focus_window' && a.window) {
+      const w = /^w\d+$/i.test(a.window.trim()) ? windowLists.get(tid)?.find((x) => x.ref === a.window!.trim().toLowerCase()) : undefined
+      why.push(w ? selfTarget(self, { app: w.app, pid: w.pid }) : selfTarget(self, { window: a.window }))
+    }
+    if (a.action === 'ui' && a.window && /^w\d+$/i.test(a.window.trim())) {
+      const w = windowLists.get(tid)?.find((x) => x.ref === a.window!.trim().toLowerCase())
+      if (w) why.push(selfTarget(self, { app: w.app, pid: w.pid }))
+    }
+    // Keystrokes and menu choices go to the app in front.
+    if (['type', 'key', 'menu', 'click_element'].includes(a.action) && !a.app) {
+      const front = await probe().catch(() => undefined)
+      if (front) why.push(selfTarget(self, { app: front.app }))
+    }
+    const hit = why.find(Boolean)
+    if (hit) throw new Error(`${hit} Computer use never clicks, types into or drives SahilBot's own windows: its approval and purchase cards are only for the user. Work in the other app, or ask the user.`)
+  }
+
+  /** Reads state, runs the action, waits for the UI to settle, and says what changed. */
+  async function verified(ctx: ToolContext, act: () => Promise<void>, o: { target?: { pid?: number; path: number[] }; before?: UiState; timeoutMs?: number } = {}): Promise<{ text: string; changed: boolean; after: UiState }> {
+    const before = o.before ?? await probe(o.target).catch(() => undefined)
+    alive(ctx)
+    await act()
+    const settled = await waitForSettle(() => probe(o.target), sameState, { timeoutMs: o.timeoutMs ?? 2500, intervalMs: 150, initialDelayMs: 120, signal: ctx.signal }).catch((e) => {
+      if ((e as Error).name === 'AbortError') throw e
+      return undefined
+    })
+    if (!settled) return { text: '(Couldn\'t read the screen state afterwards: check with ui or a screenshot.)', changed: true, after: before ?? { app: '', window: '', windows: 0, sheets: 0 } }
+    if (!before) return { text: `Now: ${settled.state.app}${settled.state.window ? ` › "${settled.state.window}"` : ''}.`, changed: true, after: settled.state }
+    const c = describeChange(before, settled.state)
+    return { text: `${c.text}${settled.stable ? '' : ' (The screen was still changing when SahilBot stopped waiting; look again before the next step.)'}`, changed: c.changed, after: settled.state }
+  }
+
+  /** Hands a step to the user: asks them to do it and waits (nobody there: the agent is told to stop that part). */
+  async function handOff(g: Guard, ctx: ToolContext): Promise<ToolOutput> {
+    const answer = await ctx.askUser(g.ask, ['Done', 'Skip it'])
+    if (/^\(Nobody can answer/.test(answer)) return { text: `Not done: this step needs the user (${g.reason}), and nobody is here to do it. Don't try another way; leave it for the user and say so in your report.`, display: `left for you: ${g.kind}` }
+    return { text: `Handed to the user (${g.reason}). They answered: "${answer.slice(0, 200)}". Don't do this step yourself. Check where things stand with ui or a screenshot, then carry on with the rest.`, display: `handed to you: ${g.kind}` }
+  }
+
+  /** The thread's snapshot, if it is recent and of the app in front. */
+  const freshSnapshot = (tid: string, app?: string): AxSnapshot | undefined => {
+    const s = snapshots.get(tid)
+    return s && Date.now() - s.at < 120_000 && (!app || s.app === app) ? s : undefined
+  }
+
+  async function snapshot(tid: string, o: { app?: string; pid?: number; activate?: boolean; window?: number }): Promise<AxSnapshot> {
+    const raw = await jxa<RawSnapshot>(SNAPSHOT, { app: o.app, pid: o.pid, activate: !!o.activate, window: o.window, max: 700, maxDepth: 14, maxWindows: 6, maxValue: 200 }, 45_000)
+    if (raw?.error) throw new Error(raw.error === 'not running' ? `${o.app ?? 'That app'} isn't running. Open it with open_app first.` : raw.error)
+    const snap = buildSnapshot(raw, snapshots.get(tid))
+    snapshots.set(tid, snap)
+    return snap
+  }
+
+  type ElementResult = { missing?: boolean; mismatch?: boolean; refused?: string; done?: boolean; error?: string; actions?: string[]; value?: string; secure?: boolean; x?: number; y?: number; w?: number; h?: number }
+
+  /**
+   * Runs an element operation on a ref. If the element moved (windows reordered, list changed), the app
+   * is read again and the same element (role + label, nearest) is found; if it's gone, says so.
+   */
+  async function onElement(tid: string, ref: string, op: Record<string, unknown>): Promise<{ el: AxElement; snap: AxSnapshot; res: ElementResult }> {
+    let snap = snapshots.get(tid)
+    let el = byRef(snap, ref)
+    if (!snap || !el) throw new Error(`No element ${ref} in the last ui snapshot. Read the app with ui first and use a ref from it.`)
+    const run = (e: AxElement): Promise<ElementResult> => jxa<ElementResult>(ELEMENT, { pid: snap!.pid, path: e.path, expect: { role: e.role, name: e.name, desc: e.desc }, ...op })
+    let res = await run(el)
+    if (res.missing || res.mismatch) {
+      snap = await snapshot(tid, { pid: snap.pid })
+      const again = relocate(el, snap)
+      if (!again) throw new Error(`${ref} (${short(el.role)} "${el.label}") is no longer on screen. Read the app again with ui.`)
+      el = again
+      res = await run(el)
+      if (res.missing || res.mismatch) throw new Error(`${ref} (${short(el.role)} "${el.label}") keeps changing; read the app again with ui or use a screenshot.`)
+    }
+    return { el, snap, res }
+  }
+
+  /** Screen point for x,y (in the latest screenshot's pixels unless coords says screen) or a ref's center. */
+  function pointOf(tid: string, a: Args, which: 1 | 2 = 1): { x: number; y: number; el?: AxElement } {
+    const ref = which === 1 ? a.ref : a.ref2
+    if (ref) {
+      const el = byRef(snapshots.get(tid), ref)
+      if (!el?.rect) throw new Error(`No element ${ref} with a position in the last ui snapshot. Read the app with ui first.`)
+      return { ...center(el.rect), el }
+    }
+    const x = which === 1 ? a.x : a.x2
+    const y = which === 1 ? a.y : a.y2
+    if (x === undefined || y === undefined) throw new Error(which === 1 ? 'Give a ref from ui, or x and y.' : 'Give ref2, or x2 and y2, for where to drag to.')
+    const f = frames.get(tid)
+    const p = f && a.coords !== 'screen' ? toScreen(f, x, y) : { x, y }
+    const ds = displays()
+    if (ds.length && !displayAt(ds, p.x, p.y)) throw new Error(`(${Math.round(p.x)}, ${Math.round(p.y)}) is outside every screen. ${f && a.coords !== 'screen' ? `Coordinates are pixels of the last screenshot (${f.width}×${f.height}).` : ''}`)
+    return { x: Math.round(p.x), y: Math.round(p.y) }
+  }
+
+  async function typeText(ctx: ToolContext, text: string): Promise<void> {
+    for (const chunk of typingChunks(text)) {
+      alive(ctx)
+      await jxa(TYPE, { text: chunk })
+      await sleep(20)
+    }
+  }
+
+  async function windowsList(tid: string, app?: string): Promise<Array<{ ref: string; app: string; pid?: number; index: number; title: string; rect?: Rect; front?: boolean; minimized?: boolean }>> {
+    const r = await jxa<Array<{ app: string; pid?: number; index: number; title: string; x?: number; y?: number; w?: number; h?: number; front?: boolean; minimized?: boolean }>>(WINDOWS, { app }, 30_000)
+    const list = (r ?? []).map((w, i) => ({ ref: `w${i + 1}`, app: w.app, pid: w.pid, index: w.index, title: w.title, front: w.front, minimized: w.minimized, rect: w.x !== undefined && w.w !== undefined ? { x: w.x, y: w.y!, width: w.w, height: w.h! } : undefined }))
+    windowLists.set(tid, list)
+    return list
+  }
+
+  /** A window by ref (w3) from the last windows list, or by title (and app). */
+  async function findWindow(tid: string, want: string, app?: string): Promise<{ ref: string; app: string; pid?: number; index: number; title: string; rect?: Rect }> {
+    const byRefW = /^w\d+$/i.test(want.trim()) ? windowLists.get(tid)?.find((w) => w.ref === want.trim().toLowerCase()) : undefined
+    if (byRefW) return byRefW
+    const list = await windowsList(tid, app)
+    const q = want.toLowerCase()
+    const hit = list.find((w) => w.title.toLowerCase() === q) ?? list.find((w) => w.title.toLowerCase().includes(q)) ?? list.find((w) => w.app.toLowerCase() === q)
+    if (!hit) throw new Error(`No window matching "${want}". List them with the windows action.`)
+    return hit
+  }
+
+  async function screenshot(a: Args, ctx: ToolContext): Promise<ToolOutput> {
+    const tid = ctx.threadId
+    const ds = displays()
+    let rect: Rect | undefined
+    let what = 'the main display'
+    let zoom = false
+    if (a.ref) {
+      const el = byRef(snapshots.get(tid), a.ref)
+      if (!el?.rect) throw new Error(`No element ${a.ref} with a position in the last ui snapshot.`)
+      rect = pad(el.rect, 40); what = `${short(el.role)} "${el.label}" and around it`; zoom = true
+    } else if (a.window) {
+      const w = await findWindow(tid, a.window, a.app)
+      if (!w.rect) throw new Error(`The window "${w.title}" has no readable position; take a full screenshot instead.`)
+      rect = w.rect; what = `the ${w.app} window "${w.title}"`; zoom = true
+    } else if (a.region) {
+      const [x, y, w, h] = a.region
+      if ([x, y, w, h].some((n) => typeof n !== 'number') || w <= 0 || h <= 0) throw new Error('region is [x, y, width, height] with a positive width and height.')
+      const f = frames.get(tid)
+      const p1 = f && a.coords !== 'screen' ? toScreen(f, x, y) : { x, y }
+      const p2 = f && a.coords !== 'screen' ? toScreen(f, x + w, y + h) : { x: x + w, y: y + h }
+      rect = { x: p1.x, y: p1.y, width: p2.x - p1.x, height: p2.y - p1.y }; what = 'the region'; zoom = true
+    } else if (ds.length) {
+      const disp = displayByNumber(ds, a.display)
+      if (!disp) throw new Error(`There is no display ${a.display}. Displays: ${describeDisplays(ds)}.`)
+      rect = disp.bounds; what = a.display && a.display > 1 ? `display ${a.display}` : ds.length > 1 ? 'display 1 (main)' : 'the screen'
+    }
+    if (rect && ds.length) {
+      const clipped = clipToDisplays(rect, ds)
+      if (!clipped) throw new Error('That area is off screen.')
+      rect = clipped
+    }
+    const scale = rect ? (displayAt(ds, center(rect).x, center(rect).y)?.scaleFactor ?? 2) : 1
+    const size = rect ? fitImage(rect, scale, { ...imageLimits(ctx.model), zoom }) : undefined
+    const dir = mkdtempSync(join(tmpdir(), 'sb-shot-'))
+    try {
+      d.enterMini(ctx.state.rootId ?? tid)
+      const shot = await d.capture(join(dir, 'screen.png'), rect ? { rect, ...size } : undefined)
+      const r = rect ?? { x: 0, y: 0, width: shot.width, height: shot.height }
+      const f = makeFrame(r, shot.width, shot.height, what)
+      frames.set(tid, f)
+      const scaleNote = Math.abs(shot.width - r.width) > 1 ? ` (1 image pixel = ${(r.width / shot.width).toFixed(2)} screen points)` : ''
+      const multi = ds.length > 1 && !a.ref && !a.window && !a.region ? ` Displays: ${describeDisplays(ds)}; pass display to see another.` : ''
+      return {
+        text: `Screenshot of ${what}: ${shot.width}×${shot.height} pixels${scaleNote}. For click, move, drag and scroll, give x,y in THIS image's pixels (x right, y down); SahilBot converts them to the screen. SahilBot's own small window (top right, with Stop) is not part of the task.${multi} Prefer refs from ui when the element is listed there.`,
+        display: `Looked at ${what.length > 40 ? 'the screen' : what}`,
+        images: [shot.dataUrl]
+      }
+    } catch (e) {
+      throw new Error(/could not create image|not permitted|denied|cannot|screencapture/i.test((e as Error).message) ? 'SahilBot needs Screen Recording permission to see the screen: System Settings → Privacy & Security → Screen Recording. Meanwhile use the ui action instead.' : (e as Error).message)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  const needAx = (): void => {
+    if (!d.trusted(true)) throw new Error('SahilBot needs Accessibility permission to read and use other apps. macOS just showed the prompt: the user should turn SahilBot on in System Settings → Privacy & Security → Accessibility, then you can try again.')
+  }
+
+  const describe = (a: Args): string => {
+    const el = (ref?: string): string => { if (!ref) return ''; for (const s of snapshots.values()) { const e = byRef(s, ref); if (e) return `${short(e.role)} "${e.label.slice(0, 60)}" in ${s.app}` } return ref }
+    switch (a.action) {
+      case 'type': return `Take control of your Mac and type "${(a.text ?? '').slice(0, 80)}"`
+      case 'type_ref': return `Type "${(a.text ?? '').slice(0, 80)}" into ${el(a.ref)}`
+      case 'set_value': return `Set ${el(a.ref)} to "${(a.value ?? '').slice(0, 80)}"`
+      case 'click_ref': case 'press': return `${a.action === 'press' ? `${a.ax_action ?? 'Press'}` : 'Click'} ${el(a.ref)}`
+      case 'open_app': return `Take control of your Mac: open ${a.app}`
+      case 'activate_app': return `Bring ${a.app} to the front`
+      case 'quit_app': return `Quit ${a.app} (it may ask to save unsaved work)`
+      case 'focus_window': return `Bring the window "${a.window}" to the front`
+      case 'menu': return `Choose ${a.path}${a.app ? ` in ${a.app}` : ''}`
+      case 'key': return `Press ${a.keys}`
+      case 'clipboard_write': return `Copy ${(a.text ?? '').length} characters to your clipboard`
+      default: return `Take control of your mouse and keyboard (${a.action.replace('_', ' ')}${a.ref ? ` on ${el(a.ref)}` : a.x !== undefined ? ` at ${a.x}, ${a.y}` : ''}). SahilBot shrinks to a small window so you can watch; press Stop (or Ctrl+Option+Esc) anytime.`
+    }
+  }
+
+  const hardStop = (a: Args): string | null => {
+    if (a.action === 'quit_app') return `quitting ${a.app ?? 'an app'}`
+    if (a.action === 'key' && a.keys) { try { return riskyCombo(parseCombo(a.keys)) } catch { return null } }
+    if (a.action === 'menu' && a.path) { const last = a.path.split('>').pop()?.trim() ?? ''; if (RISKY_MENU.test(last)) return `choosing "${a.path}"` }
+    return null
+  }
 
   return {
     name: 'computer',
     label: 'Computer',
     core: true,
     untrusted: true,
-    effect: (a) => (['screenshot', 'ui', 'wait', 'apps'].includes(a.action) ? 'read' : 'write_external'),
-    // Asks once per task before taking control; then routine clicks and typing run.
-    // The OK belongs to the chat that got it; nobody approved anything for a scheduled run or helper.
-    consequential: (a, c) => !['screenshot', 'ui', 'wait', 'apps'].includes(a.action) && (!!c.unattended || !isGranted(c.threadId)),
-    describe: (a) => a.action === 'type' ? `Take control of your Mac and type "${(a.text ?? '').slice(0, 80)}"` : a.action === 'open_app' ? `Take control of your Mac: open ${a.app}` : `Take control of your mouse and keyboard (${a.action.replace('_', ' ')}${a.x !== undefined ? ` at ${a.x}, ${a.y}` : ''}). SahilBot shrinks to a small window so you can watch; press Stop anytime.`,
-    description: 'Use the Mac like a person: see the screen and control the mouse and keyboard, for apps that have no other tool. Start with screenshot (if you can see images) or ui (a list of the front app\'s buttons, fields and text with their x,y centers). Coordinates are screen points. Actions: click_element(name, role?) clicks a button/field/item by its name from ui (most reliable); menu(path like "File > Export > PDF…", app?) picks a menu item; apps lists open apps; ui(app?) reads an app\'s window (brings it to the front); click/double_click/right_click(x,y), move(x,y), drag(x,y,x2,y2), scroll(x,y,amount: negative = down), type(text), key(keys like "cmd+c", "return", "cmd+shift+t"), open_app(app), wait(seconds). After each action, take a screenshot or ui again to check what happened. Prefer the browser tool for websites and app tools (Notes, Calendar, Cursor) when they exist. Never type passwords; stop and ask the user for CAPTCHAs and 2-factor codes.',
+    effect: (a) => (READ.has(a.action) ? 'read' : a.action === 'clipboard_write' ? 'write_local' : 'write_external'),
+    // Asks once per task before taking control; then routine clicks and typing run. Quitting an app
+    // always asks. The OK belongs to the chat that got it; nobody approved anything for a scheduled run or helper.
+    consequential: (a, c) => a.action === 'quit_app' || (!READ.has(a.action) && a.action !== 'clipboard_write' && (!!c.unattended || !isGranted(c.threadId))),
+    hardStop,
+    describe,
+    description: `Use the Mac like a person, for apps that have no other tool (prefer the browser tool for websites and app tools for Notes, Calendar, Cursor…).
+Accessibility first:
+- ui {app?, window?, query?}: the app's windows and elements (buttons, fields, checkboxes, menus, text) with refs like e12, values, focus and disabled state. app brings that app to the front first. query filters.
+- click_ref {ref, modifiers?}: press/click an element. type_ref {ref, text, clear?, submit?}: focus a field and type (clear replaces its text; submit presses Return). set_value {ref, value}: set a field/slider/checkbox value directly. press {ref, ax_action}: an Accessibility action (AXPress, AXShowMenu, AXIncrement, AXDecrement, AXConfirm, AXCancel, AXRaise).
+Screen: screenshot {display?, window?, ref?, region?}: the main display, another display, one window (window: ref from windows or part of its title), around an element, or a region [x,y,w,h] of the last screenshot (zoom in for small text; smaller images cost less).
+Coordinates (fallback): click/double_click/triple_click/right_click/move {x,y, modifiers?}, drag {x,y,x2,y2 or ref,ref2}, scroll {x,y or ref, amount: lines, negative = down, dx?: sideways}. x,y are pixels of the LAST screenshot (coords:"screen" for global screen points).
+Keyboard: type {text} into whatever is focused; key {keys: "cmd+s", "return", "cmd+shift+t", "ctrl+option+left", "cmd+plus"}.
+Apps: apps (running apps), windows {app?} (every window with refs w1…), open_app {app}, activate_app {app}, focus_window {window, app?}, quit_app {app} (asks first), menu {path: "File > Export > PDF…", app?} (a path ending at a menu lists its items).
+Clipboard: clipboard_read, clipboard_write {text}. wait {seconds}.
+Every action reports what changed afterwards (app, window, dialog, focus, values) or that nothing did: if nothing changed, look before retrying. SahilBot never types passwords, never confirms payments or purchases, and never answers system password/Touch ID prompts: those steps go to the user automatically. Stop and ask the user for CAPTCHAs and 2-factor codes.`,
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['screenshot', 'ui', 'click', 'double_click', 'right_click', 'move', 'drag', 'scroll', 'type', 'key', 'open_app', 'wait', 'click_element', 'menu', 'apps'] },
-        name: { type: 'string', description: 'For click_element: the element name shown by ui' },
-        role: { type: 'string', description: 'For click_element: optional role to disambiguate, e.g. Button' },
-        path: { type: 'string', description: 'For menu: e.g. "File > Export > Export as PDF…"' },
+        action: { type: 'string', enum: ['screenshot', 'ui', 'apps', 'windows', 'wait', 'clipboard_read', 'click', 'double_click', 'triple_click', 'right_click', 'move', 'drag', 'scroll', 'type', 'key', 'click_ref', 'type_ref', 'set_value', 'press', 'click_element', 'open_app', 'activate_app', 'quit_app', 'focus_window', 'menu', 'clipboard_write'] },
+        ref: { type: 'string', description: 'Element ref from ui, e.g. "e12"' },
+        ref2: { type: 'string', description: 'For drag: the element to drop on' },
         x: { type: 'number' }, y: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' },
+        coords: { type: 'string', enum: ['screenshot', 'screen'], description: 'x,y are pixels of the last screenshot (default) or global screen points' },
         amount: { type: 'integer', minimum: -50, maximum: 50, description: 'For scroll: lines; negative scrolls down' },
-        text: { type: 'string', description: 'For type' },
-        keys: { type: 'string', description: 'For key, e.g. "cmd+v", "return", "escape"' },
-        app: { type: 'string', description: 'For open_app, e.g. "Finder", "Numbers"' },
+        dx: { type: 'integer', minimum: -50, maximum: 50, description: 'For scroll: sideways lines; negative scrolls left' },
+        text: { type: 'string', description: 'For type, type_ref, clipboard_write' },
+        clear: { type: 'boolean', description: 'For type_ref: replace the field\'s current text' },
+        submit: { type: 'boolean', description: 'For type_ref: press Return afterwards' },
+        keys: { type: 'string', description: 'For key, e.g. "cmd+v", "return", "escape", "cmd+shift+t"' },
+        modifiers: { type: 'string', description: 'For clicks: keys held, e.g. "cmd" or "shift"' },
+        app: { type: 'string', description: 'App name, e.g. "Finder", "Numbers"' },
+        window: { type: 'string', description: 'A window ref from windows (w3) or part of its title' },
+        display: { type: 'integer', minimum: 1, maximum: 8, description: 'For screenshot: display number (1 = main)' },
+        region: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: 'For screenshot: [x, y, width, height] in the last screenshot\'s pixels' },
+        value: { type: 'string', description: 'For set_value' },
+        ax_action: { type: 'string', description: 'For press, e.g. AXPress, AXShowMenu, AXIncrement' },
+        query: { type: 'string', description: 'For ui: only elements whose name or value contains this' },
+        name: { type: 'string', description: 'For click_element: an element name shown by ui' },
+        role: { type: 'string', description: 'For click_element: optional role, e.g. Button' },
+        path: { type: 'string', description: 'For menu: e.g. "File > Export > Export as PDF…"' },
         seconds: { type: 'number', minimum: 0.2, maximum: 10 }
       },
       required: ['action'],
       additionalProperties: false,
       allOf: [
-        { if: { properties: { action: { enum: ['click', 'double_click', 'right_click', 'move', 'scroll'] } } }, then: { required: ['x', 'y'] } },
-        { if: { properties: { action: { const: 'drag' } } }, then: { required: ['x', 'y', 'x2', 'y2'] } },
         { if: { properties: { action: { const: 'type' } } }, then: { required: ['text'] } },
         { if: { properties: { action: { const: 'key' } } }, then: { required: ['keys'] } },
-        { if: { properties: { action: { const: 'open_app' } } }, then: { required: ['app'] } },
+        { if: { properties: { action: { enum: ['open_app', 'activate_app', 'quit_app'] } } }, then: { required: ['app'] } },
+        { if: { properties: { action: { enum: ['click_ref', 'press', 'set_value', 'type_ref'] } } }, then: { required: ['ref'] } },
+        { if: { properties: { action: { const: 'type_ref' } } }, then: { required: ['text'] } },
+        { if: { properties: { action: { const: 'set_value' } } }, then: { required: ['value'] } },
         { if: { properties: { action: { const: 'click_element' } } }, then: { required: ['name'] } },
-        { if: { properties: { action: { const: 'menu' } } }, then: { required: ['path'] } }
+        { if: { properties: { action: { const: 'focus_window' } } }, then: { required: ['window'] } },
+        { if: { properties: { action: { const: 'menu' } } }, then: { required: ['path'] } },
+        { if: { properties: { action: { const: 'clipboard_write' } } }, then: { required: ['text'] } }
       ]
     },
     async run(a, ctx) {
-      const acting = !['screenshot', 'ui', 'wait', 'apps'].includes(a.action)
+      const tid = ctx.threadId
+      await notSelf(a, tid)
+      const acting = !READ.has(a.action) && a.action !== 'clipboard_write'
       if (acting) {
-        if (!d.trusted(true)) throw new Error('SahilBot needs Accessibility permission to use the mouse and keyboard. macOS just showed the prompt: the user should turn SahilBot on in System Settings → Privacy & Security → Accessibility, then you can try again.')
-        granted.set(ctx.threadId, Date.now())
-        d.enterMini(ctx.state.rootId ?? ctx.threadId)
+        needAx()
+        granted.set(tid, Date.now())
+        d.enterMini(ctx.state.rootId ?? tid)
       }
+      alive(ctx)
       switch (a.action) {
-        case 'screenshot': {
-          const dir = mkdtempSync(join(tmpdir(), 'sb-shot-'))
-          try {
-            d.enterMini(ctx.state.rootId ?? ctx.threadId)
-            const shot = await d.capture(join(dir, 'screen.png'))
-            return { text: `Screenshot of the screen (${shot.width}×${shot.height} points; use these coordinates).`, display: 'Looked at the screen', images: [shot.dataUrl] }
-          } catch (e) {
-            throw new Error(/could not create image|not permitted|denied/i.test((e as Error).message) ? 'SahilBot needs Screen Recording permission to see the screen: System Settings → Privacy & Security → Screen Recording. Meanwhile use the ui action instead.' : (e as Error).message)
-          } finally {
-            rmSync(dir, { recursive: true, force: true })
-          }
-        }
+        case 'screenshot':
+          return screenshot(a, ctx)
+
         case 'ui': {
-          if (!d.trusted(true)) throw new Error('Reading other apps needs Accessibility permission: System Settings → Privacy & Security → Accessibility → SahilBot.')
-          const r = (await jxa(UI, { max: 200, app: a.app ?? null })) as { app: string; elements: Array<{ role: string; name: string; value: string; x: number; y: number }> }
-          return { text: `Front app: ${r.app}\n${r.elements.map((e) => `- ${e.role} "${e.name}"${e.value ? ` = "${e.value}"` : ''} at (${e.x}, ${e.y})`).join('\n') || '(no readable elements: take a screenshot instead)'}`, display: `Read ${r.app}'s window` }
+          needAx()
+          let pid: number | undefined
+          let windowIndex: number | undefined
+          let app = a.app
+          if (a.window && /^w\d+$/i.test(a.window.trim())) {
+            const w = windowLists.get(tid)?.find((x) => x.ref === a.window!.trim().toLowerCase())
+            if (!w) throw new Error(`No window ${a.window} in the last windows list. Run windows first.`)
+            pid = w.pid; windowIndex = w.index; app = w.app
+          }
+          const snap = await snapshot(tid, { app, pid, activate: !!app, window: windowIndex })
+          let text = formatSnapshot(snap, { query: a.query })
+          if (a.window && windowIndex === undefined) {
+            const want = a.window.toLowerCase()
+            const w = snap.windows.find((x) => x.title.toLowerCase().includes(want))
+            if (w) text = formatSnapshot({ ...snap, windows: [w], elements: snap.elements.filter((e) => e.win === w.index) }, { query: a.query })
+          }
+          if (!snap.elements.length) text += '\n(No readable elements: this app may draw its own UI. Take a screenshot and use coordinates.)'
+          return { text: `${text}\nAct on elements by ref (click_ref, type_ref, set_value, press). Refs stay valid while the element is on screen.`, display: `Read ${snap.app}'s window` }
         }
+
         case 'apps': {
-          const r = (await jxa(APPS, {})) as Array<{ name: string; front: boolean }>
+          const r = await jxa<Array<{ name: string; front: boolean }>>(APPS, {})
           return { text: r.map((x) => `- ${x.name}${x.front ? ' (in front)' : ''}`).join('\n'), display: `${r.length} apps open` }
         }
-        case 'click_element': {
-          // Find it in the front app's window by name (and role), then click its center.
-          const r = (await jxa(UI, { max: 400, app: a.app ?? null })) as { app: string; elements: Array<{ role: string; name: string; x: number; y: number }> }
-          const want = a.name!.toLowerCase()
-          const pool = r.elements.filter((e) => !a.role || e.role.toLowerCase().includes(a.role.toLowerCase()))
-          const hit = pool.find((e) => e.name.toLowerCase() === want) ?? pool.find((e) => e.name.toLowerCase().includes(want))
-          if (!hit) throw new Error(`No element named "${a.name}" in ${r.app}. Read the window with ui to see what's there, or take a screenshot.`)
-          await jxa(MOUSE, { kind: 'click', x: hit.x, y: hit.y })
-          return { text: `Clicked ${hit.role} "${hit.name}" in ${r.app} at (${hit.x}, ${hit.y}). Check the result with ui or a screenshot.`, display: `clicked "${hit.name.slice(0, 40)}"` }
+
+        case 'windows': {
+          needAx()
+          const list = await windowsList(tid, a.app)
+          const ds = displays()
+          const where = (r?: Rect): string => { if (!r || ds.length < 2) return ''; const disp = displayAt(ds, center(r).x, center(r).y); return disp ? ` on display ${ordered(ds).indexOf(disp) + 1}` : ' (off screen)' }
+          return { text: list.length ? list.map((w) => `[${w.ref}] ${w.app}: "${w.title || '(untitled)'}"${w.front ? ' (in front)' : ''}${w.minimized ? ' (minimized)' : ''}${where(w.rect)}`).join('\n') + '\nUse focus_window {window: "w3"}, ui {window: "w3"} or screenshot {window: "w3"}.' : 'No open windows.', display: `${list.length} windows` }
         }
-        case 'menu': {
-          try {
-            const r = (await jxa(MENU, { path: a.path, app: a.app ?? null })) as { app: string; clicked: string }
-            return { text: `Chose ${r.clicked} in ${r.app}.`, display: `menu: ${r.clicked.slice(0, 50)}` }
-          } catch (e) {
-            throw new Error(`Couldn't find the menu item "${a.path}" (${(e as Error).message.slice(0, 120)}). Menu names must match exactly, including "…".`)
-          }
-        }
-        case 'click': case 'double_click': case 'right_click': case 'move': {
-          await jxa(MOUSE, { kind: a.action === 'double_click' ? 'double' : a.action === 'right_click' ? 'right' : a.action === 'move' ? 'move' : 'click', x: a.x, y: a.y })
-          return { text: `${a.action.replace('_', ' ')} at (${a.x}, ${a.y}). Check the result with a screenshot or ui.`, display: `${a.action.replace('_', ' ')} at ${Math.round(a.x!)}, ${Math.round(a.y!)}` }
-        }
-        case 'drag':
-          await jxa(MOUSE, { kind: 'drag', x: a.x, y: a.y, x2: a.x2, y2: a.y2 })
-          return { text: `Dragged from (${a.x}, ${a.y}) to (${a.x2}, ${a.y2}).`, display: 'dragged' }
-        case 'scroll':
-          try { await jxa(MOUSE, { kind: 'scroll', x: a.x, y: a.y, amount: a.amount ?? -5 }) } catch { await pressKeys((a.amount ?? -5) < 0 ? 'pagedown' : 'pageup') }
-          return { text: `Scrolled ${(a.amount ?? -5) < 0 ? 'down' : 'up'}.`, display: `scrolled ${(a.amount ?? -5) < 0 ? 'down' : 'up'}` }
-        case 'type':
-          // Typed in chunks so long text doesn't drop characters.
-          for (const chunk of a.text!.match(/[\s\S]{1,200}/g) ?? []) await sh('osascript', ['-e', `tell application "System Events" to keystroke ${JSON.stringify(chunk)}`])
-          return { text: `Typed ${a.text!.length} characters.`, display: `typed "${a.text!.slice(0, 40)}"` }
-        case 'key':
-          await pressKeys(a.keys!)
-          return { text: `Pressed ${a.keys}.`, display: `pressed ${a.keys}` }
-        case 'open_app':
-          await sh('open', ['-a', a.app!])
-          await new Promise((r) => setTimeout(r, 1200))
-          return { text: `Opened ${a.app}.`, display: `opened ${a.app}` }
-        case 'wait':
-          await new Promise((r) => setTimeout(r, Math.min(10, a.seconds ?? 1) * 1000))
+
+        case 'wait': {
+          const ms = Math.min(10, a.seconds ?? 1) * 1000
+          for (let t = 0; t < ms; t += 200) { alive(ctx); await sleep(Math.min(200, ms - t)) }
           return { text: `Waited ${a.seconds ?? 1}s.`, display: 'waited' }
+        }
+
+        case 'clipboard_read': {
+          // Sensitive: the contents go to the model only (never into the chip or logs), secrets blanked.
+          const raw = await sh('pbpaste', [])
+          const { text, redacted } = redactClipboard(raw)
+          const cut = text.length > 8000 ? `${text.slice(0, 8000)}\n… (${text.length - 8000} more characters)` : text
+          return { text: raw ? `Clipboard text${redacted ? ' (parts that look like passwords, keys or card numbers are hidden)' : ''}:\n${cut}` : 'The clipboard has no text.', display: 'read the clipboard' }
+        }
+
+        case 'clipboard_write':
+          await shIn('pbcopy', [], a.text!)
+          return { text: `Copied ${a.text!.length} characters to the clipboard.`, display: `copied ${a.text!.length} characters` }
+
+        case 'click_ref': case 'click_element': {
+          let ref = a.ref
+          if (a.action === 'click_element') {
+            // Older form: by name (and role) in the front app.
+            const snap = await snapshot(tid, { app: a.app, activate: !!a.app })
+            const want = a.name!.toLowerCase()
+            const pool = snap.elements.filter((e) => !a.role || short(e.role).toLowerCase().includes(a.role.toLowerCase()))
+            const hit = pool.find((e) => e.label.toLowerCase() === want) ?? pool.find((e) => e.label.toLowerCase().includes(want))
+            if (!hit) throw new Error(`No element named "${a.name}" in ${snap.app}. Read the window with ui to see what's there, or take a screenshot.`)
+            ref = hit.ref
+          }
+          if (!ref) throw new Error('Give a ref from ui.')
+          const known = byRef(snapshots.get(tid), ref)
+          const before = await probe().catch(() => undefined)
+          const g = known && guardAction({ action: 'click', app: snapshots.get(tid)!.app, window: known.window || before?.window, el: known })
+          if (g) return handOff(g, ctx)
+          const flags = clickFlags(a.modifiers)
+          let how = ''
+          const v = await verified(ctx, async () => {
+            if (known?.pressable && !flags) {
+              const { el, res } = await onElement(tid, ref!, { op: 'press' })
+              if (res.done) { how = 'pressed'; return }
+              const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
+              if (!r) throw new Error(`Couldn't press ${ref} (${res.error ?? 'no AXPress'}) and it has no position to click.`)
+              await jxa(MOUSE, { kind: 'click', ...center(r) }); how = 'clicked'
+              return
+            }
+            const { el, res } = await onElement(tid, ref!, { op: 'read' })
+            const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
+            if (!r) throw new Error(`${ref} has no position to click.`)
+            await jxa(MOUSE, { kind: 'click', ...center(r), flags }); how = 'clicked'
+          }, { before, target: known ? { pid: snapshots.get(tid)?.pid, path: known.path } : undefined })
+          const el = byRef(snapshots.get(tid), ref)
+          return { text: `${how === 'pressed' ? 'Pressed' : 'Clicked'} ${ref}${el ? ` (${short(el.role)} "${el.label}")` : ''}. ${v.text}`, display: `${how} "${(el?.label ?? ref).slice(0, 40)}"${v.changed ? '' : ' (no change)'}` }
+        }
+
+        case 'press': {
+          const known = byRef(snapshots.get(tid), a.ref!)
+          const name = a.ax_action?.trim() || 'AXPress'
+          const axName = /^AX/.test(name) ? name : `AX${name[0].toUpperCase()}${name.slice(1)}`
+          const before = await probe().catch(() => undefined)
+          const g = known && /^AX(Press|Confirm|Pick)$/.test(axName) ? guardAction({ action: 'press', app: snapshots.get(tid)!.app, window: known.window || before?.window, el: known }) : null
+          if (g) return handOff(g, ctx)
+          let failed = undefined as ElementResult | undefined
+          const v = await verified(ctx, async () => {
+            const { res } = await onElement(tid, a.ref!, { op: 'action', action: axName })
+            if (!res.done) failed = res
+          }, { before, target: known ? { pid: snapshots.get(tid)?.pid, path: known.path } : undefined, timeoutMs: 2000 })
+          if (failed) throw new Error(`${a.ref} doesn't support ${axName}${failed.actions?.length ? `; it supports ${failed.actions.join(', ')}` : ''}.`)
+          return { text: `Performed ${axName} on ${a.ref}${known ? ` (${short(known.role)} "${known.label}")` : ''}. ${v.text}`, display: `${axName.replace(/^AX/, '').toLowerCase()} "${(known?.label ?? a.ref!).slice(0, 40)}"` }
+        }
+
+        case 'type_ref': case 'set_value': {
+          const snap = snapshots.get(tid)
+          const known = byRef(snap, a.ref!)
+          if (!snap || !known) throw new Error(`No element ${a.ref} in the last ui snapshot. Read the app with ui first.`)
+          const before = await probe().catch(() => undefined)
+          const g = guardAction({ action: a.action, app: snap.app, window: known.window || before?.window, el: known, typing: true })
+          if (g) return handOff(g, ctx)
+          const target = { pid: snap.pid, path: known.path }
+          if (a.action === 'set_value') {
+            let res = undefined as ElementResult | undefined
+            const v = await verified(ctx, async () => { res = (await onElement(tid, a.ref!, { op: 'set_value', value: a.value })).res }, { before, target })
+            if (res?.refused === 'secure') return handOff(guardAction({ action: 'set_value', app: snap.app, el: { ...known, secure: true }, typing: true })!, ctx)
+            if (!res?.done) throw new Error(`Couldn't set ${a.ref}'s value (${res?.error ?? 'not settable'}). Try type_ref, or click it and type.`)
+            const now = v.after.target?.value
+            const ok = now === undefined || now === a.value || (now === '1' && /^(true|on|1|yes)$/i.test(a.value!)) || (now === '0' && /^(false|off|0|no)$/i.test(a.value!))
+            return { text: `Set ${a.ref} (${short(known.role)} "${known.label}") to "${a.value!.slice(0, 80)}". ${v.text}${ok ? '' : ` Its value reads "${now}" now, not what was set: the app may not accept direct values. Try type_ref instead.`}`, display: `set "${known.label.slice(0, 30)}"` }
+          }
+          // type_ref: the app must be in front (keystrokes go to the front app), then focus the field, then type.
+          if (before && before.app !== snap.app) await jxa(ACTIVATE, { app: snap.app })
+          let refused = false as boolean
+          const v = await verified(ctx, async () => {
+            const { el, res } = await onElement(tid, a.ref!, { op: 'focus', forTyping: true })
+            if (res.refused === 'secure') { refused = true; return }
+            if (!res.done) {
+              const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
+              if (!r) throw new Error(`Couldn't focus ${a.ref}.`)
+              await jxa(MOUSE, { kind: 'click', ...center(r) })
+              await sleep(150)
+            }
+            // Focus landed somewhere else (or on a password field): stop before typing.
+            const now = await probe().catch(() => undefined)
+            if (now?.focused?.secure) { refused = true; return }
+            if (a.clear) { await jxa(KEY, { char: 'a', using: ['command down'] }); await jxa(KEY, { code: 51, using: [] }) }
+            await typeText(ctx, a.text!)
+            if (a.submit) await jxa(KEY, { code: 36, using: [] })
+          }, { before, target })
+          if (refused) return handOff({ kind: 'password', reason: `typing into a password field ("${known.label}") in ${snap.app}`, ask: `The next step is typing a password into "${known.label}" in ${snap.app}. I never type passwords: please type it yourself, then tell me when you're done.` }, ctx)
+          const val = v.after.target?.value
+          const landed = val === undefined || a.submit || val.includes(a.text!.slice(-Math.min(20, a.text!.length)))
+          return { text: `Typed ${a.text!.length} characters into ${a.ref} (${short(known.role)} "${known.label}")${a.submit ? ' and pressed Return' : ''}. ${v.text}${landed ? '' : ' The field\'s value doesn\'t show the typed text: the keystrokes may have gone elsewhere. Check with ui.'}`, display: `typed "${a.text!.slice(0, 40)}"` }
+        }
+
+        case 'click': case 'double_click': case 'triple_click': case 'right_click': case 'move': {
+          const p = pointOf(tid, a)
+          const before = await probe().catch(() => undefined)
+          if (a.action !== 'move') {
+            const snap = freshSnapshot(tid, before?.app)
+            const el = p.el ?? elementAt(snap, p.x, p.y)
+            const g = guardAction({ action: 'click', app: before?.app ?? '', window: before?.window, el })
+            if (g) return handOff(g, ctx)
+          }
+          const kind = { click: 'click', double_click: 'double', triple_click: 'triple', right_click: 'right', move: 'move' }[a.action]
+          const flags = clickFlags(a.modifiers)
+          const v = await verified(ctx, () => jxa(MOUSE, { kind, x: p.x, y: p.y, flags }).then(() => undefined), { before, timeoutMs: a.action === 'move' ? 600 : 2500 })
+          const label = a.action.replace('_', ' ')
+          return { text: `${label} at screen point (${p.x}, ${p.y})${p.el ? ` on ${p.el.ref} "${p.el.label}"` : ''}. ${v.text}`, display: `${label} at ${p.x}, ${p.y}${v.changed || a.action === 'move' ? '' : ' (no change)'}` }
+        }
+
+        case 'drag': {
+          const p1 = pointOf(tid, a, 1)
+          const p2 = pointOf(tid, a, 2)
+          const v = await verified(ctx, () => jxa(MOUSE, { kind: 'drag', x: p1.x, y: p1.y, x2: p2.x, y2: p2.y }).then(() => undefined))
+          return { text: `Dragged from (${p1.x}, ${p1.y}) to (${p2.x}, ${p2.y}). ${v.text}`, display: 'dragged' }
+        }
+
+        case 'scroll': {
+          let p: { x: number; y: number }
+          try { p = pointOf(tid, a) } catch {
+            // No point given: the middle of the main display.
+            const main = displayByNumber(displays(), 1)
+            p = main ? center(main.bounds) : { x: 700, y: 450 }
+          }
+          const dy = a.amount ?? -5
+          const v = await verified(ctx, async () => {
+            try { await jxa(MOUSE, { kind: 'scroll', x: p.x, y: p.y, dy, dx: a.dx ?? 0 }) } catch { await jxa(KEY, { code: dy < 0 ? 121 : 116, using: [] }) }
+          }, { timeoutMs: 1200 })
+          return { text: `Scrolled ${dy < 0 ? 'down' : 'up'} ${Math.abs(dy)} lines${a.dx ? ` and ${a.dx < 0 ? 'left' : 'right'} ${Math.abs(a.dx)}` : ''} at (${p.x}, ${p.y}). ${v.changed ? v.text : 'Scrolling only shows in a screenshot or a new ui read.'}`, display: `scrolled ${dy < 0 ? 'down' : 'up'}` }
+        }
+
+        case 'type': {
+          const before = await probe().catch(() => undefined)
+          const g = guardAction({ action: 'type', app: before?.app ?? '', window: before?.window, focused: before?.focused, typing: true })
+          if (g) return handOff(g, ctx)
+          const v = await verified(ctx, () => typeText(ctx, a.text!), { before })
+          return { text: `Typed ${a.text!.length} characters into ${before?.focused ? `${short(before.focused.role)}${before.focused.label ? ` "${before.focused.label}"` : ''}` : 'the focused element'}. ${v.text}`, display: `typed "${a.text!.slice(0, 40)}"` }
+        }
+
+        case 'key': {
+          let k: KeyCombo
+          try { k = parseCombo(a.keys!) } catch (e) { throw new Error((e as Error).message) }
+          const before = await probe().catch(() => undefined)
+          // A pasted or typed character into a password field is typing a password.
+          const typesText = !!k.char && (!k.using.some((m) => m !== 'shift down') || (k.char === 'v' && k.using.includes('command down')))
+          const g = guardAction({ action: 'key', app: before?.app ?? '', window: before?.window, focused: before?.focused, typing: typesText })
+          if (g) return handOff(g, ctx)
+          const v = await verified(ctx, () => jxa(KEY, { code: k.code, char: k.char, using: k.using }).then(() => undefined), { before })
+          return { text: `Pressed ${k.label}. ${v.text}`, display: `pressed ${k.label}${v.changed ? '' : ' (no change)'}` }
+        }
+
+        case 'open_app': case 'activate_app': {
+          const v = await verified(ctx, async () => {
+            if (a.action === 'open_app') await sh('open', ['-a', a.app!])
+            const r = await jxa<{ front?: string; error?: string; timeout?: boolean }>(ACTIVATE, { app: a.app }, 15_000)
+            if (r?.error) throw new Error(`Couldn't ${a.action === 'open_app' ? 'open' : 'bring up'} ${a.app}: ${r.error}`)
+          }, { timeoutMs: 1500 })
+          const front = v.after.app
+          const ok = !front || front.toLowerCase() === a.app!.toLowerCase()
+          return { text: `${a.action === 'open_app' ? 'Opened' : 'Brought up'} ${a.app}. ${v.text}${ok ? '' : ` ${front} is in front instead: ${a.app} may still be starting or showing a dialog; check with ui or apps.`}`, display: `${a.action === 'open_app' ? 'opened' : 'switched to'} ${a.app}` }
+        }
+
+        case 'quit_app': {
+          if (NO_QUIT.test(a.app!.trim())) throw new Error(`SahilBot doesn't quit ${a.app}.`)
+          const r = await jxa<{ ok?: boolean; error?: string }>(QUIT, { app: a.app }, 30_000)
+          if (r?.error) throw new Error(`Couldn't quit ${a.app}: ${r.error}`)
+          return { text: `Asked ${a.app} to quit. If it had unsaved work it may be showing a save dialog: check with ui.`, display: `quit ${a.app}` }
+        }
+
+        case 'focus_window': {
+          const w = await findWindow(tid, a.window!, a.app)
+          let res = undefined as ElementResult | undefined
+          const v = await verified(ctx, async () => {
+            await jxa(ACTIVATE, { app: w.app })
+            res = await jxa<ElementResult>(ELEMENT, { pid: w.pid, path: [w.index], op: 'raise' })
+          }, { timeoutMs: 1500 })
+          if (res?.missing) throw new Error(`The window "${w.title}" is gone. List windows again.`)
+          return { text: `Brought ${w.app}'s window "${w.title}" to the front. ${v.text}`, display: `focused ${w.app}` }
+        }
+
+        case 'menu': {
+          type MenuResult = { app?: string; clicked?: string; listed?: string; disabled?: string; missing?: number; walked?: string; options?: string[]; error?: string }
+          let r = undefined as MenuResult | undefined
+          const v = await verified(ctx, async () => {
+            r = await jxa<MenuResult>(MENU, { path: a.path, app: a.app, activate: !!a.app }, 20_000)
+          }, { timeoutMs: 2000 })
+          if (!r || r.error) throw new Error(r?.error ?? 'Couldn\'t read the menu bar.')
+          if (r.listed) return { text: `${r.listed} menu in ${r.app}:\n${(r.options ?? []).map((o) => `- ${o}`).join('\n')}\nChoose one with menu {path: "${r.listed} > …"}.`, display: `read menu ${r.listed.slice(0, 40)}` }
+          if (r.disabled) throw new Error(`"${r.disabled}" is disabled right now in ${r.app} (select something first, or it doesn't apply here).`)
+          if (r.missing !== undefined) {
+            const parts = a.path!.split('>').map((s) => s.trim())
+            throw new Error(`No menu item "${parts[r.missing] ?? a.path}"${r.walked ? ` under ${r.walked}` : ''} in ${r.app}.${r.options?.length ? ` Available: ${r.options.slice(0, 40).join(' · ')}` : ''}`)
+          }
+          return { text: `Chose ${r.clicked} in ${r.app}. ${v.text}`, display: `menu: ${(r.clicked ?? '').slice(0, 50)}` }
+        }
       }
+      throw new Error(`Unknown action ${(a as { action: string }).action}.`)
     }
   }
 }

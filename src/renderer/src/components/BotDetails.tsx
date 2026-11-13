@@ -5,6 +5,7 @@ import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { describeSchedule, groupLibrary, host, when } from '../routines'
 import { BotShareRows } from './BotShare'
+import { BotGoals } from './TasksView'
 
 type Tab = 'details' | 'library'
 type Filter = 'all' | 'file' | 'link'
@@ -143,6 +144,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
 
           {tab === 'details' ? (
             <div className="bd-body">
+              {space.kind !== 'group' && <BotGoals spaceId={space.id} />}
               <div className="bd-section-title">Routines</div>
               <div className="bd-card">
                 {tasks.length === 0 && <div className="bd-empty">Ask in chat to set a routine.</div>}

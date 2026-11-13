@@ -54,7 +54,7 @@ export const CATALOG: CatalogEntry[] = [
   // 80 layers x 8 KV heads x 128 head dim x (K+V) x 2 bytes
   // Outclassed by Qwen3.8 27B, so it isn't treated as a step up.
   { match: /llama[-_]?3\.3.*70b/i, label: 'Llama 3.3 70B', vision: false, paramsB: 70.6, kvBytesPerToken: 80 * 8 * 128 * 2 * 2, sampling: LLAMA, thinks: false, tier: 2, tools: true },
-  { match: /^claude-fable/i, label: 'Claude Fable', vision: true, sampling: { ...GENERIC_REMOTE }, thinks: false, tier: 3, tools: true },
+  { match: /^claude-(fable|mythos)/i, label: 'Claude Fable', vision: true, sampling: { ...GENERIC_REMOTE }, thinks: false, tier: 3, tools: true },
   { match: /^claude-opus/i, label: 'Claude Opus', vision: true, sampling: { ...GENERIC_REMOTE }, thinks: false, tier: 3, tools: true },
   { match: /^claude-sonnet/i, label: 'Claude Sonnet', vision: true, sampling: { ...GENERIC_REMOTE }, thinks: false, tier: 2, tools: true },
   { match: /^claude-haiku/i, label: 'Claude Haiku', vision: true, sampling: { ...GENERIC_REMOTE }, thinks: false, tier: 1, tools: true },
@@ -102,7 +102,9 @@ export function rankOf(id: string): number {
   // Claude: by family, then the newer version (haiku-5-5 over haiku-4-5).
   const v = id.match(/^claude-[a-z]+-(\d+)(?:-(\d+))?/i)
   const ver = v ? (Number(v[1]) + (v[2] && v[2].length < 3 ? Number(v[2]) / 10 : 0)) / 100 : 0
-  if (/^claude-(opus|fable)/i.test(id)) return 5 + ver
+  // Fable/Mythos rank above Opus (more capable; Auto and the advisor still prefer Opus: see isPremiumClaude).
+  if (/^claude-(fable|mythos)/i.test(id)) return 6 + ver
+  if (/^claude-opus/i.test(id)) return 5 + ver
   if (/^claude-sonnet/i.test(id)) return 4 + ver
   if (/^claude-haiku/i.test(id)) return 3 + ver
   return 0

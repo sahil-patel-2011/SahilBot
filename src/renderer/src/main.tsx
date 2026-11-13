@@ -10,6 +10,8 @@ import './styles-teach.css'
 import './styles-pages.css'
 import './styles-memory.css'
 import './styles-share-usage.css'
+import './styles-stocks.css'
+import './styles-tasks.css'
 // Loaded last: the polish layer refines everything above.
 import './styles-polish.css'
 

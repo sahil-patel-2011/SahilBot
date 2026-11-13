@@ -109,6 +109,17 @@ const api: SahilBotApi = {
       return () => ipcRenderer.removeListener('schedules:changed', fn)
     }
   },
+  // Long-running goals (Tasks board, bot details).
+  goals: {
+    list: call('goals:list') as never,
+    update: call('goals:update') as never,
+    runNow: call('goals:runNow') as never,
+    onChange(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('goals:changed', fn)
+      return () => ipcRenderer.removeListener('goals:changed', fn)
+    }
+  },
   voice: {
     status: call('voice:status') as never,
     download: call('voice:download') as never,
@@ -136,6 +147,10 @@ const api: SahilBotApi = {
     disconnect: call('connectors:disconnect') as never,
     icons: call('connectors:icons') as never,
     setToolEnabled: call('connectors:setToolEnabled') as never,
+    test: call('connectors:test') as never,
+    googleClient: call('connectors:googleClient') as never,
+    setGoogleClient: call('connectors:setGoogleClient') as never,
+    clearGoogleClient: call('connectors:clearGoogleClient') as never,
     onIcons(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('connectors:icons', fn)
@@ -147,7 +162,13 @@ const api: SahilBotApi = {
       return () => ipcRenderer.removeListener('connectors:changed', fn)
     }
   },
-  vault: { list: call('vault:list') as never, set: call('vault:set') as never, remove: call('vault:remove') as never },
+  vault: {
+    list: call('vault:list') as never, set: call('vault:set') as never, remove: call('vault:remove') as never,
+    totpCode: call('vault:totpCode') as never, otpGrants: call('vault:otpGrants') as never, revokeOtpGrant: call('vault:revokeOtpGrant') as never,
+    cards: call('vault:cards') as never, setCard: call('vault:setCard') as never, removeCard: call('vault:removeCard') as never,
+    addresses: call('vault:addresses') as never, setAddress: call('vault:setAddress') as never, removeAddress: call('vault:removeAddress') as never
+  },
+  purchase: { respond: call('purchase:respond') as never },
   browser: {
     state: call('browser:state') as never,
     setBounds: call('browser:setBounds') as never,
@@ -183,9 +204,38 @@ const api: SahilBotApi = {
   templates: { list: call('templates:list') as never, add: call('templates:add') as never },
   bots: { exportFile: call('bots:export') as never, importPick: call('bots:importPick') as never, importConfirm: call('bots:importConfirm') as never, duplicate: call('bots:duplicate') as never },
   checkin: { get: call('checkin:get') as never, set: call('checkin:set') as never },
+  watchlist: { get: call('watchlist:get') as never, set: call('watchlist:set') as never },
+  markets: { quotes: call('markets:quotes') as never, card: call('markets:card') as never, search: call('markets:search') as never },
   usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never },
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
   alwaysOn: { status: call('alwaysOn:status') as never, pauseRoutines: call('alwaysOn:pauseRoutines') as never },
+  permissions: { status: call('permissions:status') as never, open: call('permissions:open') as never, automation: call('permissions:automation') as never },
+  knowledge: {
+    status: call('knowledge:status') as never,
+    addFolder: call('knowledge:addFolder') as never,
+    addAttached: call('knowledge:addAttached') as never,
+    removeFolder: call('knowledge:removeFolder') as never,
+    setPaused: call('knowledge:setPaused') as never,
+    rebuild: call('knowledge:rebuild') as never,
+    search: call('knowledge:search') as never,
+    reveal: call('knowledge:reveal') as never,
+    open: call('knowledge:open') as never,
+    onChanged(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('knowledge:changed', fn)
+      return () => { ipcRenderer.removeListener('knowledge:changed', fn) }
+    }
+  },
+  // Connected apps (MCP server): Settings → Privacy & Permissions.
+  mcp: {
+    status: call('mcp:status') as never, setEnabled: call('mcp:setEnabled') as never,
+    createClient: call('mcp:createClient') as never, revokeClient: call('mcp:revokeClient') as never,
+    onChange(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('mcp:changed', fn)
+      return () => ipcRenderer.removeListener('mcp:changed', fn)
+    }
+  },
   chat: {
     resume: call('chat:resume') as never,
     interrupted: call('chat:interrupted') as never,

@@ -8,7 +8,7 @@ const { originMatches, normalizeOrigin } = await import('../../src/main/vault')
 describe('click effect', () => {
   const r = (role: string, name: string) => ({ backendNodeId: 1, role, name })
   test('links and tabs are reads; local widgets are local', () => {
-    expect(clickEffect(r('link', 'Pricing'))).toBe('read')
+    expect(clickEffect({ ...r('link', 'Pricing'), tag: 'a', href: '/pricing', navLink: true })).toBe('read')
     expect(clickEffect(r('checkbox', 'Remember me'))).toBe('write_local')
   })
   test('benign buttons run in Auto; unknown buttons count as outside actions', () => {
@@ -25,9 +25,10 @@ describe('click effect', () => {
 })
 
 describe('vault origins', () => {
-  test('exact site and its subdomains only', () => {
+  test('exact origin by default; subdomains only when opted in', () => {
     expect(originMatches('https://github.com', 'https://github.com/login')).toBe(true)
-    expect(originMatches('https://example.com', 'https://login.example.com/x')).toBe(true)
+    expect(originMatches('https://example.com', 'https://login.example.com/x')).toBe(false)
+    expect(originMatches('https://example.com', 'https://login.example.com/x', { subdomains: true })).toBe(true)
     expect(originMatches('https://github.com', 'https://github.com.evil.io/login')).toBe(false)
     expect(originMatches('https://github.com', 'http://github.com/login')).toBe(false)
     expect(originMatches('http://127.0.0.1:4000', 'http://127.0.0.1:4001/')).toBe(false)

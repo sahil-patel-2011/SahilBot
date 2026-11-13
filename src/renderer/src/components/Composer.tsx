@@ -23,6 +23,8 @@ export interface ComposerHandle {
   insert(text: string): void
   /** Replace the box's text (starter ideas). */
   replace(text: string): void
+  /** Text from a sahilbot:// link: shown with a "review before sending" banner, marked if sent unedited. */
+  prefillFromLink(text: string): void
   setDeep(on: boolean): void
   focus(): void
   toggleDictation(): void
@@ -41,6 +43,8 @@ export interface Outgoing {
   deepResearch?: boolean
   /** Plan first: questions and a plan to approve before anything changes. */
   planFirst?: boolean
+  /** The text came from a sahilbot:// link and was sent as it was (not edited): it isn't the user's own words. */
+  fromLink?: boolean
 }
 
 export const Composer = forwardRef<ComposerHandle, {
@@ -82,10 +86,18 @@ export const Composer = forwardRef<ComposerHandle, {
   const [drag, setDrag] = useState(false)
   const [deep, setDeep] = useState(false)
   const [planFirst, setPlanFirst] = useState(false)
+  /** Text a sahilbot:// link put in the box (null: none). Cleared when the box is emptied or sent. */
+  const [linkText, setLinkText] = useState<string | null>(null)
   const ta = useRef<HTMLTextAreaElement>(null)
 
   useImperativeHandle(ref, () => ({
     replace(t: string) {
+      setLinkText(null)
+      setText(t)
+      requestAnimationFrame(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } })
+    },
+    prefillFromLink(t: string) {
+      setLinkText(t)
       setText(t)
       requestAnimationFrame(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } })
     },
@@ -173,8 +185,11 @@ export const Composer = forwardRef<ComposerHandle, {
       setDictating(false)
       void api.voice.dictateStop()
     }
-    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on || deep, deepResearch: deep, planFirst, queue })
+    // Sent exactly as the link had it: not the user's own words (the agent treats it as relayed text).
+    const fromLink = linkText !== null && text.trim() === linkText.trim()
+    p.onSend({ text: text.trim(), images, attachments: atts, team: p.team?.on || deep, deepResearch: deep, planFirst, queue, ...(fromLink ? { fromLink } : {}) })
     setDeep(false)
+    setLinkText(null)
     setText('')
     setImages([])
     setAtts([])
@@ -321,6 +336,13 @@ export const Composer = forwardRef<ComposerHandle, {
       </div>
       {p.running && !p.answering && <div className="steer-hint" data-testid="steer-hint"><kbd>Enter</kbd> steers SahilBot now · <kbd>⌘Enter</kbd> queues for when it's done{p.steering ? <span className="steering"> · <span className="spin" /> steering at its next step…</span> : null}</div>}
       {dictError && <div className="bypass-banner">{dictError}</div>}
+      {linkText !== null && text.trim() !== '' && (
+        <div className="bypass-banner" data-testid="link-prefill-banner">
+          {text.trim() === linkText.trim()
+            ? 'Text from a link — review before sending. Sent as is, SahilBot treats it as coming from the link, not from you.'
+            : 'Text from a link, edited by you — review before sending.'}
+        </div>
+      )}
       {p.mode === 'bypass' && <div className="bypass-banner">Bypass is on for this chat: actions run without asking, except hard stops.</div>}
     </div>
   )

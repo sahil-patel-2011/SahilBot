@@ -1,10 +1,12 @@
-import { useId, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import type { PendingRequest } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { addRule, RULE_MAX_CHARS } from '../lib/approvalRules'
 import '../styles-approvals.css'
+import '../styles-purchase.css'
+import { GoogleSetup } from './ConnectApps'
 
 const EFFECT_TEXT: Record<string, string> = {
   read: 'Reads only',
@@ -18,6 +20,9 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const p = req.preset!
+  // Gmail, Calendar and Drive need "Set up Google once" first: shown right here in the card.
+  const [googleSetup, setGoogleSetup] = useState(false)
+  useEffect(() => { if (p.auth === 'google') void api.connectors.googleClient().then((c) => setGoogleSetup(!c)).catch(() => undefined) }, [p.auth])
   const go = async (): Promise<void> => {
     setBusy(true)
     setErr(null)
@@ -26,10 +31,23 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
       if (st.state === 'connected') onRespond(req.id, 'connected')
       else setErr(st.error ?? 'Sign-in did not finish.')
     } catch (e) {
-      setErr((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))
+      const m = (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+      if (p.auth === 'google' && /one-time setup/i.test(m)) setGoogleSetup(true)
+      else setErr(m)
     } finally {
       setBusy(false)
     }
+  }
+  if (googleSetup) {
+    return (
+      <div className="pending connect-card" data-testid="connect-card">
+        <div className="pending-title">
+          <span className="conn-logo" style={{ background: p.color }}>{p.name[0]}</span>
+          Set up Google once to connect {p.name}
+        </div>
+        <GoogleSetup compact forApp={p.name} onCancel={() => onRespond(req.id, 'skip')} onDone={() => { setGoogleSetup(false); void go() }} />
+      </div>
+    )
   }
   return (
     <div className="pending connect-card" data-testid="connect-card">
@@ -107,7 +125,123 @@ function PlanApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: 
   )
 }
 
+/** Counts down to `at` (ms since epoch); true once it's reached. */
+function useReady(at: number): boolean {
+  const [ready, setReady] = useState(() => Date.now() >= at)
+  useEffect(() => {
+    if (ready) return
+    const t = setTimeout(() => setReady(true), Math.max(0, at - Date.now()) + 20)
+    return () => clearTimeout(t)
+  }, [at, ready])
+  return ready
+}
+
+/**
+ * A purchase waiting for your click. Everything on it comes from main: the store is the page's own
+ * address, the total and items were read from the page, the card and address are your saved nicknames.
+ * Nothing the assistant writes appears here. It approves exactly this one step, once.
+ */
+function PurchaseCard({ req }: { req: PendingRequest }) {
+  const p = req.purchase!
+  const ready = useReady(p.readyAt)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const answer = async (a: 'approve' | 'deny'): Promise<void> => {
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await api.purchase.respond(req.threadId, req.id, p.nonce, a)
+      if (!r.ok) setErr(r.error ?? 'Not accepted.')
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const fill = p.step === 'fill'
+  return (
+    <div className="pending purchase-card" data-testid="purchase-card" data-id={req.id} data-step={p.step} role="group" aria-label="Purchase approval">
+      <div className="pc-head">
+        <span className="pc-icon" aria-hidden="true"><I.Shield size={15} /></span>
+        <div className="pc-head-text">
+          <div className="pc-kicker">{fill ? 'Use a saved card?' : 'Approve this purchase?'}</div>
+          <div className="pc-merchant" data-testid="purchase-merchant">
+            {p.merchant}
+            <span className={`pc-secure${p.secure ? '' : ' warn'}`}>{p.secure ? 'secure connection' : 'not secure (http)'}</span>
+          </div>
+        </div>
+      </div>
+      {p.changed && <div className="pc-changed" data-testid="purchase-changed">The page changed after you approved. Check the details again.</div>}
+      <div className="pc-total" data-testid="purchase-total">
+        {p.total
+          ? <><span className="pc-total-label">Total</span><span className="pc-total-amount">{p.total.display}</span><span className="pc-total-cur">{p.total.currency}</span></>
+          : <span className="pc-total-missing">Total not found — check the page (the browser panel is open)</span>}
+      </div>
+      {p.items.length > 0 && (
+        <ul className="pc-items" data-testid="purchase-items" aria-label="Items (from the page)">
+          {p.items.map((it, i) => <li key={i}><span>{it.name}</span>{it.price && <span className="pc-price">{it.price}</span>}</li>)}
+        </ul>
+      )}
+      <dl className="pc-facts">
+        <dt>Pay with</dt><dd data-testid="purchase-payment">{p.payment}</dd>
+        <dt>Ship to</dt><dd data-testid="purchase-shipping">{p.shipping}</dd>
+        <dt>Action</dt><dd data-testid="purchase-action">{p.action}</dd>
+      </dl>
+      {!!p.typed?.length && (
+        <dl className="pc-facts pc-typed" data-testid="purchase-typed" aria-label="Already typed into the form">
+          {p.typed.map((t, i) => <Fragment key={i}><dt>{t.field}</dt><dd>{t.value}</dd></Fragment>)}
+        </dl>
+      )}
+      <div className="hint pc-note">Approves this one step only. Assistants and web pages can't approve purchases; only this button can.</div>
+      {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}
+      <div className="pending-actions">
+        <button className="btn primary" disabled={!ready || busy} onClick={() => void answer('approve')} data-testid="purchase-approve">{fill ? 'Use this card' : p.total ? `Buy for ${p.total.display}` : 'Approve purchase'}</button>
+        <button className="btn danger" disabled={busy} onClick={() => void answer('deny')} data-testid="purchase-deny">{fill ? "Don't use it" : "Don't buy"}</button>
+      </div>
+    </div>
+  )
+}
+
+const OTP_SOURCE: Record<string, string> = { authenticator: 'your saved authenticator key', email: 'your email', sms: 'your text messages' }
+
+/** Using a one-time sign-in code on a site: once for this chat, or always for this site. */
+function OtpCard({ req }: { req: PendingRequest }) {
+  const o = req.otp!
+  const ready = useReady(o.readyAt)
+  const [err, setErr] = useState<string | null>(null)
+  const answer = (a: 'approve' | 'always' | 'deny'): void => {
+    void api.purchase.respond(req.threadId, req.id, o.nonce, a).then((r) => { if (!r.ok) setErr(r.error ?? 'Not accepted.') }, (e: Error) => setErr(e.message))
+  }
+  return (
+    <div className="pending otp-card" data-testid="otp-card" data-id={req.id}>
+      <div className="pc-head">
+        <span className="pc-icon otp" aria-hidden="true"><I.Key size={15} /></span>
+        <div className="pc-head-text">
+          <div className="pc-kicker">One-time sign-in code</div>
+          <div className="pc-merchant">Use a code from {OTP_SOURCE[o.source] ?? o.source} to sign in to {o.site}?</div>
+        </div>
+      </div>
+      {o.sender && (
+        <dl className="pc-facts" data-testid="otp-sender">
+          <dt>From</dt><dd>{o.sender}</dd>
+          {o.snippet && <><dt>Message</dt><dd>{o.snippet}</dd></>}
+        </dl>
+      )}
+      {o.unverifiedSender && <div className="pc-changed" data-testid="otp-unverified">This message isn't from {o.site}'s own domain. Only allow it if you know this sender is {o.site}.</div>}
+      <div className="hint">SahilBot types the code straight into the page; the assistant never sees it.{o.source === 'sms' ? ' Reads only messages from the last 10 minutes.' : ''}</div>
+      {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}
+      <div className="pending-actions">
+        <button className="btn primary" disabled={!ready} onClick={() => answer('approve')} data-testid="otp-approve">Allow in this chat</button>
+        <button className="btn" disabled={!ready} onClick={() => answer('always')} data-testid="otp-always">Always for {o.site}</button>
+        <button className="btn danger" onClick={() => answer('deny')} data-testid="otp-deny">Deny</button>
+      </div>
+    </div>
+  )
+}
+
 export function PendingCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+  if (req.kind === 'purchase' && req.purchase) return <PurchaseCard req={req} />
+  if (req.kind === 'otp' && req.otp) return <OtpCard req={req} />
   if (req.kind === 'connect' && req.preset) return <ConnectCard req={req} onRespond={onRespond} />
   if (req.kind === 'questions' && req.questions) return <QuestionsCard req={req} onRespond={onRespond} />
   if (req.kind === 'plan' && req.plan) return <PlanApprovalCard req={req} onRespond={onRespond} />

@@ -15,7 +15,18 @@ export function stricterMode(a: PermissionMode, b?: PermissionMode | null): Perm
  */
 export function decide(p: PermissionInput): Decision {
   // Never send a stored secret anywhere, in any mode, even if asked to.
-  if (p.leaksSecret) return { verdict: 'deny', reason: 'The arguments contain a saved password. Secrets can only be typed with browser fill_secret.' }
+  if (p.leaksSecret) return { verdict: 'deny', reason: 'The arguments contain a saved password or card number. Secrets can only be typed with browser fill_secret / fill_payment.' }
+
+  // Purchases: the browser shows its own Purchase card at the moment of the click (browser/checkout.ts).
+  // No mode, rule, "Always allow" or setting can skip that card, and unattended runs are refused there,
+  // so a generic card here would only be a second prompt (or worse, a pre-approval). None is shown.
+  // One-time codes work the same way: the browser asks with its own card (per site, per chat, or a
+  // per-site grant the user chose), and refuses unattended runs without such a grant.
+  if (isSelfGated(p.hardStop)) return { verdict: 'allow', reason: p.hardStop! }
+
+  // A hard stop on a call classified as a read (a link-styled "Place order", a system-level command that
+  // only reads) means the read label can't be trusted: it asks in every mode, hard stops on or off.
+  if (p.effect === 'read' && p.hardStop) return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}` }
 
   // A read that opens an address steered by fetched content can leak data in the URL itself.
   if (p.effect === 'read') return p.tainted && p.mode !== 'bypass' ? { verdict: 'ask', reason: 'Opens an address taken from a web page or email' } : { verdict: 'allow' }
@@ -42,6 +53,16 @@ export function decide(p: PermissionInput): Decision {
 }
 
 // ---------- hard-stop heuristics shared by tools ----------
+
+/**
+ * Prefix of a hard stop that the browser's purchase gate owns. The tool asks with a Purchase card
+ * itself, every time, whatever the mode; decide() therefore doesn't ask a second time.
+ */
+export const PURCHASE_STOP = 'purchase: '
+export const isPurchaseStop = (s: string | null | undefined): boolean => typeof s === 'string' && s.startsWith(PURCHASE_STOP)
+/** Prefix of a hard stop for filling a one-time code: the browser's own code card handles it. */
+export const OTP_STOP = 'one-time code: '
+export const isSelfGated = (s: string | null | undefined): boolean => typeof s === 'string' && (s.startsWith(PURCHASE_STOP) || s.startsWith(OTP_STOP))
 
 /** Words that mark an action with real-world consequences. */
 export const CONSEQUENTIAL = /\b(send|submit|post|publish|pay|buy|purchase|order|checkout|check out|book|reserve|confirm|place|transfer|share|invite|sign ?up|register|subscribe|apply|delete|remove|cancel|tweet|reply|comment|upload|forward|approve|decline|accept|merge|deploy|donate|bid)\b/i
@@ -99,7 +120,12 @@ export function isTainted(args: unknown, untrusted: string[], userText: string):
 
 export function containsSecret(args: unknown, secrets: string[]): boolean {
   const all = strings(args).join('\n')
-  return secrets.some((s) => s.length >= 4 && all.includes(s))
+  if (secrets.some((s) => s.length >= 4 && all.includes(s))) return true
+  // Card numbers however they're written: "4242 4242 4242 4242", "4242-4242-…", "4242.4242…".
+  const cards = secrets.filter((s) => /^\d{12,19}$/.test(s))
+  if (!cards.length) return false
+  const digits = all.replace(/[\s.\-\u00a0\u2010-\u2015_/]+/g, '')
+  return cards.some((c) => digits.includes(c))
 }
 
 /**
@@ -338,4 +364,54 @@ export function ruleVerdict(rules: import('@shared/types').CustomRule[] | undefi
   const narrow: RuleAction = { tool: action.tool, label: action.label, args: '', target: action.target ?? actionTarget(action) }
   if (of('allow').some((r) => !isBroadAllow(r.when) && ruleMatches(r.when, narrow))) return 'allow'
   return null
+}
+
+// ---------- runs an app started (MCP ask_bot): private reads ask ----------
+
+/**
+ * Reads of public data only: no cookies, no files, no accounts. A connected app's run may use these
+ * without asking; every other read asks, because the bot's reply goes back to the app.
+ */
+export const APP_PUBLIC_READS = new Set(['web_search', 'fetch_page', 'stock_quote', 'stock_analyze', 'stock_compare', 'stock_forecast', 'stock_backtest'])
+/** The run's own bookkeeping (its plan, loading tools, asking the user): reads nothing private. */
+const APP_BOOKKEEPING = new Set(['todo', 'find_tools', 'ask_user', 'propose_plan'])
+
+/**
+ * Why a read in a run a connected app started (or steered into) must ask, or null. Every read except
+ * public web and market data asks: files, commands, the screen and clipboard, mail, the logged-in
+ * browser, the knowledge base and memories are the user's private data, and the reply goes to the app.
+ */
+export function appReadRisk(app: string | undefined | null, tool: string, effect: string): string | null {
+  if (!app || effect !== 'read') return null
+  if (APP_PUBLIC_READS.has(tool) || APP_BOOKKEEPING.has(tool)) return null
+  return `${app} asked: this reads your private data, and the reply goes back to ${app}`
+}
+
+// ---------- goals: what a run that read outside content may change ----------
+
+/** goal actions that change a goal (get and list only read). follow_up always changes it. */
+export const GOAL_MUTATIONS = new Set(['create', 'update', 'add_milestones', 'milestone', 'journal', 'set_status'])
+
+export function isGoalMutation(tool: string, args: unknown): boolean {
+  if (tool === 'follow_up') return true
+  if (tool !== 'goal') return false
+  const action = (args as { action?: unknown } | null)?.action
+  return typeof action === 'string' && GOAL_MUTATIONS.has(action)
+}
+
+/**
+ * Whether a goal change may run. `tainted`: the run read untrusted content (web, email, another bot's
+ * or an app's message, a sahilbot:// link) or was handed tainted work. `wake`: an unattended wake-up of
+ * the goal itself, which keeps its bookkeeping (its entries are tagged as tainted by the tool).
+ * Starting a goal from such a run is refused outright: the user has to ask for it directly.
+ */
+export function goalChangeRisk(tool: string, args: unknown, o: { tainted: boolean; wake: boolean }): { verdict: 'deny' | 'ask'; reason: string } | null {
+  if (!isGoalMutation(tool, args)) return null
+  const action = (args as { action?: unknown } | null)?.action
+  // (A wake-up can't start goals at all: the tool itself refuses that, unattended.)
+  if (tool === 'goal' && action === 'create' && o.tainted && !o.wake) {
+    return { verdict: 'deny', reason: 'A goal can\'t be started from content the bot read (a web page, email, another bot or app, or a link). Ask the user to ask for the goal directly in this chat.' }
+  }
+  if (o.wake || !o.tainted) return null
+  return { verdict: 'ask', reason: 'Changes a long-running goal after reading a web page, email, or a message from another bot or app' }
 }

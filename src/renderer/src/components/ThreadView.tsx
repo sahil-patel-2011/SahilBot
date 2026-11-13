@@ -8,6 +8,7 @@ import { describe, duration, stepStatus, summarize, type Step } from '../lib/ste
 import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
 import { PageCard, pagesFromSteps } from './PageCard'
+import { StockCard, stocksFromSteps } from './StockCard'
 
 type Block =
   | { kind: 'user'; m: Message }
@@ -185,14 +186,14 @@ const PREPARING: Record<string, string> = {
 }
 
 /** "Thinking… 12s" / "Preparing to write a file… 3s" while the model works. */
-function StatusLine({ drafting, since }: { drafting: string | null; since: number }) {
+function StatusLine({ drafting, since, progress }: { drafting: string | null; since: number; progress?: string | null }) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 500)
     return () => clearInterval(t)
   }, [])
   const secs = Math.max(0, Math.round((now - since) / 1000))
-  const label = drafting ? (PREPARING[drafting] ?? `Preparing ${drafting.replace(/__/g, ' · ').replace(/_/g, ' ')}`) : 'Thinking'
+  const label = progress ? progress.replace(/\s+/g, ' ').slice(0, 120) : drafting ? (PREPARING[drafting] ?? `Preparing ${drafting.replace(/__/g, ' · ').replace(/_/g, ' ')}`) : 'Thinking'
   return (
     <div className="status-line" data-testid="status-line">
       <span className="activity-dots live"><i /><i /><i /><i /></span>
@@ -202,7 +203,7 @@ function StatusLine({ drafting, since }: { drafting: string | null; since: numbe
   )
 }
 
-export function ThreadView({ messages, running, pending, actions, drafting, since, teams }: {
+export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress }: {
   messages: Message[]
   /** Live Team of Experts boards by agents call id. */
   teams?: Record<string, TeamMember[]>
@@ -211,6 +212,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   actions: ThreadActions
   drafting?: string | null
   since?: number
+  /** Live progress from a long-running tool (tests, builds, a Cursor agent). */
+  progress?: string | null
 }) {
   const scroller = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
@@ -269,6 +272,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                   <>
                     <Activity steps={b.steps} live={running && b === lastActivity && tail === b} waitingApproval={approvalWaiting && b === lastActivity} onOpenFile={actions.onOpenFile} />
                     {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
+                    {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
                   </>
                 ) : (
                   <Row b={b} actions={actions} editable={!running && b.kind === 'user' && b.m.id === lastUserId} cont={cont} />
@@ -277,7 +281,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
             )
           })}
           {pending.map((p) => <PendingCard key={p.id} req={p} onRespond={actions.onRespond} />)}
-          {running && !pending.length && (waiting || drafting) && <StatusLine drafting={drafting ?? null} since={since ?? Date.now()} />}
+          {running && !pending.length && (waiting || drafting || progress) && <StatusLine drafting={drafting ?? null} since={since ?? Date.now()} progress={progress} />}
           {!running && lastText && !pending.length && (
             <div className="after-actions">
               <button className="chip-btn" onClick={actions.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>

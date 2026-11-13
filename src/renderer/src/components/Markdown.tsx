@@ -4,6 +4,14 @@ import { memo, useMemo } from 'react'
 
 const escape = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
 
+/**
+ * Our own markup carries this per-session key instead of classes (classes and ids are stripped from
+ * everything by the sanitizer, so model output can't borrow the app's styles); the classes go back on
+ * after sanitizing, only where the key matches. Model text can't guess the key.
+ */
+const KEY = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')
+const mark = (role: string): string => `data-sb-${KEY}="${role}"`
+
 // Code blocks get a header with the language and a Copy button.
 marked.use({
   gfm: true,
@@ -11,10 +19,10 @@ marked.use({
   renderer: {
     code({ text, lang }: Tokens.Code) {
       const l = (lang ?? '').split(/\s/)[0]
-      return `<div class="code"><div class="code-head"><span>${escape(l || 'text')}</span><span data-copy-slot></span></div><pre><code>${escape(text)}</code></pre></div>`
+      return `<div ${mark('code')}><div ${mark('code-head')}><span>${escape(l || 'text')}</span><span ${mark('copy')}></span></div><pre><code>${escape(text)}</code></pre></div>`
     },
     checkbox({ checked }: Tokens.Checkbox) {
-      return `<span data-task="${checked ? 'x' : ''}"></span> `
+      return `<span ${mark(checked ? 'task-x' : 'task')}></span> `
     }
   }
 })
@@ -39,13 +47,15 @@ function onClick(e: React.MouseEvent<HTMLDivElement>): void {
   }
 }
 
-// Model output must not restyle the app (e.g. approval buttons) or add its own controls.
-export const SANITIZE = { FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'], FORBID_ATTR: ['style'] }
+// Model output must not restyle the app (e.g. look like an approval or purchase card), add its own
+// controls, or take ids the app uses: no style, class or id attributes, no form controls.
+export const SANITIZE = { FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'], FORBID_ATTR: ['style', 'class', 'id'] }
 
-/** Our own controls go in after sanitizing: Copy buttons and task-list checkboxes. */
-const render = (text: string): string => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, SANITIZE)
-  .replace(/<span data-copy-slot=""><\/span>/g, '<button type="button" data-copy="">Copy</button>')
-  .replace(/<span data-task="(x?)"><\/span>/g, (_, x: string) => `<input type="checkbox" disabled=""${x ? ' checked=""' : ''}>`)
+/** Our own classes and controls go in after sanitizing: code blocks, Copy buttons and task-list checkboxes. */
+export const render = (text: string): string => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, SANITIZE)
+  .replace(new RegExp(`<span data-sb-${KEY}="copy"></span>`, 'g'), '<button type="button" data-copy="">Copy</button>')
+  .replace(new RegExp(`<span data-sb-${KEY}="task(-x)?"></span>`, 'g'), (_, x?: string) => `<input type="checkbox" disabled=""${x ? ' checked=""' : ''}>`)
+  .replace(new RegExp(`data-sb-${KEY}="(code|code-head)"`, 'g'), (_, c: string) => `class="${c}"`)
 
 export const Markdown = memo(function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
   const html = useMemo(() => render(text), [text])

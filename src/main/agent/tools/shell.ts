@@ -1,8 +1,7 @@
-import { spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { isAbsolute, join, resolve, sep } from 'node:path'
+import { isAbsolute, resolve, sep } from 'node:path'
 import type { ToolEffect } from '@shared/types'
+import { runProcess, stripAnsi, throttle } from '../../code/proc'
 import type { ToolContext, ToolDef } from '../types'
 
 // Run a terminal command. What it can do decides who must approve it:
@@ -63,7 +62,7 @@ export function classify(cmd: string): { effect: ToolEffect; why: string } {
 }
 
 /** Commands run in the workspace, the project folder or a folder attached to this chat. */
-function cwdFor(p: string | undefined, ctx: ToolContext): string {
+export function cwdFor(p: string | undefined, ctx: Pick<ToolContext, 'state' | 'workspaceDir'>): string {
   const base = ctx.state.roots?.find((r) => existsSync(r) && statSync(r).isDirectory()) ?? ctx.workspaceDir
   if (!p) return base
   const abs = isAbsolute(p) ? p : resolve(ctx.workspaceDir, p)
@@ -85,7 +84,7 @@ export function shellTool(): ToolDef<Args> {
     // Deleting always asks, even in Bypass (same rule as deleting a file).
     hardStop: (a) => (SYSTEM.test(a.command) ? `"${a.command.slice(0, 80)}" is a system-level command` : deletes(a.command) ? `"${a.command.slice(0, 80)}" deletes files or rewrites history` : null),
     describe: (a) => `Run in Terminal: ${a.command.slice(0, 200)}${a.cwd ? ` (in ${a.cwd})` : ''} · ${classify(a.command).why}`,
-    description: 'Run a shell command (zsh) on this Mac in the workspace or an attached/project folder, and get its output and exit code. Use it for builds, tests, git, scripts, file conversions and anything a terminal does. Prefer one clear command per call; check the exit code. Long-running servers: add a timeout or run them in the background with "&" and a log file. Deleting files always asks the user.',
+    description: 'Run a shell command (zsh) on this Mac in the workspace or an attached/project folder, and get its output and exit code. Use it for builds, tests, git, scripts, file conversions and anything a terminal does. Prefer one clear command per call; check the exit code. Long-running servers: add a timeout or run them in the background with "&" and a log file. Deleting files always asks the user. In code projects prefer the code tool (search, edit, apply_patch, run_tests, typecheck, lint) and the git tool: they return parsed, compact results.',
     parameters: {
       type: 'object',
       properties: {
@@ -100,47 +99,16 @@ export function shellTool(): ToolDef<Args> {
       if (SYSTEM.test(a.command)) throw new Error('System-level commands (sudo, disk tools, shutdown, security settings) are not run by SahilBot. Ask the user to run it themselves in Terminal.')
       const cwd = cwdFor(a.cwd, ctx)
       const limit = Math.min(a.timeout ?? 120, 1800) * 1000
-      const out = await new Promise<{ code: number | null; text: string; timedOut: boolean; stopped: boolean }>((done) => {
-        // Its own process group, so Stop and timeouts reach everything it started.
-        const child = spawn('/bin/zsh', ['-lc', a.command], {
-          cwd,
-          detached: true,
-          env: { ...process.env, PATH: `${process.env.PATH ?? ''}:/opt/homebrew/bin:/usr/local/bin:${join(homedir(), '.local/bin')}`, CI: '1', TERM: 'dumb', NO_COLOR: '1' },
-          stdio: ['ignore', 'pipe', 'pipe']
-        })
-        let text = ''
-        const add = (b: Buffer): void => { if (text.length < 400_000) text += b.toString() }
-        child.stdout.on('data', add)
-        child.stderr.on('data', add)
-        let timedOut = false
-        let stopped = false
-        let settled = false
-        const timers: NodeJS.Timeout[] = []
-        const kill = (sig: NodeJS.Signals): void => {
-          try { process.kill(-child.pid!, sig) } catch { try { child.kill(sig) } catch { /* gone */ } }
-        }
-        const finish = (code: number | null, t = text): void => {
-          if (settled) return
-          settled = true
-          timers.forEach(clearTimeout)
-          ctx.signal.removeEventListener('abort', stop)
-          done({ code, text: t, timedOut, stopped })
-        }
-        // Something may keep the output pipes open after the kill; don't wait on it forever.
-        const halt = (): void => {
-          kill('SIGTERM')
-          setTimeout(() => kill('SIGKILL'), 2000)
-          timers.push(setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); finish(null) }, 3000))
-        }
-        const stop = (): void => { stopped = true; halt() }
-        timers.push(setTimeout(() => { timedOut = true; halt() }, limit))
-        ctx.signal.addEventListener('abort', stop, { once: true })
-        if (ctx.signal.aborted) stop()
-        child.on('close', (code) => finish(code))
-        child.on('error', (e) => finish(-1, e.message))
+      // Its own process group, so Stop and timeouts reach everything it started.
+      const tick = throttle<string>((l) => ctx.progress?.(l), 700)
+      const out = await runProcess('/bin/zsh', ['-lc', a.command], {
+        cwd,
+        timeoutMs: limit,
+        signal: ctx.signal,
+        onLine: (l) => { if (l.trim()) tick.push(l.trim().slice(0, 160)) }
       })
-      // eslint-disable-next-line no-control-regex
-      const clean = out.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trimEnd()
+      tick.flush()
+      const clean = stripAnsi(out.output).trimEnd()
       const status = out.timedOut ? `stopped after ${limit / 1000}s` : out.stopped ? 'stopped' : `exit code ${out.code}`
       return { text: `$ ${a.command}\n(in ${cwd}; ${status})\n${clean || '(no output)'}`, display: `${a.command.slice(0, 60)} · ${status}` }
     }

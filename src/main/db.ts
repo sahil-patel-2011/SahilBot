@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import type { LibraryItem, Message, PermissionMode, Space, Thread } from '@shared/types'
 import { emptyState, type ThreadState } from './agent/types'
+import { KNOWLEDGE_SCHEMA } from './knowledge/schema'
 
 export const uid = (): string => randomUUID()
 
@@ -68,7 +69,22 @@ const MIGRATIONS: string[] = [
      id INTEGER PRIMARY KEY AUTOINCREMENT, month TEXT NOT NULL, host TEXT NOT NULL, model TEXT NOT NULL,
      input INTEGER NOT NULL, output INTEGER NOT NULL, usd REAL NOT NULL, at INTEGER NOT NULL);
    ALTER TABLE usage ADD COLUMN space_id TEXT;
-   CREATE INDEX IF NOT EXISTS usage_at ON usage(at);`
+   CREATE INDEX IF NOT EXISTS usage_at ON usage(at);`,
+  // Long-running goals (goals/): milestones, journal, queued approvals and the wake log are JSON;
+  // next_wake is a one-time wake-up the scheduler fires. A bot's goals go with it.
+  `CREATE TABLE IF NOT EXISTS goals (
+     id TEXT PRIMARY KEY, space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE, thread_id TEXT,
+     title TEXT NOT NULL, done_when TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', status_reason TEXT,
+     milestones TEXT NOT NULL DEFAULT '[]', journal TEXT NOT NULL DEFAULT '[]', asks TEXT NOT NULL DEFAULT '[]',
+     wake_log TEXT NOT NULL DEFAULT '[]', next_wake INTEGER, wake_note TEXT, end_at INTEGER,
+     max_usd REAL NOT NULL DEFAULT 2, max_runs_per_day INTEGER NOT NULL DEFAULT 6, spent_usd REAL NOT NULL DEFAULT 0,
+     wakes INTEGER NOT NULL DEFAULT 0, last_wake INTEGER, stall INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+   CREATE INDEX IF NOT EXISTS goals_space ON goals(space_id, created_at DESC);
+   CREATE INDEX IF NOT EXISTS goals_wake ON goals(status, next_wake);`,
+  // Knowledge base (knowledge/): indexed files, their passages (with optional embeddings) and a BM25 term
+  // index. The FTS5 table is made at runtime by KnowledgeStore, since not every SQLite build has FTS5.
+  KNOWLEDGE_SCHEMA
 ]
 
 type Row = Record<string, unknown>

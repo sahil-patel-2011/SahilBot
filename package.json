@@ -54,6 +54,14 @@
   "build": {
     "appId": "app.sahilbot.desktop",
     "productName": "SahilBot",
+    "protocols": [
+      {
+        "name": "SahilBot",
+        "schemes": [
+          "sahilbot"
+        ]
+      }
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "target": [

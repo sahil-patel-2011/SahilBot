@@ -4,6 +4,7 @@ import { isAnthropic } from './providers'
 import { claudeMaxTokens, fallbacks, listAnthropicModels, streamAnthropic } from './anthropic'
 import { httpError, retryInfo, withRetries } from './retry'
 import { timer } from './timing'
+import { toolTurnSampling, withToolPrimer } from './local-tools'
 
 export { backoffMs, httpError, parseRetryAfter, retryAfterFrom, retryInfo, retryPolicy, withRetries } from './retry'
 
@@ -137,11 +138,15 @@ export async function listModels(baseUrl: string, apiKey?: string, signal?: Abor
 }
 
 export function buildBody(req: ChatRequest): Record<string, unknown> {
-  const s = req.sampling
+  // Small local models with tools: a cooler temperature and a short tool-call primer (local-tools.ts).
+  const local = isLocal(req.baseUrl)
+  const tools = !!req.tools?.length
+  const s = local ? toolTurnSampling(req.model, req.sampling, tools) : req.sampling
+  const messages = local ? withToolPrimer(req.messages, req.model, tools) : req.messages
   const body: Record<string, unknown> = {
     model: req.model,
     // App-only fields stay home: strict servers reject unknown message keys.
-    messages: req.messages.map(({ raw: _r, imagesFor: _i, ...m }) => m),
+    messages: messages.map(({ raw: _r, imagesFor: _i, ...m }) => m),
     stream: true,
     stream_options: { include_usage: true },
     max_tokens: req.maxTokens
@@ -298,7 +303,8 @@ export function ollamaThink(model: string, effort?: ChatRequest['effort']): bool
 
 /** The request body for Ollama's native /api/chat. */
 export function ollamaBody(req: ChatRequest): Record<string, unknown> {
-  const s = req.sampling
+  const tools = !!req.tools?.length
+  const s = toolTurnSampling(req.model, req.sampling, tools)
   const options: Record<string, unknown> = { temperature: s.temperature, top_p: s.top_p, num_predict: req.maxTokens }
   const numCtx = numCtxFor(req.baseUrl, req.model, req.contextWindow)
   if (numCtx) options.num_ctx = numCtx
@@ -309,7 +315,7 @@ export function ollamaBody(req: ChatRequest): Record<string, unknown> {
   const think = ollamaThink(req.model, req.effort)
   return {
     model: req.model,
-    messages: toOllamaMessages(req.messages),
+    messages: toOllamaMessages(withToolPrimer(req.messages, req.model, tools)),
     tools: req.tools?.length ? req.tools : undefined,
     stream: true,
     options,
@@ -410,7 +416,7 @@ async function* paidAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
   const chars = JSON.stringify(req.messages).length + JSON.stringify(req.tools ?? []).length
   const estimatedInput = Math.ceil((chars / 3) * 1.1)
   const claude = isAnthropic(req.baseUrl)
-  const maxOutput = claude ? claudeMaxTokens(req.maxTokens, req.effort) : req.maxTokens
+  const maxOutput = claude ? claudeMaxTokens(req.maxTokens, req.effort, req.model) : req.maxTokens
   // If a refusal fallback could answer instead, price the worst case at the most expensive tier.
   spendHooks.before?.(req, estimatedInput, maxOutput, claude && fallbacks(req.model) ? 'claude-fable-5-1' : req.model)
   let input = 0

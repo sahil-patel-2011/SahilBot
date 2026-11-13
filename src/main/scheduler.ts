@@ -188,6 +188,11 @@ export class Scheduler {
   paused: () => boolean = () => false
   /** When the scheduler last checked for due routines (null until the first check after launch). */
   private lastTickAt: number | null = null
+  /**
+   * Goal wake-ups (goals/manager.ts): one-time wake-ups checked on every tick, alongside routines, and
+   * never while "Pause all routines" is on. Main wires it to GoalManager.tick.
+   */
+  wakeups?: () => Promise<void>
 
   /** `late` (on a run) = when a missed run was due; it is running late now. */
   constructor(private db: Db, private run: (task: ScheduledTask, run: { id: string; test: boolean; late?: number }) => Promise<RunResult>, private changed: () => void, private now = () => new Date()) {
@@ -281,12 +286,14 @@ export class Scheduler {
     this.lastTickAt = now.getTime()
     const due = this.list().filter((t) => t.enabled && t.nextRun !== null && t.nextRun <= now.getTime() && !this.busy.has(t.id))
     const window = this.catchUpHours()
-    await Promise.all(due.map((t) => {
+    // Goal wake-ups run beside routines; a failure there never affects them.
+    const goals = this.wakeups ? this.wakeups().catch(() => undefined) : Promise.resolve()
+    await Promise.all([goals, ...due.map((t) => {
       const dueAt = lastDue(t.schedule, t.nextRun!, now.getTime())
       const plan = catchUp({ dueAt, now: now.getTime(), lastTickAt, catchUpHours: window })
       if (plan === 'skip') { this.skip(t, dueAt); return Promise.resolve() }
       return this.fire(t, plan === 'late' ? dueAt : undefined)
-    }))
+    })])
   }
 
   /** A missed run older than the catch-up window: advance without running (a one-off turns off). */

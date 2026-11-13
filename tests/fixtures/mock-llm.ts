@@ -78,7 +78,14 @@ export async function startMockLlm(): Promise<MockLlm> {
     }
     if (req.method === 'POST' && url === '/v1/chat/completions') {
       const json = JSON.parse(await body(req))
- state.requests.push(json)
+      // Like most small servers: no schema-constrained output. The app's constrained repair then falls
+      // back to its normal repair prompt, and the scripted replies stay in order.
+      if (json.response_format?.type === 'json_schema') {
+        res.writeHead(400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'response_format json_schema is not supported' } }))
+        return
+      }
+      state.requests.push(json)
       const isSummary = String(json.messages?.[0]?.content ?? '').includes('You are compressing')
       const reply: ScriptedReply = isSummary
         ? { content: '## Goal\nTest the app\n## Decisions\n- none\n## Facts\n- codeword is PELICAN\n## Open items\n- none\n## Files/URLs\n- none', delay: 0 }

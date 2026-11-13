@@ -5,7 +5,7 @@ import * as I from '../icons'
 
 export type PaletteAction =
   | { kind: 'new-chat' } | { kind: 'new-bot' } | { kind: 'new-group' } | { kind: 'new-project' }
-  | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'connect' } | { kind: 'settings' }
+  | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'tasks' } | { kind: 'connect' } | { kind: 'settings' }
   | { kind: 'open'; id: string } | { kind: 'chat'; id: string }
 
 type Item = { a: PaletteAction; label: string; sub?: string; icon: React.ReactNode; group: string }
@@ -23,6 +23,7 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       { a: { kind: 'new-project' }, label: 'New project', icon: ico(<I.Folder size={15} />), group: 'Start' },
       { a: { kind: 'projects' }, label: 'Projects', sub: 'All your projects', icon: ico(<I.Folder size={15} />), group: 'Go to' },
       { a: { kind: 'files' }, label: 'Files', sub: 'Everything your bots made', icon: ico(<I.File size={15} />), group: 'Go to' },
+      { a: { kind: 'tasks' }, label: 'Tasks', sub: 'Goals your bots are working on', icon: ico(<I.Check size={15} />), group: 'Go to' },
       { a: { kind: 'scheduled' }, label: 'Scheduled', sub: 'Routines and scheduled tasks', icon: ico(<I.Clock size={15} />), group: 'Go to' },
       { a: { kind: 'connect' }, label: 'Connect apps', icon: ico(<I.Plug size={15} />), group: 'Go to' },
       { a: { kind: 'settings' }, label: 'Settings', icon: ico(<I.Gear size={15} />), group: 'Go to' }

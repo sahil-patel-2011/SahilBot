@@ -60,7 +60,8 @@ function humanSize(n: number): string {
   return n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 ** 2).toFixed(1)} MB`
 }
 
-function backup(workspace: string, full: string): void {
+/** Keeps a copy of a file or folder under <workspace>/.foreman/backups before it is overwritten. */
+export function backup(workspace: string, full: string): void {
   const dest = join(workspace, '.foreman', 'backups', `${Date.now()}-${full.replace(/[\\/:]/g, '__').slice(-180)}`)
   mkdirSync(dirname(dest), { recursive: true })
   if (lstatSync(full).isDirectory()) cpSync(full, dest, { recursive: true })

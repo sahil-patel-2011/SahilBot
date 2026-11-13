@@ -1,16 +1,18 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, shell, systemPreferences } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { tmpdir, totalmem } from 'node:os'
+import { homedir, tmpdir, totalmem } from 'node:os'
 import { writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, PendingRequest, SendInput, Settings, Space, UsageRow } from '@shared/types'
+import type { GoalPatch } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 import { INTRO } from './agent/prompt'
 import { updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget } from './llm/budget'
+import { automationStatus, fileProbe, permissionsStatus, settingsUrl } from './permissions-center'
 import { collectText, isLocal, spendHooks, streamChat } from './llm/client'
 import { ConnectorIcons, Connectors, PRESETS } from './connectors'
 import { addTemplate, loadTemplates, type TemplateDeps } from './templates'
@@ -42,21 +44,39 @@ import { docxText, pdfText, pptxText } from './docs/read'
 import { RuleStore } from './rules'
 import { cursorTool, macAppsTool } from './agent/tools/apps'
 import { shellTool } from './agent/tools/shell'
+import { codeTool, gitTool } from './agent/tools/code'
 import { researchTool } from './agent/tools/research'
 import { agentsTool } from './agent/tools/agents'
 import { handoffTool } from './agent/tools/handoff'
 import { computerTool } from './agent/tools/computer'
 import { consultTool } from './agent/tools/consult'
+import { frcCodeTool } from './agent/tools/frc_code'
+import { frcMechTool } from './agent/tools/frc_mech'
 import { Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { SpaceFiles } from './spaces'
 import { BrowserManager } from './browser/manager'
 import { Vault } from './vault'
+import { PurchaseGate } from './browser/checkout'
+import { recentEmail, recentTexts, setEmailCodeSource } from './otp'
+import { mailTool } from './agent/tools/mail'
+import { gmailCodeSource } from './mail/gmail'
 import { findOllamaBinary, setupOllama, startOllama, stopOllama } from './ollama-setup'
 import { needsYouBody } from './needs-you'
 import { MenuBarIcon, type TrayItem } from './tray'
 import { KeepAwake, RESUME_NEXT_NOTE, RESUME_NOTE, WorkTracker, wantAwake } from './resume'
 import type { MenuAction } from './shell'
+import { getWatchlist, setWatchlist } from './watchlist'
+import { MarketData } from './markets/data'
+import { Markets, type AlertState } from './markets/service'
+import { alertFromPrompt, usMarketOpen } from './markets/alerts'
+import { stockTools } from './agent/tools/stocks'
+import { KnowledgeService } from './knowledge/service'
+import { knowledgeTools, resolveScope } from './agent/tools/knowledge'
+import { GoalManager, withGoalsOverview } from './goals'
+import { opensDirectly } from './knowledge/ignore'
+import { followUpTool, goalTool } from './agent/tools/goals'
+import { captureOpenUrls, registerProtocolClient, setupMcpServer, urlHandler } from './mcp-server/app'
 
 /** Set by the automated tests: run without ever showing a window. */
 const HIDDEN = !!process.env.SAHILBOT_HIDDEN
@@ -73,6 +93,8 @@ if (process.env.FOREMAN_DATA_DIR) app.setPath('userData', process.env.FOREMAN_DA
 else app.setPath('userData', join(app.getPath('appData'), 'Foreman'))
 
 registerScheme()
+// sahilbot:// links (Shortcuts, Raycast, Alfred): caught from launch on, handled once the window exists.
+const openUrls = captureOpenUrls()
 
 // One SahilBot at a time: a second launch focuses the existing window.
 if (!app.requestSingleInstanceLock()) app.quit()
@@ -205,13 +227,20 @@ app.whenReady().then(() => {
   // Pages (create_page) live in the workspace's "pages" folder; the app manual in docsDir is read-only.
   const pagesDir = (): string => join(settings.get().workspaceDir, 'pages')
   const listeners = new Set<(e: ChatEvent) => void>()
-  /** Screenshot of the main display, scaled so one image pixel = one screen point. */
-  const captureScreen = async (file: string): Promise<{ dataUrl: string; width: number; height: number }> => {
-    await new Promise<void>((ok, fail) => execFile('screencapture', ['-x', '-C', '-t', 'png', file], { timeout: 15_000 }, (e) => (e ? fail(e) : ok())))
+  /**
+   * Screenshot. Default: the main display, scaled so one image pixel = one screen point. With rect
+   * (global points, any display): that area (screencapture -R), resized to width×height pixels.
+   */
+  const captureScreen = async (file: string, opts?: { rect?: Electron.Rectangle; width?: number; height?: number }): Promise<{ dataUrl: string; width: number; height: number }> => {
+    const r = opts?.rect
+    const area = r ? ['-R', `${Math.round(r.x)},${Math.round(r.y)},${Math.max(1, Math.round(r.width))},${Math.max(1, Math.round(r.height))}`] : []
+    await new Promise<void>((ok, fail) => execFile('screencapture', ['-x', '-C', ...area, '-t', 'png', file], { timeout: 15_000 }, (e) => (e ? fail(e) : ok())))
     const d = screen.getPrimaryDisplay()
-    const img = nativeImage.createFromPath(file).resize({ width: d.size.width, height: d.size.height })
+    const width = opts?.width ?? (r ? Math.round(r.width) : d.size.width)
+    const height = opts?.height ?? (r ? Math.round(r.height) : d.size.height)
+    const img = nativeImage.createFromPath(file).resize({ width, height, quality: 'best' })
     if (img.isEmpty()) throw new Error('could not create image (Screen Recording permission)')
-    return { dataUrl: img.toDataURL(), width: d.size.width, height: d.size.height }
+    return { dataUrl: img.toDataURL(), width, height }
   }
 
   // Computer use: while SahilBot controls the Mac it shrinks to a small window in the top-right corner
@@ -339,7 +368,25 @@ app.whenReady().then(() => {
     () => toWin('browser:open')
   )
   // A saved password typed while teaching a task is never recorded, whichever field it went into.
-  browser.teach.secretValues = () => vault.passwords()
+  browser.teach.secretValues = () => vault.secretValues()
+  // Saved card numbers never leave the browser unless the user approved that purchase step.
+  browser.cardNumbers = () => { try { return vault.cardNumbers() } catch { return [] } }
+  // Purchase and one-time-code cards: approved only by a click in the main window (purchase:respond).
+  const purchases = new PurchaseGate({
+    emit: (e) => emit(e),
+    runInfo: (t) => chat.handoffHost().runInfo(t),
+    startedByHandoff: (t) => {
+      const last = [...db.listMessages(t)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+      return !!(last?.meta?.handoff || last?.meta?.helperTask || last?.meta?.scheduled)
+    },
+    // Runs the user didn't start by typing in this chat: one-time-code chat grants don't count there.
+    automated: (t) => {
+      const last = [...db.listMessages(t)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+      return !!(last?.meta?.handoff || last?.meta?.helperTask || last?.meta?.scheduled || last?.meta?.goalRun || last?.meta?.fromApp || last?.meta?.mcpClientId)
+    },
+    otpGrants: { get: () => db.getSetting<string[]>('otp:grants') ?? [], set: (sites) => db.setSetting('otp:grants', sites) },
+    otpSenders: { get: () => db.getSetting<Record<string, string[]>>('otp:senders') ?? {}, set: (v) => db.setSetting('otp:senders', v) }
+  })
 
   // Built-in packs of skills and rules ship in packs/; yours live in the data folder.
   const skills = new SkillStore(sub('skills'), join(appRoot(), 'packs', 'skills'))
@@ -352,16 +399,36 @@ app.whenReady().then(() => {
     ...webTools(() => ({ ...settings.get().search, braveKey: secrets.get('braveKey') })),
     memoryTool(memory, db, skills, rules),
     // Built in and always available (connector tools are found with find_tools).
-    { ...browserTool(browser, vault), core: true },
-    { ...cursorTool(() => secrets.get('cursorKey')), core: true },
+    { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since) }), core: true },
+    { ...cursorTool(() => secrets.get('cursorKey'), () => settings.get().workspaceDir), core: true },
     { ...macAppsTool(), core: true },
+    // Email through Apple Mail (every account in Mail; drafts by default, sending and bulk changes ask).
+    { ...mailTool(), core: true },
     shellTool(),
+    // Coding: search, symbols, exact edits, patches, tests/type checks/lint with parsed failures; git with a secret scan.
+    codeTool({ getWorkspace: () => settings.get().workspaceDir }),
+    gitTool(),
     researchTool(),
     agentsTool(),
     computerTool({
       enterMini: (id) => enterMini(id),
       trusted: (prompt) => systemPreferences.isTrustedAccessibilityClient(prompt),
-      capture: (file) => captureScreen(file)
+      capture: (file, opts) => captureScreen(file, opts),
+      displays: () => {
+        const primary = screen.getPrimaryDisplay().id
+        return screen.getAllDisplays().map((x) => ({ id: x.id, bounds: x.bounds, scaleFactor: x.scaleFactor, primary: x.id === primary }))
+      },
+      // SahilBot's own processes and windows: computer use never clicks or types into them.
+      self: () => {
+        const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.isVisible())
+        return {
+          pids: [process.pid, ...app.getAppMetrics().map((m) => m.pid)],
+          names: [...new Set([app.getName(), 'SahilBot', ...(app.isPackaged ? [] : ['Electron'])])],
+          bundleIds: ['app.sahilbot.desktop', ...(app.isPackaged ? [] : ['com.github.Electron'])],
+          titles: wins.map((w) => w.getTitle()).filter(Boolean),
+          rects: wins.map((w) => w.getBounds())
+        }
+      }
     }),
     consultTool({
       advisor: () => endpoints.advisor(),
@@ -372,7 +439,11 @@ app.whenReady().then(() => {
         return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, settings.get().sampling), maxTokens: 2000, effort: 'medium', signal }))
       }
     }),
-    updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' }))
+    updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
+    // FRC robot software: logs, vendordeps, project scan, scouting (found with find_tools).
+    frcCodeTool({ workspace: () => settings.get().workspaceDir, tbaKey: () => secrets.get('tbaKey') ?? undefined }),
+    // FRC mechanical design math: motors, mechanisms, ratios, belt/chain centers, beams, weight (found with find_tools).
+    frcMechTool()
   )
 
   const registerQuickKeyRef = { current: (): void => undefined }
@@ -380,7 +451,9 @@ app.whenReady().then(() => {
   const alwaysOnChanged = { current: (_patch: SettingsPatch): void => undefined }
   // Every model server that's on; the last list tells the agent how much context each model can hold.
   const endpoints = new Endpoints(settings)
-  const fitWindow = (model: string, window: number): number => {
+  // Auto skips cloud models this month's remaining budget couldn't pay for.
+  endpoints.budgetLeft = () => { const b = budget.summary(); return b.cap - b.spent }
+  const fitWindow =(model: string, window: number): number => {
     const m = endpoints.last?.models.find((x) => x.id === model)
     if (!m || m.note === 'remote') return window
     // Never below 16k; otherwise the largest window this Mac's memory allows with this model.
@@ -388,11 +461,17 @@ app.whenReady().then(() => {
   }
 
   const connectors = new Connectors(db, secrets, registry, () => toWin('connectors:changed'))
+  // Emailed sign-in codes: the Gmail connector when it's connected, else Mail.app (read in main, never shown to the model).
+  setEmailCodeSource(gmailCodeSource((tool, args, signal) => connectors.callPresetTool('gmail', tool, args, signal)), () => connectors.presetConnected('gmail'))
 
+  /** Goals (set up further down): an unattended goal wake-up's call that needs approval is queued for the user. */
+  const goalHooks: { ask?: (threadId: string, info: { tool: string; label: string; summary?: string; reason?: string }) => string | undefined } = {}
   const chat = new Agent({
     connectors,
     db, settings, endpoints, spaces, memory, skills, rules, registry, results, docsDir, emit, fitWindow,
-    secretValues: () => vault.passwords()
+    // Saved passwords and cards, plus one-time codes typed in the last 10 minutes: no tool call may carry them.
+    secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+    onUnattendedAsk: (threadId, info) => goalHooks.ask?.(threadId, info)
   })
   // Bot-to-bot handoffs need the agent itself (to start or steer the other bot's run).
   registry.register(handoffTool(() => chat.handoffHost()))
@@ -669,12 +748,39 @@ app.whenReady().then(() => {
   const connectorIcons = new ConnectorIcons(sub('connector-icons'), PRESETS, () => toWin('connectors:icons'))
   handle('connectors:icons', () => connectorIcons.all())
   handle('connectors:setToolEnabled', (id: string, tool: string, on: boolean) => connectors.setToolEnabled(id, tool, on))
+  handle('connectors:test', (id: string) => connectors.test(id))
+  handle('connectors:googleClient', () => connectors.googleClient())
+  handle('connectors:setGoogleClient', (clientId: string, clientSecret: string) => connectors.setGoogleClient(clientId, clientSecret))
+  handle('connectors:clearGoogleClient', () => connectors.clearGoogleClient())
   void connectors.connectAll()
+  // Health: a tools/list check every few minutes; dropped connections reconnect with backoff.
+  connectors.startHealth()
+
+  // ---------------------------------------------------------------- markets (read-only stock data; never trades)
+  const markets = new Markets(new MarketData({
+    cacheDir: sub('markets-cache'),
+    keys: () => settings.marketKeys(),
+    quoteProvider: () => settings.get().markets?.quoteProvider ?? 'auto',
+    // SEC asks for an app name and contact; a generic one unless the user sets their own in Settings → Markets.
+    secUserAgent: () => `SahilBot/0.1 (${settings.get().markets?.secContact || 'contact@example.com'})`
+  }))
+  /** A live (intraday) quote source is set: alerts check every 15 minutes in market hours, not once a day. */
+  const liveQuotes = (): boolean => (settings.get().markets?.quoteProvider ?? 'auto') !== 'none' && Object.keys(settings.marketKeys()).length > 0
 
   // ---------------------------------------------------------------- scheduled tasks
   const scheduler = new Scheduler(db, async (task, info) => {
     const space = db.getSpace(task.spaceId)
     if (!space) return 'error: its bot was deleted'
+    // Price alerts (price_alert tool): a plain data check, no model call; the chat hears only when one fires.
+    const priceAlert = alertFromPrompt(task.prompt)
+    let alertHit: Awaited<ReturnType<typeof markets.checkAlert>> | null = null
+    if (priceAlert) {
+      if (!info.test && liveQuotes() && !usMarketOpen(new Date())) return 'done'
+      const key = `priceAlert:${task.id}`
+      alertHit = await markets.checkAlert(priceAlert, db.getSetting<AlertState>(key))
+      db.setSetting(key, alertHit.state)
+      if (!alertHit.fired && !info.test) return 'done'
+    }
     // Bots get reminders in their one conversation; SahilBot and projects keep a thread per task.
     let threadId = space.isMain || space.kind === 'project' ? task.threadId : db.listThreads(space.id)[0]?.id ?? null
     if (!threadId || !db.getThread(threadId)) {
@@ -682,6 +788,17 @@ app.whenReady().then(() => {
       db.updateThread(t.id, { title: space.isMain || space.kind === 'project' ? `⏰ ${task.title}` : space.name })
       threadId = t.id
       scheduler.setThread(task.id, threadId)
+    }
+    if (priceAlert && alertHit) {
+      const text = alertHit.text ?? `Price alert check (test): ${alertHit.observed}; "${task.title.replace(/^Price alert:\s*/, '')}" is not met, so nothing fired.`
+      const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done', meta: { scheduled: task.id, priceAlert: true, ...(alertHit.card ? { stock: alertHit.card } : {}) } })
+      emit({ threadId, type: 'message', message: m })
+      if (alertHit.fired && space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) {
+        showNote(new Notification({ title: `${space.isMain ? 'SahilBot' : space.name}: ${task.title}`, body: alertHit.observed }), threadId)
+      }
+      // Fires once unless it repeats.
+      if (alertHit.fired && !priceAlert.repeat && !info.test) scheduler.update(task.id, { enabled: false })
+      return { status: 'done', threadId }
     }
     if (chat.isRunning(threadId)) return { status: 'skipped: the chat was busy', threadId }
     const startedAt = Date.now()
@@ -722,6 +839,8 @@ app.whenReady().then(() => {
     emit({ threadId, type: 'message', message: m })
   }
   registry.register({ ...scheduleTool(scheduler, db), core: true })
+  // Stock tools (found with find_tools "stock"): quotes, analysis, forecasts, compare, backtests, price alerts.
+  registry.register(...stockTools(markets, { scheduler, db, liveQuotes }))
   // Missed runs (closed or asleep) catch up once within Settings → General → "Catch up on missed routines".
   scheduler.catchUpHours = () => settings.get().catchUpHours ?? 12
   scheduler.paused = () => !!settings.get().routinesPaused
@@ -824,11 +943,76 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------- morning check-in and usage
   handle('checkin:get', () => getCheckin(db, scheduler))
   handle('checkin:set', (c: CheckinSettings) => setCheckin(db, scheduler, c))
+  // Stock watchlist (renderer-owned list; values cached from stock cards or a refresh).
+  handle('watchlist:get', () => getWatchlist(db))
+  handle('watchlist:set', (items: unknown) => setWatchlist(db, items))
+  // Market data for the watchlist and stock cards (cached daily data; no model calls).
+  handle('markets:quotes', (symbols: unknown) => markets.quotes(Array.isArray(symbols) ? symbols.filter((x): x is string => typeof x === 'string') : []))
+  handle('markets:card', (symbol: string, o?: { forecast?: boolean; horizonDays?: number }) => markets.card(String(symbol), { forecast: !!o?.forecast, horizonDays: o?.horizonDays }))
+  handle('markets:search', (q: string) => markets.data.search(String(q ?? '')))
   registry.register(overviewTool({
     db,
     pending: () => Object.keys(chat.allPending()).flatMap((tid) => chat.pending(tid)),
     routines: () => scheduler.list()
   }))
+
+  // ---------------------------------------------------------------- long-running goals (goals/)
+  // A bot pursues a goal over hours or days: one-time wake-ups (fired by the scheduler's tick, never while
+  // routines are paused) run unattended in the goal's chat, inside its spend cap, daily run cap and end date.
+  let goalsTimer: ReturnType<typeof setTimeout> | null = null
+  const goals = new GoalManager({
+    db,
+    run: async ({ threadId, text, note, goalId, unattended, untrusted }) => {
+      // Wake-ups end with the goal's own lines and notifications, not the generic "done" one.
+      if (unattended) scheduledRuns.add(threadId)
+      try {
+        // goalUntrusted: journal lines and the wake note written after reading outside content (loop.ts seeds them as untrusted).
+        const { done } = await chat.send({ threadId, text, note, meta: { goalRun: goalId, ...(unattended ? { scheduled: `goal:${goalId}` } : {}), ...(untrusted?.length ? { goalUntrusted: untrusted } : {}) } }, { unattended })
+        return await done
+      } finally { if (unattended) scheduledRuns.delete(threadId) }
+    },
+    isRunning: (threadId) => chat.isRunning(threadId),
+    posted: (threadId, message) => emit({ threadId, type: 'message', message }),
+    notify: (g, headline, body, ask) => {
+      const space = db.getSpace(g.botId)
+      if (!space || space.notify === false || QUIET || !Notification.isSupported()) return
+      const threadId = g.threadId ?? db.listThreads(g.botId)[0]?.id ?? ''
+      if (mainFocused() && viewingThread === threadId) return
+      // A queued approval's line is built like any "needs you" notification (safe for the lock screen).
+      const text = ask ? needsYouText({ id: ask.id, threadId, kind: 'approval', tool: ask.tool, label: ask.label, summary: ask.summary }) : body
+      showNote(new Notification({ title: `${botName(g.botId)}: ${headline}`, body: text.replace(/\s+/g, ' ').slice(0, 160) }), threadId)
+    },
+    changed: () => {
+      if (goalsTimer) return
+      goalsTimer = setTimeout(() => { goalsTimer = null; toWin('goals:changed') }, 250)
+    },
+    paused: () => !!settings.get().routinesPaused
+  })
+  goalHooks.ask = (threadId, info) => goals.onUnattendedAsk(threadId, info)
+  // goal and follow_up are found with find_tools("goal"); wake-ups load them into their chat.
+  registry.register(goalTool(db, goals), followUpTool(db, goals))
+  // The morning check-in's bots_overview also lists goals.
+  const overviewDef = registry.get('bots_overview')
+  if (overviewDef) registry.register(withGoalsOverview(overviewDef, goals, (id) => botName(id)))
+  // Goal spend: a wake-up stops before a request that could pass its goal's cap; every paid request
+  // made while a chat works on a goal counts toward it.
+  const spendBeforeGoals = spendHooks.before
+  spendHooks.before = (req, est, maxOutput, pricedAs) => {
+    spendBeforeGoals?.(req, est, maxOutput, pricedAs)
+    const t = usageScope.getStore()?.threadId
+    if (t) goals.checkSpend(t, pricedAs, est, maxOutput)
+  }
+  const spendAfterGoals = spendHooks.after
+  spendHooks.after = (req, input, output, served) => {
+    spendAfterGoals?.(req, input, output, served)
+    const t = usageScope.getStore()?.threadId
+    if (t) { try { goals.addSpend(t, served, input, output) } catch { /* never fails the request */ } }
+  }
+  listeners.add((e) => { if (e.type === 'run' && e.status !== 'started') goals.runEnded(e.threadId) })
+  scheduler.wakeups = () => goals.tick()
+  handle('goals:list', () => goals.list())
+  handle('goals:update', (id: string, patch: GoalPatch) => goals.patch(String(id), patch && typeof patch === 'object' ? patch : {}))
+  handle('goals:runNow', (id: string) => goals.runNow(String(id)))
   /** A model is cloud when the endpoint that serves it isn't on this Mac (Claude and GPT always are). */
   const isCloudModel = (model: string): boolean => {
     if (/^(claude-|gpt-|chatgpt-)/i.test(model)) return true
@@ -857,6 +1041,59 @@ app.whenReady().then(() => {
   })
   // Project folders are previewable and usable by their chats.
   for (const sp of db.listSpaces()) if (sp.kind === 'project' && sp.folder) attachments.allow(sp.folder)
+
+  // ---------------------------------------------------------------- knowledge base (search over the user's own files)
+  // Sources: the workspace, every project's folder, folders added in Settings → Knowledge, and attached
+  // folders the user opts in. Indexing starts a few seconds after launch (not in hidden test runs unless
+  // SAHILBOT_KNOWLEDGE=1); embeddings run only while no chat is running.
+  let knowledgeNotify: ReturnType<typeof setTimeout> | null = null
+  const knowledge = new KnowledgeService({
+    sql: db.sql,
+    workspace: () => settings.get().workspaceDir,
+    projects: () => db.listSpaces().filter((x) => x.kind === 'project').map((x) => ({ id: x.id, name: x.name, folder: x.folder })),
+    ollamaUrl: () => (settings.providers().ollama.enabled ? settings.providers().ollama.baseUrl : null),
+    busy: () => chat.busy(),
+    onChange: () => { if (!knowledgeNotify) knowledgeNotify = setTimeout(() => { knowledgeNotify = null; toWin('knowledge:changed') }, 1000) }
+  })
+  registry.register(...knowledgeTools({ kb: knowledge, spaceOf: (threadId) => db.getThread(threadId)?.spaceId }))
+  if (process.env.SAHILBOT_KNOWLEDGE !== '0' && (!HIDDEN || process.env.SAHILBOT_KNOWLEDGE === '1')) knowledge.start(HIDDEN ? 500 : 8000)
+  app.on('before-quit', () => knowledge.dispose())
+  handle('knowledge:status', () => knowledge.status())
+  // Folders are added only through the picker here, or from folders already attached to a chat.
+  handle('knowledge:addFolder', async () => {
+    const r = win ? await dialog.showOpenDialog(win, { title: 'Add a folder to your knowledge base', properties: ['openDirectory'] }) : { canceled: true, filePaths: [] }
+    if (r.canceled || !r.filePaths[0]) return null
+    knowledge.addFolder(r.filePaths[0], 'folder')
+    return knowledge.status()
+  })
+  handle('knowledge:addAttached', (path: string) => {
+    const p = String(path ?? '')
+    if (!knowledge.attachedCandidates().includes(p) && !attachments.accept([p]).length) throw new Error('Attach that folder to a chat first.')
+    knowledge.addFolder(p, 'attached')
+    return knowledge.status()
+  })
+  handle('knowledge:removeFolder', (path: string) => {
+    if (!knowledge.store.userSources().some((x) => x.path === path)) throw new Error('The workspace and project folders are always in the knowledge base.')
+    knowledge.removeFolder(path)
+    return knowledge.status()
+  })
+  handle('knowledge:setPaused', (on: boolean) => { knowledge.setPaused(!!on); return knowledge.status() })
+  handle('knowledge:rebuild', () => { void knowledge.rebuild(); return knowledge.status() })
+  handle('knowledge:search', (query: string, opts?: { folder?: string; k?: number }) => {
+    const sc = resolveScope(knowledge, opts?.folder ? String(opts.folder) : 'all', undefined)
+    if ('error' in sc) throw new Error(sc.error)
+    return knowledge.search(String(query ?? '').slice(0, 500), { scope: sc.folders, k: Math.min(20, Number(opts?.k) || 8) })
+  })
+  // Only files in the index can be opened or revealed from search results.
+  handle('knowledge:reveal', (path: string) => { if (knowledge.isIndexed(String(path))) shell.showItemInFolder(String(path)) })
+  handle('knowledge:open', async (path: string) => {
+    const p = String(path)
+    if (!knowledge.isIndexed(p)) return
+    // Only documents open in their app; code, scripts, web pages and anything else are shown in Finder
+    // (a .py, .js, .html or .command file's default app could run it).
+    if (opensDirectly(p)) await shell.openPath(p)
+    else shell.showItemInFolder(p)
+  })
 
   // ---------------------------------------------------------------- voice
   let voiceThread: string | null = null
@@ -910,10 +1147,14 @@ app.whenReady().then(() => {
   handle('chat:steer', (threadId: string, text: string) => chat.steer(threadId, String(text).slice(0, 20_000)))
   handle('chat:respond', (threadId: string, id: string, answer: string) => chat.respond(threadId, id, answer))
   // The main window asks for a chat's open requests whenever it opens that chat: that's how main knows what you're reading.
-  handle('chat:allPending', () => chat.allPending())
+  handle('chat:allPending', () => {
+    const all = chat.allPending()
+    for (const t of purchases.threads()) all[t] = [...(all[t] ?? []), ...purchases.pending(t).map((r) => r.id)]
+    return all
+  })
   ipcMain.handle('chat:pending', (ev, threadId: string) => {
     if (win && !win.isDestroyed() && ev.sender === win.webContents) { viewingThread = threadId; refreshBadge() }
-    return chat.pending(threadId)
+    return [...chat.pending(threadId), ...purchases.pending(threadId)]
   })
   handle('chat:retry', (threadId: string) => chat.retry(threadId))
   // Continue a chat cut off by SahilBot closing: a hidden note, then a normal run from the current history.
@@ -943,6 +1184,23 @@ app.whenReady().then(() => {
   handle('vault:list', () => vault.list())
   handle('vault:set', (e: Parameters<Vault['set']>[0]) => { vault.set(e); return vault.list() })
   handle('vault:remove', (name: string) => { vault.remove(name); return vault.list() })
+  handle('vault:totpCode', (name: string) => { const c = vault.totpCode(name); return c ? { code: c.code, remaining: c.remaining } : null })
+  handle('vault:otpGrants', () => purchases.permanent())
+  handle('vault:revokeOtpGrant', (site: string) => purchases.revokeOtp(site))
+  handle('vault:cards', () => vault.cards())
+  handle('vault:setCard', (c: Parameters<Vault['setCard']>[0]) => vault.setCard(c))
+  handle('vault:removeCard', (id: string) => vault.removeCard(id))
+  handle('vault:addresses', () => vault.addresses())
+  handle('vault:setAddress', (a: Parameters<Vault['setAddress']>[0]) => vault.setAddress(a))
+  handle('vault:removeAddress', (id: string) => vault.removeAddress(id))
+  // Only a click in the main window's own page approves a purchase or a one-time code (not the Quick
+  // bar, not a Page, not a bot or a message relayed from anywhere else).
+  ipcMain.handle('purchase:respond', (ev, threadId: string, id: string, nonce: string, answer: string) => {
+    if (!win || win.isDestroyed() || ev.sender !== win.webContents || (ev.senderFrame && ev.senderFrame !== win.webContents.mainFrame)) {
+      return { ok: false, error: 'This can only be approved in the main SahilBot window.' }
+    }
+    return purchases.respond(String(threadId), String(id), String(nonce), String(answer))
+  })
 
   handle('browser:state', () => browser.state())
   handle('browser:setBounds', (b: Electron.Rectangle | null) => browser.setBounds(b && { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) }))
@@ -1058,6 +1316,16 @@ app.whenReady().then(() => {
     return { loginItem, openedAtLogin, working: work.working().length, keepingAwake: awake.on, menuBarIcon: !!menuBar?.shown, routinesPaused: !!s.routinesPaused }
   }
   handle('alwaysOn:status', () => alwaysOnStatus())
+  // Settings → Privacy & Permissions: status (no prompts) and the exact System Settings pane; nothing is granted here.
+  handle('permissions:status', () => permissionsStatus({
+    accessibility: () => systemPreferences.isTrustedAccessibilityClient(false),
+    media: (kind) => systemPreferences.getMediaAccessStatus(kind),
+    notificationsSupported: () => Notification.isSupported(),
+    open: fileProbe,
+    home: homedir()
+  }))
+  handle('permissions:open', async (kind: string) => { await shell.openExternal(settingsUrl(kind)) })
+  handle('permissions:automation', (appName: string) => automationStatus(String(appName).slice(0, 80)))
   handle('alwaysOn:pauseRoutines', (paused: boolean) => { setRoutinesPaused(!!paused); return alwaysOnStatus() })
   // One notification for chats cut off last time (each also has a Continue notice in the chat).
   if (recovered.length) {
@@ -1067,6 +1335,25 @@ app.whenReady().then(() => {
       showNote(new Notification({ title: 'SahilBot was closed while working', body: n === 1 ? `${chatLabel(recovered[0].threadId)}: open the chat and press Continue.` : `${n} chats were cut off. Open them and press Continue.` }), recovered[0].threadId)
     }
   }
+  // ---------------------------------------------------------------- connected apps (MCP server) and sahilbot:// links
+  // Off by default. An app's messages are untrusted (like another bot's handoff): Ask mode, tainted.
+  const mcp = setupMcpServer({
+    db, settings, dir: sub('mcp-server'), hidden: HIDDEN, mainWindow: () => win,
+    host: {
+      db, memory, emit, secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+      agent: {
+        isRunning: (t) => chat.isRunning(t),
+        pending: (t) => [...chat.pending(t), ...purchases.pending(t)],
+        send: (input, opts) => chat.send(input, opts),
+        steer: (t, text, meta) => chat.steer(t, text, meta),
+        whenIdle: (t, signal, ms) => chat.whenIdle(t, signal, ms)
+      }
+    }
+  })
+  app.on('before-quit', () => { void mcp.dispose() })
+  registerProtocolClient(HIDDEN)
+  openUrls.attach(urlHandler({ db, emit, openThread, newChat: () => sendMenu('new-chat'), mainWindow: () => showMain(), isAppThread: (id) => mcp.isAppThread(id) }))
+
   app.on('activate', () => {
     // The browser's hidden parking window doesn't count as an open window.
     if (!win || win.isDestroyed()) reopen()

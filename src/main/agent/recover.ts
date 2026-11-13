@@ -1,5 +1,6 @@
 import type { ToolCall } from '@shared/types'
 import { repairJson } from './validate'
+import { familyToolCalls } from '../llm/tool-adapters'
 
 // Local models on OpenAI-compatible servers sometimes write the tool call into the
 // text instead of the tool_calls field (Hermes/Qwen <tool_call> tags, fenced JSON,
@@ -60,14 +61,25 @@ export function recoverToolCalls(content: string, known: Set<string>, disabled?:
     rest = rest.replace(XMLISH, (whole, name: string, body: string) => {
       const fixed = fixName(name, known, disabled)
       if (!fixed) return whole
-      const args: Record<string, unknown> = {}
+      let args: Record<string, unknown> = {}
       for (const m of body.matchAll(/<parameter=([\w.-]+)>\s*([\s\S]*?)\s*<\/parameter>/g)) {
         const v = m[2]
         try { args[m[1]] = JSON.parse(v) } catch { args[m[1]] = v }
       }
+      // Llama 3.1's variant: <function=name>{json}</function>.
+      if (!Object.keys(args).length && body.trim().startsWith('{')) {
+        const parsed = tryJson(body.trim())
+        if (parsed && !Array.isArray(parsed)) args = parsed as Record<string, unknown>
+      }
       calls.push({ id: `text_${calls.length}`, name: fixed, arguments: JSON.stringify(args) })
       return ''
     })
+  }
+  // Model families' own call syntaxes (Llama, Mistral, Gemma, LFM, DeepSeek, gpt-oss, ReAct…): see llm/tool-adapters.ts.
+  if (!calls.length) {
+    const fam = familyToolCalls(content, known)
+    const found = fam.calls.map((c) => toCall(c, known, calls.length, disabled)).filter((c): c is ToolCall => !!c)
+    if (found.length) { calls.push(...found.map((c, i) => ({ ...c, id: `text_${i}` }))); rest = fam.rest }
   }
   // A fenced block only counts when it is (almost) the whole reply; JSON shown to the user stays text.
   if (!calls.length && content.replace(FENCED, '').trim().length < 40) take(FENCED)

@@ -7,10 +7,13 @@ import { api } from '../api'
 import * as I from '../icons'
 import { TeachBar } from './TeachBar'
 import { isPageCandidate, PageView } from './PageView'
+import { Watchlist } from './Watchlist'
+import { ChartIcon } from './StockCard'
+import { useWatchlist } from '../lib/stocks'
 
-export type PanelTab = 'progress' | 'browser' | 'file'
+export type PanelTab = 'progress' | 'browser' | 'file' | 'watchlist'
 
-export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, browserState, onClose, running, progress, threadId }: {
+export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, browserState, onClose, running, progress, threadId, stocks }: {
   tab: PanelTab
   onTab: (t: PanelTab) => void
   hidden: boolean
@@ -23,7 +26,12 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
   progress?: { used: number; window: number; model?: string; actions?: number }
   /** The open chat: a recording made with Teach goes there. */
   threadId?: string | null
+  /** A stock bot's chat: always offer the Watchlist tab. */
+  stocks?: boolean
 }) {
+  const watch = useWatchlist()
+  // The Watchlist tab appears once stocks are in play: a stock bot, a stock card in this chat, or a saved list.
+  const showWatch = tab === 'watchlist' || !!stocks || watch.length > 0 || messages.some((m) => m.role === 'tool' && !!m.meta?.stock)
   return (
     <aside className="right" data-testid="right-panel">
       <div className="right-tabs drag">
@@ -31,12 +39,14 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
           <button className={tab === 'progress' ? 'on' : ''} onClick={() => onTab('progress')} data-testid="tab-progress"><I.ListIcon size={14} />Overview</button>
           <button className={tab === 'browser' ? 'on' : ''} onClick={() => onTab('browser')}><I.Globe size={14} />Browser</button>
           <button className={tab === 'file' ? 'on' : ''} onClick={() => onTab('file')} data-testid="tab-file"><I.File size={14} />File</button>
+          {showWatch && <button className={tab === 'watchlist' ? 'on' : ''} onClick={() => onTab('watchlist')} data-testid="tab-watchlist"><ChartIcon size={14} />Watchlist</button>}
         </div>
         <span style={{ flex: 1 }} />
         <button className="icon-btn nodrag" onClick={onClose} title="Close panel (⌘\\)"><I.Close size={15} /></button>
       </div>
       {tab === 'browser' && <BrowserPane hidden={hidden} threadId={threadId} />}
       {tab === 'progress' && <ProgressPane messages={messages} onOpenFile={onOpenFile} browserState={browserState} onBrowser={() => onTab('browser')} running={!!running} progress={progress} />}
+      {tab === 'watchlist' && <Watchlist />}
       {tab === 'file' && (isPageCandidate(file) ? <PageView key={file} path={file} hidden={hidden} fallback={<FilePane path={file} />} /> : <FilePane path={file} />)}
     </aside>
   )

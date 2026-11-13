@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { ToolCall } from '@shared/types'
 import type { ChatRequest, StreamPart, WireMessage } from './client'
 import { retryAfterFrom } from './retry'
+import { CACHE_WRITE_FACTOR, cacheReadFactor, claudeSpec, claudeThinking } from './claude-models'
 
 // Native Claude path (Anthropic SDK). Follows the Messages API rules for current models:
 // - assistant turns are sent back exactly as Claude returned them (thinking blocks included),
@@ -40,14 +41,16 @@ async function client(key: string): Promise<Anthropic> {
 type Block = Anthropic.Beta.Messages.BetaContentBlockParam
 type Param = Anthropic.Beta.Messages.BetaMessageParam
 
-/** Models that accept adaptive thinking (all current ones except Haiku 4.5). */
-const adaptive = (model: string): boolean => !/haiku-4-5|^claude-3/.test(model)
 /**
  * Output ceiling actually sent for Claude (the budget check prices this worst case). Higher effort
- * thinks longer, so it gets more room (Anthropic suggests 64k at xhigh/max for agent work).
+ * thinks longer, so it gets more room (Anthropic suggests 64k at xhigh/max for agent work), never past
+ * what the model accepts (Haiku 4.5: 64K; current models: 128K).
  */
-export const claudeMaxTokens = (requested: number, effort?: import('@shared/types').Effort): number =>
-  Math.max(requested, effort === 'max' || effort === 'xhigh' ? 64000 : effort === 'high' ? 32000 : 16000)
+export const claudeMaxTokens = (requested: number, effort?: import('@shared/types').Effort, model?: string): number => {
+  const want = Math.max(requested, effort === 'max' || effort === 'xhigh' ? 64000 : effort === 'high' ? 32000 : 16000)
+  const cap = model ? claudeSpec(model)?.maxOutput : undefined
+  return cap ? Math.min(want, cap) : want
+}
 
 /** Server-side refusal fallbacks (Claude API): Opus 5/5.5, Fable 5.1, Sonnet 5.5. */
 export const fallbacks = (model: string): boolean => /^claude-(opus-5|fable-5-1|sonnet-5-5)/.test(model)
@@ -139,6 +142,17 @@ export async function listAnthropicModels(apiKey: string): Promise<string[]> {
   return ids.sort()
 }
 
+/** Input tokens in billing terms (what the budget prices at the input rate). */
+export function billedInput(model: string, u: { input_tokens?: number | null; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }): number {
+  return Math.round((u.input_tokens ?? 0) + CACHE_WRITE_FACTOR * (u.cache_creation_input_tokens ?? 0) + cacheReadFactor(model) * (u.cache_read_input_tokens ?? 0))
+}
+
+/** What the user sees when Claude's safety classifiers decline (stop_details is set only for refusals). */
+export function refusalNote(d: { category?: string | null; explanation?: string | null } | null | undefined): string {
+  const why = d?.category ? ` (${d.category.replace(/_/g, ' ')})` : ''
+  return `_Claude declined this request${why}._${d?.explanation ? ` ${d.explanation}` : ''} You can rephrase it, or pick another model for this chat.`
+}
+
 const STREAM_ERROR_STATUS: Record<string, number> = { overloaded_error: 529, rate_limit_error: 429, api_error: 500, timeout_error: 408 }
 
 export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamPart> {
@@ -156,15 +170,15 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
   })
   const params: Anthropic.Beta.Messages.MessageCreateParamsStreaming = {
     model: req.model,
-    max_tokens: claudeMaxTokens(req.maxTokens, req.effort),
+    max_tokens: claudeMaxTokens(req.maxTokens, req.effort, req.model),
     system,
     messages,
     stream: true,
     // Caches the whole prefix; resent history then costs about a tenth.
     cache_control: { type: 'ephemeral' },
     ...(tools.length ? { tools, tool_choice: { type: 'auto' } } : {}),
-    ...(adaptive(req.model) ? { thinking: { type: 'adaptive', display: 'summarized' } } : {}),
-    ...(adaptive(req.model) ? { output_config: { effort: req.effort ?? 'medium' } } : {}),
+    // Adaptive thinking + the app's thinking level as effort, mapped to what this model accepts.
+    ...claudeThinking(req.model, req.effort),
     ...(fallbacks(req.model) ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : {})
   } as Anthropic.Beta.Messages.MessageCreateParamsStreaming
   const { stream: _s, ...streamParams } = params
@@ -207,8 +221,8 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
     const u = final.usage
     yield {
       type: 'usage',
-      // Billing-equivalent input: cache writes cost 1.25x, cache reads 0.1x.
-      promptTokens: Math.round((u.input_tokens ?? 0) + 1.25 * (u.cache_creation_input_tokens ?? 0) + 0.1 * (u.cache_read_input_tokens ?? 0)),
+      // Billing-equivalent input: cache writes cost 1.25x; cache reads 0.1x (0.05x Opus 5.5, 0.025x Fable 5.1).
+      promptTokens: billedInput(final.model ?? req.model, u),
       completionTokens: u.output_tokens ?? 0
     }
     // Cut off mid tool call: keep the text, drop the half-written tool_use (it would have no tool_result).
@@ -217,7 +231,7 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
     if (content.some((b) => b.type === 'text' || b.type === 'tool_use')) yield { type: 'raw', provider: 'anthropic', model: final.model ?? req.model, content }
 
     if (final.stop_reason === 'refusal') {
-      yield { type: 'content', text: '\n\n_Claude declined this request._' }
+      yield { type: 'content', text: `\n\n${refusalNote(final.stop_details)}` }
       yield { type: 'finish', reason: 'refusal' }
       return
     }

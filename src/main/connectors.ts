@@ -15,6 +15,7 @@ import type { ToolDef } from './agent/types'
 import { CONSEQUENTIAL } from './agent/permissions'
 import type { Db } from './db'
 import type { Secrets } from './secrets'
+import { gmailPolicy, type ToolPolicy } from './mail/gmail'
 
 // MCP connectors: remote servers with OAuth sign-in (browser + loopback callback, tokens in
 // the Keychain) and local stdio servers. Each server's tools become agent tools loaded on
@@ -24,11 +25,12 @@ import type { Secrets } from './secrets'
 export const PRESETS: ConnectorPreset[] = [
   { id: 'cursor-app', name: 'Cursor', url: 'app:cursor', color: '#111111', category: 'Built in', domain: 'cursor.com', auth: 'app', description: 'SahilBot opens files in Cursor and can hand coding tasks to Cursor\'s agent.' },
   { id: 'apple-notes', name: 'Notes, Reminders & Calendar', url: 'app:mac_apps', color: '#F5B400', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Your Mac\'s own apps; macOS asks once to allow access.' },
+  { id: 'apple-mail', name: 'Mail (all your accounts)', url: 'app:mail', color: '#1A8CFF', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Apple Mail on this Mac: Gmail, iCloud, Outlook and more, no sign-in. macOS asks once.' },
   { id: 'gmail-web', name: 'Gmail (no setup)', url: 'https://mail.google.com/', color: '#EA4335', category: 'Built in', domain: 'mail.google.com/mail/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser; SahilBot uses Gmail like you do.' },
   { id: 'gcal-web', name: 'Google Calendar (no setup)', url: 'https://calendar.google.com/', color: '#4285F4', category: 'Built in', domain: 'calendar.google.com/calendar/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
   { id: 'gdrive-web', name: 'Google Drive (no setup)', url: 'https://drive.google.com/', color: '#0F9D58', category: 'Built in', domain: 'drive.google.com/drive/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
   { id: 'linkedin-web', name: 'LinkedIn (no setup)', url: 'https://www.linkedin.com/', color: '#0A66C2', category: 'Built in', auth: 'browser', description: 'Any site works this way: sign in once in SahilBot\'s browser.' },
-  { id: 'gmail', name: 'Gmail', url: 'https://gmailmcp.googleapis.com/mcp/v1', color: '#EA4335', category: 'Communication', domain: 'mail.google.com/mail/', auth: 'google', description: 'Search, read, draft and send email.' },
+  { id: 'gmail', name: 'Gmail', url: 'https://gmailmcp.googleapis.com/mcp/v1', color: '#EA4335', category: 'Communication', domain: 'mail.google.com/mail/', auth: 'google', description: 'Search, read, label and draft email; sending always asks.' },
   { id: 'gcal', name: 'Google Calendar', url: 'https://calendarmcp.googleapis.com/mcp/v1', color: '#4285F4', category: 'Productivity', domain: 'calendar.google.com/calendar/', auth: 'google', description: 'Events, availability and invites.' },
   { id: 'gdrive', name: 'Google Drive', url: 'https://drivemcp.googleapis.com/mcp/v1', color: '#0F9D58', category: 'Productivity', domain: 'drive.google.com/drive/', auth: 'google', description: 'Find and read Docs, Sheets and files.' },
   { id: 'notion', name: 'Notion', url: 'https://mcp.notion.com/mcp', color: '#111111', category: 'Productivity', auth: 'oauth', description: 'Pages, databases and comments.' },
@@ -182,6 +184,8 @@ export class ConnectorIcons {
 
 const MAX_TOOL_NAME = 64
 const SAFE_ENV_BLOCK = /^(NODE_OPTIONS|DYLD_|LD_|ELECTRON_)/
+/** Everyday words that don't say which app a request needs. */
+const SUGGEST_STOP = new Set(['and', 'the', 'for', 'with', 'your', 'you', 'any', 'all', 'from', 'into', 'files', 'file', 'data', 'sign', 'needs', 'setup', 'more', 'own', 'one', 'via', 'app', 'apps', 'read', 'find', 'search', 'get', 'list', 'make', 'new'])
 
 interface Live {
   client: Client
@@ -248,6 +252,48 @@ export function effectFor(name: string, ann?: { readOnlyHint?: boolean; destruct
   if (/^([a-z0-9]+[_\-.])?(get|list|search|read|fetch|query|find|lookup|describe|view|show|retrieve|count|stats|report|overview|research)([_\-.]|$)/i.test(name) ||
     /^(get|list|search|read|fetch|query|find|lookup|describe|view|show|retrieve|count)[A-Z]/.test(name)) return 'read'
   return 'write_external'
+}
+
+/**
+ * What one connector tool may do. Gmail's tools are mapped by name (read vs. labels vs. trash vs.
+ * send, and sending always asks); other servers go by annotations and verbs.
+ */
+export function toolPolicy(preset: string | undefined, name: string, ann?: { readOnlyHint?: boolean; destructiveHint?: boolean }, args?: unknown): ToolPolicy {
+  if (preset === 'gmail') return gmailPolicy(name, ann)
+  const effect = effectFor(name, ann)
+  // Tool names use underscores (send_email), which regex word boundaries don't split on.
+  return { effect, consequential: effect !== 'read' && CONSEQUENTIAL.test(`${name.replace(/[_\-.]+/g, ' ')} ${JSON.stringify(args ?? {}).slice(0, 200)}`) }
+}
+
+// ---------------------------------------------------------------- Google: one OAuth client for Gmail, Calendar and Drive
+
+export const GOOGLE_PRESETS = ['gmail', 'gcal', 'gdrive']
+const GOOGLE_CLIENT_KEY = 'google:oauthClient'
+export const GOOGLE_SETUP_NEEDED = 'Google apps need a one-time setup (about 5 minutes): open Connect apps → Gmail → "Set up Google once", then connect again.'
+
+/** Problems with a pasted Google OAuth client, or null when it looks right. */
+export function validateGoogleClient(clientId: string, clientSecret?: string): string | null {
+  const id = String(clientId ?? '').trim()
+  if (!id) return 'Paste the client ID.'
+  if (/\s/.test(id)) return 'The client ID has spaces in it; copy it again.'
+  if (!/^\d{5,}-[a-z0-9_]{8,}\.apps\.googleusercontent\.com$/i.test(id)) return 'That doesn\'t look like a Google OAuth client ID. It ends in .apps.googleusercontent.com (e.g. 1234567890-abc123….apps.googleusercontent.com).'
+  const sec = String(clientSecret ?? '').trim()
+  if (!sec) return 'Paste the client secret too (Google asks for it from Desktop apps; it starts with GOCSPX-).'
+  if (/\s/.test(sec) || sec.length < 16 || sec.length > 80 || (!/^GOCSPX-/.test(sec) && !/^[A-Za-z0-9_-]{20,40}$/.test(sec))) return 'That doesn\'t look like a Google client secret (it usually starts with GOCSPX-).'
+  return null
+}
+
+// ---------------------------------------------------------------- health
+
+/** Wait before reconnect attempt n (1-based): 5s, 15s, 45s, 2m15s… capped at 10 minutes. */
+export function backoffMs(attempt: number): number {
+  return Math.min(10 * 60_000, 5000 * 3 ** Math.max(0, attempt - 1))
+}
+export const MAX_RECONNECTS = 8
+
+/** Errors that mean the connection dropped (not that the tool itself failed). */
+export function isConnectionError(message: string): boolean {
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|socket hang up|Not connected|Connection closed|other side closed|network (error|is down)|SSE stream disconnected/i.test(String(message ?? ''))
 }
 
 function portOf(uri?: string): number | undefined {
@@ -343,6 +389,10 @@ class Oauth implements OAuthClientProvider {
 export class Connectors {
   private live = new Map<string, Live>()
   private status = new Map<string, ConnectorStatus>()
+  /** Pending automatic reconnects and how many tries each has had. */
+  private timers = new Map<string, ReturnType<typeof setTimeout>>()
+  private attempts = new Map<string, number>()
+  private healthTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(private db: Db, private secrets: Secrets, private registry: ToolRegistry, private changed: () => void) {}
 
@@ -350,21 +400,64 @@ export class Connectors {
     return this.db.getSetting<ConnectorConfig[]>('connectors') ?? []
   }
 
-  /** Catalog entries that match a request and aren't connected yet (for in-chat connect cards). */
+  /** Catalog entries that match a request and aren't connected yet (for in-chat connect cards): by name first, then by what they do ("seo" → Semrush). */
   suggest(query: string): ConnectorPreset[] {
     const q = query.toLowerCase()
     const connected = new Set(this.list().filter((c) => this.status.get(c.id)?.state === 'connected').map((c) => c.preset))
-    return PRESETS.filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app' &&
-      q.split(/[^a-z0-9.]+/).some((w) => w.length > 2 && (p.name.toLowerCase().includes(w) || p.id.startsWith(w))))
+    const words = q.split(/[^a-z0-9.]+/).filter((w) => w.length > 2)
+    const open = PRESETS.filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app')
+    const byName = open.filter((p) => words.some((w) => p.name.toLowerCase().includes(w) || p.id.startsWith(w)))
+    const byUse = open.filter((p) => !byName.includes(p) && words.some((w) => !SUGGEST_STOP.has(w) && p.description.toLowerCase().split(/[^a-z0-9]+/).includes(w)))
+    return [...byName, ...byUse]
   }
 
-  /** One-click connect for a catalog entry (OAuth opens the browser). */
+  /** One-click connect for a catalog entry (OAuth opens the browser). Google apps use the shared client from "Set up Google once". */
   async connectPreset(id: string): Promise<ConnectorStatus> {
     const p = PRESETS.find((x) => x.id === id)
-    if (!p || p.auth === 'google' || p.auth === 'browser' || p.auth === 'app' || !p.url) throw new Error('This connector needs setup in Connect apps.')
+    if (!p || p.auth === 'browser' || p.auth === 'app' || !p.url) throw new Error('This connector needs setup in Connect apps.')
+    if (p.auth === 'google' && !this.googleClient()) throw new Error(GOOGLE_SETUP_NEEDED)
     const existing = this.list().find((c) => c.preset === id)
     const cfg = existing ?? this.save({ name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true })
     return this.connect(cfg.id, true)
+  }
+
+  // ---------------------------------------------------------------- Google OAuth client (shared by Gmail, Calendar, Drive)
+
+  /** The saved Google client (the ID only; the secret stays in the Keychain). */
+  googleClient(): { clientId: string; hasSecret: boolean } | null {
+    const raw = this.secrets.get(GOOGLE_CLIENT_KEY)
+    if (!raw) return null
+    try {
+      const v = JSON.parse(raw) as { clientId?: string; clientSecret?: string }
+      return v.clientId ? { clientId: v.clientId, hasSecret: !!v.clientSecret } : null
+    } catch { return null }
+  }
+
+  /** Saves the Google client once for every Google app; already-added Google connectors pick it up on their next connect. */
+  setGoogleClient(clientId: string, clientSecret?: string): { clientId: string; hasSecret: boolean } {
+    const problem = validateGoogleClient(clientId, clientSecret)
+    if (problem) throw new Error(problem)
+    const prev = this.googleClient()
+    const id = clientId.trim()
+    this.secrets.set(GOOGLE_CLIENT_KEY, JSON.stringify({ clientId: id, clientSecret: clientSecret!.trim() }))
+    // A different client can't use the old one's tokens: Google connectors without their own client sign in again.
+    if (prev && prev.clientId !== id) {
+      for (const c of this.list()) if (GOOGLE_PRESETS.includes(c.preset ?? '') && !c.clientId) new Oauth(c.id, this.secrets).invalidateCredentials('all')
+    }
+    this.changed()
+    return { clientId: id, hasSecret: true }
+  }
+
+  clearGoogleClient(): void {
+    this.secrets.set(GOOGLE_CLIENT_KEY, null)
+    this.changed()
+  }
+
+  private sharedGoogle(): { clientId: string; clientSecret?: string } | null {
+    try {
+      const v = JSON.parse(this.secrets.get(GOOGLE_CLIENT_KEY) ?? 'null') as { clientId?: string; clientSecret?: string } | null
+      return v?.clientId ? { clientId: v.clientId, clientSecret: v.clientSecret } : null
+    } catch { return null }
   }
 
   statuses(): ConnectorStatus[] {
@@ -378,7 +471,7 @@ export class Connectors {
 
   save(c: Omit<ConnectorConfig, 'id'> & { id?: string }): ConnectorConfig {
     if (c.kind === 'remote' && !/^https?:\/\//.test(c.url ?? '')) throw new Error('Enter the server URL (https://…).')
-    if (PRESETS.find((p) => p.id === c.preset)?.auth === 'google' && !c.clientId) throw new Error('Google needs your OAuth client ID (Google Cloud Console → Credentials → Create OAuth client → Desktop app).')
+    if (PRESETS.find((p) => p.id === c.preset)?.auth === 'google' && !c.clientId && !this.googleClient()) throw new Error(GOOGLE_SETUP_NEEDED)
     if (c.kind === 'stdio' && !c.command?.trim()) throw new Error('Enter the command that starts the server.')
     const all = this.list()
     const full: ConnectorConfig = { ...c, id: c.id ?? `${slug(c.name)}-${randomUUID().slice(0, 4)}`, enabled: c.enabled ?? true } as ConnectorConfig
@@ -437,25 +530,39 @@ export class Connectors {
     this.changed()
   }
 
+  /** Closes the connection and stops any automatic reconnect. */
   async disconnect(id: string): Promise<void> {
+    await this.teardown(id)
+    this.attempts.delete(id)
+    this.setStatus({ id, state: 'disconnected', tools: 0 })
+  }
+
+  /** Drops the live connection (its tools leave the registry) and any pending reconnect. */
+  private async teardown(id: string): Promise<void> {
+    const timer = this.timers.get(id)
+    if (timer) { clearTimeout(timer); this.timers.delete(id) }
     const l = this.live.get(id)
     if (l) {
+      // Out of the map first, so the client's onclose doesn't read this as a dropped connection.
+      this.live.delete(id)
       this.registry.unregister((t) => l.tools.includes(t.name))
       await l.client.close().catch(() => undefined)
-      this.live.delete(id)
     }
-    this.setStatus({ id, state: 'disconnected', tools: 0 })
   }
 
   async connectAll(): Promise<void> {
     await Promise.all(this.list().filter((c) => c.enabled).map((c) => this.connect(c.id, false).catch(() => undefined)))
   }
 
-  /** Connects; with interactive=true a remote server that needs auth opens the browser to sign in. */
-  async connect(id: string, interactive = true): Promise<ConnectorStatus> {
+  /**
+   * Connects; with interactive=true a remote server that needs auth opens the browser to sign in.
+   * A connection that fails for network reasons (offline at launch, server hiccup) retries with backoff.
+   */
+  async connect(id: string, interactive = true, fromRetry = false): Promise<ConnectorStatus> {
     const c = this.list().find((x) => x.id === id)
     if (!c) throw new Error('Unknown connector')
-    await this.disconnect(id)
+    await this.teardown(id)
+    if (!fromRetry) this.attempts.delete(id)
     this.setStatus({ id, state: 'connecting', tools: 0 })
     const client = new Client({ name: 'SahilBot', version: '0.1.0' })
     try {
@@ -463,8 +570,12 @@ export class Connectors {
         const env = Object.fromEntries(Object.entries({ ...process.env, ...(c.env ?? {}) }).filter(([k, v]) => v !== undefined && !SAFE_ENV_BLOCK.test(k))) as Record<string, string>
         await client.connect(new StdioClientTransport({ command: c.command!, args: c.args ?? [], env, stderr: 'ignore' }))
       } else {
-        const secret = this.secrets.get(`mcp:${id}:clientSecret`)
-        const auth = new Oauth(id, this.secrets, c.clientId ? { client_id: c.clientId, ...(secret ? { client_secret: secret } : {}) } : undefined, interactive)
+        // Google apps share the client from "Set up Google once" unless this connector has its own.
+        const shared = PRESETS.find((p) => p.id === c.preset)?.auth === 'google' ? this.sharedGoogle() : null
+        const clientId = c.clientId ?? shared?.clientId
+        const secret = this.secrets.get(`mcp:${id}:clientSecret`) ?? (c.clientId ? undefined : shared?.clientSecret)
+        if (PRESETS.find((p) => p.id === c.preset)?.auth === 'google' && !clientId) throw new Error(GOOGLE_SETUP_NEEDED)
+        const auth = new Oauth(id, this.secrets, clientId ? { client_id: clientId, ...(secret ? { client_secret: secret } : {}) } : undefined, interactive)
         await auth.listen()
         const url = new URL(c.url!)
         const headers = c.headerName && this.secrets.get(`mcp:${id}:header`) ? { [c.headerName]: this.secrets.get(`mcp:${id}:header`)! } : undefined
@@ -481,7 +592,7 @@ export class Connectors {
           await attempt()
         } catch (e) {
           if (!(e instanceof UnauthorizedError)) throw e
-          if (!interactive) { this.setStatus({ id, state: 'needs_auth', tools: 0 }); auth.close(); return this.status.get(id)! }
+          if (!interactive) { this.attempts.delete(id); this.setStatus({ id, state: 'needs_auth', tools: 0 }); auth.close(); return this.status.get(id)! }
           this.setStatus({ id, state: 'signing_in', tools: 0 })
           const code = await auth.waitForCode()
           const t = new StreamableHTTPClientTransport(url, { authProvider: auth })
@@ -498,38 +609,162 @@ export class Connectors {
       const defs: ToolDef[] = tools.filter((t) => !off.has(t.name)).map((t) => this.toToolDef(c, client, t, names.get(t.name)!))
       this.registry.register(...defs)
       this.live.set(id, { client, tools: defs.map((d) => d.name), all: tools as ServerTool[], names })
-      const st: ConnectorStatus = { id, state: 'connected', tools: defs.length, toolNames: tools.map((t) => t.name) }
+      // A local server that exits, or a stream that closes, reconnects on its own.
+      client.onclose = () => { if (this.live.get(id)?.client === client) this.lost(id, 'Connection closed') }
+      this.attempts.delete(id)
+      const st: ConnectorStatus = { id, state: 'connected', tools: defs.length, toolNames: tools.map((t) => t.name), checkedAt: Date.now() }
       this.setStatus(st)
       return st
     } catch (e) {
       await client.close().catch(() => undefined)
-      const st: ConnectorStatus = { id, state: 'error', tools: 0, error: (e as Error).message.slice(0, 300) }
+      const msg = (e as Error).message
+      const st: ConnectorStatus = { id, state: 'error', tools: 0, error: msg.slice(0, 300) }
       this.setStatus(st)
-      return st
+      if (fromRetry || isConnectionError(msg)) this.scheduleReconnect(id, msg)
+      return this.status.get(id) ?? st
     }
   }
 
+  // ---------------------------------------------------------------- health and reconnect
+
+  /** A live connection dropped: its tools leave the agent until it's back, and reconnecting starts. */
+  private lost(id: string, reason: string): void {
+    const l = this.live.get(id)
+    if (!l) return
+    this.live.delete(id)
+    this.registry.unregister((t) => l.tools.includes(t.name))
+    void l.client.close().catch(() => undefined)
+    this.scheduleReconnect(id, reason)
+  }
+
+  private scheduleReconnect(id: string, reason: string): void {
+    const c = this.list().find((x) => x.id === id)
+    if (!c || !c.enabled || this.timers.has(id)) return
+    const attempt = (this.attempts.get(id) ?? 0) + 1
+    const why = reason.replace(/\s+/g, ' ').slice(0, 160)
+    if (attempt > MAX_RECONNECTS) {
+      this.attempts.delete(id)
+      this.setStatus({ id, state: 'error', tools: 0, error: `${why} (stopped retrying; press Reconnect)` })
+      return
+    }
+    this.attempts.set(id, attempt)
+    const wait = backoffMs(attempt)
+    this.setStatus({ id, state: 'reconnecting', tools: 0, error: why, attempt, retryAt: Date.now() + wait })
+    const t = setTimeout(() => { this.timers.delete(id); void this.connect(id, false, true).catch(() => undefined) }, wait)
+    t.unref?.()
+    this.timers.set(id, t)
+  }
+
+  /**
+   * "Test connection": lists the server's tools and times it. A connector that isn't live tries to
+   * connect (without opening the browser); a dropped one starts reconnecting.
+   */
+  async test(id: string): Promise<ConnectorStatus> {
+    const c = this.list().find((x) => x.id === id)
+    if (!c) throw new Error('Unknown connector')
+    const l = this.live.get(id)
+    if (!l) return this.connect(id, false)
+    const t0 = Date.now()
+    try {
+      const { tools } = await l.client.listTools(undefined, { timeout: 20_000 })
+      const latencyMs = Date.now() - t0
+      const now = tools.map((t) => t.name).sort().join('\n')
+      // The server changed its tools: connect again so the agent sees the current set.
+      if (now !== l.all.map((t) => t.name).sort().join('\n')) return this.connect(id, false)
+      const st: ConnectorStatus = { id, state: 'connected', tools: l.tools.length, toolNames: tools.map((t) => t.name), checkedAt: Date.now(), latencyMs }
+      this.setStatus(st)
+      return st
+    } catch (e) {
+      const msg = (e as Error).message
+      if (e instanceof UnauthorizedError || /\b401\b|unauthori[sz]ed|invalid_token|invalid_grant/i.test(msg)) {
+        await this.teardown(id)
+        this.setStatus({ id, state: 'needs_auth', tools: 0, error: 'Sign-in expired', checkedAt: Date.now() })
+        return this.status.get(id)!
+      }
+      this.lost(id, msg)
+      return this.status.get(id)!
+    }
+  }
+
+  /** Checks every live connector now and then (each check is one tools/list call). */
+  startHealth(everyMs = 5 * 60_000): void {
+    if (this.healthTimer) return
+    this.healthTimer = setInterval(() => void this.checkAll(), everyMs)
+    this.healthTimer.unref?.()
+  }
+
+  stopHealth(): void {
+    if (this.healthTimer) clearInterval(this.healthTimer)
+    this.healthTimer = null
+    for (const t of this.timers.values()) clearTimeout(t)
+    this.timers.clear()
+  }
+
+  async checkAll(): Promise<void> {
+    for (const id of [...this.live.keys()]) await this.test(id).catch(() => undefined)
+  }
+
+  // ---------------------------------------------------------------- calls from SahilBot itself (not the model)
+
+  /** True when a connector made from this catalog entry is live. */
+  presetConnected(preset: string): boolean {
+    return this.list().some((c) => c.preset === preset && this.live.has(c.id))
+  }
+
+  /**
+   * Calls one of a connected app's tools from main (e.g. reading an emailed sign-in code). The text
+   * stays in main. Tools the user switched off stay off here too.
+   */
+  async callPresetTool(preset: string, tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+    const c = this.list().find((x) => x.preset === preset && this.live.has(x.id))
+    if (!c) throw new Error(`${preset} is not connected`)
+    if (c.disabledTools?.includes(tool)) throw new Error(`${c.name}'s ${tool} is switched off`)
+    const l = this.live.get(c.id)!
+    if (!l.all.some((t) => t.name === tool)) throw new Error(`${c.name} has no ${tool} tool`)
+    const r = await l.client.callTool({ name: tool, arguments: args }, undefined, { signal, timeout: 30_000 })
+    const { text } = contentOf(r)
+    if (r.isError) throw new Error(text || `${tool} failed`)
+    return text
+  }
+
   private toToolDef(c: ConnectorConfig, client: Client, t: ServerTool, name: string): ToolDef {
-    const effect = effectFor(t.name, t.annotations)
+    const policy = toolPolicy(c.preset, t.name, t.annotations)
+    const lost = (reason: string): void => { if (this.live.get(c.id)?.client === client) this.lost(c.id, reason) }
     return {
       name,
       label: c.name,
       group: c.name,
-      effect,
+      effect: policy.effect,
       untrusted: true,
-      // Tool names use underscores (send_email), which regex word boundaries don't split on.
-      consequential: (args) => effect !== 'read' && CONSEQUENTIAL.test(`${t.name.replace(/[_\-.]+/g, ' ')} ${JSON.stringify(args).slice(0, 200)}`),
+      consequential: (args) => toolPolicy(c.preset, t.name, t.annotations, args).consequential,
+      ...(policy.hardStop ? { hardStop: () => policy.hardStop! } : {}),
       describe: (args) => `${c.name}: ${t.annotations?.title ?? t.name.replace(/_/g, ' ')} ${JSON.stringify(args).slice(0, 160)}`,
       description: `[${c.name}] ${(t.description ?? t.name).slice(0, 900)}`,
       parameters: t.inputSchema && Object.keys(t.inputSchema).length ? t.inputSchema : { type: 'object', properties: {} },
       async run(args, ctx) {
-        const r = await client.callTool({ name: t.name, arguments: args as Record<string, unknown> }, undefined, { signal: ctx.signal, timeout: 120_000 })
-        const parts = (r.content ?? []) as Array<{ type: string; text?: string; data?: string; mimeType?: string; resource?: { text?: string; uri?: string } }>
-        const text = parts.map((p) => (p.type === 'text' ? p.text : p.type === 'resource' ? (p.resource?.text ?? p.resource?.uri) : p.type === 'image' ? '[image attached]' : '')).filter(Boolean).join('\n')
-        const images = parts.filter((p) => p.type === 'image' && p.data).map((p) => `data:${p.mimeType ?? 'image/png'};base64,${p.data}`)
+        let r: Awaited<ReturnType<Client['callTool']>>
+        try {
+          r = await client.callTool({ name: t.name, arguments: args as Record<string, unknown> }, undefined, { signal: ctx.signal, timeout: 120_000 })
+        } catch (e) {
+          const m = (e as Error).message
+          if (!ctx.signal.aborted && isConnectionError(m)) {
+            lost(m)
+            throw new Error(`${c.name} lost its connection (${m.slice(0, 80)}). SahilBot is reconnecting on its own: try again in a minute, or tell the user to check Connect apps.`)
+          }
+          throw e
+        }
+        const { text, images } = contentOf(r)
         if (r.isError) throw new Error(text || `${t.name} failed`)
         return { text: text || '(no output)', images: images.length ? images : undefined, display: t.annotations?.title ?? t.name.replace(/_/g, ' ') }
       }
     }
   }
+}
+
+/** Text and images from an MCP tool result. */
+function contentOf(r: object): { text: string; images: string[] } {
+  const parts = ((r as { content?: unknown }).content ?? []) as Array<{ type: string; text?: string; data?: string; mimeType?: string; resource?: { text?: string; uri?: string } }>
+  const text = parts.map((p) => (p.type === 'text' ? p.text : p.type === 'resource' ? (p.resource?.text ?? p.resource?.uri) : p.type === 'image' ? '[image attached]' : '')).filter(Boolean).join('\n')
+  const images = parts.filter((p) => p.type === 'image' && p.data).map((p) => `data:${p.mimeType ?? 'image/png'};base64,${p.data}`)
+  return { text, images }
 }

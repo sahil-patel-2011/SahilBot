@@ -10,7 +10,7 @@ import { importBot } from './BotShare'
 
 const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
   off: 'Off', disconnected: 'Disconnected', connecting: 'Connecting…', signing_in: 'Finish signing in in your browser…',
-  needs_auth: 'Needs sign-in', connected: 'Connected', error: 'Error'
+  needs_auth: 'Needs sign-in', connected: 'Connected', error: 'Error', reconnecting: 'Reconnecting…'
 }
 
 /** SahilBot's own saved-logins vault, listed under Password Managers (opens Settings → Passwords). */
@@ -24,7 +24,7 @@ const prettyTool = (n: string): string => n.replace(/[_\-.]+/g, ' ').replace(/^\
 const ACRONYMS = /^(pdf|pcb|sql|seo|ci|api|ios|gdt|dfm)$/i
 const prettySkill = (n: string): string => n.split('-').map((w) => (ACRONYMS.test(w) ? w.toUpperCase() : w)).join(' ').replace(/^\w/, (c) => c.toUpperCase())
 
-type View = 'browse' | 'manage' | 'templates' | 'form'
+type View = 'browse' | 'manage' | 'templates' | 'form' | 'google'
 type Form = { preset: ConnectorPreset; name: string; kind: 'remote' | 'stdio'; url: string; command: string; headerName: string; headerValue: string; clientId: string; clientSecret: string }
 
 /**
@@ -53,6 +53,11 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const [moreOpen, setMoreOpen] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
   const [adding, setAdding] = useState<string | null>(null)
+  /** The Google app waiting for "Set up Google once" to finish (connects right after). */
+  const [googleFor, setGoogleFor] = useState<ConnectorPreset | null>(null)
+  const [google, setGoogle] = useState<{ clientId: string; hasSecret: boolean } | null>(null)
+  /** Test connection results by connector id. */
+  const [tests, setTests] = useState<Record<string, { ok: boolean; text: string }>>({})
   const body = useRef<HTMLDivElement>(null)
   const icons = useAppIcons()
 
@@ -60,6 +65,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     const r = await api.connectors.list()
     setConfigs(r.configs)
     setStatuses(r.statuses)
+    setGoogle(await api.connectors.googleClient().catch(() => null))
   }
   useEffect(() => {
     void api.connectors.presets().then(setPresets)
@@ -102,15 +108,17 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     // No-setup apps: just open the site in SahilBot's browser and sign in once.
     if (p.auth === 'browser') { onBrowse(p.url); onClose(); return }
     // Built-in apps need nothing: just ask SahilBot to use them.
-    if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : 'add a reminder for tomorrow at 9'}".`); return }
+    if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : 'add a reminder for tomorrow at 9'}".`); return }
     const existing = configOf(p)
+    // Google apps without the shared client (and without their own): set Google up first.
+    if (p.auth === 'google' && !google && !existing?.clientId && status(existing?.id ?? '')?.state !== 'connected') { setGoogleFor(p); go('google'); return }
     if (existing) {
       if (status(existing.id)?.state === 'connected') { setOpen(existing.id); go('manage'); return }
       try { await api.connectors.connect(existing.id) } catch (e) { setErr(clean(e)) }
       return
     }
-    // Known servers connect in one click; Google needs your client ID; custom needs details.
-    if (p.id !== 'custom' && p.auth !== 'google') {
+    // Known servers connect in one click; custom needs details.
+    if (p.id !== 'custom') {
       try {
         const saved = await api.connectors.save({ name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true })
         await load()
@@ -164,6 +172,34 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     try { await api.connectors.setToolEnabled(c.id, tool, on) } catch (e) { setErr(clean(e)); void load() }
   }
 
+  const testOne = async (c: ConnectorConfig): Promise<void> => {
+    setTests((t) => ({ ...t, [c.id]: { ok: true, text: 'Testing…' } }))
+    try {
+      const st = await api.connectors.test(c.id)
+      setTests((t) => ({ ...t, [c.id]: { ok: st.state === 'connected', text: healthText(st) } }))
+    } catch (e) {
+      setTests((t) => ({ ...t, [c.id]: { ok: false, text: clean(e) } }))
+    }
+  }
+
+  /** Google is set up: connect the app that was waiting for it (the browser opens to sign in). */
+  const afterGoogle = async (info: { clientId: string; hasSecret: boolean }): Promise<void> => {
+    setGoogle(info)
+    const p = googleFor
+    setGoogleFor(null)
+    go(p ? 'manage' : 'browse')
+    if (!p) { toast('Google is set up. Connect Gmail, Calendar or Drive with one click each.'); return }
+    try {
+      const existing = configOf(p)
+      const saved = existing ?? await api.connectors.save({ name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true })
+      setOpen(saved.id)
+      await load()
+      await api.connectors.connect(saved.id)
+    } catch (e) {
+      setErr(clean(e))
+    }
+  }
+
   // ---------------------------------------------------------------- rows
 
   const item = (p: ConnectorPreset): ReactNode => {
@@ -186,7 +222,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           : <AppIcon src={icons[p.id]} name={p.name} color={p.color} />}
         <span className="ca-item-text">
           <b>{p.name}</b>
-          <span>{st?.state === 'needs_auth' || st?.state === 'error' ? STATE_TEXT[st.state] : p.description}</span>
+          <span>{st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !google && !cfg ? `${p.description} One-time Google setup first.` : p.description}</span>
         </span>
         <span className={`ca-btn ${tone}`} aria-disabled={busy || undefined}>
           {label}{tone === 'done' && <I.Check size={13} />}
@@ -291,6 +327,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
                   <span className={`ca-status ${state}`}>
                     <i />{STATE_TEXT[state]}
                     {state === 'connected' ? ` · ${off.size && names.length ? `${on} of ${names.length}` : st?.tools ?? 0} tools` : ''}
+                    {state === 'reconnecting' && st?.retryAt ? ` · try ${st.attempt ?? 1} at ${new Date(st.retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}` : ''}
                     {st?.error ? ` · ${st.error}` : ''}
                   </span>
                 </div>
@@ -299,6 +336,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
                     Tools<I.Chevron size={13} style={{ transform: expanded ? 'rotate(180deg)' : undefined }} />
                   </button>
                 )}
+                <button className="btn" disabled={busy} title="Checks the connection by listing the app's tools" data-testid="connector-test" onClick={() => void testOne(c)}>Test</button>
                 {state === 'connected' ? (
                   <button className="btn" onClick={() => void guard(() => api.connectors.disconnect(c.id))}>Disconnect</button>
                 ) : (
@@ -308,6 +346,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
                 )}
                 <button className="icon-btn" title="Remove" aria-label={`Remove ${c.name}`} onClick={() => { if (confirm(`Remove ${c.name}? You can add it again later.`)) void guard(() => api.connectors.remove(c.id)) }}><I.Trash size={15} /></button>
               </div>
+              {tests[c.id] && (
+                <div className="hint" data-testid="connector-test-result" style={{ margin: '2px 0 8px 52px', color: tests[c.id].ok ? 'var(--ok, #2e9d5b)' : 'var(--danger)' }}>{tests[c.id].text}</div>
+              )}
               {expanded && (
                 <div className="ca-tools" data-testid="connector-tools">
                   <div className="ca-tools-head">
@@ -330,6 +371,12 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           )
         })}
       </div>
+      {(google || configs.some((c) => presets.find((p) => p.id === c.preset)?.auth === 'google')) && (
+        <p className="ca-foot">
+          {google ? `Google apps use your OAuth client …${google.clientId.split('-')[0].slice(-4)}. ` : 'Google apps need a one-time setup. '}
+          <button className="ca-viewall" onClick={() => { setGoogleFor(null); go('google') }} data-testid="google-setup-open">{google ? 'Change Google setup' : 'Set up Google once'}</button>
+        </p>
+      )}
     </>
   )
 
@@ -365,16 +412,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           <button className={form.kind === 'stdio' ? 'on' : ''} onClick={() => setForm({ ...form, kind: 'stdio' })}>Local (command)</button>
         </div>
       </div>
-      {form.preset.auth === 'google' && (
-        <>
-          <div className="hint" style={{ margin: '6px 0 10px' }}>
-            Google only signs in apps registered to you. Once: open Google Cloud Console → APIs &amp; Services → Credentials → Create credentials → OAuth client ID → <b>Desktop app</b>, and enable the {form.preset.name} API. Paste the client ID (and secret) here; the secret is kept in your Keychain.
-          </div>
-          <div className="field"><label>OAuth client ID</label><input value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} placeholder="1234-abc.apps.googleusercontent.com" data-testid="conn-client-id" /></div>
-          <div className="field"><label>Client secret</label><input type="password" value={form.clientSecret} onChange={(e) => setForm({ ...form, clientSecret: e.target.value })} placeholder="GOCSPX-…" /></div>
-        </>
-      )}
-      {form.preset.auth === 'google' ? null : form.kind === 'remote' ? (
+      {form.kind === 'remote' ? (
         <>
           <div className="field"><label>Server URL</label><input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://example.com/mcp" data-testid="conn-url" /></div>
           <div className="field"><label>API key header (optional)</label>
@@ -398,7 +436,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   // ---------------------------------------------------------------- frame
 
   const moreLabel = MORE_CATEGORIES.includes(chip) ? chip : 'More'
-  const title = view === 'manage' ? 'Connected apps' : view === 'templates' ? 'Bot templates' : view === 'form' ? 'Add an app' : 'Connect Apps'
+  const title = view === 'manage' ? 'Connected apps' : view === 'templates' ? 'Bot templates' : view === 'form' ? 'Add an app' : view === 'google' ? 'Set up Google once' : 'Connect Apps'
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -463,7 +501,139 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           {view === 'manage' && manage()}
           {view === 'templates' && gallery()}
           {view === 'form' && formView()}
+          {view === 'google' && (
+            <GoogleSetup
+              forApp={googleFor?.name}
+              onCancel={() => { setGoogleFor(null); go(googleFor ? 'browse' : 'manage') }}
+              onDone={(info) => void afterGoogle(info)} />
+          )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+/** "Working · 23 tools · 340 ms" for a Test connection result. */
+function healthText(st: ConnectorStatus): string {
+  if (st.state === 'connected') return `Working · ${st.toolNames?.length ?? st.tools} tools${typeof st.latencyMs === 'number' ? ` · answered in ${st.latencyMs} ms` : ''}`
+  if (st.state === 'needs_auth') return 'Needs sign-in: press Sign in.'
+  if (st.state === 'reconnecting') return `Not reachable right now${st.error ? ` (${st.error})` : ''}. Reconnecting on its own.`
+  return `${STATE_TEXT[st.state]}${st.error ? `: ${st.error}` : ''}`
+}
+
+// ---------------------------------------------------------------- Set up Google once
+
+/** Same checks as main (connectors.validateGoogleClient), for feedback while typing. */
+export function googleClientProblem(clientId: string, clientSecret: string): string | null {
+  const id = clientId.trim()
+  const sec = clientSecret.trim()
+  if (!id) return 'Paste the client ID.'
+  if (/\s/.test(id)) return 'The client ID has spaces in it; copy it again.'
+  if (!/^\d{5,}-[a-z0-9_]{8,}\.apps\.googleusercontent\.com$/i.test(id)) return 'A client ID ends in .apps.googleusercontent.com (e.g. 1234567890-abc123….apps.googleusercontent.com).'
+  if (!sec) return 'Paste the client secret too (it starts with GOCSPX-).'
+  if (/\s/.test(sec) || sec.length < 16 || sec.length > 80 || (!/^GOCSPX-/.test(sec) && !/^[A-Za-z0-9_-]{20,40}$/.test(sec))) return 'That doesn\'t look like a Google client secret (it usually starts with GOCSPX-).'
+  return null
+}
+
+const CONSOLE = 'https://console.cloud.google.com'
+const GOOGLE_STEPS: Array<{ title: string; text: string; links: Array<[string, string]> }> = [
+  { title: 'Create a Google Cloud project', text: 'Any name works, e.g. "SahilBot". It\'s free; no billing needed.', links: [['Create project', `${CONSOLE}/projectcreate`]] },
+  {
+    title: 'Turn on the Gmail, Calendar and Drive APIs',
+    text: 'With the new project picked at the top of the page, press Enable on each. If the API Library also lists MCP versions of them, enable those too.',
+    links: [['Gmail API', `${CONSOLE}/apis/library/gmail.googleapis.com`], ['Calendar API', `${CONSOLE}/apis/library/calendar-json.googleapis.com`], ['Drive API', `${CONSOLE}/apis/library/drive.googleapis.com`], ['Search "MCP"', `${CONSOLE}/apis/library?q=mcp`]]
+  },
+  {
+    title: 'Set up the consent screen',
+    text: 'Get started → app name "SahilBot", your email → Audience: External → create. Then under Audience → Test users, add your own Google address. Leave it in Testing: only you can sign in.',
+    links: [['Consent screen', `${CONSOLE}/auth/overview`], ['Test users', `${CONSOLE}/auth/audience`]]
+  },
+  { title: 'Create a Desktop OAuth client', text: 'Application type: Desktop app, name "SahilBot" → Create. Copy the Client ID and the Client secret it shows.', links: [['Create client', `${CONSOLE}/auth/clients/create`]] },
+  { title: 'Paste them here', text: 'SahilBot uses this one client for Gmail, Calendar and Drive. The secret is kept in your Mac\'s Keychain; your email never goes through anyone else\'s servers.', links: [] }
+]
+
+/**
+ * "Set up Google once": step-by-step with direct links into Google Cloud Console, then the client ID
+ * and secret, checked as you type and shared by every Google app. Also shown inside the in-chat
+ * Connect card when a task needs Gmail, Calendar or Drive.
+ */
+export function GoogleSetup({ forApp, onDone, onCancel, compact }: {
+  forApp?: string
+  onDone: (info: { clientId: string; hasSecret: boolean }) => void
+  onCancel?: () => void
+  compact?: boolean
+}) {
+  const [current, setCurrent] = useState<{ clientId: string; hasSecret: boolean } | null | undefined>(undefined)
+  const [editing, setEditing] = useState(false)
+  const [clientId, setClientId] = useState('')
+  const [secret, setSecret] = useState('')
+  const [touched, setTouched] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  useEffect(() => { void api.connectors.googleClient().then(setCurrent).catch(() => setCurrent(null)) }, [])
+  const problem = googleClientProblem(clientId, secret)
+
+  const save = async (): Promise<void> => {
+    setTouched(true)
+    if (problem) return
+    setBusy(true)
+    setErr('')
+    try {
+      const info = await api.connectors.setGoogleClient(clientId.trim(), secret.trim())
+      setCurrent(info)
+      setEditing(false)
+      setSecret('')
+      onDone(info)
+    } catch (e) {
+      setErr(clean(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (current === undefined) return <div className="hint">Loading…</div>
+  if (current && !editing) {
+    return (
+      <div className="conn-form" data-testid="google-setup">
+        <div className="hint">Google is set up with client …{current.clientId.split('-')[0].slice(-4)}{current.hasSecret ? ' (secret in your Keychain)' : ''}. Gmail, Calendar and Drive each connect with one click and their own Google sign-in.</div>
+        <div className="modal-actions">
+          {onCancel && <button className="btn" onClick={onCancel}>Back</button>}
+          <button className="btn" onClick={() => setEditing(true)}>Use a different client</button>
+          <button className="btn primary" onClick={() => onDone(current)} data-testid="google-setup-continue">{forApp ? `Connect ${forApp}` : 'Done'}</button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="conn-form" data-testid="google-setup">
+      {!compact && <p className="ca-lede" style={{ marginTop: 0 }}>Google only lets you sign in apps registered to you, so this takes about 5 minutes, once. {forApp ? `Then ${forApp} connects` : 'Then Gmail, Calendar and Drive connect'} with one click.</p>}
+      <ol style={{ margin: '0 0 12px', paddingLeft: 20, display: 'grid', gap: compact ? 8 : 12 }}>
+        {GOOGLE_STEPS.map((s) => (
+          <li key={s.title}>
+            <b>{s.title}</b>
+            <div className="hint" style={{ margin: '2px 0 4px' }}>{s.text}</div>
+            {s.links.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {s.links.map(([label, href]) => (
+                  <a key={href} className="ca-btn ghost" href={href} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>{label} ↗</a>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+      <div className="field"><label>Client ID</label>
+        <input value={clientId} onChange={(e) => setClientId(e.target.value)} onBlur={() => clientId && setTouched(true)} placeholder="1234567890-abc123.apps.googleusercontent.com" spellCheck={false} autoComplete="off" data-testid="google-client-id" />
+      </div>
+      <div className="field"><label>Client secret</label>
+        <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="GOCSPX-…" autoComplete="off" data-testid="google-client-secret" />
+      </div>
+      {(touched && problem) || err ? <div className="hint" style={{ color: 'var(--danger)' }} data-testid="google-setup-error">{err || problem}</div> : null}
+      <div className="hint">Google may ask you to sign in again about once a week while the app is in Testing. Publishing it (Audience → Publish app) stops that; Google may show an "unverified app" notice you can continue past, since it's your own app.</div>
+      <div className="modal-actions">
+        {onCancel && <button className="btn" onClick={onCancel}>Cancel</button>}
+        {current && <button className="btn" onClick={() => setEditing(false)}>Keep the current client</button>}
+        <button className="btn primary" disabled={busy || (touched && !!problem)} onClick={() => void save()} data-testid="google-setup-save">{busy ? 'Saving…' : forApp ? `Save and connect ${forApp}` : 'Save'}</button>
       </div>
     </div>
   )
