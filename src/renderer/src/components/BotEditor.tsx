@@ -79,7 +79,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
             </div>
             <div className="field"><label>Color</label>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{COLORS.map((c) => (
-                <button key={c} onClick={() => setColor(c)} style={{ width: 22, height: 22, borderRadius: 7, background: c, outline: c === color ? '2px solid var(--text)' : 'none', outlineOffset: 2 }} />
+                <button key={c} className="swatch" onClick={() => setColor(c)} aria-label={`Color ${c}`} aria-pressed={c === color} title={c} style={{ width: 22, height: 22, borderRadius: 7, background: c, outline: c === color ? '2px solid var(--text)' : 'none', outlineOffset: 2 }} />
               ))}</div>
             </div>
             <h3>Instructions</h3>
@@ -94,7 +94,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
                   <button key={sh} className={`shape-pick${sh === shape ? ' on' : ''}`} onClick={() => setShape(sh)} title={sh}><SpaceAvatar color={color} shape={sh} size={34} /></button>
                 ))}</div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{COLORS.map((c) => (
-                  <button key={c} onClick={() => setColor(c)} style={{ width: 22, height: 22, borderRadius: 7, background: c, outline: c === color ? '2px solid var(--text)' : 'none', outlineOffset: 2 }} />
+                  <button key={c} className="swatch" onClick={() => setColor(c)} aria-label={`Color ${c}`} aria-pressed={c === color} title={c} style={{ width: 22, height: 22, borderRadius: 7, background: c, outline: c === color ? '2px solid var(--text)' : 'none', outlineOffset: 2 }} />
                 ))}</div>
               </div>
             </div>

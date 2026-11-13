@@ -10,6 +10,8 @@ import './styles-teach.css'
 import './styles-pages.css'
 import './styles-memory.css'
 import './styles-share-usage.css'
+// Loaded last: the polish layer refines everything above.
+import './styles-polish.css'
 
 // The same page serves the main window and the Quick Ask bar (#quick).
 const quick = location.hash === '#quick'

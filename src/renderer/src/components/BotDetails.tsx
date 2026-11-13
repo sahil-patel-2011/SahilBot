@@ -148,7 +148,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                 {tasks.length === 0 && <div className="bd-empty">Ask in chat to set a routine.</div>}
                 {tasks.map((t) => (
                   <div key={t.id} className={`rt-row${t.enabled ? '' : ' paused'}`} data-testid="routine-row">
-                    <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }}>
+                    <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }} title={t.title}>
                       <span className="rt-icon"><I.Clock size={16} /></span>
                       <span className="rt-text">
                         <b>{t.title}</b>

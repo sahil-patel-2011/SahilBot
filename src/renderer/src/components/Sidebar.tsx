@@ -244,7 +244,7 @@ export function Sidebar(p: {
   const smallRow = (s: Space, id: string) => (
     <div key={s.id} className={`nav-row${isActive(s) ? ' active' : ''}`} onContextMenu={(e) => spaceMenu(s, e)} {...(s.hidden ? {} : drag('space', s.id))}>
       {renaming === s.id ? renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v })) : (
-        <button className="nav-btn" onClick={() => openSpace(s)} data-testid={id} title={s.lastPreview ?? s.name}>
+        <button className="nav-btn" onClick={() => openSpace(s)} data-testid={id} title={s.lastPreview ? `${s.name}: ${s.lastPreview.slice(0, 120)}` : s.name}>
           <span className="row-icon">{avatar(s, 22)}</span>
           <span className="t">{s.name}</span>
           {status(working(s), needs(s), !!s.unread && !isActive(s))}

@@ -21,7 +21,7 @@ const PAGES: Array<{ id: Page; label: string; icon: ReactNode; color: string; wo
   { id: 'memory', label: 'Memory', icon: <I.ListIcon size={14} />, color: '#34c759', words: 'remember people places projects facts import chatgpt claude forget work log' },
   { id: 'rules', label: 'Rules & Skills', icon: <I.Check size={14} />, color: '#30b0c7', words: 'rules skills procedures engineering medical business coding' },
   { id: 'approvals', label: 'Approval rules', icon: <I.Shield size={14} />, color: '#34aadc', words: 'approval approve allow ask first permission always automatically confirm' },
-  { id: 'passwords', label: 'Passwords', icon: <I.Shield size={14} />, color: '#636366', words: 'vault login password' },
+  { id: 'passwords', label: 'Passwords', icon: <I.Key size={14} />, color: '#636366', words: 'vault login password' },
   { id: 'advanced', label: 'Advanced', icon: <I.Edit size={14} />, color: '#af52de', words: 'context window gpu memory sampling hard stops' }
 ]
 
@@ -710,12 +710,14 @@ function Passwords() {
   return (
     <>
       <h2>Passwords</h2>
-      <Section sub="Logins SahilBot can type into a site without ever seeing them. Stored encrypted in your Keychain, only for the site they belong to.">
-        {vault.length === 0 && <div className="set-empty">No saved logins.</div>}
+      <div className="set-sub">Logins SahilBot can type into a site without ever seeing them. Stored encrypted in your Keychain, only for the site they belong to.</div>
+      <Section title="Saved logins">
+        {vault.length === 0 && <div className="set-empty">No saved logins yet. Add one below.</div>}
         {vault.map((v) => (
           <div className="set-row" key={v.name} data-testid="vault-row">
-            <div className="set-row-text"><div className="set-row-title">{v.name}</div><div className="set-row-sub">{v.username} · {v.origin}</div></div>
-            <button className="icon-btn" title="Remove" onClick={() => void api.vault.remove(v.name).then(setVault)}><I.Trash size={14} /></button>
+            <span className="vault-row-icon" aria-hidden="true">{v.name.slice(0, 1)}</span>
+            <div className="set-row-text"><div className="set-row-title">{v.name}</div><div className="set-row-sub" title={`${v.username} · ${v.origin}`}>{v.username} · {v.origin}</div></div>
+            <button className="icon-btn" title="Remove" aria-label={`Remove ${v.name}`} onClick={() => void api.vault.remove(v.name).then(setVault)}><I.Trash size={14} /></button>
           </div>
         ))}
       </Section>
@@ -725,7 +727,7 @@ function Passwords() {
           <input className="set-input" placeholder="Site (github.com)" value={draft.origin} onChange={(e) => setDraft({ ...draft, origin: e.target.value })} />
           <input className="set-input" placeholder="Username" value={draft.username} onChange={(e) => setDraft({ ...draft, username: e.target.value })} autoComplete="off" />
           <input className="set-input" placeholder="Password" type="password" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} autoComplete="new-password" />
-          <button className="btn" onClick={() => { setErr(''); void api.vault.set(draft).then((v) => { setVault(v); setDraft({ name: '', origin: '', username: '', password: '' }) }).catch((e) => setErr(clean(e))) }}>Save login</button>
+          <button className="btn primary" disabled={!draft.name.trim() || !draft.origin.trim()} onClick={() => { setErr(''); void api.vault.set(draft).then((v) => { setVault(v); setDraft({ name: '', origin: '', username: '', password: '' }) }).catch((e) => setErr(clean(e))) }}>Save login</button>
         </div>
         {err && <div className="set-empty" style={{ color: 'var(--danger)' }}>{err}</div>}
       </Section>
