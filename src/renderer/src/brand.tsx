@@ -61,7 +61,8 @@ export function SpaceAvatar({ color, shape = 'blob', size = 52, group }: { color
 export const SHAPES = ['mascot', 'blob', 'triangle', 'circle', 'hex', 'drop', 'square', 'pebble', 'star'] as const
 export const COLORS = ['#FF4D4F', '#FF8A1F', '#F59E0B', '#A0612F', '#13A10E', '#14B8A6', '#0EA5E9', '#7C5CFF', '#EC4899', '#9CA3AF', '#1F1F1F']
 
-function isLight(hex: string): boolean {
+export function isLight(hex: string): boolean {
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return false
   const n = parseInt(hex.slice(1), 16)
   const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
   return 0.299 * r + 0.587 * g + 0.114 * b > 170

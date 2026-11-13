@@ -1,6 +1,7 @@
 import { BrowserWindow, WebContentsView, session as electronSession, type Rectangle, type Session, type WebContents } from 'electron'
-import type { BrowserState } from '@shared/types'
+import type { BrowserState, TeachStep } from '@shared/types'
 import { readable } from '../agent/tools/web'
+import { TeachRecorder } from './teach'
 
 /** Size the page renders at while the panel is closed (a typical laptop viewport). */
 const PARK = { width: 1280, height: 860 }
@@ -73,12 +74,18 @@ export class BrowserManager {
   private dialog: { type: string; message: string; defaultPrompt?: string } | null = null
   controlling = false
   takenOver = false
+  /** "Teach a task": records the user's own steps in the browser panel. */
+  readonly teach = new TeachRecorder(() => this.publish(), (wc) => this.tabs.findIndex((t) => t.webContents === wc) + 1)
 
   constructor(private win: () => BrowserWindow | null, private emit: (s: BrowserState) => void, private requestOpen?: () => void) {
     this.ses = electronSession.fromPartition('persist:foreman-browser')
     // Sites don't get the camera, mic, location or notifications, and nothing downloads silently.
     this.ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
-    this.ses.on('will-download', (e) => e.preventDefault())
+    this.ses.on('will-download', (e, item, wc) => {
+      // A recording notes the download (still blocked) as a step.
+      if (this.teach.recording) { try { this.teach.download(wc, item.getFilename(), item.getURL()) } catch { /* item gone */ } }
+      e.preventDefault()
+    })
   }
 
   // ------------------------------------------------------------- tabs & view
@@ -120,14 +127,20 @@ export class BrowserManager {
       if (method === 'Page.javascriptDialogClosed') this.dialog = null
     })
     this.tabs.push(view)
-    this.switchTab(this.tabs.length - 1)
+    if (this.teach.recording) {
+      // The first tab opening is just the browser starting; later ones are steps.
+      if (this.tabs.length > 1) this.teach.record(null, { kind: 'tab', op: 'new', tab: this.tabs.length, url: url ?? 'about:blank', at: 0 })
+      void this.teach.attach(wc)
+    }
+    this.switchTab(this.tabs.length - 1, true)
     if (url) void wc.loadURL(url).catch(() => undefined)
     return this.tabs.length - 1
   }
 
-  switchTab(i: number): void {
+  switchTab(i: number, quiet = false): void {
     if (!this.tabs[i]) throw new Error(`No tab ${i + 1}`)
     if (this.view) this.detach(this.view)
+    if (!quiet && i !== this.active) this.teach.record(null, { kind: 'tab', op: 'switch', tab: i + 1, title: this.tabs[i].webContents.getTitle(), at: 0 })
     this.active = i
     this.refs.clear()
     this.attach()
@@ -137,6 +150,8 @@ export class BrowserManager {
   closeTab(i: number): void {
     const t = this.tabs[i]
     if (!t) throw new Error(`No tab ${i + 1}`)
+    this.teach.record(null, { kind: 'tab', op: 'close', tab: i + 1, at: 0 })
+    this.teach.forget(t.webContents)
     if (this.view) this.detach(this.view)
     t.webContents.close()
     this.tabs.splice(i, 1)
@@ -203,7 +218,8 @@ export class BrowserManager {
       canGoBack: !!this.view?.webContents.navigationHistory.canGoBack(),
       canGoForward: !!this.view?.webContents.navigationHistory.canGoForward(),
       controlling: this.controlling,
-      takenOver: this.takenOver
+      takenOver: this.takenOver,
+      teach: this.teach.state()
     }
   }
 
@@ -215,12 +231,46 @@ export class BrowserManager {
 
   userNavigate(url: string): void {
     const u = /^[a-z]+:\/\//i.test(url) ? url : /\s/.test(url) || !url.includes('.') ? `https://duckduckgo.com/?q=${encodeURIComponent(url)}` : `https://${url}`
-    void this.wc().loadURL(u).catch(() => undefined)
+    const wc = this.wc()
+    this.teach.record(wc, { kind: 'navigate', cause: 'address', url: u, at: 0 })
+    void wc.loadURL(u).catch(() => undefined)
   }
 
-  back(): void { this.view?.webContents.navigationHistory.goBack() }
-  forward(): void { this.view?.webContents.navigationHistory.goForward() }
-  reload(): void { this.view?.webContents.reload() }
+  private history(op: 'back' | 'forward' | 'reload'): void {
+    if (this.view) this.teach.record(this.view.webContents, { kind: 'history', op, at: 0 })
+  }
+
+  back(): void { this.history('back'); this.view?.webContents.navigationHistory.goBack() }
+  forward(): void { this.history('forward'); this.view?.webContents.navigationHistory.goForward() }
+  reload(): void { this.history('reload'); this.view?.webContents.reload() }
+
+  // ------------------------------------------------------------- teach a task
+
+  /** Starts recording the user's steps in every open tab (and tabs opened while it runs). */
+  async teachStart(by: 'user' | 'agent' = 'user', o: { name?: string; threadId?: string } = {}): Promise<void> {
+    await this.teach.start({ by, tabs: this.tabs.map((t) => t.webContents).filter((wc) => !wc.isDestroyed()), ...o })
+    // Where the lesson starts: the page that's open now.
+    const wc = this.view?.webContents
+    if (wc && !wc.isDestroyed() && /^https?:/i.test(wc.getURL())) this.teach.record(wc, { kind: 'navigate', cause: 'address', url: wc.getURL(), at: 0 })
+  }
+
+  teachStop(): { steps: number; text: string } {
+    const r = this.teach.stop()
+    return { steps: r.steps.length, text: r.text }
+  }
+
+  /** For the bot: stops and returns the steps themselves. */
+  teachSteps(): TeachStep[] {
+    return this.teach.stop().steps
+  }
+
+  teachCancel(): void {
+    this.teach.cancel()
+  }
+
+  teachCompose(name: string, goal?: string): { text: string; note: string; threadId?: string } {
+    return this.teach.compose(name, goal)
+  }
 
   takeOver(on: boolean): void {
     this.takenOver = on
@@ -240,10 +290,13 @@ export class BrowserManager {
       this.publish()
     }
     if (this.controlTimer) clearTimeout(this.controlTimer)
+    // The bot's own clicks and typing aren't part of a lesson being recorded.
+    this.teach.hold()
     try {
       if (!this.controlCssKey && !wc.isLoading()) this.controlCssKey = await wc.insertCSS(CONTROL_CSS).catch(() => null)
       return await fn(wc)
     } finally {
+      this.teach.release()
       this.controlTimer = setTimeout(() => void this.endControl(), 2500)
     }
   }

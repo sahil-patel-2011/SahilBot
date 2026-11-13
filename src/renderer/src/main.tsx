@@ -5,6 +5,9 @@ import './styles.css'
 import './styles-bots.css'
 import './styles-connect.css'
 import './styles-routines.css'
+import './styles-teach.css'
+import './styles-pages.css'
+import './styles-memory.css'
 
 // The same page serves the main window and the Quick Ask bar (#quick).
 const quick = location.hash === '#quick'

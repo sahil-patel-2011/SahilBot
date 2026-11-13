@@ -251,13 +251,28 @@ export interface PendingRequest {
 
 export type ApprovalAnswer = 'once' | 'always' | 'deny'
 
+/** What a memory is: about the user (profile, preference, person, location…), a rule to follow, or a dated work-log entry. */
+export type MemoryKind = 'profile' | 'work' | 'preference' | 'person' | 'location' | 'project' | 'trip' | 'link' | 'date' | 'rule' | 'fact' | 'worklog'
+
 export interface MemoryItem {
   id: string
-  category: string
+  category: MemoryKind
   content: string
-  /** null = about you; otherwise the project it belongs to. */
+  /** null = shared (about you, every bot sees it); otherwise the bot or project it belongs to. */
+  spaceId: string | null
+  /** Same as spaceId (older name). */
   projectId: string | null
+  /** 'chat' = saved by a bot while talking, 'you' = added in Settings, 'import' = imported from another assistant. */
+  source: 'chat' | 'you' | 'import'
+  createdAt: number
   updatedAt: number
+}
+
+/** Import preview: one candidate memory per line of the pasted export. */
+export interface MemoryImportPreview {
+  items: Array<{ content: string; category: MemoryKind }>
+  duplicates: number
+  skipped: number
 }
 
 /** A procedure the agent learned (or you wrote): when to use it and the steps that work. */
@@ -292,6 +307,55 @@ export interface BrowserState {
   controlling: boolean
   /** The user took over; agent browser actions are refused until they hand back. */
   takenOver: boolean
+  /** "Teach a task": a recording of the user's own browser steps, while one is running or awaiting Done. */
+  teach?: TeachState
+}
+
+/** One recorded step of "Teach a task" (values of secret fields are never recorded: text is ‹secret›). */
+export interface TeachStep {
+  kind: 'navigate' | 'history' | 'click' | 'type' | 'select' | 'key' | 'tab' | 'download'
+  /** ms since the recording started */
+  at: number
+  /** 1-based tab number */
+  tab?: number
+  url?: string
+  /** navigate: typed in the address bar, caused by the previous action, or by the page itself */
+  cause?: 'address' | 'action' | 'page'
+  inPage?: boolean
+  /** history: back | forward | reload; tab: new | switch | close */
+  op?: 'back' | 'forward' | 'reload' | 'new' | 'switch' | 'close'
+  role?: string
+  /** accessible name of the element, or the field's label */
+  name?: string
+  /** a stable CSS-ish selector hint (for the bot to cross-check; refs are found by snapshot) */
+  selector?: string
+  /** typed text or chosen option */
+  text?: string
+  secret?: boolean
+  checked?: boolean
+  key?: string
+  title?: string
+  filename?: string
+  /** host of the iframe the step happened in (absent for the main page) */
+  frame?: string
+  inputType?: string
+  autocomplete?: string
+}
+
+export interface TeachState {
+  status: 'recording' | 'stopped'
+  /** who started it: the Teach button, or a bot through the browser tool */
+  by: 'user' | 'agent'
+  startedAt: number
+  stoppedAt?: number
+  steps: number
+  /** the last few steps, human-readable */
+  recent: string[]
+  /** set when the recording stopped itself at a cap */
+  limit?: 'time' | 'steps'
+  /** agent recordings: what the bot asked to be shown, and its chat */
+  name?: string
+  threadId?: string
 }
 
 export interface VaultEntry {
@@ -325,6 +389,17 @@ export interface Attachment {
   size?: number
   /** Images only, for the model's vision input and the bubble. */
   dataUrl?: string
+}
+
+/** A Page (an interactive HTML artifact made with create_page), for the panel and Open in window. */
+export interface PageInfo {
+  path: string
+  name: string
+  title: string
+  /** foreman-file: URL; served with a strict CSP and `sandbox allow-scripts`. */
+  url: string
+  size: number
+  updatedAt: number
 }
 
 export interface FilePreview {
@@ -559,6 +634,14 @@ export interface SahilBotApi {
     open(path: string): Promise<void>
     reveal(path: string): Promise<void>
   }
+  /** Pages (create_page): only files directly in the pages folder; anything else is refused. */
+  pages: {
+    info(path: string): Promise<PageInfo>
+    /** Opens the page full-size in its own locked-down window (no preload, no network). */
+    openWindow(path: string): Promise<void>
+    /** Saves "<name>.pdf" next to the page, reveals it in Finder, and returns its path. */
+    exportPdf(path: string): Promise<string>
+  }
   providers(): Promise<ProviderPreset[]>
   /** Quick Ask (the floating ⌥Space bar). */
   quick: {
@@ -645,14 +728,28 @@ export interface SahilBotApi {
     switchTab(i: number): Promise<void>
     closeTab(i: number): Promise<void>
     takeOver(on: boolean): Promise<void>
+    /** Teach a task: record the user's steps in the browser panel. */
+    teachStart(): Promise<void>
+    /** Stops recording and keeps the steps for teachCompose. */
+    teachStop(): Promise<{ steps: number; text: string }>
+    teachCancel(): Promise<void>
+    /** The chat message (text shown, note for the model) for the stopped recording; clears it. */
+    teachCompose(name: string, goal?: string): Promise<{ text: string; note: string; threadId?: string }>
     onState(cb: (s: BrowserState) => void): () => void
     onOpenRequest(cb: () => void): () => void
   }
   memory: {
     list(): Promise<MemoryItem[]>
     remove(id: string): Promise<void>
-    add(content: string, projectId: string | null): Promise<MemoryItem>
-    update(id: string, content: string): Promise<void>
+    /** spaceId null = shared (about you). The kind is guessed from the wording unless given. */
+    add(content: string, spaceId: string | null, category?: MemoryKind): Promise<MemoryItem>
+    update(id: string, content: string, patch?: { category?: MemoryKind; spaceId?: string | null }): Promise<void>
+    /** Parses text exported from another assistant; nothing is saved yet. */
+    importPreview(text: string): Promise<MemoryImportPreview>
+    /** Saves the chosen lines as shared memories; returns how many were added. */
+    importCommit(items: Array<{ content: string; category?: MemoryKind }>): Promise<number>
+    getEnabled(): Promise<boolean>
+    setEnabled(on: boolean): Promise<void>
   }
   rules: {
     list(): Promise<Rule[]>

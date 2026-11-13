@@ -1,4 +1,5 @@
 import type { ToolCall } from '@shared/types'
+import { repairJson } from './validate'
 
 // Local models on OpenAI-compatible servers sometimes write the tool call into the
 // text instead of the tool_calls field (Hermes/Qwen <tool_call> tags, fenced JSON,
@@ -28,7 +29,10 @@ function tryJson(s: string): RawCall | RawCall[] | null {
     try {
       return JSON.parse(s.replace(/,\s*([}\]])/g, '$1')) as RawCall
     } catch {
-      return null
+      // Single quotes, bare keys, Python literals, a missing final brace: the same repair tool arguments get.
+      const fixed = repairJson(s)
+      if (fixed === null) return null
+      try { return JSON.parse(fixed) as RawCall } catch { return null }
     }
   }
 }

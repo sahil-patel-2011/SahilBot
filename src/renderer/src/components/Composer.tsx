@@ -245,7 +245,7 @@ export const Composer = forwardRef<ComposerHandle, {
           data-testid="composer-input"
         />
         <div className="composer-bar">
-          <Popover label={<I.Plus />} className="plus-pop" title="Attach files or a folder">
+          <Popover label={<I.Plus size={19} />} className="plus-pop" title="Attach files or a folder">
             {(close) => (
               <>
                 <button className="menu-item" onClick={() => { close(); void api.files.pick('files').then(addAtts) }} data-testid="attach-files"><I.Paperclip size={15} />Upload files or photos</button>
@@ -280,11 +280,11 @@ export const Composer = forwardRef<ComposerHandle, {
           )}
           <button className={`c-btn${dictating ? ' recording' : ''}`} title={dictating ? 'Stop dictation (⌘⇧D) · Esc cancels' : 'Dictate (⌘⇧D)'} onClick={() => void toggleDictation()} data-testid="dictate"><I.Mic /></button>
           {p.running && !p.answering && !canSend ? (
-            <button className="c-btn primary" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
+            <button className="c-btn primary stop" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
           ) : canSend ? (
-            <button className="c-btn primary" title={p.running && !p.answering ? 'Steer: SahilBot takes this into account right away (⌘Enter queues it instead)' : 'Send'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
+            <button className="c-btn primary send" title={p.running && !p.answering ? 'Steer: SahilBot takes this into account right away (⌘Enter queues it instead)' : 'Send'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
           ) : (
-            <button className="c-btn ghost" title="Talk with SahilBot (⌘⇧V)" onClick={p.onVoice} data-testid="voice-btn"><I.Wave /></button>
+            <button className="c-btn voice" title="Voice chat (⌘⇧V)" aria-label="Voice chat" onClick={p.onVoice} data-testid="voice-btn"><I.Wave size={17} /></button>
           )}
         </div>
       </div>

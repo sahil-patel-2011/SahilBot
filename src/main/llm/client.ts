@@ -2,6 +2,9 @@ import type { Sampling, ToolCall } from '@shared/types'
 import { lookup } from './catalog'
 import { isAnthropic } from './providers'
 import { claudeMaxTokens, fallbacks, listAnthropicModels, streamAnthropic } from './anthropic'
+import { httpError, withRetries } from './retry'
+
+export { backoffMs, httpError, parseRetryAfter, retryAfterFrom, retryInfo, retryPolicy, withRetries } from './retry'
 
 // Minimal OpenAI-compatible client over fetch. Works with Ollama, llama.cpp
 // server, LM Studio, vLLM and hosted OpenAI-style APIs.
@@ -240,7 +243,7 @@ async function* streamOllama(req: ChatRequest): AsyncGenerator<StreamPart> {
     body: JSON.stringify({ model: req.model, messages: toOllamaMessages(req.messages), tools: req.tools?.length ? req.tools : undefined, stream: true, options, ...(req.effort === 'low' && lookup(req.model)?.thinks ? { think: false } : {}) }),
     signal: req.signal
   })
-  if (!res.ok || !res.body) throw new Error(`Ollama returned ${res.status}: ${(await res.text().catch(() => '')).slice(0, 500)}`)
+  if (!res.ok || !res.body) throw httpError(`Ollama returned ${res.status}: ${(await res.text().catch(() => '')).slice(0, 500)}`, res.status, res.headers)
   const splitter = new ThinkSplitter()
   const calls: ToolCall[] = []
   const decoder = new TextDecoder()
@@ -282,14 +285,18 @@ async function* streamOllama(req: ChatRequest): AsyncGenerator<StreamPart> {
 
 export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> {
   if (await isOllama(req.baseUrl)) {
-    yield* streamOllama(req)
+    yield* withRetries(() => streamOllama(req), req.signal)
     return
   }
   if (isLocal(req.baseUrl)) {
-    yield* streamOpenAI(req)
+    yield* withRetries(() => streamOpenAI(req), req.signal)
     return
   }
-  // Paid endpoint: priced and checked against the monthly cap before anything is sent.
+  // Paid endpoint: each attempt is priced and checked against the monthly cap before anything is sent.
+  yield* withRetries(() => paidAttempt(req), req.signal)
+}
+
+async function* paidAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
   const chars = JSON.stringify(req.messages).length + JSON.stringify(req.tools ?? []).length
   const estimatedInput = Math.ceil((chars / 3) * 1.1)
   const claude = isAnthropic(req.baseUrl)
@@ -302,7 +309,7 @@ export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> 
   let served = req.model
   let rejected = false
   try {
-    for await (const part of isAnthropic(req.baseUrl) ? streamAnthropic(req) : streamOpenAI(req)) {
+    for await (const part of claude ? streamAnthropic(req) : streamOpenAI(req)) {
       if (part.type === 'usage') { input = part.promptTokens; output = part.completionTokens }
       if (part.type === 'reset') produced = 0
       if (part.type === 'content' || part.type === 'reasoning') produced += part.text.length
@@ -312,7 +319,8 @@ export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> 
     }
   } catch (e) {
     // A request the server rejected outright (400/401/429/5xx before any output) isn't billed.
-    rejected = (e as { billed?: boolean }).billed === false || (!input && !produced && /\b(4\d\d|5\d\d)\b/.test((e as Error).message))
+    const status = (e as { status?: number }).status
+    rejected = (e as { billed?: boolean }).billed === false || (!input && !produced && (typeof status === 'number' || /\b(4\d\d|5\d\d)\b/.test((e as Error).message)))
     throw e
   } finally {
     if (!rejected)
@@ -330,7 +338,7 @@ async function* streamOpenAI(req: ChatRequest): AsyncGenerator<StreamPart> {
   })
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '')
-    throw new Error(`Model server returned ${res.status}: ${text.slice(0, 500)}`)
+    throw httpError(`Model server returned ${res.status}: ${text.slice(0, 500)}`, res.status, res.headers)
   }
 
   const splitter = new ThinkSplitter()
@@ -344,14 +352,21 @@ async function* streamOpenAI(req: ChatRequest): AsyncGenerator<StreamPart> {
     let json: {
       choices?: Array<{ delta?: Delta; finish_reason?: string | null }>
       usage?: { prompt_tokens: number; completion_tokens: number }
-      error?: { message?: string }
+      error?: { message?: string; code?: unknown; type?: string }
     }
     try {
       json = JSON.parse(data)
     } catch {
       return
     }
-    if (json.error) throw new Error(json.error.message ?? 'Model server error')
+    if (json.error) {
+      // An error event mid-stream: overloads and rate limits are worth another try.
+      const code = Number(json.error.code)
+      const why = `${json.error.type ?? ''} ${json.error.message ?? ''}`
+      const status = code >= 400 && code < 600 ? code : /overload/i.test(why) ? 529 : /rate.?limit/i.test(why) ? 429 : undefined
+      const err = new Error(json.error.message ?? 'Model server error')
+      throw status ? Object.assign(err, { status }) : err
+    }
     const choice = json.choices?.[0]
     const d = choice?.delta
     if (d) {

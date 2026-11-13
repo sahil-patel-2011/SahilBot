@@ -47,8 +47,8 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
     async run(a, ctx) {
       const thread = db.getThread(ctx.threadId)
       if (a.action === 'create') {
-        const t = scheduler.create({ title: a.title!, prompt: a.prompt!, schedule: a.when!, spaceId: thread?.spaceId ?? '' })
-        if (thread && db.getSpace(thread.spaceId)?.isMain) scheduler.setThread(t.id, thread.id)
+        // SahilBot's routines run in the chat that made them; other bots have one conversation anyway.
+        const t = scheduler.create({ title: a.title!, prompt: a.prompt!, schedule: a.when!, spaceId: thread?.spaceId ?? '', threadId: thread && db.getSpace(thread.spaceId)?.isMain ? thread.id : null })
         return { text: `Scheduled "${t.title}" (${describeSchedule(t.schedule)}), id ${t.id}. Next run: ${new Date(t.nextRun!).toLocaleString()}.`, display: `"${t.title}" ${describeSchedule(t.schedule)}` }
       }
       if (a.action === 'list') {

@@ -128,11 +128,95 @@ export function checkTaint(tool: string, effect: string, args: unknown, untruste
   return !!url && urlTainted(url, untrusted, userText)
 }
 
+// ---------- the user's own approval rules ----------
+
+/** Rule limits: per kind (allow / ask) and per rule text. */
+export const RULE_LIMIT = 20
+export const RULE_MAX_CHARS = 1000
+
+/** Filler words a rule can contain without narrowing what it matches. */
+const STOPWORDS = new Set(('a an the to for of on in at by with and or any anything something someone somebody me my mine i ' +
+  'it its this that these those want wants wanted wanting when whenever if sahilbot should be is are was were am from into onto ' +
+  'about please some all every do does use uses using used via can could would will just thing things stuff action actions try tries').split(' '))
+
+/** Irregular forms, so "sent" matches "send" and "ran" matches "run". */
+const IRREGULAR: Record<string, string> = {
+  sent: 'send', ran: 'run', bought: 'buy', paid: 'pay', wrote: 'write', written: 'write', made: 'make', sold: 'sell',
+  took: 'take', taken: 'take', gave: 'give', given: 'give', went: 'go', gone: 'go', got: 'get', gotten: 'get', chose: 'choose',
+  chosen: 'choose', did: 'do', done: 'do', put: 'put', read: 'read', left: 'leave', kept: 'keep', found: 'find', told: 'tell',
+  goes: 'go', said: 'say', saw: 'see', seen: 'see', spent: 'spend', built: 'build', began: 'begin', begun: 'begin'
+}
+
+/** A light stemmer: send / sends / sending, delete / deleted, reply / replies / replied all meet in one form. */
+export function stem(word: string): string {
+  let w = word.toLowerCase()
+  if (IRREGULAR[w]) w = IRREGULAR[w]
+  if (w.length <= 3 || /^\d/.test(w)) return w
+  const undouble = (x: string): string => (/([b-df-hj-kmnp-rtv-z])\1$/.test(x) ? x.slice(0, -1) : x)
+  // Plurals first, then verb endings, so "strings" and "string", "settings" and "set" agree.
+  if (/ies$/.test(w) && w.length > 4) w = `${w.slice(0, -3)}y`
+  else if (/(s|x|z|ch|sh)es$/.test(w)) w = w.slice(0, -2)
+  else if (/s$/.test(w) && !/(ss|us|is)$/.test(w)) w = w.slice(0, -1)
+  if (/ied$/.test(w) && w.length > 4) w = `${w.slice(0, -3)}y`
+  else if (/ing$/.test(w) && w.length >= 6) w = undouble(w.slice(0, -3))
+  else if (/ed$/.test(w) && w.length >= 5 && !/eed$/.test(w)) w = undouble(w.slice(0, -2))
+  if (/e$/.test(w) && w.length >= 4) w = w.slice(0, -1)
+  return w
+}
+
+/** Lowercase words of a text: camelCase, snake_case, paths and URLs all split into their parts. */
+function words(text: string): string[] {
+  return text.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+}
+
+interface ParsedRule { tools: RegExp[]; stems: string[]; phrases: string[] }
+
+/** "tool:run_command", quoted "exact phrases", and plain words (stopwords dropped, stemmed). */
+export function parseRule(when: string): ParsedRule {
+  const text = String(when ?? '').slice(0, RULE_MAX_CHARS)
+  const tools: RegExp[] = []
+  const phrases: string[] = []
+  let rest = text.replace(/\btool:\s*([\w.*-]+)/gi, (_m, name: string) => {
+    tools.push(new RegExp(`^${name.toLowerCase().replace(/[.+?^${}()|[\]\\-]/g, '\\$&').replace(/\*/g, '.*')}$`))
+    return ' '
+  })
+  rest = rest.replace(/["\u201c\u201d]([^"\u201c\u201d]+)["\u201c\u201d]/g, (_m, p: string) => {
+    const t = p.trim().toLowerCase().replace(/\s+/g, ' ')
+    if (t) phrases.push(t)
+    return ' '
+  })
+  const stems = [...new Set(words(rest).filter((w) => !STOPWORDS.has(w)).map(stem))]
+  return { tools, stems, phrases }
+}
+
+/** Whether one rule matches an action. A rule with nothing significant in it matches nothing. */
+export function ruleMatches(when: string, action: { tool: string; label?: string; summary?: string; args: string }): boolean {
+  const r = parseRule(when)
+  if (!r.tools.length && !r.stems.length && !r.phrases.length) return false
+  const tool = String(action.tool ?? '').toLowerCase()
+  if (r.tools.length && !r.tools.some((t) => t.test(tool))) return false
+  const all = [action.tool, action.label, action.summary, action.args].filter(Boolean).join('\n')
+  const have = new Set(words(all).map(stem))
+  if (!r.stems.every((s) => have.has(s))) return false
+  const flat = all.toLowerCase().replace(/\s+/g, ' ')
+  return r.phrases.every((p) => flat.includes(p))
+}
+
 /**
  * The user's custom rules for one action: 'ask' if any Ask-first rule matches, else 'allow' if an
  * Allow rule matches, else null (normal permissions apply). Contract shared by the approvals UI and
- * the agent loop; matching is implemented by the approvals work.
+ * the agent loop.
+ *
+ * Matching is case-insensitive: every significant word of the rule (filler words dropped, simple
+ * stemming so "send" also matches "sends" / "sending" / "sent") must appear somewhere in the tool
+ * name, label, summary or arguments. "tool:run_command" pins a rule to one tool (* is a wildcard), and
+ * "quoted text" must appear as written. At most RULE_LIMIT rules of each kind are considered.
  */
-export function ruleVerdict(_rules: import('@shared/types').CustomRule[] | undefined, _action: { tool: string; label?: string; summary?: string; args: string }): 'allow' | 'ask' | null {
+export function ruleVerdict(rules: import('@shared/types').CustomRule[] | undefined, action: { tool: string; label?: string; summary?: string; args: string }): 'allow' | 'ask' | null {
+  if (!Array.isArray(rules) || !rules.length) return null
+  const valid = rules.filter((r) => r && typeof r.when === 'string' && (r.action === 'ask' || r.action === 'allow'))
+  const of = (kind: 'ask' | 'allow') => valid.filter((r) => r.action === kind).slice(0, RULE_LIMIT)
+  if (of('ask').some((r) => ruleMatches(r.when, action))) return 'ask'
+  if (of('allow').some((r) => ruleMatches(r.when, action))) return 'allow'
   return null
 }

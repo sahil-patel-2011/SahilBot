@@ -5,14 +5,15 @@ import { writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
-import type { BotShape, ChatEvent, SendInput, Settings, Space } from '@shared/types'
+import type { BotShape, ChatEvent, PendingRequest, SendInput, Settings, Space } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 import { INTRO } from './agent/prompt'
 import { updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget } from './llm/budget'
 import { isLocal, spendHooks, streamChat } from './llm/client'
-import { Connectors, PRESETS } from './connectors'
+import { ConnectorIcons, Connectors, PRESETS } from './connectors'
+import { addTemplate, loadTemplates } from './templates'
 import { VoiceService } from './voice/service'
 import { Scheduler } from './scheduler'
 import { buildMenu, setupApp, windowState } from './shell'
@@ -23,6 +24,7 @@ import { ToolRegistry } from './agent/registry'
 import { browserTool } from './agent/tools/browser'
 import { coreTools } from './agent/tools/core'
 import { fileTools } from './agent/tools/files'
+import { exportPagePdf, guardFrames, isPagePath, openPageWindow, pageInfo, pageTools, servePage } from './agent/tools/pages'
 import { memoryTool } from './agent/tools/memory'
 import { webTools } from './agent/tools/web'
 import { Db } from './db'
@@ -38,6 +40,7 @@ import { cursorTool, macAppsTool } from './agent/tools/apps'
 import { shellTool } from './agent/tools/shell'
 import { researchTool } from './agent/tools/research'
 import { agentsTool } from './agent/tools/agents'
+import { handoffTool } from './agent/tools/handoff'
 import { computerTool } from './agent/tools/computer'
 import { consultTool } from './agent/tools/consult'
 import { Secrets } from './secrets'
@@ -134,6 +137,8 @@ function createWindow(bounds: Partial<Electron.Rectangle> = {}): BrowserWindow {
     return { action: 'deny' }
   })
   w.webContents.on('will-navigate', (e) => e.preventDefault())
+  // Page iframes (sandboxed artifacts) can't navigate off to the web.
+  guardFrames(w.webContents)
   if (process.env.ELECTRON_RENDERER_URL) void w.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void w.loadFile(join(__dirname, '../renderer/index.html'))
   return w
@@ -177,6 +182,8 @@ app.whenReady().then(() => {
   const memory = new MemoryStore(db)
   const results = new ResultStore(sub('results'))
   const docsDir = join(appRoot(), 'docs')
+  // Pages (create_page) live in the workspace's "pages" folder; the app manual in docsDir is read-only.
+  const pagesDir = (): string => join(settings.get().workspaceDir, 'pages')
   const listeners = new Set<(e: ChatEvent) => void>()
   /** Screenshot of the main display, scaled so one image pixel = one screen point. */
   const captureScreen = async (file: string): Promise<{ dataUrl: string; width: number; height: number }> => {
@@ -214,15 +221,96 @@ app.whenReady().then(() => {
   let quick: BrowserWindow | null = null
   /** Runs started from Quick Ask answer in the bar itself, so they don't notify. */
   const quickRuns = new Set<string>()
+  /** Bot details → "Notify me when this bot finishes or needs me" (on unless switched off). */
+  const botNotifies = (spaceId: string | undefined): boolean => !spaceId || db.getSpace(spaceId)?.notify !== false
+
+  // ---------------------------------------------------------------- needs you: notifications + Dock badge
+  /** The chat open in the main window (the window asks for a chat's open requests whenever it shows one). */
+  let viewingThread: string | null = null
+  /** Open requests (approvals, questions, plans, connects) per chat. */
+  const waiting = new Map<string, Set<string>>()
+  /** Last "needs you" notification per chat: at most one a minute. */
+  const lastNeedsYou = new Map<string, number>()
+  /** Routine runs end with the routine's own notification instead of the generic "done". */
+  const scheduledRuns = new Set<string>()
+  /** Quick Ask chats were read in the bar: they don't count toward the badge. */
+  const quickSeen = new Set<string>()
+  /** Recent notifications, held so their click handlers survive garbage collection. */
+  const notes: Notification[] = []
+  const showNote = (n: Notification, threadId: string): void => {
+    n.on('click', () => openThread(threadId))
+    notes.push(n)
+    if (notes.length > 30) notes.shift()
+    n.show()
+  }
+  const botName = (spaceId: string | undefined): string => {
+    const sp = spaceId ? db.getSpace(spaceId) : undefined
+    return !sp || sp.isMain ? 'SahilBot' : sp.name
+  }
+  const mainFocused = (): boolean => !!win && !win.isDestroyed() && win.isFocused()
+  /** One short line for a request. Saved-login actions never show their details; saved passwords are masked. */
+  const needsYouText = (r: PendingRequest): string => {
+    const secret = /vault|secret|password/i.test(r.tool ?? '') || /"fill_secret"|saved login|password field/i.test(`${r.args ?? ''} ${r.reason ?? ''}`)
+    const lower = (x: string): string => (/^[A-Z][a-z]/.test(x) ? x[0].toLowerCase() + x.slice(1) : x)
+    const n = r.questions?.length ?? 0
+    let t = r.kind === 'approval' ? (secret ? 'Asks to use one of your saved logins' : r.summary ? `Asks to ${lower(r.summary)}` : `Asks to use ${r.label ?? r.tool ?? 'a tool'}`)
+      : r.kind === 'question' ? (r.question ?? 'Has a question for you')
+        : r.kind === 'questions' ? `${r.questions?.[0]?.question ?? 'Has a few questions'}${n > 1 ? ` (+${n - 1} more)` : ''}`
+          : r.kind === 'plan' ? `Plan ready for your OK: ${r.plan?.goal ?? ''}`
+            : r.kind === 'connect' ? `Wants to connect ${r.preset?.name ?? 'an app'}` : 'Waiting for you'
+    try { for (const pw of vault.passwords()) if (pw.length >= 4) t = t.split(pw).join('••••') } catch { /* vault locked */ }
+    t = t.replace(/\s+/g, ' ').trim()
+    return t.length > 140 ? `${t.slice(0, 139)}…` : t
+  }
+  /** Dock badge: chats waiting on you + unread chats (top-level, not hidden bots, not the one you're reading). */
+  let badgeTimer: ReturnType<typeof setTimeout> | null = null
+  const refreshBadge = (): void => {
+    if (badgeTimer || HIDDEN) return
+    badgeTimer = setTimeout(() => {
+      badgeTimer = null
+      try {
+        if (!app.dock) return
+        const reading = mainFocused() ? viewingThread : null
+        const need = new Set([...waiting].filter(([, ids]) => ids.size).map(([t]) => t))
+        const hidden = new Set(db.listSpaces().filter((x) => x.hidden).map((x) => x.id))
+        for (const t of db.listThreads()) if (t.unread && t.id !== reading && !hidden.has(t.spaceId) && !quickSeen.has(t.id)) need.add(t.id)
+        app.dock.setBadge(need.size ? String(need.size) : '')
+      } catch { /* no Dock, or the database is closing */ }
+    }, 200)
+  }
+  const needsYou = (e: ChatEvent): void => {
+    if (e.type === 'pending') {
+      waiting.set(e.threadId, (waiting.get(e.threadId) ?? new Set()).add(e.request.id))
+      refreshBadge()
+      if (HIDDEN || !Notification.isSupported() || quickRuns.has(e.threadId)) return
+      if (mainFocused() && viewingThread === e.threadId) return
+      const thread = db.getThread(e.threadId)
+      if (!thread || !botNotifies(thread.spaceId)) return
+      const now = Date.now()
+      if (now - (lastNeedsYou.get(e.threadId) ?? 0) < 60_000) return
+      lastNeedsYou.set(e.threadId, now)
+      showNote(new Notification({ title: `${botName(thread.spaceId)} needs you`, body: needsYouText(e.request), silent: false }), e.threadId)
+    } else if (e.type === 'resolved') {
+      waiting.get(e.threadId)?.delete(e.id)
+      refreshBadge()
+    } else if (e.type === 'run' && e.status !== 'started') {
+      waiting.delete(e.threadId)
+      if (quickRuns.has(e.threadId)) quickSeen.add(e.threadId)
+      refreshBadge()
+    } else if (e.type === 'thread') refreshBadge()
+  }
+
   const emit = (e: ChatEvent): void => {
     toWin('chat:event', e)
     if (quick && !quick.isDestroyed()) quick.webContents.send('chat:event', e)
     for (const l of listeners) l(e)
+    try { needsYou(e) } catch { /* notifications are best-effort */ }
     if (e.type === 'run' && e.status !== 'started' && mini?.threadId === e.threadId) exitMini()
     const fromQuick = e.type === 'run' && e.status !== 'started' && quickRuns.delete(e.threadId)
+    const fromRoutine = e.type === 'run' && e.status !== 'started' && scheduledRuns.delete(e.threadId)
     // A chat finished while you were in another app: a quiet notification.
-    if (e.type === 'run' && (e.status === 'finished' || e.status === 'error') && !fromQuick && !(quick && !quick.isDestroyed() && quick.isVisible()) &&
-      !(win && !win.isDestroyed() && win.isFocused()) && !HIDDEN && Notification.isSupported()) {
+    if (e.type === 'run' && (e.status === 'finished' || e.status === 'error') && !fromQuick && !fromRoutine && !(quick && !quick.isDestroyed() && quick.isVisible()) &&
+      !(win && !win.isDestroyed() && win.isFocused()) && !HIDDEN && Notification.isSupported() && botNotifies(e.spaceId ?? db.getThread(e.threadId)?.spaceId)) {
       const n = new Notification({ title: e.status === 'error' ? 'SahilBot hit a problem' : 'SahilBot is done', body: (e.title ?? 'Your task').slice(0, 120), silent: false })
       n.on('click', () => openThread(e.threadId))
       n.show()
@@ -243,6 +331,7 @@ app.whenReady().then(() => {
   registry.register(
     ...coreTools(results),
     ...fileTools(() => settings.get().workspaceDir, docsDir),
+    ...pageTools(pagesDir),
     ...webTools(() => ({ ...settings.get().search, braveKey: secrets.get('braveKey') })),
     memoryTool(memory, db, skills, rules),
     // Built in and always available (connector tools are found with find_tools).
@@ -290,14 +379,20 @@ app.whenReady().then(() => {
     db, settings, endpoints, spaces, memory, skills, rules, registry, results, docsDir, emit, fitWindow,
     secretValues: () => vault.passwords()
   })
+  // Bot-to-bot handoffs need the agent itself (to start or steer the other bot's run).
+  registry.register(handoffTool(() => chat.handoffHost()))
 
   if (db.listSpaces().length === 0) db.createSpace('SahilBot', '#1F1F1F', { isMain: true, shape: 'mascot' })
   const attachments = new Attachments(() => win, () => settings.get().workspaceDir, docsDir)
   attachments.registerProtocol()
+  attachments.serve = (p) => servePage(pagesDir(), p)
   applyTheme(settings.get().theme)
 
+  /** Calls that change what's unread refresh the Dock badge. */
+  const BADGE_IPC = new Set(['threads:update', 'threads:remove', 'spaces:markUnread', 'spaces:update', 'spaces:remove'])
   const handle = <A extends unknown[], R>(ch: string, fn: (...args: A) => R | Promise<R>): void => {
-    ipcMain.handle(ch, (_e, ...args) => fn(...(args as A)))
+    if (BADGE_IPC.has(ch)) ipcMain.handle(ch, async (_e, ...args) => { try { return await fn(...(args as A)) } finally { refreshBadge() } })
+    else ipcMain.handle(ch, (_e, ...args) => fn(...(args as A)))
   }
 
   handle('system:info', () => ({
@@ -448,7 +543,7 @@ app.whenReady().then(() => {
     }
     return { space, threadId: thread.id }
   })
-  handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model'>>) => {
+  handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'label' | 'notify'>>) => {
     const s = db.updateSpace(id, patch)
     // Keep a bot's one conversation titled after it.
     if (patch.name && s.kind === 'bot' && !s.isMain) for (const t of db.listThreads(id)) db.updateThread(t.id, { title: s.name })
@@ -467,6 +562,8 @@ app.whenReady().then(() => {
   handle('spaces:getPrompt', (id: string) => spaces.getPrompt(id))
   handle('spaces:setPrompt', (id: string, text: string) => spaces.setPrompt(id, text))
   handle('spaces:promptPath', (id: string) => spaces.path(id))
+  // Bot details → Library: files this bot made (that still exist) and links from its chats.
+  handle('spaces:library', (id: string) => db.spaceLibrary(id).filter((x) => x.kind !== 'file' || (!!x.path && existsSync(x.path))))
 
   handle('threads:list', (spaceId?: string) => db.listThreads(spaceId))
   handle('threads:search', (q: string) => db.searchThreads(q))
@@ -491,7 +588,11 @@ app.whenReady().then(() => {
   handle('files:pick', (kind: 'files' | 'folder') => attachments.pick(kind))
   handle('files:register', (paths: string[]) => attachments.register(paths))
   handle('files:preview', (path: string) => attachments.preview(path))
-  handle('files:open', async (path: string) => { await attachments.open(path) })
+  // Pages open in their own locked-down window, never in the default browser.
+  handle('files:open', async (path: string) => { if (isPagePath(pagesDir(), path)) openPageWindow(pagesDir, path, { show: !HIDDEN }); else await attachments.open(path) })
+  handle('pages:info', (path: string) => pageInfo(pagesDir(), path))
+  handle('pages:openWindow', (path: string) => { openPageWindow(pagesDir, path, { show: !HIDDEN }) })
+  handle('pages:exportPdf', (path: string) => exportPagePdf(pagesDir, path))
   // The first lines of a document, for file thumbnails (only files SahilBot made).
   handle('files:snippet', async (path: string) => {
     if (!db.recentFiles(500).some((f) => f.path === path) || !existsSync(path)) return ''
@@ -531,6 +632,10 @@ app.whenReady().then(() => {
   handle('connectors:connectPreset', (id: string) => connectors.connectPreset(id))
   handle('connectors:connect', (id: string) => connectors.connect(id, true))
   handle('connectors:disconnect', (id: string) => connectors.disconnect(id))
+  // App icons: cached files come back at once; missing ones are fetched in the background.
+  const connectorIcons = new ConnectorIcons(sub('connector-icons'), PRESETS, () => toWin('connectors:icons'))
+  handle('connectors:icons', () => connectorIcons.all())
+  handle('connectors:setToolEnabled', (id: string, tool: string, on: boolean) => connectors.setToolEnabled(id, tool, on))
   void connectors.connectAll()
 
   // ---------------------------------------------------------------- scheduled tasks
@@ -545,23 +650,82 @@ app.whenReady().then(() => {
       threadId = t.id
       scheduler.setThread(task.id, threadId)
     }
-    if (chat.isRunning(threadId)) return 'skipped: the chat was busy'
-    const { done } = await chat.send({ threadId, text: `⏰ ${task.title}\n\n${task.prompt}`, meta: { scheduled: task.id } }, { unattended: true })
-    const status = await done
-    const last = [...db.listMessages(threadId)].reverse().find((m) => m.role === 'assistant' && m.content)
-    if (Notification.isSupported()) new Notification({ title: `${space.isMain ? 'SahilBot' : space.name}: ${task.title}`, body: (last?.content ?? 'Done').replace(/\s+/g, ' ').slice(0, 140) }).show()
-    return status === 'finished' ? 'done' : status
+    if (chat.isRunning(threadId)) return { status: 'skipped: the chat was busy', threadId }
+    const startedAt = Date.now()
+    scheduledRuns.add(threadId)
+    let status: Awaited<Awaited<ReturnType<typeof chat.send>>['done']>
+    try {
+      const { done } = await chat.send({ threadId, text: `⏰ ${task.title}\n\n${task.prompt}`, meta: { scheduled: task.id } }, { unattended: true })
+      status = await done
+    } finally { scheduledRuns.delete(threadId) }
+    const after = db.listMessages(threadId).filter((m) => m.createdAt >= startedAt)
+    const last = [...after].reverse().find((m) => m.role === 'assistant' && m.content && m.kind === 'normal')
+    // The routine's own notification (the generic "done" one is skipped for routine runs). Click opens the chat.
+    if (space.notify !== false && !HIDDEN && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) {
+      const body = status === 'error' ? 'The routine hit a problem. Click to see what happened.' : (last?.content ?? 'Done').replace(/\s+/g, ' ').trim().slice(0, 140)
+      showNote(new Notification({ title: `${space.isMain ? 'SahilBot' : space.name}: ${task.title.replace(/^⏰\s*/, '')}`, body }), threadId)
+    }
+    if (status === 'finished') return { status: 'done', threadId }
+    // Why it failed: the run's own error line, when it left one.
+    const why = [...after].reverse().find((m) => m.kind === 'notice' || m.kind === 'error' || m.status === 'error')?.content.replace(/^(Run failed|Something went wrong):\s*/i, '')
+    return { status: status === 'error' ? `error: ${why || 'Something went wrong'}` : status, threadId }
   }, () => toWin('schedules:changed'))
+  // System lines in the bot's chat when its routines change or a run fails.
+  scheduler.events = (ev) => {
+    const space = db.getSpace(ev.task.spaceId)
+    if (!space) return
+    const own = ev.threadId ?? ev.task.threadId
+    const threadId = own && db.getThread(own) ? own : db.listThreads(space.id)[0]?.id
+    if (!threadId) return
+    const verb = { created: 'Created', paused: 'Paused', resumed: 'Resumed', deleted: 'Deleted', changed: 'Changed', failed: 'Routine failed' }[ev.type]
+    const text = ev.type === 'failed' ? `Routine failed · ${ev.task.title}${ev.reason ? `: ${ev.reason}` : ''}` : `${verb} routine · ${ev.task.title}`
+    const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', meta: { routineNotice: ev.type, routine: ev.task.id } })
+    emit({ threadId, type: 'message', message: m })
+  }
   registry.register({ ...scheduleTool(scheduler, db), core: true })
   scheduler.start()
+  // Dock badge: right from launch (unread chats carry over), and again whenever SahilBot comes forward.
+  refreshBadge()
+  app.on('browser-window-focus', () => refreshBadge())
   handle('schedules:list', () => scheduler.list())
   handle('schedules:create', (t: Parameters<Scheduler['create']>[0]) => scheduler.create(t))
   handle('schedules:update', (id: string, patch: Parameters<Scheduler['update']>[1]) => scheduler.update(id, patch))
   handle('schedules:remove', (id: string) => scheduler.remove(id))
-  handle('schedules:runNow', async (id: string) => {
-    const t = scheduler.get(id)
-    if (t) void scheduler.fire(t)
+  // Test: starts the run and returns at once; progress arrives as schedules:changed + schedules:runs.
+  handle('schedules:runNow', (id: string) => {
+    if (!scheduler.get(id)) throw new Error('That routine no longer exists.')
+    scheduler.test(id)
   })
+
+  // ---------------------------------------------------------------- bot templates
+  const templatesDir = join(appRoot(), 'packs', 'templates')
+  handle('templates:list', () => loadTemplates(templatesDir))
+  handle('templates:add', (id: string) => {
+    const t = loadTemplates(templatesDir).find((x) => x.id === id)
+    if (!t) throw new Error('That template is no longer available.')
+    return addTemplate(t, {
+      createBot: (name, color, shape) => {
+        const space = db.createSpace(name, color, { kind: 'bot', shape })
+        const thread = db.createThread(space.id, 'auto', null)
+        db.updateThread(thread.id, { title: name })
+        // Lets the bot rename itself or refine its job from its first reply.
+        const state = db.getState(thread.id)
+        state.loaded = ['update_bot']
+        db.setState(thread.id, state)
+        return { spaceId: space.id, threadId: thread.id }
+      },
+      setPrompt: (spaceId, text) => spaces.setPrompt(spaceId, text),
+      // Suggested routines start paused; the bot offers to turn them on.
+      createRoutine: (r) => {
+        const input: Parameters<Scheduler['create']>[0] = { ...r, enabled: false } as Parameters<Scheduler['create']>[0]
+        const made = scheduler.create(input)
+        if (made.enabled) scheduler.update(made.id, { enabled: false })
+      },
+      postAssistant: (threadId, text) => { db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done' }) },
+      changed: () => emit({ threadId: '', type: 'spaces' })
+    })
+  })
+  handle('schedules:runs', (taskId: string) => scheduler.runs(taskId))
   handle('pickFolder', async () => {
     const r = win ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] }) : { canceled: true, filePaths: [] }
     if (r.canceled || !r.filePaths[0]) return null
@@ -622,7 +786,11 @@ app.whenReady().then(() => {
   handle('chat:stop', (threadId: string) => chat.stop(threadId))
   handle('chat:steer', (threadId: string, text: string) => chat.steer(threadId, String(text).slice(0, 20_000)))
   handle('chat:respond', (threadId: string, id: string, answer: string) => chat.respond(threadId, id, answer))
-  handle('chat:pending', (threadId: string) => chat.pending(threadId))
+  // The main window asks for a chat's open requests whenever it opens that chat: that's how main knows what you're reading.
+  ipcMain.handle('chat:pending', (ev, threadId: string) => {
+    if (win && !win.isDestroyed() && ev.sender === win.webContents) { viewingThread = threadId; refreshBadge() }
+    return chat.pending(threadId)
+  })
   handle('chat:retry', (threadId: string) => chat.retry(threadId))
   handle('chat:editLast', (threadId: string, text: string) => chat.editLast(threadId, text))
   handle('chat:export', async (threadId: string) => {
@@ -653,11 +821,19 @@ app.whenReady().then(() => {
   handle('browser:switchTab', (i: number) => browser.switchTab(i))
   handle('browser:closeTab', (i: number) => browser.closeTab(i))
   handle('browser:takeOver', (on: boolean) => browser.takeOver(on))
+  handle('browser:teachStart', () => browser.teachStart('user'))
+  handle('browser:teachStop', () => browser.teachStop())
+  handle('browser:teachCancel', () => browser.teachCancel())
+  handle('browser:teachCompose', (name: string, goal?: string) => browser.teachCompose(String(name ?? ''), goal ? String(goal) : undefined))
 
   handle('memory:list', () => memory.list())
   handle('memory:remove', (id: string) => void memory.remove(id))
-  handle('memory:add', (content: string, projectId: string | null) => memory.save(content, 'other', projectId ?? null).memory)
-  handle('memory:update', (id: string, content: string) => void memory.update(id, content))
+  handle('memory:add', (content: string, spaceId: string | null, category?: string) => memory.add(content, spaceId ?? null, category))
+  handle('memory:update', (id: string, content: string, patch?: { category?: string; spaceId?: string | null }) => void memory.update(id, content, patch ?? {}))
+  handle('memory:importPreview', (text: string) => memory.importPreview(String(text ?? '').slice(0, 200_000)))
+  handle('memory:importCommit', (items: Array<{ content: string; category?: string }>) => memory.importCommit(Array.isArray(items) ? items : []))
+  handle('memory:getEnabled', () => memory.enabled)
+  handle('memory:setEnabled', (on: boolean) => memory.setEnabled(!!on))
   handle('rules:list', () => rules.list())
   handle('rules:save', (r: { name: string; text: string; scope?: string; category?: string }) => rules.save(r))
   handle('rules:setEnabled', (name: string, on: boolean) => rules.setEnabled(name, on))

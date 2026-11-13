@@ -1,10 +1,11 @@
 import type { ToolEffect } from '@shared/types'
 import { safeUrl, type BrowserManager, type RefInfo } from '../../browser/manager'
+import { MAX_MS, MAX_STEPS, stepDetails, stepsToText, SECRET } from '../../browser/teach'
 import { originMatches, type Vault } from '../../vault'
 import { CONSEQUENTIAL, looksLikePayment, looksLikeSecurity } from '../permissions'
 import type { ToolDef } from '../types'
 
-type Action = 'navigate' | 'snapshot' | 'click' | 'type' | 'select' | 'fill_secret' | 'scroll' | 'screenshot' | 'get_text' | 'tabs' | 'dialog' | 'fill_form'
+type Action = 'navigate' | 'snapshot' | 'click' | 'type' | 'select' | 'fill_secret' | 'scroll' | 'screenshot' | 'get_text' | 'tabs' | 'dialog' | 'fill_form' | 'recording'
 interface Args {
   action: Action
   url?: string
@@ -15,7 +16,8 @@ interface Args {
   field?: 'username' | 'password'
   direction?: 'up' | 'down'
   amount?: number
-  op?: 'list' | 'new' | 'switch' | 'close'
+  /** tabs: list|new|switch|close; recording: start|stop|status */
+  op?: 'list' | 'new' | 'switch' | 'close' | 'start' | 'stop' | 'status'
   index?: number
   option?: string
   accept?: boolean
@@ -85,6 +87,7 @@ export function browserTool(b: BrowserManager, vault: Vault): ToolDef<Args> {
       case 'dialog': return `${a.accept ? 'Accept' : 'Dismiss'} the page's ${b.pendingDialog?.type ?? 'dialog'}: "${b.pendingDialog?.message.slice(0, 120) ?? ''}"`
       case 'tabs': return `${a.op} tab${a.index ? ` ${a.index}` : ''}`
       case 'fill_form': return `Fill ${a.fields?.length ?? 0} fields${a.submit_ref ? ` and click "${b.refInfo(a.submit_ref)?.name ?? a.submit_ref}"` : ''}${on}`
+      case 'recording': return a.op === 'start' ? 'Record what you do in the browser panel (Teach a task)' : a.op === 'stop' ? 'Stop recording and read the steps' : 'Check the Teach recording'
       default: return `${a.action}${on}`
     }
   }
@@ -118,6 +121,7 @@ export function browserTool(b: BrowserManager, vault: Vault): ToolDef<Args> {
 - get_text: readable text of the page
 - tabs {op: list|new|switch|close, index?, url?}
 - fill_form {fields: [{ref, text} or {ref, option}], submit_ref?}: fill a whole form in one step (fastest), optionally click submit
+- recording {op: start|stop|status, text?}: "Teach a task". start records what the USER does in the browser panel (text = what you asked them to show); stop returns their steps (secret values hidden). Use it when the user wants to show you a web workflow once so you can repeat it.
 Speed: navigate already returns a snapshot; act by ref; use fill_form for forms; use get_text to read long pages. For CAPTCHAs or 2-factor codes, stop and ask the user to take over in the browser panel.`,
     parameters: {
       type: 'object',
@@ -135,7 +139,7 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
         field: { type: 'string', enum: ['username', 'password'] },
         direction: { type: 'string', enum: ['up', 'down'] },
         amount: { type: 'number', minimum: 0.1, maximum: 10 },
-        op: { type: 'string', enum: ['list', 'new', 'switch', 'close'] },
+        op: { type: 'string', enum: ['list', 'new', 'switch', 'close', 'start', 'stop', 'status'], description: 'tabs: list|new|switch|close; recording: start|stop|status' },
         index: { type: 'integer', minimum: 1, description: '1-based tab number' }
       },
       required: ['action'],
@@ -147,12 +151,14 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
         { if: { properties: { action: { const: 'fill_secret' } } }, then: { required: ['ref', 'secret', 'field'] } },
         { if: { properties: { action: { const: 'scroll' } } }, then: { required: ['direction'] } },
         { if: { properties: { action: { const: 'tabs' } } }, then: { required: ['op'] } },
+        { if: { properties: { action: { const: 'recording' } } }, then: { required: ['op'] } },
         { if: { properties: { action: { const: 'select' } } }, then: { required: ['ref', 'option'] } },
         { if: { properties: { action: { const: 'dialog' } } }, then: { required: ['accept'] } },
         { if: { properties: { action: { const: 'fill_form' } } }, then: { required: ['fields'] } }
       ]
     },
-    async run(a) {
+    async run(a, ctx) {
+      if (a.action === 'recording') return recording(a, ctx?.threadId)
       const out = await act(a)
       // A CAPTCHA or "verify you are human" page: never solved by SahilBot. The user does it, then the agent continues.
       if (['navigate', 'click', 'snapshot', 'fill_form', 'type', 'get_text'].includes(a.action)) {
@@ -221,18 +227,54 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
         }
         case 'get_text':
           return { text: await b.getText(), display: `read text of ${safeHost(b.pageUrl())}` }
+        case 'recording':
+          return recording(a)
         case 'tabs': {
           if (a.op === 'new') {
             const url = a.url ? safeUrl(a.url) : undefined
             await b.control(async () => b.newTab(url))
             return { text: `Opened a new tab.${url ? ` Loading ${url}.` : ''}\n${b.listTabs()}`, display: 'new tab' }
           }
-          if (a.op === 'switch') { b.switchTab((a.index ?? 1) - 1); return { text: b.listTabs(), display: `tab ${a.index}` } }
-          if (a.op === 'close') { b.closeTab((a.index ?? b.state().active + 1) - 1); return { text: b.listTabs(), display: 'closed tab' } }
+          // The bot's own tab changes aren't part of a lesson being recorded.
+          if (a.op === 'switch') { quietly(() => b.switchTab((a.index ?? 1) - 1)); return { text: b.listTabs(), display: `tab ${a.index}` } }
+          if (a.op === 'close') { quietly(() => b.closeTab((a.index ?? b.state().active + 1) - 1)); return { text: b.listTabs(), display: 'closed tab' } }
           return { text: b.listTabs(), display: 'listed tabs' }
         }
       }
     }
+  }
+
+  function quietly(fn: () => void): void {
+    b.teach.hold()
+    try { fn() } finally { b.teach.release() }
+  }
+
+  async function recording(a: Args, threadId?: string): Promise<import('../types').ToolOutput> {
+    const st = b.teach.state()
+    if (a.op === 'start') {
+      if (st?.status === 'recording') return { text: `Already recording (${st.steps} steps so far, started by ${st.by === 'user' ? 'the user' : 'you'}). Call recording op=stop when the user is done.`, display: 'already recording' }
+      await b.teachStart('agent', { name: a.text?.slice(0, 80), threadId })
+      b.showToUser()
+      return {
+        text: `Recording started (up to ${MAX_MS / 60_000} minutes or ${MAX_STEPS} steps). The browser panel is open with a red Teach bar.\nTell the user: "Show me once: do the task in the browser panel, then press Done in the Teach bar." Then end your turn: their recorded steps arrive as their next message. If they tell you in chat that they're done instead, call recording op=stop to get the steps. Don't use the browser yourself while they record.`,
+        display: 'recording your steps'
+      }
+    }
+    if (a.op === 'stop') {
+      if (!st) return { text: 'Nothing is being recorded. Start with recording op=start.', display: 'not recording' }
+      if (st.by === 'user') return { text: `The user is recording a lesson themselves (${st.steps} steps so far). They'll press Done in the Teach bar and send it to you; don't stop it.`, display: 'user is recording' }
+      const steps = b.teachSteps()
+      b.teachCancel()
+      if (!steps.length) return { text: 'Recording stopped. No steps were captured: ask the user to try again in the browser panel.', display: 'no steps recorded' }
+      const secrets = steps.some((x) => x.secret)
+      return {
+        text: `Recording stopped: ${steps.length} step${steps.length === 1 ? '' : 's'}${st.limit ? ` (stopped at the ${st.limit === 'time' ? 'time' : 'step'} limit)` : ''}.\n${stepsToText(steps)}\n\nDetails (selector hints are for cross-checking; act by snapshot refs):\n${stepDetails(steps)}${secrets ? `\n\nValues shown as ${SECRET} were hidden on purpose: never put them in a skill; use fill_secret with a saved login, or ask the user.` : ''}`,
+        display: `recorded ${steps.length} steps`
+      }
+    }
+    if (!st) return { text: 'Not recording.', display: 'not recording' }
+    const latest = st.recent.length ? `\nLatest:\n${st.recent.map((r) => `- ${r}`).join('\n')}` : ''
+    return { text: `${st.status === 'recording' ? 'Recording' : 'Stopped'} (started by ${st.by === 'user' ? 'the user' : 'you'}): ${st.steps} steps, ${Math.round(((st.stoppedAt ?? Date.now()) - st.startedAt) / 1000)}s.${latest}`, display: 'checked recording' }
   }
 }
 

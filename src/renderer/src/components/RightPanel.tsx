@@ -5,10 +5,12 @@ import { prettyName } from '../lib/steps'
 import { Markdown, SANITIZE } from './Markdown'
 import { api } from '../api'
 import * as I from '../icons'
+import { TeachBar } from './TeachBar'
+import { isPageCandidate, PageView } from './PageView'
 
 export type PanelTab = 'progress' | 'browser' | 'file'
 
-export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, browserState, onClose, running, progress }: {
+export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, browserState, onClose, running, progress, threadId }: {
   tab: PanelTab
   onTab: (t: PanelTab) => void
   hidden: boolean
@@ -19,6 +21,8 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
   onClose: () => void
   running?: boolean
   progress?: { used: number; window: number; model?: string; actions?: number }
+  /** The open chat: a recording made with Teach goes there. */
+  threadId?: string | null
 }) {
   return (
     <aside className="right" data-testid="right-panel">
@@ -31,9 +35,9 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
         <span style={{ flex: 1 }} />
         <button className="icon-btn nodrag" onClick={onClose} title="Close panel (⌘\\)"><I.Close size={15} /></button>
       </div>
-      {tab === 'browser' && <BrowserPane hidden={hidden} />}
+      {tab === 'browser' && <BrowserPane hidden={hidden} threadId={threadId} />}
       {tab === 'progress' && <ProgressPane messages={messages} onOpenFile={onOpenFile} browserState={browserState} onBrowser={() => onTab('browser')} running={!!running} progress={progress} />}
-      {tab === 'file' && <FilePane path={file} />}
+      {tab === 'file' && (isPageCandidate(file) ? <PageView key={file} path={file} fallback={<FilePane path={file} />} /> : <FilePane path={file} />)}
     </aside>
   )
 }
@@ -55,7 +59,7 @@ function ProgressPane({ messages, onOpenFile, browserState, onBrowser, running, 
     const a = lastTodo ? JSON.parse(lastTodo.arguments) : null
     plan = !a ? [] : lastTodo!.name === 'todo' ? a.items ?? [] : (a.steps ?? []).map((t: string, i: number) => ({ text: t, status: i === 0 ? 'in_progress' : 'pending' }))
   } catch { plan = [] }
-  const outputs = [...new Map(messages.filter((m) => m.role === 'tool' && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && ['file_write', 'create_document'].includes(m.toolName ?? ''))
+  const outputs = [...new Map(messages.filter((m) => m.role === 'tool' && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && ['file_write', 'create_document', 'create_page', 'update_page'].includes(m.toolName ?? ''))
     .map((m) => [m.meta!.path as string, m])).values()].reverse()
   const attached = messages.flatMap((m) => [
     ...((m.meta?.files ?? []) as Array<{ name: string; path: string }>).map((f) => ({ ...f, folder: false })),
@@ -225,7 +229,8 @@ function FilePane({ path }: { path: string | null }) {
   )
 }
 
-function BrowserPane({ hidden }: { hidden: boolean }) {
+/** threadId: the chat a "Teach a task" recording is sent to (the bot's current thread). */
+function BrowserPane({ hidden, threadId }: { hidden: boolean; threadId?: string | null }) {
   const [s, setS] = useState<BrowserState | null>(null)
   const [url, setUrl] = useState('')
   const [editing, setEditing] = useState(false)
@@ -258,7 +263,7 @@ function BrowserPane({ hidden }: { hidden: boolean }) {
       window.removeEventListener('resize', sync)
       void api.browser.setBounds(null)
     }
-  }, [hidden, s?.controlling, s?.takenOver, s?.tabs.length])
+  }, [hidden, s?.controlling, s?.takenOver, s?.tabs.length, s?.teach?.status, !!s?.teach])
 
   return (
     <div className="browser">
@@ -281,7 +286,14 @@ function BrowserPane({ hidden }: { hidden: boolean }) {
             onChange={(e) => setUrl(e.target.value)} data-testid="browser-url" />
         </form>
         <button className="icon-btn" onClick={() => void api.browser.newTab()} title="New tab"><I.Plus size={16} /></button>
+        {!s?.teach && (
+          <button className="teach-btn" disabled={!!s?.controlling} onClick={() => void api.browser.teachStart()}
+            title="Teach a task: do it once here while SahilBot records, and your bot learns to repeat it" data-testid="teach-start">
+            <span className="teach-dot" aria-hidden />Teach
+          </button>
+        )}
       </div>
+      {s?.teach && <TeachBar key={s.teach.startedAt} state={s.teach} threadId={threadId} />}
       {(s?.controlling || s?.takenOver) && (
         <div className={`bcontrol${s.takenOver ? ' you' : ''}`} data-testid="browser-overlay">
           {s.takenOver ? (

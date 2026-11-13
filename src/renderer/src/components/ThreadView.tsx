@@ -5,6 +5,7 @@ import * as I from '../icons'
 import { describe, duration, stepStatus, summarize, type Step } from '../lib/steps'
 import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
+import { PageCard, pagesFromSteps } from './PageCard'
 
 type Block =
   | { kind: 'user'; m: Message }
@@ -176,7 +177,7 @@ function PlanCard({ items, live }: { items: PlanItem[]; live: boolean }) {
 
 const PREPARING: Record<string, string> = {
   file_write: 'Preparing to write a file', create_document: 'Building a document', file_manage: 'Preparing a file change',
-  web_search: 'Preparing a web search', fetch_page: 'Opening a page', browser: 'Preparing a browser step', todo: 'Planning',
+  web_search: 'Preparing a web search', create_page: 'Building a page', update_page: 'Updating the page', message_bot: 'Handing off to another bot', fetch_page: 'Opening a page', browser: 'Preparing a browser step', todo: 'Planning',
   memory: 'Updating memory', verify: 'Double-checking the work', ask_user: 'Writing a question', schedule: 'Setting up a schedule', find_tools: 'Looking for tools',
   research: 'Searching trusted sources', run_command: 'Preparing a command', agents: 'Putting together a team', consult: 'Asking an expert', computer: 'Getting ready to use your Mac', cursor: 'Preparing a Cursor task', mac_apps: 'Opening a Mac app'
 }
@@ -247,8 +248,11 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
             const at = atOf(b)
             const prevAt = prev ? atOf(prev) : undefined
             const time = stamp(at, prevAt)
+            // Back-to-back replies from the same bot stack tightly, like short progress messages.
+            const cont = !time && b.kind === 'text' && prev?.kind === 'text' && (b.m.meta?.botName ?? '') === (prev.m.meta?.botName ?? '')
             return (
-              <div key={b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.m.id} className="block">
+              <div key={b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.m.id}
+                className={`block b-${b.kind}${cont ? ' cont' : ''}`}>
                 {time && <div className="stamp">{time}</div>}
                 {b.kind === 'qa' ? (
                   <>
@@ -260,9 +264,12 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                 ) : b.kind === 'plan' ? (
                   <PlanCard items={b.items} live={running && b === lastPlan} />
                 ) : b.kind === 'activity' ? (
-                  <Activity steps={b.steps} live={running && b === lastActivity && tail === b} waitingApproval={approvalWaiting && b === lastActivity} onOpenFile={actions.onOpenFile} />
+                  <>
+                    <Activity steps={b.steps} live={running && b === lastActivity && tail === b} waitingApproval={approvalWaiting && b === lastActivity} onOpenFile={actions.onOpenFile} />
+                    {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
+                  </>
                 ) : (
-                  <Row b={b} actions={actions} editable={!running && b.kind === 'user' && b.m.id === lastUserId} />
+                  <Row b={b} actions={actions} editable={!running && b.kind === 'user' && b.m.id === lastUserId} cont={cont} />
                 )}
               </div>
             )
@@ -364,7 +371,7 @@ function StepDetail({ s, onOpenFile }: { s: Step; onOpenFile: (p: string) => voi
 const QUICK = ['👍', '😄', '👎', '❤️', '🤐']
 const MORE = ['🔥', '🎉', '🙏', '👀', '🤔', '😂', '😮', '💯', '✅', '🚀', '😢', '👏']
 
-function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' }>; actions: ThreadActions; editable?: boolean }) {
+function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' }>; actions: ThreadActions; editable?: boolean; cont?: boolean }) {
   const m = b.m
   const [editing, setEditing] = useState<string | null>(null)
   if (b.kind === 'compacted') {
@@ -376,7 +383,7 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
       </details>
     )
   }
-  if (b.kind === 'notice') return <div className="notice">{m.content}</div>
+  if (b.kind === 'notice') return <div className="notice sys-line" role="status">{m.content}</div>
   const reactions = (m.meta?.reactions ?? {}) as { user?: string; bot?: string }
 
   if (b.kind === 'user') {
@@ -426,7 +433,7 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
   return (
     <div className="row ai">
       <div className="bubble-wrap ai-col">
-        {speaker && <div className="speaker" style={{ color: (m.meta?.botColor as string) ?? undefined }}>{speaker}</div>}
+        {speaker && !cont && <div className="speaker" style={{ color: (m.meta?.botColor as string) ?? undefined }}>{speaker}</div>}
         <div className={`bubble ai${error ? ' err' : ''}`} data-testid="assistant-bubble" data-status={m.status}>
           {m.reasoning && (
             <details className="reasoning" open={streaming && !m.content}>
@@ -461,17 +468,18 @@ function Row({ b, actions, editable }: { b: Exclude<Block, { kind: 'activity' } 
         {reactions.user && (
           <button className="reaction" onClick={() => actions.onReact(m.id, null)} title="Remove reaction" data-testid="user-reaction">{reactions.user}</button>
         )}
-        {m.content && !streaming && (
-          <div className="ai-foot">
-            <MessageTools m={m} actions={actions} side="right" />
-            {!!m.meta?.routed && m.model && (
-              <span className="routed" title={`Auto chose this model: ${(m.meta.routed as { why: string }).why}`} data-testid="routed">
-                {(m.meta.routed as { label?: string }).label || m.model}
-              </span>
-            )}
-          </div>
-        )}
       </div>
+      {/* Beside the bubble (so stacked replies stay close): react, copy, read aloud, more; shown on hover. */}
+      {m.content && !streaming && (
+        <div className="ai-foot">
+          <MessageTools m={m} actions={actions} side="right" />
+          {!!m.meta?.routed && m.model && (
+            <span className="routed" title={`Auto chose this model: ${(m.meta.routed as { why: string }).why}`} data-testid="routed">
+              {(m.meta.routed as { label?: string }).label || m.model}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 }

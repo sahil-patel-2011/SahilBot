@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BrowserState, ChatEvent, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
 import { api } from './api'
-import { SpaceAvatar } from './brand'
+import { isLight, SpaceAvatar } from './brand'
+import { BotDetails } from './components/BotDetails'
 import { BotEditor } from './components/BotEditor'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
@@ -34,12 +35,15 @@ export function App() {
   const [running, setRunning] = useState<Set<string>>(new Set())
   const [pending, setPending] = useState<PendingRequest[]>([])
   const [progress, setProgress] = useState<Record<string, Extract<ChatEvent, { type: 'progress' }>>>({})
-  const [panel, setPanel] = useState<PanelTab | null>(null)
+  /** The right side: a RightPanel tab, or the bot details panel (opened from the header pill). */
+  const [panel, setPanel] = useState<PanelTab | 'details' | null>(null)
+  /** Open questions/approvals/plans per chat, for the sidebar's "needs you" dot. */
+  const [needs, setNeeds] = useState<Record<string, string[]>>({})
   const [file, setFile] = useState<string | null>(null)
   const [browser, setBrowser] = useState<BrowserState | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [view, setView] = useState<MainView>('home')
-  const [settingsPage, setSettingsPage] = useState<'general' | 'models' | 'keys' | undefined>(undefined)
+  const [settingsPage, setSettingsPage] = useState<'general' | 'models' | 'keys' | 'passwords' | 'rules' | 'memory' | undefined>(undefined)
   const [showConnect, setShowConnect] = useState(false)
   const [editor, setEditor] = useState<Editor>(null)
   const [palette, setPalette] = useState(false)
@@ -138,6 +142,7 @@ export function App() {
       })
       if (e.status !== 'started') void refreshSpaces()
       setRunSpaces((m) => { const n = { ...m }; if (e.status === 'started' && e.spaceId) n[e.threadId] = e.spaceId; else delete n[e.threadId]; return n })
+      if (e.status !== 'started') setNeeds((x) => { if (!x[e.threadId]) return x; const n = { ...x }; delete n[e.threadId]; return n })
       // A chat you're not looking at finished: say so.
       if (e.status === 'finished' && e.threadId !== threadRef.current && e.title) toast(`Done: ${e.title.replace(/^⏰ /, '').slice(0, 60)}`, 'ok')
       // Deep Research: open the finished report.
@@ -178,6 +183,15 @@ export function App() {
       void refreshSpaces()
       return
     }
+    // Every chat's open requests, so the sidebar can show which bots need you.
+    if (e.type === 'pending') setNeeds((x) => ({ ...x, [e.threadId]: [...(x[e.threadId] ?? []).filter((id) => id !== e.request.id), e.request.id] }))
+    else if (e.type === 'resolved') setNeeds((x) => {
+      const left = (x[e.threadId] ?? []).filter((id) => id !== e.id)
+      const n = { ...x }
+      if (left.length) n[e.threadId] = left
+      else delete n[e.threadId]
+      return n
+    })
     if (e.threadId !== threadRef.current) return
     if (e.type === 'pending') setPending((ps) => [...ps.filter((p) => p.id !== e.request.id), e.request])
     else if (e.type === 'resolved') setPending((ps) => ps.filter((p) => p.id !== e.id))
@@ -206,7 +220,7 @@ export function App() {
     else if (a === 'settings') setShowSettings(true)
     else if (a === 'scheduled') setShowScheduled(true)
     else if (a === 'connect') setShowConnect(true)
-    else if (a === 'toggle-panel') setPanel((p) => (p ? null : 'progress'))
+    else if (a === 'toggle-panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
     else if (a === 'search') setPalette(true)
     else if (a === 'export' && threadRef.current) void api.chat.exportThread(threadRef.current).then((p) => p && toast(`Saved to ${p.split('/').pop()}`, 'ok'))
   }), [])
@@ -267,7 +281,7 @@ export function App() {
       if (e.metaKey && e.key === 'n') { e.preventDefault(); newChatRef.current() }
       if (e.metaKey && e.key === 'k') { e.preventDefault(); setPalette(true) }
       if (e.metaKey && e.key === ',') { e.preventDefault(); setShowSettings(true) }
-      if (e.metaKey && e.key === '\\') { e.preventDefault(); setPanel((p) => (p ? null : 'progress')) }
+      if (e.metaKey && e.key === '\\') { e.preventDefault(); setPanel((p) => (p && p !== 'details' ? null : 'progress')) }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); composer.current?.toggleDictation() }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setVoiceOn(true) }
       // Esc stops speaking, and the current run (when no dialog is open and Esc wasn't closing something else).
@@ -322,6 +336,10 @@ export function App() {
     else if (a.kind === 'new-group') setEditor({ space: null, mode: 'group' })
     else if (a.kind === 'new-project') setEditor({ space: null, mode: 'project' })
     else if (a.kind === 'scheduled') setShowScheduled(true)
+    else if (a.kind === 'projects' || a.kind === 'files') { setView(a.kind); setThread(null) }
+    else if (a.kind === 'connect') setShowConnect(true)
+    else if (a.kind === 'settings') setShowSettings(true)
+    else if (a.kind === 'chat') void openAnyChat(a.id)
     else void openBot(a.id)
   }
 
@@ -370,6 +388,8 @@ export function App() {
   const question = pending.find((p) => p.kind === 'question' || p.kind === 'questions' || p.kind === 'plan')
   const isBot = !!space && !space.isMain && space.kind !== 'project'
   const isProject = space?.kind === 'project'
+  /** Whose chat this is: the bot, group or project; plain chats belong to SahilBot itself. */
+  const chatBot = isBot || isProject ? space : main
 
   const patchThread = async (patch: Parameters<typeof api.threads.update>[1]): Promise<void> => {
     if (!thread) return
@@ -440,9 +460,8 @@ export function App() {
       onThinking={(e) => void api.settings.set({ thinking: e }).then(setSettings)}
       mode={mode}
       onMode={(m) => (thread ? void patchThread({ permissionMode: m }) : setDraft((d) => ({ ...d, mode: m })))}
-      accent={isBot ? space?.color : undefined}
       onVoice={() => setVoiceOn(true)}
-      placeholder={isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? 'Reply to SahilBot' : 'How can I help you today?'}
+      placeholder={isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? `Message ${chatBot?.name ?? 'SahilBot'}` : 'How can I help you today?'}
       big={!thread}
       steering={thread ? steering[thread.id] : 0}
       context={!thread && !isBot ? (
@@ -488,6 +507,12 @@ export function App() {
 
   const memberColors = space?.kind === 'group' ? space.members.map((id) => spaces.find((s) => s.id === id)?.color ?? '#999') : undefined
   const modal = showSettings || !!editor || palette || showConnect || showScheduled || voiceOn || !settings.onboarded
+  // The chat's colour: your bubbles, the voice and send buttons. SahilBot itself uses the accent.
+  const botColor = chatBot && !chatBot.isMain ? chatBot.color : null
+  const chatStyle = { '--bot': botColor ?? 'var(--accent)', '--bot-text': botColor && isLight(botColor) ? '#141414' : '#ffffff' } as React.CSSProperties
+  const detailsSpace = chatBot ?? main
+  const needThreads = new Set(Object.keys(needs))
+  const needSpaces = new Set(Object.keys(needs).map((t) => runSpaces[t] ?? (t === thread?.id ? thread.spaceId : chats.find((c) => c.id === t)?.spaceId ?? '')).filter(Boolean))
 
   return (
     <div className="app">
@@ -518,39 +543,46 @@ export function App() {
         onNewProject={() => setEditor({ space: null, mode: 'project' })}
         runningThreads={running}
         runningSpaces={new Set(Object.values(runSpaces))}
+        needThreads={needThreads}
+        needSpaces={needSpaces}
         pinned={settings.pinnedBots}
         onPinned={(ids) => void api.settings.set({ pinnedBots: ids }).then(setSettings)}
       />
-      <main className="main">
+      <main className="main chat-root" style={chatStyle}>
         <header className="main-header drag">
           <div className="header-title">
-            {isProject && space && <button className="hint" style={{ fontWeight: 600 }} onClick={() => setThread(null)}>{space.name}{thread ? ' /' : ''}</button>}
-            {thread && !isBot && (renamingTitle ? (
-              <input className="title-edit" autoFocus defaultValue={thread.title}
-                onBlur={(e) => { setRenamingTitle(false); const v = e.target.value.trim(); if (v && v !== thread.title) void patchThread({ title: v }).then(() => refreshSpaces()) }}
-                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { e.preventDefault(); setRenamingTitle(false) } }} />
-            ) : (
-              <span data-testid="thread-title" onDoubleClick={() => setRenamingTitle(true)} title="Double-click to rename">{thread.title}</span>
-            ))}
-            {thread && (
-              <Popover label={<I.Chevron size={14} />} className="title-menu" menuClass="down" title="Chat options">
-                {(close) => (
-                  <>
-                    <button className="menu-item" onClick={() => { close(); setRenamingTitle(true) }}><I.Edit size={15} />Rename</button>
-                    <button className="menu-item" onClick={() => { close(); void patchThread({ pinned: !thread.pinned }).then(() => refreshSpaces()) }}><I.Pin size={15} />{thread.pinned ? 'Unpin' : 'Pin'}</button>
-                    <button className="menu-item" onClick={() => { close(); void api.chat.exportThread(thread.id).then((p) => p && toast(`Saved to ${p.split('/').pop()}`, 'ok')) }}><I.Share size={15} />Export as Markdown</button>
-                    <div className="menu-sep" />
-                    <button className="menu-item danger" onClick={() => { close(); if (confirm(`Delete "${thread.title}"?`)) void api.threads.remove(thread.id).then(() => { openMain(); void refreshSpaces() }) }}><I.Trash size={15} />Delete chat</button>
-                  </>
-                )}
-              </Popover>
-            )}
+            {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
           </div>
-          {isBot && space && (
-            <button className="bot-pill" onClick={() => setEditor({ space, mode: space.kind })} data-testid="bot-pill" title="Customize">
-              <SpaceAvatar color={space.color} shape={space.shape} size={26} group={memberColors} />
-              <span>{space.name}</span>
-            </button>
+          {chatBot && (thread || (isBot && view === 'home')) && (
+            <div className={`chat-pill${panel === 'details' ? ' on' : ''}`}>
+              {renamingTitle && thread ? (
+                <input className="title-edit" autoFocus defaultValue={thread.title}
+                  onBlur={(e) => { setRenamingTitle(false); const v = e.target.value.trim(); if (v && v !== thread.title) void patchThread({ title: v }).then(() => refreshSpaces()) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { e.preventDefault(); setRenamingTitle(false) } }} />
+              ) : (
+                <button className="bot-pill" onClick={() => setPanel((p) => (p === 'details' ? null : 'details'))} data-testid="bot-pill" title={`About ${chatBot.name}`}>
+                  {chatBot.kind === 'project'
+                    ? <span className="proj-tile" style={{ background: chatBot.color, width: 22, height: 22, borderRadius: 7 }}><I.Folder size={12} /></span>
+                    : <SpaceAvatar color={chatBot.color} shape={chatBot.shape} size={22} group={chatBot.kind === 'group' ? memberColors : undefined} />}
+                  <span className="pill-name">{chatBot.name}</span>
+                  {thread && !isBot && <span className="pill-title" data-testid="thread-title">{thread.title}</span>}
+                </button>
+              )}
+              {thread && (
+                <Popover label={<I.Chevron size={14} />} className="title-menu" menuClass="down" title="Chat options">
+                  {(close) => (
+                    <>
+                      <button className="menu-item" onClick={() => { close(); setPanel('details') }}><I.Users size={15} />About {chatBot.name}</button>
+                      <button className="menu-item" onClick={() => { close(); setRenamingTitle(true) }}><I.Edit size={15} />Rename chat</button>
+                      <button className="menu-item" onClick={() => { close(); void patchThread({ pinned: !thread.pinned }).then(() => refreshSpaces()) }}><I.Pin size={15} />{thread.pinned ? 'Unpin' : 'Pin'}</button>
+                      <button className="menu-item" onClick={() => { close(); void api.chat.exportThread(thread.id).then((p) => p && toast(`Saved to ${p.split('/').pop()}`, 'ok')) }}><I.Share size={15} />Export as Markdown</button>
+                      <div className="menu-sep" />
+                      <button className="menu-item danger" onClick={() => { close(); if (confirm(`Delete "${thread.title}"?`)) void api.threads.remove(thread.id).then(() => { openMain(); void refreshSpaces() }) }}><I.Trash size={15} />Delete chat</button>
+                    </>
+                  )}
+                </Popover>
+              )}
+            </div>
           )}
           <div className="header-actions">
             {((isRunning && (prog?.plan || (prog?.actions ?? 0) > 0)) || plan.length > 0) && (
@@ -572,7 +604,7 @@ export function App() {
               <I.Globe size={17} />
               {!!browser?.tabs.length && <span className={`globe-dot${browser.controlling ? ' live' : ''}`} />}
             </button>
-            <button className={`icon-btn${panel ? ' on' : ''}`} title="Side panel (⌘\)" onClick={() => setPanel((p) => (p ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
+            <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Side panel (⌘\)" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
             <button className="icon-btn" title="Settings (⌘,)" onClick={() => setShowSettings(true)}><I.Gear size={17} /></button>
           </div>
         </header>
@@ -618,9 +650,14 @@ export function App() {
             onIdea={(text, deep) => { composer.current?.replace(text); composer.current?.setDeep(!!deep) }} />
         )}
       </main>
-      {panel && (
+      {panel === 'details' && detailsSpace ? (
+        <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)}
+          onCustomize={() => setEditor({ space: detailsSpace, mode: detailsSpace.kind })}
+          onChanged={() => void refreshSpaces()}
+          onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }} />
+      ) : panel && panel !== 'details' && (
         <RightPanel tab={panel} onTab={setPanel} hidden={modal} messages={messages} file={file}
-          onOpenFile={openFile} browserState={browser} onClose={() => setPanel(null)}
+          onOpenFile={openFile} browserState={browser} onClose={() => setPanel(null)} threadId={thread?.id ?? null}
           running={isRunning} progress={prog ? { used: prog.used, window: prog.window, model: (prog.routed as { label?: string } | undefined)?.label ?? prog.model, actions: prog.actions } : undefined} />
       )}
       {!settings.onboarded && <Onboarding settings={settings} onDone={(s) => { setSettings(s); void refreshModels() }} />}
@@ -628,13 +665,15 @@ export function App() {
         <VoiceMode threadId={thread?.id ?? null} space={space} onClose={() => setVoiceOn(false)}
           onThread={(id) => { if (thread?.id !== id) void api.threads.list(space?.id).then((ts) => { const t = ts.find((x) => x.id === id); if (t) setThread(t) }) }} />
       )}
-      {palette && <CommandPalette spaces={spaces} onPick={onPalette} onClose={() => setPalette(false)} />}
+      {palette && <CommandPalette spaces={spaces} chats={chats} onPick={onPalette} onClose={() => setPalette(false)} />}
       {showSettings && (
         <SettingsModal settings={settings} models={models} sys={sys} spaces={spaces} initialPage={settingsPage}
           onClose={() => { setShowSettings(false); setSettingsPage(undefined) }}
           onSaved={setSettings} onRefreshModels={() => void refreshModels()} />
       )}
-      {showConnect && <ConnectApps onClose={() => setShowConnect(false)} onBrowse={(url) => { setPanel('browser'); void api.browser.navigate(url) }} />}
+      {showConnect && <ConnectApps onClose={() => setShowConnect(false)} onBrowse={(url) => { setPanel('browser'); void api.browser.navigate(url) }}
+        onOpenBot={(id) => { setShowConnect(false); void refreshSpaces().then(() => openBot(id)) }}
+        onOpenSettings={(page) => { setShowConnect(false); setSettingsPage(page); setShowSettings(true) }} />}
       {showScheduled && (
         <Scheduled spaces={spaces.filter((x) => x.kind !== 'group')} onClose={() => setShowScheduled(false)}
           onOpen={(t) => { setShowScheduled(false); void api.threads.list(t.spaceId).then((ts) => { const th = ts.find((x) => x.id === t.threadId); if (th) { setSpaceId(t.spaceId); setThread(th) } }) }} />

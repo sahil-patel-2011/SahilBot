@@ -28,7 +28,8 @@ const api: SahilBotApi = {
     markUnread: call('spaces:markUnread') as never,
     getPrompt: call('spaces:getPrompt') as never,
     setPrompt: call('spaces:setPrompt') as never,
-    promptPath: call('spaces:promptPath') as never
+    promptPath: call('spaces:promptPath') as never,
+    library: call('spaces:library') as never
   },
   threads: {
     list: call('threads:list') as never,
@@ -49,6 +50,7 @@ const api: SahilBotApi = {
     recent: call('files:recent') as never,
     snippet: call('files:snippet') as never
   },
+  pages: { info: call('pages:info') as never, openWindow: call('pages:openWindow') as never, exportPdf: call('pages:exportPdf') as never },
   providers: call('providers') as never,
   onMenu(cb) {
     const fn = (_e: unknown, a: string): void => cb(a)
@@ -100,6 +102,7 @@ const api: SahilBotApi = {
     update: call('schedules:update') as never,
     remove: call('schedules:remove') as never,
     runNow: call('schedules:runNow') as never,
+    runs: call('schedules:runs') as never,
     onChange(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('schedules:changed', fn)
@@ -131,6 +134,13 @@ const api: SahilBotApi = {
     connect: call('connectors:connect') as never,
     connectPreset: call('connectors:connectPreset') as never,
     disconnect: call('connectors:disconnect') as never,
+    icons: call('connectors:icons') as never,
+    setToolEnabled: call('connectors:setToolEnabled') as never,
+    onIcons(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('connectors:icons', fn)
+      return () => ipcRenderer.removeListener('connectors:icons', fn)
+    },
     onChange(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('connectors:changed', fn)
@@ -149,6 +159,10 @@ const api: SahilBotApi = {
     switchTab: call('browser:switchTab') as never,
     closeTab: call('browser:closeTab') as never,
     takeOver: call('browser:takeOver') as never,
+    teachStart: call('browser:teachStart') as never,
+    teachStop: call('browser:teachStop') as never,
+    teachCancel: call('browser:teachCancel') as never,
+    teachCompose: call('browser:teachCompose') as never,
     onState(cb) {
       const fn = (_e: unknown, s: BrowserState): void => cb(s)
       ipcRenderer.on('browser:state', fn)
@@ -160,8 +174,13 @@ const api: SahilBotApi = {
       return () => ipcRenderer.removeListener('browser:open', fn)
     }
   },
-  memory: { list: call('memory:list') as never, remove: call('memory:remove') as never, add: call('memory:add') as never, update: call('memory:update') as never },
+  memory: {
+    list: call('memory:list') as never, remove: call('memory:remove') as never, add: call('memory:add') as never, update: call('memory:update') as never,
+    importPreview: call('memory:importPreview') as never, importCommit: call('memory:importCommit') as never,
+    getEnabled: call('memory:getEnabled') as never, setEnabled: call('memory:setEnabled') as never
+  },
   rules: { list: call('rules:list') as never, save: call('rules:save') as never, setEnabled: call('rules:setEnabled') as never, remove: call('rules:remove') as never },
+  templates: { list: call('templates:list') as never, add: call('templates:add') as never },
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
   chat: {
     send: call('chat:send') as never,

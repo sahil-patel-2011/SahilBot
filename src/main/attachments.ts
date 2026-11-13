@@ -65,12 +65,15 @@ export class Attachments {
     return `${SCHEME}://local${pathToFileURL(p).pathname}`
   }
 
+  /** Special serving for some allowed files (Pages get strict CSP + sandbox headers); null = normal. */
+  serve: ((p: string) => Response | null) | null = null
+
   /** Serves allowed local files to the renderer (images, PDFs in the File panel). */
   registerProtocol(): void {
     protocol.handle(SCHEME, (req) => {
       const p = decodeURIComponent(new URL(req.url).pathname)
       if (!this.isAllowed(p) || !existsSync(p)) return new Response('Not allowed', { status: 403 })
-      return net.fetch(pathToFileURL(p).toString())
+      return this.serve?.(p) ?? net.fetch(pathToFileURL(p).toString())
     })
   }
 

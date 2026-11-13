@@ -1,35 +1,48 @@
 import type { Db } from '../../db'
-import type { MemoryCategory, MemoryStore } from '../../memory'
+import { MEMORY_KINDS, SECRETISH, isBotKind, normalizeKind, type Memory, type MemoryKind, type MemoryStore } from '../../memory'
 import type { SkillStore } from '../../skills'
 import type { RuleStore } from '../../rules'
 import type { ToolDef } from '../types'
 
 type Args = {
-  action: 'save' | 'search' | 'forget' | 'read_skill' | 'save_skill' | 'save_rule'
-  fact?: string; category?: MemoryCategory; query?: string; id?: string; about?: 'user' | 'project'
+  action: 'save' | 'list' | 'search' | 'forget' | 'read_skill' | 'save_skill' | 'save_rule'
+  fact?: string; category?: string; scope?: 'me' | 'bot'; query?: string; id?: string; all?: boolean
+  /** Older name for scope: 'user' = me, 'project' = bot. */
+  about?: 'user' | 'project'
   name?: string; description?: string; steps?: string; rule?: string; applies?: 'everywhere' | 'this_bot' | 'this_project'
 }
 
-const SECRETISH = /\b(password|passcode|pin|ssn|social security|credit card|cvv|api key|token|secret)\b/i
 const SECRET_VALUE = /\b(password|passcode|api key|secret|token)\s*[:=]\s*\S+/i
+
+const KIND_TITLE: Record<MemoryKind, string> = {
+  profile: 'About you', preference: 'Preferences', rule: 'Rules', person: 'People', location: 'Places', work: 'Work',
+  project: 'Projects', trip: 'Trips', date: 'Dates', link: 'Links', fact: 'Other facts', worklog: 'Work log'
+}
+
+const quote = (s: string): string => `"${s.length > 140 ? `${s.slice(0, 137)}…` : s}"`
 
 export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rules?: RuleStore): ToolDef<Args> {
   return {
     name: 'memory',
     label: 'Memory',
     core: true,
-    effect: (a) => (a.action === 'search' || a.action === 'read_skill' ? 'read' : 'write_local'),
-    description: 'Long-term memory shared across chats. save: store a lasting fact as one short sentence: about the user (name, role, location, preferences, people, dates), or, in a project, about the project (decisions, conventions, status) with about="project" so every chat in the project knows it. search: look up saved facts and past conversations (in a project: its chats first). forget: delete a fact by id. read_skill: the full steps of a saved skill (a procedure that worked before) by name. save_skill: write or improve a skill after a task that needed a non-obvious procedure: name (short, dashes), description (when to use it), steps (numbered, exact tools, arguments, gotchas). save_rule: when the user says how they always want something done, save it as a standing rule (name, rule, applies) that every future chat follows. Never save passwords or other secrets.',
+    effect: (a) => (a.action === 'search' || a.action === 'list' || a.action === 'read_skill' ? 'read' : 'write_local'),
+    description: 'Long-term memory across chats. Each memory is shared ("me": about the user, every bot sees it) or belongs to this bot ("bot": its job rules, decisions, work log). ' +
+      'save: one short self-contained sentence with a category; scope defaults to "me" for facts about the user and "bot" for rule and worklog. After meaningful work, save a worklog entry: what was done and where the output is. ' +
+      'list: everything remembered (for "what do you remember about me?"). search: saved memories and past conversations. ' +
+      'forget: by id, or by query describing it ("lives in Boston"); it removes the clear match and says what was removed, or lists candidates when unsure (all=true removes every strong match). ' +
+      'read_skill / save_skill: procedures that worked before (name, description, numbered steps). save_rule: an app-wide standing instruction every chat follows. Never save passwords or other secrets.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['save', 'search', 'forget', 'read_skill', 'save_skill', 'save_rule'] },
-        fact: { type: 'string', description: 'For save: one self-contained sentence with the specifics, e.g. "Works at Urology of Greater Atlanta as marketing lead." or "Alex Chen is the user\'s sister; lives in Austin; alex@example.com."' },
-        category: { type: 'string', enum: ['profile', 'work', 'preference', 'location', 'person', 'project', 'trip', 'link', 'date', 'other'], description: 'profile: about the user; person: someone in their life (name, relation, contact, where they live); location: places and addresses; project; trip; link: a URL worth remembering; date: birthdays, deadlines' },
-        query: { type: 'string', description: 'For search' },
-        id: { type: 'string', description: 'For forget' },
-        about: { type: 'string', enum: ['user', 'project'], description: 'For save inside a project: "project" shares it with the project\'s chats; default "user".' },
-        name: { type: 'string', description: 'For read_skill and save_skill, e.g. "export-gmail-invoices"' },
+        action: { type: 'string', enum: ['save', 'list', 'search', 'forget', 'read_skill', 'save_skill', 'save_rule'] },
+        fact: { type: 'string', description: 'For save: one self-contained sentence with the specifics, e.g. "Alex Chen is the user\'s sister; lives in Austin." For worklog: what was done and where the output is, e.g. "Drafted the Q4 board memo → ~/Documents/Q4 memo.docx".' },
+        category: { type: 'string', enum: MEMORY_KINDS, description: 'profile: who the user is; preference: how they like things; rule: an instruction to follow ("Always ask before sending email"); person; location (places, addresses, time zone); work; project; trip; date (birthdays, deadlines); link; fact; worklog: a dated entry of work done' },
+        scope: { type: 'string', enum: ['me', 'bot'], description: 'For save: "me" = about the user, shared with every bot; "bot" = only this bot. Default: bot for rule and worklog (and project inside a project), otherwise me. For list/search/forget: limit to one scope.' },
+        query: { type: 'string', description: 'For search, or for forget: words describing the memory to remove' },
+        id: { type: 'string', description: 'For forget: a memory id (or several, comma-separated). For save: replace this memory with the new wording.' },
+        all: { type: 'boolean', description: 'For forget with query: remove every strong match, not just the best one' },
+        name: { type: 'string', description: 'For read_skill, save_skill and save_rule, e.g. "export-gmail-invoices"' },
         description: { type: 'string', description: 'For save_skill: when to use it, one sentence' },
         steps: { type: 'string', description: 'For save_skill: numbered Markdown steps' },
         rule: { type: 'string', description: 'For save_rule: the instruction to always follow, one or two sentences' },
@@ -40,7 +53,6 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
       allOf: [
         { if: { properties: { action: { const: 'save' } } }, then: { required: ['fact'] } },
         { if: { properties: { action: { const: 'search' } } }, then: { required: ['query'] } },
-        { if: { properties: { action: { const: 'forget' } } }, then: { required: ['id'] } },
         { if: { properties: { action: { const: 'read_skill' } } }, then: { required: ['name'] } },
         { if: { properties: { action: { const: 'save_skill' } } }, then: { required: ['name', 'description', 'steps'] } },
         { if: { properties: { action: { const: 'save_rule' } } }, then: { required: ['name', 'rule'] } }
@@ -49,7 +61,12 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
     async run(a, ctx) {
       const thread = db.getThread(ctx.threadId)
       const space = thread ? db.getSpace(thread.spaceId) : undefined
+      // The bot (or project) this chat belongs to. Group chats have no single bot: their saves are shared.
+      const botId = space && space.kind !== 'group' ? space.id : null
+      const botName = space?.kind === 'project' ? `the ${space.name} project` : space?.name ?? 'this bot'
       const projectId = space?.kind === 'project' ? space.id : null
+      const where = (m: Memory): string => (m.spaceId ? (m.spaceId === botId ? 'this bot' : db.getSpace(m.spaceId)?.name ?? 'another bot') : 'shared')
+
       if (a.action === 'save_rule') {
         if (!rules) throw new Error('Rules are not available.')
         if (SECRETISH.test(a.rule!)) throw new Error('Rules never hold secrets.')
@@ -72,23 +89,102 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         const sk = skills.save({ name: a.name!, description: a.description!, body: a.steps!, source: 'learned' })
         return { text: `${existing ? 'Updated' : 'Saved'} skill "${sk.name}".`, display: `${existing ? 'updated' : 'saved'} skill "${sk.name}"` }
       }
+
+      const off = !memory.enabled
+      const offText = 'Memory is turned off (Settings → Memory), so nothing is saved or recalled. Tell the user if they asked you to remember something.'
+
       if (a.action === 'save') {
+        if (off) return { text: offText, display: 'memory is off' }
         if (SECRETISH.test(a.fact!)) throw new Error('That looks like a secret. Secrets are never stored in memory; saved logins belong in the password vault.')
-        const { memory: m, replaced } = memory.save(a.fact!, a.category, a.about === 'project' ? projectId : null)
-        return { text: replaced ? `Updated memory ${m.id} (was: "${replaced}").` : `Saved memory ${m.id}.`, display: `saved "${m.content.slice(0, 60)}"` }
+        const kind = normalizeKind(a.category)
+        // Job rules and the work log belong to the bot; in a project, so do its decisions and status.
+        const scope = a.scope ?? (a.about === 'project' ? 'bot' : a.about === 'user' ? 'me' : isBotKind(kind) || (kind === 'project' && projectId) ? 'bot' : 'me')
+        const spaceId = scope === 'bot' ? botId : null
+        if (a.id) {
+          const cur = memory.get(a.id.trim())
+          if (cur) {
+            const m = memory.update(cur.id, a.fact!, { category: a.category ? kind : undefined })!
+            return { text: `Updated memory ${m.id} (was: ${quote(cur.content)}; now: ${quote(m.content)}). Mention the change briefly in your reply.`, display: `updated "${m.content.slice(0, 60)}"` }
+          }
+        }
+        const { memory: m, replaced } = memory.save(a.fact!, kind, spaceId, 'chat')
+        const whereSaved = spaceId ? `for ${botName} only` : 'shared (about the user)'
+        return {
+          text: `${replaced ? `Updated memory ${m.id} (was: ${quote(replaced)})` : `Saved memory ${m.id}`} as ${m.category}, ${whereSaved}.${m.category === 'worklog' ? '' : ' Mention it briefly in your reply (e.g. "I\'ll remember that…").'}`,
+          display: `${m.category === 'worklog' ? 'logged' : replaced ? 'updated' : 'saved'} "${m.content.slice(0, 60)}"`
+        }
       }
+
+      if (a.action === 'list') {
+        if (off) return { text: offText, display: 'memory is off' }
+        let items = memory.list(botId)
+        if (a.scope === 'me') items = items.filter((m) => !m.spaceId)
+        if (a.scope === 'bot') items = items.filter((m) => m.spaceId)
+        if (a.query?.trim()) {
+          const keep = new Set(items.map((m) => m.id))
+          items = memory.search(a.query, botId, 100).filter((m) => keep.has(m.id))
+        }
+        if (!items.length) return { text: 'Nothing saved yet.', display: 'nothing saved' }
+        const groups = MEMORY_KINDS.map((k) => ({ k, ms: items.filter((m) => m.category === k) })).filter((g) => g.ms.length)
+        const lines: string[] = []
+        let shown = 0
+        for (const g of groups) {
+          const ms = g.k === 'worklog' ? g.ms.slice(0, 8) : g.ms
+          lines.push(`${KIND_TITLE[g.k]}:`)
+          for (const m of ms.slice(0, 60)) {
+            lines.push(`- [${m.id}] ${m.content}${m.spaceId ? ` (${where(m)})` : ''}`)
+            shown++
+          }
+        }
+        if (shown < items.length) lines.push(`(${items.length - shown} older entries not shown)`)
+        lines.push('', 'Tell the user in plain words, grouped like this, without the ids. They can say "forget …" or edit everything in Settings → Memory.')
+        return { text: lines.join('\n'), display: `${items.length} memories` }
+      }
+
       if (a.action === 'forget') {
-        return { text: memory.remove(a.id!) ? `Forgot ${a.id}.` : `No memory with id ${a.id}.`, display: `forgot ${a.id}` }
+        if (!a.id && !a.query) throw new Error('Give the id of the memory to forget, or a query describing it.')
+        if (a.id) {
+          const gone: Memory[] = [], missing: string[] = []
+          for (const id of a.id.split(/[\s,]+/).filter(Boolean)) {
+            const m = memory.get(id)
+            if (m && memory.remove(id)) gone.push(m)
+            else missing.push(id)
+          }
+          // Wrong ids but a description too: fall back to matching the description.
+          if (gone.length || !a.query) {
+            const parts: string[] = []
+            if (gone.length) parts.push(`Forgot ${gone.length === 1 ? quote(gone[0].content) : `${gone.length} memories:\n${gone.map((m) => `- ${quote(m.content)}`).join('\n')}`}. Confirm to the user exactly what you removed.`)
+            if (missing.length) parts.push(`No memory with id ${missing.join(', ')}. Try forget with a query describing it.`)
+            return { text: parts.join('\n'), display: gone.length ? `forgot ${gone.length === 1 ? `"${gone[0].content.slice(0, 50)}"` : `${gone.length} memories`}` : 'nothing to forget' }
+          }
+        }
+        const { removed: visible, candidates } = memory.forget(a.query!, botId, { all: a.all, only: a.scope === 'me' ? 'shared' : a.scope === 'bot' ? 'space' : undefined })
+        if (visible.length) {
+          return {
+            text: `Forgot ${visible.length === 1 ? quote(visible[0].content) : `${visible.length} memories:\n${visible.map((m) => `- ${quote(m.content)}`).join('\n')}`}. Confirm to the user exactly what you removed.`,
+            display: `forgot ${visible.length === 1 ? `"${visible[0].content.slice(0, 50)}"` : `${visible.length} memories`}`
+          }
+        }
+        if (candidates.length) {
+          return {
+            text: `Several memories could match; nothing removed yet:\n${candidates.map((m) => `- [${m.id}] ${m.content}`).join('\n')}\nForget the right one by id (several ids comma-separated), or ask the user which they meant.`,
+            display: `${candidates.length} possible matches`
+          }
+        }
+        return { text: `No saved memory matches "${a.query}". Nothing was removed. (If it was something said earlier in this chat, it was never saved.)`, display: 'no match' }
       }
-      const facts = memory.search(a.query!, projectId).slice(0, 10)
+
+      // search
+      const facts = off ? [] : memory.search(a.query!, a.scope === 'me' ? null : botId, 10).filter((m) => a.scope !== 'bot' || m.spaceId)
       const all = db.searchThreads(a.query!).filter((t) => t.id !== ctx.threadId)
-      // In a project, its own chats come first.
-      const threads = [...all.filter((t) => projectId && t.spaceId === projectId), ...all.filter((t) => !projectId || t.spaceId !== projectId)].slice(0, 5)
+      // This bot's (or project's) own chats come first.
+      const threads = [...all.filter((t) => botId && t.spaceId === botId), ...all.filter((t) => !botId || t.spaceId !== botId)].slice(0, 5)
       const parts: string[] = []
-      parts.push(facts.length ? `Saved facts:\n${facts.map((m) => `- [${m.id}] ${m.content}`).join('\n')}` : 'No saved facts match.')
+      parts.push(off ? 'Memory is turned off; only past conversations were searched.' : facts.length ? `Saved memories:\n${facts.map((m) => `- [${m.id}] (${m.category}${m.spaceId ? `, ${where(m)}` : ''}) ${m.content}`).join('\n')}` : 'No saved memories match.')
       if (threads.length) {
+        const first = a.query!.toLowerCase().split(/\s+/)[0]
         parts.push(`Past conversations:\n${threads.map((t) => {
-          const hits = db.listMessages(t.id).filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.toLowerCase().includes(a.query!.toLowerCase().split(/\s+/)[0]))
+          const hits = db.listMessages(t.id).filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.toLowerCase().includes(first))
           const snippet = (hits[0]?.content ?? t.lastPreview ?? '').replace(/\s+/g, ' ').slice(0, 300)
           return `- "${t.title}" (${new Date(t.updatedAt).toISOString().slice(0, 10)}): ${snippet}`
         }).join('\n')}`)

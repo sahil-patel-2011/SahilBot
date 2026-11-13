@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { ApprovalAnswer, Attachment, ChatEvent, Effort, TeamMember, Message, PendingRequest, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
+import type { ApprovalAnswer, Attachment, ChatEvent, Effort, TeamMember, Message, ModelInfo, PendingRequest, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
 import type { Db } from '../db'
 import type { MemoryStore } from '../memory'
 import type { SettingsStore } from '../settings'
@@ -8,12 +8,14 @@ import { samplingFor } from '../llm/catalog'
 import { isLocal, streamChat, type WireMessage } from '../llm/client'
 import type { Endpoints } from '../llm/endpoints'
 import { teamCapacity } from '../llm/models'
+import { def as providerDef } from '../llm/providers'
 import { decide as route, pick } from '../llm/router'
 import { ContextManager, OUTPUT_RESERVE, ResultStore, ServerTokenCounter, SUMMARY_INSTRUCTIONS, wrapToolOutput, type TokenCounter } from './context'
-import { checkTaint, containsSecret, decide } from './permissions'
+import { checkTaint, containsSecret, decide, ruleVerdict } from './permissions'
 import { VOICE_SUFFIX, groupNote, harnessPrompt } from './prompt'
 import type { ToolRegistry } from './registry'
-import type { ThreadState, ToolContext, ToolDef, ToolOutput } from './types'
+import type { Decision, PermissionInput, ThreadState, ToolContext, ToolDef, ToolOutput } from './types'
+import type { HandoffHost } from './tools/handoff'
 import { check, repairPrompt } from './validate'
 import { LoopGuard, fixName, recoverToolCalls } from './recover'
 
@@ -65,8 +67,10 @@ interface Run {
   unattended?: boolean
   /** A helper agent working for another agent (Team of Experts). */
   helper?: boolean
-  /** Messages the user sent while this run works (steering), added at the start of the next step. */
-  steers?: string[]
+  /** Messages sent while this run works (steering, or another bot's handoff), added at the start of the next step. */
+  steers?: Array<{ text: string; meta?: Record<string, unknown> }>
+  /** Resolves when the run (and its group speakers) has ended. */
+  done?: Promise<'finished' | 'stopped' | 'error'>
 }
 
 const HELPER_NOTE = (depth: number): string => `
@@ -155,13 +159,13 @@ export class Agent {
    * the current tool results, so the history stays valid) and the agent adjusts without starting over.
    * Nothing running: it's sent as a normal message.
    */
-  async steer(threadId: string, text: string): Promise<'steered' | 'sent'> {
+  async steer(threadId: string, text: string, meta?: Record<string, unknown>): Promise<'steered' | 'sent'> {
     const run = this.runs.get(threadId)
     if (!run) {
-      await this.send({ threadId, text })
+      await this.send({ threadId, text, ...(meta ? { meta } : {}) })
       return 'sent'
     }
-    run.steers = [...(run.steers ?? []), text]
+    run.steers = [...(run.steers ?? []), { text, meta }]
     this.d.emit({ threadId, type: 'steer', pending: run.steers.length })
     return 'steered'
   }
@@ -169,10 +173,10 @@ export class Agent {
   /** Adds waiting steering messages to the conversation. */
   private flushSteers(threadId: string, run: Run): boolean {
     const texts = run.steers?.splice(0) ?? []
-    for (const text of texts) {
+    for (const { text, meta } of texts) {
       const m = this.d.db.insertMessage({
         threadId, role: 'user', content: text, kind: 'normal', status: 'done',
-        meta: { steer: true, note: '[The user sent this while you were working. Take it into account from your next step on: change the plan if needed, don\'t redo work that is already done, and keep going.]' }
+        meta: { steer: true, note: '[The user sent this while you were working. Take it into account from your next step on: change the plan if needed, don\'t redo work that is already done, and keep going.]', ...(meta ?? {}) }
       })
       this.d.emit({ threadId, type: 'message', message: m })
     }
@@ -355,13 +359,15 @@ export class Agent {
         const left = run.steers?.splice(0) ?? []
         if (!left.length) return
         this.d.emit({ threadId: thread.id, type: 'steer', pending: 0 })
-        const text = left.join('\n\n')
-        if (!run.ctrl.signal.aborted) void this.steer(thread.id, text).catch((e) => this.notice(thread.id, `Couldn't send your message: ${(e as Error).message}`))
+        const text = left.map((x) => x.text).join('\n\n')
+        const meta = Object.assign({}, ...left.map((x) => x.meta ?? {})) as Record<string, unknown>
+        if (!run.ctrl.signal.aborted) void this.steer(thread.id, text, Object.keys(meta).length ? meta : undefined).catch((e) => this.notice(thread.id, `Couldn't send your message: ${(e as Error).message}`))
         else {
-          const m = this.d.db.insertMessage({ threadId: thread.id, role: 'user', content: text, kind: 'normal', status: 'done', meta: { steer: true } })
+          const m = this.d.db.insertMessage({ threadId: thread.id, role: 'user', content: text, kind: 'normal', status: 'done', meta: { ...meta, steer: true } })
           this.d.emit({ threadId: thread.id, type: 'message', message: m })
         }
       })
+    run.done = done
     return { done }
   }
 
@@ -408,13 +414,15 @@ export class Agent {
   // -------------------------------------------------------------------------
 
   private systemFor(thread: Thread, state: ThreadState, speaker?: Space, group?: Space): string {
+    // Memories ranked for this request: shared ones plus the speaking bot's own (each group member gets its own).
+    const query = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.content ?? ''
     const build = (bot: Space | undefined): string => {
       const s = this.d.settings.get()
       return harnessPrompt({
         date: new Date(),
         userName: s.userName,
         workspaceDir: s.workspaceDir,
-        memories: this.d.memory.block(),
+        memories: this.d.memory.block({ spaceId: bot?.kind === 'bot' ? bot.id : null, spaceName: bot?.name, query }),
         spacePrompt: this.d.spaces.getPrompt(bot?.id ?? thread.spaceId),
         spaceName: bot?.name ?? 'SahilBot',
         projectFolder: bot?.kind === 'project' ? bot.folder ?? undefined : undefined,
@@ -621,20 +629,60 @@ export class Agent {
     const group = run.group ? db.getSpace(thread.spaceId) : undefined
     const speaker = group ? space : undefined
     const state = db.getState(thread.id)
-    const { model, routed } = await this.chooseModel(speaker?.model || db.getThread(thread.id)?.model || space?.model || s.defaultModel, thread, state)
-    const ep = this.d.endpoints.for(model)
-    const claude = ep.provider === 'anthropic'
+    const chosen = await this.chooseModel(speaker?.model || db.getThread(thread.id)?.model || space?.model || s.defaultModel, thread, state)
+    let model = chosen.model
+    let routed = chosen.routed
+    let ep = this.d.endpoints.for(model)
+    let claude = ep.provider === 'anthropic'
     // Voice keeps a 16k window so replies start fast; Claude gets a larger window (1M available, cached).
     // Auto (0): the largest window that fits this Mac with this model; Claude gets plenty (cached).
-    const window = Math.min(claude ? Math.max(s.contextWindow, 131072) : this.d.fitWindow(model, s.contextWindow || 131072), state.voice ? 16384 : Infinity)
+    const windowFor = (m: string, isClaude: boolean): number => Math.min(isClaude ? Math.max(s.contextWindow, 131072) : this.d.fitWindow(m, s.contextWindow || 131072), state.voice ? 16384 : Infinity)
+    let window = windowFor(model, claude)
     const system = this.systemFor(thread, state, speaker, group)
     db.setState(thread.id, state)
     const view = (ms: Message[]): Message[] => (speaker ? perspective(ms, speaker.id) : ms)
     // In a group, the app's nudges belong to the bot they were for.
     const mine = speaker && run.group ? botMeta(speaker) : {}
 
-    const counter = this.d.counter?.(ep.baseUrl, model) ?? new ServerTokenCounter(ep.baseUrl, model)
-    const cm = new ContextManager(counter, (text, maxTokens) => this.summarize(model, text, maxTokens, run.ctrl.signal), results)
+    const makeCm = (): ContextManager => {
+      const counter = this.d.counter?.(ep.baseUrl, model) ?? new ServerTokenCounter(ep.baseUrl, model)
+      return new ContextManager(counter, (text, maxTokens) => this.summarize(model, text, maxTokens, run.ctrl.signal), results)
+    }
+    let cm = makeCm()
+
+    // Model fallback: the run's model failed (after retries) or keeps making invalid tool calls, so the
+    // rest of the run moves to the next stronger usable model. The history is re-read as is.
+    const tried = new Set<string>([model])
+    let switches = 0
+    const switchModel = (reason: string, sideways: boolean, err?: Error): boolean => {
+      if (switches >= 2) return false
+      const now = settings.get()
+      const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+      const next = nextStronger(this.d.endpoints.usable(), model, {
+        cloud: now.cloud.enabled,
+        // Out of cloud budget: only a local model can carry on.
+        localOnly: !!err && /cloud budget/i.test(err.message),
+        exclude: tried,
+        sideways,
+        needsVision: !!lastUser?.images?.length
+      })
+      if (!next) return false
+      tried.add(next.id)
+      switches++
+      model = next.id
+      ep = this.d.endpoints.for(model)
+      claude = ep.provider === 'anthropic'
+      window = windowFor(model, claude)
+      cm = makeCm()
+      this.lastModel.set(thread.id, model)
+      if (routed) routed = { ...routed, label: next.label ?? next.id }
+      this.notice(thread.id, `Switched to ${next.label ?? next.id} for the rest of this task: ${reason}`)
+      return true
+    }
+    const modelName = (): string => this.d.endpoints.last?.models.find((m) => m.id === model)?.label ?? model
+    let invalidStreak = 0
+    let sincePlan = 0
+    let planReminded = false
 
     // Untrusted text seen in this thread, for the taint check on outside actions.
     const history = db.listMessages(thread.id)
@@ -690,7 +738,15 @@ export class Agent {
         else if (prepared.compacted && notes) prepared.wire.push({ role: 'user', content: `[From the app] Older messages were summarized.${notes}` })
         else if (late) prepared.wire.push({ role: 'user', content: `[From the app]${late}` })
 
-        const assistant = await this.stream(thread.id, model, prepared.wire, wireTools, window, run, speaker, routed)
+        let assistant: Message
+        try {
+          assistant = await this.stream(thread.id, model, prepared.wire, wireTools, window, run, speaker, routed)
+        } catch (e) {
+          if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') throw e
+          // The failed reply stays visible as an error bubble (it's left out of the history); redo this step.
+          if (switchModel(`${modelName()} failed (${(e as Error).message.replace(/\s+/g, ' ').slice(0, 140)})`, true, e as Error)) { step--; continue }
+          throw e
+        }
         if (!assistant.toolCalls?.length) {
           // Some local models write the call as text; recover it rather than ending the run.
           const known = new Set(registry.all().map((t) => t.name))
@@ -767,13 +823,27 @@ export class Agent {
           break
         }
 
-        for (const call of assistant.toolCalls) {
-          if (run.ctrl.signal.aborted) throw new DOMException('stopped', 'AbortError')
-          await this.execute(thread, run, state, call, { failures, untrusted, userText, guard, track, window })
-          db.setState(thread.id, state)
-        }
+        const ran = await this.executeAll(thread, run, state, assistant.toolCalls, { failures, untrusted, userText, guard, track, window })
 
         actions += assistant.toolCalls.length
+        // A local model that keeps calling tools that don't exist or with broken arguments: a stronger model takes over.
+        for (const r of ran) {
+          if (r.status === 'invalid') invalidStreak++
+          else if (r.status !== 'repeat') invalidStreak = 0
+        }
+        if (invalidStreak >= 3 && isLocal(ep.baseUrl) && switchModel(`${modelName()} kept making invalid tool calls`, false)) invalidStreak = 0
+        // Long runs keep their plan current: one reminder after 12 calls without a todo update.
+        if (ran.some((r) => (r.name === 'todo' || r.name === 'propose_plan') && r.status === 'ok')) sincePlan = 0
+        else sincePlan += ran.length
+        if (sincePlan >= 12 && !planReminded && step < budget) {
+          planReminded = true
+          db.insertMessage({
+            threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine },
+            content: state.todos.length
+              ? `[From the app] You've made ${sincePlan} tool calls since you last updated your plan. Update it with todo now: mark finished items done, set the current one in_progress, add or drop items based on what you learned, and put key facts in notes. Then continue.\n${planText(state)}`
+              : `[From the app] You've made ${sincePlan} tool calls without a plan. Write one with todo now (the steps left, the current one in_progress, key facts in notes), then continue.`
+          })
+        }
         // The budget follows the agent's own plan, and grows while it keeps finishing items.
         const nowDone = state.todos.filter((t) => t.status === 'done').length
         if (state.todos.length) budget = Math.max(budget, Math.min(HARD_CAP, step + (state.todos.length - nowDone) * PER_PLAN_ITEM + 4))
@@ -858,8 +928,13 @@ export class Agent {
         } else if (part.type === 'tool_pending') {
           this.d.emit({ threadId, type: 'drafting', tool: part.name })
         } else if (part.type === 'reset') {
+          // A retried or re-issued turn: everything from the failed attempt goes.
           m.content = ''
           m.reasoning = undefined
+          m.toolCalls = undefined
+          if (m.meta?.raw) m.meta = { ...m.meta, raw: undefined }
+          head = ''
+          headDone = false
           this.d.emit({ threadId, type: 'message', message: { ...m } })
         } else if (part.type === 'raw') {
           m.meta = { ...m.meta, raw: { provider: part.provider, model: part.model, content: part.content } }
@@ -920,26 +995,104 @@ export class Agent {
     this.d.emit({ threadId, type: 'message', message: m })
   }
 
-  private async execute(
-    thread: Thread,
-    run: Run,
-    state: ThreadState,
-    call: ToolCall,
-    ctx: { failures: Map<string, number>; untrusted: string[]; userText: string; guard: LoopGuard; track: { changed: boolean; researched: boolean }; window: number }
-  ): Promise<void> {
-    const { registry } = this.d
+  /** Runs one assistant turn's tool calls: consecutive safe reads together (up to 4 at once), everything else in order. */
+  private async executeAll(thread: Thread, run: Run, state: ThreadState, calls: ToolCall[], ctx: ExecCtx): Promise<Array<{ name: string; status: CallStatus }>> {
+    const out: Array<{ name: string; status: CallStatus }> = []
+    let i = 0
+    while (i < calls.length) {
+      if (run.ctrl.signal.aborted) throw new DOMException('stopped', 'AbortError')
+      // A batch: consecutive reads that run without asking. A repeat of a call in the batch ends it, so
+      // the loop guard sees the first result before judging the repeat.
+      const batch: ToolCall[] = []
+      const keys = new Set<string>()
+      while (i + batch.length < calls.length) {
+        const c = calls[i + batch.length]
+        const k = callKey(c)
+        if (keys.has(k) || !this.parallelSafe(thread, run, state, c, ctx)) break
+        keys.add(k)
+        batch.push(c)
+      }
+      const group = batch.length > 1 ? batch : [calls[i]]
+      const outcomes = group.length > 1
+        ? await mapLimit(group, PARALLEL_TOOLS, (c) => this.perform(thread, run, state, c, ctx))
+        : [await this.perform(thread, run, state, group[0], ctx)]
+      // Stored in the order the model asked for them: providers match results to calls by position too.
+      for (const o of outcomes) out.push({ name: o.call.name, status: this.commit(thread, o, ctx) })
+      i += group.length
+      this.d.db.setState(thread.id, state)
+    }
+    return out
+  }
+
+  /** The tool a call means, with a misspelled name fixed. */
+  private resolve(call: ToolCall): ToolDef | undefined {
+    const fixed = fixName(call.name, new Set(this.d.registry.all().map((t) => t.name)))
+    return fixed ? this.d.registry.get(fixed) : undefined
+  }
+
+  /** A read that runs without asking and doesn't touch shared state (browser, screen, the user). */
+  private parallelSafe(thread: Thread, run: Run, state: ThreadState, call: ToolCall, ctx: ExecCtx): boolean {
+    const tool = this.resolve(call)
+    if (!tool || SERIAL_TOOLS.has(tool.name)) return false
+    if (ctx.guard.check({ ...call, name: tool.name })) return false
+    const checked = check(tool, call.arguments)
+    if (!checked.ok) return false
+    try {
+      const { effect, decision } = this.permission(thread, run, state, tool, call, checked.args, ctx)
+      return effect === 'read' && decision.verdict === 'allow'
+    } catch {
+      return false
+    }
+  }
+
+  /** Effect and verdict for one call: the mode, hard stops, taint, secrets and the user's own rules. */
+  private permission(thread: Thread, run: Run, state: ThreadState, tool: ToolDef, call: ToolCall, args: Record<string, unknown>, ctx: ExecCtx): { effect: ToolEffect; decision: Decision; summary?: string } {
     const s = this.d.settings.get()
     const mode = this.d.db.getThread(thread.id)?.permissionMode ?? thread.permissionMode
+    const effect: ToolEffect = typeof tool.effect === 'function' ? tool.effect(args, { roots: state.roots ?? [] }) : tool.effect
+    let summary: string | undefined
+    try { summary = tool.describe?.(args) } catch { summary = undefined }
+    const rule = ruleVerdict(s.customRules, { tool: tool.name, label: tool.label, summary, args: call.arguments })
+    const decision = decideWithRule({
+      mode,
+      effect,
+      tool: tool.name,
+      alwaysAllowed: state.alwaysAllow.includes(tool.name),
+      hardStop: tool.hardStop?.(args) ?? null,
+      hardStopsEnabled: s.advanced.hardStopsEnabled,
+      tainted: checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText),
+      leaksSecret: containsSecret(args, this.d.secretValues()),
+      consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended }) : true
+    }, rule)
+    return { effect, decision, summary }
+  }
+
+  /** Stores a call's result. Loop-guard and taint bookkeeping happen here, in call order. */
+  private commit(thread: Thread, o: Outcome, ctx: ExecCtx): CallStatus {
+    let content = o.content
+    if (o.errorFor) content += ctx.guard.error(o.errorFor.tool, o.errorFor.message) ?? ''
+    if (o.output) {
+      if (o.output.untrusted) ctx.untrusted.push(o.output.text)
+      ctx.guard.record(o.call, o.output.text)
+    }
+    this.toolMessage(thread.id, o.call, content, o.meta, o.images)
+    return o.status
+  }
+
+  /** Validates, checks permission (asking if needed) and runs one call. Nothing is stored yet. */
+  private async perform(thread: Thread, run: Run, state: ThreadState, call: ToolCall, ctx: ExecCtx): Promise<Outcome> {
+    const { registry } = this.d
+    const s = this.d.settings.get()
 
     const fixed = fixName(call.name, new Set(registry.all().map((t) => t.name)))
     if (fixed && fixed !== call.name) call = { ...call, name: fixed }
     const repeat = ctx.guard.check(call)
-    if (repeat) return this.toolMessage(thread.id, call, repeat, { status: 'error', label: call.name, display: 'repeated call skipped' })
+    if (repeat) return { call, status: 'repeat', content: repeat, meta: { status: 'error', label: call.name, display: 'repeated call skipped' } }
 
     const tool = registry.get(call.name)
     if (!tool) {
       const names = registry.listFor(state).map((t) => t.name).join(', ')
-      return this.toolMessage(thread.id, call, `Unknown tool "${call.name}". Available: ${names}. Use find_tools to load others.`, { status: 'invalid', label: call.name })
+      return { call, status: 'invalid', content: `Unknown tool "${call.name}". Available: ${names}. Use find_tools to load others.`, meta: { status: 'invalid', label: call.name } }
     }
     // A known tool the model called without loading it: load it so the next request lists it.
     if (!tool.core && !state.loaded.includes(tool.name)) registry.load(state, [tool.name])
@@ -949,43 +1102,30 @@ export class Agent {
     if (!checked.ok) {
       const n = (ctx.failures.get(tool.name) ?? 0) + 1
       ctx.failures.set(tool.name, n)
-      return this.toolMessage(thread.id, call, repairPrompt(tool, checked.error, n < 2), { status: 'invalid', label: tool.label, display: 'invalid arguments' })
+      return { call, status: 'invalid', content: repairPrompt(tool, checked.error, n < 2), meta: { status: 'invalid', label: tool.label, display: 'invalid arguments' } }
     }
     ctx.failures.delete(tool.name)
     const args = checked.args
 
     // 2. Permission.
-    const effect: ToolEffect = typeof tool.effect === 'function' ? tool.effect(args, { roots: state.roots ?? [] }) : tool.effect
-    const hardStop = tool.hardStop?.(args) ?? null
-    const tainted = checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText)
-    const decision = decide({
-      mode,
-      effect,
-      tool: tool.name,
-      alwaysAllowed: state.alwaysAllow.includes(tool.name),
-      hardStop,
-      hardStopsEnabled: s.advanced.hardStopsEnabled,
-      tainted,
-      leaksSecret: containsSecret(args, this.d.secretValues()),
-      consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended }) : true
-    })
+    const { effect, decision, summary } = this.permission(thread, run, state, tool, call, args, ctx)
     const baseMeta = { label: tool.label, effect, args: call.arguments }
     if (decision.verdict === 'deny') {
-      return this.toolMessage(thread.id, call, `Blocked: ${decision.reason}`, { ...baseMeta, status: 'denied', display: 'blocked' })
+      return { call, status: 'denied', content: `Blocked: ${decision.reason}`, meta: { ...baseMeta, status: 'denied', display: 'blocked' } }
     }
     if (decision.verdict === 'ask' && run.unattended) {
       const why = run.helper
         ? 'Skipped: helper agents can\'t get the user\'s approval. Do not retry. In your report, say exactly what you would do so the lead agent can do it.'
         : 'Skipped: this ran on a schedule with nobody to approve it. Do not retry. In your summary, tell the user exactly what you would do so they can approve it later.'
-      return this.toolMessage(thread.id, call, why, { ...baseMeta, status: 'denied', display: 'Skipped (needs approval)' })
+      return { call, status: 'denied', content: why, meta: { ...baseMeta, status: 'denied', display: 'Skipped (needs approval)' } }
     }
     if (decision.verdict === 'ask') {
       const answer = (await this.ask(thread.id, run, {
         kind: 'approval', tool: tool.name, label: tool.label, effect, args: pretty(call.arguments), reason: decision.reason,
-        summary: tool.describe?.(args)
+        summary
       })) as ApprovalAnswer
       if (answer === 'deny') {
-        return this.toolMessage(thread.id, call, 'The user declined this action. Do not retry it. Ask what they would like instead, or continue without it.', { ...baseMeta, status: 'denied', display: 'Skipped' })
+        return { call, status: 'denied', content: 'The user declined this action. Do not retry it. Ask what they would like instead, or continue without it.', meta: { ...baseMeta, status: 'denied', display: 'Skipped' } }
       }
       if (answer === 'always' && !state.alwaysAllow.includes(tool.name)) state.alwaysAllow.push(tool.name)
     }
@@ -1022,26 +1162,157 @@ export class Agent {
     } catch (e) {
       if (run.ctrl.signal.aborted) throw e
       const msg = (e as Error).message
-      return this.toolMessage(thread.id, call, `Error: ${msg}${ctx.guard.error(tool.name, msg) ?? ''}`, { ...baseMeta, status: 'error', display: msg.slice(0, 80) })
+      return { call, status: 'error', content: `Error: ${msg}`, errorFor: { tool: tool.name, message: msg }, meta: { ...baseMeta, status: 'error', display: msg.slice(0, 80) } }
     }
 
-    // 4. Store: big outputs go to disk; everything is wrapped as data.
+    // 4. Prepare to store: big outputs go to disk; everything is wrapped as data.
     const cm = this.lastModel.get(thread.id) ?? thread.model ?? s.defaultModel
     const cep = this.d.endpoints.for(cm)
     const counter = this.d.counter?.(cep.baseUrl, cm) ?? new ServerTokenCounter(cep.baseUrl, cm)
     const id = `r-${call.id.replace(/[^\w-]/g, '').slice(-12)}-${Date.now().toString(36)}`
     // The team's reports are the work itself: the lead must see them whole, so they get a big share of the window.
     const off = await this.d.results.maybeOffload(out.text, id, counter, tool.name === 'agents' ? teamShare(ctx.window) : undefined)
-    if (tool.untrusted) ctx.untrusted.push(out.text)
-    ctx.guard.record(call, out.text)
     if (effect !== 'read') ctx.track.changed = true
     if (tool.name === 'web_search' || tool.name === 'fetch_page' || tool.name === 'research' || (tool.name === 'browser' && /get_text|snapshot|navigate/.test(call.arguments))) ctx.track.researched = true
     const team = this.lastTeam.get(call.id)
     if (team) this.lastTeam.delete(call.id)
-    this.toolMessage(thread.id, call, wrapToolOutput(tool.name, off.text, !!tool.untrusted), {
-      ...baseMeta, ...(team ? { team } : {}), status: 'ok', display: out.display, path: out.path, sources: out.sources, read: out.read, untrusted: !!tool.untrusted, offloaded: off.offloaded ? id : undefined, tokens: off.tokens
-    }, out.images)
+    return {
+      call,
+      status: 'ok',
+      content: wrapToolOutput(tool.name, off.text, !!tool.untrusted),
+      meta: { ...baseMeta, ...(team ? { team } : {}), status: 'ok', display: out.display, path: out.path, sources: out.sources, read: out.read, untrusted: !!tool.untrusted, offloaded: off.offloaded ? id : undefined, tokens: off.tokens },
+      images: out.images,
+      output: { text: out.text, untrusted: !!tool.untrusted }
+    }
   }
+
+  // ---------- handoffs between bots ----------
+
+  /** Bots waiting on another bot's reply: waiter thread → the thread it waits on (cycle check). */
+  private handoffWaits = new Map<string, string>()
+
+  /** Waits until nothing runs in a thread (a leftover steer can start one more run). */
+  async whenIdle(threadId: string, signal: AbortSignal, ms: number): Promise<'idle' | 'timeout' | 'aborted'> {
+    const deadline = Date.now() + ms
+    for (;;) {
+      const run = this.runs.get(threadId)
+      if (!run) return 'idle'
+      if (signal.aborted) return 'aborted'
+      const left = deadline - Date.now()
+      if (left <= 0) return 'timeout'
+      await new Promise<void>((resolve) => {
+        // A run without a done promise (a helper's) is polled.
+        const t = setTimeout(done, run.done ? left : Math.min(left, 500))
+        function done(): void { clearTimeout(t); signal.removeEventListener('abort', done); resolve() }
+        signal.addEventListener('abort', done, { once: true })
+        void run.done?.then(done, done)
+      })
+    }
+  }
+
+  /** What the message_bot tool needs from the agent. */
+  handoffHost(): HandoffHost {
+    return {
+      db: this.d.db,
+      emit: (e) => this.d.emit(e),
+      runInfo: (threadId) => {
+        const r = this.runs.get(threadId)
+        return r ? { helper: r.helper, unattended: r.unattended, speaker: r.speaker } : undefined
+      },
+      isRunning: (threadId) => this.runs.has(threadId),
+      send: (input, opts) => this.send(input, opts),
+      steer: (threadId, text, meta) => this.steer(threadId, text, meta),
+      whenIdle: (threadId, signal, ms) => this.whenIdle(threadId, signal, ms),
+      waits: this.handoffWaits
+    }
+  }
+}
+
+type CallStatus = 'ok' | 'invalid' | 'error' | 'denied' | 'repeat'
+
+interface ExecCtx {
+  failures: Map<string, number>
+  untrusted: string[]
+  userText: string
+  guard: LoopGuard
+  track: { changed: boolean; researched: boolean }
+  window: number
+}
+
+/** A finished call, ready to store. */
+interface Outcome {
+  call: ToolCall
+  status: CallStatus
+  content: string
+  meta: Record<string, unknown>
+  images?: string[]
+  /** An error to count toward the repeated-error nudge (counted when stored, in call order). */
+  errorFor?: { tool: string; message: string }
+  /** Output for the loop guard and the taint corpus (recorded when stored, in call order). */
+  output?: { text: string; untrusted: boolean }
+}
+
+/** How many read-only calls from one turn run at the same time. */
+export const PARALLEL_TOOLS = 4
+
+/**
+ * Tools that never run alongside others, even when their effect is 'read': they ask the user, change
+ * the plan, start agents or other bots, spend a capped budget, or drive one shared browser or screen.
+ */
+export const SERIAL_TOOLS = new Set(['ask_user', 'propose_plan', 'find_tools', 'todo', 'agents', 'message_bot', 'consult', 'browser', 'computer', 'cursor'])
+
+const callKey = (c: ToolCall): string => {
+  let args = c.arguments
+  try { args = JSON.stringify(JSON.parse(c.arguments)) } catch { /* raw */ }
+  return `${c.name}:${args}`
+}
+
+/** Runs fn over items with at most `limit` in flight; results keep the input order. */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker))
+  return out
+}
+
+/**
+ * decide() plus the user's custom rule for this action. 'allow' counts as always-allowed (hard stops,
+ * taint and secret checks still win); 'ask' makes anything that isn't a read ask, even in Auto or Bypass.
+ */
+export function decideWithRule(p: PermissionInput, rule: 'allow' | 'ask' | null): Decision {
+  if (rule === 'allow') return decide({ ...p, alwaysAllowed: true })
+  const d = decide(p)
+  if (rule === 'ask' && p.effect !== 'read' && d.verdict === 'allow') return { verdict: 'ask', reason: 'One of your approval rules says to ask first' }
+  return d
+}
+
+/** Whether a model runs in the cloud (costs money, needs Cloud on). */
+export const isRemoteModel = (m: ModelInfo): boolean => m.note === 'remote' || !(providerDef(m.provider)?.local ?? true)
+
+/**
+ * The model to switch to when the run's model fails: the next stronger one (tier, then rank; local
+ * first when equal). `sideways` also allows an equal or weaker one when nothing stronger exists
+ * (a provider outage). Cloud models only when Cloud is on and the budget isn't the problem.
+ */
+export function nextStronger(models: ModelInfo[], current: string, o: { cloud: boolean; localOnly?: boolean; exclude?: Set<string>; sideways?: boolean; needsVision?: boolean }): ModelInfo | undefined {
+  let pool = models.filter((m) => m.id !== current && !o.exclude?.has(m.id) && m.tools !== false && m.installed !== false)
+  if (!o.cloud || o.localOnly) pool = pool.filter((m) => !isRemoteModel(m))
+  if (o.needsVision && pool.some((m) => m.vision)) pool = pool.filter((m) => m.vision)
+  const cur = models.find((m) => m.id === current)
+  const tier = cur?.tier ?? 0
+  const rank = cur?.rank ?? 0
+  const up = pool
+    .filter((m) => m.tier > tier || (m.tier === tier && (m.rank ?? 0) > rank))
+    .sort((a, b) => a.tier - b.tier || (a.rank ?? 0) - (b.rank ?? 0) || Number(isRemoteModel(a)) - Number(isRemoteModel(b)))
+  if (up.length) return up[0]
+  if (!o.sideways) return undefined
+  return [...pool].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0) || Number(isRemoteModel(a)) - Number(isRemoteModel(b)))[0]
 }
 
 export function citedUrls(text: string): string[] {

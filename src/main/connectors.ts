@@ -2,6 +2,8 @@ import { shell } from 'electron'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { randomUUID } from 'node:crypto'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
@@ -20,15 +22,15 @@ import type { Secrets } from './secrets'
 
 // Verified live on 2026-11-11 (each answered an MCP initialize: open, or 401 = sign-in required).
 export const PRESETS: ConnectorPreset[] = [
-  { id: 'cursor-app', name: 'Cursor', url: 'app:cursor', color: '#111111', category: 'No setup', auth: 'app', description: 'Built in. SahilBot opens files in Cursor and can hand coding tasks to Cursor\'s agent.' },
-  { id: 'apple-notes', name: 'Notes, Reminders & Calendar', url: 'app:mac_apps', color: '#F5B400', category: 'No setup', auth: 'app', description: 'Built in. Your Mac\'s own apps; macOS asks once to allow access.' },
-  { id: 'gmail-web', name: 'Gmail (no setup)', url: 'https://mail.google.com/', color: '#EA4335', category: 'No setup', auth: 'browser', description: 'Sign in once in SahilBot\'s browser; SahilBot uses Gmail like you do.' },
-  { id: 'gcal-web', name: 'Google Calendar (no setup)', url: 'https://calendar.google.com/', color: '#4285F4', category: 'No setup', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
-  { id: 'gdrive-web', name: 'Google Drive (no setup)', url: 'https://drive.google.com/', color: '#0F9D58', category: 'No setup', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
-  { id: 'linkedin-web', name: 'LinkedIn (no setup)', url: 'https://www.linkedin.com/', color: '#0A66C2', category: 'No setup', auth: 'browser', description: 'Any site works this way: sign in once in SahilBot\'s browser.' },
-  { id: 'gmail', name: 'Gmail', url: 'https://gmailmcp.googleapis.com/mcp/v1', color: '#EA4335', category: 'Google', auth: 'google', description: 'Search, read, draft and send email.' },
-  { id: 'gcal', name: 'Google Calendar', url: 'https://calendarmcp.googleapis.com/mcp/v1', color: '#4285F4', category: 'Google', auth: 'google', description: 'Events, availability and invites.' },
-  { id: 'gdrive', name: 'Google Drive', url: 'https://drivemcp.googleapis.com/mcp/v1', color: '#0F9D58', category: 'Google', auth: 'google', description: 'Find and read Docs, Sheets and files.' },
+  { id: 'cursor-app', name: 'Cursor', url: 'app:cursor', color: '#111111', category: 'Built in', domain: 'cursor.com', auth: 'app', description: 'SahilBot opens files in Cursor and can hand coding tasks to Cursor\'s agent.' },
+  { id: 'apple-notes', name: 'Notes, Reminders & Calendar', url: 'app:mac_apps', color: '#F5B400', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Your Mac\'s own apps; macOS asks once to allow access.' },
+  { id: 'gmail-web', name: 'Gmail (no setup)', url: 'https://mail.google.com/', color: '#EA4335', category: 'Built in', domain: 'mail.google.com/mail/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser; SahilBot uses Gmail like you do.' },
+  { id: 'gcal-web', name: 'Google Calendar (no setup)', url: 'https://calendar.google.com/', color: '#4285F4', category: 'Built in', domain: 'calendar.google.com/calendar/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
+  { id: 'gdrive-web', name: 'Google Drive (no setup)', url: 'https://drive.google.com/', color: '#0F9D58', category: 'Built in', domain: 'drive.google.com/drive/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
+  { id: 'linkedin-web', name: 'LinkedIn (no setup)', url: 'https://www.linkedin.com/', color: '#0A66C2', category: 'Built in', auth: 'browser', description: 'Any site works this way: sign in once in SahilBot\'s browser.' },
+  { id: 'gmail', name: 'Gmail', url: 'https://gmailmcp.googleapis.com/mcp/v1', color: '#EA4335', category: 'Communication', domain: 'mail.google.com/mail/', auth: 'google', description: 'Search, read, draft and send email.' },
+  { id: 'gcal', name: 'Google Calendar', url: 'https://calendarmcp.googleapis.com/mcp/v1', color: '#4285F4', category: 'Productivity', domain: 'calendar.google.com/calendar/', auth: 'google', description: 'Events, availability and invites.' },
+  { id: 'gdrive', name: 'Google Drive', url: 'https://drivemcp.googleapis.com/mcp/v1', color: '#0F9D58', category: 'Productivity', domain: 'drive.google.com/drive/', auth: 'google', description: 'Find and read Docs, Sheets and files.' },
   { id: 'notion', name: 'Notion', url: 'https://mcp.notion.com/mcp', color: '#111111', category: 'Productivity', auth: 'oauth', description: 'Pages, databases and comments.' },
   { id: 'linear', name: 'Linear', url: 'https://mcp.linear.app/mcp', color: '#5E6AD2', category: 'Productivity', auth: 'oauth', description: 'Issues, projects and cycles.' },
   { id: 'asana', name: 'Asana', url: 'https://mcp.asana.com/v2/mcp', color: '#F06A6A', category: 'Productivity', auth: 'oauth', description: 'Tasks, projects and portfolios.' },
@@ -36,16 +38,16 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'monday', name: 'monday.com', url: 'https://mcp.monday.com/mcp', color: '#FF3D57', category: 'Productivity', auth: 'oauth', description: 'Boards, items and updates.' },
   { id: 'clickup', name: 'ClickUp', url: 'https://mcp.clickup.com/mcp', color: '#7B68EE', category: 'Productivity', auth: 'oauth', description: 'Tasks, docs and spaces.' },
   { id: 'airtable', name: 'Airtable', url: 'https://mcp.airtable.com/mcp', color: '#18BFFF', category: 'Productivity', auth: 'oauth', description: 'Bases, tables and records.' },
-  { id: 'slack', name: 'Slack', url: 'https://mcp.slack.com/mcp', color: '#4A154B', category: 'Productivity', auth: 'oauth', description: 'Search and post in channels.' },
-  { id: 'miro', name: 'Miro', url: 'https://mcp.miro.com/', color: '#FFD02F', category: 'Productivity', auth: 'oauth', description: 'Boards, stickies and diagrams.' },
+  { id: 'slack', name: 'Slack', url: 'https://mcp.slack.com/mcp', color: '#4A154B', category: 'Communication', auth: 'oauth', description: 'Search and post in channels.' },
+  { id: 'miro', name: 'Miro', url: 'https://mcp.miro.com/', color: '#FFD02F', category: 'Design', auth: 'oauth', description: 'Boards, stickies and diagrams.' },
   { id: 'box', name: 'Box', url: 'https://mcp.box.com', color: '#0061D5', category: 'Productivity', auth: 'oauth', description: 'Files and folders in Box.' },
   { id: 'dropbox', name: 'Dropbox', url: 'https://mcp.dropbox.com/mcp', color: '#0061FF', category: 'Productivity', auth: 'oauth', description: 'Files and folders in Dropbox.' },
   { id: 'zapier', name: 'Zapier', url: 'https://mcp.zapier.com/api/mcp/mcp', color: '#FF4F00', category: 'Productivity', auth: 'oauth', description: 'Thousands of app actions via your Zaps.' },
-  { id: 'granola', name: 'Granola', url: 'https://mcp.granola.ai/mcp', color: '#1E1E1E', category: 'Productivity', auth: 'oauth', description: 'Meeting notes and transcripts.' },
-  { id: 'fireflies', name: 'Fireflies', url: 'https://mcp.fireflies.ai/mcp', color: '#E1308A', category: 'Productivity', auth: 'oauth', description: 'Meeting recordings and summaries.' },
-  { id: 'gamma', name: 'Gamma', url: 'https://mcp.gamma.app/mcp', color: '#7C3AED', category: 'Productivity', auth: 'oauth', description: 'Generate decks and docs.' },
-  { id: 'canva', name: 'Canva', url: 'https://mcp.canva.com/mcp', color: '#00C4CC', category: 'Productivity', auth: 'oauth', description: 'Designs, templates and exports.' },
-  { id: 'figma', name: 'Figma', url: 'https://mcp.figma.com/mcp', color: '#A259FF', category: 'Productivity', auth: 'oauth', description: 'Design files and components.' },
+  { id: 'granola', name: 'Granola', url: 'https://mcp.granola.ai/mcp', color: '#1E1E1E', category: 'Productivity', domain: 'granola.ai', auth: 'oauth', description: 'Meeting notes and transcripts.' },
+  { id: 'fireflies', name: 'Fireflies', url: 'https://mcp.fireflies.ai/mcp', color: '#E1308A', category: 'Productivity', domain: 'fireflies.ai', auth: 'oauth', description: 'Meeting recordings and summaries.' },
+  { id: 'gamma', name: 'Gamma', url: 'https://mcp.gamma.app/mcp', color: '#7C3AED', category: 'Design', domain: 'gamma.app', auth: 'oauth', description: 'Generate decks and docs.' },
+  { id: 'canva', name: 'Canva', url: 'https://mcp.canva.com/mcp', color: '#00C4CC', category: 'Design', auth: 'oauth', description: 'Designs, templates and exports.' },
+  { id: 'figma', name: 'Figma', url: 'https://mcp.figma.com/mcp', color: '#A259FF', category: 'Design', auth: 'oauth', description: 'Design files and components.' },
   { id: 'jotform', name: 'Jotform', url: 'https://mcp.jotform.com/', color: '#FF6100', category: 'Productivity', auth: 'oauth', description: 'Forms and submissions.' },
   { id: 'docusign', name: 'Docusign', url: 'https://mcp.docusign.com/mcp', color: '#4C00FF', category: 'Productivity', auth: 'oauth', description: 'Agreements and envelopes.' },
   { id: 'hubspot', name: 'HubSpot', url: 'https://mcp.hubspot.com/', color: '#FF7A59', category: 'Sales & marketing', auth: 'oauth', description: 'Contacts, deals and companies.' },
@@ -59,37 +61,137 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'ahrefs', name: 'Ahrefs', url: 'https://api.ahrefs.com/mcp/mcp', color: '#FF8800', category: 'Sales & marketing', auth: 'oauth', description: 'Backlinks and keyword research.' },
   { id: 'similarweb', name: 'Similarweb', url: 'https://mcp.similarweb.com/mcp', color: '#092540', category: 'Sales & marketing', auth: 'oauth', description: 'Website traffic and market data.' },
   { id: 'crunchbase', name: 'Crunchbase', url: 'https://mcp.crunchbase.com/mcp', color: '#146AFF', category: 'Sales & marketing', auth: 'oauth', description: 'Companies, funding and people.' },
-  { id: 'intercom', name: 'Intercom', url: 'https://mcp.intercom.com/mcp', color: '#1F8DED', category: 'Sales & marketing', auth: 'oauth', description: 'Conversations and help center.' },
+  { id: 'intercom', name: 'Intercom', url: 'https://mcp.intercom.com/mcp', color: '#1F8DED', category: 'Communication', auth: 'oauth', description: 'Conversations and help center.' },
   { id: 'stripe', name: 'Stripe', url: 'https://mcp.stripe.com', color: '#635BFF', category: 'Finance & commerce', auth: 'oauth', description: 'Payments, customers and invoices.' },
   { id: 'paypal', name: 'PayPal', url: 'https://mcp.paypal.com/mcp', color: '#003087', category: 'Finance & commerce', auth: 'oauth', description: 'Invoices, orders and disputes.' },
-  { id: 'square', name: 'Square', url: 'https://mcp.squareup.com/sse', color: '#3E4348', category: 'Finance & commerce', auth: 'oauth', description: 'Payments, orders and catalog.' },
+  { id: 'square', name: 'Square', url: 'https://mcp.squareup.com/sse', color: '#3E4348', category: 'Finance & commerce', domain: 'squareup.com', auth: 'oauth', description: 'Payments, orders and catalog.' },
   { id: 'plaid', name: 'Plaid', url: 'https://mcp.plaid.com/mcp', color: '#111111', category: 'Finance & commerce', auth: 'oauth', description: 'Bank-data integrations.' },
   { id: 'xero', name: 'Xero', url: 'https://mcp.xero.com/mcp', color: '#13B5EA', category: 'Finance & commerce', auth: 'oauth', description: 'Accounting: invoices and contacts.' },
-  { id: 'github', name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', color: '#24292F', category: 'Dev & data', auth: 'oauth', description: 'Repos, issues and pull requests.' },
-  { id: 'sentry', name: 'Sentry', url: 'https://mcp.sentry.dev/mcp', color: '#362D59', category: 'Dev & data', auth: 'oauth', description: 'Errors and performance issues.' },
-  { id: 'vercel', name: 'Vercel', url: 'https://mcp.vercel.com', color: '#000000', category: 'Dev & data', auth: 'oauth', description: 'Deployments, logs and domains.' },
-  { id: 'netlify', name: 'Netlify', url: 'https://mcp.netlify.com/mcp', color: '#00AD9F', category: 'Dev & data', auth: 'oauth', description: 'Sites and deploys.' },
-  { id: 'supabase', name: 'Supabase', url: 'https://mcp.supabase.com/mcp', color: '#3ECF8E', category: 'Dev & data', auth: 'oauth', description: 'Databases, auth and storage.' },
-  { id: 'neon', name: 'Neon', url: 'https://mcp.neon.tech/mcp', color: '#00E599', category: 'Dev & data', auth: 'oauth', description: 'Serverless Postgres.' },
-  { id: 'posthog', name: 'PostHog', url: 'https://mcp.posthog.com/mcp', color: '#F54E00', category: 'Dev & data', auth: 'oauth', description: 'Product analytics and flags.' },
-  { id: 'amplitude', name: 'Amplitude', url: 'https://mcp.amplitude.com/mcp', color: '#1E61F0', category: 'Dev & data', auth: 'oauth', description: 'Product analytics.' },
-  { id: 'webflow', name: 'Webflow', url: 'https://mcp.webflow.com/mcp', color: '#4353FF', category: 'Dev & data', auth: 'oauth', description: 'Sites and CMS collections.' },
-  { id: 'wix', name: 'Wix', url: 'https://mcp.wix.com/mcp', color: '#0C6EFC', category: 'Dev & data', auth: 'oauth', description: 'Sites, stores and bookings.' },
-  { id: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', color: '#FFD21E', category: 'Dev & data', auth: 'oauth', description: 'Models, datasets and Spaces.' },
+  { id: 'github', name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', color: '#24292F', category: 'Code', domain: 'github.com', auth: 'oauth', description: 'Repos, issues and pull requests.' },
+  { id: 'sentry', name: 'Sentry', url: 'https://mcp.sentry.dev/mcp', color: '#362D59', category: 'Code', domain: 'sentry.io', auth: 'oauth', description: 'Errors and performance issues.' },
+  { id: 'vercel', name: 'Vercel', url: 'https://mcp.vercel.com', color: '#000000', category: 'Code', domain: 'vercel.com', auth: 'oauth', description: 'Deployments, logs and domains.' },
+  { id: 'netlify', name: 'Netlify', url: 'https://mcp.netlify.com/mcp', color: '#00AD9F', category: 'Code', auth: 'oauth', description: 'Sites and deploys.' },
+  { id: 'supabase', name: 'Supabase', url: 'https://mcp.supabase.com/mcp', color: '#3ECF8E', category: 'Code', auth: 'oauth', description: 'Databases, auth and storage.' },
+  { id: 'neon', name: 'Neon', url: 'https://mcp.neon.tech/mcp', color: '#00E599', category: 'Code', auth: 'oauth', description: 'Serverless Postgres.' },
+  { id: 'posthog', name: 'PostHog', url: 'https://mcp.posthog.com/mcp', color: '#F54E00', category: 'Data & analytics', auth: 'oauth', description: 'Product analytics and flags.' },
+  { id: 'amplitude', name: 'Amplitude', url: 'https://mcp.amplitude.com/mcp', color: '#1E61F0', category: 'Data & analytics', auth: 'oauth', description: 'Product analytics.' },
+  { id: 'webflow', name: 'Webflow', url: 'https://mcp.webflow.com/mcp', color: '#4353FF', category: 'Design', auth: 'oauth', description: 'Sites and CMS collections.' },
+  { id: 'wix', name: 'Wix', url: 'https://mcp.wix.com/mcp', color: '#0C6EFC', category: 'Design', auth: 'oauth', description: 'Sites, stores and bookings.' },
+  { id: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', color: '#FFD21E', category: 'Code', domain: 'huggingface.co', auth: 'oauth', description: 'Models, datasets and Spaces.' },
   { id: 'exa', name: 'Exa search', url: 'https://mcp.exa.ai/mcp', color: '#1F40ED', category: 'Research', auth: 'none', description: 'High-quality web search and page contents. No sign-in.' },
-  { id: 'deepwiki', name: 'DeepWiki', url: 'https://mcp.deepwiki.com/mcp', color: '#0F172A', category: 'Research', auth: 'none', description: 'Explains any public GitHub repo. No sign-in.' },
-  { id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', color: '#059669', category: 'Research', auth: 'none', description: 'Up-to-date library docs. No sign-in.' },
-  { id: 'mslearn', name: 'Microsoft Learn', url: 'https://learn.microsoft.com/api/mcp', color: '#0078D4', category: 'Research', auth: 'none', description: 'Official Microsoft docs. No sign-in.' },
+  { id: 'deepwiki', name: 'DeepWiki', url: 'https://mcp.deepwiki.com/mcp', color: '#0F172A', category: 'Code', auth: 'none', description: 'Explains any public GitHub repo. No sign-in.' },
+  { id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', color: '#059669', category: 'Code', auth: 'none', description: 'Up-to-date library docs. No sign-in.' },
+  { id: 'mslearn', name: 'Microsoft Learn', url: 'https://learn.microsoft.com/api/mcp', color: '#0078D4', category: 'Code', domain: 'learn.microsoft.com', auth: 'none', description: 'Official Microsoft docs. No sign-in.' },
   { id: 'custom', name: 'Custom MCP server', url: '', color: '#7C5CFF', category: 'Other', auth: 'oauth', description: 'Any MCP server: a URL, or a local command.' }
 ]
+
+/** The site whose icon represents a preset: its explicit domain (may include a path), else the server URL's host minus mcp./api./www. */
+export function iconDomain(p: Pick<ConnectorPreset, 'url' | 'domain'>): string | null {
+  if (p.domain) return p.domain
+  let host: string
+  try { host = new URL(p.url).hostname.toLowerCase() } catch { return null }
+  if (!host || !host.includes('.') || /^(\d+\.){3}\d+$/.test(host) || host === 'localhost') return null
+  const labels = host.split('.')
+  while (labels.length > 2 && /^(www|mcp|api|app)$/.test(labels[0])) labels.shift()
+  return labels.slice(-2).join('.')
+}
+
+/** Favicon services; a site with a path (mail.google.com/mail/) gets that page's icon, not the domain's. */
+const ICON_SOURCES = (site: string): string[] => [
+  site.includes('/')
+    ? `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(`https://${site}`)}&sz=128`
+    : `https://www.google.com/s2/favicons?domain=${encodeURIComponent(site)}&sz=128`,
+  `https://icons.duckduckgo.com/ip3/${encodeURIComponent(site.split('/')[0])}.ico`
+]
+const ICON_RETRY_MS = 3 * 24 * 3600_000
+const ICON_TYPES: Record<string, string> = { png: 'image/png', ico: 'image/x-icon', svg: 'image/svg+xml', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }
+
+/**
+ * App icons for the catalog: fetched once per preset from a favicon service, kept as files in the
+ * data folder and handed to the renderer as data: URLs (it can't load remote images).
+ */
+export class ConnectorIcons {
+  private urls = new Map<string, string>()
+  private running: Promise<void> | null = null
+  private misses: Record<string, number>
+
+  constructor(private dir: string, private presets: ConnectorPreset[], private changed: () => void, private fetcher: typeof fetch = fetch) {
+    this.misses = this.readMisses()
+    for (const f of existsSync(dir) ? readdirSync(dir) : []) {
+      const m = /^(.+)\.(png|ico|svg|jpg|webp|gif)$/.exec(f)
+      if (!m) continue
+      try { this.urls.set(m[1], `data:${ICON_TYPES[m[2]]};base64,${readFileSync(join(dir, f)).toString('base64')}`) } catch { /* unreadable: refetch */ }
+    }
+  }
+
+  /** What's cached now; missing icons are fetched in the background and `changed` fires as they land. */
+  all(): Record<string, string> {
+    void this.fill()
+    return Object.fromEntries(this.urls)
+  }
+
+  private readMisses(): Record<string, number> {
+    try { return JSON.parse(readFileSync(join(this.dir, 'misses.json'), 'utf8')) as Record<string, number> } catch { return {} }
+  }
+
+  private fill(): Promise<void> {
+    if (this.running) return this.running
+    const now = Date.now()
+    const todo = this.presets.filter((p) => !this.urls.has(p.id) && iconDomain(p) && !(this.misses[p.id] && now - this.misses[p.id] < ICON_RETRY_MS))
+    if (!todo.length) return Promise.resolve()
+    let dirty = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const notify = (): void => {
+      dirty = true
+      timer ??= setTimeout(() => { timer = null; if (dirty) { dirty = false; this.changed() } }, 250)
+    }
+    const queue = [...todo]
+    const worker = async (): Promise<void> => {
+      for (let p = queue.shift(); p; p = queue.shift()) {
+        const got = await this.fetchOne(iconDomain(p)!).catch(() => null)
+        if (got) {
+          try { writeFileSync(join(this.dir, `${p.id}.${got.ext}`), got.bytes) } catch { /* cache is best effort */ }
+          this.urls.set(p.id, `data:${ICON_TYPES[got.ext]};base64,${got.bytes.toString('base64')}`)
+          delete this.misses[p.id]
+          notify()
+        } else this.misses[p.id] = Date.now()
+      }
+    }
+    this.running = Promise.all(Array.from({ length: 6 }, worker)).then(() => {
+      try { writeFileSync(join(this.dir, 'misses.json'), JSON.stringify(this.misses)) } catch { /* best effort */ }
+    }).finally(() => { this.running = null })
+    return this.running
+  }
+
+  private async fetchOne(domain: string): Promise<{ bytes: Buffer; ext: string } | null> {
+    for (const url of ICON_SOURCES(domain)) {
+      try {
+        const r = await this.fetcher(url, { signal: AbortSignal.timeout(8000), redirect: 'follow' })
+        if (!r.ok) continue
+        const type = (r.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+        const bytes = Buffer.from(await r.arrayBuffer())
+        // Tiny responses are the services' "no icon" placeholders.
+        if (bytes.length < 120 || bytes.length > 400_000) continue
+        const ext = type.includes('png') ? 'png' : type.includes('icon') || url.endsWith('.ico') ? 'ico' : type.includes('svg') ? 'svg' : type.includes('jpeg') ? 'jpg' : type.includes('webp') ? 'webp' : type.includes('gif') ? 'gif' : null
+        if (ext) return { bytes, ext }
+      } catch { /* try the next source */ }
+    }
+    return null
+  }
+}
 
 const MAX_TOOL_NAME = 64
 const SAFE_ENV_BLOCK = /^(NODE_OPTIONS|DYLD_|LD_|ELECTRON_)/
 
 interface Live {
   client: Client
+  /** Registered agent tool names (enabled tools only). */
   tools: string[]
+  /** Every tool the server offers, as listed. */
+  all: ServerTool[]
 }
+
+type ServerTool = { name: string; description?: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string } }
 
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
@@ -250,6 +352,34 @@ export class Connectors {
     return full
   }
 
+  /** Switches one server tool on or off; a live connection picks it up without reconnecting. */
+  setToolEnabled(id: string, tool: string, on: boolean): ConnectorConfig {
+    const c = this.list().find((x) => x.id === id)
+    if (!c) throw new Error('Unknown connector')
+    const off = new Set(c.disabledTools ?? [])
+    if (on) off.delete(tool)
+    else off.add(tool)
+    const next: ConnectorConfig = { ...c, disabledTools: [...off].sort() }
+    if (!next.disabledTools!.length) delete next.disabledTools
+    this.db.setSetting('connectors', this.list().map((x) => (x.id === id ? next : x)))
+    const l = this.live.get(id)
+    if (l) {
+      const t = l.all.find((x) => x.name === tool)
+      const name = toolName(c.name, tool)
+      if (!on) {
+        this.registry.unregister((d) => d.name === name)
+        l.tools = l.tools.filter((n) => n !== name)
+      } else if (t && !l.tools.includes(name)) {
+        this.registry.register(this.toToolDef(next, l.client, t))
+        l.tools.push(name)
+      }
+      const st = this.status.get(id)
+      if (st) this.status.set(id, { ...st, tools: l.tools.length })
+    }
+    this.changed()
+    return next
+  }
+
   async remove(id: string): Promise<void> {
     await this.disconnect(id)
     new Oauth(id, this.secrets).invalidateCredentials('all')
@@ -313,9 +443,11 @@ export class Connectors {
         }
       }
       const { tools } = await client.listTools()
-      const defs: ToolDef[] = tools.map((t) => this.toToolDef(c, client, t))
+      // Tools the user switched off in Connect apps are never offered to the agent.
+      const off = new Set(c.disabledTools ?? [])
+      const defs: ToolDef[] = tools.filter((t) => !off.has(t.name)).map((t) => this.toToolDef(c, client, t))
       this.registry.register(...defs)
-      this.live.set(id, { client, tools: defs.map((d) => d.name) })
+      this.live.set(id, { client, tools: defs.map((d) => d.name), all: tools as ServerTool[] })
       const st: ConnectorStatus = { id, state: 'connected', tools: defs.length, toolNames: tools.map((t) => t.name) }
       this.setStatus(st)
       return st
@@ -327,7 +459,7 @@ export class Connectors {
     }
   }
 
-  private toToolDef(c: ConnectorConfig, client: Client, t: { name: string; description?: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string } }): ToolDef {
+  private toToolDef(c: ConnectorConfig, client: Client, t: ServerTool): ToolDef {
     const effect = effectFor(t.name, t.annotations)
     return {
       name: toolName(c.name, t.name),

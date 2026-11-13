@@ -1,20 +1,24 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { MemoryItem, ModelInfo, ModelList, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, VaultEntry, VoiceStatus } from '@shared/types'
+import { useEffect, useState, type ReactNode } from 'react'
+import type { ModelInfo, ModelList, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, VaultEntry, VoiceStatus } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
+import { MemoryManager } from './MemoryManager'
+import { addRule, loadRules, removeRule, RULE_LIMIT, RULE_MAX_CHARS } from '../lib/approvalRules'
+import '../styles-approvals.css'
 
 // Settings: one page per topic. Every change saves right away (keys go to the Keychain).
 
-type Page = 'general' | 'models' | 'keys' | 'appearance' | 'voice' | 'memory' | 'rules' | 'passwords' | 'advanced'
+type Page = 'general' | 'models' | 'keys' | 'appearance' | 'voice' | 'memory' | 'rules' | 'approvals' | 'passwords' | 'advanced'
 const PAGES: Array<{ id: Page; label: string; icon: ReactNode; color: string; words: string }> = [
   { id: 'general', label: 'General', icon: <I.Gear size={14} />, color: '#8e8e93', words: 'name workspace folder quick ask shortcut search cloud budget spending limit hybrid' },
   { id: 'models', label: 'Models', icon: <I.Cpu size={14} />, color: '#5856d6', words: 'model auto download recommended voice background ollama lm studio' },
   { id: 'keys', label: 'API Keys & Servers', icon: <I.Plug size={14} />, color: '#007aff', words: 'anthropic claude openai openrouter cursor key base url ollama lm studio custom server' },
   { id: 'appearance', label: 'Appearance', icon: <I.Sparkle size={14} />, color: '#ff9500', words: 'theme dark light width font tint density code wrap' },
   { id: 'voice', label: 'Voice', icon: <I.Mic size={14} />, color: '#ff2d55', words: 'speak read aloud dictation whisper kokoro' },
-  { id: 'memory', label: 'Memory', icon: <I.ListIcon size={14} />, color: '#34c759', words: 'remember people places projects facts' },
+  { id: 'memory', label: 'Memory', icon: <I.ListIcon size={14} />, color: '#34c759', words: 'remember people places projects facts import chatgpt claude forget work log' },
   { id: 'rules', label: 'Rules & Skills', icon: <I.Check size={14} />, color: '#30b0c7', words: 'rules skills procedures engineering medical business coding' },
+  { id: 'approvals', label: 'Approval rules', icon: <I.Shield size={14} />, color: '#34aadc', words: 'approval approve allow ask first permission always automatically confirm' },
   { id: 'passwords', label: 'Passwords', icon: <I.Shield size={14} />, color: '#636366', words: 'vault login password' },
   { id: 'advanced', label: 'Advanced', icon: <I.Edit size={14} />, color: '#af52de', words: 'context window gpu memory sampling hard stops' }
 ]
@@ -160,6 +164,7 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
           {page === 'voice' && <VoicePage s={s} models={models} patch={patch} />}
           {page === 'memory' && <MemoryPage spaces={spaces ?? []} />}
           {page === 'rules' && <RulesPage spaces={spaces ?? []} />}
+          {page === 'approvals' && <ApprovalRulesPage patch={patch} />}
           {page === 'passwords' && <Passwords />}
           {page === 'advanced' && <Advanced s={s} models={models} patch={patch} />}
         </div>
@@ -519,48 +524,11 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
 // ------------------------------------------------------------------ memory bank
 
 function MemoryPage({ spaces }: { spaces: Space[] }) {
-  const [mem, setMem] = useState<MemoryItem[]>([])
-  const [adding, setAdding] = useState('')
-  const reload = (): void => { void api.memory.list().then(setMem) }
-  useEffect(reload, [])
-  const projects = spaces.filter((x) => x.kind === 'project')
-  const about = mem.filter((m) => !m.projectId)
-  const byProject = useMemo(() => projects.map((p) => ({ p, items: mem.filter((m) => m.projectId === p.id) })).filter((x) => x.items.length), [mem, projects])
-
-  const row = (m: MemoryItem) => (
-    <div className="set-row" key={m.id} data-testid="memory-row">
-      <div className="set-row-text"><div className="set-row-title mem-text" contentEditable suppressContentEditableWarning
-        onBlur={(e) => { const t = e.currentTarget.textContent?.trim() ?? ''; if (t && t !== m.content) void api.memory.update(m.id, t).then(reload) }}>{m.content}</div>
-        <div className="set-row-sub">{m.category} · {new Date(m.updatedAt).toLocaleDateString()}</div></div>
-      <button className="icon-btn" title="Forget" onClick={() => void api.memory.remove(m.id).then(reload)}><I.Trash size={14} /></button>
-    </div>
-  )
-
   return (
     <>
       <h2>Memory</h2>
-      <div className="set-sub" style={{ marginTop: -6 }}>What SahilBot remembers: you, the people and places in your life, your projects. Everything stays on this Mac. Click a memory to edit it.</div>
-      <Section title="About you" sub="Shared by every chat, whichever model you use. SahilBot saves these as you talk.">
-        {about.length === 0 && <div className="set-empty">Nothing yet.</div>}
-        {(['profile', 'work', 'preference', 'person', 'location', 'project', 'trip', 'link', 'date', 'other'] as const).map((c) => {
-          const items = about.filter((m) => (m.category || 'other') === c)
-          if (!items.length) return null
-          return (
-            <div key={c}>
-              <div className="mem-cat">{({ profile: 'You', work: 'Work', preference: 'Preferences', person: 'People', location: 'Places', project: 'Projects', trip: 'Trips', link: 'Links', date: 'Dates', other: 'Other' } as Record<string, string>)[c]}</div>
-              {items.map(row)}
-            </div>
-          )
-        })}
-        {about.filter((m) => !['profile', 'work', 'preference', 'person', 'location', 'project', 'trip', 'link', 'date', 'other'].includes(m.category)).map(row)}
-        <div className="set-search">
-          <input className="set-input" placeholder="Add something SahilBot should know about you" value={adding} onChange={(e) => setAdding(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && adding.trim()) void api.memory.add(adding.trim(), null).then(() => { setAdding(''); reload() }) }} data-testid="memory-add" />
-        </div>
-      </Section>
-      {byProject.map(({ p, items }) => (
-        <Section key={p.id} title={`Project: ${p.name}`} sub="Shared by every chat in this project.">{items.map(row)}</Section>
-      ))}
+      <div className="set-sub" style={{ marginTop: -6 }}>What your bots remember: facts about you that every bot shares, and each bot's own rules and work log. Everything stays on this Mac. Click a memory to edit it.</div>
+      <MemoryManager spaces={spaces} />
     </>
   )
 }
@@ -643,6 +611,88 @@ function RulesPage({ spaces }: { spaces: Space[] }) {
 }
 
 // ------------------------------------------------------------------ passwords
+
+// ------------------------------------------------------------------ approval rules
+
+const RULE_EXAMPLES: Array<{ when: string; action: 'allow' | 'ask' }> = [
+  { when: 'send email', action: 'ask' },
+  { when: 'npm install', action: 'allow' },
+  { when: 'post', action: 'ask' },
+  { when: 'tool:run_command git status', action: 'allow' }
+]
+
+/** "When SahilBot wants to …, it should allow automatically / ask first." Ask first wins when both match. */
+function ApprovalRulesPage({ patch }: { patch: (p: SettingsPatchUi) => Promise<Settings> }) {
+  const [rules, setRules] = useState<NonNullable<Settings['customRules']> | null>(null)
+  const [when, setWhen] = useState('')
+  const [action, setAction] = useState<'allow' | 'ask'>('ask')
+  const [busy, setBusy] = useState(false)
+  // Read the saved list fresh: an approval card may have added a rule since Settings opened.
+  useEffect(() => { void loadRules().then(setRules) }, [])
+  const save = (customRules: NonNullable<Settings['customRules']>): Promise<Settings> => patch({ customRules })
+  const add = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const r = await addRule(when, action, save)
+      if ('error' in r) { toast(r.error, 'error'); return }
+      setRules(r.rules)
+      setWhen('')
+      toast('Saved to your approval rules', 'ok')
+    } catch (e) { toast(clean(e), 'error') } finally { setBusy(false) }
+  }
+  const del = async (id: string): Promise<void> => {
+    try { setRules(await removeRule(id, save)) } catch (e) { toast(clean(e), 'error') }
+  }
+  const list = rules ?? []
+  const of = (k: 'allow' | 'ask') => list.filter((r) => r.action === k)
+  const full = of(action).length >= RULE_LIMIT
+  const ruleLabel = (t: string): ReactNode => t.split(/(tool:\S+)/g).map((part, i) => (/^tool:/.test(part) ? <code key={i}>{part}</code> : part))
+  const group = (k: 'allow' | 'ask', title: string, sub: string) => (
+    <Section title={`${title} (${of(k).length}/${RULE_LIMIT})`} sub={sub}>
+      <div className="ar-card" data-testid={`rules-${k}`}>
+        {of(k).length === 0 && <div className="ar-empty">None yet.</div>}
+        {of(k).map((r) => (
+          <div key={r.id} className="ar-item" data-testid="rule-item">
+            <div className="ar-item-text">{ruleLabel(r.when)}</div>
+            <button className="ar-del" title="Delete rule" aria-label={`Delete rule: ${r.when}`} onClick={() => void del(r.id)} data-testid="rule-delete"><I.Close size={14} /></button>
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+  return (
+    <>
+      <h2>Approval rules</h2>
+      <div className="set-sub">Decide ahead of time which actions SahilBot can take on its own and which always need your OK. A rule matches when every word in it appears in the action (its name, what it will do, or its details); “sends”, “sending” and “sent” all count as “send”. If an Ask first rule and an Allow rule both match, SahilBot asks.</div>
+      <Section>
+        <div className="ar-form">
+          <label htmlFor="rule-when">When SahilBot wants to:</label>
+          <textarea id="rule-when" className="set-input" rows={2} maxLength={RULE_MAX_CHARS} value={when} placeholder="e.g. send email, npm install, click Buy, tool:run_command"
+            onChange={(e) => setWhen(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (when.trim() && !full) void add() } }} data-testid="rule-when" />
+          <div className="ar-form-row">
+            <label htmlFor="rule-action">It should:</label>
+            <select id="rule-action" className="set-select" value={action} onChange={(e) => setAction(e.target.value as 'allow' | 'ask')} data-testid="rule-action">
+              <option value="allow">Allow automatically</option>
+              <option value="ask">Ask first</option>
+            </select>
+            <button className="btn primary" disabled={busy || !when.trim() || full} onClick={() => void add()} data-testid="rule-add">Add rule</button>
+            <span className="ar-count">{full ? `You have ${RULE_LIMIT} of these. Delete one to add another.` : when.length > RULE_MAX_CHARS - 100 ? `${when.length}/${RULE_MAX_CHARS}` : ''}</span>
+          </div>
+          <div className="ar-examples">Try:
+            {RULE_EXAMPLES.map((x) => <button key={x.when} onClick={() => { setWhen(x.when); setAction(x.action) }}>{x.action === 'ask' ? 'Ask first' : 'Allow'}: {x.when}</button>)}
+          </div>
+        </div>
+      </Section>
+      {rules === null ? <div className="hint">Loading…</div> : (
+        <>
+          {group('ask', 'Ask first', 'SahilBot stops and asks before these, even in Auto mode.')}
+          {group('allow', 'Allow automatically', 'SahilBot does these without asking. Deleting, payments and sign-in changes still ask, and saved passwords are never sent anywhere.')}
+        </>
+      )}
+      <div className="set-sub">Tip: <code>tool:run_command</code> matches one tool by name (<code>*</code> is a wildcard), and “quoted words” must appear exactly as written.</div>
+    </>
+  )
+}
 
 function Passwords() {
   const [vault, setVault] = useState<VaultEntry[]>([])

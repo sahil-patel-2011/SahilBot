@@ -1,7 +1,7 @@
 import { DEFAULT_PROVIDERS, DEFS, baseUrlOf, keyName } from './llm/providers'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import type { Appearance, ProviderId, Settings } from '@shared/types'
+import type { Appearance, CustomRule, ProviderId, Settings } from '@shared/types'
 import type { Db } from './db'
 import type { Secrets } from './secrets'
 
@@ -31,7 +31,26 @@ export const DEFAULTS: Stored = {
   search: { provider: 'auto', searxngUrl: '' },
   advanced: { hardStopsEnabled: true },
   onboarded: false,
-  cloudBudgetUsd: 200
+  cloudBudgetUsd: 200,
+  customRules: []
+}
+
+/** Approval rules as saved: trimmed, at most 1000 characters, 20 of each kind, no duplicates. */
+export function cleanRules(rules: unknown): CustomRule[] {
+  if (!Array.isArray(rules)) return []
+  const seen = new Set<string>()
+  const count = { allow: 0, ask: 0 }
+  const out: CustomRule[] = []
+  for (const r of rules as Array<Partial<CustomRule>>) {
+    if (!r || (r.action !== 'allow' && r.action !== 'ask') || typeof r.when !== 'string') continue
+    const when = r.when.replace(/\s+/g, ' ').trim().slice(0, 1000)
+    const key = `${r.action}:${when.toLowerCase()}`
+    if (!when || seen.has(key) || count[r.action] >= 20) continue
+    seen.add(key)
+    count[r.action]++
+    out.push({ id: typeof r.id === 'string' && r.id ? r.id.slice(0, 64) : `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, when, action: r.action })
+  }
+  return out
 }
 
 export type SettingsPatch = Partial<Settings> & {
@@ -63,7 +82,8 @@ export class SettingsStore {
       taskModels: { ...DEFAULTS.taskModels, ...s.taskModels },
       cloud: { ...DEFAULTS.cloud, ...s.cloud },
       appearance: { ...DEFAULT_APPEARANCE, ...s.appearance },
-      search: { ...DEFAULTS.search, ...s.search }, advanced: { ...DEFAULTS.advanced, ...s.advanced }
+      search: { ...DEFAULTS.search, ...s.search }, advanced: { ...DEFAULTS.advanced, ...s.advanced },
+      customRules: cleanRules(s.customRules)
     }
   }
 
@@ -93,6 +113,7 @@ export class SettingsStore {
       appearance: { ...cur.appearance, ...rest.appearance },
       taskModels: { ...cur.taskModels, ...rest.taskModels },
       cloud: { ...cur.cloud, ...rest.cloud },
+      customRules: rest.customRules !== undefined ? cleanRules(rest.customRules) : cur.customRules,
       providers: rest.providers ? {
         ollama: { ...cur.providers.ollama, ...rest.providers.ollama },
         lmstudio: { ...cur.providers.lmstudio, ...rest.providers.lmstudio },
