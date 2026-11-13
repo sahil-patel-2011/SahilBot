@@ -53,10 +53,11 @@ export class Budget {
     }
   }
 
-  record(host: string, model: string, input: number, output: number): number {
+  /** spaceId: the bot whose run made the request (null when it wasn't made for a bot). */
+  record(host: string, model: string, input: number, output: number, spaceId: string | null = null): number {
     const usd = cost(model, input, output)
-    this.db.sql.prepare('INSERT INTO usage(month, host, model, input, output, usd, at) VALUES(?,?,?,?,?,?,?)')
-      .run(month(), host, model, input, output, usd, Date.now())
+    this.db.sql.prepare('INSERT INTO usage(month, host, model, input, output, usd, at, space_id) VALUES(?,?,?,?,?,?,?,?)')
+      .run(month(), host, model, input, output, usd, Date.now(), spaceId)
     return usd
   }
 

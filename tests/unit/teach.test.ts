@@ -3,7 +3,7 @@ import type { TeachStep } from '@shared/types'
 
 vi.mock('electron', () => ({}))
 const T = await import('../../src/main/browser/teach')
-const { pushStep, sanitizeStep, looksLikeSecret, isSecretField, redactUrl, stepToText, stepsToText, teachMessage, fromPage, listenerScript, TeachRecorder, MAX_STEPS, MAX_MS, SECRET, TEACH_INSTRUCTION } = T
+const { hideKnown, pushStep, sanitizeStep, looksLikeSecret, isSecretField, redactUrl, stepToText, stepsToText, teachMessage, fromPage, listenerScript, TeachRecorder, MAX_STEPS, MAX_MS, SECRET, TEACH_INSTRUCTION } = T
 
 const step = (s: Partial<TeachStep> & Pick<TeachStep, 'kind'>): TeachStep => ({ at: 0, tab: 1, ...s })
 
@@ -52,6 +52,35 @@ describe('collapsing and dedupe', () => {
     pushStep(steps, step({ kind: 'click', role: 'link', name: 'Pricing', at: 9000 }))
     pushStep(steps, step({ kind: 'navigate', cause: 'page', url: 'https://www.example.com/pricing', at: 9400 }))
     expect(steps[2].cause).toBe('action')
+  })
+  test('an address the user types is its own step, even right after a page loaded', () => {
+    const steps: TeachStep[] = []
+    pushStep(steps, step({ kind: 'click', role: 'button', name: 'Send', at: 0 }))
+    pushStep(steps, step({ kind: 'navigate', cause: 'page', url: 'https://x.com/sent', at: 300 }))
+    pushStep(steps, step({ kind: 'navigate', cause: 'address', url: 'https://x.com/inbox', at: 1500 }))
+    pushStep(steps, step({ kind: 'navigate', cause: 'page', url: 'https://x.com/inbox/', at: 1700 }))
+    expect(steps.map((s) => `${s.kind}:${s.cause ?? ''}`)).toEqual(['click:', 'navigate:action', 'navigate:address'])
+    expect(steps[2].url).toBe('https://x.com/inbox/')
+  })
+  test('the click that focused a field folds into Enter pressed there', () => {
+    const steps: TeachStep[] = []
+    pushStep(steps, step({ kind: 'click', role: 'textbox', name: 'Search', selector: '#q' }))
+    pushStep(steps, step({ kind: 'key', key: 'Enter', role: 'textbox', name: 'Search', selector: '#q' }))
+    expect(steps).toHaveLength(1)
+    expect(steps[0]).toMatchObject({ kind: 'key', key: 'Enter' })
+    // A button clicked, then Enter elsewhere: both stay.
+    pushStep(steps, step({ kind: 'click', role: 'button', name: 'Go', selector: '#go' }))
+    pushStep(steps, step({ kind: 'key', key: 'Enter', role: 'button', name: 'Go', selector: '#go' }))
+    expect(steps).toHaveLength(3)
+  })
+  test('a saved password is hidden whichever field it was typed in, even half typed', () => {
+    const pw = ['correct horse battery']
+    expect(hideKnown(step({ kind: 'type', name: 'Note', text: 'correct horse battery' }), pw)).toMatchObject({ secret: true, text: '' })
+    expect(hideKnown(step({ kind: 'type', name: 'Note', text: 'correct hor' }), pw)).toMatchObject({ secret: true, text: '' })
+    expect(hideKnown(step({ kind: 'type', name: 'Note', text: 'cor' }), pw).secret).toBeUndefined()
+    expect(hideKnown(step({ kind: 'click', role: 'button', name: 'Copy correct horse battery' }), pw).name).toBe(`Copy ${SECRET}`)
+    expect(hideKnown(step({ kind: 'navigate', url: 'https://x.com/?q=correct horse battery' }), pw).url).toBe(`https://x.com/?q=${SECRET}`)
+    expect(hideKnown(step({ kind: 'type', text: 'hello' }), [])).toEqual(step({ kind: 'type', text: 'hello' }))
   })
   test('URL rewrites while typing are noise', () => {
     const steps: TeachStep[] = []

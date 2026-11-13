@@ -157,7 +157,9 @@ export function pushStep(steps: TeachStep[], raw: TeachStep): 'added' | 'merged'
         if ((last.kind === 'select' || last.kind === 'click') && sameField(last, s)) return replaceLast()
         break
       case 'navigate':
-        if (last.kind === 'navigate' && last.tab === s.tab && (last.url === s.url || s.at - last.at < 5000)) {
+        // Redirects (the page moving on by itself) fold into the navigation before them; an address the
+        // user typed is a step of its own however soon it comes.
+        if (last.kind === 'navigate' && last.tab === s.tab && (last.url === s.url || (s.cause !== 'address' && s.at - last.at < 5000))) {
           last.url = s.url
           last.at = s.at
           return 'merged'
@@ -176,6 +178,8 @@ export function pushStep(steps: TeachStep[], raw: TeachStep): 'added' | 'merged'
         break
       case 'key':
         if (last.kind === 'key' && last.key === s.key && s.at - last.at < 250) return 'dropped'
+        // The click that just focused a field, then Enter in it: the key says it all.
+        if (last.kind === 'click' && sameField(last, s) && TEXTY.has(last.role ?? '')) return replaceLast()
         break
       case 'tab':
         if (s.op === 'switch' && last.kind === 'tab' && last.op === 'switch') return replaceLast()
@@ -384,8 +388,12 @@ export function listenerScript(token: string): string {
     return t && t.nodeType === 1 ? t : t && t.parentElement
   }
   const editableRoot = (el) => (el && el.isContentEditable && el.closest ? el.closest('[contenteditable]:not([contenteditable=false])') || el : el)
+  // When Enter (recorded as a key) was just pressed in a field: the click the browser then fires on the
+  // form's submit button (implicit submission) is that Enter's effect, not a click of the user's.
+  let enterAt = -1e9
   addEventListener('click', (e) => {
     if (!e.isTrusted) return
+    if (e.detail === 0 && performance.now() - enterAt < 1000) return
     const el = targetOf(e)
     if (!el || !el.tagName) return
     const tag = el.tagName.toLowerCase()
@@ -425,7 +433,13 @@ export function listenerScript(token: string): string {
     const mods = (e.metaKey ? 'Cmd+' : '') + (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '')
     const k = e.key
     let key = null
-    if (k === 'Enter') { if (tag === 'textarea' && !mods && !e.shiftKey) return; key = mods + (e.shiftKey ? 'Shift+' : '') + 'Enter' }
+    if (k === 'Enter') {
+      if (tag === 'textarea' && !mods && !e.shiftKey) return
+      // Enter on a button or link clicks it: recorded as that click.
+      if (isEl && !mods && !e.shiftKey && ['button', 'link'].includes(roleOf(el))) return
+      key = mods + (e.shiftKey ? 'Shift+' : '') + 'Enter'
+      enterAt = performance.now()
+    }
     else if (k === 'Escape') key = 'Escape'
     else if ((k === 'ArrowDown' || k === 'ArrowUp') && isEl && (el.getAttribute('aria-autocomplete') || el.getAttribute('role') === 'combobox' || el.getAttribute('aria-expanded') !== null)) key = k
     else if (mods && k && k.length === 1 && !/^[cvxazy]$/i.test(k)) key = mods + (e.shiftKey ? 'Shift+' : '') + k.toUpperCase()
@@ -474,6 +488,9 @@ export class TeachRecorder {
   private s: Session | null = null
   private held = 0
   private quietUntil = 0
+  /** The user's saved passwords (main sets this to the vault's): never recorded, whatever field they're typed in. */
+  secretValues: () => string[] = () => []
+  private known: string[] = []
 
   /** onChange: publish the browser state. tabOf: 1-based tab number of a page (0 if unknown). */
   constructor(private onChange: () => void, private tabOf: (wc: WebContents) => number = () => 0) {}
@@ -500,6 +517,7 @@ export class TeachRecorder {
       steps: [], name: o.name?.slice(0, 80), threadId: o.threadId, wcs: new Map()
     }
     this.s = s
+    try { this.known = this.secretValues().filter((p) => p.length >= 4) } catch { this.known = [] }
     s.timer = setTimeout(() => this.stop('time'), MAX_MS)
     await Promise.all(o.tabs.map((wc) => this.attach(wc)))
     this.onChange()
@@ -587,7 +605,7 @@ export class TeachRecorder {
     const s = this.s
     if (!s || s.status !== 'recording') return
     if (this.held > 0 || Date.now() < this.quietUntil) return
-    const step: TeachStep = { ...raw, at: Date.now() - s.startedAt, tab: raw.tab ?? (wc ? this.tabOf(wc) || undefined : undefined) }
+    const step = hideKnown({ ...raw, at: Date.now() - s.startedAt, tab: raw.tab ?? (wc ? this.tabOf(wc) || undefined : undefined) }, this.known)
     const r = pushStep(s.steps, step)
     if (r === 'full') { this.stop('steps'); return }
     if (r !== 'dropped') this.onChange()
@@ -644,7 +662,23 @@ export class TeachRecorder {
     if (s.timer) clearTimeout(s.timer)
     for (const [wc, a] of s.wcs) this.detach(wc, a)
     this.s = null
+    this.known = []
   }
+}
+
+/** A saved password anywhere in a step (typed into a field not marked as a password, or in a page's text): hidden. */
+export function hideKnown(step: TeachStep, passwords: string[]): TeachStep {
+  if (!passwords.length) return step
+  const has = (v: string | undefined): boolean => !!v && passwords.some((p) => v.includes(p))
+  const out: TeachStep = { ...step }
+  // While it's being typed the field holds the start of it: that's hidden too.
+  const partial = (v: string | undefined): boolean => !!v && v.length >= 6 && passwords.some((p) => p.startsWith(v))
+  if ((out.kind === 'type' || out.kind === 'select') && (has(out.text) || partial(out.text))) { out.secret = true; out.text = '' }
+  for (const k of ['text', 'name', 'title', 'url', 'selector', 'filename', 'key'] as const) {
+    const v = out[k]
+    if (typeof v === 'string' && has(v)) out[k] = passwords.reduce((t, p) => t.split(p).join(SECRET), v)
+  }
+  return out
 }
 
 interface FrameTree { frame: { id: string }; childFrames?: FrameTree[] }

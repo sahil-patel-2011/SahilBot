@@ -462,6 +462,77 @@ export interface ConnectorConfig {
   disabledTools?: string[]
 }
 
+/**
+ * A bot shared as a file (".sahilbot.json"): its look, job and suggested routines. Never chats,
+ * memories, secrets, connector tokens, file paths or chat ids.
+ */
+export interface SharedBotFile {
+  format: 'sahilbot.bot'
+  version: 1
+  name: string
+  color: string
+  shape: BotShape
+  label?: string
+  description?: string
+  /** The bot's instructions (its system prompt, without the parts SahilBot adds). */
+  instructions: string
+  /** Names of skills it leans on. */
+  skills: string[]
+  /** Suggested routines: created paused on import. */
+  routines: Array<{ title: string; prompt: string; schedule: Schedule }>
+}
+
+/** What an import would create, shown for the user to read and confirm. */
+export interface BotImportPreview {
+  /** Pass to bots.importConfirm to create it (valid for 30 minutes, once). */
+  token: string
+  fileName: string
+  name: string
+  color: string
+  shape: BotShape
+  label: string | null
+  description: string | null
+  instructions: string
+  routines: Array<{ title: string; prompt: string; schedule: Schedule }>
+  /** Skills this Mac has (kept) and ones it doesn't (dropped). */
+  skills: string[]
+  unknownSkills: string[]
+  /** Things cleaned up while reading the file (hidden characters removed, …). */
+  warnings: string[]
+}
+
+/** Usage for one day, bot and model. where: local model server or paid cloud endpoint. */
+export interface UsageRow {
+  day: string
+  spaceId: string | null
+  model: string
+  where: 'local' | 'cloud'
+  requests: number
+  input: number
+  output: number
+  usd: number
+}
+
+/** Settings → Usage. Breakdowns cover the last `days` days; spent/cap are this month's cloud spend. */
+export interface UsageReport {
+  month: string
+  spent: number
+  cap: number
+  monthRequests: number
+  days: number
+  byModel: Array<{ model: string; where: 'local' | 'cloud'; requests: number; input: number; output: number; usd: number }>
+  byBot: Array<{ spaceId: string | null; name: string; color: string | null; cloudRequests: number; localRequests: number; input: number; output: number; usd: number }>
+  byDay: Array<{ day: string; usd: number; cloudRequests: number; localRequests: number }>
+  totals: { cloudRequests: number; localRequests: number; input: number; output: number; usd: number }
+}
+
+/** The opt-in morning check-in: a daily routine on the main bot. */
+export interface CheckinSettings {
+  enabled: boolean
+  /** HH:MM, local time. */
+  time: string
+}
+
 /** A ready-made bot from packs/templates (Connect apps → Bot templates). */
 export interface BotTemplate {
   id: string
@@ -773,6 +844,28 @@ export interface SahilBotApi {
     list(): Promise<BotTemplate[]>
     /** Creates the bot, its routines (paused) and a chat that opens with the bot's intro. */
     add(id: string): Promise<{ spaceId: string; threadId: string }>
+  }
+  /** Share, import and duplicate bots. */
+  bots: {
+    /** Saves the bot as a .sahilbot.json file (save dialog); null if cancelled. redacted: secrets/paths removed. */
+    exportFile(spaceId: string): Promise<{ path: string; redacted: number } | null>
+    /** Opens a .sahilbot.json file (open dialog) and checks it; null if cancelled. Nothing is created yet. */
+    importPick(): Promise<BotImportPreview | null>
+    /** Creates the previewed bot (routines paused) and opens its chat. */
+    importConfirm(token: string): Promise<{ spaceId: string; threadId: string }>
+    /** Copies a bot's name, look, label, instructions and routines (paused); not its chats or memories. */
+    duplicate(spaceId: string): Promise<{ spaceId: string; threadId: string }>
+  }
+  /** The morning check-in routine on the main bot (off by default). */
+  checkin: {
+    get(): Promise<CheckinSettings>
+    set(c: CheckinSettings): Promise<CheckinSettings>
+  }
+  usage: {
+    /** Last 30 days by model, bot and day, plus this month's spend against the cap. */
+    report(): Promise<UsageReport>
+    /** Saves the last 30 days as CSV (save dialog); null if cancelled. */
+    exportCsv(): Promise<string | null>
   }
   skills: {
     list(): Promise<Skill[]>

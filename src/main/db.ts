@@ -61,7 +61,14 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'chat';
    UPDATE memories SET category = 'fact' WHERE category = 'other' OR category = '';
    CREATE INDEX memories_scope ON memories(scope, updated_at DESC);
-   CREATE TRIGGER spaces_forget_memories AFTER DELETE ON spaces BEGIN DELETE FROM memories WHERE scope = OLD.id; END;`
+   CREATE TRIGGER spaces_forget_memories AFTER DELETE ON spaces BEGIN DELETE FROM memories WHERE scope = OLD.id; END;`,
+  // Cloud usage remembers which bot made each request (Settings → Usage). The table is first made by
+  // the budget guard, so a fresh database gets it here (same shape) before the column is added.
+  `CREATE TABLE IF NOT EXISTS usage (
+     id INTEGER PRIMARY KEY AUTOINCREMENT, month TEXT NOT NULL, host TEXT NOT NULL, model TEXT NOT NULL,
+     input INTEGER NOT NULL, output INTEGER NOT NULL, usd REAL NOT NULL, at INTEGER NOT NULL);
+   ALTER TABLE usage ADD COLUMN space_id TEXT;
+   CREATE INDEX IF NOT EXISTS usage_at ON usage(at);`
 ]
 
 type Row = Record<string, unknown>

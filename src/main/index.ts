@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
-import type { BotShape, ChatEvent, PendingRequest, SendInput, Settings, Space } from '@shared/types'
+import type { BotShape, ChatEvent, CheckinSettings, PendingRequest, SendInput, Settings, Space, UsageRow } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 import { INTRO } from './agent/prompt'
 import { updateBotTool } from './agent/tools/bots'
@@ -13,7 +13,10 @@ import { PROVIDERS } from './llm/providers'
 import { Budget } from './llm/budget'
 import { collectText, isLocal, spendHooks, streamChat } from './llm/client'
 import { ConnectorIcons, Connectors, PRESETS } from './connectors'
-import { addTemplate, loadTemplates } from './templates'
+import { addTemplate, loadTemplates, type TemplateDeps } from './templates'
+import { BOT_FILE_EXT, BOT_FILE_MAX_BYTES, botFileFor, duplicateBot, importPreview, importTemplate, parseBotFile, PendingImports } from './bot-share'
+import { getCheckin, overviewTool, setCheckin } from './checkin'
+import { aggregateUsage, usageCsv, usageRows, usageScope, windowStart } from './usage'
 import { VoiceService } from './voice/service'
 import { Scheduler } from './scheduler'
 import { buildMenu, setupApp, windowState } from './shell'
@@ -53,6 +56,11 @@ import { needsYouBody } from './needs-you'
 
 /** Set by the automated tests: run without ever showing a window. */
 const HIDDEN = !!process.env.SAHILBOT_HIDDEN
+/**
+ * Hidden runs make no notifications and leave the Dock badge alone. Tests of those set
+ * SAHILBOT_TEST_NOTIFY=1 (and stub Notification#show and dock.setBadge); it only applies to hidden runs.
+ */
+const QUIET = HIDDEN && process.env.SAHILBOT_TEST_NOTIFY !== '1'
 if (HIDDEN) app.whenReady().then(() => app.dock?.hide()).catch(() => undefined)
 
 // Tests and side-by-side profiles keep everything (including browser cookies) in their own folder.
@@ -176,7 +184,8 @@ app.whenReady().then(() => {
   const budget = new Budget(db, () => settings.get().cloudBudgetUsd)
   spendHooks.before = (_req, est, maxOutput, pricedAs) => budget.check(pricedAs, est, maxOutput)
   spendHooks.after = (req, input, output, served) => {
-    budget.record(new URL(req.baseUrl).host, served, input, output)
+    // Tagged with the bot whose run made it (Settings → Usage).
+    budget.record(new URL(req.baseUrl).host, served, input, output, usageScope.getStore()?.spaceId ?? null)
     toWin('budget:changed')
   }
 
@@ -258,7 +267,7 @@ app.whenReady().then(() => {
   /** Dock badge: chats waiting on you + unread chats (top-level, not hidden bots, not the one you're reading). */
   let badgeTimer: ReturnType<typeof setTimeout> | null = null
   const refreshBadge = (): void => {
-    if (badgeTimer || HIDDEN) return
+    if (badgeTimer || QUIET) return
     badgeTimer = setTimeout(() => {
       badgeTimer = null
       try {
@@ -275,7 +284,7 @@ app.whenReady().then(() => {
     if (e.type === 'pending') {
       waiting.set(e.threadId, (waiting.get(e.threadId) ?? new Set()).add(e.request.id))
       refreshBadge()
-      if (HIDDEN || !Notification.isSupported() || quickRuns.has(e.threadId)) return
+      if (QUIET || !Notification.isSupported() || quickRuns.has(e.threadId)) return
       if (mainFocused() && viewingThread === e.threadId) return
       const thread = db.getThread(e.threadId)
       if (!thread || !botNotifies(thread.spaceId)) return
@@ -303,7 +312,7 @@ app.whenReady().then(() => {
     const fromRoutine = e.type === 'run' && e.status !== 'started' && scheduledRuns.delete(e.threadId)
     // A chat finished while you were in another app: a quiet notification.
     if (e.type === 'run' && (e.status === 'finished' || e.status === 'error') && !fromQuick && !fromRoutine && !(quick && !quick.isDestroyed() && quick.isVisible()) &&
-      !(win && !win.isDestroyed() && win.isFocused()) && !HIDDEN && Notification.isSupported() && botNotifies(e.spaceId ?? db.getThread(e.threadId)?.spaceId)) {
+      !(win && !win.isDestroyed() && win.isFocused()) && !QUIET && Notification.isSupported() && botNotifies(e.spaceId ?? db.getThread(e.threadId)?.spaceId)) {
       const n = new Notification({ title: e.status === 'error' ? 'SahilBot hit a problem' : 'SahilBot is done', body: (e.title ?? 'Your task').slice(0, 120), silent: false })
       n.on('click', () => openThread(e.threadId))
       n.show()
@@ -316,6 +325,8 @@ app.whenReady().then(() => {
     (state) => toWin('browser:state', state),
     () => toWin('browser:open')
   )
+  // A saved password typed while teaching a task is never recorded, whichever field it went into.
+  browser.teach.secretValues = () => vault.passwords()
 
   // Built-in packs of skills and rules ship in packs/; yours live in the data folder.
   const skills = new SkillStore(sub('skills'), join(appRoot(), 'packs', 'skills'))
@@ -370,6 +381,7 @@ app.whenReady().then(() => {
   })
   // Bot-to-bot handoffs need the agent itself (to start or steer the other bot's run).
   registry.register(handoffTool(() => chat.handoffHost()))
+  // Paid requests made during a run are recorded against that run's bot.
 
   if (db.listSpaces().length === 0) db.createSpace('SahilBot', '#1F1F1F', { isMain: true, shape: 'mascot' })
   const attachments = new Attachments(() => win, () => settings.get().workspaceDir, docsDir)
@@ -653,7 +665,7 @@ app.whenReady().then(() => {
     const after = db.listMessages(threadId).filter((m) => m.createdAt >= startedAt)
     const last = [...after].reverse().find((m) => m.role === 'assistant' && m.content && m.kind === 'normal')
     // The routine's own notification (the generic "done" one is skipped for routine runs). Click opens the chat.
-    if (space.notify !== false && !HIDDEN && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) {
+    if (space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) {
       const body = status === 'error' ? 'The routine hit a problem. Click to see what happened.' : (last?.content ?? 'Done').replace(/\s+/g, ' ').trim().slice(0, 140)
       showNote(new Notification({ title: `${space.isMain ? 'SahilBot' : space.name}: ${task.title.replace(/^⏰\s*/, '')}`, body }), threadId)
     }
@@ -691,31 +703,109 @@ app.whenReady().then(() => {
 
   // ---------------------------------------------------------------- bot templates
   const templatesDir = join(appRoot(), 'packs', 'templates')
+  /** How a template, an imported file or a duplicate becomes a bot. */
+  const templateDeps: TemplateDeps = {
+    createBot: (name, color, shape) => {
+      const space = db.createSpace(name, color, { kind: 'bot', shape })
+      const thread = db.createThread(space.id, 'auto', null)
+      db.updateThread(thread.id, { title: name })
+      // Lets the bot rename itself or refine its job from its first reply.
+      const state = db.getState(thread.id)
+      state.loaded = ['update_bot']
+      db.setState(thread.id, state)
+      return { spaceId: space.id, threadId: thread.id }
+    },
+    setPrompt: (spaceId, text) => spaces.setPrompt(spaceId, text),
+    // Suggested routines start paused; the bot offers to turn them on.
+    createRoutine: (r) => {
+      const input: Parameters<Scheduler['create']>[0] = { ...r, enabled: false } as Parameters<Scheduler['create']>[0]
+      const made = scheduler.create(input)
+      if (made.enabled) scheduler.update(made.id, { enabled: false })
+    },
+    postAssistant: (threadId, text) => { db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done' }) },
+    changed: () => emit({ threadId: '', type: 'spaces' })
+  }
   handle('templates:list', () => loadTemplates(templatesDir))
   handle('templates:add', (id: string) => {
     const t = loadTemplates(templatesDir).find((x) => x.id === id)
     if (!t) throw new Error('That template is no longer available.')
-    return addTemplate(t, {
-      createBot: (name, color, shape) => {
-        const space = db.createSpace(name, color, { kind: 'bot', shape })
-        const thread = db.createThread(space.id, 'auto', null)
-        db.updateThread(thread.id, { title: name })
-        // Lets the bot rename itself or refine its job from its first reply.
-        const state = db.getState(thread.id)
-        state.loaded = ['update_bot']
-        db.setState(thread.id, state)
-        return { spaceId: space.id, threadId: thread.id }
-      },
-      setPrompt: (spaceId, text) => spaces.setPrompt(spaceId, text),
-      // Suggested routines start paused; the bot offers to turn them on.
-      createRoutine: (r) => {
-        const input: Parameters<Scheduler['create']>[0] = { ...r, enabled: false } as Parameters<Scheduler['create']>[0]
-        const made = scheduler.create(input)
-        if (made.enabled) scheduler.update(made.id, { enabled: false })
-      },
-      postAssistant: (threadId, text) => { db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done' }) },
-      changed: () => emit({ threadId: '', type: 'spaces' })
+    return addTemplate(t, templateDeps)
+  })
+
+  // ---------------------------------------------------------------- share, import and duplicate bots
+  /** Every saved secret (API keys, passwords, connector tokens), so an exported bot never carries one. */
+  const secretValues = (): string[] => {
+    const keys = db.sql.prepare(`SELECT key FROM settings WHERE key LIKE 'secret:%'`).all() as Array<{ key: string }>
+    return keys.map((k) => secrets.get(k.key.slice('secret:'.length))).filter((v): v is string => !!v)
+  }
+  const skillNames = (): string[] => skills.list().map((sk) => sk.name)
+  const pendingImports = new PendingImports()
+  handle('bots:export', async (id: string) => {
+    const space = db.getSpace(id)
+    if (!space || space.kind !== 'bot') throw new Error('Only bots can be shared.')
+    const { file, redacted } = botFileFor({ space, prompt: spaces.getPrompt(id), routines: scheduler.list().filter((t) => t.spaceId === id), skillNames: skillNames(), secrets: secretValues() })
+    const safe = file.name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/^\.+/, '').slice(0, 60) || 'bot'
+    const r = win ? await dialog.showSaveDialog(win, { defaultPath: `${safe}${BOT_FILE_EXT}`, filters: [{ name: 'SahilBot bot', extensions: ['json'] }] }) : { canceled: true }
+    if (r.canceled || !('filePath' in r) || !r.filePath) return null
+    writeFileSync(r.filePath, JSON.stringify(file, null, 2) + '\n')
+    return { path: r.filePath, redacted }
+  })
+  handle('bots:importPick', async () => {
+    const r = win ? await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'SahilBot bot', extensions: ['json'] }] }) : { canceled: true, filePaths: [] }
+    const path = r.canceled ? undefined : r.filePaths[0]
+    if (!path) return null
+    const size = statSync(path).size
+    // Checked before reading, so a huge file is never loaded.
+    const file = parseBotFile(size > BOT_FILE_MAX_BYTES ? '' : readFileSync(path, 'utf8'), size)
+    const preview = importPreview(file, basename(path), skillNames())
+    pendingImports.put(preview)
+    return preview
+  })
+  handle('bots:importConfirm', (token: string) => {
+    const p = pendingImports.take(token)
+    const made = addTemplate(importTemplate(p), templateDeps)
+    if (p.label) db.updateSpace(made.spaceId, { label: p.label })
+    emit({ threadId: '', type: 'spaces' })
+    openThread(made.threadId)
+    return made
+  })
+  handle('bots:duplicate', (id: string) => {
+    const made = duplicateBot(id, {
+      ...templateDeps,
+      getSpace: (x) => db.getSpace(x),
+      getPrompt: (x) => spaces.getPrompt(x),
+      routines: (x) => scheduler.list().filter((t) => t.spaceId === x),
+      updateSpace: (x, patch) => { db.updateSpace(x, patch) }
     })
+    openThread(made.threadId)
+    return made
+  })
+
+  // ---------------------------------------------------------------- morning check-in and usage
+  handle('checkin:get', () => getCheckin(db, scheduler))
+  handle('checkin:set', (c: CheckinSettings) => setCheckin(db, scheduler, c))
+  registry.register(overviewTool({
+    db,
+    pending: () => Object.keys(chat.allPending()).flatMap((tid) => chat.pending(tid)),
+    routines: () => scheduler.list()
+  }))
+  /** A model is cloud when the endpoint that serves it isn't on this Mac (Claude and GPT always are). */
+  const isCloudModel = (model: string): boolean => {
+    if (/^(claude-|gpt-|chatgpt-)/i.test(model)) return true
+    try { return !isLocal(endpoints.for(model).baseUrl) } catch { return /^o\d|\//i.test(model) }
+  }
+  const usageWindow = (): UsageRow[] => usageRows(db, windowStart(Date.now(), 30), isCloudModel)
+  handle('usage:report', () => {
+    const b = budget.summary()
+    return aggregateUsage(usageWindow(), db.listSpaces(), { now: Date.now(), days: 30, month: b.month, spent: b.spent, cap: b.cap, monthRequests: b.requests })
+  })
+  handle('usage:exportCsv', async () => {
+    const names = new Map(db.listSpaces().map((sp) => [sp.id, sp.name]))
+    const csv = usageCsv(usageWindow(), (id) => (id ? names.get(id) ?? 'Deleted bot' : ''))
+    const r = win ? await dialog.showSaveDialog(win, { defaultPath: `SahilBot usage ${new Date().toISOString().slice(0, 10)}.csv`, filters: [{ name: 'CSV', extensions: ['csv'] }] }) : { canceled: true }
+    if (r.canceled || !('filePath' in r) || !r.filePath) return null
+    writeFileSync(r.filePath, csv)
+    return r.filePath
   })
   handle('schedules:runs', (taskId: string) => scheduler.runs(taskId))
   handle('pickFolder', async () => {

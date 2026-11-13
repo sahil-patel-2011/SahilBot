@@ -5,7 +5,7 @@ import { appRoot, isPackaged } from './paths'
 
 // The app around the window: name, icon, About panel, menu bar, and remembered window size.
 
-export type MenuAction = 'new-chat' | 'new-bot' | 'new-project' | 'settings' | 'scheduled' | 'connect' | 'toggle-panel' | 'export' | 'search'
+export type MenuAction = 'new-chat' | 'new-bot' | 'new-project' | 'settings' | 'scheduled' | 'connect' | 'toggle-panel' | 'export' | 'search' | 'import-bot'
 
 export function setupApp(): void {
   app.setName('SahilBot')
@@ -48,6 +48,7 @@ export function buildMenu(send: (a: MenuAction) => void): void {
         { label: 'New Chat', accelerator: 'CmdOrCtrl+N', click: () => send('new-chat') },
         { label: 'New Bot', accelerator: 'CmdOrCtrl+Shift+B', click: () => send('new-bot') },
         { label: 'New Project', accelerator: 'CmdOrCtrl+Shift+P', click: () => send('new-project') },
+        { label: 'Import Bot…', click: () => send('import-bot') },
         { type: 'separator' },
         { label: 'Scheduled Tasks', accelerator: 'CmdOrCtrl+Shift+S', click: () => send('scheduled') },
         { label: 'Export Chat as Markdown…', accelerator: 'CmdOrCtrl+Shift+E', click: () => send('export') },

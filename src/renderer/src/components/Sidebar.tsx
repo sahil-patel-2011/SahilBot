@@ -5,6 +5,7 @@ import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { ConnectedIcons } from './ConnectedIcons'
 import { ContextMenu, type MenuItem } from './ContextMenu'
+import { duplicateBot, importBot, shareBot } from './BotShare'
 
 export type MainView = 'home' | 'projects' | 'files'
 
@@ -110,6 +111,10 @@ export function Sidebar(p: {
         'sep',
         { label: `Rename ${kind}`, icon: <I.Edit size={15} />, run: () => setRenaming(s.id) },
         { label: `Customize ${kind}…`, icon: <I.Gear size={15} />, run: () => p.onCustomize(s) },
+        ...(s.kind === 'bot' ? [
+          { label: 'Share as template…', icon: <I.Share size={15} />, run: () => void shareBot(s) },
+          { label: 'Duplicate', icon: <I.Copy size={15} />, run: () => void duplicateBot(s) }
+        ] as MenuItem[] : []),
         'sep',
         { label: 'Copy conversation ID', icon: <I.Copy size={15} />, run: () => void api.threads.list(s.id).then((ts) => navigator.clipboard.writeText(ts[0]?.id ?? s.id)) },
         ...(s.isMain ? [] : [
@@ -150,7 +155,9 @@ export function Sidebar(p: {
         { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects') },
         { label: 'Files', icon: <I.File size={15} />, run: () => p.onView('files') },
         { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled },
-        { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect }
+        { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect },
+        'sep',
+        { label: 'Import bot…', icon: <I.Users size={15} />, run: () => void importBot() }
       ]
     })
   }

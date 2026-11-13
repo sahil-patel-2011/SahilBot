@@ -4,14 +4,16 @@ import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { MemoryManager } from './MemoryManager'
+import { UsagePage } from './UsagePage'
 import { addRule, loadRules, removeRule, RULE_LIMIT, RULE_MAX_CHARS } from '../lib/approvalRules'
 import '../styles-approvals.css'
 
 // Settings: one page per topic. Every change saves right away (keys go to the Keychain).
 
-type Page = 'general' | 'models' | 'keys' | 'appearance' | 'voice' | 'memory' | 'rules' | 'approvals' | 'passwords' | 'advanced'
+type Page = 'general' | 'usage' | 'models' | 'keys' | 'appearance' | 'voice' | 'memory' | 'rules' | 'approvals' | 'passwords' | 'advanced'
 const PAGES: Array<{ id: Page; label: string; icon: ReactNode; color: string; words: string }> = [
   { id: 'general', label: 'General', icon: <I.Gear size={14} />, color: '#8e8e93', words: 'name workspace folder quick ask shortcut search cloud budget spending limit hybrid' },
+  { id: 'usage', label: 'Usage', icon: <I.Clock size={14} />, color: '#ff6a1a', words: 'usage spend spending cost cap budget tokens requests local cloud model bot csv export' },
   { id: 'models', label: 'Models', icon: <I.Cpu size={14} />, color: '#5856d6', words: 'model auto download recommended voice background ollama lm studio' },
   { id: 'keys', label: 'API Keys & Servers', icon: <I.Plug size={14} />, color: '#007aff', words: 'anthropic claude openai openrouter cursor key base url ollama lm studio custom server' },
   { id: 'appearance', label: 'Appearance', icon: <I.Sparkle size={14} />, color: '#ff9500', words: 'theme dark light width font tint density code wrap' },
@@ -159,6 +161,7 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
         </nav>
         <div className="set-body">
           {page === 'general' && <General s={s} patch={patch} />}
+          {page === 'usage' && <UsagePage />}
           {page === 'models' && <Models s={s} models={models} patch={patch} onRefresh={onRefreshModels} />}
           {page === 'keys' && <Keys s={s} patch={patch} onChanged={onRefreshModels} models={models} />}
           {page === 'appearance' && <AppearancePage s={s} patch={patch} />}

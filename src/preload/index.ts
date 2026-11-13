@@ -181,6 +181,9 @@ const api: SahilBotApi = {
   },
   rules: { list: call('rules:list') as never, save: call('rules:save') as never, setEnabled: call('rules:setEnabled') as never, remove: call('rules:remove') as never },
   templates: { list: call('templates:list') as never, add: call('templates:add') as never },
+  bots: { exportFile: call('bots:export') as never, importPick: call('bots:importPick') as never, importConfirm: call('bots:importConfirm') as never, duplicate: call('bots:duplicate') as never },
+  checkin: { get: call('checkin:get') as never, set: call('checkin:set') as never },
+  usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never },
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
   chat: {
     send: call('chat:send') as never,

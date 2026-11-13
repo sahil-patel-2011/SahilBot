@@ -4,6 +4,7 @@ import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { describeSchedule, groupLibrary, host, when } from '../routines'
+import { BotShareRows } from './BotShare'
 
 type Tab = 'details' | 'library'
 type Filter = 'all' | 'file' | 'link'
@@ -192,6 +193,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                   <span className="bd-chev"><I.Chevron size={14} /></span>
                 </button>
               </div>
+              <BotShareRows space={space} />
             </div>
           ) : (
             <Library spaceId={space.id} />

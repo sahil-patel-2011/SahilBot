@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { usageScope } from '../usage'
 import type { ApprovalAnswer, Attachment, ChatEvent, Effort, TeamMember, Message, ModelInfo, PendingRequest, PermissionMode, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
 import type { Db } from '../db'
 import type { MemoryStore } from '../memory'
@@ -390,7 +391,8 @@ export class Agent {
     const run: Run = { ctrl: new AbortController(), pending: new Map(), group, unattended: opts.unattended }
     this.runs.set(thread.id, run)
     this.d.emit({ threadId: thread.id, type: 'run', status: 'started', spaceId: thread.spaceId, title: thread.title })
-    const done = this.speakers(thread, run, space, userText)
+    // Paid requests anywhere in this run (steps, summaries, helpers) are recorded against this bot.
+    const done = usageScope.run({ spaceId: thread.spaceId, threadId: thread.id }, () => this.speakers(thread, run, space, userText))
       .catch((e) => { this.notice(thread.id, `Run failed: ${(e as Error).message}`); return 'error' as const })
       .finally(() => {
         if (this.runs.get(thread.id) === run) this.runs.delete(thread.id)
@@ -856,7 +858,8 @@ export class Agent {
         if (!assistant.toolCalls?.length) {
           // Links the model cites must come from something it actually retrieved (or the user typed).
           const all = db.listMessages(thread.id)
-          const seen = all.filter((m) => m.role === 'tool' || m.role === 'user').map((m) => m.content).join('\n')
+          // (A Teach recording's addresses are in its note: pages the user opened in this conversation.)
+          const seen = all.filter((m) => m.role === 'tool' || m.role === 'user').map((m) => (m.role === 'user' ? relayedText(m) : m.content)).join('\n')
           const unseen = citedUrls(assistant.content).filter((u) => !seen.includes(u) && !seen.includes(u.replace(/\/$/, '')))
           if (unseen.length && !linkChecked && step < HARD_CAP) {
             budget = Math.max(budget, step + 1)

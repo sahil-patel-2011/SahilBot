@@ -6,6 +6,7 @@ import * as I from '../icons'
 import { SpaceAvatar } from '../brand'
 import { AppIcon, IconStack, connectedApps, useAppIcons } from './ConnectedIcons'
 import { MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, matches, recommended } from '../lib/connect-catalog'
+import { importBot } from './BotShare'
 
 const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
   off: 'Off', disconnected: 'Disconnected', connecting: 'Connecting…', signing_in: 'Finish signing in in your browser…',
@@ -335,6 +336,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const gallery = (): ReactNode => (
     <>
       <p className="ca-lede">Ready-made bots with a job, the right skills and suggested routines. Routines start paused until you turn them on.</p>
+      <button className="ca-btn bs-import-btn" onClick={() => void importBot(onClose)} data-testid="template-import"><I.Share size={14} />Import from file…</button>
       {!templates.length && !err && <div className="ca-empty"><span>Loading templates…</span></div>}
       <div className="ca-templates">
         {templates.map((t) => (
