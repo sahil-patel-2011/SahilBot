@@ -1,10 +1,10 @@
-import type { ModelInfo, ModelList, ProviderId } from '@shared/types'
+import type { ModelInfo, ModelList, ProviderId, Settings } from '@shared/types'
 import type { SettingsStore } from '../settings'
 import { cost, priceFor } from './budget'
-import { RECOMMENDED, estimateMemory, prettyName, rankOf, tierOf } from './catalog'
-import { claudeFamily, claudeSpec, isPremiumClaude } from './claude-models'
-import { routingPrefs } from './router'
-import { machine, providerModels } from './models'
+import { RECOMMENDED, estimateMemory, isMlx, prettyName, rankOf, recommendedFor, sameModel, tierOf } from './catalog'
+import { claudeFamily, claudeInfo, claudeOptions, isPremiumClaude } from './claude-models'
+import { isAuto, routingPrefs } from './router'
+import { machine, providerModels, root } from './models'
 import { DEFS, baseUrlOf, def, isAnthropic } from './providers'
 
 export interface Endpoint {
@@ -39,6 +39,58 @@ export function olderClaude(ids: string[]): Set<string> {
   return new Set(ids.filter((id) => { const fam = claudeFamily(id); return !!fam && newest.get(fam)?.id !== id }))
 }
 
+/**
+ * A model added by name on the Models page (an OpenRouter or newer Claude model the list doesn't show).
+ * It can be picked only when a cloud provider claims the name and its key is saved: a local name no
+ * running server lists isn't downloaded, so it isn't offered.
+ */
+export function addedModelStatus(id: string, s: Pick<Settings, 'keys' | 'cloud'>): { provider?: ProviderId; reason?: string } {
+  const cloud = DEFS.find((d) => !d.local && d.claims?.test(id))
+  if (!cloud) return { reason: 'No running model server has it' }
+  if (!s.cloud.enabled) return { reason: 'Cloud models are off' }
+  if (!s.keys[cloud.id]) return { reason: `Needs an ${cloud.name} API key` }
+  return { provider: cloud.id }
+}
+
+/**
+ * Whether a model can be picked right now: downloaded (listed by Ollama, LM Studio or the custom
+ * server), or a cloud model whose provider has a key saved (and cloud models are on). Recommended models
+ * that aren't downloaded yet, and models added by name that nothing serves, are false: they live on
+ * Settings → Models, not in the picker.
+ */
+export function pickable(m: ModelInfo, s: Pick<Settings, 'keys' | 'cloud'>): boolean {
+  if (!m.installed) return false
+  if (def(m.provider).local) return true
+  // No key info (a partial settings object): trust the listing, which only has keyed providers.
+  return s.cloud.enabled && (s.keys ? !!s.keys[m.provider] : true)
+}
+
+/**
+ * Why a chosen model (a chat's, a bot's or the default) can't be used any more, judged from a listing:
+ * its cloud key was removed, cloud models were switched off, or a server that answered no longer has it
+ * (deleted). undefined: it's fine, or there's no telling (its server isn't running, which is temporary).
+ */
+export function missingReason(id: string, list: ModelList | null, s: Pick<Settings, 'keys' | 'cloud'>): string | undefined {
+  if (isAuto(id) || !list) return undefined
+  const m = list.models.find((x) => x.id === id)
+  const up = (p: ProviderId): boolean => !!list.providers?.find((x) => x.id === p)?.ok
+  if (m?.installed) return pickable(m, s) ? undefined : !s.cloud.enabled ? 'cloud models are switched off' : `there's no ${def(m.provider).name} API key any more`
+  // Added by name and nothing can run it (key removed, cloud off, or no server has it).
+  if (m && !m.pull) return m.note && m.note !== 'added by you' ? `${m.note[0].toLowerCase()}${m.note.slice(1)}`.replace(/^needs/, 'it needs') : 'it isn\'t available'
+  // A recommended model that isn't downloaded: only certain while Ollama answers.
+  if (m) return up('ollama') ? 'it isn\'t downloaded' : undefined
+  const cloud = DEFS.find((d) => !d.local && d.id !== 'openrouter' && d.claims?.test(id))
+  if (cloud) {
+    if (!s.cloud.enabled) return 'cloud models are switched off'
+    if (!s.keys?.[cloud.id]) return `there's no ${cloud.name} API key any more`
+    return up(cloud.id) ? `${cloud.name} doesn't offer it any more` : undefined
+  }
+  // Ollama names have a tag (name:tag); otherwise every local server that's on must have answered.
+  if (id.includes(':')) return up('ollama') ? 'it was deleted from Ollama' : undefined
+  const locals = (list.providers ?? []).filter((p) => def(p.id).local)
+  return locals.length && locals.every((p) => p.ok) ? 'no model server has it any more' : undefined
+}
+
 export class Endpoints {
   private index = new Map<string, ProviderId>()
   last: ModelList | null = null
@@ -59,8 +111,10 @@ export class Endpoints {
       const baseUrl = baseUrlOf(provider, s.providers)
       return { provider, baseUrl, apiKey: this.settings.keyFor(baseUrl) }
     }
-    for (const d of DEFS) if (d.claims?.test(model) && s.keys[d.id] && s.cloud.enabled) return at(d.id)
+    // A model a local server listed stays there (LM Studio's "qwen/qwen3.6-35b-a3b" isn't OpenRouter's).
     const known = this.index.get(model)
+    if (known && def(known).local) return at(known)
+    for (const d of DEFS) if (d.claims?.test(model) && s.keys[d.id] && s.cloud.enabled) return at(d.id)
     if (known) return at(known)
     if (s.providers.ollama.enabled) return at('ollama')
     return { provider: 'custom', baseUrl: s.baseUrl, apiKey: this.settings.apiKey() }
@@ -84,35 +138,49 @@ export class Endpoints {
     for (const { r } of results) for (const m of r.models) if (!seen.has(m.id)) { seen.add(m.id); models.push(m) }
 
     // Models added by name (an OpenRouter or newer Claude model the list doesn't show).
+    // Only ones a keyed cloud provider claims can be picked; the rest are listed (not installed) with why.
     for (const id of s.customModels) {
-      if (seen.has(id) || (!s.cloud.enabled && DEFS.some((d) => !d.local && d.claims?.test(id)))) continue
-      const e = this.for(id)
+      if (seen.has(id)) continue
       seen.add(id)
-      models.push({ id, provider: e.provider, providerName: def(e.provider).name, enabled: true, installed: true, label: prettyName(id), vision: false, tier: tierOf(id), requiredGB: 0, maxFittingWindow: 131072, fits: true, note: 'added by you' })
+      const st = this.override() ? { provider: this.for(id).provider } : addedModelStatus(id, s)
+      const provider = st.provider ?? 'custom'
+      models.push({ id, provider, providerName: st.provider ? def(provider).name : 'Added by you', enabled: true, installed: !!st.provider, label: prettyName(id), vision: false, tier: tierOf(id), requiredGB: 0, maxFittingWindow: 131072, fits: true, note: st.reason ?? 'added by you' })
     }
 
-    // Recommended models not downloaded yet (only when Ollama is running and nothing overrides it).
-    const ollamaUp = results.some(({ t, r }) => t.id === 'ollama' && r.ok)
-    if (ollamaUp) {
+    // Recommended models not downloaded yet, for Settings → Models (never pickable). Listed whenever Ollama
+    // is on, running or not (downloading starts it), unless something overrides the servers.
+    if (!o && s.providers.ollama.enabled) {
       for (const rec of RECOMMENDED) {
-        if (models.some((m) => m.id === rec.pull || m.id === `${rec.pull}:latest`)) continue
+        if (models.some((m) => m.provider === 'ollama' && m.installed && sameModel(m.id, rec.pull))) continue
+        if (seen.has(rec.pull)) continue
         const est = estimateMemory({ weightsBytes: rec.sizeGB * 1024 ** 3, paramsB: rec.paramsB, window, budgetGB })
         models.push({
-          id: rec.pull, provider: 'ollama', providerName: 'Ollama', enabled: false, installed: false, label: rec.label, vision: rec.vision,
+          id: rec.pull, provider: 'ollama', providerName: 'Ollama', enabled: false, installed: false, label: rec.label, vision: rec.vision, tools: rec.tools,
           tier: rec.tier, blurb: rec.blurb, pull: rec.pull, sizeBytes: rec.sizeGB * 1024 ** 3, ...est,
           note: est.fits ? `${rec.sizeGB} GB download` : `Too big for this Mac (needs ~${est.requiredGB} GB)`
         })
       }
     }
 
+    // LM Studio says which of its models are MLX builds (faster on Apple Silicon than GGUF).
+    const mlx = new Set<string>()
+    await Promise.all(results.filter(({ t, r }) => t.id === 'lmstudio' && r.ok).map(async ({ t }) => {
+      try {
+        const j = (await (await fetch(`${root(t.baseUrl)}/api/v0/models`, { signal: AbortSignal.timeout(1500) })).json()) as { data?: Array<{ id?: string; compatibility_type?: string }> }
+        for (const x of j.data ?? []) if (x.id && /mlx/i.test(x.compatibility_type ?? '')) mlx.add(x.id)
+      } catch { /* older LM Studio: names still tell (…-mlx, mlx-community/…) */ }
+    }))
+
     // Cloud models: real context window, output cap and the price the budget charges.
     for (const m of models) {
       if (m.note !== 'remote' && m.provider !== 'anthropic') continue
-      const spec = claudeSpec(m.id)
+      // A Claude id newer than SahilBot's table gets its family's facts; its price is then an estimate.
+      const spec = claudeInfo(m.id)
       if (spec?.contextTokens) m.contextTokens = spec.contextTokens
       if (spec?.maxOutput) m.maxOutputTokens = spec.maxOutput
       const p = priceFor(m.id)
-      if (p.known) m.price = { input: p.input, output: p.output, ...(p.cacheRead !== undefined ? { cacheRead: p.cacheRead } : {}) }
+      if (p.known || p.estimated) m.price = { input: p.input, output: p.output, ...(p.cacheRead !== undefined ? { cacheRead: p.cacheRead } : {}) }
+      if (!p.known) m.priceEstimated = true
       if (claudeFamily(m.id)) { m.vision = true; m.tools ??= true }
     }
     this.older = new Set([...olderClaude(models.filter((m) => m.provider === 'anthropic').map((m) => m.id))].filter((id) => !s.customModels.includes(id)))
@@ -122,9 +190,10 @@ export class Endpoints {
     const shown = new Set(s.shownModels)
     for (const m of models) {
       if (m.installed) m.enabled = this.isOn(m, hidden, shown)
-      const rec = RECOMMENDED.find((r) => r.pull === m.id || `${r.pull}:latest` === m.id)
-      if (rec) { m.label ??= rec.label; m.blurb ??= rec.blurb; m.tier = rec.tier }
-      m.rank = rankOf(m.id)
+      // Installed builds of a recommended model (qwen3.8:27b-mlx too) keep its name, tier and download tag.
+      const rec = m.provider === 'ollama' ? recommendedFor(m.id) : undefined
+      if (rec) { m.label ??= rec.label; m.blurb ??= rec.blurb; m.tier = rec.tier; m.pull ??= rec.pull; m.tools ??= rec.tools }
+      m.rank = rankOf(m.id, isMlx(m.id) || mlx.has(m.id))
     }
     this.index = new Map(models.filter((m) => m.installed).map((m) => [m.id, m.provider]))
     const providers = results.map(({ t, r }) => ({ id: t.id, name: t.name, ok: r.ok, error: r.error, count: r.models.length }))
@@ -147,8 +216,8 @@ export class Endpoints {
     // The fast one: the smallest light model that isn't already the best pick.
     add(fit.filter((r) => r.tier <= 1 && r !== fit[0]).sort((a, b) => a.tier - b.tier || a.sizeGB - b.sizeGB)[0], 'Fast: quick chats and voice')
     for (const r of fit) { if (picks.length >= 3) break; add(r, 'Also great') }
-    const installed = new Set((this.last?.models ?? []).filter((m) => m.installed).map((m) => m.id.replace(/:latest$/, '')))
-    return picks.map(({ r, role }) => ({ pull: r.pull, label: r.label, blurb: r.blurb, sizeGB: r.sizeGB, tier: r.tier, installed: installed.has(r.pull), role }))
+    const installed = (this.last?.models ?? []).filter((m) => m.installed && m.provider === 'ollama').map((m) => m.id)
+    return picks.map(({ r, role }) => ({ pull: r.pull, label: r.label, blurb: r.blurb, sizeGB: r.sizeGB, tier: r.tier, installed: installed.some((id) => sameModel(id, r.pull)), role }))
   }
 
   /** Older Claude models (off unless switched on), from the last listing. */
@@ -188,9 +257,24 @@ export class Endpoints {
     const s = this.settings.get()
     const hidden = new Set(s.hiddenModels)
     const shown = new Set(s.shownModels)
-    routingPrefs.preferCloud = s.cloud.enabled && s.cloud.prefer === 'cloud'
+    // Cloud first when chosen, or by default once a Claude key is saved (Settings → Models can say Local first).
+    const o = claudeOptions(s)
+    routingPrefs.preferCloud = s.cloud.enabled && o.preferCloud
+    routingPrefs.fableForHardest = s.cloud.enabled && o.fableForHardest
     return (this.last?.models ?? []).filter((m) => m.installed && this.isOn(m, hidden, shown) &&
-      // Cloud switched off (since the last listing): nothing goes to a cloud model.
-      (m.note !== 'remote' || (s.cloud.enabled && this.affordable(m))))
+      // Cloud switched off or its key removed (since the last listing): nothing goes to that cloud model.
+      (this.override() ? m.note !== 'remote' || s.cloud.enabled : pickable(m, s)) && (m.note !== 'remote' || this.affordable(m)))
+  }
+
+  /**
+   * Why a chosen model can't be used any more (see missingReason), checked against a fresh listing
+   * before saying so: a model downloaded since the last listing is fine. undefined = use it. Servers
+   * pointed elsewhere (FOREMAN_BASE_URL) are never second-guessed.
+   */
+  async missing(id: string): Promise<string | undefined> {
+    if (this.override() || isAuto(id)) return undefined
+    if (!missingReason(id, this.last, this.settings.get())) return undefined
+    await this.list().catch(() => undefined)
+    return missingReason(id, this.last, this.settings.get())
   }
 }

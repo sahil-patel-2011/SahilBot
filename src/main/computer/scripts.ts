@@ -114,6 +114,8 @@ export const STATE = `(a) => {
     const secure = subrole === 'AXSecureTextField' || role === 'AXSecureTextField'
     const f = { role: role, subrole: subrole || undefined, label: String(get(() => fe.name(), '') || get(() => fe.description(), '') || '').slice(0, 100), secure: secure }
     if (!secure) { const v = get(() => fe.value(), null); if (v !== null && v !== undefined && typeof v !== 'object') f.value = String(v).slice(0, 200) }
+    const fp = get(() => fe.position(), null), fs = get(() => fe.size(), null)
+    if (fp && fs) { f.x = fp[0]; f.y = fp[1]; f.w = fs[0]; f.h = fs[1] }
     out.focused = f
   }
   if (a.target) {
@@ -258,6 +260,38 @@ export const KEY = `(a) => {
   const opts = a.using && a.using.length ? { using: a.using } : {}
   if (a.code !== undefined && a.code !== null) se.keyCode(a.code, opts); else se.keystroke(a.char, opts)
   return true
+}`
+
+/**
+ * The full value of the focused element (or the target element by path), to check that typed or pasted
+ * text landed: role, value (up to a million characters), how much is selected, and whether it is a
+ * password field (then no value is read at all).
+ */
+export const VALUE = `(a) => {
+  ${GET}
+  ${RESOLVE}
+  const se = Application('System Events')
+  let el = null
+  if (a.target) {
+    const tp = a.target.pid ? get(() => se.processes.whose({ unixId: a.target.pid })[0], null) : se.processes.whose({ frontmost: true })[0]
+    el = tp ? get(() => resolve(tp, a.target.path), null) : null
+  } else {
+    const P = se.processes.whose({ frontmost: true })[0]
+    el = get(() => P.attributes.byName('AXFocusedUIElement').value(), null)
+  }
+  if (!el) return { none: true }
+  const role = get(() => el.role(), '') || ''
+  const subrole = get(() => el.subrole(), '') || ''
+  if (!role) return { none: true }
+  const out = { role: role, secure: subrole === 'AXSecureTextField' || role === 'AXSecureTextField' }
+  if (out.secure) return out
+  const v = get(() => el.value(), null)
+  if (v !== null && v !== undefined && typeof v !== 'object') out.value = String(v).slice(0, 1000000)
+  const sel = get(() => el.attributes.byName('AXSelectedText').value(), null)
+  if (typeof sel === 'string') out.selected = sel.length
+  const pos = get(() => el.position(), null), size = get(() => el.size(), null)
+  if (pos && size) { out.x = pos[0]; out.y = pos[1]; out.w = size[0]; out.h = size[1] }
+  return out
 }`
 
 /** Types text as keystrokes (the caller chunks long text). */

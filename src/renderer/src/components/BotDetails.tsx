@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import type { LibraryItem, RoutineRun, ScheduledTask, Space } from '@shared/types'
+import type { LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
@@ -190,6 +190,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                   <span className="bd-row-text">Model</span>
                   <span className="bd-row-value" title={space.model ?? 'Auto'}>{space.model ?? 'Auto'}</span>
                 </div>
+                <AutonomyRow spaceId={space.id} />
                 <button className="bd-row bd-row-btn" onClick={p.onCustomize} data-testid="bot-customize">
                   <span className="bd-row-text">Customize…</span>
                   <span className="bd-chev"><I.Chevron size={14} /></span>
@@ -294,7 +295,9 @@ function Library({ spaceId }: { spaceId: string }) {
   const groups = useMemo(() => groupLibrary((items ?? []).filter((x) => filter === 'all' || x.kind === filter)), [items, filter])
 
   const openItem = (it: LibraryItem): void => {
-    if (it.kind === 'link' && it.url) window.open(it.url, '_blank', 'noopener')
+    // Docs: a live document opens in its chat's Document tab.
+    if (it.docId) window.dispatchEvent(new CustomEvent('sahilbot:open-doc', { detail: { docId: it.docId, threadId: it.threadId } }))
+    else if (it.kind === 'link' && it.url) window.open(it.url, '_blank', 'noopener')
     else if (it.path) void api.files.open(it.path).catch(() => api.files.reveal(it.path!))
   }
 
@@ -320,7 +323,7 @@ function Library({ spaceId }: { spaceId: string }) {
                   <span className={`lib-icon ${it.kind}`}>{it.kind === 'file' ? <I.File size={16} /> : <I.Globe size={16} />}</span>
                   <span className="lib-text">
                     <b>{it.title}</b>
-                    <span>{it.kind === 'link' && it.url ? host(it.url) : folderOf(it.path ?? '')}</span>
+                    <span>{it.docId ? 'Live document' : it.kind === 'link' && it.url ? host(it.url) : folderOf(it.path ?? '')}</span>
                   </span>
                   <span className="lib-time">{when(it.at).replace(/^Today at /, '')}</span>
                 </button>
@@ -339,4 +342,34 @@ function Library({ spaceId }: { spaceId: string }) {
 function folderOf(path: string): string {
   const parts = path.split('/').filter(Boolean)
   return parts.length > 1 ? parts[parts.length - 2] : ''
+}
+
+/** The autonomy level this bot's new chats start in (Settings keeps it; Bypass is never a default). */
+function AutonomyRow({ spaceId }: { spaceId: string }) {
+  const [s, setS] = useState<{ mine?: PermissionMode; app: PermissionMode; all: Record<string, PermissionMode> } | null>(null)
+  useEffect(() => {
+    let alive = true
+    void api.settings.get().then((x) => { if (alive) setS({ mine: x.botModes?.[spaceId], app: x.defaultMode ?? 'auto', all: x.botModes ?? {} }) })
+    return () => { alive = false }
+  }, [spaceId])
+  if (!s) return null
+  const names: Record<string, string> = { ask: 'Ask first', auto: 'Auto', autonomous: 'Autonomous' }
+  const pick = (v: string): void => {
+    const all = { ...s.all }
+    if (v === '') delete all[spaceId]
+    else all[spaceId] = v as PermissionMode
+    setS({ ...s, mine: (v || undefined) as PermissionMode | undefined, all })
+    void api.settings.set({ botModes: all }).then(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
+  }
+  return (
+    <label className="bd-row">
+      <span className="bd-row-text">Autonomy for new chats<span className="bd-row-sub">{s.mine === 'autonomous' ? 'Runs builds, tests, installs and file changes in your folders on its own. Deleting, sending and buying still ask.' : 'How much this bot does without asking. Each chat can change it in the composer.'}</span></span>
+      <select className="bd-select" value={s.mine ?? ''} onChange={(e) => pick(e.target.value)} data-testid="bot-autonomy" aria-label="Autonomy for new chats">
+        <option value="">Default ({names[s.app] ?? 'Auto'})</option>
+        <option value="ask">Ask first</option>
+        <option value="auto">Auto</option>
+        <option value="autonomous">Autonomous</option>
+      </select>
+    </label>
+  )
 }

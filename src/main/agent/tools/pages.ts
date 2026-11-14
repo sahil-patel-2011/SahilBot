@@ -315,7 +315,8 @@ export function pageTools(getDir: () => string): ToolDef[] {
   const createPage: ToolDef<{ title: string; html: string; path?: string }> = {
     name: 'create_page',
     label: 'Page',
-    core: true,
+    core: false,
+    group: 'Pages',
     effect: 'write_local',
     description: `Make a Page: a self-contained interactive HTML page (visual report, dashboard, chart, comparison, calculator, slide-style summary). It opens live beside the chat; the user can open it full-window or export it to PDF. Give a "title" and "html" (body content, or a whole document).
 ${HELP}
@@ -348,7 +349,8 @@ Saved in the pages folder (optional "path": a file name like "q3-sales.html"). C
   const updatePage: ToolDef<{ path: string; html?: string; title?: string; edits?: PageEdit[] }> = {
     name: 'update_page',
     label: 'Page',
-    core: true,
+    core: false,
+    group: 'Pages',
     effect: 'write_local',
     description: 'Change a Page made with create_page: give "html" to replace its content, or "edits": [{find, replace, all?}] for small changes (find must match the page\'s own HTML exactly; read it with file_read if unsure). Optional new "title". A copy of the previous version is kept.',
     parameters: {

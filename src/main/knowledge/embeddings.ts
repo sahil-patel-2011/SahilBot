@@ -19,6 +19,9 @@ const root = (baseUrl: string): string => baseUrl.replace(/\/+$/, '').replace(/\
 
 /** The best installed embedding model on an Ollama server, or null (none installed, or not running). */
 export async function detectEmbedModel(baseUrl: string, fetchImpl: Fetch = fetch): Promise<string | null> {
+  // The user opted into OpenAI embeddings (Settings): that model wins over Ollama's.
+  const openai = openaiEmbedModel()
+  if (openai) return openai
   try {
     const res = await fetchImpl(`${root(baseUrl)}/api/tags`, { signal: AbortSignal.timeout(2500) })
     if (!res.ok) return null
@@ -50,6 +53,8 @@ export function prefixes(model: string): { document: string; query: string } {
 
 /** Embeds through Ollama's /api/embed (batched; long inputs are truncated by the server). */
 export function ollamaEmbedder(baseUrl: string, model: string, fetchImpl: Fetch = fetch): Embedder {
+  // A model detectEmbedModel picked from OpenAI goes there instead.
+  if (model.startsWith(OPENAI_EMBED_PREFIX) && embeddingProvider.openai) return openaiEmbedder(embeddingProvider.openai, model)
   const pre = prefixes(model)
   return {
     model,
@@ -67,6 +72,58 @@ export function ollamaEmbedder(baseUrl: string, model: string, fetchImpl: Fetch 
       const j = (await res.json()) as { embeddings?: number[][] }
       if (!Array.isArray(j.embeddings) || j.embeddings.length !== texts.length) throw new Error('Ollama returned no embeddings')
       return j.embeddings.map((v) => Float32Array.from(v))
+    }
+  }
+}
+
+// ---------------------------------------------------------------- OpenAI embeddings (opt-in)
+// Settings: "Use OpenAI for knowledge search embeddings" (openaiEmbeddings, off by default). Privacy:
+// this sends passages of the user's indexed documents to OpenAI. While it is on (with an OpenAI key and
+// cloud models on), detection picks the OpenAI model instead of Ollama's; vectors are stored per model,
+// so switching back and forth keeps both sets. Every request is budget-checked and recorded.
+
+/** Stored model name for OpenAI vectors ("openai:text-embedding-3-small"), never confused with an Ollama model. */
+export const OPENAI_EMBED_PREFIX = 'openai:'
+export const DEFAULT_OPENAI_EMBED_MODEL = 'text-embedding-3-small'
+
+export interface OpenAIEmbedSource {
+  /** Credentials when the setting is on, an OpenAI key is saved and cloud models are on; otherwise null. */
+  creds(): { baseUrl: string; apiKey: string } | null
+  model?(): string
+  spend?: import('../apis/spend').Spend
+  fetch?: Fetch
+}
+
+/** Set by the app (index.ts); tests set it directly. Null: Ollama only. */
+export const embeddingProvider: { openai: OpenAIEmbedSource | null } = { openai: null }
+
+/** The OpenAI model to use now, as stored ("openai:…"), or null when the option is off. */
+export function openaiEmbedModel(): string | null {
+  const o = embeddingProvider.openai
+  if (!o?.creds()) return null
+  return `${OPENAI_EMBED_PREFIX}${o.model?.() || DEFAULT_OPENAI_EMBED_MODEL}`
+}
+
+/** Embeds through OpenAI's /v1/embeddings, priced first against the cloud budget and recorded after. */
+export function openaiEmbedder(source: OpenAIEmbedSource, stored: string): Embedder {
+  const model = stored.startsWith(OPENAI_EMBED_PREFIX) ? stored.slice(OPENAI_EMBED_PREFIX.length) : stored
+  return {
+    model: stored,
+    async embed(texts, kind, signal) {
+      if (!texts.length) return []
+      const c = source.creds()
+      if (!c) throw new Error('OpenAI embeddings are off')
+      const { embeddings, embeddingsUsd } = await import('../apis/openai')
+      const { hookSpend } = await import('../apis/spend')
+      const spend = source.spend ?? hookSpend
+      // ~8,000 characters stays under the 8,192-token input limit.
+      const input = texts.map((t) => t.slice(0, 8000))
+      const est = input.reduce((n, t) => n + Math.ceil(t.length / 3), 0)
+      spend.beforeUsd(c.baseUrl, model, embeddingsUsd(model, est))
+      const timeout = AbortSignal.timeout(kind === 'query' ? 15_000 : 120_000)
+      const r = await embeddings(c, model, input, signal ? AbortSignal.any([signal, timeout]) : timeout, source.fetch ?? fetch)
+      spend.afterUsd(c.baseUrl, model, embeddingsUsd(model, r.tokens || est))
+      return r.vectors.map((v) => Float32Array.from(v))
     }
   }
 }

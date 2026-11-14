@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- The SahilBot cursor overlay: a static page with no network, no inline code, no remote content. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'" />
+    <title>SahilBot cursor</title>
+    <link rel="stylesheet" href="./overlay/overlay.css" />
+  </head>
+  <body>
+    <div id="stage" aria-hidden="true">
+      <div id="box" class="box"></div>
+      <svg id="trail" class="trail" xmlns="http://www.w3.org/2000/svg">
+        <path id="trail-path" class="trail-path" d="" />
+        <circle id="trail-start" class="trail-dot" r="4" cx="-20" cy="-20" />
+        <circle id="trail-end" class="trail-dot end" r="6" cx="-20" cy="-20" />
+      </svg>
+      <div id="fx"></div>
+      <div id="cursor" class="cursor">
+        <svg class="pointer" width="34" height="38" viewBox="0 0 34 38" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="sb-arrow" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FFB15C" />
+              <stop offset="1" stop-color="#FF6A1A" />
+            </linearGradient>
+          </defs>
+          <path d="M3 2 L3 24 L9.2 18.9 L13.3 28.4 L17.4 26.6 L13.4 17.4 L21.6 17.4 Z" fill="url(#sb-arrow)" stroke="#fff" stroke-width="2.2" stroke-linejoin="round" />
+          <!-- The mascot badge: a dark squircle in a hard hat. -->
+          <g transform="translate(17 20) rotate(-8 8 9)">
+            <rect x="1" y="4" width="15" height="13.5" rx="6.2" fill="#17120F" stroke="#fff" stroke-width="1.6" />
+            <path d="M2.6 7.6 C3.4 3.9 6 2.2 8.5 2.2 C11 2.2 13.6 3.9 14.4 7.6 Z" fill="#FFC233" />
+            <rect x="1.2" y="6.9" width="14.6" height="2" rx="1" fill="#FFB800" />
+            <ellipse cx="6.1" cy="12.4" rx="1.1" ry="1.6" fill="#FFF7EE" />
+            <ellipse cx="10.9" cy="12.4" rx="1.1" ry="1.6" fill="#FFF7EE" />
+          </g>
+        </svg>
+        <div id="chip" class="chip"></div>
+      </div>
+    </div>
+    <div id="pill" class="pill" role="status" aria-live="polite">
+      <span class="pill-badge" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+          <g transform="rotate(-10 50 54)">
+            <rect x="14" y="24" width="72" height="66" rx="30" fill="#17120F" />
+            <path d="M22 40c4-16 16-24 28-24s24 8 28 24" fill="#FFC233" />
+            <rect x="12" y="37" width="76" height="8" rx="4" fill="#FFB800" />
+            <ellipse cx="38" cy="62" rx="5" ry="7.5" fill="#FFF7EE" />
+            <ellipse cx="62" cy="62" rx="5" ry="7.5" fill="#FFF7EE" />
+          </g>
+        </svg>
+      </span>
+      <span id="pill-label" class="pill-label"></span>
+      <span id="pill-hint" class="pill-hint"></span>
+      <button id="stop" class="pill-stop" type="button">Stop</button>
+    </div>
+    <script type="module" src="./overlay/main.ts"></script>
+  </body>
+</html>

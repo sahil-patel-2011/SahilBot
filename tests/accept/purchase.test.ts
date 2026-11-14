@@ -134,6 +134,8 @@ describe('purchases: vault cards, the Purchase card, and the gate', () => {
     await expect.poll(() => llm.script.length).toBe(0)
     await page.locator('[data-testid="stop"]').waitFor({ state: 'detached' })
     const tid = (await page.evaluate(() => window.foreman.threads.list()))[0].id
+    // Bypass is offered only after Settings → Advanced → Offer Bypass.
+    await page.evaluate(() => window.foreman.settings.set({ advanced: { allowBypass: true } } as never))
     await page.evaluate((id) => window.foreman.threads.update(id, { permissionMode: 'bypass' }), tid)
     await page.evaluate(() => window.foreman.settings.set({ advanced: { hardStopsEnabled: false }, customRules: [{ id: 'r1', when: 'tool:browser place order', action: 'allow' }] } as never))
 

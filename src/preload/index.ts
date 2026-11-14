@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { BrowserState, ChatEvent, SahilBotApi, VoiceUiEvent } from '@shared/types'
+import type { BrowserState, ChatEvent, JobEvent, SahilBotApi, VoiceUiEvent } from '@shared/types'
 
 const call = (ch: string) => (...args: unknown[]) => ipcRenderer.invoke(ch, ...args)
 
@@ -10,6 +10,7 @@ const api: SahilBotApi = {
     list: call('models:list') as never,
     test: call('models:test') as never,
     pull: call('models:pull') as never,
+    remove: call('models:delete') as never,
     teamCapacity: call('agents:capacity') as never,
     gpu: call('gpu:status') as never,
     setupPicks: call('models:setupPicks') as never,
@@ -51,6 +52,31 @@ const api: SahilBotApi = {
     snippet: call('files:snippet') as never
   },
   pages: { info: call('pages:info') as never, openWindow: call('pages:openWindow') as never, exportPdf: call('pages:exportPdf') as never, show: call('pages:show') as never, thumbnail: call('pages:thumbnail') as never },
+  // Docs: live documents beside the chat (src/main/docspace).
+  docs: {
+    list: call('docs:list') as never,
+    get: call('docs:get') as never,
+    create: call('docs:create') as never,
+    save: call('docs:save') as never,
+    versions: call('docs:versions') as never,
+    version: call('docs:version') as never,
+    diff: call('docs:diff') as never,
+    restore: call('docs:restore') as never,
+    export: call('docs:export') as never,
+    addImage: call('docs:addImage') as never,
+    dirty: call('docs:dirty') as never,
+    flushed: call('docs:flushed') as never,
+    onEvent(cb) {
+      const fn = (_e: unknown, ev: Parameters<typeof cb>[0]): void => cb(ev)
+      ipcRenderer.on('docs:event', fn)
+      return () => { ipcRenderer.removeListener('docs:event', fn) }
+    },
+    onFlush(cb) {
+      const fn = (_e: unknown, id: string): void => cb(id)
+      ipcRenderer.on('docs:flush', fn)
+      return () => { ipcRenderer.removeListener('docs:flush', fn) }
+    }
+  },
   providers: call('providers') as never,
   onMenu(cb) {
     const fn = (_e: unknown, a: string): void => cb(a)
@@ -195,21 +221,43 @@ const api: SahilBotApi = {
       return () => ipcRenderer.removeListener('browser:open', fn)
     }
   },
+  sites: { list: call('sites:list') as never, get: call('sites:get') as never, forget: call('sites:forget') as never },
   memory: {
     list: call('memory:list') as never, remove: call('memory:remove') as never, add: call('memory:add') as never, update: call('memory:update') as never,
     importPreview: call('memory:importPreview') as never, importCommit: call('memory:importCommit') as never,
     getEnabled: call('memory:getEnabled') as never, setEnabled: call('memory:setEnabled') as never
   },
   rules: { list: call('rules:list') as never, save: call('rules:save') as never, setEnabled: call('rules:setEnabled') as never, remove: call('rules:remove') as never },
+  // Settings → Memory → What I learned.
+  learning: {
+    status: call('learning:status') as never, list: call('learning:list') as never, undo: call('learning:undo') as never,
+    approve: call('learning:approve') as never, dismiss: call('learning:dismiss') as never,
+    runNow: call('learning:runNow') as never, openChat: call('learning:openChat') as never,
+    onChanged(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('learning:changed', fn)
+      return () => { ipcRenderer.removeListener('learning:changed', fn) }
+    }
+  },
   templates: { list: call('templates:list') as never, add: call('templates:add') as never },
   bots: { exportFile: call('bots:export') as never, importPick: call('bots:importPick') as never, importConfirm: call('bots:importConfirm') as never, duplicate: call('bots:duplicate') as never },
   checkin: { get: call('checkin:get') as never, set: call('checkin:set') as never },
   watchlist: { get: call('watchlist:get') as never, set: call('watchlist:set') as never },
   markets: { quotes: call('markets:quotes') as never, card: call('markets:card') as never, search: call('markets:search') as never },
-  usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never },
+  cad: { onshapeTest: call('onshape:test') as never },
+  usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never, forRun: call('usage:forRun') as never },
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
   alwaysOn: { status: call('alwaysOn:status') as never, pauseRoutines: call('alwaysOn:pauseRoutines') as never },
   permissions: { status: call('permissions:status') as never, open: call('permissions:open') as never, automation: call('permissions:automation') as never },
+  activity: {
+    status: call('activity:status') as never, set: call('activity:set') as never, pause: call('activity:pause') as never,
+    clear: call('activity:clear') as never, checkPermissions: call('activity:checkPermissions') as never,
+    onChange(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('activity:changed', fn)
+      return () => ipcRenderer.removeListener('activity:changed', fn)
+    }
+  },
   knowledge: {
     status: call('knowledge:status') as never,
     addFolder: call('knowledge:addFolder') as never,
@@ -236,6 +284,16 @@ const api: SahilBotApi = {
       return () => ipcRenderer.removeListener('mcp:changed', fn)
     }
   },
+  // Background jobs (Jobs tab).
+  jobs: {
+    list: call('jobs:list') as never, output: call('jobs:output') as never, stop: call('jobs:stop') as never,
+    restart: call('jobs:restart') as never, remove: call('jobs:remove') as never,
+    onEvent(cb) {
+      const fn = (_e: unknown, ev: JobEvent): void => cb(ev)
+      ipcRenderer.on('jobs:event', fn)
+      return () => ipcRenderer.removeListener('jobs:event', fn)
+    }
+  },
   chat: {
     resume: call('chat:resume') as never,
     interrupted: call('chat:interrupted') as never,
@@ -253,7 +311,15 @@ const api: SahilBotApi = {
       ipcRenderer.on('chat:event', fn)
       return () => ipcRenderer.removeListener('chat:event', fn)
     }
+  },
+  // Team boards and Heavy cards: cancel one helper, or stop the ones that haven't finished.
+  swarm: {
+    cancel: call('agents:cancelHelper') as never,
+    stopRemaining: call('agents:stopRemaining') as never
   }
 }
 
 contextBridge.exposeInMainWorld('foreman', api)
+
+// Settings changed in main (by any window, a bot or the menu bar): the app reloads its copy.
+ipcRenderer.on('settings:changed', () => { window.dispatchEvent(new Event('sahilbot:settings-changed')) })

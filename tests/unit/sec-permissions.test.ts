@@ -48,8 +48,8 @@ describe('H1: a connected app\'s run asks before reading private data', () => {
     for (const tool of APP_PUBLIC_READS) expect(appReadRisk('Cursor', tool, 'read')).toBeNull()
     for (const tool of ['todo', 'find_tools', 'ask_user', 'propose_plan']) expect(appReadRisk('Cursor', tool, 'read')).toBeNull()
     expect(appReadRisk(undefined, 'run_command', 'read')).toBeNull()
-    // Writes already ask in an app's run (capped at Ask); this check is for reads only.
-    expect(appReadRisk('Cursor', 'file_write', 'write_local')).toBeNull()
+    // Every non-public call in an app's run asks, whatever its effect (M5).
+    expect(appReadRisk('Cursor', 'file_write', 'write_local')).toMatch(/^Cursor asked: this run was started by Cursor/)
   })
 })
 

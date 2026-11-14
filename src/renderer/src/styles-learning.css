@@ -1,0 +1,63 @@
+/* Settings → Memory → What I learned (LearningLog). Tokens from styles.css only, so light and dark both work. */
+
+.ll { margin: 26px 0 18px; }
+.ll-head { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 10px 4px; }
+.ll-title { display: flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 600; color: var(--text); }
+.ll-title svg { color: var(--accent); }
+.ll-sub { font-size: 13px; color: var(--text-3); line-height: 1.45; margin-top: 3px; max-width: 640px; }
+
+/* Cloud cap */
+.ll-cloud { gap: 10px; }
+.ll-cap {
+  display: inline-flex; align-items: center; gap: 2px; padding: 3px 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text-3); font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.ll-cap:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+.ll-cap input { width: 42px; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Status */
+.ll-status { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text-2); line-height: 1.4; }
+.ll-status.warn { color: color-mix(in srgb, var(--accent) 80%, var(--text)); }
+.ll-status.live { color: var(--text); }
+.ll-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 50%, transparent); animation: ll-pulse 1.6s ease-out infinite; }
+@keyframes ll-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 50%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+.ll-chips { margin: 14px 0 8px; }
+
+/* Log */
+.ll-days { margin-top: 6px; }
+.ll-day { margin: 0 0 14px; }
+.ll-row { display: flex; align-items: flex-start; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); transition: opacity 160ms ease-out; }
+.set-card > .ll-row:first-child { border-top: 0; }
+.ll-row.undone { opacity: .5; }
+.ll-row.undone .ll-text { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text) 40%, transparent); }
+.ll-icon {
+  width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; flex: none; margin-top: 1px;
+  background: color-mix(in srgb, var(--ll-tone) 14%, transparent); color: var(--ll-tone);
+}
+.ll-icon.mem { --ll-tone: var(--accent); }
+.ll-icon.skill { --ll-tone: #3b82f6; }
+.ll-icon.lesson { --ll-tone: var(--ok); }
+.ll-icon.tidy { --ll-tone: var(--text-3); }
+.ll-main { flex: 1; min-width: 0; }
+.ll-text { font-size: 14px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.ll-text code { font-family: var(--mono); font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: var(--hover); }
+.ll-detail { font-size: 12.5px; color: var(--text-2); line-height: 1.4; margin-top: 2px; overflow-wrap: anywhere; }
+.ll-meta { margin-top: 4px; }
+.ll-link { padding: 0; font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.ll-tag {
+  display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 500; line-height: 18px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger);
+}
+.ll-tag.soft { background: var(--hover); color: var(--text-2); }
+.mm-meta > span.ll-tag + span::before, .mm-meta > span + span.ll-tag::before { content: none; }
+.mm-meta > span + span.ll-tag { margin-left: 0; }
+.ll-actions { flex: none; display: flex; align-items: center; opacity: 0; transition: opacity 120ms ease-out; }
+.ll-row:hover .ll-actions, .ll-row:focus-within .ll-actions, .ll-row.undone .ll-actions { opacity: 1; }
+@media (hover: none) { .ll-actions { opacity: 1; } }
+.ll-undone { font-size: 12px; color: var(--text-3); padding: 0 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ll-pulse { animation: none; }
+  .ll-row, .ll-actions { transition: none; }
+}

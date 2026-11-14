@@ -9,6 +9,9 @@ category: FRC Design
 ## When to use
 Setting up a season's CAD, reviewing a student's model, or when CAD is slow, breaks on changes, or can't be manufactured from. If the user wants code-generated CAD, use cad-workflow instead.
 
+## Working in the team's real documents
+With an Onshape link (or the document name), load the onshape tool with find_tools("onshape") and follow the cad-onshape-api skill: read the feature tree, parts and materials, mass properties for weight and CG, change key dimensions through the Variable Studio (preview, then the user approves), and export STEP/STL/DXF from a version. Use it to check the steps below against the actual model instead of guessing.
+
 ## Steps
 1. Documents: one "Concept" document (main layout sketch + crayon CAD), one document per subsystem (part studios, sub-assemblies, a subsystem top-level assembly), and one "Main Robot" document that assembles the subsystem top-levels. Version each document separately; release versions when they go to manufacturing.
 2. Layout sketch (top-down design): in the concept part studio, sketch drivetrain, bumpers, starting configuration, extension limits, field elements (aligned to the bumpers), the game-piece path and every state of each moving mechanism (construction circles for pivot sweeps). One sketch per subsystem, named clearly. Leave plates, gussets and holes out.

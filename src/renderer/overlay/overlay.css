@@ -1,0 +1,243 @@
+/* The SahilBot cursor overlay. Transparent everywhere except what it draws; nothing takes clicks but
+   the pill's Stop button (and only while the pointer is over the pill; see overlay-window.ts). */
+:root {
+  --sb-orange: #ff6a1a;
+  --sb-orange-soft: rgba(255, 106, 26, 0.16);
+  --sb-ink: #17120f;
+  --sb-violet: #7c5cff;
+  color-scheme: light dark;
+}
+
+html, body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+  font: 500 13px/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+body.on #stage { opacity: 1; }
+body.leaving #stage, body.leaving .pill { opacity: 0 !important; transition: opacity 180ms ease; }
+
+/* ----------------------------------------------------------------- cursor */
+.cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 34px;
+  height: 38px;
+  opacity: 0;
+  will-change: transform;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35)) drop-shadow(0 0 1px rgba(0, 0, 0, 0.4));
+  transition: opacity 140ms ease;
+}
+body.has-cursor .cursor { opacity: 1; }
+body.idle .cursor { opacity: 0.55; transition: opacity 600ms ease; }
+.cursor .pointer { display: block; transform-origin: 3px 2px; }
+.cursor.pressing .pointer { transform: scale(0.84); transition: transform 70ms ease-out; }
+.cursor .pointer { transition: transform 140ms ease-out; }
+
+/* Typing chip and key chip, beside the caret. */
+.chip {
+  position: absolute;
+  left: 38px;
+  top: 27px;
+  max-width: 260px;
+  padding: 4px 10px 4px 9px;
+  border-radius: 999px;
+  background: rgba(23, 18, 15, 0.9);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+.chip.show { opacity: 1; transform: none; }
+.chip.typing::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 12px;
+  margin-left: 4px;
+  vertical-align: -2px;
+  background: var(--sb-orange);
+  animation: sb-caret 900ms steps(1) infinite;
+}
+.chip.key {
+  border-radius: 7px;
+  font: 600 14px/1.1 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  padding: 5px 9px;
+  background: rgba(250, 248, 246, 0.96);
+  color: var(--sb-ink);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25), 0 6px 16px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+@keyframes sb-caret { 50% { opacity: 0; } }
+
+/* ----------------------------------------------------------------- effects */
+.ring {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  border: 2.5px solid var(--sb-orange);
+  background: var(--sb-orange-soft);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.ring.right {
+  border-radius: 9px;
+  border-style: dashed;
+  border-color: var(--sb-violet);
+  background: rgba(124, 92, 255, 0.14);
+}
+.ring.right::after {
+  content: '';
+  position: absolute;
+  right: -10px;
+  top: -10px;
+  width: 9px;
+  height: 11px;
+  border-radius: 2px;
+  background: linear-gradient(var(--sb-violet) 0 0) 2px 2px / 5px 1.5px no-repeat, linear-gradient(var(--sb-violet) 0 0) 2px 5px / 5px 1.5px no-repeat, linear-gradient(var(--sb-violet) 0 0) 2px 8px / 5px 1.5px no-repeat, #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.trail {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  opacity: 0;
+  transition: opacity 260ms ease;
+}
+.trail.show { opacity: 1; transition: none; }
+.trail-path {
+  fill: none;
+  stroke: var(--sb-orange);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 2 7;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.3));
+}
+.trail-dot { fill: #fff; stroke: var(--sb-orange); stroke-width: 2.5; }
+.trail-dot.end { fill: var(--sb-orange); stroke: #fff; }
+
+.scroll {
+  position: absolute;
+  width: 30px;
+  height: 46px;
+  margin: -23px 0 0 18px;
+  border-radius: 15px;
+  background: rgba(23, 18, 15, 0.82);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25), inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.scroll i {
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-right: 2.5px solid #fff;
+  border-bottom: 2.5px solid #fff;
+  transform: rotate(45deg);
+  margin-top: -6px;
+}
+.scroll i + i { margin-top: -14px; border-color: var(--sb-orange); }
+.scroll.up i { transform: rotate(-135deg); margin-top: 6px; }
+.scroll.up i + i { margin-top: -2px; }
+
+.box {
+  position: absolute;
+  border: 2px solid var(--sb-orange);
+  border-radius: 7px;
+  background: rgba(255, 106, 26, 0.07);
+  box-shadow: 0 0 0 4px rgba(255, 106, 26, 0.18), 0 0 18px rgba(255, 106, 26, 0.25);
+  box-sizing: border-box;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+.box.show { opacity: 1; }
+
+/* ----------------------------------------------------------------- status pill */
+.pill {
+  position: fixed;
+  display: none;
+  box-sizing: border-box;
+  height: 40px;
+  padding: 0 5px 0 9px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  background: rgba(28, 23, 20, 0.86);
+  color: #fff;
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 180ms ease, transform 220ms cubic-bezier(.22, .8, .26, 1);
+}
+body.on .pill.here { display: flex; }
+body.on .pill.here.ready { opacity: 1; transform: none; }
+.pill-badge { display: grid; place-items: center; width: 24px; height: 24px; flex: none; }
+body:not(.idle) .pill-badge svg { animation: sb-bob 1.6s ease-in-out infinite; }
+@keyframes sb-bob { 50% { transform: translateY(-1.5px) rotate(-3deg); } }
+.pill-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.pill-hint {
+  flex: none;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pill-hint::before { content: '·'; margin-right: 7px; color: rgba(255, 255, 255, 0.4); }
+.pill-stop {
+  flex: none;
+  height: 30px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--sb-orange);
+  color: #fff;
+  font: 700 12px/1 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 120ms ease, transform 80ms ease;
+}
+.pill-stop:hover { background: #ff7f38; }
+.pill-stop:active { transform: scale(0.96); }
+.pill-stop:disabled { background: #6b5f58; cursor: default; }
+.pill.narrow .pill-hint { display: none; }
+
+/* Reduce Motion: no gliding, scaling or bobbing; effects fade in place. */
+body.reduce .pill-badge svg, body.reduce .chip.typing::after { animation: none !important; }
+body.reduce .pill { transform: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .pill-badge svg, .chip.typing::after { animation: none !important; }
+}

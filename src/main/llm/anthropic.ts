@@ -2,14 +2,25 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { ToolCall } from '@shared/types'
 import type { ChatRequest, StreamPart, WireMessage } from './client'
 import { retryAfterFrom } from './retry'
-import { CACHE_WRITE_FACTOR, cacheReadFactor, claudeSpec, claudeThinking } from './claude-models'
+import { priceFor } from './budget'
+import { CACHE_WRITE_1H_FACTOR, CACHE_WRITE_FACTOR, cacheReadFactor, claudeInfo, claudeThinking } from './claude-models'
+import { nativePlan, serverFindings, serverToolUsd, type NativePlan } from './claude-native'
 
-// Native Claude path (Anthropic SDK). Follows the Messages API rules for current models:
-// - assistant turns are sent back exactly as Claude returned them (thinking blocks included),
-//   so the history stays append-only;
+export { forClaude } from './claude-native'
+
+// Native Claude path (Anthropic SDK). Follows the Messages API rules for current models
+// (claude-api reference: shared/models.md, shared/model-migration.md, shared/prompt-caching.md,
+// shared/tool-use-concepts.md):
+// - assistant turns are sent back exactly as Claude returned them (thinking, server tool and compaction
+//   blocks included), so the history stays append-only; preserved-thinking models also carry
+//   thinking.block_binding drop_block, so a history edit degrades (a dropped thinking block) instead of a 400;
 // - all tool results for one assistant turn go in a single user message;
-// - no custom sampling (current models reject temperature/top_p);
-// - automatic prompt caching on the stable prefix (system + tools + history).
+// - no custom sampling, no forced tool_choice (Opus 5.5 / Sonnet 5.5 / Fable 5.1 reject it), parallel tool use on;
+// - prompt caching: an explicit breakpoint on the system prompt (caches tools + system), one on the previous
+//   request's tail (always within the 20-block lookback), and automatic caching for the growing end;
+//   1-hour TTL for long agent runs and team helpers, where gaps between requests pass five minutes;
+// - Claude's native tool types (claude-native/) when the run allows them, translated back to SahilBot's;
+// - server-side compaction (compact_20260112) when the chat nears its context strategy's window.
 
 // A key from the Console is an API key (x-api-key). A sign-in token from `ant auth login` or
 // similar is sent as a Bearer token with the OAuth beta header. Unknown prefixes are tried both ways
@@ -41,6 +52,13 @@ async function client(key: string): Promise<Anthropic> {
 type Block = Anthropic.Beta.Messages.BetaContentBlockParam
 type Param = Anthropic.Beta.Messages.BetaMessageParam
 
+/** Beta headers this module sends (each from the reference, each only with the feature that needs it). */
+export const BETA = {
+  fallback: 'server-side-fallback-2026-07-01',
+  binding: 'thinking-binding-controls-2026-08-01',
+  compaction: 'compact-2026-01-12'
+} as const
+
 /**
  * Output ceiling actually sent for Claude (the budget check prices this worst case). Higher effort
  * thinks longer, so it gets more room (Anthropic suggests 64k at xhigh/max for agent work), never past
@@ -48,12 +66,12 @@ type Param = Anthropic.Beta.Messages.BetaMessageParam
  */
 export const claudeMaxTokens = (requested: number, effort?: import('@shared/types').Effort, model?: string): number => {
   const want = Math.max(requested, effort === 'max' || effort === 'xhigh' ? 64000 : effort === 'high' ? 32000 : 16000)
-  const cap = model ? claudeSpec(model)?.maxOutput : undefined
+  const cap = model ? claudeInfo(model)?.maxOutput : undefined
   return cap ? Math.min(want, cap) : want
 }
 
-/** Server-side refusal fallbacks (Claude API): Opus 5/5.5, Fable 5.1, Sonnet 5.5. */
-export const fallbacks = (model: string): boolean => /^claude-(opus-5|fable-5-1|sonnet-5-5)/.test(model)
+/** Server-side refusal fallbacks (Claude API): Opus 5 / 5.5, Fable 5.1, Sonnet 5.5 (not Haiku 5.5: none exists). */
+export const fallbacks = (model: string): boolean => !!claudeInfo(model)?.fallback
 
 function imageBlock(url: string): Block | null {
   const m = url.match(/^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/)
@@ -69,10 +87,25 @@ function text(content: WireMessage['content']): { text: string; images: Block[] 
   }
 }
 
-/** OpenAI-shaped history -> Anthropic messages (system separated, tool results grouped). */
-export function toAnthropic(wire: WireMessage[], model: string): { system: string; messages: Param[] } {
+/** Results of native tools that failed: flagged is_error so Claude recovers (tool-use-concepts.md). */
+const FAILED = /^(Error:|Blocked:|Not executed:|Skipped:|The user declined|Unknown tool|Invalid arguments)/
+
+/**
+ * OpenAI-shaped history -> Anthropic messages (system separated, tool results grouped). With a native plan,
+ * turns rebuilt from SahilBot's own calls (another model's turns, or turns before a summary) use the names
+ * the request declares; a call to a tool the request doesn't offer becomes plain text with its result, and
+ * results of Claude's computer toolset calls carry toolset_name.
+ */
+export function toAnthropic(wire: WireMessage[], model: string, opts: { plan?: NativePlan } = {}): { system: string; messages: Param[] } {
+  const plan = opts.plan
   const system = wire.filter((m) => m.role === 'system').map((m) => text(m.content).text).join('\n\n')
   const out: Param[] = []
+  /** Tool calls written out as text (their tool isn't offered here): their results follow as text too. */
+  const asText = new Map<string, string>()
+  /** Claude's computer toolset calls: their results echo toolset_name (rejected without it). */
+  const toolset = new Set<string>()
+  /** Claude's other native calls (bash, text editor): failures come back with is_error. */
+  const native = new Set<string>()
   const pushUser = (blocks: Block[]): void => {
     const last = out[out.length - 1]
     if (last?.role === 'user' && Array.isArray(last.content)) (last.content as Block[]).push(...blocks)
@@ -84,22 +117,41 @@ export function toAnthropic(wire: WireMessage[], model: string): { system: strin
       // Same model: Claude's own blocks, unchanged. Otherwise rebuild text + tool_use without thinking.
       const raw = m.raw as { provider?: string; model?: string; content?: Block[] } | undefined
       if (raw?.provider === 'anthropic' && raw.model === model && Array.isArray(raw.content)) {
+        for (const b of raw.content as Array<{ type?: string; id?: string; name?: string; toolset_name?: string }>) {
+          if (b?.type !== 'tool_use' || !b.id) continue
+          if (b.toolset_name) toolset.add(b.id)
+          else if (b.name === 'bash' || b.name === 'str_replace_based_edit_tool') native.add(b.id)
+        }
         out.push({ role: 'assistant', content: raw.content })
         continue
       }
       const blocks: Block[] = []
-      const t = text(m.content).text
-      if (t) blocks.push({ type: 'text', text: t })
+      let t = text(m.content).text
+      const uses: Block[] = []
       for (const c of m.tool_calls ?? []) {
         let input: unknown = {}
         try { input = JSON.parse(c.function.arguments || '{}') } catch { input = {} }
-        blocks.push({ type: 'tool_use', id: c.id, name: c.function.name, input })
+        const name = plan ? plan.declaredName(c.function.name) : c.function.name
+        if (!name) {
+          asText.set(c.id, c.function.name)
+          t += `${t ? '\n' : ''}[Called ${c.function.name} ${c.function.arguments || '{}'}]`
+          continue
+        }
+        uses.push({ type: 'tool_use', id: c.id, name, input })
       }
+      if (t) blocks.push({ type: 'text', text: t })
+      blocks.push(...uses)
       if (blocks.length) out.push({ role: 'assistant', content: blocks })
       continue
     }
     if (m.role === 'tool') {
-      pushUser([{ type: 'tool_result', tool_use_id: m.tool_call_id!, content: text(m.content).text || '(empty)' }])
+      const body = text(m.content).text || '(empty)'
+      const id = m.tool_call_id!
+      if (asText.has(id)) { pushUser([{ type: 'text', text: `[Result of ${asText.get(id)}]\n${body}` }]); continue }
+      const result: Record<string, unknown> = { type: 'tool_result', tool_use_id: id, content: body }
+      if (toolset.has(id)) result.toolset_name = 'computer'
+      if ((toolset.has(id) || native.has(id)) && FAILED.test(body)) result.is_error = true
+      pushUser([result as unknown as Block])
       continue
     }
     // user: tool images ride inside the preceding tool_result when there is one
@@ -119,32 +171,105 @@ export function toAnthropic(wire: WireMessage[], model: string): { system: strin
   return { system, messages: out }
 }
 
+const CACHEABLE = new Set(['text', 'image', 'tool_result', 'document'])
+
 /**
- * Claude rejects top-level allOf/anyOf/oneOf in tool schemas. Conditional rules ("ref is required
- * when action is click") move into the description; SahilBot still enforces the full schema locally.
+ * The rolling read point: the last block of the user message before the newest assistant turn, i.e. the
+ * end of the previous request's prompt, where that request's automatic breakpoint wrote the cache. With
+ * it the next request always finds the history within the 20-block lookback (shared/prompt-caching.md),
+ * however many blocks the newest turn added. Blocks are copied, never edited in place (stored raw
+ * content stays exactly as Claude returned it).
  */
-export function forClaude(schema: Record<string, unknown>, description: string): { schema: Record<string, unknown>; description: string } {
-  const { allOf, anyOf, oneOf, ...rest } = schema as Record<string, unknown> & { allOf?: unknown[]; anyOf?: unknown[]; oneOf?: unknown[] }
-  const rules: string[] = []
-  for (const c of [...(allOf ?? []), ...(anyOf ?? []), ...(oneOf ?? [])] as Array<{ if?: { properties?: Record<string, { const?: unknown; enum?: unknown[]; pattern?: string }> }; then?: { required?: string[] } }>) {
-    const [field, cond] = Object.entries(c.if?.properties ?? {})[0] ?? []
-    const need = c.then?.required
-    if (!field || !need?.length) continue
-    const when = cond?.const !== undefined ? `${field} is "${cond.const}"` : cond?.enum ? `${field} is ${cond.enum.map((v) => `"${v}"`).join(' or ')}` : cond?.pattern ? `${field} matches ${cond.pattern}` : field
-    rules.push(`When ${when}: also give ${need.join(', ')}.`)
-  }
-  return { schema: rest, description: rules.length ? `${description}\n${rules.join('\n')}` : description }
+export function markPreviousTail(messages: Param[], cc: Record<string, unknown>): boolean {
+  let lastAssistant = -1
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === 'assistant') { lastAssistant = i; break }
+  const prev = lastAssistant > 0 ? messages[lastAssistant - 1] : undefined
+  if (!prev || prev.role !== 'user') return false
+  const content: Block[] = typeof prev.content === 'string' ? [{ type: 'text', text: prev.content }] : [...(prev.content as Block[])]
+  const i = content.length - 1
+  if (i < 0 || !CACHEABLE.has(content[i].type)) return false
+  content[i] = { ...content[i], cache_control: cc } as unknown as Block
+  messages[lastAssistant - 1] = { ...prev, content }
+  return true
 }
 
-export async function listAnthropicModels(apiKey: string): Promise<string[]> {
-  const ids: string[] = []
-  for await (const m of (await client(apiKey)).models.list()) ids.push(m.id)
-  return ids.sort()
+/**
+ * The request body for one Claude call (without `stream`): pure, so the shape can be pinned down in tests.
+ * Exported with the native plan, which turns Claude's tool_use blocks back into SahilBot's calls.
+ */
+export function buildClaudeRequest(req: ChatRequest): { params: Record<string, unknown>; plan: NativePlan } {
+  const spec = claudeInfo(req.model)
+  const plan = nativePlan(req.model, req.tools ?? [], req.native ?? { enabled: false })
+  const { system, messages } = toAnthropic(req.messages, req.model, { plan })
+  const cc: Record<string, unknown> = req.cacheTtl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' }
+  const systemText = [system, plan.systemNote].filter(Boolean).join('\n\n')
+  markPreviousTail(messages, cc)
+  const betas = new Set<string>()
+  const thinking = claudeThinking(req.model, req.effort) as { thinking?: Record<string, unknown>; output_config?: Record<string, unknown> }
+  // Preserved thinking: a history edit drops the affected thinking blocks instead of failing the request.
+  if (thinking.thinking && spec?.preservedThinking) {
+    thinking.thinking = { ...thinking.thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } }
+    betas.add(BETA.binding)
+  }
+  const params: Record<string, unknown> = {
+    model: req.model,
+    max_tokens: claudeMaxTokens(req.maxTokens, req.effort, req.model),
+    // One explicit breakpoint on the static prefix: caches tools + system together, whatever happens later.
+    ...(systemText ? { system: [{ type: 'text', text: systemText, cache_control: cc }] } : {}),
+    messages,
+    // Automatic caching for the growing conversation tail (same TTL as the explicit markers).
+    cache_control: cc,
+    ...(plan.tools.length ? { tools: plan.tools, tool_choice: { type: 'auto' } } : {}),
+    // Adaptive thinking + the app's thinking level as effort, mapped to what this model accepts.
+    ...thinking
+  }
+  // Server-side compaction near the end of the chat's context budget (never below the API's 50K minimum).
+  if (req.compactAt && spec?.compaction) {
+    params.context_management = { edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: Math.max(50_000, Math.round(req.compactAt)) } }] }
+    betas.add(BETA.compaction)
+  }
+  if (fallbacks(req.model)) {
+    params.fallbacks = 'default'
+    betas.add(BETA.fallback)
+  }
+  if (betas.size) params.betas = [...betas]
+  return { params, plan }
 }
 
 /** Input tokens in billing terms (what the budget prices at the input rate). */
-export function billedInput(model: string, u: { input_tokens?: number | null; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }): number {
-  return Math.round((u.input_tokens ?? 0) + CACHE_WRITE_FACTOR * (u.cache_creation_input_tokens ?? 0) + cacheReadFactor(model) * (u.cache_read_input_tokens ?? 0))
+export function billedInput(model: string, u: {
+  input_tokens?: number | null; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null
+  cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null
+}): number {
+  const c = u.cache_creation
+  // 1-hour writes cost 2x, 5-minute writes 1.25x (usage.cache_creation splits them by TTL when present).
+  const writes = c && (c.ephemeral_1h_input_tokens || c.ephemeral_5m_input_tokens)
+    ? CACHE_WRITE_FACTOR * (c.ephemeral_5m_input_tokens ?? 0) + CACHE_WRITE_1H_FACTOR * (c.ephemeral_1h_input_tokens ?? 0)
+    : CACHE_WRITE_FACTOR * (u.cache_creation_input_tokens ?? 0)
+  return Math.round((u.input_tokens ?? 0) + writes + cacheReadFactor(model) * (u.cache_read_input_tokens ?? 0))
+}
+
+type Usage = Parameters<typeof billedInput>[1] & {
+  output_tokens?: number | null
+  iterations?: Array<{ type?: string; input_tokens?: number | null; output_tokens?: number | null; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }> | null
+  server_tool_use?: { web_search_requests?: number | null; web_fetch_requests?: number | null } | null
+}
+
+/**
+ * One response's usage in billing terms: the message's own tokens, plus any compaction iteration (the
+ * top-level counts leave it out: "sum across all entries in usage.iterations"), plus server tool fees
+ * (web search, $10 per 1,000) expressed as input tokens at the rate the budget will charge.
+ */
+export function billedUsage(model: string, u: Usage, extraUsd = 0): { input: number; output: number } {
+  let input = billedInput(model, u)
+  let output = u.output_tokens ?? 0
+  for (const it of u.iterations ?? []) {
+    if (it?.type !== 'compaction') continue
+    input += billedInput(model, it)
+    output += it.output_tokens ?? 0
+  }
+  if (extraUsd > 0) input += Math.round((extraUsd * 1e6) / priceFor(model, input).input)
+  return { input, output }
 }
 
 /** What the user sees when Claude's safety classifiers decline (stop_details is set only for refusals). */
@@ -153,52 +278,69 @@ export function refusalNote(d: { category?: string | null; explanation?: string 
   return `_Claude declined this request${why}._${d?.explanation ? ` ${d.explanation}` : ''} You can rephrase it, or pick another model for this chat.`
 }
 
+export async function listAnthropicModels(apiKey: string): Promise<string[]> {
+  const ids: string[] = []
+  for await (const m of (await client(apiKey)).models.list()) ids.push(m.id)
+  return ids.sort()
+}
+
+/** A reply cut off by max_tokens: client tool calls and server tool calls without their result are dropped. */
+export function droppedWhenCut(content: Array<{ type?: string; id?: string; tool_use_id?: string }>): typeof content {
+  const answered = new Set(content.map((b) => b.tool_use_id).filter(Boolean))
+  return content.filter((b) => b.type !== 'tool_use' && !(b.type === 'server_tool_use' && !answered.has(b.id)))
+}
+
+/** SahilBot's tool name for a block that has started streaming (for the "drafting…" status). */
+function pendingName(plan: NativePlan, b: { type: string; name?: string; toolset_name?: string }): string | undefined {
+  if (b.type === 'server_tool_use') return b.name === 'web_fetch' ? 'fetch_page' : b.name === 'web_search' ? 'web_search' : b.name
+  if (b.type !== 'tool_use' || !b.name) return undefined
+  return plan.fromNative({ id: '', name: b.name, input: {}, toolset_name: b.toolset_name }).name
+}
+
 const STREAM_ERROR_STATUS: Record<string, number> = { overloaded_error: 529, rate_limit_error: 429, api_error: 500, timeout_error: 408 }
+/** A long server-tool turn may pause (stop_reason pause_turn): resumed this many times at most. */
+export const MAX_CONTINUATIONS = 4
 
 export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamPart> {
   if (!req.apiKey) throw new Error('Add your Anthropic API key in Settings to use Claude.')
-  const { system, messages } = toAnthropic(req.messages, req.model)
-  const tools = (req.tools ?? []).map((t) => {
-    const c = forClaude(t.function.parameters, t.function.description)
-    return {
-    name: t.function.name,
-    description: c.description,
-    input_schema: c.schema as Anthropic.Beta.Messages.BetaTool.InputSchema,
-    // Large inputs (file contents) stream as generated; SahilBot validates every input against its schema.
-    eager_input_streaming: true
-  }
-  })
-  const params: Anthropic.Beta.Messages.MessageCreateParamsStreaming = {
-    model: req.model,
-    max_tokens: claudeMaxTokens(req.maxTokens, req.effort, req.model),
-    system,
-    messages,
-    stream: true,
-    // Caches the whole prefix; resent history then costs about a tenth.
-    cache_control: { type: 'ephemeral' },
-    ...(tools.length ? { tools, tool_choice: { type: 'auto' } } : {}),
-    // Adaptive thinking + the app's thinking level as effort, mapped to what this model accepts.
-    ...claudeThinking(req.model, req.effort),
-    ...(fallbacks(req.model) ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : {})
-  } as Anthropic.Beta.Messages.MessageCreateParamsStreaming
-  const { stream: _s, ...streamParams } = params
+  const { params, plan } = buildClaudeRequest(req)
+  const baseMessages = params.messages as Param[]
 
   for (let attempt = 0; ; attempt++) {
-    // The SDK's own retries are off here: streamChat retries transient failures (with a reset when
-    // something already streamed), so a failure is never retried twice over.
-    const stream = (await client(req.apiKey)).beta.messages.stream(streamParams, { signal: req.signal, maxRetries: 0 })
     let streamed = false
-    stream.on('text', () => undefined)
-    let final: Anthropic.Beta.Messages.BetaMessage
+    // Everything this turn produced, across pause_turn continuations (consecutive assistant messages
+    // are one turn to the API, so they are stored and replayed as one).
+    let content: Anthropic.Beta.Messages.BetaContentBlock[] = []
+    let input = 0
+    let output = 0
+    let searches = 0
+    let final: Anthropic.Beta.Messages.BetaMessage | undefined
     try {
-      for await (const ev of stream) {
-        if (ev.type === 'content_block_start' && ev.content_block.type === 'tool_use') yield { type: 'tool_pending', name: ev.content_block.name }
-        if (ev.type === 'content_block_delta') {
-          if (ev.delta.type === 'text_delta') { streamed = true; yield { type: 'content', text: ev.delta.text } }
-          else if (ev.delta.type === 'thinking_delta') { streamed = true; yield { type: 'reasoning', text: ev.delta.thinking } }
+      for (let cont = 0; ; cont++) {
+        const messages = content.length ? [...baseMessages, { role: 'assistant' as const, content: content as unknown as Block[] }] : baseMessages
+        // The SDK's own retries are off here: streamChat retries transient failures (with a reset when
+        // something already streamed), so a failure is never retried twice over.
+        const stream = (await client(req.apiKey)).beta.messages.stream({ ...params, messages } as unknown as Anthropic.Beta.Messages.MessageCreateParamsStreaming, { signal: req.signal, maxRetries: 0 })
+        stream.on('text', () => undefined)
+        for await (const ev of stream) {
+          if (ev.type === 'content_block_start') {
+            const name = pendingName(plan, ev.content_block as { type: string; name?: string; toolset_name?: string })
+            if (name) yield { type: 'tool_pending', name }
+          }
+          if (ev.type === 'content_block_delta') {
+            if (ev.delta.type === 'text_delta') { streamed = true; yield { type: 'content', text: ev.delta.text } }
+            else if (ev.delta.type === 'thinking_delta') { streamed = true; yield { type: 'reasoning', text: ev.delta.thinking } }
+          }
         }
+        final = await stream.finalMessage()
+        content = [...content, ...final.content]
+        const f = serverFindings(final.content, final.usage as Usage)
+        searches += f.searches
+        const b = billedUsage(final.model ?? req.model, final.usage as Usage)
+        input += b.input
+        output += b.output
+        if (final.stop_reason !== 'pause_turn' || cont >= MAX_CONTINUATIONS || req.signal?.aborted) break
       }
-      final = await stream.finalMessage()
     } catch (e) {
       // A tool input that couldn't be parsed at all: re-issue the turn (at most twice). API errors propagate, readably.
       if (e instanceof Anthropic.APIError) {
@@ -217,30 +359,38 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
       if (streamed) yield { type: 'reset' }
       continue
     }
+    if (!final) throw new Error('Claude returned no message.')
+    const served = final.model ?? req.model
 
-    const u = final.usage
-    yield {
-      type: 'usage',
-      // Billing-equivalent input: cache writes cost 1.25x; cache reads 0.1x (0.05x Opus 5.5, 0.025x Fable 5.1).
-      promptTokens: billedInput(final.model ?? req.model, u),
-      completionTokens: u.output_tokens ?? 0
-    }
+    // Billing-equivalent input: cache writes 1.25x (1h: 2x), reads 0.1x (0.05x Opus 5.5, 0.025x Fable 5.1),
+    // compaction iterations, and web searches at $10 per 1,000.
+    const fee = serverToolUsd({ searches })
+    if (fee) input += billedUsage(served, { input_tokens: 0 }, fee).input
+    yield { type: 'usage', promptTokens: input, completionTokens: output }
+
+    // Server tools (web search / fetch) ran inside the request: their sources and their outside text.
+    const found = serverFindings(content)
+    found.searches = searches
+    if (found.found.length || found.read.length || found.untrusted.length || found.searches || found.fetches) yield { type: 'server_tools', ...found }
+
     // Cut off mid tool call: keep the text, drop the half-written tool_use (it would have no tool_result).
     const cut = final.stop_reason === 'max_tokens'
-    const content = cut ? final.content.filter((b) => b.type !== 'tool_use' && b.type !== 'server_tool_use') : final.content
-    if (content.some((b) => b.type === 'text' || b.type === 'tool_use')) yield { type: 'raw', provider: 'anthropic', model: final.model ?? req.model, content }
+    const kept = cut ? droppedWhenCut(content as Array<{ type?: string; id?: string; tool_use_id?: string }>) as typeof content : content
+    const compacted = kept.some((b) => (b as { type: string; content?: unknown }).type === 'compaction' && !!(b as { content?: unknown }).content)
+    if (kept.length) yield { type: 'raw', provider: 'anthropic', model: served, content: kept, ...(compacted ? { compacted: true } : {}) }
 
     if (final.stop_reason === 'refusal') {
       yield { type: 'content', text: `\n\n${refusalNote(final.stop_details)}` }
       yield { type: 'finish', reason: 'refusal' }
       return
     }
-    // A reply cut off mid tool call must not run that tool.
-    const calls: ToolCall[] = cut ? [] : final.content
+    // A reply cut off mid tool call must not run that tool. Native tool calls become SahilBot's own.
+    const calls: ToolCall[] = cut ? [] : content
       .filter((b): b is Anthropic.Beta.Messages.BetaToolUseBlock => b.type === 'tool_use')
-      .map((b) => ({ id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}) }))
+      .map((b) => plan.fromNative({ id: b.id, name: b.name, input: b.input, toolset_name: (b as { toolset_name?: string }).toolset_name }))
     if (calls.length) yield { type: 'tool_calls', calls }
     yield { type: 'finish', reason: final.stop_reason ?? 'end_turn' }
     return
   }
 }
+

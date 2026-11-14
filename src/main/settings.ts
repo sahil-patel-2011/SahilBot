@@ -2,11 +2,11 @@ import { DEFAULT_PROVIDERS, DEFS, baseUrlOf, keyName } from './llm/providers'
 import { isBroadAllow } from './agent/permissions'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import type { Appearance, CustomRule, MarketKeyProvider, MarketsSettings, McpServerSettings, ProviderId, Settings } from '@shared/types'
+import type { Appearance, CustomRule, LearningSettings, MarketKeyProvider, MarketsSettings, McpServerSettings, PermissionMode, ProviderId, Settings } from '@shared/types'
 import type { Db } from './db'
 import type { Secrets } from './secrets'
 
-type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
+type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'hasOnshapeKeys' | 'onshapeKeyParts' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
 
 export const DEFAULT_APPEARANCE: Appearance = { density: 'compact', chatWidth: 780, codeWrap: false, hue: 30, tint: 0, reduceTransparency: false, fontSize: 15 }
 
@@ -45,7 +45,12 @@ export const DEFAULTS: Stored = {
   // Markets: keyless data (Stooq, SEC EDGAR) by default; API keys are optional (Settings → Markets).
   markets: { quoteProvider: 'auto', secContact: '' },
   // Connected apps (MCP): off until the user turns it on; port 0 = pick a free one on first start.
-  mcpServer: { enabled: false, port: 0 }
+  mcpServer: { enabled: false, port: 0 },
+  // Learning while the app is open and idle: on by default when a local model exists (enabled unset).
+  learning: { cloudAllowed: false, dailyUsd: 0.25 },
+  // Knowledge search embeddings through OpenAI instead of Ollama: off until the user turns it on
+  // (it sends passages of their indexed documents to OpenAI).
+  openaiEmbeddings: false
 }
 
 /** The MCP server settings as saved: on/off, and a port in the unprivileged range (0 = pick one). */
@@ -53,6 +58,13 @@ export function cleanMcpServer(v: unknown): McpServerSettings {
   const x = (v ?? {}) as Partial<McpServerSettings>
   const port = typeof x.port === 'number' && Number.isInteger(x.port) && x.port >= 1024 && x.port <= 65535 ? x.port : 0
   return { enabled: x.enabled === true, port }
+}
+
+/** Learning settings as saved: enabled stays unset until the user picks (the default depends on local models); a daily cap of $0-$5. */
+export function cleanLearning(v: unknown): LearningSettings {
+  const x = (v ?? {}) as Partial<LearningSettings>
+  const n = typeof x.dailyUsd === 'number' && Number.isFinite(x.dailyUsd) ? x.dailyUsd : 0.25
+  return { ...(typeof x.enabled === 'boolean' ? { enabled: x.enabled } : {}), cloudAllowed: x.cloudAllowed === true, dailyUsd: Math.max(0, Math.min(5, Math.round(n * 100) / 100)) }
 }
 
 export const MARKET_KEY_PROVIDERS: MarketKeyProvider[] = ['tiingo', 'polygon', 'alphavantage', 'finnhub']
@@ -96,6 +108,22 @@ export function cleanRules(rules: unknown): CustomRule[] {
   return out
 }
 
+const LEVELS = new Set(['ask', 'auto', 'autonomous'])
+/** An autonomy level a new chat may start in: Ask first, Auto or Autonomous (never Bypass). */
+export function cleanLevel(v: unknown): PermissionMode | undefined {
+  return typeof v === 'string' && LEVELS.has(v) ? (v as PermissionMode) : undefined
+}
+/** Per-bot autonomy levels: known levels only (never Bypass), at most 500 bots. */
+export function cleanBotModes(v: unknown): Record<string, PermissionMode> {
+  const out: Record<string, PermissionMode> = {}
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out
+  for (const [k, m] of Object.entries(v as Record<string, unknown>).slice(0, 500)) {
+    const l = cleanLevel(m)
+    if (l && k.length <= 64) out[k] = l
+  }
+  return out
+}
+
 export type SettingsPatch = Partial<Settings> & {
   /** Key for the fallback endpoint (first-run setup, older callers). */
   apiKey?: string | null
@@ -106,6 +134,9 @@ export type SettingsPatch = Partial<Settings> & {
   cursorKey?: string | null
   /** The Blue Alliance read API key (FRC scouting in the frc_code tool); kept in the Keychain like the others. */
   tbaKey?: string | null
+  /** Onshape API key pair (the onshape CAD tool; https://dev-portal.onshape.com/keys); Keychain like the others, null removes. */
+  onshapeAccessKey?: string | null
+  onshapeSecretKey?: string | null
   /** Market data API keys (Settings → Markets); null removes one. */
   marketKeys?: Partial<Record<MarketKeyProvider, string | null>>
 }
@@ -133,7 +164,10 @@ export class SettingsStore {
       customRules: cleanRules(s.customRules),
       catchUpHours: cleanCatchUpHours(s.catchUpHours),
       markets: cleanMarkets(s.markets),
-      mcpServer: cleanMcpServer(s.mcpServer)
+      mcpServer: cleanMcpServer(s.mcpServer),
+      learning: cleanLearning(s.learning),
+      defaultMode: cleanLevel(s.defaultMode) ?? 'auto',
+      botModes: cleanBotModes(s.botModes)
     }
   }
 
@@ -147,6 +181,8 @@ export class SettingsStore {
       hasApiKey: !!this.keyFor(process.env.FOREMAN_BASE_URL || s.baseUrl),
       hasCursorKey: this.secrets.has('cursorKey'),
       hasTbaKey: this.secrets.has('tbaKey'),
+      hasOnshapeKeys: this.secrets.has('onshapeAccessKey') && this.secrets.has('onshapeSecretKey'),
+      onshapeKeyParts: { access: this.secrets.has('onshapeAccessKey'), secret: this.secrets.has('onshapeSecretKey') },
       keys: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers))])) as Record<ProviderId, boolean>,
       search: { ...s.search, hasBraveKey: this.secrets.has('braveKey') },
       markets: { ...cleanMarkets(s.markets), keys: Object.fromEntries(MARKET_KEY_PROVIDERS.map((p) => [p, this.secrets.has(marketKeyName(p))])) as Record<MarketKeyProvider, boolean> }
@@ -154,12 +190,14 @@ export class SettingsStore {
   }
 
   set(patch: SettingsPatch): Settings {
-    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, marketKeys, hasApiKey: _a, keys: _k, hasCursorKey: _c, hasTbaKey: _t, ...rest } = patch
+    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, marketKeys, hasApiKey: _a, keys: _k, hasCursorKey: _c, hasTbaKey: _t, onshapeAccessKey, onshapeSecretKey, hasOnshapeKeys: _o, onshapeKeyParts: _op, ...rest } = patch
     for (const [p, k] of Object.entries(marketKeys ?? {}) as Array<[MarketKeyProvider, string | null]>) {
       if (MARKET_KEY_PROVIDERS.includes(p)) this.secrets.set(marketKeyName(p), k ? k.trim() : null)
     }
     if (cursorKey !== undefined) this.secrets.set('cursorKey', cursorKey)
     if (tbaKey !== undefined) this.secrets.set('tbaKey', tbaKey ? tbaKey.trim() : null)
+    if (onshapeAccessKey !== undefined) this.secrets.set('onshapeAccessKey', onshapeAccessKey ? onshapeAccessKey.trim() : null)
+    if (onshapeSecretKey !== undefined) this.secrets.set('onshapeSecretKey', onshapeSecretKey ? onshapeSecretKey.trim() : null)
     if (braveKey !== undefined) this.secrets.set('braveKey', braveKey)
     const cur = this.stored()
     const search = rest.search ? { provider: rest.search.provider, searxngUrl: rest.search.searxngUrl } : cur.search
@@ -173,6 +211,9 @@ export class SettingsStore {
       catchUpHours: rest.catchUpHours !== undefined ? cleanCatchUpHours(rest.catchUpHours) : cur.catchUpHours,
       markets: rest.markets !== undefined ? cleanMarkets({ ...cur.markets, ...rest.markets }) : cur.markets,
       mcpServer: rest.mcpServer !== undefined ? cleanMcpServer({ ...cur.mcpServer, ...rest.mcpServer }) : cur.mcpServer,
+      defaultMode: rest.defaultMode !== undefined ? cleanLevel(rest.defaultMode) ?? cur.defaultMode : cur.defaultMode,
+      botModes: rest.botModes !== undefined ? cleanBotModes(rest.botModes) : cur.botModes,
+      learning: rest.learning !== undefined ? cleanLearning({ ...cur.learning, ...rest.learning }) : cur.learning,
       providers: rest.providers ? {
         ollama: { ...cur.providers.ollama, ...rest.providers.ollama },
         lmstudio: { ...cur.providers.lmstudio, ...rest.providers.lmstudio },

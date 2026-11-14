@@ -1,9 +1,19 @@
 import type { PermissionMode } from '@shared/types'
 import type { Decision, PermissionInput } from './types'
 
-const STRICTNESS: Record<PermissionMode, number> = { ask: 2, auto: 1, bypass: 0 }
+const STRICTNESS: Record<PermissionMode, number> = { ask: 3, auto: 2, autonomous: 1, bypass: 0 }
 
-/** The stricter of two permission modes (ask > auto > bypass). A missing one doesn't loosen anything. */
+/** Every autonomy level, strictest first. */
+export const PERMISSION_MODES: PermissionMode[] = ['ask', 'auto', 'autonomous', 'bypass']
+export const isPermissionMode = (m: unknown): m is PermissionMode => typeof m === 'string' && m in STRICTNESS
+
+/**
+ * Tools that only write inside the workspace and attached folders, and keep a backup when they overwrite
+ * something (files.ts backup()). Autonomous runs their overwrites; deleting still asks (a hard stop).
+ */
+export const BACKED_UP_OVERWRITES = new Set(['file_write', 'file_manage', 'create_document'])
+
+/** The stricter of two permission modes (ask > auto > autonomous > bypass). A missing one doesn't loosen anything. */
 export function stricterMode(a: PermissionMode, b?: PermissionMode | null): PermissionMode {
   if (!b || !(b in STRICTNESS)) return a
   return STRICTNESS[b] > STRICTNESS[a] ? b : a
@@ -35,12 +45,25 @@ export function decide(p: PermissionInput): Decision {
     return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}` }
   }
 
-  switch (p.mode) {
+  // Nobody is there to watch an unattended run (routines, wake-ups): Autonomous works like Auto there.
+  const mode: PermissionMode = p.unattended && p.mode === 'autonomous' ? 'auto' : p.mode
+  // Taint is checked before the local-write shortcut: a terminal command steered by fetched content asks
+  // whatever it does (checkTaint flags run_command at every effect; other tools' local writes never are).
+  if (p.tainted && (mode === 'auto' || mode === 'autonomous')) return { verdict: 'ask', reason: 'Uses details taken from a web page or email' }
+  switch (mode) {
     case 'bypass':
       return { verdict: 'allow' }
+    case 'autonomous':
+      // Auto, plus: project commands (installs from the lockfile, git fetch/pull) and overwrites inside
+      // your folders that keep a backup. Taint, hard stops (deleting, sending, buying, credentials,
+      // security, history rewrites) and every other consequential outside action still ask.
+      if (p.effect === 'write_local') return { verdict: 'allow' }
+      if (p.effect === 'write_external' && (p.consequential === false || p.consequential === 'project')) return { verdict: 'allow' }
+      if (p.alwaysAllowed && p.effect === 'write_external') return { verdict: 'allow' }
+      if (p.effect === 'destructive' && BACKED_UP_OVERWRITES.has(p.tool)) return { verdict: 'allow' }
+      return { verdict: 'ask', reason: p.effect === 'destructive' ? 'Deletes or replaces something' : 'Acts outside this Mac (Autonomous still asks for this)' }
     case 'auto':
       if (p.effect === 'write_local') return { verdict: 'allow' }
-      if (p.tainted) return { verdict: 'ask', reason: 'Uses details taken from a web page or email' }
       // Routine outside actions (sign in, next page, search, save draft) don't interrupt the user.
       if (p.effect === 'write_external' && p.consequential === false) return { verdict: 'allow' }
       if (p.alwaysAllowed && p.effect === 'write_external') return { verdict: 'allow' }
@@ -155,12 +178,28 @@ const URL_READS: Record<string, (args: any) => string | undefined> = {
   browser: (a) => (a?.action === 'navigate' || (a?.action === 'tabs' && a?.op === 'new') ? a?.url : undefined)
 }
 
+/** Tools whose every call is checked for taint, whatever its effect: a terminal command can do anything. */
+export const ALWAYS_TAINT_CHECKED = new Set(['run_command'])
+
 /** Whether a call's arguments were steered by fetched content, for decide()'s `tainted`. */
 export function checkTaint(tool: string, effect: string, args: unknown, untrusted: string[], userText: string): boolean {
-  if (effect === 'write_external' || effect === 'destructive') return isTainted(args, untrusted, userText)
+  if (effect === 'write_external' || effect === 'destructive' || ALWAYS_TAINT_CHECKED.has(tool)) return isTainted(args, untrusted, userText) || (effect === 'read' && urlTaintedRead(tool, args, untrusted, userText))
   if (effect !== 'read') return false
+  return urlTaintedRead(tool, args, untrusted, userText)
+}
+
+function urlTaintedRead(tool: string, args: unknown, untrusted: string[], userText: string): boolean {
   const url = URL_READS[tool]?.(args)
   return !!url && urlTainted(url, untrusted, userText)
+}
+
+/**
+ * Whether a chat's autonomy may be changed to `next` from the renderer: only real levels, and Bypass only
+ * when Settings offers it (advanced.allowBypass) or the chat is already in Bypass.
+ */
+export function modeChangeAllowed(next: unknown, o: { allowBypass?: boolean; current?: PermissionMode | null }): boolean {
+  if (!isPermissionMode(next)) return false
+  return next !== 'bypass' || !!o.allowBypass || o.current === 'bypass'
 }
 
 // ---------- long-term memory: instructions planted from fetched content ----------
@@ -377,14 +416,17 @@ export const APP_PUBLIC_READS = new Set(['web_search', 'fetch_page', 'stock_quot
 const APP_BOOKKEEPING = new Set(['todo', 'find_tools', 'ask_user', 'propose_plan'])
 
 /**
- * Why a read in a run a connected app started (or steered into) must ask, or null. Every read except
- * public web and market data asks: files, commands, the screen and clipboard, mail, the logged-in
- * browser, the knowledge base and memories are the user's private data, and the reply goes to the app.
+ * Why a call in a run a connected app started (or steered into) must ask, or null. Only public web and
+ * market data reads and the run's own bookkeeping run freely. Every other call asks, whatever its effect:
+ * files, commands (run_command at any effect), the screen and clipboard, mail, the logged-in browser, the
+ * knowledge base and memories are the user's private data, the reply goes to the app, and a "local" write
+ * or command is still the app acting on this Mac.
  */
 export function appReadRisk(app: string | undefined | null, tool: string, effect: string): string | null {
-  if (!app || effect !== 'read') return null
+  if (!app) return null
   if (APP_PUBLIC_READS.has(tool) || APP_BOOKKEEPING.has(tool)) return null
-  return `${app} asked: this reads your private data, and the reply goes back to ${app}`
+  if (effect === 'read') return `${app} asked: this reads your private data, and the reply goes back to ${app}`
+  return `${app} asked: this run was started by ${app}, so everything it does on this Mac asks you first`
 }
 
 // ---------- goals: what a run that read outside content may change ----------

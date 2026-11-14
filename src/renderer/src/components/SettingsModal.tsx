@@ -4,10 +4,12 @@ import { BRAND_NAME, cardProblem, digitsOnly, formatCardNumber, normalizeExpiry,
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
+import { recommendedRows } from '@shared/model-picker'
 import { MemoryManager } from './MemoryManager'
 import { KnowledgeSettings } from './KnowledgeSettings'
 import { UsagePage } from './UsagePage'
 import { McpSettings } from './McpSettings'
+import { ActivitySettings } from './ActivitySettings'
 import { addRule, loadRules, removeRule, RULE_LIMIT, RULE_MAX_CHARS } from '../lib/approvalRules'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
@@ -19,7 +21,7 @@ const PAGES: Array<{ id: Page; label: string; icon: ReactNode; color: string; wo
   { id: 'general', label: 'General', icon: <I.Gear size={14} />, color: '#8e8e93', words: 'name workspace folder quick ask shortcut search cloud budget spending limit hybrid' },
   { id: 'usage', label: 'Usage', icon: <I.Clock size={14} />, color: '#ff6a1a', words: 'usage spend spending cost cap budget tokens requests local cloud model bot csv export' },
   { id: 'models', label: 'Models', icon: <I.Cpu size={14} />, color: '#5856d6', words: 'model auto download recommended voice background ollama lm studio' },
-  { id: 'keys', label: 'API Keys & Servers', icon: <I.Plug size={14} />, color: '#007aff', words: 'anthropic claude openai openrouter cursor key base url ollama lm studio custom server' },
+  { id: 'keys', label: 'API Keys & Servers', icon: <I.Plug size={14} />, color: '#007aff', words: 'anthropic claude openai openrouter cursor key base url ollama lm studio custom server onshape cad' },
   { id: 'appearance', label: 'Appearance', icon: <I.Sparkle size={14} />, color: '#ff9500', words: 'theme dark light width font tint density code wrap' },
   { id: 'voice', label: 'Voice', icon: <I.Mic size={14} />, color: '#ff2d55', words: 'speak read aloud dictation whisper kokoro' },
   { id: 'memory', label: 'Memory', icon: <I.ListIcon size={14} />, color: '#34c759', words: 'remember people places projects facts import chatgpt claude forget work log' },
@@ -247,6 +249,7 @@ function PrivacyPage() {
           </div>
         </Row>
       </Section>
+      <ActivitySettings />
       <McpSettings />
     </>
   )
@@ -322,21 +325,30 @@ function modelName(m: ModelInfo): string { return m.label || m.id }
 function cloudFacts(m: ModelInfo): string {
   const tok = (n: number): string => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${Math.round(n / 1000)}K`)
   const usd = (n: number): string => `$${n < 1 ? n.toFixed(2) : n}`
-  return [m.contextTokens ? `${tok(m.contextTokens)} context` : '', m.price ? `${usd(m.price.input)} / ${usd(m.price.output)} per M tokens` : ''].filter(Boolean).map((x) => ` · ${x}`).join('')
+  return [m.contextTokens ? `${tok(m.contextTokens)} context` : '', m.price ? `${usd(m.price.input)} / ${usd(m.price.output)} per M tokens${m.price.cacheRead !== undefined ? ` (cached ${usd(m.price.cacheRead)})` : ''}` : '', m.priceEstimated ? 'pricing estimated' : ''].filter(Boolean).map((x) => ` · ${x}`).join('')
 }
+
+/** Size on disk as Ollama reports it ("18.2 GB"). */
+const diskGB = (bytes: number): string => `${(bytes / 1e9).toFixed(bytes >= 10e9 ? 0 : 1)} GB`
 
 function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null; onRefresh: () => void }) {
   const [q, setQ] = useState('')
   const [all, setAll] = useState(false)
   const [pull, setPull] = useState<Record<string, { pct: number; status: string; error?: string }>>({})
+  const [deleting, setDeleting] = useState<string | null>(null)
+  // The three picks first-run setup offers for this Mac (best agent model, fast one, alternative).
+  const [picks, setPicks] = useState<Record<string, string>>({})
+  useEffect(() => { void api.models.setupPicks().then((ps) => setPicks(Object.fromEntries(ps.map((p) => [p.pull, p.role])))).catch(() => undefined) }, [models])
   useEffect(() => api.models.onPull((e) => {
     setPull((p) => ({ ...p, [e.tag]: { pct: e.total ? Math.round(((e.completed ?? 0) / e.total) * 100) : p[e.tag]?.pct ?? 0, status: e.status, error: e.error } }))
     if (e.done && !e.error) { toast(`${e.tag} is ready`, 'ok'); onRefresh() }
     if (e.error) toast(e.error, 'error')
   }), [onRefresh])
 
+  // Installed = can run now (downloaded, or a cloud model with its key). Recommended rows include both.
   const installed = (models?.models ?? []).filter((m) => m.installed)
-  const recommended = (models?.models ?? []).filter((m) => !m.installed)
+  const recommended = recommendedRows(models)
+  const ollama = models?.providers?.find((p) => p.id === 'ollama')
   const hidden = new Set(s.hiddenModels)
   const shown = installed.filter((m) => !q || `${m.id} ${m.label ?? ''} ${m.providerName}`.toLowerCase().includes(q.toLowerCase()))
   const list = all || q ? shown : shown.slice(0, 12)
@@ -349,27 +361,89 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
     void patch({ customModels: [...new Set([...s.customModels, id])] }).then(() => { setQ(''); onRefresh(); toast(`Added ${id}`, 'ok') })
   }
   const usable = installed.filter((m) => !hidden.has(m.id) && (m.fits || m.maxFittingWindow >= 16384))
+  const download = (m: ModelInfo): void => { setPull((p) => ({ ...p, [m.pull!]: { pct: 0, status: 'starting' } })); void api.models.pull(m.pull!) }
+  // Deleting asks first: it removes the files from Ollama (they can be downloaded again).
+  const remove = async (m: ModelInfo): Promise<void> => {
+    const size = m.sizeBytes ? ` and frees ${diskGB(m.sizeBytes)}` : ''
+    if (!confirm(`Delete ${modelName(m)} (${m.id}) from this Mac? This removes it from Ollama${size}. You can download it again later.`)) return
+    setDeleting(m.id)
+    const r = await api.models.remove(m.id).catch((e: Error) => ({ ok: false, error: e.message }))
+    setDeleting(null)
+    if (r.ok) toast(`Deleted ${modelName(m)}`, 'ok')
+    else toast(r.error ?? 'Couldn\'t delete it', 'error')
+    onRefresh()
+  }
+  const deleteBtn = (m: ModelInfo): ReactNode => deleting === m.id
+    ? <span className="spin" />
+    : <button className="icon-btn" title={`Delete ${m.id}`} aria-label={`Delete ${m.id}`} onClick={() => void remove(m)} data-testid={`model-delete-${m.id}`}><I.Trash size={15} /></button>
 
   return (
     <>
       <h2>Models</h2>
-      <div className="set-sub" style={{ marginTop: -6 }}>Choose which models appear in the model picker. Auto uses the ones that are on.</div>
+      <div className="set-sub" style={{ marginTop: -6 }}>The model picker lists the models you can use now: downloaded ones and cloud models whose API key you saved. Auto uses the ones that are on.</div>
       <Section title="Default">
         <Row title="Model for new chats" sub="Auto picks the right model for each message: a fast one for quick chats, a stronger one for real tasks. When it isn't sure, it uses the stronger one.">
           <select className="set-select" value={s.defaultModel} onChange={(e) => void patch({ defaultModel: e.target.value })} data-testid="default-model">
             <option value="auto">Auto (recommended)</option>
+            <option value="auto:local">Auto (local only)</option>
+            <option value="auto:cloud">Auto (cloud only)</option>
             {usable.map((m) => <option key={m.id} value={m.id}>{modelName(m)}</option>)}
           </select>
         </Row>
       </Section>
+
+      {s.providers.ollama.enabled && (recommended.length > 0 || (ollama && !ollama.ok)) && (
+        <Section title="Recommended for this Mac" sub={`Free models picked for agent work and tool use, sized for this Mac${models ? ` (${models.totalGB} GB of memory, ${models.budgetGB} GB for models)` : ''}. Download the ones that fit; Auto starts using them right away.`}>
+          {ollama && !ollama.ok && <OllamaSetup onReady={onRefresh} />}
+          {recommended.map((m) => {
+            const pr = m.pull ? pull[m.pull] : undefined
+            const busy = !m.installed && pr && !pr.error && pr.status !== 'done'
+            const fits = m.fits || m.maxFittingWindow > 0
+            const role = m.pull ? picks[m.pull] : undefined
+            return (
+              <div className="set-row" style={fits ? undefined : { opacity: 0.6 }} key={m.id} data-testid="recommended-row">
+                <div className="set-row-text">
+                  <div className="set-row-title">{modelName(m)} <span className="tier-badge">{TIER[m.tier]}</span>{role && <span className="tier-badge" style={{ marginLeft: 4 }} data-testid={`recommended-pick-${m.pull}`}>{role}</span>}</div>
+                  <div className="set-row-sub">
+                    {m.blurb}
+                    {m.installed ? ` · Downloaded${m.id !== m.pull ? ` as ${m.id}` : ''}${m.sizeBytes ? ` · ${diskGB(m.sizeBytes)} on disk` : ''}` : ` · ${m.note}`}
+                  </div>
+                  {busy && <div className="meter" style={{ marginTop: 6 }}><i style={{ width: `${pr.pct}%` }} /></div>}
+                </div>
+                {m.installed ? <><span className="hint" style={{ marginRight: 6 }}>Installed</span>{deleteBtn(m)}</>
+                  : busy ? <span className="hint">{pr.pct ? `${pr.pct}%` : pr.status}</span>
+                  : <button className="btn" disabled={!fits} title={fits ? `Download ${m.pull} with Ollama` : 'Needs more memory than this Mac has'} onClick={() => download(m)} data-testid={`pull-${m.id}`}>Download</button>}
+              </div>
+            )
+          })}
+        </Section>
+      )}
+
       {s.cloud.enabled && installed.some((m) => m.note === 'remote') && (
         <Section title="Cloud models" sub="How Auto and hybrid mode use cloud models. Every cloud request is still priced against your monthly cap first.">
-          <Row title="Auto prefers" sub="Cloud first: Haiku for quick questions, Sonnet for everyday tasks, Opus for the hardest ones. Local first: free, private local models whenever one is strong enough.">
-            <select className="set-select" value={s.cloud.prefer ?? 'local'} onChange={(e) => void patch({ cloud: { ...s.cloud, prefer: e.target.value as 'local' | 'cloud' } })} data-testid="cloud-prefer">
+          <Row title="Auto prefers" sub="Cloud first (the default once a Claude key is saved): Haiku for quick questions, Sonnet for everyday tasks, Opus for the hardest ones. Local first: free, private local models whenever one is strong enough.">
+            <select className="set-select" value={s.cloud.prefer ?? (s.keys.anthropic ? 'cloud' : 'local')} onChange={(e) => void patch({ cloud: { ...s.cloud, prefer: e.target.value as 'local' | 'cloud' } })} data-testid="cloud-prefer">
               <option value="local">Local first</option>
               <option value="cloud">Cloud first</option>
             </select>
           </Row>
+          {s.keys.anthropic && (
+            <>
+              <Row title="Claude context" sub="How much of Claude's 1M-token window a chat uses before older turns are summarized (by Claude, on Anthropic's servers). More context remembers more but costs more per step; cached history is billed at a fraction of the input price.">
+                <select className="set-select" value={s.cloud.contextStrategy ?? 'balanced'} onChange={(e) => void patch({ cloud: { ...s.cloud, contextStrategy: e.target.value as 'max' | 'balanced' | 'economy' } })} data-testid="claude-context-strategy">
+                  <option value="max">Maximum (the full 1M window)</option>
+                  <option value="balanced">Balanced (up to 400K, recommended)</option>
+                  <option value="economy">Economy (up to 128K)</option>
+                </select>
+              </Row>
+              <Row title="Claude's native tools" sub="Claude uses its own computer-use, text-editor, terminal and web search tools, which it handles best. They run through SahilBot's same approvals and safety checks; web search then runs on Anthropic's servers ($10 per 1,000 searches).">
+                <Toggle on={s.cloud.nativeTools !== false} onChange={(v) => void patch({ cloud: { ...s.cloud, nativeTools: v } })} label="Claude's native tools" testId="claude-native-tools" />
+              </Row>
+              <Row title="Use Fable for the hardest tasks" sub="Auto sends the hardest requests to Claude Fable (priced well above Opus). Off: Fable only when you pick it.">
+                <Toggle on={!!s.cloud.fableForHardest} onChange={(v) => void patch({ cloud: { ...s.cloud, fableForHardest: v } })} label="Use Fable for the hardest tasks" testId="claude-fable-hardest" />
+              </Row>
+            </>
+          )}
           {s.cloud.hybrid && (
             <Row title="Hybrid advisor" sub="The cloud model your local model asks for plans and help.">
               <select className="set-select" value={s.cloud.advisorModel} onChange={(e) => void patch({ cloud: { ...s.cloud, advisorModel: e.target.value } })} data-testid="advisor-model">
@@ -396,50 +470,37 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
         </Row>
       </Section>
 
-      <Section>
+      <Section title="Installed and available" sub="Downloaded models and cloud models with a key. Switch one off to keep it out of the picker and Auto.">
         <div className="set-search">
           <input className="set-input" placeholder="Add or search model" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addModel()} data-testid="model-search" />
           {q.trim() && !installed.some((m) => m.id === q.trim()) && <button className="btn" onClick={addModel}>Add “{q.trim()}”</button>}
           <button className="icon-btn" title="Refresh" onClick={onRefresh}><I.Reply size={15} style={{ transform: 'scaleX(-1)' }} /></button>
         </div>
         {!models && <div className="set-empty">Loading models…</div>}
-        {models && installed.length === 0 && <div className="set-empty">No models yet. Download one below, or add an API key under API Keys & Servers.</div>}
+        {models && installed.length === 0 && <div className="set-empty">No models yet. Download one above, or add an API key under API Keys & Servers.</div>}
         {list.map((m) => (
           <div className="set-row" key={m.id} data-testid="model-row">
             <div className="set-row-text">
               <div className="set-row-title">{modelName(m)}</div>
-              <div className="set-row-sub">{m.providerName} · {TIER[m.tier]}{m.vision ? ' · sees images' : ''}{m.note === 'remote' ? ` · cloud${cloudFacts(m)}` : m.requiredGB ? ` · ${m.requiredGB} GB` : ''}{!m.fits && m.note && m.note !== 'remote' ? ` · ${m.note}` : ''}</div>
+              <div className="set-row-sub">{m.providerName} · {TIER[m.tier]}{m.vision ? ' · sees images' : ''}{m.note === 'remote' ? ` · cloud${cloudFacts(m)}` : m.sizeBytes ? ` · ${diskGB(m.sizeBytes)} on disk` : m.requiredGB ? ` · ${m.requiredGB} GB` : ''}{!m.fits && m.note && m.note !== 'remote' ? ` · ${m.note}` : ''}</div>
             </div>
+            {m.provider === 'ollama' && m.note !== 'remote' && deleteBtn(m)}
             <Toggle on={m.enabled} onChange={(v) => setOn(m.id, v)} label={`Show ${m.id}`} testId={`model-toggle-${m.id}`} />
           </div>
         ))}
         {!q && shown.length > 12 && <button className="link-btn set-more" onClick={() => setAll((x) => !x)}>{all ? 'Show fewer' : `View All Models (${shown.length})`}</button>}
         {s.customModels.length > 0 && (
-          <div className="set-row-sub" style={{ padding: '8px 4px 2px' }}>Added by you: {s.customModels.map((id) => (
-            <button key={id} className="chip-btn" style={{ marginLeft: 6 }} onClick={() => void patch({ customModels: s.customModels.filter((x) => x !== id) }).then(onRefresh)}>{id} ×</button>
-          ))}</div>
+          <div className="set-row-sub" style={{ padding: '8px 4px 2px' }}>Added by you: {s.customModels.map((id) => {
+            // Names nothing can run yet (no key for its provider, or no server has it) aren't in the picker.
+            const off = models?.models.find((m) => m.id === id && !m.installed)
+            return (
+              <button key={id} className="chip-btn" style={{ marginLeft: 6 }} title={off?.note ? `Not in the picker: ${off.note}` : 'Remove'} onClick={() => void patch({ customModels: s.customModels.filter((x) => x !== id) }).then(onRefresh)}>
+                {id}{off?.note ? ` (${off.note.toLowerCase()})` : ''} ×
+              </button>
+            )
+          })}</div>
         )}
       </Section>
-
-      {recommended.length > 0 && (
-        <Section title="Recommended downloads" sub="The best free model at each size, picked for agent work and tool use. Get the ones that fit this Mac; Auto starts using them right away.">
-          {recommended.map((m) => {
-            const pr = pull[m.id]
-            const busy = pr && !pr.error && pr.status !== 'done'
-            return (
-              <div className="set-row" key={m.id} data-testid="recommended-row">
-                <div className="set-row-text">
-                  <div className="set-row-title">{modelName(m)} <span className="tier-badge">{TIER[m.tier]}</span></div>
-                  <div className="set-row-sub">{m.blurb} · {m.note}</div>
-                  {busy && <div className="meter" style={{ marginTop: 6 }}><i style={{ width: `${pr.pct}%` }} /></div>}
-                </div>
-                {busy ? <span className="hint">{pr.pct ? `${pr.pct}%` : pr.status}</span>
-                  : <button className="btn" disabled={!m.fits && m.maxFittingWindow === 0} onClick={() => { setPull((p) => ({ ...p, [m.id]: { pct: 0, status: 'starting' } })); void api.models.pull(m.pull!) }} data-testid={`pull-${m.id}`}>Get</button>}
-              </div>
-            )
-          })}
-        </Section>
-      )}
     </>
   )
 }
@@ -449,6 +510,30 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
 const SETUP_PHASE: Record<string, string> = { download: 'Downloading Ollama…', verify: 'Checking it with Apple\'s security check…', install: 'Installing…', start: 'Starting Ollama…', done: 'Ollama is running.' }
 
 /** Ollama isn't running: install it if needed and start it, in one click. */
+/** Settings → API Keys → Onshape: the access/secret key pair for the onshape CAD tool, and a Test button. */
+function OnshapeKeys({ s, patch }: P) {
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const test = async (): Promise<void> => {
+    if (!api.cad) return
+    setMsg({ ok: true, text: 'Checking…' })
+    const r = await api.cad.onshapeTest().catch((e: Error) => ({ ok: false, name: undefined, error: e.message }))
+    setMsg(r.ok ? { ok: true, text: `Working${r.name ? ` · ${r.name}` : ''}` } : { ok: false, text: (r.error ?? 'Could not connect.').split('. Fix:')[0].slice(0, 160) })
+  }
+  const save = (field: 'onshapeAccessKey' | 'onshapeSecretKey') => async (k: string | null): Promise<void> => { setMsg(null); await patch({ [field]: k } as never) }
+  return (
+    <Section title="Onshape (CAD)" sub={<>Lets the bots read your Onshape documents (parts, feature trees, variables, mass properties, exports) and, with your OK each time, change variables or configurations in a workspace. Create an API key pair at the <a href="https://dev-portal.onshape.com/keys" target="_blank" rel="noreferrer">Onshape developer portal</a> (Read scope to look; Write to make changes) and paste both halves here. Keys only work on the Onshape stack they were made on.</>}>
+      <Row title="Access key"><KeyField saved={!!s.onshapeKeyParts?.access} placeholder="Onshape access key" testId="key-onshape-access" onSave={save('onshapeAccessKey')} /></Row>
+      <Row title="Secret key"><KeyField saved={!!s.onshapeKeyParts?.secret} placeholder="Onshape secret key" testId="key-onshape-secret" onSave={save('onshapeSecretKey')} /></Row>
+      <Row title="Connection" sub={s.hasOnshapeKeys ? 'Checks the saved keys with Onshape (one API call).' : 'Save both keys, then test them.'}>
+        <div className="key-saved">
+          <button className="link-btn" disabled={!s.hasOnshapeKeys} onClick={() => void test()} data-testid="onshape-test">Test</button>
+          {msg && <span className={`conn ${msg.ok ? 'ok' : 'bad'}`} data-testid="onshape-test-msg">{msg.text}</span>}
+        </div>
+      </Row>
+    </Section>
+  )
+}
+
 function OllamaSetup({ onReady }: { onReady: () => void }) {
   const [st, setSt] = useState<{ phase: string; pct?: number; error?: string } | null>(null)
   const [installed, setInstalled] = useState<boolean | null>(null)
@@ -516,6 +601,7 @@ function Keys({ s, patch, onChanged, models }: P & { onChanged: () => void; mode
       <Section title="The Blue Alliance (FRC)" sub={<>A free read key from <a href="https://www.thebluealliance.com/account" target="_blank" rel="noreferrer">your TBA account</a> lets the FRC bots pull match schedules, results and rankings. Statbotics works without a key.</>}>
         <Row title="Read API Key"><KeyField saved={!!s.hasTbaKey} placeholder="TBA read key" testId="key-tba" onSave={async (k) => { await patch({ tbaKey: k }) }} /></Row>
       </Section>
+      <OnshapeKeys s={s} patch={patch} />
       <Section title="Cursor API Key" sub={<>Lets SahilBot start and manage <a href="https://cursor.com/dashboard" target="_blank" rel="noreferrer">Cursor cloud agents</a> on your GitHub repos (Cursor dashboard → API Keys). Opening files in Cursor and its agent on this Mac need no key.</>}>
         <Row title="API Key"><KeyField saved={s.hasCursorKey} placeholder="key_…" testId="key-cursor" onSave={async (k) => { await patch({ cursorKey: k }) }} /></Row>
       </Section>
@@ -1061,12 +1147,22 @@ function Advanced({ s, models, patch }: P & { models: ModelList | null }) {
     <>
       <h2>Advanced</h2>
       <Section>
-        <Row title="Context window" sub="How much of the conversation a local model holds. Auto uses the most this Mac's memory allows for each model (agents get the room they need). Older turns are summarized only when it's almost full.">
+        <Row title="Context window" sub="How much of the conversation a local model holds. Auto gives each model up to 64k on Macs with 48 GB or more and 32k on smaller ones, never more than fits in memory. Older turns are summarized only when it's almost full.">
           <div className="seg">{WINDOWS.map((w) => <button key={w} className={s.contextWindow === w ? 'on' : ''} onClick={() => void patch({ contextWindow: w })}>{w ? `${w / 1024}k` : 'Auto'}</button>)}</div>
         </Row>
         <GpuRow />
         <Row title="Hard stops in Bypass" sub="Always ask before payments, typing credentials, account or security settings, and permanent deletes.">
           <Toggle on={s.advanced.hardStopsEnabled} onChange={(v) => void patch({ advanced: { hardStopsEnabled: v } })} label="Hard stops" />
+        </Row>
+        <Row title="Autonomy for new chats" sub="Ask first: approve every change. Auto: routine steps run; installing, sending, buying, posting and deleting ask. Autonomous: also builds, tests, installs from the project's lockfile, git and file changes in your folders; deleting, sending, buying, credentials and anything outside your folders still ask. A bot can set its own level in its details panel.">
+          <select className="set-select" value={s.defaultMode ?? 'auto'} onChange={(e) => void patch({ defaultMode: e.target.value as Settings['defaultMode'] })} data-testid="default-autonomy" aria-label="Autonomy for new chats">
+            <option value="ask">Ask first</option>
+            <option value="auto">Auto</option>
+            <option value="autonomous">Autonomous</option>
+          </select>
+        </Row>
+        <Row title="Offer Bypass in the autonomy picker" sub="Bypass runs everything without asking except hard stops (when they're on). It resets to Auto when SahilBot restarts. Only for work you watch.">
+          <Toggle on={!!s.advanced.allowBypass} onChange={(v) => void patch({ advanced: { ...s.advanced, allowBypass: v } })} label="Offer Bypass" testId="allow-bypass" />
         </Row>
       </Section>
       <Section title="Sampling" sub="Blank fields use the model card's recommended values.">

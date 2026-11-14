@@ -210,31 +210,62 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     }
   }
 
+  const cellT = { type: ['string', 'number', 'boolean', 'null'] }
   const createDoc: ToolDef<DocSpec> = {
     name: 'create_document',
     label: 'Document',
     core: true,
     effect: (a, c) => { const p = safe(() => resolvePath(a.path, getWorkspace(), c.roots)); return p === undefined || existsSync(p) ? 'destructive' : 'write_local' },
-    description: `Create (or rebuild) a formatted document from data:
-- .docx / .pdf: give "markdown" (headings, lists, tables, bold, links).
-- .pptx: give "slides": [{title, subtitle?, bullets?, table?, layout?: title|bullets|two_column|section|quote, right?, notes?}]. First slide is usually layout "title".
-- .xlsx: give "sheets": [{name, rows: [[...]], header?: true}]. Strings starting with "=" are formulas.
-Optional "accent" color like "#2563EB". To edit an existing document, read it, then create it again at the same path (a backup is kept).`,
+    description: `Create (or rebuild) a polished document from data; it is reviewed automatically (fix every FAIL in the review, then present it).
+- .docx / .pdf: "markdown" (headings, lists, tables, bold, links, images ![alt](path "Caption"), [TOC], <!-- pagebreak -->, <!-- landscape --> / <!-- portrait -->, footnotes text[^1] + [^1]: note, "Table: caption" under a table, > [!NOTE] callouts). Real Word styles (Title, Heading 1-3, Caption, Quote), table header rows with banding, page numbers. Options: template (memo | report | letter | meeting_notes | proposal) with fields {to, from, cc, date, subject, recipient, recipient_address, sender, sender_address, salutation, closing, signature, subtitle, author, organization, prepared_for, prepared_by, attendees, facilitator, location, time}, cover, toc (auto for long docs), subtitle, author, header, footer, page_numbers, orientation, page_size (letter|a4), font, citations [text | {text, url}].
+- .pptx: "slides": [{title, subtitle?, bullets? (indent sub-points with 2 spaces), notes?, layout?}]. Layouts: title, section, bullets, two_column (bullets + right, left_title/right_title), image_text (image path + bullets, image_side), image (+caption), chart (chart: {type: bar|column|line|area|pie|doughnut, categories, series: [{name, values}], number_format: "$#,##0", stacked?} + optional bullets as the takeaway), table (table: [[header…], [row…]]), stats (stats: [{value: "$4.2M", label: "ARR"}]), quote (title = quote, subtitle = who), closing. theme light|dark, slide_numbers (default on), 16:9. Headline titles that state the point; detail in notes. Overlong slides are split/shortened for you.
+- .xlsx: "sheets": [{name, rows: [[header…], [row…]], columns?: [{header, type: text|number|integer|currency|percent|date|datetime|boolean, format?, width?, total?: sum|average|count|min|max|none, options?: [dropdown values], min?, max?, formula?: "=C{r}*D{r}"}], totals?: true, freeze?: {rows, cols}, autofilter?, conditional?: [{column, type: greater_than|less_than|between|equal|not_equal|negative|text_contains|duplicates|blank|top|bottom|data_bar|color_scale|formula, value?, value2?, color?: red|green|yellow|blue|#hex, formula?}], banded?}]. Strings starting with "=" are formulas (XLOOKUP is rewritten to INDEX/MATCH so it works everywhere). summary: true adds a Summary sheet with live totals; currency: "$".
+Optional "accent" color like "#2563EB". To change an existing file: rebuild it at the same path (a backup is kept), or edit cells in place with the office tool (sheet_write).`,
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', pattern: '\\.(docx|pdf|pptx|xlsx)$' },
         title: { type: 'string' },
         markdown: { type: 'string' },
+        blocks: { type: 'array', items: { type: 'object', properties: { type: { type: 'string' } }, required: ['type'] }, description: 'Structured content instead of markdown' },
+        template: { type: 'string', enum: ['memo', 'report', 'letter', 'meeting_notes', 'proposal'] },
+        fields: { type: 'object', additionalProperties: { type: ['string', 'array', 'boolean'] } },
+        subtitle: { type: 'string' },
+        author: { type: 'string' },
+        toc: { type: 'boolean' },
+        cover: { type: 'boolean' },
+        header: { type: ['string', 'boolean'] },
+        footer: { type: ['string', 'boolean'] },
+        page_numbers: { type: 'boolean' },
+        orientation: { type: 'string', enum: ['portrait', 'landscape'] },
+        page_size: { type: 'string', enum: ['letter', 'a4'] },
+        font: { type: 'string' },
+        citations: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { text: { type: 'string' }, url: { type: 'string' } }, required: ['text'] }] } },
+        footnotes: { type: 'object', additionalProperties: { type: 'string' } },
+        theme: { type: 'string', enum: ['light', 'dark'] },
+        slide_numbers: { type: 'boolean' },
         slides: {
-          type: 'array', minItems: 1, maxItems: 60,
+          type: 'array', minItems: 1, maxItems: 80,
           items: {
             type: 'object',
             properties: {
               title: { type: 'string' }, subtitle: { type: 'string' }, notes: { type: 'string' },
               bullets: { type: 'array', items: { type: 'string' } }, right: { type: 'array', items: { type: 'string' } },
+              left_title: { type: 'string' }, right_title: { type: 'string' },
               table: { type: 'array', items: { type: 'array', items: { type: ['string', 'number'] } } },
-              layout: { type: 'string', enum: ['title', 'bullets', 'two_column', 'section', 'quote'] }
+              layout: { type: 'string', enum: ['title', 'section', 'bullets', 'two_column', 'image', 'image_text', 'chart', 'table', 'stats', 'quote', 'closing'] },
+              image: { type: 'string' }, image_side: { type: 'string', enum: ['left', 'right'] }, caption: { type: 'string' },
+              chart: {
+                type: 'object',
+                properties: {
+                  type: { type: 'string', enum: ['bar', 'column', 'line', 'area', 'pie', 'doughnut'] },
+                  categories: { type: 'array', items: { type: ['string', 'number'] } },
+                  series: { type: 'array', minItems: 1, items: { type: 'object', properties: { name: { type: 'string' }, values: { type: 'array', items: { type: 'number' } } }, required: ['name', 'values'] } },
+                  title: { type: 'string' }, number_format: { type: 'string' }, show_values: { type: 'boolean' }, stacked: { type: 'boolean' }
+                },
+                required: ['type', 'categories', 'series']
+              },
+              stats: { type: 'array', maxItems: 4, items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } }, required: ['value', 'label'] } }
             },
             required: ['title'],
             additionalProperties: false
@@ -246,20 +277,52 @@ Optional "accent" color like "#2563EB". To edit an existing document, read it, t
             type: 'object',
             properties: {
               name: { type: 'string' },
-              rows: { type: 'array', items: { type: 'array', items: { type: ['string', 'number', 'boolean', 'null'] } } },
+              rows: { type: 'array', items: { type: 'array', items: cellT } },
               header: { type: 'boolean' },
-              widths: { type: 'array', items: { type: 'number' } }
+              widths: { type: 'array', items: { type: 'number' } },
+              columns: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    header: { type: 'string' }, type: { type: 'string', enum: ['text', 'number', 'integer', 'currency', 'percent', 'date', 'datetime', 'boolean'] },
+                    format: { type: 'string' }, width: { type: 'number' }, total: { type: 'string', enum: ['sum', 'average', 'count', 'min', 'max', 'none'] },
+                    options: { type: 'array', items: { type: 'string' } }, min: { type: 'number' }, max: { type: 'number' }, formula: { type: 'string' }, align: { type: 'string', enum: ['left', 'center', 'right'] }
+                  },
+                  additionalProperties: false
+                }
+              },
+              totals: { type: ['boolean', 'string'] },
+              freeze: { anyOf: [{ type: 'boolean', const: false }, { type: 'object', properties: { rows: { type: 'integer', minimum: 0 }, cols: { type: 'integer', minimum: 0 } }, additionalProperties: false }] },
+              autofilter: { type: 'boolean' },
+              banded: { type: 'boolean' },
+              tab_color: { type: 'string' },
+              conditional: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    column: { type: 'string' }, range: { type: 'string' },
+                    type: { type: 'string', enum: ['greater_than', 'less_than', 'between', 'equal', 'not_equal', 'negative', 'text_contains', 'duplicates', 'blank', 'top', 'bottom', 'data_bar', 'color_scale', 'formula'] },
+                    value: { type: ['number', 'string'] }, value2: { type: 'number' }, count: { type: 'integer' }, color: { type: 'string' }, formula: { type: 'string' }
+                  },
+                  required: ['type'],
+                  additionalProperties: false
+                }
+              }
             },
             required: ['name', 'rows'],
             additionalProperties: false
           }
         },
+        summary: { anyOf: [{ type: 'boolean' }, { type: 'object', properties: { title: { type: 'string' }, items: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, value: { type: ['string', 'number'] }, format: { type: 'string' } }, required: ['label', 'value'] } } } }] },
+        currency: { type: 'string', maxLength: 4 },
         accent: { type: 'string', pattern: '^#[0-9A-Fa-f]{6}$' }
       },
       required: ['path'],
       additionalProperties: false,
       allOf: [
-        { if: { properties: { path: { pattern: '\\.(docx|pdf)$' } } }, then: { required: ['markdown'] } },
+        { if: { properties: { path: { pattern: '\\.(docx|pdf)$' } } }, then: { anyOf: [{ required: ['markdown'] }, { required: ['blocks'] }] } },
         { if: { properties: { path: { pattern: '\\.pptx$' } } }, then: { required: ['slides'] } },
         { if: { properties: { path: { pattern: '\\.xlsx$' } } }, then: { required: ['sheets'] } }
       ]
@@ -269,9 +332,27 @@ Optional "accent" color like "#2563EB". To edit an existing document, read it, t
       const full = resolvePath(spec.path, workspace, roots(ctx))
       const existed = existsSync(full)
       if (existed) backup(workspace, full)
-      const r = await createDocument(full, spec)
-      const what = spec.slides ? `${spec.slides.length} slides` : spec.sheets ? `${spec.sheets.length} sheet${spec.sheets.length > 1 ? 's' : ''}` : humanSize(r.bytes)
-      return { text: `${existed ? 'Rebuilt' : 'Created'} ${r.kind} ${full} (${what}). The user can open it from the chat.`, display: `${existed ? 'rebuilt' : 'created'} ${basename(full)}`, path: full }
+      // Images in documents come from the workspace and the folders the user attached, like every file tool.
+      const readImage = (src: string): Buffer => {
+        const p = resolvePath(src, workspace, roots(ctx))
+        if (!existsSync(p) || !statSync(p).isFile()) throw new Error(`Image not found: ${src}`)
+        if (statSync(p).size > 25_000_000) throw new Error(`Image ${src} is larger than 25 MB.`)
+        return readFileSync(p)
+      }
+      const r = await createDocument(full, spec, { readImage })
+      const what = spec.slides ? `${r.slides ?? spec.slides.length} slides` : spec.sheets ? `${spec.sheets.length} sheet${spec.sheets.length > 1 ? 's' : ''}` : humanSize(r.bytes)
+      let review = ''
+      try {
+        const { formatReview, reviewDocument } = await import('../../docs/review')
+        review = `\n\n${formatReview(await reviewDocument(full))}`
+      } catch (e) {
+        review = `\n\n(Automatic review skipped: ${(e as Error).message}. Run review_document.)`
+      }
+      return {
+        text: `${existed ? 'Rebuilt' : 'Created'} ${r.kind} ${full} (${what}). The user can open it from the chat.${r.warnings?.length ? `\nGenerator notes:\n${r.warnings.slice(0, 25).map((w) => `- ${w}`).join('\n')}` : ''}${review}`,
+        display: `${existed ? 'rebuilt' : 'created'} ${basename(full)}`,
+        path: full
+      }
     }
   }
 

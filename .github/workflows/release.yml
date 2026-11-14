@@ -1,0 +1,202 @@
+# Builds SahilBot for Apple Silicon on every push to main and publishes it to GitHub Releases.
+#
+# Always-current download (resolves to the newest non-prerelease release, which always carries the
+# stable file names):
+#   https://github.com/sahil-patel-2011/SahilBot/releases/latest/download/SahilBot-mac-arm64.dmg
+#
+# Each run publishes:
+#   v<package.json version>-<run number>  versioned release, marked Latest, with versioned + stable names
+#   latest                                rolling prerelease (stable names only), moved to this commit
+#
+# Two jobs, so the code under test never sees a secret or a write token:
+#   build    contents: read, no secrets. Installs, typechecks, runs the unit tests, builds the app and
+#            whisper-server, and uploads them as an artifact.
+#   publish  runs only for refs/heads/main, in the `release` environment (add required reviewers there to
+#            gate it). contents: write; the signing / notarization secrets exist only in its Package step.
+#
+# Signing: with the repository secrets CSC_LINK + CSC_KEY_PASSWORD (a Developer ID Application
+# certificate, .p12 as base64) the app is signed with it; with APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +
+# APPLE_TEAM_ID as well it is also notarized. Without them it is signed ad hoc and the release notes
+# explain the first-launch step (right-click → Open / Open Anyway).
+#
+# Every action is pinned to the full commit SHA of the tag named in its comment.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['README.md', 'research/**', 'design/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Releases go out in push order; a newer push waits instead of cancelling a publish halfway.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # whisper.cpp commit the bundled whisper-server is built from (bump deliberately; it keys the cache).
+  WHISPER_REF: d2c6f05a46dacf663e357bcf0ed40f542a72825d
+
+jobs:
+  build:
+    # macos-15 is GitHub's Apple Silicon (M1, arm64) image; whisper.cpp's native CPU flags then target
+    # M1, which every Apple Silicon Mac supports.
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # No engines field or .nvmrc in the repo: Node 26 matches the development Mac.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '26'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache whisper-server
+        id: whisper
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: vendor/whisper.cpp/build/bin
+          key: whisper-server-${{ runner.os }}-${{ runner.arch }}-${{ env.WHISPER_REF }}-${{ hashFiles('scripts/ci-whisper.sh') }}
+
+      - name: Build whisper-server
+        if: steps.whisper.outputs.cache-hit != 'true'
+        run: scripts/ci-whisper.sh
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npx vitest run tests/unit
+
+      - name: Build app
+        run: npx electron-vite build
+
+      - name: Version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::package.json version must be MAJOR.MINOR.PATCH (got: $VERSION)"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "SahilBot $VERSION build $GITHUB_RUN_NUMBER"
+
+      - name: Upload the build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: app-build
+          path: |
+            out/
+            vendor/whisper.cpp/build/bin/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '26'
+          cache: npm
+
+      # electron-builder packages the production dependencies; no secrets are in this step's environment.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download the build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: app-build
+          path: .
+
+      - name: Check version
+        id: version
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          BUILD: ${{ github.run_number }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then echo "::error::bad version: $VERSION"; exit 1; fi
+          if ! printf '%s' "$BUILD" | grep -Eq '^[0-9]+$'; then echo "::error::bad build number: $BUILD"; exit 1; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+
+      - name: Package (DMG + ZIP, arm64)
+        id: package
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SAHILBOT_BUILD: ${{ steps.version.outputs.build }}
+        run: |
+          # CFBundleShortVersionString stays the package.json version; CFBundleVersion is the run number.
+          chmod +x vendor/whisper.cpp/build/bin/* || true
+          ARGS=(--mac dmg zip --arm64 --publish never
+            "-c.buildVersion=$SAHILBOT_BUILD"
+            '-c.mac.artifactName=SahilBot-${version}-${env.SAHILBOT_BUILD}-${arch}.${ext}')
+          if [ -n "$CSC_LINK" ] && [ -n "$CSC_KEY_PASSWORD" ]; then
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+              SIGNING=notarized
+              ARGS+=(-c.mac.notarize=true)
+            else
+              SIGNING=signed
+              unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+              ARGS+=(-c.mac.notarize=false)
+            fi
+          else
+            # No Developer ID: ad-hoc signature (runs after right-click → Open / Open Anyway).
+            SIGNING=adhoc
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            ARGS+=(-c.mac.identity=- -c.mac.notarize=false)
+          fi
+          echo "signing=$SIGNING" >> "$GITHUB_OUTPUT"
+          echo "Signing: $SIGNING"
+          npx electron-builder "${ARGS[@]}"
+
+      - name: Verify the app
+        env:
+          SIGNING: ${{ steps.package.outputs.signing }}
+        run: |
+          APP=dist/mac-arm64/SahilBot.app
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          test -x "$APP/Contents/Resources/whisper/whisper-server"
+          if [ "$SIGNING" = notarized ]; then
+            spctl --assess --type execute -vv "$APP"
+            xcrun stapler validate "$APP"
+          fi
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+          SHA: ${{ github.sha }}
+          SIGNING: ${{ steps.package.outputs.signing }}
+          REPO: ${{ github.repository }}
+        run: node scripts/release.mjs --version "$VERSION" --build "$BUILD" --sha "$SHA" --signing "$SIGNING" --repo "$REPO"

@@ -12,6 +12,9 @@ import './styles-memory.css'
 import './styles-share-usage.css'
 import './styles-stocks.css'
 import './styles-tasks.css'
+import './styles-jobs.css'
+import './styles-docs.css'
+import './styles-heavy.css'
 // Loaded last: the polish layer refines everything above.
 import './styles-polish.css'
 

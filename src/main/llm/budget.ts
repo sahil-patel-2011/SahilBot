@@ -1,5 +1,5 @@
 import type { Db } from '../db'
-import { claudeSpec } from './claude-models'
+import { CACHE_WRITE_FACTOR, claudeInfo } from './claude-models'
 
 // Cloud spending guard. Every request to a paid (non-local) endpoint is priced before it is
 // sent, using the worst case (full max_tokens of output), and refused if it could push this
@@ -13,16 +13,33 @@ const OTHER_PRICES: Array<[RegExp, number, number]> = []
 /** Unknown paid models are priced pessimistically (the most expensive tier) so the cap still holds. */
 const UNKNOWN: [number, number] = [10, 50]
 
-export function priceFor(model: string, inputTokens = 0): { input: number; output: number; known: boolean; cacheRead?: number } {
-  const spec = claudeSpec(model)
+export function priceFor(model: string, inputTokens = 0): { input: number; output: number; known: boolean; cacheRead?: number; estimated?: boolean } {
+  const spec = claudeInfo(model)
   if (spec?.price) {
-    // Haiku 5.5 is $0.50 / $2.50 above 100K prompt tokens.
-    if (spec.id === 'claude-haiku-5-5' && inputTokens > 100_000) return { input: 0.5, output: 2.5, known: true }
+    // Long-context rate card (Haiku 5.5: $0.50 / $2.50 above 100K prompt tokens; cache reads stay 0.1x of it).
+    const lc = spec.longContext
+    if (lc && inputTokens > lc.above) return { input: lc.input, output: lc.output, known: true, cacheRead: lc.input * 0.1 }
+    // A model newer than the table: the family's highest known prices, flagged as an estimate.
+    if (spec.estimated) return { input: spec.price.input, output: spec.price.output, known: false, estimated: true, cacheRead: spec.price.cacheRead }
     return { input: spec.price.input, output: spec.price.output, known: true, cacheRead: spec.price.cacheRead }
   }
   const hit = OTHER_PRICES.find(([re]) => re.test(model))
-  if (!hit) return { input: UNKNOWN[0], output: UNKNOWN[1], known: false }
+  if (!hit) return { input: UNKNOWN[0], output: UNKNOWN[1], known: false, estimated: true }
   return { input: hit[1], output: hit[2], known: true }
+}
+
+/**
+ * What the next request of a running chat costs, roughly, at its current context size: the prompt read
+ * from the cache (Claude caches the stable prefix and the history), the newest few thousand tokens written
+ * to it, and a typical reply. For the progress chip; the budget still prices the worst case.
+ */
+export function stepCost(model: string, contextTokens: number, o: { fresh?: number; reply?: number } = {}): { usd: number; estimated: boolean } {
+  const fresh = Math.min(contextTokens, o.fresh ?? 4000)
+  const reply = o.reply ?? 2000
+  const p = priceFor(model, contextTokens)
+  const read = p.cacheRead ?? p.input * 0.1
+  const usd = ((contextTokens - fresh) * read + fresh * p.input * CACHE_WRITE_FACTOR + reply * p.output) / 1e6
+  return { usd, estimated: !p.known }
 }
 
 export const cost = (model: string, input: number, output: number): number => {

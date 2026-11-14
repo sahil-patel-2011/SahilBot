@@ -51,12 +51,13 @@ export class SkillStore {
     return sk ? { ...sk, updatedAt: statSync(f).mtimeMs } : undefined
   }
 
-  save(input: { name: string; description: string; body: string; source: Skill['source'] }): Skill {
+  /** `untrusted`: learned from a borderline run; kept out of the index until the user approves it. */
+  save(input: { name: string; description: string; body: string; source: Skill['source']; untrusted?: boolean }): Skill {
     const name = slug(input.name)
     const f = this.file(name)
     const prev = existsSync(f) ? parse(readFileSync(f, 'utf8'), name) : undefined
     mkdirSync(join(this.dir, name), { recursive: true })
-    const sk: Skill = { name, description: oneLine(input.description).slice(0, 300), body: input.body.trim().slice(0, 12_000), source: input.source, uses: prev?.uses ?? 0, updatedAt: Date.now() }
+    const sk: Skill = { name, description: oneLine(input.description).slice(0, 300), body: input.body.trim().slice(0, 12_000), source: input.source, uses: prev?.uses ?? 0, updatedAt: Date.now(), ...(input.untrusted && input.source === 'learned' ? { untrusted: true } : {}) }
     writeFileSync(f, render(sk))
     return sk
   }
@@ -77,9 +78,11 @@ export class SkillStore {
   /**
    * The list for the system prompt. Yours and learned ones with their descriptions (they're specific);
    * built-in packs as names grouped by topic (the names say what they do), so the prompt stays small.
+   * Skills marked `untrusted: true` are left out until approved.
    */
   index(max = 40): string {
-    const all = this.list()
+    // Unverified learned skills wait for the user's OK (Settings → Memory → What I learned).
+    const all = this.list().filter((s) => !s.untrusted)
     const mine = all.filter((s) => s.source !== 'builtin').slice(0, max).map((s) => `- ${s.name}: ${s.description}`)
     const groups = new Map<string, string[]>()
     for (const s of all.filter((x) => x.source === 'builtin')) groups.set(s.category ?? 'General', [...(groups.get(s.category ?? 'General') ?? []), s.name])
@@ -91,12 +94,12 @@ export class SkillStore {
 const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
 
 function render(s: Skill): string {
-  return `---\nname: ${s.name}\ndescription: ${oneLine(s.description)}\nsource: ${s.source === 'builtin' ? 'you' : s.source}\nuses: ${s.uses}${s.category ? `\ncategory: ${s.category}` : ''}\n---\n\n${s.body}\n`
+  return `---\nname: ${s.name}\ndescription: ${oneLine(s.description)}\nsource: ${s.source === 'builtin' ? 'you' : s.source}\nuses: ${s.uses}${s.category ? `\ncategory: ${s.category}` : ''}${s.untrusted ? '\nuntrusted: true' : ''}\n---\n\n${s.body}\n`
 }
 
 function parse(text: string, fallback: string): Omit<Skill, 'updatedAt'> | undefined {
   const m = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
   if (!m) return { name: fallback, description: '', body: text.trim(), source: 'you', uses: 0 }
   const meta = Object.fromEntries(m[1].split('\n').map((l) => l.match(/^(\w+):\s*(.*)$/)).filter((x): x is RegExpMatchArray => !!x).map((x) => [x[1], x[2].trim()]))
-  return { name: meta.name || fallback, description: meta.description ?? '', body: m[2].trim(), source: meta.source === 'learned' ? 'learned' : 'you', uses: Number(meta.uses) || 0, category: meta.category }
+  return { name: meta.name || fallback, description: meta.description ?? '', body: m[2].trim(), source: meta.source === 'learned' ? 'learned' : 'you', uses: Number(meta.uses) || 0, category: meta.category, ...(meta.untrusted === 'true' && meta.source === 'learned' ? { untrusted: true } : {}) }
 }

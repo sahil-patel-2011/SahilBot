@@ -25,7 +25,7 @@ describe('bots, group chats, reactions, attachments and documents', () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     await page.evaluate(() => window.foreman.settings.set({ userName: 'Sahil' }))
     llm.script.push(
-      { content: "Hey Sahil! I'm your new bot, fresh and ready to take on whatever you want to throw at me.", toolCalls: [{ name: 'ask_user', arguments: '{"question":"What do you want me to focus on?","options":["Vantage app work","Robotics team stuff","Personal errands","Something else"]}' }] },
+      { content: "Hey Sahil! I'm your new bot, fresh and ready to take on whatever you want to throw at me.", toolCalls: [{ name: 'ask_user', arguments: '{"question":"What do you want me to focus on?","options":["Vantage app work","Robotics team stuff","Personal errands"]}' }] },
       { toolCalls: [{ name: 'update_bot', arguments: '{"name":"Robo Coach","instructions":"You help with the robotics team."}' }] },
       { content: 'Done — I am Robo Coach now.' }
     )
@@ -33,7 +33,9 @@ describe('bots, group chats, reactions, attachments and documents', () => {
     await page.click('[data-testid="bot-save"]')
     const q = page.locator('[data-testid="question-card"]')
     await q.waitFor({ timeout: 20_000 })
-    expect(await q.innerText()).toMatch(/A\s*Vantage app work[\s\S]*D\s*Something else/)
+    // Three choices, then a fourth row to type your own answer.
+    expect(await q.innerText()).toMatch(/A\s*Vantage app work[\s\S]*C\s*Personal errands[\s\S]*D/)
+    expect(await q.locator('[data-testid="question-own-input"]').count()).toBe(1)
     // The intro instruction itself is hidden from the user.
     expect(await page.locator('[data-testid="user-bubble"]').count()).toBe(0)
     // Typing in the composer answers the question.
@@ -144,7 +146,8 @@ describe('bots, group chats, reactions, attachments and documents', () => {
     await expect.poll(() => page.locator('[data-testid="file-pane"]').getAttribute('data-kind')).toBe('sheets')
     expect(await page.locator('.sheet').innerText()).toContain('112')
 
-    // Deleting asks even in Bypass; deny keeps the file.
+    // Deleting asks even in Bypass; deny keeps the file. (Bypass is offered only after Settings → Advanced → Offer Bypass.)
+    await page.evaluate(() => window.foreman.settings.set({ advanced: { allowBypass: true } } as never))
     await page.click('[data-testid="mode-picker"]')
     await page.locator('.menu-item', { hasText: 'Bypass' }).click()
     llm.script.push({ toolCalls: [{ name: 'file_manage', arguments: `{"op":"delete","path":${p('memo.pdf')}}` }] }, { content: 'Kept it.' })

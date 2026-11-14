@@ -95,15 +95,15 @@ export function coreTools(results: ResultStore): ToolDef[] {
     label: 'Question',
     core: true,
     effect: 'read',
-    description: 'Ask the user and wait for the answer. Use it for decisions that are theirs to make or information you can\'t find. For a big or unclear task, ask everything you need at once with questions (up to 4, each with 2-4 short options when the choice is clear-cut); don\'t drip questions one at a time.',
+    description: 'Ask the user and wait for the answer. Research first, then use it only for decisions that are theirs to make or information you can\'t find. Give up to 3 short options (put the one you recommend first, e.g. "Weekly (recommended)"); the card always adds a 4th "type your own answer" field, so never add "Other"/"Something else". Use fewer options when fewer make sense, or none for an open question. For a big or unclear task, ask everything at once with questions (up to 4) instead of one at a time.',
     parameters: {
       type: 'object',
       properties: {
         question: { type: 'string', description: 'One question' },
-        options: { type: 'array', items: { type: 'string' }, maxItems: 4 },
+        options: { type: 'array', items: { type: 'string' }, maxItems: 3 },
         questions: {
           type: 'array', minItems: 1, maxItems: 4, description: 'Several clarifying questions answered together',
-          items: { type: 'object', properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' }, maxItems: 4 } }, required: ['question'], additionalProperties: false }
+          items: { type: 'object', properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' }, maxItems: 3 } }, required: ['question'], additionalProperties: false }
         }
       },
       additionalProperties: false

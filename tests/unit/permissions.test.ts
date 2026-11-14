@@ -12,6 +12,7 @@ describe('mode x effect matrix', () => {
   const table: Record<PermissionMode, Record<ToolEffect, string>> = {
     ask: { read: 'allow', write_local: 'ask', write_external: 'ask', destructive: 'ask' },
     auto: { read: 'allow', write_local: 'allow', write_external: 'ask', destructive: 'ask' },
+    autonomous: { read: 'allow', write_local: 'allow', write_external: 'ask', destructive: 'ask' },
     bypass: { read: 'allow', write_local: 'allow', write_external: 'allow', destructive: 'allow' }
   }
   for (const [mode, row] of Object.entries(table)) {

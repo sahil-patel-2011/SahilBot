@@ -44,6 +44,12 @@ export interface ChatRequest {
   effort?: import('@shared/types').Effort
   /** Ollama: how long the model stays loaded after this request (default localDefaults.keepAlive). */
   keepAlive?: string
+  /** Claude: offer SahilBot's tools as Claude's native tool types (llm/claude-native); web = server web tools. */
+  native?: { enabled: boolean; web?: boolean }
+  /** Claude: prompt-cache lifetime ('1h' for long agent runs and team helpers, where gaps pass 5 minutes). */
+  cacheTtl?: '5m' | '1h'
+  /** Claude: server-side compaction starts at this many input tokens (undefined: no server compaction). */
+  compactAt?: number
 }
 
 /** Defaults for local servers. keepAlive follows the localKeepAlive setting (the agent passes it per request). */
@@ -96,7 +102,9 @@ export type StreamPart =
   | { type: 'tool_calls'; calls: ToolCall[] }
   | { type: 'usage'; promptTokens: number; completionTokens: number }
   | { type: 'finish'; reason: string }
-  | { type: 'raw'; provider: 'anthropic'; model: string; content: unknown }
+  | { type: 'raw'; provider: 'anthropic'; model: string; content: unknown; compacted?: boolean }
+  /** Claude's server tools ran inside the request: sources found and read, and the outside text they brought in. */
+  | { type: 'server_tools'; found: Array<{ title: string; url: string }>; read: Array<{ title: string; url: string }>; untrusted: string[]; searches: number; fetches: number; errors: string[] }
   /** A tool call has started streaming: its name is known, its arguments aren't yet. */
   | { type: 'tool_pending'; name: string }
   /** The provider re-issued the turn: discard the text and reasoning streamed so far. */
@@ -172,6 +180,8 @@ export function buildBody(req: ChatRequest): Record<string, unknown> {
     body.cache_prompt = true
     // Quick replies skip thinking on local thinking models (Qwen3-style templates read enable_thinking).
     if (req.effort === 'low' && lookup(req.model)?.thinks) body.chat_template_kwargs = { enable_thinking: false, reasoning_effort: 'low' }
+    // gpt-oss on LM Studio / llama.cpp: agent work at High or above asks for its high reasoning level.
+    else if ((req.effort === 'high' || req.effort === 'xhigh' || req.effort === 'max') && /gpt-oss/i.test(req.model) && lookup(req.model)?.thinks) body.chat_template_kwargs = { reasoning_effort: 'high' }
   }
   if (req.tools?.length) {
     body.tools = req.tools
@@ -295,10 +305,15 @@ export interface ServerStats {
   numCtx?: number
 }
 
-/** Ollama's `think`: off for quick replies on thinking models; gpt-oss can't turn it off, only down. */
-export function ollamaThink(model: string, effort?: ChatRequest['effort']): boolean | 'low' | undefined {
-  if (effort !== 'low' || !lookup(model)?.thinks) return undefined
-  return /gpt-oss/i.test(model) ? 'low' : false
+/**
+ * Ollama's `think`: off for quick replies on thinking models (gpt-oss can't turn it off, only down);
+ * agent work at High or above asks gpt-oss for its high level (other thinking models think by default).
+ */
+export function ollamaThink(model: string, effort?: ChatRequest['effort']): boolean | 'low' | 'high' | undefined {
+  if (!lookup(model)?.thinks) return undefined
+  if (effort === 'low') return /gpt-oss/i.test(model) ? 'low' : false
+  if ((effort === 'high' || effort === 'xhigh' || effort === 'max') && /gpt-oss/i.test(model)) return 'high'
+  return undefined
 }
 
 /** The request body for Ollama's native /api/chat. */

@@ -83,7 +83,7 @@ export function codeTool(o: { getWorkspace: () => string; trash?: (path: string)
   return {
     name: 'code',
     label: 'Code',
-    core: true,
+    core: false,
     group: 'Coding',
     effect: (a) => codeEffect(a),
     hardStop: (a) => {
@@ -367,7 +367,7 @@ export function gitTool(): ToolDef<GitArgs> {
   return {
     name: 'git',
     label: 'Git',
-    core: true,
+    core: false,
     group: 'Coding',
     effect: (a) => gitEffect(a),
     // Pushes and pull requests reach GitHub: Auto asks.

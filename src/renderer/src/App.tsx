@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { autoLabel } from '@shared/model-picker'
 import type { BrowserState, ChatEvent, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
 import { api } from './api'
 import { readableOn, SpaceAvatar } from './brand'
@@ -11,6 +12,7 @@ import { FilesView, Home, ProjectsView } from './components/Home'
 import { TasksView } from './components/TasksView'
 import { Onboarding } from './components/Onboarding'
 import { RightPanel, type PanelTab } from './components/RightPanel'
+import { JobsChip, RunSummary } from './components/JobsPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { Sidebar, type MainView } from './components/Sidebar'
 import { ThreadView } from './components/ThreadView'
@@ -45,6 +47,8 @@ export function App() {
   /** Which bot/project each waiting chat belongs to, for chats the sidebar doesn't otherwise know (e.g. a bot's chat after a reopen). */
   const [needSpaceOf, setNeedSpaceOf] = useState<Record<string, string>>({})
   const [file, setFile] = useState<string | null>(null)
+  /** Docs: the live document open in the Document tab (null = the chat's latest). */
+  const [docId, setDocId] = useState<string | null>(null)
   const [browser, setBrowser] = useState<BrowserState | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [view, setView] = useState<MainView>('home')
@@ -55,8 +59,15 @@ export function App() {
   const [voiceOn, setVoiceOn] = useState(false)
   const [showScheduled, setShowScheduled] = useState(false)
   // Model and mode picked on the home screen before a chat exists.
-  const [draft, setDraft] = useState<{ model: string | null; mode: PermissionMode }>({ model: null, mode: 'auto' })
+  // mode null: the bot's own autonomy level (BotDetails), else the app default (Settings → Advanced).
+  const [draft, setDraft] = useState<{ model: string | null; mode: PermissionMode | null }>({ model: null, mode: null })
   const [drafting, setDrafting] = useState<Record<string, string | null>>({})
+  // Settings changed outside the Settings window (a bot's autonomy level in its details panel).
+  useEffect(() => {
+    const fn = (): void => void api.settings.get().then(setSettings)
+    window.addEventListener('sahilbot:settings-changed', fn)
+    return () => window.removeEventListener('sahilbot:settings-changed', fn)
+  }, [])
   const [toolProgress, setToolProgress] = useState<Record<string, string | null>>({})
   const [runSince, setRunSince] = useState<Record<string, number>>({})
   // Messages typed while SahilBot is working wait here and go out when the run ends.
@@ -395,7 +406,7 @@ export function App() {
       sendingRef.current.add(tid)
       setQueue((q) => ({ ...q, [tid]: (q[tid] ?? []).filter((x) => x !== first) }))
       // On failure it goes back to the front and is retried after this thread's next run event (no hot retry loop).
-      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst, ...(first.fromLink ? { meta: { fromLink: true } } : {}) }).catch((e: Error) => {
+      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst, ...(first.heavy ? { heavy: true } : {}), ...(first.fromLink ? { meta: { fromLink: true } } : {}) }).catch((e: Error) => {
         setQueue((q) => ({ ...q, [tid]: [first, ...(q[tid] ?? [])] }))
         toast(e.message, 'error')
       })
@@ -424,10 +435,25 @@ export function App() {
   useEffect(() => { void api.models.teamCapacity(capModel).then(setTeamCap) }, [capModel, models])
 
   // All hooks above this line: the early return below must not change the hook count.
+  // Docs: a chat's documents are its own, so switching chats shows the new chat's latest (or the one asked for).
+  const pendingDoc = useRef<string | null>(null)
+  useEffect(() => {
+    const p = pendingDoc.current
+    pendingDoc.current = null
+    setDocId(p)
+    if (p) setPanel('doc')
+  }, [thread?.id])
+  const openDocRef = useRef<(d: { docId: string; threadId: string }) => void>(() => undefined)
+  useEffect(() => {
+    const on = (e: Event): void => { const d = (e as CustomEvent<{ docId: string; threadId: string }>).detail; if (d?.docId) openDocRef.current(d) }
+    window.addEventListener('sahilbot:open-doc', on)
+    return () => window.removeEventListener('sahilbot:open-doc', on)
+  }, [])
+
   if (!settings) return null
 
   const model = thread?.model ?? space?.model ?? draft.model ?? settings.defaultModel
-  const mode = thread?.permissionMode ?? draft.mode
+  const mode: PermissionMode = thread?.permissionMode ?? draft.mode ?? (space && settings.botModes?.[space.id]) ?? settings.defaultMode ?? 'auto'
   const isRunning = !!thread && running.has(thread.id)
   const question = pending.find((p) => p.kind === 'question' || p.kind === 'questions' || p.kind === 'plan')
   const isBot = !!space && !space.isMain && space.kind !== 'project'
@@ -463,13 +489,14 @@ export function App() {
       const sid = space?.id ?? main?.id
       if (!sid) return
       const created = await api.threads.create(sid)
-      t = await api.threads.update(created.id, { model: draft.model, permissionMode: draft.mode })
+      // Without a pick here, main already started it at the bot's (or the app's) autonomy level.
+      t = await api.threads.update(created.id, { model: draft.model, ...(draft.mode ? { permissionMode: draft.mode } : {}) })
       threadRef.current = t.id
       setMessages([])
       setThread(t)
     }
     try {
-      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst, ...(o.fromLink ? { meta: { fromLink: true } } : {}) })
+      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst, ...(o.heavy ? { heavy: true } : {}), ...(o.fromLink ? { meta: { fromLink: true } } : {}) })
       void refreshSpaces()
     } catch (e) {
       toast((e as Error).message, 'error')
@@ -478,6 +505,12 @@ export function App() {
 
 
   const openFile = (p: string): void => { setFile(p); setPanel('file') }
+  const openDoc = (id: string): void => { setDocId(id); setPanel('doc') }
+  // The bot's Library opens a document in its chat (hooks are above, before the early return).
+  openDocRef.current = (d) => {
+    if (thread?.id === d.threadId) openDoc(d.docId)
+    else { pendingDoc.current = d.docId; void openAnyChat(d.threadId) }
+  }
   /** Any chat, in any bot or project (e.g. the one a file came from). */
   const openAnyChat = async (id: string): Promise<void> => {
     for (const sp of spaces) {
@@ -505,6 +538,7 @@ export function App() {
       thinking={settings.thinking}
       onThinking={(e) => void api.settings.set({ thinking: e }).then(setSettings)}
       mode={mode}
+      allowBypass={!!settings.advanced.allowBypass}
       onMode={(m) => (thread ? void patchThread({ permissionMode: m }) : setDraft((d) => ({ ...d, mode: m })))}
       onVoice={() => setVoiceOn(true)}
       placeholder={isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? `Message ${chatBot?.name ?? 'SahilBot'}` : 'How can I help you today?'}
@@ -578,7 +612,7 @@ export function App() {
         onSearch={() => setPalette(true)}
         view={view}
         onView={(v) => { setView(v); setThread(null) }}
-        modelLabel={`${settings.defaultModel === 'auto' ? 'Auto' : models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}`}
+        modelLabel={`${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}`}
         onCustomize={(s) => setEditor({ space: s, mode: s.kind })}
         onChanged={() => void refreshSpaces().then((sp) => {
           if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain()
@@ -632,6 +666,7 @@ export function App() {
             </div>
           )}
           <div className="header-actions">
+            {thread && <JobsChip threadId={thread.id} on={panel === 'jobs'} onOpen={() => setPanel((p) => (p === 'jobs' ? null : 'jobs'))} />}
             {((isRunning && (prog?.plan || (prog?.actions ?? 0) > 0)) || plan.length > 0) && (
               <button className={`progress-chip${panel === 'progress' ? ' on' : ''}`} onClick={() => setPanel((p) => (p === 'progress' ? null : 'progress'))} data-testid="progress-chip">
                 {isRunning && <span className="spin" />}
@@ -645,6 +680,12 @@ export function App() {
                 <svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--line)" strokeWidth="2.5" />
                   <circle cx="10" cy="10" r="8" fill="none" stroke={prog.used / prog.window > 0.85 ? 'var(--accent)' : 'var(--text-3)'} strokeWidth="2.5" strokeLinecap="round"
                     strokeDasharray={`${Math.max(2, Math.min(1, prog.used / prog.window) * 50.3)} 50.3`} transform="rotate(-90 10 10)" /></svg>
+              </span>
+            )}
+            {prog?.cost && (
+              <span className="hint ctx-cost" style={{ fontSize: 12, marginRight: 4 }} data-testid="ctx-cost"
+                title={`About $${prog.cost.usd < 0.01 ? prog.cost.usd.toFixed(4) : prog.cost.usd.toFixed(2)} per step at this context size (${prog.used.toLocaleString()} tokens; cached history is billed at the cache-read rate)${prog.cost.estimated ? '. Pricing estimated: this model\'s rates aren\'t known exactly.' : ''}`}>
+                ~${prog.cost.usd < 0.01 ? '<0.01' : prog.cost.usd.toFixed(2)}/step{prog.cost.estimated ? '*' : ''}
               </span>
             )}
             <button className={`icon-btn globe${panel === 'browser' ? ' on' : ''}`} title="Browser" onClick={() => setPanel((p) => (p === 'browser' ? null : 'browser'))} data-testid="toggle-browser">
@@ -678,7 +719,8 @@ export function App() {
                 onRespond: (id, answer) => api.chat.respond(thread.id, id, answer),
                 onReact: (id, emoji) => void api.threads.react(id, emoji),
                 onReply: (text) => composer.current?.insert(`> ${text.replace(/\s+/g, ' ').slice(0, 220)}\n`),
-                onOpenFile: openFile
+                onOpenFile: openFile,
+                onOpenDoc: openDoc
               }} />
             <div className="composer-wrap">
               {(queue[thread.id] ?? []).length > 0 && (
@@ -689,6 +731,7 @@ export function App() {
                   <span className="hint">Sends when SahilBot finishes</span>
                 </div>
               )}
+              {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} />}
               {composerEl}
             </div>
           </>
@@ -708,7 +751,9 @@ export function App() {
         <RightPanel tab={panel} onTab={setPanel} hidden={modal} messages={messages} file={file}
           onOpenFile={openFile} browserState={browser} onClose={() => setPanel(null)} threadId={thread?.id ?? null}
           running={isRunning} progress={prog ? { used: prog.used, window: prog.window, model: (prog.routed as { label?: string } | undefined)?.label ?? prog.model, actions: prog.actions } : undefined}
-          stocks={!!chatBot && !chatBot.isMain && /stock|market|invest|portfolio/i.test(chatBot.name)} />
+          stocks={!!chatBot && !chatBot.isMain && /stock|market|invest|portfolio/i.test(chatBot.name)}
+          docId={docId} onDocId={setDocId} botColor={botColor} botName={chatBot?.name}
+          onAsk={(text, title) => { composer.current?.insert(`About this part of “${title}”:\n> ${text.replace(/\s+/g, ' ').slice(0, 800)}\n`); composer.current?.focus() }} />
       )}
       {!settings.onboarded && <Onboarding settings={settings} onDone={(s) => { setSettings(s); void refreshModels() }} />}
       {voiceOn && (

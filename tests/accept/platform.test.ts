@@ -99,7 +99,7 @@ describe('platform: templates, handoffs, pages, rules, routines, memory', () => 
   test('an Ask-first approval rule makes SahilBot ask even in Bypass', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'sb-ws-'))
     const { app, page } = await launch(tempProfile(), llm.url)
-    await page.evaluate((w) => window.foreman.settings.set({ workspaceDir: w, customRules: [{ id: 'r1', when: 'tool:file_write', action: 'ask' }] }), ws)
+    await page.evaluate((w) => window.foreman.settings.set({ workspaceDir: w, advanced: { hardStopsEnabled: true, allowBypass: true }, customRules: [{ id: 'r1', when: 'tool:file_write', action: 'ask' }] }), ws)
     const main = (await page.evaluate(() => window.foreman.spaces.list())).find((s) => s.isMain)!
     const t = await page.evaluate((id) => window.foreman.threads.create(id), main.id)
     await page.evaluate((id) => window.foreman.threads.update(id, { permissionMode: 'bypass' }), t.id)

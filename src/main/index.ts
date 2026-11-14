@@ -1,10 +1,12 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, shell, systemPreferences } from 'electron'
+import { autoPool, autoVariant } from './llm/router'
 import { execFileSync } from 'node:child_process'
 import { homedir, tmpdir, totalmem } from 'node:os'
 import { writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, mkdirSync } from 'node:fs'
 import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, PendingRequest, SendInput, Settings, Space, UsageRow } from '@shared/types'
 import type { GoalPatch } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
@@ -27,15 +29,23 @@ import { ResultStore } from './agent/context'
 import { Agent } from './agent/loop'
 import { ToolRegistry } from './agent/registry'
 import { browserTool } from './agent/tools/browser'
+import { sitesTool } from './agent/tools/sites'
+import { SiteStore } from './sites/store'
+import { setSiteHintProvider } from './sites/hint'
 import { coreTools } from './agent/tools/core'
 import { fileTools } from './agent/tools/files'
+import { officeTool, reviewDocumentTool } from './agent/tools/office'
 import { exportPagePdf, guardFrames, isPagePath, openPageWindow, PagePanel, pageInfo, pageThumbnail, pageTools, type PanelBounds } from './agent/tools/pages'
+// Docs: live two-way documents beside the chat.
+import { DocStore } from './docspace/store'
+import { exportDoc } from './docspace/export'
+import { docTools } from './agent/tools/docspace'
 import { memoryTool } from './agent/tools/memory'
 import { webTools } from './agent/tools/web'
 import { Db } from './db'
-import { providerModels, root, teamCapacity, wiredLimitMB } from './llm/models'
+import { machine, providerModels, root, teamCapacity, wiredLimitMB } from './llm/models'
 import { Endpoints } from './llm/endpoints'
-import { samplingFor } from './llm/catalog'
+import { autoWindow, samplingFor } from './llm/catalog'
 import { Warmup, lastUsedModel, warmupAllowed } from './llm/warmup'
 import { MemoryStore } from './memory'
 import { appRoot, dataDir, sub } from './paths'
@@ -43,15 +53,25 @@ import { SkillStore } from './skills'
 import { docxText, pdfText, pptxText } from './docs/read'
 import { RuleStore } from './rules'
 import { cursorTool, macAppsTool } from './agent/tools/apps'
+import { appHelpTool, appTool } from './computer/apps/tool'
 import { shellTool } from './agent/tools/shell'
+import { jobsTool } from './agent/tools/jobs'
+import { jobs } from './jobs/manager'
+import { installQuitGuard } from './jobs/quit'
+import { runUsage } from './run-usage'
+import { isPermissionMode, modeChangeAllowed } from './agent/permissions'
 import { codeTool, gitTool } from './agent/tools/code'
 import { researchTool } from './agent/tools/research'
 import { agentsTool } from './agent/tools/agents'
 import { handoffTool } from './agent/tools/handoff'
 import { computerTool } from './agent/tools/computer'
+import { createOverlay } from './computer/overlay-window'
 import { consultTool } from './agent/tools/consult'
 import { frcCodeTool } from './agent/tools/frc_code'
 import { frcMechTool } from './agent/tools/frc_mech'
+import { onshapeTool, testOnshapeKeys } from './agent/tools/onshape'
+import { freecadTool } from './agent/tools/freecad'
+import { findFreecadCmd } from './cad/freecad'
 import { Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { SpaceFiles } from './spaces'
@@ -72,11 +92,22 @@ import { Markets, type AlertState } from './markets/service'
 import { alertFromPrompt, usMarketOpen } from './markets/alerts'
 import { stockTools } from './agent/tools/stocks'
 import { KnowledgeService } from './knowledge/service'
+import { LearningService } from './learning/service'
 import { knowledgeTools, resolveScope } from './agent/tools/knowledge'
 import { GoalManager, withGoalsOverview } from './goals'
 import { opensDirectly } from './knowledge/ignore'
 import { followUpTool, goalTool } from './agent/tools/goals'
 import { captureOpenUrls, registerProtocolClient, setupMcpServer, urlHandler } from './mcp-server/app'
+import { setupActivity } from './activity/app'
+// Media, vision and batch tools on the user's own OpenAI / Anthropic keys (src/main/apis).
+import { apiAccess } from './apis/keys'
+import { mediaTools } from './agent/tools/media'
+import { readDocumentImageTool, readReceipt } from './agent/tools/vision'
+import { BatchManager, batchTool } from './agent/tools/batch'
+import { embeddingProvider } from './knowledge/embeddings'
+import { OPENAI_URL } from './llm/providers'
+import { fromWav } from './voice/audio'
+import { swarmSpend } from './agent/swarm/ledger'
 
 /** Set by the automated tests: run without ever showing a window. */
 const HIDDEN = !!process.env.SAHILBOT_HIDDEN
@@ -211,6 +242,11 @@ app.whenReady().then(() => {
   let menuBar: MenuBarIcon | null = null
   const secrets = new Secrets(db)
   const settings = new SettingsStore(db, secrets)
+  /** The Onshape API key pair from the Keychain (main process only; never sent to the renderer or the model). */
+  const onshapeKeys = (): { accessKey: string; secretKey: string } | undefined => {
+    const accessKey = secrets.get('onshapeAccessKey'), secretKey = secrets.get('onshapeSecretKey')
+    return accessKey && secretKey ? { accessKey, secretKey } : undefined
+  }
   const spaces = new SpaceFiles()
   // Cloud spending cap: enforced inside the model client for every paid request (chat, agent, voice, summaries).
   const budget = new Budget(db, () => settings.get().cloudBudgetUsd)
@@ -231,10 +267,21 @@ app.whenReady().then(() => {
    * Screenshot. Default: the main display, scaled so one image pixel = one screen point. With rect
    * (global points, any display): that area (screencapture -R), resized to width×height pixels.
    */
+  // The SahilBot cursor (computer use): click-through windows that show each step; Stop on its pill (or
+  // Ctrl+Option+Esc) stops the run. Made on first use; hidden test runs never make them.
+  const cursorOverlay = createOverlay({
+    hidden: HIDDEN,
+    rendererUrl: process.env.ELECTRON_RENDERER_URL,
+    onStop: () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini(); cursorOverlay.overlay.hide() }
+  })
+  app.on('before-quit', () => cursorOverlay.windows()?.dispose())
   const captureScreen = async (file: string, opts?: { rect?: Electron.Rectangle; width?: number; height?: number }): Promise<{ dataUrl: string; width: number; height: number }> => {
     const r = opts?.rect
     const area = r ? ['-R', `${Math.round(r.x)},${Math.round(r.y)},${Math.max(1, Math.round(r.width))},${Math.max(1, Math.round(r.height))}`] : []
-    await new Promise<void>((ok, fail) => execFile('screencapture', ['-x', '-C', ...area, '-t', 'png', file], { timeout: 15_000 }, (e) => (e ? fail(e) : ok())))
+    const shoot = (): Promise<void> => new Promise<void>((ok, fail) => execFile('screencapture', ['-x', '-C', ...area, '-t', 'png', file], { timeout: 15_000 }, (e) => (e ? fail(e) : ok())))
+    // The SahilBot cursor is never in the model's screenshots (content protection, and invisible while capturing).
+    const ov = cursorOverlay.windows()
+    await (ov ? ov.aroundCapture(shoot) : shoot())
     const d = screen.getPrimaryDisplay()
     const width = opts?.width ?? (r ? Math.round(r.width) : d.size.width)
     const height = opts?.height ?? (r ? Math.round(r.height) : d.size.height)
@@ -248,6 +295,7 @@ app.whenReady().then(() => {
   let mini: { bounds: Electron.Rectangle; threadId: string } | null = null
   const exitMini = (): void => {
     globalShortcut.unregister('Control+Option+Escape')
+    cursorOverlay.overlay.hide()
     if (!mini || !win || win.isDestroyed()) { mini = null; return }
     win.setAlwaysOnTop(false)
     win.setMinimumSize(900, 600)
@@ -263,6 +311,7 @@ app.whenReady().then(() => {
     win.setAlwaysOnTop(true, 'floating')
     win.setBounds({ x: workArea.x + workArea.width - 300 - 14, y: workArea.y + 14, width: 300, height: 176 }, true)
     toWin('mini', { on: true, threadId })
+    cursorOverlay.overlay.warm()
     // A way out that works whatever app is in front.
     globalShortcut.register('Control+Option+Escape', () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini() })
   }
@@ -330,7 +379,7 @@ app.whenReady().then(() => {
       const now = Date.now()
       if (now - (lastNeedsYou.get(e.threadId) ?? 0) < 60_000) return
       lastNeedsYou.set(e.threadId, now)
-      showNote(new Notification({ title: `${botName(thread.spaceId)} needs you`, body: needsYouText(e.request), silent: false }), e.threadId)
+      showNote(new Notification({ title: e.request.kind === 'question' || e.request.kind === 'questions' ? `${botName(thread.spaceId)} has a question` : `${botName(thread.spaceId)} needs you`, body: needsYouText(e.request), silent: false }), e.threadId)
     } else if (e.type === 'resolved') {
       waiting.get(e.threadId)?.delete(e.id)
       refreshBadge()
@@ -371,6 +420,16 @@ app.whenReady().then(() => {
   browser.teach.secretValues = () => vault.secretValues()
   // Saved card numbers never leave the browser unless the user approved that purchase step.
   browser.cardNumbers = () => { try { return vault.cardNumbers() } catch { return [] } }
+  // Site playbooks: what SahilBot learns about each website from its browser runs and Teach recordings
+  // (never secrets: saved passwords, cards and recent codes are checked against everything stored).
+  const sites = new SiteStore(sub('sites'), () => { try { return [...vault.secretValues(), ...browser.hiddenValues()] } catch { return [] } })
+  browser.onTeach = (r) => { sites.learnTeach(r.steps, r.name) }
+  setSiteHintProvider((url) => sites.hintFor(url))
+  listeners.add((e) => {
+    if (e.type !== 'run' || !e.threadId) return
+    if (e.status === 'started') sites.startRun(e.threadId)
+    else sites.endRun(e.threadId, e.status)
+  })
   // Purchase and one-time-code cards: approved only by a click in the main window (purchase:respond).
   const purchases = new PurchaseGate({
     emit: (e) => emit(e),
@@ -395,16 +454,28 @@ app.whenReady().then(() => {
   registry.register(
     ...coreTools(results),
     ...fileTools(() => settings.get().workspaceDir, docsDir),
+    // Office: review_document (core; every new document gets checked) and the office tool (find_tools("office"/"excel"/"pdf")):
+    // spreadsheets read/edited in place, PDF forms, merge/split, batch file jobs, receipts, meeting notes.
+    reviewDocumentTool({ getWorkspace: () => settings.get().workspaceDir }),
+    officeTool({ getWorkspace: () => settings.get().workspaceDir, markdownToPdf: async (md, title) => (await import('./docs/create')).renderPdf(md, { title }),
+      // Receipts without a text layer: Claude vision when an Anthropic key is saved and cloud is on.
+      visionReceipt: (file, signal) => readReceipt({ access: apiAccess(settings), workspace: () => settings.get().workspaceDir }, file, signal) }),
     ...pageTools(pagesDir),
     ...webTools(() => ({ ...settings.get().search, braveKey: secrets.get('braveKey') })),
     memoryTool(memory, db, skills, rules),
     // Built in and always available (connector tools are found with find_tools).
-    { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since) }), core: true },
+    { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since), sites }), core: true },
+    sitesTool(sites),
     { ...cursorTool(() => secrets.get('cursorKey'), () => settings.get().workspaceDir), core: true },
     { ...macAppsTool(), core: true },
     // Email through Apple Mail (every account in Mail; drafts by default, sending and bulk changes ask).
-    { ...mailTool(), core: true },
-    shellTool(),
+    { ...mailTool(), core: false, group: 'Email' },
+    // Mac apps through their own scripting (Finder, browsers, Office, iWork, Messages, Slack, Music, Xcode, System Settings…).
+    appTool(() => settings.get().workspaceDir),
+    appHelpTool(),
+    // Terminal commands, and background jobs (dev servers, watchers) with the jobs tool to manage them.
+    shellTool({ rootsOf: (threadId) => db.getState(threadId).roots ?? [], workspace: () => settings.get().workspaceDir }),
+    jobsTool(),
     // Coding: search, symbols, exact edits, patches, tests/type checks/lint with parsed failures; git with a secret scan.
     codeTool({ getWorkspace: () => settings.get().workspaceDir }),
     gitTool(),
@@ -412,6 +483,7 @@ app.whenReady().then(() => {
     agentsTool(),
     computerTool({
       enterMini: (id) => enterMini(id),
+      overlay: cursorOverlay.overlay,
       trusted: (prompt) => systemPreferences.isTrustedAccessibilityClient(prompt),
       capture: (file, opts) => captureScreen(file, opts),
       displays: () => {
@@ -420,7 +492,7 @@ app.whenReady().then(() => {
       },
       // SahilBot's own processes and windows: computer use never clicks or types into them.
       self: () => {
-        const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.isVisible())
+        const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.isVisible() && !cursorOverlay.windows()?.owns(w))
         return {
           pids: [process.pid, ...app.getAppMetrics().map((m) => m.pid)],
           names: [...new Set([app.getName(), 'SahilBot', ...(app.isPackaged ? [] : ['Electron'])])],
@@ -443,7 +515,11 @@ app.whenReady().then(() => {
     // FRC robot software: logs, vendordeps, project scan, scouting (found with find_tools).
     frcCodeTool({ workspace: () => settings.get().workspaceDir, tbaKey: () => secrets.get('tbaKey') ?? undefined }),
     // FRC mechanical design math: motors, mechanisms, ratios, belt/chain centers, beams, weight (found with find_tools).
-    frcMechTool()
+    frcMechTool(),
+    // CAD: Onshape through the user's API keys (reads free; CAD changes ask, workspaces only), found with find_tools("onshape"/"cad").
+    onshapeTool({ keys: onshapeKeys, workspace: () => settings.get().workspaceDir }),
+    // Local CAD files through FreeCAD's command line, only when FreeCAD is installed.
+    ...(findFreecadCmd() ? [freecadTool({ workspace: () => settings.get().workspaceDir })] : [])
   )
 
   const registerQuickKeyRef = { current: (): void => undefined }
@@ -456,8 +532,10 @@ app.whenReady().then(() => {
   const fitWindow =(model: string, window: number): number => {
     const m = endpoints.last?.models.find((x) => x.id === model)
     if (!m || m.note === 'remote') return window
-    // Never below 16k; otherwise the largest window this Mac's memory allows with this model.
-    return Math.max(16384, Math.min(window, m.maxFittingWindow || 32768))
+    // Never below 16k; otherwise the largest window this Mac's memory allows with this model. On Auto
+    // (context window 0) at most 64k on 48 GB+ Macs and 32k on smaller ones: bigger costs memory and speed.
+    const cap = settings.get().contextWindow ? window : Math.min(window, autoWindow(machine().budgetGB))
+    return Math.max(16384, Math.min(cap, m.maxFittingWindow || 32768))
   }
 
   const connectors = new Connectors(db, secrets, registry, () => toWin('connectors:changed'))
@@ -486,6 +564,19 @@ app.whenReady().then(() => {
   attachments.registerProtocol()
   // Pages run only in their own session (the side-panel view, their window, PDF/thumbnail renderers).
   const pagePanel = new PagePanel(() => win, pagesDir)
+  // ---- Docs (live documents the bot and the user both edit; src/main/docspace) ----
+  const docs = new DocStore(db.sql)
+  docs.onChange((e) => toWin('docs:event', e))
+  // Before the bot reads or edits a document, unsaved edits in the editor are saved first (briefly waited for).
+  const docsDirty = new Set<string>()
+  const docsFlushWaits = new Map<string, () => void>()
+  docs.beforeBotAccess = (id) => !docsDirty.has(id) || !win || win.isDestroyed() ? Promise.resolve() : new Promise<void>((done) => {
+    const finish = (): void => { docsFlushWaits.delete(id); done() }
+    docsFlushWaits.set(id, finish)
+    toWin('docs:flush', id)
+    setTimeout(finish, 1500)
+  })
+  registry.register(...docTools({ store: docs, workspace: () => settings.get().workspaceDir, spaceOf: (threadId) => db.getThread(threadId)?.spaceId }))
   applyTheme(settings.get().theme)
 
   /** Calls that change what's unread refresh the Dock badge. */
@@ -578,9 +669,13 @@ app.whenReady().then(() => {
 
   // Team of Experts: how many helper agents this Mac can run with a model.
   handle('agents:capacity', (model: string) => {
-    const id = model === 'auto' ? endpoints.usable().sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id : model
+    const variant = autoVariant(model)
+    const id = variant ? autoPool(variant, endpoints.usable()).sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id : model
     return teamCapacity(endpoints.last?.models.find((m) => m.id === id))
   })
+
+  // Settings → Onshape → Test: the saved key pair against GET /users/sessioninfo (keys never leave main).
+  handle('onshape:test', () => testOnshapeKeys({ keys: onshapeKeys }))
 
   handle('models:test', async (baseUrl: string, apiKey?: string) => {
     const r = await providerModels('custom', 'Test', baseUrl, apiKey || settings.keyFor(baseUrl), settings.get().contextWindow || 32768)
@@ -624,6 +719,22 @@ app.whenReady().then(() => {
     }
   })
 
+  // Deletes a downloaded model from Ollama (Settings → Models asks first). Only models Ollama listed.
+  handle('models:delete', async (tag: string) => {
+    if (typeof tag !== 'string' || !/^[\w.\-/]+(:[\w.\-]+)?$/.test(tag) || pulling.has(tag)) return { ok: false, error: 'That model can\'t be deleted right now.' }
+    if (!endpoints.last?.models.some((m) => m.id === tag && m.provider === 'ollama' && m.installed)) await endpoints.list().catch(() => undefined)
+    if (!endpoints.last?.models.some((m) => m.id === tag && m.provider === 'ollama' && m.installed)) return { ok: false, error: `${tag} isn't downloaded in Ollama.` }
+    try {
+      const res = await fetch(`${root(settings.providers().ollama.baseUrl)}/api/delete`, { method: 'DELETE', body: JSON.stringify({ model: tag }), signal: AbortSignal.timeout(30_000) })
+      if (!res.ok) return { ok: false, error: `Ollama answered ${res.status}${res.status === 404 ? ': it was already deleted' : ''}` }
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message.includes('fetch failed') ? 'Ollama isn\'t running.' : (e as Error).message }
+    } finally {
+      void endpoints.list().catch(() => undefined)
+    }
+  })
+
   handle('spaces:list', () => db.listSpaces())
   handle('spaces:create', (input: { name?: string; color?: string; shape?: BotShape; kind?: 'bot' | 'group' | 'project'; members?: string[]; intro?: boolean; folder?: string }) => {
     const kind = input.kind ?? 'bot'
@@ -658,6 +769,8 @@ app.whenReady().then(() => {
   handle('spaces:remove', (id: string) => {
     if (db.getSpace(id)?.isMain) throw new Error("The main bot can't be deleted.")
     for (const t of db.listThreads(id)) chat.stop(t.id)
+    // Background jobs belong to the bot's chats: they stop with it.
+    void jobs.stopThreads(db.listThreads(id).map((t) => t.id))
     db.deleteSpace(id)
     for (const g of db.listSpaces().filter((x) => x.kind === 'group' && x.members.includes(id))) db.updateSpace(g.id, { members: g.members.filter((m) => m !== id) })
   })
@@ -665,18 +778,28 @@ app.whenReady().then(() => {
   handle('spaces:setPrompt', (id: string, text: string) => spaces.setPrompt(id, text))
   handle('spaces:promptPath', (id: string) => spaces.path(id))
   // Bot details → Library: files this bot made (that still exist) and links from its chats.
-  handle('spaces:library', (id: string) => db.spaceLibrary(id).filter((x) => x.kind !== 'file' || (!!x.path && existsSync(x.path))))
+  handle('spaces:library', (id: string) => [...db.spaceLibrary(id).filter((x) => x.kind !== 'file' || (!!x.path && existsSync(x.path))), ...docs.libraryItems(id)].sort((a, b) => b.at - a.at))
 
   handle('threads:list', (spaceId?: string) => db.listThreads(spaceId))
   handle('threads:search', (q: string) => db.searchThreads(q))
-  handle('threads:create', (spaceId: string) => db.createThread(spaceId, 'auto', null))
+  // New chats start at the bot's autonomy level, else the app default (never Bypass).
+  handle('threads:create', (spaceId: string) => {
+    const s = settings.get()
+    const m = s.botModes?.[spaceId] ?? s.defaultMode
+    return db.createThread(spaceId, isPermissionMode(m) && m !== 'bypass' ? m : 'auto', null)
+  })
   handle('threads:update', (id: string, patch: Parameters<Db['updateThread']>[1]) => {
+    // Bypass only when Settings offers it (advanced.allowBypass); a chat already in Bypass may stay there.
+    if (patch && 'permissionMode' in patch && !modeChangeAllowed(patch.permissionMode, { allowBypass: settings.get().advanced.allowBypass, current: db.getThread(id)?.permissionMode })) {
+      throw new Error(patch.permissionMode === 'bypass' ? 'Bypass is turned off in Settings → Advanced.' : `Unknown autonomy level "${String(patch.permissionMode)}".`)
+    }
     // A local model picked for this chat: load it while the user types.
     if (patch.model && warmupAllowed()) warmup.soon(patch.model)
     return db.updateThread(id, patch)
   })
   handle('threads:remove', (id: string) => {
     chat.stop(id)
+    void jobs.stopThreads([id])
     db.deleteThread(id)
   })
   handle('threads:messages', (id: string) => db.listMessages(id))
@@ -705,6 +828,43 @@ app.whenReady().then(() => {
   handle('pages:exportPdf', (path: string) => exportPagePdf(pagesDir, path))
   handle('pages:show', (path: string | null, rev?: string, bounds?: PanelBounds | null) => { if (path) return pagePanel.show(path, String(rev ?? ''), bounds ?? null); pagePanel.close(); return null })
   handle('pages:thumbnail', (path: string) => pageThumbnail(pagesDir, path))
+  // ---- Docs IPC (the Document tab) ----
+  handle('docs:list', (threadId: string) => docs.list(threadId))
+  handle('docs:get', (id: string) => docs.get(id))
+  handle('docs:create', (threadId: string, title: string, type?: 'doc' | 'sheet') => {
+    const t = db.getThread(threadId)
+    if (!t) throw new Error('Thread not found')
+    return docs.create({ threadId, spaceId: t.spaceId, title: title || 'Untitled', type, content: { blocks: type === 'sheet' ? [] : [{ id: 'b000', type: 'p', text: '' }] }, author: 'user' })
+  })
+  handle('docs:save', (id: string, base: number, content: import('@shared/types').DocContent) => {
+    const snap = docs.saveUser(id, Number(base), content)
+    docsDirty.delete(id)
+    docsFlushWaits.get(id)?.()
+    return snap
+  })
+  handle('docs:versions', (id: string) => docs.versions(id))
+  handle('docs:version', (id: string, n: number) => docs.version(id, Number(n)))
+  handle('docs:diff', (id: string, from: number, to: number) => docs.diff(id, Number(from), Number(to)))
+  handle('docs:restore', (id: string, n: number) => docs.restore(id, Number(n)))
+  handle('docs:export', async (id: string, format: import('@shared/types').DocExportFormat) => {
+    const path = await exportDoc(docs.get(id), format, join(settings.get().workspaceDir, 'exports'))
+    attachments.allow(path)
+    if (!HIDDEN) shell.showItemInFolder(path)
+    return path
+  })
+  handle('docs:addImage', async () => {
+    const opts: Electron.OpenDialogOptions = { title: 'Add an image', properties: ['openFile'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] }] }
+    const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+    if (r.canceled || !r.filePaths[0]) return null
+    // Copied into the workspace so the editor may show it (and exports can find it).
+    const dir = join(settings.get().workspaceDir, 'doc-images')
+    mkdirSync(dir, { recursive: true })
+    const dest = join(dir, `${Date.now().toString(36)}-${basename(r.filePaths[0]).replace(/[^\w.-]+/g, '-')}`)
+    copyFileSync(r.filePaths[0], dest)
+    return dest
+  })
+  handle('docs:dirty', (id: string, dirty: boolean) => { if (dirty) docsDirty.add(id); else { docsDirty.delete(id); docsFlushWaits.get(id)?.() } })
+  handle('docs:flushed', (id: string) => { docsDirty.delete(id); docsFlushWaits.get(id)?.() })
   // The first lines of a document, for file thumbnails (only files SahilBot made).
   handle('files:snippet', async (path: string) => {
     if (!db.recentFiles(500).some((f) => f.path === path) || !existsSync(path)) return ''
@@ -1023,6 +1183,8 @@ app.whenReady().then(() => {
     const b = budget.summary()
     return aggregateUsage(usageWindow(), db.listSpaces(), { now: Date.now(), days: 30, month: b.month, spent: b.spent, cap: b.cap, monthRequests: b.requests })
   })
+  // The end-of-run line under the last reply: tokens (and cloud cost) of one run, helpers included.
+  handle('usage:forRun', (threadId: string, since: number, until?: number) => runUsage(db, String(threadId), Number(since) || 0, typeof until === 'number' ? until : undefined, isCloudModel))
   handle('usage:exportCsv', async () => {
     const names = new Map(db.listSpaces().map((sp) => [sp.id, sp.name]))
     const csv = usageCsv(usageWindow(), (id) => (id ? names.get(id) ?? 'Deleted bot' : ''))
@@ -1051,13 +1213,47 @@ app.whenReady().then(() => {
     sql: db.sql,
     workspace: () => settings.get().workspaceDir,
     projects: () => db.listSpaces().filter((x) => x.kind === 'project').map((x) => ({ id: x.id, name: x.name, folder: x.folder })),
-    ollamaUrl: () => (settings.providers().ollama.enabled ? settings.providers().ollama.baseUrl : null),
+    ollamaUrl: () => (settings.providers().ollama.enabled ? settings.providers().ollama.baseUrl : settings.get().openaiEmbeddings && apiAccess(settings).openai() ? OPENAI_URL : null),
     busy: () => chat.busy(),
     onChange: () => { if (!knowledgeNotify) knowledgeNotify = setTimeout(() => { knowledgeNotify = null; toWin('knowledge:changed') }, 1000) }
   })
   registry.register(...knowledgeTools({ kb: knowledge, spaceOf: (threadId) => db.getThread(threadId)?.spaceId }))
   if (process.env.SAHILBOT_KNOWLEDGE !== '0' && (!HIDDEN || process.env.SAHILBOT_KNOWLEDGE === '1')) knowledge.start(HIDDEN ? 500 : 8000)
   app.on('before-quit', () => knowledge.dispose())
+
+  // ---------------------------------------------------------------- learning while the app is open and idle
+  // Runs only while SahilBot is running and idle (no chat for 2 minutes, nobody using the window); it stops
+  // the moment a run starts or the user does something, and never after quit. Not in hidden test runs
+  // unless SAHILBOT_LEARNING=1. Everything it learns is in Settings → Memory → What I learned, with Undo.
+  const appThreadRef: { current?: (id: string) => boolean } = {}
+  let learningNotify: ReturnType<typeof setTimeout> | null = null
+  const learning = new LearningService({
+    db, memory, skills, settings, endpoints, fitWindow,
+    busy: () => chat.busy(),
+    isRunning: (id) => chat.isRunning(id),
+    secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+    isAppThread: (id) => appThreadRef.current?.(id) ?? false,
+    onBattery: () => { try { return powerMonitor.isOnBatteryPower() } catch { return false } },
+    onChange: () => { if (!learningNotify) learningNotify = setTimeout(() => { learningNotify = null; toWin('learning:changed') }, 300) }
+  })
+  if (process.env.SAHILBOT_LEARNING !== '0' && (!HIDDEN || process.env.SAHILBOT_LEARNING === '1')) learning.start()
+  // A run starting (any chat, routine or helper) stops a pass at once; so does the user typing or clicking.
+  listeners.add((e) => { if (e.type === 'run' && e.status === 'started') learning.activity('run') })
+  const watchInput = (w: BrowserWindow): void => {
+    w.webContents.on('before-input-event', () => learning.activity('input'))
+    w.on('focus', () => learning.activity('input'))
+  }
+  for (const w of BrowserWindow.getAllWindows()) watchInput(w)
+  app.on('browser-window-created', (_e, w) => watchInput(w))
+  powerMonitor.on('suspend', () => learning.activity('run'))
+  app.on('before-quit', () => learning.dispose())
+  handle('learning:status', () => learning.status())
+  handle('learning:list', (limit?: number) => learning.list(typeof limit === 'number' ? limit : 200))
+  handle('learning:undo', (id: string) => learning.undo(String(id ?? '')))
+  handle('learning:approve', (id: string) => learning.approve(String(id ?? '')))
+  handle('learning:dismiss', (id: string) => learning.dismiss(String(id ?? '')))
+  handle('learning:runNow', () => learning.runNow())
+  handle('learning:openChat', (threadId: string) => { if (db.getThread(String(threadId ?? ''))) openThread(String(threadId)) })
   handle('knowledge:status', () => knowledge.status())
   // Folders are added only through the picker here, or from folders already attached to a chat.
   handle('knowledge:addFolder', async () => {
@@ -1135,6 +1331,54 @@ app.whenReady().then(() => {
   handle('voice:dictateStart', () => voice.startDictation())
   handle('voice:dictateStop', () => voice.stopDictation())
   ipcMain.on('voice:frame', (_e, buf: Float32Array) => voice.frame(buf))
+
+  // ---------------------------------------------------------------- media, vision and batch tools (the user's OpenAI / Anthropic keys)
+  // Found with find_tools ("image", "speech", "transcribe", "ocr", "batch"); listed only while cloud models are
+  // on and the needed key is saved. Every call is priced first and recorded through spendHooks (cap + Usage).
+  const apiKeys = apiAccess(settings)
+  registry.register(
+    ...mediaTools({
+      access: apiKeys,
+      workspace: () => settings.get().workspaceDir,
+      vision: (model) => !!model && (/^claude-/i.test(model) || !!endpoints.last?.models.find((m) => m.id === model)?.vision),
+      // WAV plays through the app's own audio output (like spoken replies); other formats with afplay.
+      play: (file, format) => {
+        if (format === 'wav' && win && !win.isDestroyed()) {
+          const { samples, rate } = fromWav(readFileSync(file))
+          toWin('voice:event', { type: 'stop-audio' })
+          toWin('voice:event', { type: 'audio', audio: samples, rate })
+          return
+        }
+        execFile('afplay', [file], { timeout: 60 * 60_000 }, () => undefined)
+      }
+    }),
+    readDocumentImageTool({ access: apiKeys, workspace: () => settings.get().workspaceDir })
+  )
+  const batches = new BatchManager({
+    access: apiKeys,
+    workspace: () => settings.get().workspaceDir,
+    stateFile: join(sub('batches'), 'batches.json'),
+    spaceOf: (threadId) => db.getThread(threadId)?.spaceId ?? null,
+    notify: (threadId, text) => {
+      if (!db.getThread(threadId)) return
+      const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done' })
+      emit({ threadId, type: 'message', message: m })
+    }
+  })
+  registry.register(batchTool(batches, { access: apiKeys, workspace: () => settings.get().workspaceDir }))
+  if (!HIDDEN || process.env.SAHILBOT_BATCHES === '1') batches.resume()
+  app.on('before-quit', () => batches.dispose())
+  // Knowledge search embeddings through OpenAI, only when the user turned it on (sends document text to OpenAI).
+  embeddingProvider.openai = { creds: () => (settings.get().openaiEmbeddings ? apiKeys.openai() ?? null : null) }
+  const setSettings = settings.set.bind(settings)
+  settings.set = (patch) => {
+    const s = setSettings(patch)
+    // Switching the option (or cloud / keys) takes effect now, not at the next periodic re-check.
+    if (patch.openaiEmbeddings !== undefined || patch.cloud !== undefined || patch.setKeys !== undefined) void knowledge.embedModel(true).catch(() => undefined)
+    // Open windows pick up the change wherever it came from (a bot, the menu bar, another window).
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('settings:changed')
+    return s
+  }
   // Runs still going at quit were cut off: their rows stay so the next launch offers Continue.
   app.on('before-quit', () => { work.quitting(); menuBar?.dispose(); voice.dispose(); scheduler.stop(); browser.dispose(); stopOllama() })
   // Local models just work after a restart: start Ollama in the background if it's installed and not running.
@@ -1216,6 +1460,9 @@ app.whenReady().then(() => {
   handle('browser:teachStop', () => browser.teachStop())
   handle('browser:teachCancel', () => browser.teachCancel())
   handle('browser:teachCompose', (name: string, goal?: string) => browser.teachCompose(String(name ?? ''), goal ? String(goal) : undefined))
+  handle('sites:list', () => sites.list())
+  handle('sites:get', (domain: string) => sites.get(String(domain ?? '')) ?? null)
+  handle('sites:forget', (domain: string) => sites.forget(String(domain ?? '')))
 
   handle('memory:list', () => memory.list())
   handle('memory:remove', (id: string) => void memory.remove(id))
@@ -1351,8 +1598,40 @@ app.whenReady().then(() => {
     }
   })
   app.on('before-quit', () => { void mcp.dispose() })
+  // ---------------------------------------------------------------- know what I'm working on (opt-in, off by default)
+  // Only while SahilBot runs; local only; stops on quit. See activity/ for what is (and is never) collected.
+  setupActivity({ db, mainWindow: () => win, hidden: HIDDEN })
+  // Chats a connected app started: anything learned from them is tagged.
+  appThreadRef.current = (id) => mcp.isAppThread(id)
+  // Background jobs (Jobs tab): live updates to the window, IPC, and a quit that asks while any still run.
+  jobs.onEvent((e) => toWin('jobs:event', e))
+  handle('jobs:list', (threadId?: string) => jobs.list(typeof threadId === 'string' ? threadId : undefined))
+  handle('jobs:output', (id: string, o?: { tail?: number; grep?: string }) => {
+    try { const r = jobs.output(String(id), { tail: Math.min(Number(o?.tail) || 400, 2000), grep: typeof o?.grep === 'string' ? o.grep.slice(0, 200) : undefined }); return { lines: r.lines, total: r.total } } catch { return { lines: [], total: 0 } }
+  })
+  handle('jobs:stop', async (id: string) => (await jobs.stop(String(id))) ?? null)
+  handle('jobs:restart', async (id: string) => (await jobs.restart(String(id))) ?? null)
+  handle('jobs:remove', (id: string) => jobs.remove(String(id)))
+  installQuitGuard(app, { jobs, silent: HIDDEN, window: () => win, showMessageBox: (w, opts) => (w ? dialog.showMessageBox(w, opts) : dialog.showMessageBox(opts)) })
   registerProtocolClient(HIDDEN)
   openUrls.attach(urlHandler({ db, emit, openThread, newChat: () => sendMenu('new-chat'), mainWindow: () => showMain(), isAppThread: (id) => mcp.isAppThread(id) }))
+
+  // ---------------------------------------------------------------- swarms and Heavy runs
+  // Paid requests made inside a swarm (a big cloud team, a Heavy run) count toward its own cap: one that
+  // could pass it is refused before it is sent. Chained after the monthly and goal checks.
+  const spendBeforeSwarm = spendHooks.before
+  spendHooks.before = (req, est, maxOutput, pricedAs) => {
+    spendBeforeSwarm?.(req, est, maxOutput, pricedAs)
+    swarmSpend.before(pricedAs, est, maxOutput)
+  }
+  const spendAfterSwarm = spendHooks.after
+  spendHooks.after = (req, input, output, served) => {
+    spendAfterSwarm?.(req, input, output, served)
+    try { swarmSpend.after(served, input, output) } catch { /* never fails the request */ }
+  }
+  // Team board and Heavy card buttons: cancel one helper, or stop the ones that haven't finished.
+  handle('agents:cancelHelper', (memberId: string) => chat.cancelHelper(String(memberId)))
+  handle('agents:stopRemaining', (groupId: string) => chat.stopRemaining(String(groupId)))
 
   app.on('activate', () => {
     // The browser's hidden parking window doesn't count as an open window.
