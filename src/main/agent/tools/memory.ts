@@ -1,5 +1,5 @@
 import type { Db } from '../../db'
-import { MEMORY_KINDS, SECRETISH, isBotKind, normalizeKind, type Memory, type MemoryKind, type MemoryStore } from '../../memory'
+import { MEMORY_KINDS, SECRETISH, isBotKind, isUntrusted, normalizeKind, type Memory, type MemoryKind, type MemoryStore } from '../../memory'
 import type { SkillStore } from '../../skills'
 import type { RuleStore } from '../../rules'
 import type { ToolDef } from '../types'
@@ -91,6 +91,8 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         if (a.action === 'read_skill') {
           const sk = skills.get(a.name!)
           if (!sk) return { text: `No skill named "${a.name}". Saved skills:\n${skills.index(100) || '(none)'}`, display: `no skill "${a.name}"` }
+          // Learned next to outside content: not followed until the user approves it in the learning log.
+          if (sk.untrusted) return { text: `The skill "${sk.name}" is waiting for the user's OK (Settings → Memory → What I learned) and can't be used yet. Work it out without it.`, display: `skill "${sk.name}" not approved yet` }
           skills.used(sk.name)
           return { text: `# ${sk.name}\n${sk.description}\n\n${sk.body}`, display: `read skill "${sk.name}"` }
         }
@@ -108,20 +110,26 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
       if (a.action === 'save') {
         if (off) return { text: offText, display: 'memory is off' }
         if (SECRETISH.test(a.fact!)) throw new Error('That looks like a secret. Secrets are never stored in memory; saved logins belong in the password vault.')
-        const kind = normalizeKind(a.category)
+        // An unverified memory is never a rule.
+        const kind = tainted && normalizeKind(a.category) === 'rule' ? 'fact' : normalizeKind(a.category)
         // Job rules and the work log belong to the bot; in a project, so do its decisions and status.
         const scope = a.scope ?? (a.about === 'project' ? 'bot' : a.about === 'user' ? 'me' : isBotKind(kind) || (kind === 'project' && projectId) ? 'bot' : 'me')
-        const spaceId = scope === 'bot' ? botId : null
+        // Wording that came from (or followed) outside content: unverified, kept with this bot only, and it
+        // never rewrites a verified memory.
+        if (tainted && !botId) throw new Error('This chat read outside content (a web page, email, another app or bot), and there is no single bot to keep an unverified memory for. Tell the user what you would remember and let them save it.')
+        const spaceId = scope === 'bot' || tainted ? botId : null
+        const provenance = tainted ? 'untrusted' as const : 'trusted' as const
         if (a.id) {
           const cur = memory.get(a.id.trim())
           if (cur && !mine(cur)) throw new Error(`Memory ${cur.id} belongs to ${where(cur)}, not to this chat. Save a new memory instead.`)
+          if (cur && tainted && !isUntrusted(cur)) throw new Error(`Memory ${cur.id} is verified (the user's own words); it can't be reworded from outside content. Save a new memory instead, or ask the user.`)
           if (cur) {
             const m = memory.update(cur.id, a.fact!, { category: a.category ? kind : undefined })!
             return { text: `Updated memory ${m.id} (was: ${quote(cur.content)}; now: ${quote(m.content)}).${from} Mention the change briefly in your reply.`, display: `updated "${m.content.slice(0, 60)}"` }
           }
         }
-        const { memory: m, replaced } = memory.save(a.fact!, kind, spaceId, 'chat')
-        const whereSaved = spaceId ? `for ${botName} only` : 'shared (about the user)'
+        const { memory: m, replaced } = memory.save(a.fact!, kind, spaceId, 'chat', provenance)
+        const whereSaved = `${spaceId ? `for ${botName} only` : 'shared (about the user)'}${tainted ? ', marked unverified (from outside content)' : ''}`
         return {
           text: `${replaced ? `Updated memory ${m.id} (was: ${quote(replaced)})` : `Saved memory ${m.id}`} as ${m.category}, ${whereSaved}.${from}${m.category === 'worklog' ? '' : ' Mention it briefly in your reply (e.g. "I\'ll remember that…").'}`,
           display: `${m.category === 'worklog' ? 'logged' : replaced ? 'updated' : 'saved'} "${m.content.slice(0, 60)}"`

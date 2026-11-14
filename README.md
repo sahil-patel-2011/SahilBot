@@ -1,61 +1,95 @@
-# Foreman
+# SahilBot
 
-A macOS desktop AI assistant that runs on your own local models (Ollama or any OpenAI-compatible server). It can chat, work as an agent with tools, and drive a built-in browser.
+A private, local-first AI assistant for your Mac. SahilBot chats, works as an agent with tools (files, documents, the built-in browser, your Mac's apps, connectors), talks with you by voice, and runs on models on your own Mac through Ollama or LM Studio. You can also add Claude, ChatGPT or OpenRouter with your own API key.
 
-## Run
+## Download
+
+<p>
+  <a href="https://github.com/sahil-patel-2011/SahilBot/releases/latest/download/SahilBot-mac-arm64.dmg"><b>⬇ Download SahilBot for Mac (Apple Silicon)</b></a>
+</p>
+
+https://github.com/sahil-patel-2011/SahilBot/releases/latest/download/SahilBot-mac-arm64.dmg
+
+This link always gets the newest build. Every push to `main` builds and publishes one ([Releases](https://github.com/sahil-patel-2011/SahilBot/releases) keeps every earlier build). A `.zip` of the app is there too: [SahilBot-mac-arm64.zip](https://github.com/sahil-patel-2011/SahilBot/releases/latest/download/SahilBot-mac-arm64.zip).
+
+> **The repository is private.** Only people added as collaborators can download, and they need to be signed in to GitHub in the browser. To share the app more widely, make the repository public or attach the DMG somewhere else.
+
+## Requirements
+
+- A Mac with Apple Silicon (M1 or newer). Intel Macs aren't supported.
+- macOS 13 Ventura or later.
+- For local models: memory decides which models fit. 8–16 GB runs the small fast ones, 24 GB+ handles everyday agent work, and 48–64 GB runs the strongest local models (Qwen3.8 27B, Qwen3.6 35B-A3B) with a 64k context. Each model needs 2–25 GB of disk space.
+
+## Install
+
+1. Open `SahilBot-mac-arm64.dmg` and drag **SahilBot** to **Applications**.
+   - No admin rights? Drag it to the **Applications** folder inside your home folder (`~/Applications`; create it if it isn't there). Spotlight and Launchpad find it there too.
+2. Open SahilBot.
+
+**First launch, when the build isn't notarized.** Builds made without an Apple Developer ID are signed ad hoc, so macOS blocks the first open. The release notes say which kind each build is. To open it:
+
+- macOS 13–14: right-click (or Control-click) SahilBot in Applications → **Open** → **Open**.
+- macOS 15 or later: double-click it once, close the warning, then go to System Settings → Privacy & Security and click **Open Anyway** next to SahilBot.
+- Or in Terminal: `xattr -dr com.apple.quarantine /Applications/SahilBot.app` (or `~/Applications/SahilBot.app`).
+
+After that it opens normally. Notarized builds open with a plain double-click.
+
+## Local models (Ollama)
+
+SahilBot runs models on your Mac through [Ollama](https://ollama.com) (or [LM Studio](https://lmstudio.ai)).
+
+1. **Easiest:** on first launch SahilBot offers to set up Ollama for you. It downloads Ollama from its official GitHub release, checks the download's SHA-256, Apple's notarization and Ollama's signature, and runs it in the background. No Terminal, no admin password.
+2. **Or install it yourself:** get Ollama from [ollama.com/download](https://ollama.com/download) (or `brew install ollama`) and open it once.
+3. **Download models:** Settings → Models → *Recommended for this Mac* lists the best models that fit your Mac's memory, with sizes and a **Download** button (and **Delete** to free up disk space). The setup screen picks three for you: the strongest agent model, a fast one for quick chats and voice, and an alternative.
+4. **Auto** (the default in the model picker) sends each message to the right model: a fast one for small talk, a stronger one for real tasks.
+
+The model picker only lists models you can actually use: models downloaded in Ollama, models loaded in LM Studio or served by your own server, and cloud models whose API key you've saved. Models you haven't downloaded yet are in Settings → Models.
+
+Already use LM Studio or another OpenAI-compatible server? Turn it on under Settings → API Keys & Servers. In LM Studio, MLX builds of a model are preferred over GGUF ones: they're faster on Apple Silicon.
+
+**Cloud models (optional):** add an Anthropic, OpenAI or OpenRouter key under Settings → API Keys & Servers. Cloud spending is capped by a monthly budget (Settings → Cloud budget, $200 by default).
+
+## Privacy
+
+- With local models, your chats, files and voice never leave your Mac.
+- Voice: speech recognition (Whisper) and speech (Kokoro) run on this Mac. Audio is never sent anywhere.
+- Cloud models only get what you send them, and only when you've added a key and picked (or let Auto pick) a cloud model.
+- API keys and saved logins are encrypted with your macOS Keychain and are never shown to the model.
+- No telemetry and no analytics. Everything is stored in `~/Library/Application Support/Foreman` (SQLite database, bot prompts, browser profile). Delete that folder to reset SahilBot.
+- SahilBot asks before actions that send, buy, post or delete; you choose how much it may do on its own per chat (permission modes).
+
+## Develop
 
 ```bash
 npm install
 npm run dev          # development, hot reload
 npm start            # run the built app
-npm test             # unit tests
-npm run test:accept  # acceptance tests: drives the real app against a mock model
+npm test             # tests (unit: npx vitest run tests/unit)
+npm run voice:setup  # once: builds whisper.cpp (Metal) and fetches the voice models
+npm run install:mac  # build and install into /Applications (or ~/Applications) on this Mac
 ```
 
-Foreman expects a model server at `http://localhost:11434/v1` (Ollama). Change it in Settings (⌘,).
+SahilBot expects Ollama at `http://localhost:11434/v1`; change servers in Settings (⌘,).
 
-## Release
+### Releases
 
-```bash
-npm run voice:setup   # once: builds whisper.cpp (Metal) and fetches voice models
-npm run dist          # Foreman-<version>-arm64.dmg and .zip in dist/
-```
+`.github/workflows/release.yml` runs on every push to `main` (and by hand from the Actions tab) on GitHub's Apple Silicon runner: `npm ci`, builds `whisper-server` (cached, `scripts/ci-whisper.sh`), typecheck, unit tests, `electron-vite build`, then `electron-builder --mac dmg zip --arm64`. `scripts/release.mjs` publishes:
 
-The app ships with its own icon (`build/icon.icns`, source `build/icon.svg`), hardened runtime and entitlements (`build/entitlements.mac.plist`), and a microphone usage string. To distribute outside your own Mac, sign and notarize with an Apple Developer ID: set `CSC_LINK`/`CSC_KEY_PASSWORD` (or have the certificate in your keychain) and `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, then run `npm run dist`. Without them the build is unsigned and macOS will warn on first open.
+- `v<version>-<run number>`: a versioned release, marked **Latest**, with the versioned files and the stable names `SahilBot-mac-arm64.dmg` / `SahilBot-mac-arm64.zip` plus `SHA256SUMS.txt`. GitHub's `/releases/latest/download/<file>` always resolves to the newest non-prerelease release, so the download link above always gets the newest build.
+- `latest`: a rolling prerelease with only the stable names, moved to the newest commit.
 
-## Layout
+Signing: add the repository secrets `CSC_LINK` (Developer ID Application certificate, `.p12` as base64) and `CSC_KEY_PASSWORD` to sign with your Developer ID, plus `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` to notarize too. Without them builds are signed ad hoc (see *First launch* above). The version is `package.json`'s; the run number is the build number (`CFBundleVersion`).
+
+### Layout
 
 | Path | What |
 |---|---|
 | `src/main/agent/` | Agent loop, context manager (compaction, result offload), permissions, schema repair, tools |
 | `src/main/browser/` | Built-in browser: WebContentsView tabs driven over the DevTools Protocol |
-| `src/main/llm/` | OpenAI-compatible streaming client, model catalog and RAM gating |
+| `src/main/llm/` | Model servers, streaming clients (OpenAI-compatible and Anthropic), model catalog, RAM fit, Auto routing |
 | `src/main/vault.ts` | Saved logins (Keychain-encrypted, never shown to the model) |
 | `src/renderer/` | React UI |
 | `docs/` | The model's own manual, read with `file_read("docs/…")` |
 | `tests/` | `unit/`, `accept/` (Playwright + Electron), `fixtures/` (mock model, test site) |
 
-## Research
-
-`research/` holds notes on OpenClaw, Hermes Agent, Goose, OpenHands, Cline, opencode, browser-use, Letta, smolagents, Aider and Jan, and what Foreman borrowed. Credits are in `THIRD_PARTY_NOTICES.md`.
-
-## Data
-
-Everything lives in `~/Library/Application Support/Foreman` (SQLite DB, Space prompts at `spaces/<id>/system.md`, offloaded tool results, browser profile). Set `FOREMAN_DATA_DIR` to use another folder. No telemetry.
-
-## Status
-
-- [x] Phase 1: shell, streaming chat, model selector, SQLite persistence
-- [x] Phase 2: agent loop, context management, permission modes, memory, model docs
-- [x] Phase 3: browser pane, browser tools, password vault
-- [x] Phase 4: MCP connectors (OAuth sign-in or local command) and web search (tested with a local MCP server; real Gmail/Semrush need your sign-in)
-- [x] Extra: bots and group chats, reactions, grouped tool steps, Progress panel, file/folder attachments, PDF/DOCX/PPTX/XLSX create and preview, onboarding, provider presets (Ollama, LM Studio, Claude, OpenAI, OpenRouter)
-- [x] Phase 5: voice (local Whisper + Silero + Kokoro; ~1.0 s end of speech → first audio on an M5 Pro with a fast model)
-- [x] Phase 6: documents, scheduled tasks, Projects
-- [x] Research-first answers with cited sources and a check for invented links; keyless web search
-- [x] Connector library (55 verified MCP servers), browser outcome reporting, safe page dialogs
-- [x] Cloud spending cap (Settings > Cloud budget, default $200/month)
-- [x] Native Claude support via the Anthropic SDK (prompt caching, adaptive thinking, refusal fallbacks, append-only history)
-- [x] One-click connecting from chat, no-setup browser apps, and first-run auto-detection of local models
-
-Voice setup (once): `npm run voice:setup` builds whisper.cpp with Metal and downloads the models.
+Research notes on other agents (OpenClaw, Hermes Agent, Goose, OpenHands, Cline, opencode, browser-use, Letta, smolagents, Aider, Jan) are in `research/`; credits are in `THIRD_PARTY_NOTICES.md`.

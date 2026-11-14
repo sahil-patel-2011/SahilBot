@@ -560,7 +560,8 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
   const def: ToolDef<Args> = {
     name: 'computer',
     label: 'Computer',
-    core: true,
+    core: false,
+    group: 'Computer use',
     untrusted: true,
     effect: (a) => (READ.has(a.action) ? 'read' : a.action === 'clipboard_write' ? 'write_local' : 'write_external'),
     // Asks once per task before taking control; then routine clicks and typing run. Quitting an app

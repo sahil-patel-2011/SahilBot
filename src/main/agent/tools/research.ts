@@ -75,7 +75,8 @@ export function researchTool(): ToolDef<Args> {
   return {
     name: 'research',
     label: 'Research',
-    core: true,
+    core: false,
+    group: 'Research',
     effect: 'read',
     untrusted: true,
     description: 'Trusted sources through their official APIs (more reliable than their web pages). source: pubmed (search medical literature: query; use PubMed syntax like "prostate cancer[tiab] AND guideline[pt]"), pubmed_abstract (ids: PMIDs, full abstracts), clinical_trials (query: condition or treatment, from ClinicalTrials.gov), drug_label (query: drug name, official FDA label: uses, dosing, warnings, interactions), wikipedia (query: topic, summary), arxiv (query: physics, math, CS and engineering preprints), doi (ids: DOIs, citation details). Cite what you use. For any other website use web_search, fetch_page or the browser.',

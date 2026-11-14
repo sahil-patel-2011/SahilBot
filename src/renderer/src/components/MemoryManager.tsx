@@ -3,6 +3,7 @@ import type { MemoryImportPreview, MemoryItem, MemoryKind, Space } from '@shared
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
+import { LearningLog } from './LearningLog'
 
 // Settings → Memory: everything SahilBot remembers, shared ("About you") or per bot. Search, filter,
 // edit inline, forget, import from another assistant, or switch memory off.
@@ -167,6 +168,8 @@ export function MemoryManager({ spaces }: { spaces: Space[] }) {
               {m.updatedAt - m.createdAt > 60_000 && <span>Updated {savedOn(m.updatedAt)}</span>}
               {m.source === 'import' && <span>Imported</span>}
               {m.source === 'you' && <span>Added by you</span>}
+              {m.source === 'learned' && <span title="Learned while SahilBot was idle (see What I learned below)">Learned</span>}
+              {m.provenance === 'untrusted' && <span className="ll-tag" title="Saved after reading outside content (a web page, email, another app or bot). Kept for this bot only, shown to it as unverified, never as a rule.">Unverified (from outside content)</span>}
             </div>
           )}
         </div>
@@ -264,6 +267,8 @@ export function MemoryManager({ spaces }: { spaces: Space[] }) {
           </div>
         </div>
       </section>
+
+      <LearningLog spaces={spaces} />
     </div>
   )
 }

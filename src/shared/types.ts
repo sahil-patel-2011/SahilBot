@@ -1,7 +1,13 @@
 // Types shared by the main process, preload bridge and renderer.
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool'
-export type PermissionMode = 'ask' | 'auto' | 'bypass'
+/**
+ * How much a chat may do on its own. 'ask': every change asks. 'auto': routine actions run, consequential
+ * outside actions ask. 'autonomous': also project commands (installs from the lockfile, git fetch/pull)
+ * and overwrites inside your folders; deleting, sending, buying, credentials, security, tainted actions
+ * and anything outside your folders still ask. 'bypass' (Settings → Advanced): everything but hard stops.
+ */
+export type PermissionMode = 'ask' | 'auto' | 'autonomous' | 'bypass'
 export type ToolEffect = 'read' | 'write_local' | 'write_external' | 'destructive'
 export type MessageStatus = 'streaming' | 'done' | 'error' | 'stopped'
 export type MessageKind = 'normal' | 'compacted' | 'error' | 'notice'
@@ -11,6 +17,11 @@ export interface ToolCall {
   name: string
   /** Raw JSON string exactly as the model produced it. */
   arguments: string
+  /**
+   * Set when Claude called one of its native tool types (llm/claude-native): the member it called, and
+   * an error when that call can't be expressed with SahilBot's tool (answered without running anything).
+   */
+  native?: { kind: 'computer' | 'editor' | 'bash' | 'alias'; member: string; error?: string }
 }
 
 export interface Message {
@@ -164,6 +175,12 @@ export interface Settings {
     maxConsultsPerRequest: number
     /** Auto: 'local' (default) tries local models first at each tier; 'cloud' tries cloud models first (Haiku → Sonnet → Opus). */
     prefer?: 'local' | 'cloud'
+    /** Claude: how much of the model's 1M window a chat uses before compacting ('balanced' = 400K by default). */
+    contextStrategy?: 'max' | 'balanced' | 'economy'
+    /** Claude: present SahilBot's tools through Claude's native tool types (default on). */
+    nativeTools?: boolean
+    /** Auto may use Claude Fable for the hardest tier (default off: Fable only when picked by name). */
+    fableForHardest?: boolean
   }
   /** 0 = Auto: the largest window that fits this Mac's memory with the model (agents get more room). */
   contextWindow: 0 | 16384 | 32768 | 65536 | 131072
@@ -175,7 +192,13 @@ export interface Settings {
   userName: string
   workspaceDir: string
   search: { provider: 'auto' | 'none' | 'brave' | 'searxng' | 'duckduckgo'; searxngUrl: string; hasBraveKey: boolean }
-  advanced: { hardStopsEnabled: boolean }
+  advanced: {
+    hardStopsEnabled: boolean
+    /** Offer Bypass (Full access) in the composer's autonomy picker (default off). */
+    allowBypass?: boolean
+    /** Run terminal commands under a macOS sandbox that refuses writes outside your folders unless you approved the command (default on). */
+    sandboxCommands?: boolean
+  }
   /** First-run setup finished. */
   onboarded: boolean
   /** Hard monthly cap (USD) on cloud model spending; local models are free and unaffected. */
@@ -196,6 +219,12 @@ export interface Settings {
   routinesPaused?: boolean
   /** How long a local model stays loaded after a message (Ollama keep_alive: '30m', '2h', or seconds; '-1' = always). */
   localKeepAlive?: string
+  /** Learning while the app is open and idle (Settings → Memory → What I learned). */
+  learning?: LearningSettings
+  /** Autonomy level new chats start in (never 'bypass'). Default 'auto'. */
+  defaultMode?: PermissionMode
+  /** Per-bot autonomy level for its new chats (bot id → level; never 'bypass'). */
+  botModes?: Record<string, PermissionMode>
 }
 
 /** Always-on status for Settings → General (main process view). */
@@ -260,6 +289,8 @@ export interface ModelInfo {
   maxOutputTokens?: number
   /** Cloud models: $ per 1M tokens (what the budget estimator charges). */
   price?: { input: number; output: number; cacheRead?: number }
+  /** The price is an estimate (a model newer than SahilBot's table, or a provider without published rates here). */
+  priceEstimated?: boolean
 }
 
 export interface ModelList {
@@ -318,8 +349,10 @@ export interface MemoryItem {
   spaceId: string | null
   /** Same as spaceId (older name). */
   projectId: string | null
-  /** 'chat' = saved by a bot while talking, 'you' = added in Settings, 'import' = imported from another assistant. */
-  source: 'chat' | 'you' | 'import'
+  /** 'chat' = saved by a bot while talking, 'you' = added in Settings, 'import' = imported from another assistant, 'learned' = learned while the app was idle. */
+  source: 'chat' | 'you' | 'import' | 'learned'
+  /** 'untrusted': saved after reading outside content (a web page, email, another app or bot); kept with that bot only. */
+  provenance?: 'trusted' | 'untrusted'
   createdAt: number
   updatedAt: number
 }
@@ -341,6 +374,8 @@ export interface Skill {
   updatedAt: number
   uses: number
   category?: string
+  /** Learned from a run with outside content nearby: not in the skill index or usable until you approve it. */
+  untrusted?: boolean
 }
 
 /** A standing instruction the agent always follows. */
@@ -413,6 +448,70 @@ export interface TeachState {
   name?: string
   threadId?: string
 }
+
+// ---- Site playbooks (src/main/sites): what SahilBot learned about a website, per registrable domain.
+// Derived from the agent's own browser actions and Teach recordings; page text is data, never steps.
+// Never holds secrets or personal data (typed values, codes, card numbers, emails are never stored).
+
+/** A named page of a site and how it was reached. */
+export interface SitePage { name: string; path: string; how?: string; seen: number; lastSeen: number }
+/** A reliable element locator: role + accessible name (never CSS), where it was used, how often. */
+export interface SiteLocator { role: string; label: string; page?: string; uses: number; lastUsed: number }
+/** A step list that worked (or was shown in a Teach recording), with success and failure counts. */
+export interface SiteFlow {
+  name: string
+  steps: string[]
+  successes: number
+  failures: number
+  firstSeen: number
+  lastSuccess?: number
+  lastFailure?: number
+  /** 'model' = written by SahilBot with the sites tool (shown as "added by SahilBot"); 'user' = the user's own. */
+  source: 'run' | 'teach' | 'user' | 'model'
+}
+export type SitePitfallKind = 'cookie' | 'popup' | 'covered' | 'human_check' | 'rate_limit' | 'error' | 'stale' | 'disabled' | 'no_change' | 'tip'
+export interface SitePitfall { kind: SitePitfallKind; text: string; count: number; lastSeen: number; source: 'run' | 'teach' | 'user' | 'model' }
+export interface SiteLogin {
+  /** password (a saved login), sso (another site signs you in), none, or unknown */
+  method: 'password' | 'sso' | 'none' | 'unknown'
+  /** The saved login's name in Settings > Passwords (never the secret itself). */
+  savedLogin?: string
+  /** SSO provider, e.g. "Google". */
+  sso?: string
+  twoFactor?: 'authenticator' | 'email' | 'sms' | 'unknown'
+  loginPath?: string
+  /** Where the signed-in session lives: SahilBot's browser panel, or the user's own browser. */
+  where?: 'sahilbot' | 'user-browser'
+  verified?: number
+  /** Set by SahilBot with the sites tool (not learned from a run or written by the user). */
+  by?: 'model'
+}
+export interface SitePlaybook {
+  version: 1
+  /** Registrable domain (eTLD+1, Public Suffix List), or an IP / single-label host. */
+  domain: string
+  /** The site's own name as its pages title it ("Acme Portal"). */
+  siteName?: string
+  /** What the user uses this site for (set by the user, or summarized from flows). */
+  purpose?: string
+  hosts: string[]
+  login?: SiteLogin
+  pages: SitePage[]
+  locators: SiteLocator[]
+  flows: SiteFlow[]
+  pitfalls: SitePitfall[]
+  /** The user's own notes (or SahilBot's, when notesBy is 'model'). */
+  notes?: string
+  /** Who wrote the purpose and notes: 'model' = SahilBot with the sites tool. Unset = the user. */
+  purposeBy?: 'user' | 'model'
+  notesBy?: 'user' | 'model'
+  visits: number
+  /** Last time a flow on this site worked end to end. */
+  lastVerified?: number
+  createdAt: number
+  updatedAt: number
+}
+export interface SitePlaybookSummary { domain: string; siteName?: string; purpose?: string; flows: number; pages: number; visits: number; lastVerified?: number; updatedAt: number }
 
 export interface VaultEntry {
   name: string
@@ -523,7 +622,7 @@ export type ChatEvent =
   /** Live progress of a Team of Experts call (callId = the agents tool call). */
   | { threadId: string; type: 'team'; callId: string; members: TeamMember[] }
   /** step = model turns so far; plan = position in the agent's own plan, when it wrote one. */
-  | { threadId: string; type: 'progress'; step: number; actions: number; plan?: { at: number; of: number }; used: number; window: number; model?: string; routed?: { tier: Tier; why: string } }
+  | { threadId: string; type: 'progress'; step: number; actions: number; plan?: { at: number; of: number }; used: number; window: number; model?: string; routed?: { tier: Tier; why: string }; cost?: { usd: number; estimated: boolean } }
   /** The model is writing a tool call (shown as "Preparing to …" before it runs). */
   | { threadId: string; type: 'drafting'; tool: string | null }
   /** Bots or groups changed (renamed, recolored by a bot): reload the sidebar. */
@@ -587,10 +686,31 @@ export interface ConnectorPreset {
   color: string
   description: string
   category: string
-  /** oauth: sign in in the browser; none: open server; google: needs your Google OAuth client ID; app: built into SahilBot. */
-  auth: 'oauth' | 'none' | 'google' | 'browser' | 'app'
+  /**
+   * oauth: one click (the server registers SahilBot itself, OAuth dynamic client registration); none: open server;
+   * oauth-static: the provider needs a one-time setup (the user creates an OAuth app there and pastes its client ID, see `setup`);
+   * google: needs your Google OAuth client ID; browser: sign in once in SahilBot's browser; app: built into SahilBot.
+   */
+  auth: 'oauth' | 'none' | 'oauth-static' | 'google' | 'browser' | 'app'
   /** The app's own site, for its icon, when the server URL's host doesn't map to it (gmailmcp.googleapis.com → mail.google.com/mail/). */
   domain?: string
+  /** One-time setup for oauth-static apps: exact steps with links, and the redirect URL to register. */
+  setup?: ConnectorSetup
+}
+
+/** A provider-specific "create an OAuth app once" guide (oauth-static presets and custom servers). */
+export interface ConnectorSetup {
+  /** About how long it takes. */
+  minutes: number
+  steps: Array<{ title: string; text: string; links?: Array<[label: string, href: string]> }>
+  /** The exact redirect (callback) URL to register with the provider. */
+  redirectUri: string
+  /** The provider issues a client secret that must be pasted too. */
+  needsSecret: boolean
+  /** Where the client ID is shown, e.g. "Basic Information → App Credentials". */
+  idHint?: string
+  /** The provider's own setup doc. */
+  docs?: string
 }
 
 export interface ConnectorConfig {
@@ -603,7 +723,7 @@ export interface ConnectorConfig {
   env?: Record<string, string>
   /** Static auth header instead of OAuth (value kept in the Keychain). */
   headerName?: string
-  /** Pre-registered OAuth client (Google); its secret, if any, is kept in the Keychain. */
+  /** Pre-registered OAuth client (Google, oauth-static apps, custom servers); its secret, if any, is kept in the Keychain. */
   clientId?: string
   preset?: string
   enabled: boolean
@@ -826,6 +946,8 @@ export interface SahilBotApi {
     teamCapacity(model: string): Promise<{ parallel: number; maxAgents: number; heavy: boolean; why: string }>
     /** Downloads a model through Ollama; progress arrives as 'pull' events on onPull. */
     pull(tag: string): Promise<void>
+    /** Deletes a downloaded Ollama model (frees its disk space). The UI asks first. */
+    remove(tag: string): Promise<{ ok: boolean; error?: string }>
     onPull(cb: (e: { tag: string; status: string; completed?: number; total?: number; done?: boolean; error?: string }) => void): () => void
     /** Checks an endpoint without saving anything. Leave apiKey empty to use the key saved for that endpoint. */
     test(baseUrl: string, apiKey?: string): Promise<{ ok: boolean; count: number; error?: string }>
@@ -997,6 +1119,12 @@ export interface SahilBotApi {
     onState(cb: (s: BrowserState) => void): () => void
     onOpenRequest(cb: () => void): () => void
   }
+  /** Site playbooks: what SahilBot learned about each website (src/main/sites). */
+  sites: {
+    list(): Promise<SitePlaybookSummary[]>
+    get(domain: string): Promise<SitePlaybook | null>
+    forget(domain: string): Promise<boolean>
+  }
   memory: {
     list(): Promise<MemoryItem[]>
     remove(id: string): Promise<void>
@@ -1043,6 +1171,8 @@ export interface SahilBotApi {
     report(): Promise<UsageReport>
     /** Saves the last 30 days as CSV (save dialog); null if cancelled. */
     exportCsv(): Promise<string | null>
+    /** Tokens and cloud cost of one run: a chat's model replies (and its helper agents') since `since`. */
+    forRun(threadId: string, since: number, until?: number): Promise<RunUsage>
   }
   skills: {
     list(): Promise<Skill[]>
@@ -1510,4 +1640,472 @@ export interface SahilBotApi {
     open(path: string): Promise<void>
     onChanged(cb: () => void): () => void
   }
+}
+
+// ---------------------------------------------------------------- learning (learning/: while the app is open and idle)
+
+export interface LearningSettings {
+  /** Learn while SahilBot is open. Unset = on when a local model is available, off otherwise. */
+  enabled?: boolean
+  /** May use a cloud model when no local one is available (default off). */
+  cloudAllowed: boolean
+  /** Daily cap (USD) on cloud spending for learning. */
+  dailyUsd: number
+}
+
+/** What a learned item is: a memory, a skill, a lesson from a mistake, or memory housekeeping. */
+export type LearnedKind = 'memory' | 'skill' | 'lesson' | 'merge' | 'stale' | 'trim'
+
+/** One entry in the learning log (Settings → Memory → What I learned). */
+export interface LearnedItem {
+  id: string
+  at: number
+  kind: LearnedKind
+  /** One line for the list, e.g. the memory's text or the skill's name. */
+  title: string
+  detail?: string
+  /** The chat it was learned from (when there was one). */
+  threadId?: string | null
+  threadTitle?: string
+  /** The bot or project it belongs to (null = shared, about you). */
+  spaceId?: string | null
+  /** Its source text came from tool output, a web page, another app or another bot: never a rule, and tagged. */
+  untrusted: boolean
+  /** Where the chat came from when it wasn't the user typing: 'app' (a connected app), 'handoff', 'routine'. */
+  origin?: string
+  undone: boolean
+  /** Undo is still possible (the item hasn't been changed or removed since). */
+  canUndo: boolean
+  /** Waiting for the user's OK (Approve / Dismiss): a rule from a chat with outside content, or an unverified skill. */
+  pending?: boolean
+}
+
+export interface LearningStatus {
+  /** The setting, with the default worked out. */
+  enabled: boolean
+  /** Why it isn't learning right now, when it can't ('No local model…', 'Memory is off'…). */
+  blocked?: string
+  running: boolean
+  job?: string
+  lastRunAt?: number
+  lastSummary?: string
+  nextRunAt?: number
+  /** The model it will use, and whether that's a cloud model. */
+  model?: string
+  cloud: boolean
+  localAvailable: boolean
+  spentTodayUsd: number
+  settings: LearningSettings
+}
+
+export interface SahilBotApi {
+  /** Settings → Memory → What I learned. */
+  learning: {
+    status(): Promise<LearningStatus>
+    list(limit?: number): Promise<LearnedItem[]>
+    undo(id: string): Promise<LearnedItem[]>
+    /** An item waiting for your OK: Approve saves it (then Undo works), Dismiss drops it for good. */
+    approve(id: string): Promise<LearnedItem[]>
+    dismiss(id: string): Promise<LearnedItem[]>
+    /** Starts a pass now (if nothing is running). */
+    runNow(): Promise<LearningStatus>
+    openChat(threadId: string): Promise<void>
+    onChanged(cb: () => void): () => void
+  }
+}
+
+// ---------- background jobs (dev servers, watchers, long builds) ----------
+
+export type JobStatus = 'starting' | 'running' | 'ready' | 'exited' | 'failed' | 'stopped'
+
+export interface JobInfo {
+  id: string
+  /** The chat the job belongs to (a helper agent's jobs belong to the chat that started it). */
+  threadId: string
+  command: string
+  cwd: string
+  startedAt: number
+  endedAt?: number
+  status: JobStatus
+  exitCode: number | null
+  signal?: string | null
+  pid?: number
+  /** Local addresses seen in its output, e.g. http://localhost:5173/ (first = main). */
+  urls: string[]
+  ports: number[]
+  /** Output lines seen so far (the buffer keeps the last ~2000). */
+  lines: number
+  restarts: number
+  /** A warning to show: CPU runaway, very noisy output. */
+  warning?: string
+  /** Last sampled CPU use of its process group, percent of one core. */
+  cpu?: number
+}
+
+export type JobEvent =
+  | { kind: 'job'; job: JobInfo }
+  | { kind: 'lines'; id: string; threadId: string; lines: string[]; total: number }
+  | { kind: 'removed'; id: string; threadId: string }
+
+export interface RunUsageModel { model: string; cloud: boolean; calls: number; input: number; output: number; usd: number }
+export interface RunUsage { input: number; output: number; usd: number; cloud: boolean; calls: number; models: RunUsageModel[] }
+
+export interface SahilBotApi {
+  /** Background jobs started with run_command background: true (Jobs tab). */
+  jobs: {
+    list(threadId?: string): Promise<JobInfo[]>
+    output(id: string, opts?: { tail?: number; grep?: string }): Promise<{ lines: string[]; total: number }>
+    stop(id: string): Promise<JobInfo | null>
+    restart(id: string): Promise<JobInfo | null>
+    /** Forgets a finished job. */
+    remove(id: string): Promise<void>
+    onEvent(cb: (e: JobEvent) => void): () => void
+  }
+}
+
+// ---- "Know what I'm working on": opt-in activity awareness (main: src/main/activity)
+
+/** Settings → Privacy & Permissions → Know what I'm working on. Off by default; kept only on this Mac. */
+export interface ActivitySettings {
+  enabled: boolean
+  /** Front window titles (needs Accessibility, and System Events once). */
+  windowTitles: boolean
+  /** The front browser tab's title and address (needs Automation for each browser). */
+  browserTabs: boolean
+  /** "Let SahilBot learn from my activity": the learning pass may read the timeline. Separate, off by default. */
+  learn: boolean
+  /** How long the session timeline is kept, 1–72 hours (raw samples: at most 2 hours). */
+  retentionHours: number
+  /** Apps never recorded (names or bundle ids). */
+  excludedApps: string[]
+  /** Sites never recorded (domains; subdomains included). */
+  excludedDomains: string[]
+  /** "Pause for 1 hour": nothing is collected or shared until then. */
+  pausedUntil: number | null
+  /** "Also share with cloud models": off by default, so only local models get the activity section. */
+  shareWithCloud: boolean
+}
+
+export interface ActivityPermissionInfo {
+  accessibility: boolean
+  /** System Events answered (front window titles work). null = not checked yet. */
+  systemEvents: boolean | null
+  /** Browsers SahilBot may read the front tab of (from the user's last check). */
+  browsers: Array<{ app: string; state: PermissionState; detail?: string }>
+}
+
+export interface ActivityTimelineItem {
+  start: number
+  end: number
+  label: string
+}
+
+export interface ActivityStatus {
+  settings: ActivitySettings
+  /** Collecting right now (on, not paused, SahilBot running). */
+  collecting: boolean
+  /** Why it isn't collecting, in words. */
+  reason?: string
+  permissions: ActivityPermissionInfo
+  lastSampleAt: number | null
+  samples: number
+  sessions: number
+  /** Exactly what a bot's next run would get (the whole section), or '' when nothing would be added. */
+  preview: string
+  /** The last hours of the timeline, newest first. */
+  timeline: ActivityTimelineItem[]
+  /** The built-in lists, for "what's never recorded". */
+  builtIn: { passwordManagers: string[]; messaging: string[]; sensitiveDomains: number }
+}
+
+export interface SahilBotApi {
+  /** Know what I'm working on. Changes are only accepted from the main window. */
+  activity: {
+    status(): Promise<ActivityStatus>
+    set(patch: Partial<Omit<ActivitySettings, 'pausedUntil'>>): Promise<ActivityStatus>
+    /** Pause for `minutes` (default 60); 0 resumes. */
+    pause(minutes?: number): Promise<ActivityStatus>
+    /** Deletes every sample and the timeline now. */
+    clear(): Promise<ActivityStatus>
+    /** User-initiated permission check (macOS may show its one-time prompt for System Events or a browser). */
+    checkPermissions(): Promise<ActivityStatus>
+    onChange(cb: () => void): () => void
+  }
+}
+
+// ---------------------------------------------------------------- CAD (Onshape)
+
+/** Interface merging (append-only): the Onshape API key pair is saved (Settings → API Keys & Servers → Onshape). */
+export interface Settings {
+  hasOnshapeKeys?: boolean
+  /** Which half of the Onshape key pair is saved. */
+  onshapeKeyParts?: { access: boolean; secret: boolean }
+}
+
+/** Result of Settings → Onshape → Test (GET /users/sessioninfo with the saved keys). */
+export interface OnshapeTestResult {
+  ok: boolean
+  /** The Onshape account the keys belong to. */
+  name?: string
+  error?: string
+}
+
+export interface SahilBotApi {
+  /** CAD helpers for Settings. Optional so older preloads still type-check. */
+  cad?: {
+    onshapeTest(): Promise<OnshapeTestResult>
+  }
+}
+
+// ---------------------------------------------------------------- Docs (live document workspace)
+// A two-way document beside the chat (src/main/docspace): the bot creates and edits it with doc_* tools,
+// the user edits it in the Document tab, and every change is a version. Interface merging, append-only.
+
+export type DocBlockType = 'h1' | 'h2' | 'h3' | 'p' | 'bullet' | 'numbered' | 'check' | 'quote' | 'code' | 'table' | 'divider' | 'image' | 'callout'
+export type DocCalloutTone = 'info' | 'tip' | 'warn' | 'danger'
+
+/** One block of a document. Text is inline Markdown (**bold**, *italic*, `code`, [link](url), ~~strike~~). */
+export interface DocBlock {
+  /** Stable id, e.g. "b7kq": the bot addresses blocks by it. */
+  id: string
+  type: DocBlockType
+  text?: string
+  /** List nesting, 0 to 5 (bullet, numbered, check). */
+  indent?: number
+  checked?: boolean
+  /** Code block language. */
+  lang?: string
+  /** Table cells (inline Markdown), row by row. */
+  rows?: string[][]
+  /** The table's first row is a header row. */
+  header?: boolean
+  /** Image: a local file path. */
+  src?: string
+  alt?: string
+  tone?: DocCalloutTone
+}
+
+/** A spreadsheet: raw cell inputs by address ("A1": "12", "B3": "=SUM(B1:B2)"). Values are computed locally. */
+export interface DocSheet {
+  rows: number
+  cols: number
+  cells: Record<string, string>
+  /** Row 1 is a header row. */
+  header?: boolean
+}
+
+export type DocType = 'doc' | 'sheet'
+
+export interface DocContent {
+  title: string
+  blocks: DocBlock[]
+  sheet?: DocSheet
+}
+
+export type DocAuthor = 'user' | 'bot'
+
+export interface DocInfo {
+  id: string
+  threadId: string
+  spaceId?: string
+  title: string
+  type: DocType
+  /** The current version number (1 = as created). */
+  version: number
+  createdAt: number
+  updatedAt: number
+  lastAuthor: DocAuthor
+  lastSummary: string
+}
+
+export interface DocVersionInfo {
+  n: number
+  author: DocAuthor
+  at: number
+  summary: string
+  /** What changed from the version before: block ids, "title", "cell:A1". */
+  changed: string[]
+}
+
+/** A computed sheet cell: the value, or an error code like "#DIV/0!" / "#CYCLE!". */
+export interface DocCellValue { value: number | string; error?: string }
+
+export interface DocSnapshot extends DocInfo {
+  content: DocContent
+  /** Sheets: computed values by address. */
+  computed?: Record<string, DocCellValue>
+}
+
+/** Sent to the renderer whenever a document changes. */
+export interface DocEvent {
+  docId: string
+  threadId: string
+  version: number
+  author: DocAuthor
+  summary: string
+  changed: string[]
+  removed: string[]
+}
+
+/** One row of a version diff: a block (or sheet cell) and how it changed. */
+export interface DocDiffRow {
+  status: 'same' | 'added' | 'removed' | 'changed'
+  block: DocBlock
+  before?: DocBlock
+  /** Word-level diff of the text, for changed text blocks. */
+  words?: Array<{ t: 'same' | 'add' | 'del'; s: string }>
+}
+
+export interface DocDiff {
+  from: number
+  to: number
+  title?: { before: string; after: string }
+  rows: DocDiffRow[]
+  cells?: Array<{ addr: string; before: string; after: string }>
+}
+
+export type DocExportFormat = 'docx' | 'pdf' | 'md' | 'html' | 'xlsx' | 'csv'
+
+/** Library items can be live documents (opened in the Document tab). */
+export interface LibraryItem {
+  docId?: string
+}
+
+export interface SahilBotApi {
+  docs: {
+    /** Documents in a chat, newest change first. */
+    list(threadId: string): Promise<DocInfo[]>
+    get(id: string): Promise<DocSnapshot>
+    create(threadId: string, title: string, type?: DocType): Promise<DocSnapshot>
+    /** Saves the user's edits made on top of version `base` (merged with any newer bot edit). */
+    save(id: string, base: number, content: DocContent): Promise<DocSnapshot>
+    versions(id: string): Promise<DocVersionInfo[]>
+    version(id: string, n: number): Promise<DocContent>
+    diff(id: string, from: number, to: number): Promise<DocDiff>
+    restore(id: string, n: number): Promise<DocSnapshot>
+    export(id: string, format: DocExportFormat): Promise<string>
+    /** Picks an image, copies it into the workspace and returns its path (null if cancelled). */
+    addImage(): Promise<string | null>
+    /** Tells main whether the editor holds unsaved edits (so the bot's next read waits for them). */
+    dirty(id: string, dirty: boolean): Promise<void>
+    flushed(id: string): Promise<void>
+    onEvent(cb: (e: DocEvent) => void): () => void
+    /** Main asks for unsaved edits to be saved now (the bot is about to read or edit). */
+    onFlush(cb: (id: string) => void): () => void
+  }
+}
+
+// ---------------------------------------------------------------- swarms (big cloud teams) and Heavy mode
+
+/** Team of Experts on cloud models: capacity, parallelism and spend per swarm (one agents call). */
+export interface SwarmSettings {
+  /** Most helper agents per task on a cloud model (1-100, default 30). Local models are RAM-bound instead. */
+  maxAgents: number
+  /** Helpers running at once on a cloud model (1-32, default 8); halved on a rate limit, then eased back up. */
+  maxParallel: number
+  /** A swarm (or Heavy run) estimated above this asks the user first (default $1). */
+  askAboveUsd: number
+  /** Hard cap per swarm (or Heavy run): no new helper starts past it, and requests stop at it (default $5). */
+  maxUsd: number
+  /** Helper model on the cloud: 'same' as the lead, 'auto' (one tier lower: Sonnet under Opus), or a model id. */
+  helperModel: string
+}
+
+/** Heavy mode: several independent attempts, then a judge. */
+export interface HeavySettings {
+  /** Independent attempts (2-8, default 4). */
+  attempts: number
+  /** 'auto' mixes models on the cloud (2× the lead's, 1× the strongest, 1× another provider when keyed); 'same'; or model ids. */
+  mix: 'auto' | 'same' | string[]
+}
+
+export interface Settings {
+  swarm?: Partial<SwarmSettings>
+  heavy?: Partial<HeavySettings>
+}
+
+export interface SendInput {
+  /** Heavy: several independent attempts, compared by a judge that writes the final answer. */
+  heavy?: boolean
+}
+
+export interface TeamMember {
+  /** Cost so far (cloud models only), from the helper's replies. */
+  usd?: number
+  /** Tokens so far (prompt + output), from the helper's replies. */
+  tokens?: number
+}
+
+/** A spend the user is asked to OK before a big swarm or a Heavy run starts. */
+export interface SpendApproval {
+  kind: 'team' | 'heavy'
+  count: number
+  model: string
+  estimateUsd: number
+  capUsd: number
+}
+
+export interface PendingRequest {
+  /** For an 'approval' that is really a spend OK (a big swarm, a Heavy run): shown as a cost card. */
+  spend?: SpendApproval
+}
+
+export interface HeavyAttempt {
+  id: string
+  n: number
+  model: string
+  label?: string
+  /** How this attempt was told to approach the problem (its "seed"). */
+  angle: string
+  status: TeamMember['status']
+  usd?: number
+  tokens?: number
+  /** Its full answer, once done. */
+  answer?: string
+  detail?: string
+  /** The judge asked it to verify a contested point. */
+  rechecked?: boolean
+}
+
+export interface HeavyVerdict {
+  agreements: string[]
+  disagreements: Array<{ point: string; attempts: number[] }>
+  errors: Array<{ attempt: number; issue: string }>
+  unsupported: Array<{ attempt: number; claim: string }>
+  /** The one contested point the judge had an attempt re-check (one round at most). */
+  recheck?: { attempt: number; question: string; answer?: string }
+  summary?: string
+}
+
+/** The Heavy card: kept on a notice message's meta.heavy, updated live. */
+export interface HeavyBoard {
+  attempts: HeavyAttempt[]
+  judge: { model: string; label?: string; status: 'waiting' | 'comparing' | 'rechecking' | 'writing' | 'done' | 'failed' | 'stopped'; verdict?: HeavyVerdict; usd?: number }
+  estimateUsd?: number
+  capUsd?: number
+  spentUsd?: number
+  /** Why it ended early (the cap, a stop), if it did. */
+  note?: string
+}
+
+export interface SahilBotApi {
+  swarm: {
+    /** Cancels one helper (or Heavy attempt): a queued one never starts, a working one stops. */
+    cancel(memberId: string): Promise<boolean>
+    /** Stops every helper of a team (or Heavy run) that hasn't finished; the lead carries on with what's done. */
+    stopRemaining(groupId: string): Promise<number>
+  }
+}
+
+// ---------------------------------------------------------------- Media, vision and batch tools (OpenAI / Anthropic keys)
+
+/** Interface merging (append-only): knowledge-search embeddings provider. */
+export interface Settings {
+  /**
+   * "Use OpenAI for knowledge search embeddings" (Settings → Knowledge). Off by default. Privacy: when on
+   * (and an OpenAI key is saved and cloud models are on), passages of the user's indexed documents are
+   * sent to OpenAI (text-embedding-3-small) to build the meaning-search index; costs count toward the
+   * monthly cloud budget. Off: embeddings stay on this Mac (Ollama) or keyword search alone.
+   */
+  openaiEmbeddings?: boolean
 }

@@ -1,0 +1,119 @@
+/* Background jobs (Jobs tab, header chip), the autonomy picker and chip, and the end-of-run summary.
+   Tokens only (light and dark); status colors are tokens defined here. */
+
+:root {
+  --job-run: var(--ok);
+  --job-warn: #c27c0e;
+  --job-warn-bg: color-mix(in srgb, #f5a524 14%, var(--panel));
+}
+@media (prefers-color-scheme: dark) {
+  :root { --job-warn: #f0b341; --job-warn-bg: color-mix(in srgb, #f5a524 16%, var(--panel)); }
+}
+
+/* ---------------------------------------------------------------- small buttons */
+.btn.small { min-height: 28px; padding: 4px 10px; font-size: 12.5px; border-radius: 8px; gap: 5px; }
+.btn.small .spin { width: 11px; height: 11px; }
+.btn.danger-ghost { color: var(--danger); background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 30%, var(--line)); }
+.btn.danger-ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.icon-btn.small { width: 26px; height: 26px; border-radius: 7px; }
+
+/* ---------------------------------------------------------------- right panel tab */
+.seg-tabs .tab-count { min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: var(--job-run); color: #fff; font-size: 10.5px; font-weight: 600; display: inline-grid; place-items: center; line-height: 1; }
+
+/* ---------------------------------------------------------------- the Jobs pane */
+.jobs-pane { flex: 1; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.jobs-summary { display: flex; align-items: center; gap: 8px; font-size: 13.5px; padding: 2px 4px 4px; }
+.jobs-summary .hint { color: var(--text-3); font-size: 12.5px; }
+.jobs-summary .spacer { flex: 1; }
+.jobs-empty { margin: auto; max-width: 280px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; line-height: 1.45; padding: 40px 0; }
+.jobs-empty svg { color: var(--text-3); }
+.jobs-empty b { color: var(--text); font-size: 14px; }
+
+.job-card { border: 1px solid var(--line); background: var(--panel); border-radius: 16px; padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 7px; transition: border-color 140ms ease-out, box-shadow 140ms ease-out; }
+.job-card.open { box-shadow: var(--shadow); }
+.job-card.s-failed { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+.job-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.job-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; padding: 4px 4px; border-radius: 8px; text-align: left; }
+.job-toggle:hover { background: var(--hover); }
+.job-cmd { flex: 1; min-width: 0; font: 500 12.5px/1.4 var(--mono); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-chev { color: var(--text-3); transition: transform 140ms ease-out; flex: none; }
+.job-card.open .job-chev { transform: rotate(180deg); }
+.job-actions { display: flex; gap: 6px; flex: none; }
+
+.job-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--text-3); }
+.job-dot.s-running, .job-dot.s-ready { background: var(--job-run); box-shadow: 0 0 0 3px color-mix(in srgb, var(--job-run) 18%, transparent); }
+.job-dot.s-running { animation: job-pulse 1.6s ease-out infinite; }
+.job-dot.s-starting { background: var(--job-warn); animation: job-pulse 1.2s ease-out infinite; }
+.job-dot.s-failed { background: var(--danger); }
+.job-dot.s-exited, .job-dot.s-stopped { background: var(--text-3); }
+@keyframes job-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--job-run) 45%, transparent); } 100% { box-shadow: 0 0 0 6px transparent; } }
+@media (prefers-reduced-motion: reduce) { .job-dot, .autonomy-dot { animation: none !important; } }
+
+.job-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--text-2); padding: 0 4px; }
+.job-meta > span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.job-meta svg { color: var(--text-3); flex: none; }
+.job-cwd { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-state { font-weight: 600; color: var(--text); }
+.job-state.s-ready, .job-state.s-running { color: var(--job-run); }
+.job-state.s-failed { color: var(--danger); }
+
+.job-url { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--bubble-ai); font-size: 13px; }
+.job-url svg { color: var(--text-2); flex: none; }
+.job-url .spacer { flex: 1; }
+.job-link { color: var(--accent); font: 500 12.5px var(--mono); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; }
+.job-link:hover { text-decoration: underline; }
+.job-warn { font-size: 12.5px; color: var(--job-warn); background: var(--job-warn-bg); border-radius: 10px; padding: 7px 10px; line-height: 1.4; }
+
+.job-out { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.job-out-bar { display: flex; align-items: center; gap: 8px; }
+.job-out-bar .hint { color: var(--text-3); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
+.job-search { flex: 1; max-width: 240px; display: flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 8px; background: var(--hover); color: var(--text-3); }
+.job-search:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.job-search input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; color: var(--text); font-size: 12.5px; }
+.job-log { margin: 0; height: 260px; overflow: auto; resize: vertical; min-height: 120px; max-height: 70vh; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); font: 11.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; user-select: text; }
+.job-log:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 1px; }
+.job-log > div { min-height: 1.55em; }
+.job-log .err { color: var(--danger); }
+.job-log .warn { color: var(--job-warn); }
+.job-log mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--text); border-radius: 3px; padding: 0 1px; }
+.job-log .hint { color: var(--text-3); }
+.job-jump { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 999px; background: var(--panel); color: var(--text); font-size: 12px; box-shadow: var(--shadow); border: 1px solid var(--line); }
+.job-jump:hover { background: var(--hover); }
+
+/* ---------------------------------------------------------------- header chip */
+.jobs-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 10px; font-size: 13px; font-weight: 500; background: var(--hover); color: var(--text-2); white-space: nowrap; flex: none; transition: background 120ms ease-out; }
+.jobs-chip:hover, .jobs-chip.on { background: var(--selected); color: var(--text); }
+.jobs-chip .job-dot { width: 7px; height: 7px; }
+.jobs-chip.warn { color: var(--job-warn); }
+
+/* ---------------------------------------------------------------- autonomy picker and chip */
+.autonomy-menu { width: 330px; max-width: 80vw; }
+.autonomy-menu .menu-item { align-items: flex-start; }
+.autonomy-menu .menu-item .sub { white-space: normal; line-height: 1.35; }
+.autonomy-menu .menu-foot { font-size: 11.5px; color: var(--text-3); padding: 8px 10px 4px; border-top: 1px solid var(--line); margin-top: 4px; line-height: 1.4; }
+.under-pick.autonomous > button { color: var(--text); }
+.under-pick.autonomous > button svg { color: var(--bot, var(--accent)); }
+.autonomy-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--text-2); background: color-mix(in srgb, var(--bot, var(--accent)) 10%, var(--hover)); }
+.autonomy-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bot, var(--accent)); animation: auto-breathe 2s ease-in-out infinite; }
+@keyframes auto-breathe { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+/* ---------------------------------------------------------------- end-of-run summary */
+.run-summary { position: relative; container-type: inline-size; width: 100%; margin: 0 auto 8px; max-width: var(--chat-width, 780px); font-size: 12px; color: var(--text-3); text-align: center; outline: none; }
+.run-summary .rs-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 8px; }
+/* Narrow chat: tokens get their own line, without a dangling separator. */
+@container (max-width: 600px) { .run-summary .rs-sep { display: none; } .run-summary .rs-tokens { flex-basis: 100%; } }
+.run-summary .rs-words { color: var(--text-2); }
+.run-summary.quiet { font-size: 11.5px; }
+.run-summary .rs-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--bot, var(--accent)) 12%, var(--hover)); color: var(--text-2); font-weight: 500; }
+.run-summary .rs-badge svg { color: var(--bot, var(--accent)); }
+.run-summary .rs-tokens { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.run-summary .rs-sep { margin-right: 8px; }
+.run-summary .rs-badge { white-space: nowrap; }
+.run-summary .rs-tip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%) translateY(4px); min-width: 240px; max-width: 420px; padding: 8px 10px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); color: var(--text-2); text-align: left; display: flex; flex-direction: column; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 140ms ease-out, transform 140ms ease-out; z-index: 5; }
+.run-summary:hover .rs-tip, .run-summary:focus-visible .rs-tip { opacity: 1; transform: translateX(-50%); }
+.run-summary .rs-row { display: flex; flex-direction: column; gap: 1px; font-size: 11.5px; }
+.run-summary .rs-row b { color: var(--text); font-weight: 600; font-size: 12px; overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- bot details: autonomy row */
+.bd-row-sub { display: block; font-size: 12px; color: var(--text-3); margin-top: 2px; line-height: 1.35; }
+.bd-select { flex: none; max-width: 48%; font-size: 13px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }

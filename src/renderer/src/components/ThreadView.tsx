@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Message, PendingRequest, TeamMember } from '@shared/types'
+import type { HeavyBoard, Message, PendingRequest, TeamMember } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
 import { legibleOn } from '../brand'
@@ -9,6 +9,9 @@ import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
 import { PageCard, pagesFromSteps } from './PageCard'
 import { StockCard, stocksFromSteps } from './StockCard'
+import { DocCard, docsFromSteps } from './doc/DocCard'
+import { HeavyCard, MemberRow, SpendCard } from './HeavyCard'
+import { groupMembers, heavyOf, money, teamTotals, tokenCount, unfinished } from '../lib/swarm-view'
 
 type Block =
   | { kind: 'user'; m: Message }
@@ -19,6 +22,7 @@ type Block =
   | { kind: 'qa'; id: string; question: string; answer?: string; at: number }
   | { kind: 'plan'; id: string; items: PlanItem[]; at: number }
   | { kind: 'team'; id: string; titles: string[]; final?: TeamMember[]; summary?: string; at: number }
+  | { kind: 'heavy'; id: string; groupId: string; board: HeavyBoard; at: number }
 
 type PlanItem = { text: string; status: 'pending' | 'in_progress' | 'done' }
 
@@ -29,6 +33,8 @@ export interface ThreadActions {
   onReact: (messageId: string, emoji: string | null) => void
   onReply: (text: string) => void
   onOpenFile: (path: string) => void
+  /** Docs: opens a live document in the Document tab. */
+  onOpenDoc?: (id: string) => void
 }
 
 /** Groups consecutive tool calls into one activity block; text replies stay bubbles. */
@@ -42,6 +48,9 @@ export function blocks(messages: Message[]): Block[] {
   for (const m of messages) {
     if (m.role === 'tool') continue
     if (m.kind === 'compacted') { out.push({ kind: 'compacted', m }); continue }
+    // Heavy mode's card rides on a notice (kept out of the model's history), updated live.
+    const hv = m.kind === 'notice' ? heavyOf(m) : undefined
+    if (hv) { act = null; out.push({ kind: 'heavy', id: m.id, groupId: hv.id, board: hv.board, at: m.createdAt }); continue }
     if (m.kind === 'notice') { act = null; out.push({ kind: 'notice', m }); continue }
     if (m.role === 'user') {
       if (m.meta?.hidden) continue
@@ -120,30 +129,49 @@ export function blocks(messages: Message[]): Block[] {
   return out
 }
 
-/** Team of Experts: every helper agent, what it's doing, and how it finished. */
-function TeamCard({ titles, members, summary, live }: { titles: string[]; members?: TeamMember[]; summary?: string; live: boolean }) {
+/**
+ * Team of Experts: every helper agent, grouped by status (busiest first) in compact rows with live tokens
+ * and cost. While it runs: cancel one helper, or stop the ones that haven't finished. Big swarms fold
+ * the finished helpers away.
+ */
+function TeamCard({ id, titles, members, summary, live }: { id: string; titles: string[]; members?: TeamMember[]; summary?: string; live: boolean }) {
   const [open, setOpen] = useState(true)
+  const [showDone, setShowDone] = useState(false)
   const list: TeamMember[] = members?.length ? members : titles.map((t, i) => ({ id: String(i), title: t, status: 'queued', depth: 1 }))
   const done = list.filter((m) => m.status === 'done').length
   const working = list.filter((m) => m.status === 'working').length
+  const left = unfinished(list)
+  const totals = teamTotals(list)
+  const big = list.length > 12
+  const cost = [money(totals.usd), tokenCount(totals.tokens)].filter(Boolean).join(' · ')
   return (
-    <div className="team-card" data-testid="team-card">
-      <button className="plan-head" onClick={() => setOpen((o) => !o)}>
+    <div className={`team-card${big ? ' big' : ''}`} data-testid="team-card">
+      <button className="plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.Users size={15} />
         <span className="plan-title">Team of Experts</span>
-        <span className="plan-count">{live || working ? `${working} working · ${done} of ${list.length} done` : summary ?? `${done} of ${list.length} done`}</span>
+        <span className="plan-count">{live || working ? `${working} working · ${done} of ${list.length} done` : summary ?? `${done} of ${list.length} done`}{cost ? ` · ${cost}` : ''}</span>
         <span className="plan-bar"><i style={{ width: `${(done / Math.max(1, list.length)) * 100}%` }} /></span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>
       {open && (
-        <div className="team-grid">
-          {list.map((m) => (
-            <div key={m.id} className={`team-member tm-${m.status}${m.depth > 1 ? ' sub' : ''}`} data-testid="team-member" title={m.detail}>
-              <span className="tm-dot" />
-              <span className="tm-title">{m.title}</span>
-              {m.detail && <span className="tm-detail">{m.detail}</span>}
+        <div className="team-board">
+          {live && left > 0 && members?.length ? (
+            <div className="team-actions">
+              <button className="link-btn" onClick={() => void api.swarm.stopRemaining(id)} data-testid="team-stop-remaining">Stop remaining ({left})</button>
             </div>
-          ))}
+          ) : null}
+          {groupMembers(list).map((g) => {
+            const folded = big && g.status === 'done' && !showDone
+            return (
+              <div key={g.status} className={`team-group tg-${g.status}`} data-testid="team-group">
+                <button className="team-group-head" onClick={() => g.status === 'done' && big && setShowDone((x) => !x)} disabled={!(g.status === 'done' && big)}>
+                  <span>{g.label}</span><span className="tg-count">{g.members.length}</span>
+                  {g.status === 'done' && big && <span className="tg-toggle">{folded ? 'Show' : 'Hide'}</span>}
+                </button>
+                {!folded && <div className="team-rows">{g.members.map((m) => <MemberRow key={m.id} m={m} live={live && !!members?.length} />)}</div>}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
@@ -180,7 +208,7 @@ function PlanCard({ items, live }: { items: PlanItem[]; live: boolean }) {
 
 const PREPARING: Record<string, string> = {
   file_write: 'Preparing to write a file', create_document: 'Building a document', file_manage: 'Preparing a file change',
-  web_search: 'Preparing a web search', create_page: 'Building a page', update_page: 'Updating the page', message_bot: 'Handing off to another bot', fetch_page: 'Opening a page', browser: 'Preparing a browser step', todo: 'Planning',
+  web_search: 'Preparing a web search', create_page: 'Building a page', update_page: 'Updating the page', doc_create: 'Writing the document', doc_edit: 'Editing the document', doc_export: 'Exporting the document', message_bot: 'Handing off to another bot', fetch_page: 'Opening a page', browser: 'Preparing a browser step', todo: 'Planning',
   memory: 'Updating memory', verify: 'Double-checking the work', ask_user: 'Writing a question', schedule: 'Setting up a schedule', find_tools: 'Looking for tools',
   research: 'Searching trusted sources', run_command: 'Preparing a command', agents: 'Putting together a team', consult: 'Asking an expert', computer: 'Getting ready to use your Mac', cursor: 'Preparing a Cursor task', mac_apps: 'Opening a Mac app'
 }
@@ -249,14 +277,14 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
         <div className="thread">
           {bs.map((b, i) => {
             const prev = bs[i - 1]
-            const atOf = (x: Block): number => (x.kind === 'activity' ? x.steps[0].at : x.kind === 'qa' || x.kind === 'plan' || x.kind === 'team' ? x.at : x.m.createdAt)
+            const atOf = (x: Block): number => (x.kind === 'activity' ? x.steps[0].at : x.kind === 'qa' || x.kind === 'plan' || x.kind === 'team' || x.kind === 'heavy' ? x.at : x.m.createdAt)
             const at = atOf(b)
             const prevAt = prev ? atOf(prev) : undefined
             const time = stamp(at, prevAt)
             // Back-to-back replies from the same bot stack tightly, like short progress messages.
             const cont = !time && b.kind === 'text' && prev?.kind === 'text' && (b.m.meta?.botName ?? '') === (prev.m.meta?.botName ?? '')
             return (
-              <div key={b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.m.id}
+              <div key={b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.kind === 'heavy' ? `h-${b.id}` : b.m.id}
                 className={`block b-${b.kind}${cont ? ' cont' : ''}`}>
                 {time && <div className="stamp">{time}</div>}
                 {b.kind === 'qa' ? (
@@ -265,7 +293,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                     {b.answer && <div className="row me"><div className="bubble-wrap"><div className="bubble me" data-testid="answer-bubble">{b.answer}</div></div></div>}
                   </>
                 ) : b.kind === 'team' ? (
-                  <TeamCard titles={b.titles} members={teams?.[b.id] ?? b.final} summary={b.summary} live={running && !b.final} />
+                  <TeamCard id={b.id} titles={b.titles} members={teams?.[b.id] ?? b.final} summary={b.summary} live={running && !b.final} />
+                ) : b.kind === 'heavy' ? (
+                  <HeavyCard board={b.board} groupId={b.groupId} live={running} />
                 ) : b.kind === 'plan' ? (
                   <PlanCard items={b.items} live={running && b === lastPlan} />
                 ) : b.kind === 'activity' ? (
@@ -273,6 +303,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                     <Activity steps={b.steps} live={running && b === lastActivity && tail === b} waitingApproval={approvalWaiting && b === lastActivity} onOpenFile={actions.onOpenFile} />
                     {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
                     {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
+                    {actions.onOpenDoc && docsFromSteps(b.steps).map((d) => <DocCard key={d.key} doc={d.doc} at={d.at} exported={d.exported} onOpen={actions.onOpenDoc!} />)}
                   </>
                 ) : (
                   <Row b={b} actions={actions} editable={!running && b.kind === 'user' && b.m.id === lastUserId} cont={cont} />
@@ -280,7 +311,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
               </div>
             )
           })}
-          {pending.map((p) => <PendingCard key={p.id} req={p} onRespond={actions.onRespond} />)}
+          {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={actions.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={actions.onRespond} />))}
           {running && !pending.length && (waiting || drafting || progress) && <StatusLine drafting={drafting ?? null} since={since ?? Date.now()} progress={progress} />}
           {!running && lastText && !pending.length && (
             <div className="after-actions">
@@ -377,7 +408,7 @@ function StepDetail({ s, onOpenFile }: { s: Step; onOpenFile: (p: string) => voi
 const QUICK = ['👍', '😄', '👎', '❤️', '🤐']
 const MORE = ['🔥', '🎉', '🙏', '👀', '🤔', '😂', '😮', '💯', '✅', '🚀', '😢', '👏']
 
-function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' }>; actions: ThreadActions; editable?: boolean; cont?: boolean }) {
+function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' } | { kind: 'heavy' }>; actions: ThreadActions; editable?: boolean; cont?: boolean }) {
   const m = b.m
   const [editing, setEditing] = useState<string | null>(null)
   if (b.kind === 'compacted') {

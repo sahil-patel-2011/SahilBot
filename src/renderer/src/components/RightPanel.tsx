@@ -10,10 +10,14 @@ import { isPageCandidate, PageView } from './PageView'
 import { Watchlist } from './Watchlist'
 import { ChartIcon } from './StockCard'
 import { useWatchlist } from '../lib/stocks'
+import { JobsPanel, TerminalIcon, useJobs } from './JobsPanel'
+// Docs: the Document tab (live documents shared with the bot).
+import { DocPane } from './DocEditor'
+import { DocIcon, useThreadDocs } from './doc/DocCard'
 
-export type PanelTab = 'progress' | 'browser' | 'file' | 'watchlist'
+export type PanelTab = 'progress' | 'browser' | 'file' | 'watchlist' | 'jobs' | 'doc'
 
-export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, browserState, onClose, running, progress, threadId, stocks }: {
+export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, browserState, onClose, running, progress, threadId, stocks, docId, onDocId, onAsk, botColor, botName }: {
   tab: PanelTab
   onTab: (t: PanelTab) => void
   hidden: boolean
@@ -28,10 +32,23 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
   threadId?: string | null
   /** A stock bot's chat: always offer the Watchlist tab. */
   stocks?: boolean
+  /** Docs: the open document (null = the chat's latest), how to switch, and "Ask about selection". */
+  docId?: string | null
+  onDocId?: (id: string) => void
+  onAsk?: (text: string, title: string) => void
+  botColor?: string | null
+  botName?: string
 }) {
   const watch = useWatchlist()
   // The Watchlist tab appears once stocks are in play: a stock bot, a stock card in this chat, or a saved list.
   const showWatch = tab === 'watchlist' || !!stocks || watch.length > 0 || messages.some((m) => m.role === 'tool' && !!m.meta?.stock)
+  // The Jobs tab appears once this chat has background jobs (dev servers, watchers, long builds).
+  const jobList = useJobs(threadId)
+  const jobsRunning = jobList.filter((j) => j.status === 'starting' || j.status === 'running' || j.status === 'ready').length
+  const showJobs = tab === 'jobs' || jobList.length > 0
+  // The Document tab appears once this chat has a live document.
+  const docList = useThreadDocs(threadId)
+  const showDoc = tab === 'doc' || docList.length > 0
   return (
     <aside className="right" data-testid="right-panel">
       <div className="right-tabs drag">
@@ -40,6 +57,8 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
           <button className={tab === 'browser' ? 'on' : ''} onClick={() => onTab('browser')}><I.Globe size={14} />Browser</button>
           <button className={tab === 'file' ? 'on' : ''} onClick={() => onTab('file')} data-testid="tab-file"><I.File size={14} />File</button>
           {showWatch && <button className={tab === 'watchlist' ? 'on' : ''} onClick={() => onTab('watchlist')} data-testid="tab-watchlist"><ChartIcon size={14} />Watchlist</button>}
+          {showDoc && <button className={tab === 'doc' ? 'on' : ''} onClick={() => onTab('doc')} data-testid="tab-doc"><DocIcon size={14} />Document</button>}
+          {showJobs && <button className={tab === 'jobs' ? 'on' : ''} onClick={() => onTab('jobs')} data-testid="tab-jobs"><TerminalIcon size={14} />Jobs{jobsRunning > 0 && <span className="tab-count" aria-label={`${jobsRunning} running`}>{jobsRunning}</span>}</button>}
         </div>
         <span style={{ flex: 1 }} />
         <button className="icon-btn nodrag" onClick={onClose} title="Close panel (⌘\\)"><I.Close size={15} /></button>
@@ -47,6 +66,8 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
       {tab === 'browser' && <BrowserPane hidden={hidden} threadId={threadId} />}
       {tab === 'progress' && <ProgressPane messages={messages} onOpenFile={onOpenFile} browserState={browserState} onBrowser={() => onTab('browser')} running={!!running} progress={progress} />}
       {tab === 'watchlist' && <Watchlist />}
+      {tab === 'doc' && <DocPane threadId={threadId ?? null} docId={docId ?? null} onDocId={(id) => onDocId?.(id)} onAsk={(t, title) => onAsk?.(t, title)} botColor={botColor} botName={botName} />}
+      {tab === 'jobs' && <JobsPanel threadId={threadId ?? null} onOpenUrl={(url) => { onTab('browser'); void api.browser.navigate(url) }} />}
       {tab === 'file' && (isPageCandidate(file) ? <PageView key={file} path={file} hidden={hidden} fallback={<FilePane path={file} />} /> : <FilePane path={file} />)}
     </aside>
   )

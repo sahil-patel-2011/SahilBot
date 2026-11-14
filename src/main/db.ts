@@ -84,7 +84,10 @@ const MIGRATIONS: string[] = [
    CREATE INDEX IF NOT EXISTS goals_wake ON goals(status, next_wake);`,
   // Knowledge base (knowledge/): indexed files, their passages (with optional embeddings) and a BM25 term
   // index. The FTS5 table is made at runtime by KnowledgeStore, since not every SQLite build has FTS5.
-  KNOWLEDGE_SCHEMA
+  KNOWLEDGE_SCHEMA,
+  // Memory provenance: 'untrusted' = its wording followed outside content (a web page, email, another app
+  // or bot). Those stay in the bot that saved them, are labelled, and never replace a trusted memory.
+  `ALTER TABLE memories ADD COLUMN provenance TEXT NOT NULL DEFAULT 'trusted';`
 ]
 
 type Row = Record<string, unknown>

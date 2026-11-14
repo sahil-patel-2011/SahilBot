@@ -6,7 +6,7 @@ uses: 0
 category: Mac Apps
 ---
 
-Making a new file from scratch? Use create_document (docx/xlsx/pptx) instead. Use the app adapters when the user has the document open or wants it changed in place.
+Making a new file from scratch? Use create_document (docx/xlsx/pptx) instead. Editing a closed .xlsx's cells: office sheet_write (find_tools("office"); keeps styles and a backup). Use the app adapters when the user has the document open, or the workbook has charts, pivots or macros.
 
 Excel (`app {app: "Microsoft Excel"}`):
 1. `workbooks`: open workbooks, sheets and their used ranges.

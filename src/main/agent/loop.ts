@@ -1,4 +1,7 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { intentTools } from './intent'
 import { usageScope } from '../usage'
 import type { ApprovalAnswer, Attachment, ChatEvent, Effort, TeamMember, Message, ModelInfo, PendingRequest, PermissionMode, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
 import type { Db } from '../db'
@@ -10,17 +13,32 @@ import { collectText, contextPin, isLocal, isOllama, pinContextWindow, streamCha
 import { constrainedArgs } from '../llm/constrained'
 import { timer } from '../llm/timing'
 import type { Endpoints } from '../llm/endpoints'
-import { teamCapacity } from '../llm/models'
+import type { HeavyBoard, Sampling } from '@shared/types'
+import { cost as priceOf } from '../llm/budget'
+import { claudeFamily } from '../llm/claude-models'
+import { HEAVY_ATTEMPT_NOTE, runHeavy } from './heavy'
+import { heavyConfig, swarmConfig, usd } from './swarm/config'
+import { helperModelFor, isCloudInfo, swarmCapacity } from './swarm/capacity'
+import { SwarmLedger, estimateFor, swarmScope, threadCost } from './swarm/ledger'
+import { AdaptiveLimit, RATE_LIMITED, runPool } from './swarm/pool'
 import { def as providerDef } from '../llm/providers'
 import { decide as route, pick } from '../llm/router'
+import { isPremiumClaude } from '../llm/claude-models'
+// Claude long context, native tools and Auto variants (llm/claude-models, llm/claude-native, llm/router).
+import { claudeInfo, claudeOptions, claudeWindow, compactionTrigger } from '../llm/claude-models'
+import { HALT_TEXT } from '../llm/claude-native'
+import { stepCost } from '../llm/budget'
+import { autoPool, autoUnavailable, autoVariant } from '../llm/router'
 import { ContextManager, OUTPUT_RESERVE, ResultStore, ServerTokenCounter, SUMMARY_INSTRUCTIONS, pinRunContext, withPinned, wrapToolOutput, type TokenCounter } from './context'
-import { appReadRisk, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, ruleVerdict, stricterMode } from './permissions'
+import { ALWAYS_TAINT_CHECKED, appReadRisk, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, ruleVerdict, stricterMode } from './permissions'
 import { VOICE_SUFFIX, contextSections, groupNote, harnessPrompt, type ContextSection } from './prompt'
 import { chooseToolMode, quickEligible, type ToolRegistry } from './registry'
 import { emptyState, type Decision, type PermissionInput, type ThreadState, type ToolContext, type ToolDef, type ToolOutput } from './types'
 import type { HandoffHost } from './tools/handoff'
+import { noteTrustWrites } from './tools/shell'
 import { check, repairPrompt } from './validate'
 import { LoopGuard, fixName, recoverToolCalls } from './recover'
+import { ACTIVITY_TITLE, activityAllowedFor, activityContext } from '../activity/context'
 
 /**
  * No fixed step count: a run gets a budget that grows with the agent's own plan and with progress
@@ -97,10 +115,18 @@ interface Run {
   fromApp?: string
   /** An unattended goal wake-up (the goal's id): tainted for outside actions, its own bookkeeping allowed. */
   goalWake?: string
+  /** A new bot introducing itself (its hidden INTRO instruction asks a question right away). */
+  intro?: boolean
+  /** Sampling overrides for this run only (a Heavy attempt's temperature). */
+  sampling?: Partial<Sampling>
 }
 
-/** Messages that look like the user's but aren't their words: another bot's handoff, or a Teach recording (page strings). */
-export const isRelayed = (m: Pick<Message, 'meta'>): boolean => !!(m.meta?.handoff || m.meta?.teach || m.meta?.helperTask || m.meta?.fromLink)
+/**
+ * Messages that look like the user's but aren't their words: another bot's handoff, a Teach recording
+ * (page strings), a helper task, a sahilbot:// link, or a connected app's (MCP) message.
+ */
+export const isRelayed = (m: Pick<Message, 'meta'>): boolean =>
+  !!(m.meta?.handoff || m.meta?.teach || m.meta?.helperTask || m.meta?.fromLink || typeof m.meta?.mcpClientId === 'string' || typeof m.meta?.fromApp === 'string')
 
 /**
  * The user's own words in a chat, for the taint check. Handoffs, Teach recordings (except the name and
@@ -144,8 +170,86 @@ export function adaptiveEffort(base: Effort, tier?: Tier): Effort {
   return base
 }
 
+/**
+ * Agent work thinks harder: a task (tier 2+, Plan first, Deep Research, Team of Experts, coding or CAD)
+ * gets at least High (Medium if the user picked Low as their level), on top of the adaptive shift; chat
+ * stays adaptive and fast, voice stays Low. Each provider maps the level itself: Claude's effort, Ollama's
+ * think, OpenAI's reasoning_effort.
+ */
+export function runEffort(base: Effort, o: { tier?: Tier; task?: boolean; voice?: boolean }): Effort {
+  if (o.voice) return 'low'
+  const e = adaptiveEffort(base, o.tier)
+  if (!o.task) return e
+  const floor: Effort = base === 'low' ? 'medium' : 'high'
+  return LEVELS[Math.max(LEVELS.indexOf(e), LEVELS.indexOf(floor))]
+}
+
+/** The activity sections ("what the user is working on") in a chat's pinned context blocks: other apps' text. */
+export function activityTexts(pins?: Record<string, string>): string[] {
+  const out: string[] = []
+  for (const block of Object.values(pins ?? {})) {
+    const i = block.indexOf(ACTIVITY_TITLE)
+    if (i < 0) continue
+    const rest = block.slice(i + ACTIVITY_TITLE.length)
+    const end = rest.search(/\n\n|\n<\/context>/)
+    const text = (end < 0 ? rest : rest.slice(0, end)).trim()
+    if (text) out.push(text)
+  }
+  return out
+}
+
+/** A task run (not a chat): hard enough, a task mode on, or a plan in progress. */
+export function isTaskRun(o: { tier?: Tier; flags?: Record<string, unknown>; openPlan?: boolean }): boolean {
+  return (o.tier ?? 0) >= 2 || !!(o.flags?.planFirst || o.flags?.deepResearch || o.flags?.team) || !!o.openPlan
+}
+
+/** Coding or CAD work: routed as coding, or code/git/CAD tools are loaded. */
+export function codingRun(loaded: string[], why?: string): boolean {
+  return /coding/i.test(why ?? '') || loaded.some((n) => /^(code|git|cursor|frc_code|frc_mech)$|onshape|freecad|cad/i.test(n))
+}
+
+export const RESEARCH_FIRST = 'Research first: spend a few steps learning about this (search, read the user\'s files/memory) so your questions are informed or unnecessary; then ask only what\'s left — or, if this is purely the user\'s preference, call ask_user again.'
+
+/** Tools that don't count as looking into the task (planning and asking). */
+const NOT_RESEARCH = new Set(['todo', 'ask_user', 'propose_plan', 'find_tools'])
+export const countsAsResearch = (tool: string): boolean => !NOT_RESEARCH.has(tool)
+
+/**
+ * Research before asking: a task run that asks clarifying questions (or proposes a plan) before looking at
+ * anything gets one nudge to look first. A second call goes through (a question that is purely the user's
+ * taste), and so do chats, intros, unattended runs and helpers.
+ */
+export function researchGate(tool: string, o: { task: boolean; explored: boolean; gated: boolean; unattended?: boolean; helper?: boolean; intro?: boolean }): boolean {
+  if (tool !== 'ask_user' && tool !== 'propose_plan') return false
+  return o.task && !o.explored && !o.gated && !o.unattended && !o.helper && !o.intro
+}
+
+/** The hidden double-check before a real task's final answer; a complex one also critiques its draft against the goal. */
+export function verifyNote(o: { changed: boolean; researched: boolean; actions: number; complex: boolean; goal?: string }): string {
+  const goal = o.goal?.replace(/\s+/g, ' ').trim().slice(0, 400)
+  return `[From the app] Before you finish, double-check your work:\n${o.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${o.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${o.complex ? `- Critique your draft against what the user asked for${goal ? ` ("${goal}")` : ''}: any requirement missed or only half done, any claim without evidence you saw, any edge case or caveat they should know. Fix what you find (a quick extra step is fine).\n` : ''}${o.actions >= 8 ? '- If this took a non-obvious procedure or several tries, save what worked with memory(action="save_skill") so next time is faster.\n' : ''}- Fix anything that's wrong.\nThen write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.`
+}
+
+/**
+ * The model that writes a compaction summary: the strongest usable model (tier, then rank) that is
+ * stronger than the chat's own and whose window holds the transcript, local (free) first; a cloud one
+ * only when allowed (Cloud on, within budget, and the chat isn't kept local). None: the chat's own model.
+ */
+export function pickSummarizer(models: ModelInfo[], current: string, o: { need: number; cloudOk: boolean; windowOf: (m: ModelInfo) => number }): ModelInfo | undefined {
+  const cur = models.find((m) => m.id === current)
+  if (!cur) return undefined
+  const rank = cur.rank ?? 0
+  const stronger = models.filter((m) => m.id !== current && m.installed !== false && (m.tier > cur.tier || (m.tier === cur.tier && (m.rank ?? 0) > rank)) && o.windowOf(m) >= o.need)
+  const best = (xs: ModelInfo[]): ModelInfo | undefined => [...xs].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]
+  const local = best(stronger.filter((m) => !isRemoteModel(m)))
+  if (local) return local
+  if (!o.cloudOk) return undefined
+  // Premium Claude models (priced far above Opus) only summarize for a chat already on one.
+  return best(stronger.filter((m) => isRemoteModel(m) && (!isPremiumClaude(m.id) || isPremiumClaude(current))))
+}
+
 /** How a request was sized: its difficulty, why, and whether Auto picked the model (manual = the user did). */
-type Routed = { tier: Tier; why: string; label?: string; manual?: boolean }
+type Routed = { tier: Tier; why: string; label?: string; manual?: boolean; variant?: 'auto' | 'auto:local' | 'auto:cloud' }
 
 /** What one bot sees in a group chat: its own turns as assistant, other bots' replies as quoted user text. */
 export function perspective(messages: Message[], speakerId: string): Message[] {
@@ -250,6 +354,10 @@ export class Agent {
     const thread = this.d.db.getThread(input.threadId)
     if (!thread) throw new Error('Thread not found')
     if (this.runs.has(thread.id)) throw new Error('SahilBot is still working in this thread. Stop it first or wait.')
+    // Heavy: several attempts and a judge, with a cost the user OKs. Never unattended; it replaces Team,
+    // Deep Research and Plan first for this message (attempts can't ask questions or run teams).
+    if (input.heavy && opts.unattended) throw new Error('Heavy mode needs you there to OK what it costs, so it can\'t run unattended (routines, goals). Send it without Heavy.')
+    if (input.heavy) input = { ...input, team: false, deepResearch: false, planFirst: false }
 
     const history = this.d.db.listMessages(thread.id)
     const lastUserAt = [...history].reverse().find((m) => m.role === 'user')?.createdAt ?? 0
@@ -298,7 +406,8 @@ export class Agent {
         ...(input.meta ?? {}),
         ...(input.team ? { team: true } : {}),
         ...(input.deepResearch ? { deepResearch: true } : {}),
-        ...(input.planFirst ? { planFirst: true } : {})
+        ...(input.planFirst ? { planFirst: true } : {}),
+        ...(input.heavy ? { heavy: true } : {})
       }
     })
     this.d.emit({ threadId: thread.id, type: 'message', message: user })
@@ -396,13 +505,13 @@ export class Agent {
     const thread = this.d.db.getThread(threadId)
     if (!thread || this.runs.has(threadId)) return
     this.d.db.insertMessage({ threadId, role: 'user', content: instruction, kind: 'normal', status: 'done', meta: { hidden: true } })
-    this.start(thread, '')
+    this.start(thread, '', { intro: true })
   }
 
-  private start(thread: Thread, userText: string, opts: { unattended?: boolean } = {}): { done: Promise<'finished' | 'stopped' | 'error'> } {
+  private start(thread: Thread, userText: string, opts: { unattended?: boolean; intro?: boolean } = {}): { done: Promise<'finished' | 'stopped' | 'error'> } {
     const space = this.d.db.getSpace(thread.spaceId)
     const group = space?.kind === 'group'
-    const run: Run = { ctrl: new AbortController(), pending: new Map(), group, unattended: opts.unattended }
+    const run: Run = { ctrl: new AbortController(), pending: new Map(), group, unattended: opts.unattended, intro: opts.intro }
     this.runs.set(thread.id, run)
     this.d.emit({ threadId: thread.id, type: 'run', status: 'started', spaceId: thread.spaceId, title: thread.title })
     // Paid requests anywhere in this run (steps, summaries, helpers) are recorded against this bot.
@@ -440,7 +549,7 @@ export class Agent {
     let error: string | undefined
     try {
       if (!space || space.kind !== 'group') {
-        status = await this.loop(thread, run, space)
+        status = this.heavyWanted(thread, run) ? await this.heavy(thread, run, space) : await this.loop(thread, run, space)
       } else {
         const members = space.members.map((id) => this.d.db.getSpace(id)).filter((b): b is Space => !!b)
         if (!members.length) throw new Error('This group has no bots. Add some in its settings.')
@@ -521,7 +630,12 @@ export class Agent {
       project: !!project,
       ...(project ? this.projectContext(project.id, thread.id) : {}),
       rules: this.d.rules?.block(bot?.id ?? thread.spaceId, project?.id),
-      skills: this.d.skills?.index()
+      skills: this.d.skills?.index(),
+      // Opt-in "what I'm working on" (activity/): only the user's own attended runs; undefined when off.
+      // Local models only, unless "Also share with cloud models" is on (the run's model decides).
+      activity: activityContext(this.runs.get(thread.id), () => this.d.db.listMessages(thread.id), {
+        local: (() => { try { const m = this.lastModel.get(thread.id); return !!m && isLocal(this.d.endpoints.for(m).baseUrl) } catch { return false } })()
+      })
     })
   }
 
@@ -543,12 +657,30 @@ export class Agent {
     return { system: this.baseSystem(main, main.id), tools: this.d.registry.wire(this.d.registry.listFor(st)) }
   }
 
-  /** Team of Experts size for this Mac and model: at least 10 helpers when it can run them. */
+  /** The model as listed (undefined when the listing doesn't have it). */
+  private modelInfo(id: string | undefined): ModelInfo | undefined {
+    return id ? this.d.endpoints.last?.models.find((m) => m.id === id) : undefined
+  }
+
+  /** Billed by the token: listed as a cloud model, or (unlisted) served from off this Mac. */
+  private cloudModel(id: string): boolean {
+    const info = this.modelInfo(id)
+    if (info) return isCloudInfo(info)
+    try { return !isLocal(this.d.endpoints.for(id).baseUrl) } catch { return false }
+  }
+
+  private modelLabel(id: string): string {
+    return this.modelInfo(id)?.label || id
+  }
+
+  /** Team of Experts size for this Mac (local models) or the swarm settings (cloud): at least 10 helpers when it can run them. */
   private teamSize(thread: Thread): { min: number; max: number } {
     const s = this.d.settings.get()
     const want = thread.model || this.d.db.getSpace(thread.spaceId)?.model || s.defaultModel
-    const id = want === 'auto' ? [...this.d.endpoints.usable()].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id : want
-    const cap = teamCapacity(this.d.endpoints.last?.models.find((m) => m.id === id))
+    // Auto variants size the team for the strongest model they may route to (local only / cloud only).
+    const v = autoVariant(want)
+    const id = v ? [...autoPool(v, this.d.endpoints.usable())].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id : want
+    const cap = swarmCapacity(this.modelInfo(id), swarmConfig(s.swarm))
     return { min: Math.min(10, cap.maxAgents), max: cap.maxAgents }
   }
 
@@ -558,20 +690,114 @@ export class Agent {
   private lastTeam = new Map<string, TeamMember[]>()
   /** Live team cards by the root agents call. */
   private boards = new Map<string, TeamMember[]>()
+  /** Running helpers and Heavy attempts by member id (cancel one). */
+  private helperCtl = new Map<string, AbortController>()
+  /** Members cancelled before they started: they never start. */
+  private cancelled = new Set<string>()
+  /** Unfinished members per team (root agents call) or Heavy run, for Stop remaining. */
+  private groups = new Map<string, Set<string>>()
+  /** Spend per swarm, by its root agents call (helpers of helpers share it). */
+  private ledgers = new Map<string, SwarmLedger>()
+
+  /** Cancels one helper or Heavy attempt: a queued one never starts, a working one stops (its lead carries on). */
+  cancelHelper(memberId: string): boolean {
+    const ctl = this.helperCtl.get(memberId)
+    if (ctl) { ctl.abort(); return true }
+    if ([...this.groups.values()].some((g) => g.has(memberId))) { this.cancelled.add(memberId); return true }
+    return false
+  }
+
+  /** Stop remaining: every helper of this team (or attempt of this Heavy run) that hasn't finished. */
+  stopRemaining(groupId: string): number {
+    let n = 0
+    for (const id of [...(this.groups.get(groupId) ?? [])]) if (this.cancelHelper(id)) n++
+    return n
+  }
 
   /**
-   * Team of Experts: each task runs as its own hidden agent thread with the same tools and rules, in
-   * parallel up to what this Mac can hold, all on the lead's model (one model loaded, not several).
-   * Helpers can't get approvals, so anything that needs one is left for the lead.
+   * One hidden helper run (a Team of Experts helper or a Heavy attempt): its own child thread with the
+   * same tools and rules, never looser than its lead right now (a capped handoff run stays capped),
+   * unattended (anything that needs approval is skipped and left for the lead). Inside a swarm its paid
+   * requests count toward the swarm's cap. childId continues an earlier run of it (after a rate limit, or
+   * with a follow-up question from Heavy's judge).
+   */
+  private async helperRun(parent: Thread, run: Run, o: {
+    memberId: string; title: string; task: string; model: string; depth: number; rootId: string; rootCallId: string
+    note: string; seed: { untrusted: string[]; userText: string }; ledger?: SwarmLedger; sampling?: Partial<Sampling>
+    childId?: string; followUp?: string; meta?: Record<string, unknown>
+  }): Promise<{ status: 'finished' | 'stopped' | 'error'; report: string; childId: string; rateLimited?: { afterMs?: number } }> {
+    const { db } = this.d
+    let childId = o.childId
+    if (!childId) {
+      const child = db.createThread(parent.spaceId, stricterMode(db.getThread(parent.id)?.permissionMode ?? parent.permissionMode, run.modeCap), o.model, parent.id)
+      childId = child.id
+      db.updateThread(child.id, { title: o.title })
+      const st = db.getState(child.id)
+      st.roots = db.getState(parent.id).roots
+      st.depth = o.depth
+      st.rootId = o.rootId
+      st.rootCallId = o.rootCallId
+      st.systemSnapshot = this.systemFor(child, { ...st }) + o.note
+      db.setState(child.id, st)
+      // The task is the lead model's words (or, for Heavy, the user's request relayed): the helper checks
+      // taint against the user's own words and everything untrusted the lead had read.
+      db.insertMessage({ threadId: child.id, role: 'user', content: o.task, kind: 'normal', status: 'done', meta: { helperTask: true, ...(o.meta ?? {}) } })
+    } else if (o.followUp) {
+      db.insertMessage({ threadId: childId, role: 'user', content: o.followUp, kind: 'normal', status: 'done', meta: { helperTask: true, ...(o.meta ?? {}) } })
+    }
+    const crun: Run = {
+      ctrl: new AbortController(), pending: new Map(), group: false, unattended: true, helper: true,
+      modeCap: run.modeCap, forceTaint: run.forceTaint, fromApp: run.fromApp, seed: o.seed, sampling: o.sampling
+    }
+    const stop = (): void => crun.ctrl.abort()
+    run.ctrl.signal.addEventListener('abort', stop, { once: true })
+    if (run.ctrl.signal.aborted) crun.ctrl.abort()
+    const before = db.listMessages(childId).length
+    this.runs.set(childId, crun)
+    this.helperCtl.set(o.memberId, crun.ctrl)
+    let status: 'finished' | 'stopped' | 'error'
+    try {
+      const go = (): Promise<'finished' | 'stopped' | 'error'> => this.loop(db.getThread(childId!)!, crun, db.getSpace(parent.spaceId))
+      status = o.ledger ? await swarmScope.run({ ledger: o.ledger, memberId: o.memberId }, go) : await go()
+    } catch {
+      status = 'error'
+    } finally {
+      this.runs.delete(childId)
+      this.helperCtl.delete(o.memberId)
+      run.ctrl.signal.removeEventListener('abort', stop)
+    }
+    const fresh = db.listMessages(childId).slice(before)
+    const report = [...fresh].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)?.content ?? ''
+    let rateLimited: { afterMs?: number } | undefined
+    if (status === 'error') {
+      const err = [...fresh].reverse().find((m) => (m.role === 'assistant' && m.status === 'error') || m.kind === 'notice')
+      if (RATE_LIMITED.test(String(err?.meta?.error ?? err?.content ?? ''))) rateLimited = {}
+    }
+    return { status, report, childId, rateLimited }
+  }
+
+  /**
+   * Team of Experts: each task runs as its own hidden agent thread with the same tools and rules. Local
+   * models: in parallel up to what this Mac can hold, all on the lead's model (one model loaded). Cloud
+   * models: up to swarm.maxAgents helpers, swarm.maxParallel at once (halved on a rate limit, then eased
+   * back up), on a cheaper model than the lead by default (swarm.helperModel); the swarm's cost is
+   * estimated first (the user OKs it above swarm.askAboveUsd) and capped at swarm.maxUsd: no helper
+   * starts past the cap, and the lead gets the partial results. Helpers can't get approvals, so anything
+   * that needs one is left for the lead.
    */
   private async runTeam(parent: Thread, run: Run, callId: string, tasks: Array<{ title: string; task: string }>): Promise<Array<{ title: string; status: string; report: string }>> {
     const { db } = this.d
+    const s = this.d.settings.get()
+    const cfg = swarmConfig(s.swarm)
     const pstate = db.getState(parent.id)
     const depth = (pstate.depth ?? 0) + 1
     if (depth > 2) throw new Error('Helper agents can only go two levels deep. Do this part yourself.')
     const rootId = pstate.rootId ?? parent.id
-    const model = this.lastModel.get(parent.id) ?? parent.model ?? this.d.settings.get().defaultModel
-    const cap = teamCapacity(this.d.endpoints.last?.models.find((m) => m.id === model))
+    const lead = this.lastModel.get(parent.id) ?? parent.model ?? s.defaultModel
+    const leadCap = swarmCapacity(this.modelInfo(lead), cfg)
+    // On the cloud, helpers default to a cheaper, faster model than the lead (all within the run's mode caps and taint rules).
+    const model = helperModelFor(lead, cfg.helperModel, this.d.endpoints.usable(), leadCap.cloud)
+    const cap = model === lead ? leadCap : swarmCapacity(this.modelInfo(model), cfg)
     const used = this.teamUsed.get(rootId) ?? 0
     // Team of Experts: the first team must be wide enough to research properly.
     const teamMode = depth === 1 && !![...db.listMessages(parent.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.meta?.team
@@ -580,86 +806,242 @@ export class Agent {
       throw new Error(`Team of Experts is on: send at least ${min} helpers (you sent ${tasks.length}). Split the research into ${min} or more focused parts (different sources, angles, sub-questions or options) and call agents again with all of them.`)
     }
     if (used + tasks.length > cap.maxAgents) {
-      throw new Error(`This Mac can run ${cap.maxAgents} helper agents per task with this model (${cap.why}); ${Math.max(0, cap.maxAgents - used)} left. Combine the work into fewer, bigger tasks or do the rest yourself.`)
+      throw new Error(cap.cloud
+        ? `Teams on this model can have up to ${cap.maxAgents} helper agents per task (the swarm setting); ${Math.max(0, cap.maxAgents - used)} left. Combine the work into fewer, bigger tasks or do the rest yourself.`
+        : `This Mac can run ${cap.maxAgents} helper agents per task with this model (${cap.why}); ${Math.max(0, cap.maxAgents - used)} left. Combine the work into fewer, bigger tasks or do the rest yourself.`)
+    }
+    const rootCallId = depth === 1 ? callId : pstate.rootCallId ?? callId
+    // Spend on the cloud: estimated before anything starts; above the threshold the user OKs it first.
+    const each = estimateFor(model, this.cloudModel(model))
+    let ledger = this.ledgers.get(rootCallId)
+    const ownLedger = !ledger && each > 0
+    if (ownLedger) {
+      const est = each * tasks.length
+      if (est > cfg.askAboveUsd) {
+        if (run.unattended || run.helper) {
+          throw new Error(`This team would cost about ${usd(est)}, above the ${usd(cfg.askAboveUsd)} that can start without the user's OK, and nobody is here to approve it. Send at most ${Math.max(1, Math.floor(cfg.askAboveUsd / each))} helpers, or do the work yourself.`)
+        }
+        const answer = await this.ask(parent.id, run, {
+          kind: 'approval', tool: 'agents', label: 'Team of Experts', effect: 'read',
+          summary: `Run ${tasks.length} helpers on ${this.modelLabel(model)} · est. ${usd(est)} · cap ${usd(cfg.maxUsd)}`,
+          reason: `about ${usd(each)} per helper; no new helper starts past the ${usd(cfg.maxUsd)} cap`,
+          spend: { kind: 'team', count: tasks.length, model: this.modelLabel(model), estimateUsd: est, capUsd: cfg.maxUsd }
+        })
+        if (answer === 'deny') {
+          throw new Error(`The user declined this team (about ${usd(est)} for ${tasks.length} helpers on ${this.modelLabel(model)}). Don't start it again: do the work yourself in fewer steps, or ask the user how they'd like to go on.`)
+        }
+      }
+      ledger = new SwarmLedger(cfg.maxUsd)
+      this.ledgers.set(rootCallId, ledger)
     }
     this.teamUsed.set(rootId, used + tasks.length)
-    const space = db.getSpace(parent.spaceId)
     const members: TeamMember[] = tasks.map((t, i) => ({ id: `${callId}-${i}`, title: t.title, status: 'queued', depth, model }))
     // One card in the lead's chat shows the whole team, helpers of helpers included.
-    const rootCallId = depth === 1 ? callId : pstate.rootCallId ?? callId
     const board = this.boards.get(rootCallId) ?? []
     board.push(...members)
     this.boards.set(rootCallId, board)
+    const group = this.groups.get(rootCallId) ?? new Set<string>()
+    for (const m of members) group.add(m.id)
+    this.groups.set(rootCallId, group)
     const show = (): void => this.d.emit({ threadId: rootId, type: 'team', callId: rootCallId, members: board.map((m) => ({ ...m })) })
     show()
-    const children: string[] = []
+    const children: Array<string | undefined> = []
+    const isCloud = (m: string): boolean => this.cloudModel(m)
+    // Live token and cost per helper, from its replies (message meta); the swarm's ledger follows them.
+    const measure = (i: number): void => {
+      const cid = children[i]
+      if (!cid) return
+      const c = threadCost(db.listMessages(cid), isCloud)
+      members[i].usd = c.usd
+      members[i].tokens = c.tokens
+      ledger?.observe(members[i].id, c.usd)
+    }
     const tick = setInterval(() => {
       children.forEach((cid, i) => {
         if (!cid || members[i].status !== 'working') return
         const last = [...db.listMessages(cid)].reverse().find((m) => m.role === 'tool' || (m.role === 'assistant' && m.content))
         members[i].detail = last?.role === 'tool' ? String(last.meta?.display ?? last.toolName ?? '') : last?.content.replace(/\s+/g, ' ').slice(0, 90)
+        measure(i)
       })
       show()
     }, 1500)
 
-    let next = 0
     const results: Array<{ title: string; status: string; report: string }> = new Array(tasks.length)
-    const worker = async (): Promise<void> => {
-      while (next < tasks.length) {
-        const i = next++
-        if (run.ctrl.signal.aborted) { members[i].status = 'stopped'; results[i] = { title: tasks[i].title, status: 'stopped', report: '' }; continue }
-        members[i].status = 'working'
-        show()
-        // A helper never runs looser than its lead does right now (a capped handoff run stays capped).
-        const child = db.createThread(parent.spaceId, stricterMode(db.getThread(parent.id)?.permissionMode ?? parent.permissionMode, run.modeCap), model, parent.id)
-        children[i] = child.id
-        db.updateThread(child.id, { title: tasks[i].title })
-        const st = db.getState(child.id)
-        st.roots = pstate.roots
-        st.depth = depth
-        st.rootId = rootId
-        st.rootCallId = rootCallId
-        st.systemSnapshot = this.systemFor(child, { ...st }) + HELPER_NOTE(depth)
-        db.setState(child.id, st)
-        // The task is the lead model's words, not the user's: the helper checks taint against the user's own
-        // words and everything untrusted the lead had read.
-        db.insertMessage({ threadId: child.id, role: 'user', content: tasks[i].task, kind: 'normal', status: 'done', meta: { helperTask: true } })
-        const crun: Run = {
-          ctrl: new AbortController(), pending: new Map(), group: false, unattended: true, helper: true,
-          modeCap: run.modeCap, forceTaint: run.forceTaint, fromApp: run.fromApp,
-          seed: { untrusted: [...(run.taint?.untrusted ?? []).slice(-20), tasks[i].task], userText: run.taint?.userText() ?? run.seed?.userText ?? '' }
-        }
-        const stop = (): void => crun.ctrl.abort()
-        run.ctrl.signal.addEventListener('abort', stop, { once: true })
-        this.runs.set(child.id, crun)
-        let status: string
-        try {
-          status = await this.loop(db.getThread(child.id)!, crun, space)
-        } catch {
-          status = 'error'
-        } finally {
-          this.runs.delete(child.id)
-          run.ctrl.signal.removeEventListener('abort', stop)
-        }
-        const report = [...db.listMessages(child.id)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)?.content ?? ''
-        members[i].status = status === 'finished' ? 'done' : status === 'stopped' ? 'stopped' : 'failed'
-        members[i].detail = report.replace(/\s+/g, ' ').slice(0, 120)
-        results[i] = { title: tasks[i].title, status: members[i].status, report }
-        show()
-      }
-    }
+    const limit = new AdaptiveLimit(Math.max(1, Math.min(cap.parallel, tasks.length)))
+    const tries = new Array<number>(tasks.length).fill(0)
     try {
-      await Promise.all(Array.from({ length: Math.min(cap.parallel, tasks.length) }, worker))
+      await runPool(tasks.length, {
+        limit,
+        signal: run.ctrl.signal,
+        gate: (i) => (this.cancelled.has(members[i].id) ? 'skip' : !ledger || ledger.canLaunch(each) ? 'go' : 'wait'),
+        onSkip: (i, why) => {
+          group.delete(members[i].id)
+          members[i].status = 'stopped'
+          members[i].detail = why === 'budget' ? `Not run: the team reached its ${usd(cfg.maxUsd)} cap` : why === 'cancelled' ? 'Cancelled' : 'Stopped'
+          results[i] = why === 'budget'
+            ? { title: tasks[i].title, status: 'not run (budget cap)', report: `Not started: this team reached its ${usd(cfg.maxUsd)} budget cap. Do this part yourself if it matters, or tell the user it was left out.` }
+            : { title: tasks[i].title, status: 'stopped', report: '' }
+        }
+      }, async (i) => {
+        const id = members[i].id
+        members[i].status = 'working'
+        if (tries[i]) members[i].detail = 'Retrying after a rate limit'
+        show()
+        ledger?.start(id, each)
+        const r = await this.helperRun(parent, run, {
+          memberId: id, title: tasks[i].title, task: tasks[i].task, model, depth, rootId, rootCallId, note: HELPER_NOTE(depth), ledger, childId: children[i],
+          seed: { untrusted: [...(run.taint?.untrusted ?? []).slice(-20), tasks[i].task], userText: run.taint?.userText() ?? run.seed?.userText ?? '' }
+        })
+        children[i] = r.childId
+        measure(i)
+        ledger?.finish(id)
+        // A rate limit: fewer at once, a pause, and this helper goes back in the queue (three tries).
+        if (r.rateLimited && tries[i] < 3 && !run.ctrl.signal.aborted && !this.cancelled.has(id)) {
+          tries[i]++
+          limit.rateLimited(r.rateLimited.afterMs)
+          members[i].status = 'queued'
+          members[i].detail = `Rate limited: retrying, ${limit.limit} at a time`
+          show()
+          return 'retry'
+        }
+        if (r.status === 'finished') limit.succeeded()
+        group.delete(id)
+        members[i].status = r.status === 'finished' ? 'done' : r.status === 'stopped' ? 'stopped' : 'failed'
+        members[i].detail = r.report.replace(/\s+/g, ' ').slice(0, 120)
+        results[i] = { title: tasks[i].title, status: members[i].status, report: r.report }
+        show()
+      })
     } finally {
       clearInterval(tick)
+      for (const m of members) this.cancelled.delete(m.id)
       show()
     }
+    for (let i = 0; i < tasks.length; i++) results[i] ??= { title: tasks[i].title, status: members[i].status, report: '' }
+    if (ownLedger) this.ledgers.delete(rootCallId)
     if (depth === 1) {
       // Keep the final team on the tool result so the card survives a restart.
       this.lastTeam.set(callId, board.map((m) => ({ ...m })))
       this.boards.delete(rootCallId)
+      this.groups.delete(rootCallId)
     }
     return results
+  }
+
+  /** Heavy applies to this run: the user's own message asked for it, someone is watching, not a group or a resume. */
+  private heavyWanted(thread: Thread, run: Run): boolean {
+    if (run.unattended || run.helper || run.intro || run.group) return false
+    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    return !!opener?.meta?.heavy && !isRelayed(opener)
+  }
+
+  /** Heavy mode for this request (heavy.ts): N hidden attempts, a judge, and the final answer in the chat. */
+  private async heavy(thread: Thread, run: Run, space: Space | undefined): Promise<'finished' | 'stopped' | 'error'> {
+    const { db } = this.d
+    const s = this.d.settings.get()
+    const state = db.getState(thread.id)
+    const { model: lead } = await this.chooseModel(db.getThread(thread.id)?.model || space?.model || s.defaultModel, thread, state)
+    db.setState(thread.id, state)
+    const history = db.listMessages(thread.id)
+    const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)!
+    const prior = history.filter((m) => m.id !== opener.id && (m.role === 'user' || m.role === 'assistant') && m.kind === 'normal' && m.content && !m.meta?.hidden && !m.meta?.superseded).slice(-6)
+    const context = prior.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.replace(/\s+/g, ' ').slice(0, 1500)}`).join('\n')
+    const note = typeof opener.meta?.note === 'string' ? opener.meta.note : ''
+    const task = [opener.content, note, context ? `Earlier in this chat (for context):\n${context}` : ''].filter(Boolean).join('\n\n')
+    // Taint for the attempts, as the lead would have it: outside text this chat read, other bots' messages,
+    // what the user is working on, and the earlier replies quoted as context. The request is the user's own words.
+    const seed = {
+      untrusted: [
+        ...history.filter((m) => m.role === 'tool' && m.meta?.untrusted).slice(-20).map((m) => m.content),
+        ...history.filter((m) => m.role === 'user' && isRelayed(m) && !m.meta?.helperTask).slice(-10).map(relayedText),
+        ...activityTexts(state.pins),
+        ...(context ? [context] : [])
+      ],
+      userText: userTextOf(history)
+    }
+    const cfg = heavyConfig(s.heavy)
+    const swarm = swarmConfig(s.swarm)
+    const groupId = `heavy-${randomUUID().slice(0, 8)}`
+    let card: Message | undefined
+    const ids = new Set<string>()
+    const publish = (b: HeavyBoard): void => {
+      // Stop remaining covers the attempts not finished yet (a re-checking one included).
+      for (const a of b.attempts) ids.add(a.id)
+      this.groups.set(groupId, new Set(b.attempts.filter((a) => a.status === 'queued' || a.status === 'working').map((a) => a.id)))
+      if (!card) card = db.insertMessage({ threadId: thread.id, role: 'assistant', content: `Heavy: ${b.attempts.length} attempts`, kind: 'notice', status: 'done', meta: { heavy: b, heavyId: groupId } })
+      else { card.meta = { ...card.meta, heavy: b }; db.updateMessage(card) }
+      this.d.emit({ threadId: thread.id, type: 'message', message: { ...card, meta: { ...card.meta } } })
+    }
+    const progress = (cid: string): { usd: number; tokens: number; detail?: string } => {
+      const ms = db.listMessages(cid)
+      const last = [...ms].reverse().find((m) => m.role === 'tool' || (m.role === 'assistant' && m.content))
+      return { ...threadCost(ms, (m) => this.cloudModel(m)), detail: last?.role === 'tool' ? String(last.meta?.display ?? last.toolName ?? '') : last?.content.replace(/\s+/g, ' ').slice(0, 90) }
+    }
+    try {
+      return await runHeavy({
+        cfg, swarm, lead, usable: this.d.endpoints.usable(), task, request: opener.content, context, signal: run.ctrl.signal, groupId,
+        cloud: (m) => this.cloudModel(m),
+        label: (m) => this.modelLabel(m),
+        localParallel: swarmCapacity(this.modelInfo(lead), swarm).parallel,
+        approve: async (summary, spend) => (await this.ask(thread.id, run, { kind: 'approval', tool: 'heavy', label: 'Heavy', effect: 'read', summary, reason: `no new attempt starts past the ${usd(spend.capUsd)} cap`, spend })) !== 'deny',
+        publish,
+        attempt: async (a, o) => {
+          const r = await this.helperRun(thread, run, {
+            memberId: a.id, title: `Heavy attempt ${a.n}`, task, model: a.model, depth: 2, rootId: thread.id, rootCallId: groupId,
+            note: HEAVY_ATTEMPT_NOTE(a.n, cfg.attempts, a.angle), seed, ledger: o.ledger, childId: o.childId, followUp: o.followUp,
+            // Current Claude models take no custom temperature; their angle is their seed.
+            sampling: o.temperature !== undefined && !claudeFamily(a.model) ? { temperature: o.temperature } : undefined,
+            meta: { heavyAttempt: a.n }
+          })
+          return { status: r.status, answer: r.report, childId: r.childId, rateLimited: r.rateLimited }
+        },
+        progress,
+        cancelled: (id) => this.cancelled.has(id),
+        compare: async (model, system, user, ledger) => {
+          const ep = this.d.endpoints.for(model)
+          let text = ''
+          let p = 0
+          let c = 0
+          await swarmScope.run({ ledger, memberId: `${groupId}-judge` }, async () => {
+            for await (const part of streamChat({
+              baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, maxTokens: 4000, signal: run.ctrl.signal, effort: 'high', keepAlive: s.localKeepAlive,
+              sampling: { ...samplingFor(model, s.sampling), temperature: 0.2 },
+              messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
+            })) {
+              if (part.type === 'content') text += part.text
+              else if (part.type === 'reset') text = ''
+              else if (part.type === 'usage') { p = part.promptTokens; c = part.completionTokens }
+            }
+          })
+          return { text: text.replace(/<think>[\s\S]*?<\/think>/g, ''), usd: this.cloudModel(model) ? priceOf(model, p, c) : 0 }
+        },
+        final: async (model, prompt, ledger) => {
+          const system = this.systemFor(thread, state)
+          db.setState(thread.id, state)
+          const claude = this.d.endpoints.for(model).provider === 'anthropic'
+          const window = claude ? Math.max(s.contextWindow, 131072) : this.d.fitWindow(model, s.contextWindow || 131072)
+          try {
+            const m = await swarmScope.run({ ledger, memberId: `${groupId}-final` }, () => this.stream(thread.id, model, [{ role: 'system', content: system }, { role: 'user', content: prompt }], [], window, run, undefined, undefined, 'high'))
+            // A tool call can't run here; the text is the answer.
+            if (m.toolCalls?.length) { m.toolCalls = undefined; m.meta = { ...m.meta, raw: undefined } }
+            m.meta = { ...m.meta, heavyId: groupId }
+            db.updateMessage(m)
+            this.d.emit({ threadId: thread.id, type: 'message', message: m })
+            if (this.cloudModel(model)) ledger.observe(`${groupId}-final`, priceOf(model, Number(m.meta?.promptTokens) || 0, Number(m.meta?.completionTokens) || 0))
+            return 'finished'
+          } catch {
+            return run.ctrl.signal.aborted ? 'stopped' : 'error'
+          }
+        },
+        post: (text) => {
+          const m = db.insertMessage({ threadId: thread.id, role: 'assistant', content: text, kind: 'normal', status: 'done', meta: { heavyId: groupId } })
+          this.d.emit({ threadId: thread.id, type: 'message', message: m })
+        },
+        notice: (text) => this.notice(thread.id, text)
+      })
+    } finally {
+      for (const id of ids) this.cancelled.delete(id)
+      this.groups.delete(groupId)
+    }
   }
 
   /** What a project's chats share: its memories and a line about each other chat in it. */
@@ -714,15 +1096,51 @@ export class Agent {
       text: last?.content ?? '', attachments: files, images: last?.images?.length ?? 0, previousTier: state.lastTier,
       voice: !!state.voice, openPlan: state.todos.some((t) => t.status !== 'done')
     })
+    // A chosen model that's gone (deleted, or its cloud key removed) falls back to Auto, said once.
+    if (!autoVariant(requested) && await this.modelGone(requested, thread)) requested = 'auto'
+    // Auto, Auto (local) or Auto (cloud); undefined = a model chosen by name.
+    const variant = autoVariant(requested)
     // A chosen model keeps its choice; the difficulty still sets how hard it thinks.
-    if (state.voice && s.taskModels.voice && (requested === 'auto' || !requested)) return this.remember(thread.id, s.taskModels.voice, { tier: r.tier, why: r.why, manual: true })
-    if (requested && requested !== 'auto') { state.lastTier = r.tier; return this.remember(thread.id, requested, { tier: r.tier, why: r.why, manual: true }) }
+    if (state.voice && s.taskModels.voice && variant) return this.remember(thread.id, s.taskModels.voice, { tier: r.tier, why: r.why, manual: true })
+    if (!variant) { state.lastTier = r.tier; return this.remember(thread.id, requested, { tier: r.tier, why: r.why, manual: true }) }
+    // Auto (local) routes among downloaded models only, Auto (cloud) among keyed cloud models only.
+    const pool = autoPool(variant, usable)
+    if (!pool.length && variant !== 'auto') {
+      const keyed = Object.entries(s.keys ?? {}).some(([id, on]) => on && (id === 'anthropic' || id === 'openai' || id === 'openrouter'))
+      throw new Error(`${variant === 'auto:local' ? 'Auto (local)' : 'Auto (cloud)'} has no model to use: ${autoUnavailable(variant, usable, { enabled: s.cloud.enabled, keyed })}.`)
+    }
     // Voice conversations: a small, fast local model so replies start right away (unless the request is hard).
-    const fast = state.voice && r.tier <= 2 ? pick(usable.filter((m) => m.note !== 'remote' && m.tier <= 1), 0) : undefined
-    const chosen = fast ?? pick(usable, r.tier, { needsVision: !!last?.images?.length })
+    const fast = state.voice && r.tier <= 2 && variant !== 'auto:cloud' ? pick(pool.filter((m) => m.note !== 'remote' && m.tier <= 1), 0) : undefined
+    const chosen = fast ?? pick(pool, r.tier, { needsVision: !!last?.images?.length, ...(variant === 'auto:cloud' ? { preferCloud: true } : {}) })
     if (!chosen) throw new Error('No models are available. Start Ollama or LM Studio, or add an API key in Settings → Models.')
     state.lastTier = r.tier
-    return this.remember(thread.id, chosen.id, { tier: r.tier, why: r.why, label: chosen.label })
+    return this.remember(thread.id, chosen.id, { tier: r.tier, why: r.why, label: chosen.label, variant })
+  }
+
+  /** Chats already told that their model is gone (thread + model), so the notice shows once. */
+  private goneNoticed = new Set<string>()
+
+  /**
+   * The chat's, its bot's or the default model can't be used any more (deleted from Ollama, its cloud
+   * key removed): whichever of them chose it switches to Auto, and the chat says so once. False when the
+   * model is fine or there's no telling (its server isn't running right now).
+   */
+  private async modelGone(model: string, thread: Thread): Promise<boolean> {
+    const why = await this.d.endpoints.missing?.(model)
+    if (!why) return false
+    const { db, settings } = this.d
+    const name = this.d.endpoints.last?.models.find((m) => m.id === model)?.label || model
+    const space = db.getSpace(thread.spaceId)
+    let who = 'this chat uses'
+    if (db.getThread(thread.id)?.model === model) this.d.emit({ threadId: thread.id, type: 'thread', thread: db.updateThread(thread.id, { model: 'auto' }) })
+    else if (space?.model === model) { db.updateSpace(space.id, { model: null }); who = `${space.name} uses`; this.d.emit({ threadId: thread.id, type: 'spaces' }) }
+    else if (settings.get().defaultModel === model) { settings.set({ defaultModel: 'auto' }); who = 'new chats use' }
+    const key = `${thread.id}\n${model}`
+    if (!this.goneNoticed.has(key)) {
+      this.goneNoticed.add(key)
+      this.notice(thread.id, `${name} can't be used any more (${why}), so ${who} Auto now. Pick another model in the model menu any time.`)
+    }
+    return true
   }
 
   private remember(threadId: string, model: string, routed?: Routed): { model: string; routed?: Routed } {
@@ -741,9 +1159,13 @@ export class Agent {
     let routed = chosen.routed
     let ep = this.d.endpoints.for(model)
     let claude = ep.provider === 'anthropic'
-    // Voice keeps a 16k window so replies start fast; Claude gets a larger window (1M available, cached).
-    // Auto (0): the largest window that fits this Mac with this model; Claude gets plenty (cached).
-    const windowFor = (m: string, isClaude: boolean): number => Math.min(isClaude ? Math.max(s.contextWindow, 131072) : this.d.fitWindow(m, s.contextWindow || 131072), state.voice ? 16384 : Infinity)
+    // Voice keeps a 16k window so replies start fast. Claude works in its real window as the context strategy
+    // allows (Settings → Models: max = the whole 1M, balanced = 400K, economy = 128K), cached.
+    // Auto (0): the largest window that fits this Mac with this model.
+    const claudeOpts = claudeOptions(s)
+    const windowFor = (m: string, isClaude: boolean): number => Math.min(isClaude ? claudeWindow(m, claudeOpts.contextStrategy) : this.d.fitWindow(m, s.contextWindow || 131072), state.voice ? 16384 : Infinity)
+    // Claude models with threshold compaction summarize on the server near the window (the model id: see prepare()).
+    const serverCompactFor = (m: string, isClaude: boolean): string | undefined => (isClaude && !state.voice && claudeInfo(m)?.compaction ? m : undefined)
     let window = windowFor(model, claude)
     const system = this.systemFor(thread, state, speaker, group)
     db.setState(thread.id, state)
@@ -751,9 +1173,11 @@ export class Agent {
     // In a group, the app's nudges belong to the bot they were for.
     const mine = speaker && run.group ? botMeta(speaker) : {}
 
+    // Compaction summaries come from the strongest model that fits (see summarizeWith); the marker names it.
+    let summarizedBy: string | undefined
     const makeCm = (): ContextManager => {
       const counter = this.d.counter?.(ep.baseUrl, model) ?? new ServerTokenCounter(ep.baseUrl, model)
-      return new ContextManager(counter, (text, maxTokens) => this.summarize(model, text, maxTokens, run.ctrl.signal), results)
+      return new ContextManager(counter, (text, maxTokens) => this.summarizeWith(model, text, maxTokens, run.ctrl.signal, { manual: !!routed?.manual, variant: routed?.variant, picked: (label) => { summarizedBy = label } }), results)
     }
     let cm = makeCm()
 
@@ -806,6 +1230,8 @@ export class Agent {
     // web: it read outside content itself, so handoffs it sends count as tainted.
     const track = {
       changed: false, researched: false,
+      // Research before asking: did this run look at anything yet, is it a task, was it nudged already.
+      explored: false, task: false, askGated: false,
       web: history.some((m) => m.role === 'tool' && m.meta?.untrusted) || (run.seed?.untrusted.length ?? 0) > 1 || !!run.forceTaint,
       sawUntrusted: false
     }
@@ -820,7 +1246,7 @@ export class Agent {
       if (typeof m.meta?.mcpClientId === 'string' || typeof m.meta?.fromApp === 'string') run.fromApp = String(m.meta?.fromApp || 'A connected app').slice(0, 60)
       if (!m.meta?.handoff) return
       const mode = m.meta.mode
-      if (mode === 'ask' || mode === 'auto' || mode === 'bypass') run.modeCap = run.modeCap ? stricterMode(run.modeCap, mode) : mode
+      if (mode === 'ask' || mode === 'auto' || mode === 'autonomous' || mode === 'bypass') run.modeCap = run.modeCap ? stricterMode(run.modeCap, mode) : mode
       if (m.meta.tainted) { run.forceTaint = true; track.web = true }
     }
     const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
@@ -836,6 +1262,18 @@ export class Agent {
       if (Array.isArray(seeded)) for (const t of seeded.slice(-20)) if (typeof t === 'string' && t) untrusted.push(t)
     }
     run.taint = { untrusted, userText: () => userText, tainted: () => !!run.forceTaint || track.web }
+    // Claude's server web search / fetch results from earlier turns live on assistant messages, not tool
+    // messages: they are outside content too (added, never replacing the checks above).
+    const serverRead = history.filter((m) => m.role === 'assistant' && typeof m.meta?.serverUntrusted === 'string').slice(-20)
+    for (const m of serverRead) untrusted.push(m.meta!.serverUntrusted as string)
+    if (serverRead.length) track.web = true
+    // What the user is working on (window titles, page URLs of other apps) is outside text: untrusted for taint checks.
+    const activitySeen = new Set<string>()
+    const taintActivity = (): void => { for (const t of activityTexts(state.pins)) if (!activitySeen.has(t)) { activitySeen.add(t); untrusted.push(t) } }
+    taintActivity()
+    track.task = isTaskRun({ tier: routed?.tier, flags: opener?.meta, openPlan: state.todos.some((t) => t.status !== 'done') })
+    // Thinking: agent work gets at least High on models that support it; chat stays adaptive.
+    const effortNow = (): Effort => runEffort(s.thinking, { tier: routed?.tier, task: track.task || codingRun(state.loaded, routed?.why), voice: !!this.d.db.getState(thread.id).voice })
     const failures = new Map<string, number>()
     const guard = new LoopGuard()
     let nudged = false
@@ -875,29 +1313,40 @@ export class Agent {
         const opener = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
         // Small talk on a local model gets the small tool set; anything more, every tool from then on.
         if (step === 1) chooseToolMode(state, quickEligible({ tier: routed?.tier, local: isLocal(ep.baseUrl), state, flags: opener?.meta, helper: run.helper, unattended: run.unattended, group: run.group, newChat: !all.some((m) => m.role === 'assistant') }))
+        // Heavy tools come only when the request needs them (a smaller, faster prompt the rest of the time).
+        if (step === 1 && state.toolMode !== 'quick' && opener) {
+          const folder = (space?.kind === 'project' ? space.folder : null) ?? db.getSpace(thread.spaceId)?.folder ?? null
+          const codeProject = !!folder && ['.git', 'package.json', 'build.gradle', 'pyproject.toml', 'Cargo.toml', 'go.mod'].some((f) => existsSync(join(folder, f)))
+          const want = intentTools(opener.content, new Set(registry.all().map((t) => t.name)), { codeProject }).filter((n) => !state.loaded.includes(n))
+          if (want.length) registry.load(state, want)
+        }
         // This run's context (date, memories): pinned once to the message that opened it (or a steer).
-        if (opener && this.pinContext(thread, state, all, opener, system, speaker)) db.setState(thread.id, state)
+        if (opener && this.pinContext(thread, state, all, opener, system, speaker)) { db.setState(thread.id, state); taintActivity() }
         // Every request to this local model (summaries too) uses this window: a change would reload it.
         if (isLocal(ep.baseUrl) && !state.voice) pinContextWindow(ep.baseUrl, model, window)
         const tools = registry.listFor(state)
         const wireTools = registry.wire(tools)
-        const withContext = (): Message[] => withPinned(view(db.listMessages(thread.id)), state, speaker?.id)
-        let prepared = await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: claude, allowCompact: !claude || step === 1 })
+        // A cloud model (unless the user shares activity with cloud models) never gets activity sections pinned in earlier turns.
+        const withContext = (): Message[] => withPinned(view(db.listMessages(thread.id)), state, speaker?.id, { activity: activityAllowedFor(isLocal(ep.baseUrl)) })
+        let prepared = await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: claude, allowCompact: !claude || step === 1, serverCompaction: serverCompactFor(model, claude) })
         if (prepared.compacted) {
           db.setState(thread.id, state)
           const marker = db.insertMessage({
             threadId: thread.id, role: 'assistant', kind: 'compacted', status: 'done', content: prepared.compacted.summary,
-            meta: { before: prepared.compacted.before, after: prepared.compacted.after, boundaryId: prepared.compacted.boundaryId }
+            meta: { before: prepared.compacted.before, after: prepared.compacted.after, boundaryId: prepared.compacted.boundaryId, ...(summarizedBy ? { summarizedBy } : {}) }
           })
           this.d.emit({ threadId: thread.id, type: 'message', message: marker })
           // Earlier context blocks were summarized away: this run's block carries everything again.
           if (opener && this.pinContext(thread, state, db.listMessages(thread.id), opener, system, speaker, true)) {
+            taintActivity()
             db.setState(thread.id, state)
-            prepared = { ...(await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: claude, allowCompact: false })), compacted: prepared.compacted }
+            prepared = { ...(await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: claude, allowCompact: false, serverCompaction: serverCompactFor(model, claude) })), compacted: prepared.compacted }
           }
         }
         built.end({ step, used: prepared.used, window, tools: wireTools.length, mode: state.toolMode })
-        this.d.emit({ threadId: thread.id, type: 'progress', step, actions, plan: planPos(), used: prepared.used, window, model, routed })
+        // Cloud models: what the next request costs at this context size (cached prefix read, new tail written).
+        const stepPrice = isLocal(ep.baseUrl) ? undefined : stepCost(model, prepared.used)
+        this.d.emit({ threadId: thread.id, type: 'progress', step, actions, plan: planPos(), used: prepared.used, window, model, routed, ...(stepPrice ? { cost: stepPrice } : {}) })
 
         // Keep the plan in view on long runs (appended at the end, so the cached prefix is untouched).
         const open = state.todos.filter((t) => t.status !== 'done')
@@ -910,13 +1359,16 @@ export class Agent {
 
         let assistant: Message
         try {
-          assistant = await this.stream(thread.id, model, prepared.wire, wireTools, window, run, speaker, routed)
+          assistant = await this.stream(thread.id, model, prepared.wire, wireTools, window, run, speaker, routed, effortNow())
         } catch (e) {
           if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') throw e
           // The failed reply stays visible as an error bubble (it's left out of the history); redo this step.
           if (switchModel(`${modelName()} failed (${(e as Error).message.replace(/\s+/g, ' ').slice(0, 140)})`, true, e as Error)) { step--; continue }
           throw e
         }
+        // Claude's server web search / fetch read outside content in this step (its text is already in the
+        // untrusted list, see stream()): this run now counts as having read the web, like fetch_page.
+        if (assistant.meta?.serverTools) { track.web = true; track.sawUntrusted = true; track.researched = true; track.explored = true }
         // Cut off by the output limit in the middle of a tool call: the call was dropped (see stream()),
         // never run with guessed arguments. Ask for a shorter one.
         if (assistant.meta?.droppedToolCall && step < HARD_CAP) {
@@ -941,6 +1393,8 @@ export class Agent {
           const all = db.listMessages(thread.id)
           // (A Teach recording's addresses are in its note: pages the user opened in this conversation.)
           const seen = all.filter((m) => m.role === 'tool' || m.role === 'user').map((m) => (m.role === 'user' ? relayedText(m) : m.content)).join('\n')
+            // Pages Claude's server web search / fetch retrieved count as retrieved.
+            + all.filter((m) => m.role === 'assistant' && (m.meta?.serverSources || m.meta?.serverUntrusted)).map((m) => `\n${((m.meta?.serverSources as Array<{ url: string }> | undefined) ?? []).map((x) => x.url).join('\n')}\n${String(m.meta?.serverUntrusted ?? '')}`).join('')
           const unseen = citedUrls(assistant.content).filter((u) => !seen.includes(u) && !seen.includes(u.replace(/\/$/, '')))
           if (unseen.length && !linkChecked && step < HARD_CAP) {
             budget = Math.max(budget, step + 1)
@@ -952,7 +1406,9 @@ export class Agent {
             continue
           }
           // Sources this run read (or found) ride along for the UI's source pills.
-          const srcs = sourcesSince(all, runStart)
+          // (Server web search / fetch sources from this run's earlier steps and this reply are added after them.)
+          const srcs = [...sourcesSince(all, runStart), ...all.filter((m) => m.role === 'assistant' && m.createdAt >= runStart && Array.isArray(m.meta?.serverSources)).flatMap((m) => m.meta!.serverSources as Array<{ title: string; url: string }>), ...((assistant.meta?.serverSources as Array<{ title: string; url: string }> | undefined) ?? [])]
+            .filter((x, i, xs) => xs.findIndex((y) => y.url === x.url) === i).slice(0, 12)
           if (srcs.length) {
             assistant.meta = { ...assistant.meta, sources: srcs }
             db.updateMessage(assistant)
@@ -960,14 +1416,17 @@ export class Agent {
           }
           // Double-check real work: anything that changed something, and research beyond a quick lookup.
           // A quick answer or one search stays fast (the link check above still guards citations).
-          if ((track.changed || (track.researched && (actions >= 3 || state.todos.length > 0))) && !verified && !run.helper && state.toolMode !== 'quick' && step < HARD_CAP && !process.env.FOREMAN_NO_VERIFY) {
+          // Complex work (the hardest tier, or 8+ actions) also gets a self-review against the user's goal, in the same single pass.
+          const complex = (routed?.tier === 3 && !this.d.db.getState(thread.id).voice) || actions >= 8
+          if ((track.changed || (track.researched && (actions >= 3 || state.todos.length > 0)) || complex) && !verified && !run.helper && state.toolMode !== 'quick' && step < HARD_CAP && !process.env.FOREMAN_NO_VERIFY) {
             budget = Math.max(budget, step + 1)
             verified = true
             this.d.emit({ threadId: thread.id, type: 'drafting', tool: 'verify' })
             assistant.meta = { ...assistant.meta, superseded: true }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] Before you finish, double-check your work:\n${track.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${track.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${actions >= 8 ? '- If this took a non-obvious procedure or several tries, save what worked with memory(action="save_skill") so next time is faster.\n' : ''}- Fix anything that's wrong.\nThen write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.` })
+            const goal = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !isRelayed(m))?.content
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: verifyNote({ changed: track.changed, researched: track.researched, actions, complex, goal }) })
             continue
           }
           // Autonomy: a task stopped to ask "want me to…?" about its own next step. Do it (risky actions still ask).
@@ -1034,9 +1493,9 @@ export class Agent {
           // Out of room: one text-only turn to report what's done and what's left (adapted from opencode max-steps, MIT).
           // Claude needs the tool list whenever the history has tool calls (and keeps its cache with it).
           const wrapTools = claude ? wireTools : []
-          const wrap = await cm.prepare({ system, toolsJson: JSON.stringify(wrapTools), messages: withPinned(view(db.listMessages(thread.id)), state, speaker?.id), state, window, appendOnly: claude, allowCompact: !claude })
+          const wrap = await cm.prepare({ system, toolsJson: JSON.stringify(wrapTools), messages: withPinned(view(db.listMessages(thread.id)), state, speaker?.id), state, window, appendOnly: claude, allowCompact: !claude, serverCompaction: serverCompactFor(model, claude) })
           wrap.wire.push({ role: 'user', content: '[From the app] This run has used its step budget. Do not call tools. Reply with a short summary: what you finished, what is left, and what the user should say to continue.' })
-          const last = await this.stream(thread.id, model, wrap.wire, wrapTools, window, run, speaker, routed)
+          const last = await this.stream(thread.id, model, wrap.wire, wrapTools, window, run, speaker, routed, effortNow())
           // A tool call here can't run; the reply text is the summary.
           if (last.toolCalls?.length) { last.toolCalls = undefined; last.meta = { ...last.meta, raw: undefined }; db.updateMessage(last) }
         }
@@ -1053,7 +1512,26 @@ export class Agent {
   }
 
   /** One model call, streamed into a new assistant message. */
-  private async stream(threadId: string, model: string, wire: WireMessage[], tools: ReturnType<ToolRegistry['wire']>, window: number, run: Run, speaker?: Space, routed?: Routed): Promise<Message> {
+  /**
+   * Claude request options for one step: native tool types (cloud.nativeTools; server web tools unless web
+   * search is off), a 1-hour prompt cache for runs whose requests can be more than five minutes apart
+   * (team helpers, a lead waiting on its team, Extra/Max thinking turns: shared/prompt-caching.md
+   * "Choosing the TTL"), and server-side compaction near the window. Ignored by other providers.
+   */
+  private claudeRequest(threadId: string, model: string, window: number, run: Run, effort?: Effort): { native?: { enabled: boolean; web: boolean }; cacheTtl?: '5m' | '1h'; compactAt?: number } {
+    const s = this.d.settings.get()
+    if (this.d.endpoints.for(model).provider !== 'anthropic') return {}
+    const state = this.d.db.getState(threadId)
+    const lead = (this.teamUsed.get(state.rootId ?? threadId) ?? 0) > 0
+    const long = !!run.helper || lead || effort === 'xhigh' || effort === 'max'
+    return {
+      native: { enabled: claudeOptions(s).nativeTools, web: s.search?.provider !== 'none' },
+      cacheTtl: long ? '1h' : '5m',
+      ...(claudeInfo(model)?.compaction && !state.voice ? { compactAt: compactionTrigger(window) } : {})
+    }
+  }
+
+  private async stream(threadId: string, model: string, wire: WireMessage[], tools: ReturnType<ToolRegistry['wire']>, window: number, run: Run, speaker?: Space, routed?: Routed, effort?: Effort): Promise<Message> {
     const s = this.d.settings.get()
     const ep = this.d.endpoints.for(model)
     const meta = { ...(speaker ? botMeta(speaker) : {}), ...(routed && !routed.manual ? { routed } : {}) }
@@ -1088,14 +1566,16 @@ export class Agent {
         messages: wire,
         // A model that can't call tools (Ollama says so) would reject the whole request: plain chat instead.
         tools: this.d.endpoints.last?.models.find((x) => x.id === model)?.tools === false ? [] : tools,
-        sampling: samplingFor(model, s.sampling),
+        sampling: { ...samplingFor(model, s.sampling), ...(run.sampling ?? {}) },
         maxTokens: OUTPUT_RESERVE,
         contextWindow: window,
         signal: run.ctrl.signal,
         // Voice answers right away; otherwise thinking adapts to the problem around the chosen level.
-        effort: this.d.db.getState(threadId).voice ? 'low' : adaptiveEffort(s.thinking, routed?.tier),
+        effort: this.d.db.getState(threadId).voice ? 'low' : effort ?? adaptiveEffort(s.thinking, routed?.tier),
         // Local models stay loaded between messages.
-        keepAlive: s.localKeepAlive
+        keepAlive: s.localKeepAlive,
+        // Claude: native tool types, cache lifetime and server-side compaction (ignored by other providers).
+        ...this.claudeRequest(threadId, model, window, run, effort)
       })) {
         if (part.type === 'content') {
           const text = takeHead(part.text)
@@ -1121,7 +1601,14 @@ export class Agent {
           headDone = false
           this.d.emit({ threadId, type: 'message', message: { ...m } })
         } else if (part.type === 'raw') {
-          m.meta = { ...m.meta, raw: { provider: part.provider, model: part.model, content: part.content } }
+          m.meta = { ...m.meta, raw: { provider: part.provider, model: part.model, content: part.content }, ...(part.compacted ? { serverCompacted: true } : {}) }
+        } else if (part.type === 'server_tools') {
+          // Claude's server web search / fetch ran inside this request: their pages are this reply's sources,
+          // and what they brought in is outside content for the taint check (like fetch_page output).
+          const sources = [...part.read, ...part.found].filter((x, i, all) => all.findIndex((y) => y.url === x.url) === i).slice(0, 12)
+          const outside = part.untrusted.join('\n').slice(0, 40_000)
+          m.meta = { ...m.meta, ...(sources.length ? { sources, serverSources: sources } : {}), serverTools: { searches: part.searches, fetches: part.fetches, errors: part.errors }, ...(outside ? { serverUntrusted: outside } : {}) }
+          if (outside) run.taint?.untrusted.push(outside)
         } else if (part.type === 'usage') {
           m.meta = { ...m.meta, promptTokens: part.promptTokens, completionTokens: part.completionTokens }
         } else if (part.type === 'finish' && part.reason === 'length') {
@@ -1157,7 +1644,38 @@ export class Agent {
     return m
   }
 
-  private async summarize(model: string, transcript: string, maxTokens: number, signal: AbortSignal): Promise<string> {
+  /**
+   * A compaction summary from the strongest model that fits (pickSummarizer), falling back to the chat's
+   * own model when that one fails or writes nothing. `picked` gets the label of the model that wrote it.
+   */
+  private async summarizeWith(current: string, transcript: string, maxTokens: number, signal: AbortSignal, o: { manual: boolean; variant?: Routed['variant']; picked: (label: string) => void }): Promise<string> {
+    const s = this.d.settings.get()
+    const label = (id: string): string => this.d.endpoints.last?.models.find((m) => m.id === id)?.label ?? id
+    // Room the summarizer needs: the transcript (at a dense ~3 characters per token), the instructions and the summary.
+    const need = Math.ceil(transcript.length / 3) + Math.ceil(SUMMARY_INSTRUCTIONS.length / 3) + maxTokens + 512
+    const windowOf = (m: ModelInfo): number => (isRemoteModel(m) ? m.contextTokens ?? 200_000 : this.d.fitWindow(m.id, Math.max(s.contextWindow || 131072, 16384)))
+    let usable: ModelInfo[] = []
+    try { usable = this.d.endpoints.usable() } catch { usable = [] }
+    const cur = usable.find((m) => m.id === current)
+    // A cloud summarizer only for a chat that is already on the cloud, or that Auto routes cloud-first.
+    const curRemote = cur ? isRemoteModel(cur) : !isLocal(this.d.endpoints.for(current).baseUrl)
+    // Auto (local) never sends the chat to the cloud; Auto (cloud) and cloud-first Auto may.
+    const cloudOk = !!s.cloud?.enabled && o.variant !== 'auto:local' && (curRemote || (!o.manual && (o.variant === 'auto:cloud' || claudeOptions(s).preferCloud)))
+    const better = pickSummarizer(usable, current, { need, cloudOk, windowOf })
+    if (better) {
+      try {
+        const out = (await this.summarize(better.id, transcript, maxTokens, signal, isRemoteModel(better) ? undefined : windowOf(better))).trim()
+        if (out) { o.picked(label(better.id)); return out }
+      } catch (e) {
+        if (signal.aborted || (e as Error).name === 'AbortError') throw e
+      }
+    }
+    const out = await this.summarize(current, transcript, maxTokens, signal)
+    if (out.trim()) o.picked(label(current))
+    return out
+  }
+
+  private async summarize(model: string, transcript: string, maxTokens: number, signal: AbortSignal, contextWindow?: number): Promise<string> {
     const s = this.d.settings.get()
     const ep = this.d.endpoints.for(model)
     // collectText starts over when a retried request resets the stream (no doubled summary).
@@ -1170,7 +1688,9 @@ export class Agent {
       maxTokens,
       // Thinking models would spend the whole budget reasoning and return no summary.
       effort: 'low',
-      signal
+      signal,
+      // Another local model than the chat's: its own window (the chat's model keeps its pinned one).
+      ...(contextWindow ? { contextWindow } : {})
     }))
   }
 
@@ -1187,8 +1707,17 @@ export class Agent {
   private async executeAll(thread: Thread, run: Run, state: ThreadState, calls: ToolCall[], ctx: ExecCtx): Promise<Array<{ name: string; status: CallStatus }>> {
     const out: Array<{ name: string; status: CallStatus }> = []
     let i = 0
+    // Claude's computer toolset runs a turn's actions in order and stops at the first failure: the rest of
+    // that turn's computer actions are answered with the toolset's halt text, never run.
+    let computerFailed = false
     while (i < calls.length) {
       if (run.ctrl.signal.aborted) throw new DOMException('stopped', 'AbortError')
+      if (computerFailed && calls[i].native?.kind === 'computer') {
+        const halted: Outcome = { call: calls[i], status: 'error', content: HALT_TEXT, meta: { status: 'error', label: 'Computer', display: 'skipped: an earlier action failed' } }
+        out.push({ name: calls[i].name, status: this.commit(thread, halted, ctx) })
+        i++
+        continue
+      }
       // A batch: consecutive reads that run without asking. A repeat of a call in the batch ends it, so
       // the loop guard sees the first result before judging the repeat.
       const batch: ToolCall[] = []
@@ -1205,7 +1734,10 @@ export class Agent {
         ? await mapLimit(group, PARALLEL_TOOLS, (c) => this.perform(thread, run, state, c, ctx))
         : [await this.perform(thread, run, state, group[0], ctx)]
       // Stored in the order the model asked for them: providers match results to calls by position too.
-      for (const o of outcomes) out.push({ name: o.call.name, status: this.commit(thread, o, ctx) })
+      for (const o of outcomes) {
+        out.push({ name: o.call.name, status: this.commit(thread, o, ctx) })
+        if (o.call.native?.kind === 'computer' && o.status !== 'ok') computerFailed = true
+      }
       i += group.length
       this.d.db.setState(thread.id, state)
     }
@@ -1250,10 +1782,13 @@ export class Agent {
       // Long-term memory: a save whose wording came from (or, after reading, reads like) fetched content asks.
       hardStop: tool.hardStop?.(args) ?? (tool.name === 'memory' ? memoryRisk(args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted) : null),
       hardStopsEnabled: s.advanced.hardStopsEnabled,
-      // A handoff from a run that read untrusted content: every outside action in this run asks.
-      tainted: (!!run.forceTaint && (effect === 'write_external' || effect === 'destructive')) || checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText),
+      // A handoff from a run that read untrusted content: every outside action in this run asks, and so
+      // does every terminal command (whatever its effect: a "local" command can still do anything).
+      tainted: (!!run.forceTaint && (effect === 'write_external' || effect === 'destructive' || ALWAYS_TAINT_CHECKED.has(tool.name))) || checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText),
       leaksSecret: containsSecret(args, this.d.secretValues()),
-      consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended }) : true
+      consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended, state }) : true,
+      // Nobody watches an unattended run: the Autonomous level works like Auto there.
+      unattended: run.unattended
     }, rule)
     return { effect, decision: this.runRisks(run, tool, effect, args, ctx, decision), summary }
   }
@@ -1269,8 +1804,12 @@ export class Agent {
     // A wake-up's own bookkeeping (milestones, journal, follow_up) runs even in an Ask-mode chat: nobody
     // is there to approve it, it only touches the goal, and its entries are tagged as tainted.
     if (run.goalWake && !run.fromApp && isGoalMutation(tool.name, args) && decision.verdict === 'ask' && !decision.reason) return { verdict: 'allow' }
-    const reason = appReadRisk(run.fromApp, tool.name, effect) ?? goal?.reason
+    const app = appReadRisk(run.fromApp, tool.name, effect)
+    const reason = app ?? goal?.reason
     if (reason && decision.verdict === 'allow') return { verdict: 'ask', reason }
+    // In an app's run the card names the app ("Cursor asked: …"), also when taint would have asked anyway;
+    // only a hard stop keeps its own, more specific reason.
+    if (app && decision.verdict === 'ask' && !/^Hard stop:/.test(decision.reason ?? '')) return { ...decision, reason: app }
     if (reason && !decision.reason) return { ...decision, reason }
     return decision
   }
@@ -1286,7 +1825,9 @@ export class Agent {
         // A handoff's own receipt ("Handed off to …") isn't outside content; a reply or a page is.
         if (!(o.call.name === 'message_bot' && /^Handed off to /.test(o.output.text))) ctx.track.web = true
       }
-      ctx.guard.record(o.call, o.output.text)
+      // A screenshot's text is the same every time (Claude's computer toolset takes one after nearly every
+      // action): the image tells whether anything changed, so it counts toward "the same result".
+      ctx.guard.record(o.call, o.images?.length ? `${o.output.text}\n${o.images.map((x) => createHash('sha1').update(x).digest('hex')).join(',')}` : o.output.text)
     }
     this.toolMessage(thread.id, o.call, content, o.meta, o.images)
     return o.status
@@ -1309,6 +1850,9 @@ export class Agent {
   private async perform(thread: Thread, run: Run, state: ThreadState, call: ToolCall, ctx: ExecCtx): Promise<Outcome> {
     const { registry } = this.d
     const s = this.d.settings.get()
+
+    // A Claude native tool call SahilBot's tool can't express (llm/claude-native): answered, nothing runs.
+    if (call.native?.error) return { call, status: 'error', content: `Error: ${call.native.error}`, meta: { status: 'error', label: call.name, display: call.native.error.slice(0, 80) } }
 
     const fixed = fixName(call.name, new Set(registry.all().map((t) => t.name)), this.d.connectors?.disabledToolNames?.())
     if (fixed && fixed !== call.name) call = { ...call, name: fixed }
@@ -1339,6 +1883,12 @@ export class Agent {
     ctx.failures.delete(tool.name)
     const args = checked.args
 
+    // Research before asking: a task's first questions (or plan) before looking at anything get one nudge back.
+    if (researchGate(tool.name, { task: !!ctx.track.task, explored: !!ctx.track.explored, gated: !!ctx.track.askGated, unattended: run.unattended, helper: run.helper, intro: run.intro })) {
+      ctx.track.askGated = true
+      return { call, status: 'ok', content: RESEARCH_FIRST, meta: { label: tool.label, effect: 'read', args: call.arguments, status: 'ok', display: 'looking into it first' } }
+    }
+
     // 2. Permission.
     const { effect, decision, summary } = this.permission(thread, run, state, tool, call, args, ctx)
     const baseMeta = { label: tool.label, effect, args: call.arguments }
@@ -1363,6 +1913,8 @@ export class Agent {
       }
       if (answer === 'always' && !state.alwaysAllow.includes(tool.name)) state.alwaysAllow.push(tool.name)
     }
+    // The user approved this exact call on a card: commands it runs aren't confined by the write sandbox.
+    const approved = decision.verdict === 'ask'
 
     // 3. Run.
     const provenance = tool.name === 'memory' ? memoryProvenance(args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted) : undefined
@@ -1394,6 +1946,10 @@ export class Agent {
       speakerId: run.group ? run.speaker?.id : undefined,
       provenance,
       tainted: !!run.forceTaint || ctx.track.sawUntrusted
+        // Site playbooks outlive the run: any outside content in this chat (any turn), or activity titles in view, makes edits ask.
+        || (tool.name === 'sites' && (ctx.track.web || ctx.untrusted.length > 0 || activityTexts(state.pins).length > 0)),
+      approved,
+      sandbox: s.advanced.sandboxCommands !== false
     }
     let out: ToolOutput
     try {
@@ -1412,6 +1968,9 @@ export class Agent {
     // The team's reports are the work itself: the lead must see them whole, so they get a big share of the window.
     const off = await this.d.results.maybeOffload(out.text, id, counter, tool.name === 'agents' ? teamShare(ctx.window) : undefined)
     if (effect !== 'read') ctx.track.changed = true
+    // A tool that wrote install config or git internals: this chat's installs and pulls ask again (shell.ts).
+    if (effect !== 'read' && tool.name !== 'run_command') noteTrustWrites(state, `${call.arguments}\n${out.path ?? ''}`)
+    if (countsAsResearch(tool.name)) ctx.track.explored = true
     if (tool.name === 'web_search' || tool.name === 'fetch_page' || tool.name === 'research' || (tool.name === 'browser' && /get_text|snapshot|navigate/.test(call.arguments))) ctx.track.researched = true
     const team = this.lastTeam.get(call.id)
     if (team) this.lastTeam.delete(call.id)
@@ -1481,7 +2040,7 @@ interface ExecCtx {
   untrusted: string[]
   userText: string
   guard: LoopGuard
-  track: { changed: boolean; researched: boolean; web: boolean; sawUntrusted: boolean }
+  track: { changed: boolean; researched: boolean; web: boolean; sawUntrusted: boolean; explored?: boolean; task?: boolean; askGated?: boolean }
   window: number
 }
 

@@ -218,8 +218,11 @@ describe('plan, then execute', () => {
 
   test('Plan first: clarifying questions in one card, a plan to approve, then it executes', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
+    const ask = { toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ questions: [{ question: 'Who is the newsletter for?', options: ['Patients', 'Referring doctors'] }, { question: 'How long should it be?' }] }) }] }
+    // The first ask is sent back with "Research first"; asking again (pure preference) shows the card.
     llm.script.push(
-      { toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ questions: [{ question: 'Who is the newsletter for?', options: ['Patients', 'Referring doctors'] }, { question: 'How long should it be?' }] }) }] },
+      ask,
+      (req) => toolOut(req).includes('Research first') ? ask : { content: 'research-first gate did not run' },
       (req) => toolOut(req).includes('Patients') && toolOut(req).includes('300 words')
         ? { toolCalls: [{ name: 'propose_plan', arguments: JSON.stringify({ goal: 'A 300-word patient newsletter about BPH.', steps: ['Check the latest guidance', 'Draft the newsletter', 'Proofread it'], risks: ['Medical claims need a doctor\'s review'] }) }] }
         : { content: 'answers did not arrive' },

@@ -1,5 +1,6 @@
 import type { Attachment, ModelInfo, Tier } from '@shared/types'
 import { isPremiumClaude } from './claude-models'
+import { RECOMMENDED } from './catalog'
 
 // Auto mode: decide how hard a request is, then send it to the cheapest model that is strong enough.
 // Rules first (instant, free, predictable). When the rules don't clearly decide, it goes one tier UP:
@@ -87,7 +88,44 @@ export function decide(input: RouteInput): Route {
  * before every pick): 'cloud' sends each tier to the cloud model first (Claude Haiku for light requests,
  * Sonnet for standard ones, Opus for the hardest), 'local' keeps free, private local models first.
  */
-export const routingPrefs: { preferCloud: boolean } = { preferCloud: false }
+export const routingPrefs: { preferCloud: boolean; fableForHardest: boolean } = { preferCloud: false, fableForHardest: false }
+
+// ---------------------------------------------------------------------------------------------------
+// Auto variants, stored as the model value of a chat, a bot or the default: 'auto' (best of both: local
+// and cloud, in the order of the Auto prefers setting), 'auto:local' (only downloaded local models) and
+// 'auto:cloud' (only keyed cloud models: Claude with an Anthropic key, GPT with an OpenAI key, OpenRouter
+// models added by name with an OpenRouter key).
+// ---------------------------------------------------------------------------------------------------
+
+export type AutoVariant = 'auto' | 'auto:local' | 'auto:cloud'
+export const AUTO_VARIANTS: AutoVariant[] = ['auto', 'auto:local', 'auto:cloud']
+
+/** The Auto variant a model value means, or undefined for a concrete model ('' counts as Auto). */
+export function autoVariant(id: string | null | undefined): AutoVariant | undefined {
+  if (!id) return 'auto'
+  return (AUTO_VARIANTS as string[]).includes(id) ? (id as AutoVariant) : undefined
+}
+export const isAuto = (id: string | null | undefined): boolean => autoVariant(id) !== undefined
+
+const remoteModel = (m: ModelInfo): boolean => m.note === 'remote' || m.note === 'added by you' || m.provider === 'anthropic' || m.provider === 'openai' || m.provider === 'openrouter'
+
+/** The models a variant may route among (from what Auto may use right now). */
+export function autoPool(variant: AutoVariant, usable: ModelInfo[]): ModelInfo[] {
+  if (variant === 'auto:local') return usable.filter((m) => !remoteModel(m))
+  if (variant === 'auto:cloud') return usable.filter(remoteModel)
+  return usable
+}
+
+/**
+ * Why a variant has nothing to route to, in words for the picker and the chat (undefined: it's usable).
+ * `cloud` says whether cloud models are on and which providers have a key.
+ */
+export function autoUnavailable(variant: AutoVariant, usable: ModelInfo[], cloud: { enabled: boolean; keyed: boolean }): string | undefined {
+  if (autoPool(variant, usable).length) return undefined
+  if (variant === 'auto:local') return 'No local models downloaded — open Settings → Models'
+  if (variant === 'auto:cloud') return !cloud.enabled ? 'Cloud models are switched off — turn them on in Settings → General' : !cloud.keyed ? 'No cloud API key saved — add an Anthropic or OpenAI key in Settings → Models' : 'No cloud model is on — switch one on in Settings → Models'
+  return 'No models are available — download one or add an API key in Settings → Models'
+}
 
 export interface PickOptions {
   /** Cloud models before local ones at the same tier (default: routingPrefs.preferCloud). */
@@ -97,6 +135,8 @@ export interface PickOptions {
   localOnly?: boolean
   /** Explicit preference for a tier (e.g. the voice model setting). */
   prefer?: string
+  /** "Use Fable for the hardest tasks": premium Claude first at the hardest tier (default: routingPrefs). */
+  premiumHardest?: boolean
 }
 
 /**
@@ -116,11 +156,20 @@ export function pick(models: ModelInfo[], tier: Tier, o: PickOptions = {}): Mode
   const capable = (m: ModelInfo): boolean => m.tools !== false
   const cloudFirst = o.preferCloud ?? routingPrefs.preferCloud
   const remote = (m: ModelInfo): number => Number(m.note === 'remote') * (cloudFirst ? -1 : 1)
-  const premium = (m: ModelInfo): number => Number(m.note === 'remote' && isPremiumClaude(m.id))
+  // Premium cloud models come last, except at the hardest tier when the user lets Auto use them there.
+  const premiumFirst = tier === 3 && (o.premiumHardest ?? routingPrefs.fableForHardest)
+  const premium = (m: ModelInfo): number => Number(m.note === 'remote' && isPremiumClaude(m.id)) * (premiumFirst ? -1 : 1)
   const best = (a: ModelInfo, b: ModelInfo): number =>
     premium(a) - premium(b) || remote(a) - remote(b) || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0)
+  // A light request with no model at its level goes up a tier: there, speed matters more than the last
+  // bit of quality, so the fastest capable model wins (a mixture-of-experts with few active parameters).
+  const speed = (m: ModelInfo): number => {
+    const r = RECOMMENDED.find((x) => m.id === x.pull || m.id.startsWith(`${x.pull}-`))
+    return r ? r.activeB ?? r.paramsB : (m.sizeBytes ?? 0) / 1e9 || Infinity
+  }
+  const fastest = (a: ModelInfo, b: ModelInfo): number => premium(a) - premium(b) || remote(a) - remote(b) || speed(a) - speed(b) || best(a, b)
   for (let t = tier; t <= 3; t++) {
-    const at = pool.filter((m) => m.tier === t && capable(m)).sort(best)
+    const at = pool.filter((m) => m.tier === t && capable(m)).sort(t > tier && tier <= 1 ? fastest : best)
     if (at.length) return at[0]
   }
   const pool2 = pool.some(capable) ? pool.filter(capable) : pool

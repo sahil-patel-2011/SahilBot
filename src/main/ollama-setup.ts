@@ -190,7 +190,9 @@ export async function startOllama(baseUrl: string): Promise<boolean> {
   if (await ollamaUp(baseUrl)) return true
   const bin = await verifiedOllamaBinary()
   if (!bin) return false
-  server = spawn(bin, ['serve'], { detached: false, stdio: 'ignore', env: { ...process.env, OLLAMA_FLASH_ATTENTION: process.env.OLLAMA_FLASH_ATTENTION ?? '1' } })
+  // Flash attention, and an 8-bit KV cache (needs flash attention): about half the context memory at
+  // no visible quality cost, so a 64k window fits beside a 27B model. The user's own settings win.
+  server = spawn(bin, ['serve'], { detached: false, stdio: 'ignore', env: { ...process.env, OLLAMA_FLASH_ATTENTION: process.env.OLLAMA_FLASH_ATTENTION ?? '1', OLLAMA_KV_CACHE_TYPE: process.env.OLLAMA_KV_CACHE_TYPE ?? 'q8_0' } })
   server.on('exit', () => { server = null })
   for (let i = 0; i < 40; i++) {
     if (await ollamaUp(baseUrl)) return true

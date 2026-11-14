@@ -5,7 +5,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { SpaceAvatar } from '../brand'
 import { AppIcon, IconStack, connectedApps, useAppIcons } from './ConnectedIcons'
-import { MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, matches, recommended } from '../lib/connect-catalog'
+import { CUSTOM_REDIRECT, MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, connectBadge, matches, recommended } from '../lib/connect-catalog'
 import { importBot } from './BotShare'
 
 const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
@@ -24,7 +24,7 @@ const prettyTool = (n: string): string => n.replace(/[_\-.]+/g, ' ').replace(/^\
 const ACRONYMS = /^(pdf|pcb|sql|seo|ci|api|ios|gdt|dfm)$/i
 const prettySkill = (n: string): string => n.split('-').map((w) => (ACRONYMS.test(w) ? w.toUpperCase() : w)).join(' ').replace(/^\w/, (c) => c.toUpperCase())
 
-type View = 'browse' | 'manage' | 'templates' | 'form' | 'google'
+type View = 'browse' | 'manage' | 'templates' | 'form' | 'google' | 'setup'
 type Form = { preset: ConnectorPreset; name: string; kind: 'remote' | 'stdio'; url: string; command: string; headerName: string; headerValue: string; clientId: string; clientSecret: string }
 
 /**
@@ -56,6 +56,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   /** The Google app waiting for "Set up Google once" to finish (connects right after). */
   const [googleFor, setGoogleFor] = useState<ConnectorPreset | null>(null)
   const [google, setGoogle] = useState<{ clientId: string; hasSecret: boolean } | null>(null)
+  /** The app whose one-time OAuth setup is open (oauth-static presets). */
+  const [setupFor, setSetupFor] = useState<ConnectorPreset | null>(null)
   /** Test connection results by connector id. */
   const [tests, setTests] = useState<Record<string, { ok: boolean; text: string }>>({})
   const body = useRef<HTMLDivElement>(null)
@@ -112,6 +114,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     const existing = configOf(p)
     // Google apps without the shared client (and without their own): set Google up first.
     if (p.auth === 'google' && !google && !existing?.clientId && status(existing?.id ?? '')?.state !== 'connected') { setGoogleFor(p); go('google'); return }
+    // Apps without self-registration: create their OAuth app once, then they connect in one click.
+    if (p.auth === 'oauth-static' && !existing?.clientId) { setSetupFor(p); go('setup'); return }
     if (existing) {
       if (status(existing.id)?.state === 'connected') { setOpen(existing.id); go('manage'); return }
       try { await api.connectors.connect(existing.id) } catch (e) { setErr(clean(e)) }
@@ -182,6 +186,17 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     }
   }
 
+  /** An app's one-time setup is saved: connect it (the browser opens to sign in on the app's own page). */
+  const afterSetup = async (p: ConnectorPreset, clientId: string, clientSecret: string): Promise<void> => {
+    const existing = configOf(p)
+    const saved = await api.connectors.save({ ...(existing ?? { name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true }), clientId, ...(clientSecret ? { clientSecret } : {}) })
+    setSetupFor(null)
+    setOpen(saved.id)
+    go('manage')
+    await load()
+    try { await api.connectors.connect(saved.id) } catch (e) { setErr(clean(e)) }
+  }
+
   /** Google is set up: connect the app that was waiting for it (the browser opens to sign in). */
   const afterGoogle = async (info: { clientId: string; hasSecret: boolean }): Promise<void> => {
     setGoogle(info)
@@ -212,7 +227,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
       p.auth === 'browser' ? ['Open', 'ghost'] :
       st?.state === 'connected' ? ['Connected', 'done'] :
       busy ? ['Connecting…', 'ghost'] :
+      p.auth === 'oauth-static' && !cfg?.clientId ? ['Set up', 'ghost'] :
       cfg ? ['Connect', 'solid'] : ['Add', 'ghost']
+    const badge = st?.state === 'connected' ? null : connectBadge(p)
     const act = (): void => { if (!busy) void start(p) }
     return (
       <div key={p.id} className="ca-item" role="button" tabIndex={0} data-testid={`preset-${p.id}`} data-state={st?.state}
@@ -221,8 +238,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           ? <span className="ca-icon vault" style={{ width: 44, height: 44, borderRadius: 12 }}><I.Shield size={22} /></span>
           : <AppIcon src={icons[p.id]} name={p.name} color={p.color} />}
         <span className="ca-item-text">
-          <b>{p.name}</b>
-          <span>{st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !google && !cfg ? `${p.description} One-time Google setup first.` : p.description}</span>
+          <b>{p.name}{badge && <small className={`ca-badge ${badge === 'One click' ? 'one-click' : 'setup'}`} data-testid={`badge-${p.id}`} title={badge === 'One click' ? 'Sign in on the app\'s own page; nothing to set up' : p.auth === 'google' ? 'One-time Google setup (about 5 minutes), then one click' : `One-time setup at ${p.name} (about ${p.setup?.minutes ?? 5} minutes), then one click`}
+            style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 600, verticalAlign: 1, background: badge === 'One click' ? 'color-mix(in srgb, var(--ok, #2e9d5b) 16%, transparent)' : 'color-mix(in srgb, var(--text-3, #888) 18%, transparent)', color: badge === 'One click' ? 'var(--ok, #2e9d5b)' : 'var(--text-2, #666)' }}>{badge}</small>}</b>
+          <span>{st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !cfg?.clientId ? `${p.description} One-time setup first.` : p.description}</span>
         </span>
         <span className={`ca-btn ${tone}`} aria-disabled={busy || undefined}>
           {label}{tone === 'done' && <I.Check size={13} />}
@@ -344,6 +362,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
                     {busy ? 'Connecting…' : state === 'needs_auth' ? 'Sign in' : 'Reconnect'}
                   </button>
                 )}
+                {preset?.setup && (
+                  <button className="btn" title={`Change the OAuth app ${c.name} signs in with`} data-testid="connector-setup" onClick={() => { setSetupFor(preset); go('setup') }}>Setup</button>
+                )}
                 <button className="icon-btn" title="Remove" aria-label={`Remove ${c.name}`} onClick={() => { if (confirm(`Remove ${c.name}? You can add it again later.`)) void guard(() => api.connectors.remove(c.id)) }}><I.Trash size={15} /></button>
               </div>
               {tests[c.id] && (
@@ -422,6 +443,14 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
             </div>
           </div>
           <div className="hint">Leave the header empty to sign in with OAuth in your browser.</div>
+          <details style={{ margin: '10px 0 4px' }} open={!!form.clientId}>
+            <summary className="hint" style={{ cursor: 'pointer' }}>OAuth client (only if the server can't register SahilBot itself)</summary>
+            <div className="hint" style={{ margin: '6px 0' }}>Create an OAuth app in the service's developer settings with this redirect URL: <CopyText text={CUSTOM_REDIRECT} /></div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} placeholder="Client ID" spellCheck={false} autoComplete="off" style={{ flex: 1 }} data-testid="conn-client-id" />
+              <input type="password" value={form.clientSecret} onChange={(e) => setForm({ ...form, clientSecret: e.target.value })} placeholder="Client secret (if any)" autoComplete="off" style={{ flex: 1 }} />
+            </div>
+          </details>
         </>
       ) : (
         <div className="field"><label>Command</label><input value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })} placeholder="npx -y @some/mcp-server" data-testid="conn-command" /></div>
@@ -436,14 +465,14 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   // ---------------------------------------------------------------- frame
 
   const moreLabel = MORE_CATEGORIES.includes(chip) ? chip : 'More'
-  const title = view === 'manage' ? 'Connected apps' : view === 'templates' ? 'Bot templates' : view === 'form' ? 'Add an app' : view === 'google' ? 'Set up Google once' : 'Connect Apps'
+  const title = view === 'manage' ? 'Connected apps' : view === 'templates' ? 'Bot templates' : view === 'form' ? 'Add an app' : view === 'google' ? 'Set up Google once' : view === 'setup' && setupFor ? `Set up ${setupFor.name} once` : 'Connect Apps'
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal connect-modal ca" data-testid="connect-apps-modal" role="dialog" aria-label={title}>
         <header className="ca-head">
           {view !== 'browse' && (
-            <button className="icon-btn ca-back" aria-label="Back" onClick={() => { setForm(null); go('browse') }}>
+            <button className="icon-btn ca-back" aria-label="Back" onClick={() => { setForm(null); setSetupFor(null); go('browse') }}>
               <I.Chevron size={18} style={{ transform: 'rotate(90deg)' }} />
             </button>
           )}
@@ -501,6 +530,13 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           {view === 'manage' && manage()}
           {view === 'templates' && gallery()}
           {view === 'form' && formView()}
+          {view === 'setup' && setupFor && (
+            <AppSetup
+              preset={setupFor}
+              hasClient={!!configOf(setupFor)?.clientId}
+              onCancel={() => { setSetupFor(null); go('browse') }}
+              onDone={(id, secret) => afterSetup(setupFor, id, secret)} />
+          )}
           {view === 'google' && (
             <GoogleSetup
               forApp={googleFor?.name}
@@ -519,6 +555,94 @@ function healthText(st: ConnectorStatus): string {
   if (st.state === 'needs_auth') return 'Needs sign-in: press Sign in.'
   if (st.state === 'reconnecting') return `Not reachable right now${st.error ? ` (${st.error})` : ''}. Reconnecting on its own.`
   return `${STATE_TEXT[st.state]}${st.error ? `: ${st.error}` : ''}`
+}
+
+// ---------------------------------------------------------------- one-time OAuth app (oauth-static apps)
+
+/** A value the user pastes elsewhere, with a Copy button. */
+function CopyText({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <code style={{ userSelect: 'all', padding: '1px 6px', borderRadius: 6, background: 'var(--bubble-ai)' }} data-testid="setup-redirect">{text}</code>
+      <button type="button" className="ca-btn ghost" style={{ padding: '2px 8px' }}
+        onClick={() => { void navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => undefined) }}>{copied ? 'Copied' : 'Copy'}</button>
+    </span>
+  )
+}
+
+/** Light checks on a pasted client ID/secret (main checks again). */
+export function clientProblem(clientId: string, secret: string, needsSecret: boolean): string | null {
+  const id = clientId.trim()
+  if (!id) return 'Paste the client ID.'
+  if (/\s/.test(id)) return 'The client ID has spaces in it; copy it again.'
+  if (id.length < 4 || id.length > 300) return 'That doesn\'t look like a client ID; copy it again.'
+  if (needsSecret && !secret.trim()) return 'Paste the client secret too.'
+  if (secret && /\s/.test(secret.trim())) return 'The client secret has spaces in it; copy it again.'
+  return null
+}
+
+/**
+ * One-time setup for an app whose MCP server doesn't let apps register themselves (Slack, GitHub,
+ * HubSpot…): the provider's exact steps with links, the redirect URL to copy, then the client ID
+ * (and secret). Afterwards the app connects in one click, signing in on its own page.
+ */
+export function AppSetup({ preset, hasClient, onDone, onCancel }: {
+  preset: ConnectorPreset
+  hasClient?: boolean
+  onDone: (clientId: string, clientSecret: string) => Promise<void> | void
+  onCancel?: () => void
+}) {
+  const g = preset.setup
+  const [clientId, setClientId] = useState('')
+  const [secret, setSecret] = useState('')
+  const [touched, setTouched] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  if (!g) return <div className="hint">{preset.name} has no setup steps.</div>
+  const problem = clientProblem(clientId, secret, g.needsSecret)
+  const save = async (): Promise<void> => {
+    setTouched(true)
+    if (problem) return
+    setBusy(true)
+    setErr('')
+    try { await onDone(clientId.trim(), secret.trim()) } catch (e) { setErr(clean(e)) } finally { setBusy(false) }
+  }
+  return (
+    <div className="conn-form" data-testid="app-setup">
+      <p className="ca-lede" style={{ marginTop: 0 }}>
+        {preset.name}'s MCP server only signs in apps registered with {preset.name}, so this takes about {g.minutes} minutes, once. Then {preset.name} connects with one click and you sign in on {preset.name}'s own page.
+      </p>
+      <div className="field"><label>Redirect URL (paste this into {preset.name})</label><CopyText text={g.redirectUri} /></div>
+      <ol style={{ margin: '0 0 12px', paddingLeft: 20, display: 'grid', gap: 12 }}>
+        {g.steps.map((s) => (
+          <li key={s.title}>
+            <b>{s.title}</b>
+            <div className="hint" style={{ margin: '2px 0 4px' }}>{s.text}</div>
+            {!!s.links?.length && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {s.links.map(([label, href]) => (
+                  <a key={href} className="ca-btn ghost" href={href} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>{label} ↗</a>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+      <div className="field"><label>Client ID{g.idHint ? <span className="ca-note"> · {g.idHint}</span> : null}</label>
+        <input value={clientId} onChange={(e) => setClientId(e.target.value)} onBlur={() => clientId && setTouched(true)} placeholder="Client ID" spellCheck={false} autoComplete="off" data-testid="setup-client-id" />
+      </div>
+      <div className="field"><label>Client secret{g.needsSecret ? '' : ' (optional)'}</label>
+        <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={g.needsSecret ? 'Client secret' : 'Leave empty if the app uses PKCE only'} autoComplete="off" data-testid="setup-client-secret" />
+      </div>
+      {(touched && problem) || err ? <div className="hint" style={{ color: 'var(--danger)' }} data-testid="setup-error">{err || problem}</div> : null}
+      <div className="hint">The secret is kept in your Mac's Keychain. {g.docs ? <a href={g.docs} target="_blank" rel="noreferrer">{preset.name}'s guide ↗</a> : null}</div>
+      <div className="modal-actions">
+        {onCancel && <button className="btn" onClick={onCancel}>Cancel</button>}
+        <button className="btn primary" disabled={busy || (touched && !!problem)} onClick={() => void save()} data-testid="setup-save">{busy ? 'Saving…' : hasClient ? `Save and reconnect ${preset.name}` : `Save and connect ${preset.name}`}</button>
+      </div>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------- Set up Google once

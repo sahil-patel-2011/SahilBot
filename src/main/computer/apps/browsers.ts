@@ -1,4 +1,5 @@
 import { clip, JXA_GET, webUrl, type AppAction, type AppAdapter, type AppEnv, type Args } from './types'
+import { siteHint } from '../../sites/hint'
 
 // The user's own browsers (Safari, Google Chrome and Chromium-based ones) through their scripting
 // dictionaries: open a page in a new tab, list tabs, the current page, switch, reload, close. Reading a
@@ -198,7 +199,10 @@ function browser(kind: Kind, o: { id: string; name: string; aliases: string[]; b
           }
           let page: { title?: string; url?: string; text?: string } = {}
           try { page = JSON.parse(String(r.result ?? '{}')) } catch { page = { text: String(r.result ?? '') } }
-          return { text: `${page.title ?? t.title}\n${page.url ?? t.url}\n\n${clip(page.text ?? '', Number(a.max_chars) || 30_000)}`, display: `read "${(page.title ?? t.title).slice(0, 40)}"` }
+          // Acting on it: accessibility refs in the user's browser, or SahilBot's own browser when it knows the site.
+          const hint = siteHint(page.url ?? t.url)
+          const act = `[To act on this page in ${o.name}: computer ui {app:"${o.name}", query} for element refs, then click_ref / type_ref (never passwords, codes or card numbers: those are the user's).${hint ? ` ${hint}` : ''}]`
+          return { text: `${page.title ?? t.title}\n${page.url ?? t.url}\n\n${clip(page.text ?? '', Number(a.max_chars) || 30_000)}\n\n${act}`, display: `read "${(page.title ?? t.title).slice(0, 40)}"` }
         }
       },
       js_status: {

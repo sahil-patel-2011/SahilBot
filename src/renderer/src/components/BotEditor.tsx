@@ -3,6 +3,7 @@ import type { BotShape, ModelList, Space } from '@shared/types'
 import { api } from '../api'
 import { COLORS, SHAPES, SpaceAvatar } from '../brand'
 import * as I from '../icons'
+import { pickerModels } from '@shared/model-picker'
 
 /** Customize a bot (name, look, instructions, model) or a group chat (name, members). */
 export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
@@ -101,7 +102,9 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
             <div className="field"><label>Model</label>
               <select value={model} onChange={(e) => setModel(e.target.value)}>
                 <option value="">App default</option>
-                {models?.models.map((m) => <option key={m.id} value={m.id} disabled={!m.fits && !m.maxFittingWindow}>{m.label || m.id}</option>)}
+                {/* Only models that can run now; a saved choice that's gone stays visible so it can be changed. */}
+                {models && model && !pickerModels(models).some((m) => m.id === model) && <option value={model}>{model} (not available: uses Auto)</option>}
+                {pickerModels(models).map((m) => <option key={m.id} value={m.id} disabled={!m.fits && !m.maxFittingWindow}>{m.label || m.id}</option>)}
               </select>
             </div>
             <h3>Personality and instructions</h3>

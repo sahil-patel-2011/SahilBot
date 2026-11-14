@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import type { KnowledgeHit, KnowledgeSource, KnowledgeStatus } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
+import { Toggle } from './SettingsModal'
 import { toast } from '../lib/toast'
 
 // Settings → Knowledge: the folders SahilBot can search (with counts), meaning search (an Ollama
@@ -68,6 +69,12 @@ export function KnowledgeSettings() {
   const [st, setSt] = useKnowledgeStatus()
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<KnowledgeHit[] | null>(null)
+  const [openaiEmb, setOpenaiEmb] = useState<boolean | null>(null)
+  useEffect(() => { void api.settings.get().then((s) => setOpenaiEmb(!!(s as { openaiEmbeddings?: boolean }).openaiEmbeddings)).catch(() => undefined) }, [])
+  const setEmb = (v: boolean): void => {
+    setOpenaiEmb(v)
+    void api.settings.set({ openaiEmbeddings: v } as never).then(() => api.knowledge.status()).then((s) => { if (s) setSt(s) }).catch((e) => toast(clean(e)))
+  }
   const act = (p: Promise<KnowledgeStatus | null>): void => { void p.then((s) => { if (s) setSt(s) }).catch((e) => toast(clean(e))) }
   const search = (): void => {
     if (!q.trim()) { setHits(null); return }
@@ -94,6 +101,15 @@ export function KnowledgeSettings() {
             : <>Keyword search only. Install <b>{st.suggestedModel}</b> in Ollama (Settings → Models, or <code>ollama pull {st.suggestedModel}</code>) for smarter search that finds passages by meaning, not just matching words.</>}
           testId="knowledge-embed"
         />
+        {openaiEmb !== null && (
+          <Line
+            title="Use OpenAI for meaning search"
+            sub="Uses your OpenAI key (text-embedding-3-small, about 2¢ per million tokens) when cloud models are on. This sends passages from your indexed files to OpenAI. Off: everything stays on this Mac."
+            testId="knowledge-openai-embed"
+          >
+            <Toggle on={openaiEmb} onChange={setEmb} label="Use OpenAI for meaning search" testId="openai-embeddings" />
+          </Line>
+        )}
         {st.current && !st.paused && <Line title="Reading" sub={st.current} />}
       </Card>
 

@@ -18,7 +18,7 @@ describe('phase 1: shell + streaming chat + model selector + persistence', () =>
     // Models that only fit with a small context start switched off; the 27B fits outright and is on.
     await page.click('[data-testid="model-picker"]')
     await expect.poll(() => page.locator('[data-testid="model-option"]').first().innerText()).toContain('Auto')
-    const options = page.locator('[data-testid="model-option"]').filter({ hasNotText: 'Picks the right model' })
+    const options = page.locator('[data-testid="model-option"]:not([data-auto])')
     await expect.poll(() => options.count()).toBe(1)
     expect(await options.first().innerText()).toContain('Qwen3.8 27B')
     // Switch Llama on in Settings → Models; it then shows with its reduced window.
@@ -76,7 +76,7 @@ describe('phase 1: shell + streaming chat + model selector + persistence', () =>
     ;({ app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '24' }))
     await page.click('[data-testid="model-picker"]')
     await expect.poll(() => page.locator('[data-testid="model-option"]').first().innerText()).toContain('Auto')
-    expect(await page.locator('[data-testid="model-option"]').filter({ hasNotText: 'Picks the right model' }).count()).toBe(0)
+    expect(await page.locator('[data-testid="model-option"]:not([data-auto])').count()).toBe(0)
     await app.close()
   })
 })

@@ -16,13 +16,33 @@ export function chipOf(category: string): string {
   return (MAIN_CHIPS as readonly string[]).includes(category) ? category : 'More'
 }
 
-/** Popular apps people connect first, in order. */
-const RECOMMENDED = ['gmail', 'gcal', 'notion', 'slack', 'github', 'gdrive', 'figma', 'linear', 'canva', 'stripe', 'exa', 'asana']
+/** Popular apps people connect first, in order (one-click apps are shown before ones that need setup). */
+const RECOMMENDED = ['notion', 'gmail', 'gcal', 'figma', 'linear', 'canva', 'stripe', 'dropbox', 'exa', 'granola', 'heygen', 'vercel', 'cloudflare', 'slack', 'github', 'gdrive', 'asana']
 
-/** Six suggestions, skipping what's already connected. */
-export function recommended(presets: ConnectorPreset[], connectedPresetIds: Set<string>, n = 6): ConnectorPreset[] {
-  return RECOMMENDED.map((id) => presets.find((p) => p.id === id)).filter((p): p is ConnectorPreset => !!p && !connectedPresetIds.has(p.id)).slice(0, n)
+/** Signs in with one click: the app registers SahilBot itself, or needs no sign-in. */
+export function isOneClick(p: Pick<ConnectorPreset, 'auth'>): boolean {
+  return p.auth === 'oauth' || p.auth === 'none'
 }
+
+/** Needs a one-time setup before the first sign-in (an OAuth app at the provider, or "Set up Google once"). */
+export function needsSetup(p: Pick<ConnectorPreset, 'auth'>): boolean {
+  return p.auth === 'oauth-static' || p.auth === 'google'
+}
+
+/** The badge on a catalog row: "One click", "Needs setup", or none (built in, browser, custom). */
+export function connectBadge(p: Pick<ConnectorPreset, 'id' | 'auth'>): 'One click' | 'Needs setup' | null {
+  if (p.id === 'custom') return null
+  return isOneClick(p) ? 'One click' : needsSetup(p) ? 'Needs setup' : null
+}
+
+/** Six suggestions, skipping what's already connected; one-click apps come first. */
+export function recommended(presets: ConnectorPreset[], connectedPresetIds: Set<string>, n = 6): ConnectorPreset[] {
+  const open = RECOMMENDED.map((id) => presets.find((p) => p.id === id)).filter((p): p is ConnectorPreset => !!p && !connectedPresetIds.has(p.id))
+  return [...open.filter(isOneClick), ...open.filter((p) => !isOneClick(p))].slice(0, n)
+}
+
+/** Redirect URL for a custom server's own OAuth client (main: connectors.setupRedirect(); a unit test keeps them equal). */
+export const CUSTOM_REDIRECT = 'http://127.0.0.1:47613/callback'
 
 /** Case-insensitive match of every word in the query against the text. */
 export function matches(q: string, ...text: Array<string | undefined>): boolean {

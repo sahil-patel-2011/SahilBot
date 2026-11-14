@@ -258,6 +258,7 @@ describe('H1 end to end: an app asks a bot to read private data', () => {
     expect(r.structuredContent).toMatchObject({ status: 'needs_approval' })
     const threadId = r.structuredContent!.thread_id as string
     const [req] = h.agent.pending(threadId)
+    // The app's message is relayed (taint applies too), but the card names the app.
     expect(req).toMatchObject({ kind: 'approval', tool: 'run_command', reason: expect.stringMatching(/^Cursor asked: this reads your private data/) })
     h.agent.respond(threadId, req.id, 'deny')
     await settle(h.agent, threadId)

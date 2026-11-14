@@ -109,7 +109,7 @@ export function appTool(getWorkspace: () => string, deps: AppToolDeps = {}): Too
   return {
     name: 'app',
     label: 'Mac app',
-    core: true,
+    core: false,
     group: 'Mac apps (Finder, browsers, Office, iWork, Messages, Slack, Music, Xcode, System Settings…)',
     untrusted: true,
     effect: (a, c) => effectOf(String(a.app ?? ''), String(a.action ?? ''), argsOf(a), scope(c.roots)),
@@ -163,7 +163,7 @@ export function appHelpTool(): ToolDef<{ app?: string }> {
   return {
     name: 'app_help',
     label: 'Mac app help',
-    core: true,
+    core: false,
     effect: 'read',
     describe: (a) => (a.app ? `List what SahilBot can do in ${a.app}` : 'List the Mac apps SahilBot can work in'),
     description: 'What the app tool can do in a Mac app: its actions, their arguments and effects, and the skill with recipes. Without app: every app with an adapter.',

@@ -94,6 +94,37 @@ function QuestionsCard({ req, onRespond }: { req: PendingRequest; onRespond: (id
   )
 }
 
+/** One question: up to three choices (A–C), and always a last row to type your own answer. */
+function QuestionCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+  const options = (req.options ?? []).filter((o) => !/^(other|something else|none of these)\b/i.test(o.trim()))
+  const [own, setOwn] = useState('')
+  const [sending, setSending] = useState(false)
+  const send = (answer: string): void => {
+    if (!answer.trim() || sending) return
+    setSending(true)
+    void Promise.resolve(onRespond(req.id, answer.trim())).finally(() => setSending(false))
+  }
+  const ownLetter = String.fromCharCode(65 + options.length)
+  return (
+    <div className="question" data-testid="question-card">
+      <div className="question-title">{req.question}</div>
+      <div className="question-options">
+        {options.map((o, i) => (
+          <button key={o} className="question-option" disabled={sending} onClick={() => send(o)}>
+            <span className="letter">{String.fromCharCode(65 + i)}</span>{o}
+          </button>
+        ))}
+        <label className="question-option own" data-testid="question-own">
+          <span className="letter">{ownLetter}</span>
+          <input value={own} onChange={(e) => setOwn(e.target.value)} placeholder={options.length ? 'Type your own answer' : 'Type your answer'} aria-label="Type your own answer"
+            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); (e.target as HTMLInputElement).blur() } if (e.key === 'Enter') { e.preventDefault(); send(own) } }} data-testid="question-own-input" />
+          {own.trim() && <button className="btn primary small" disabled={sending} onClick={() => send(own)} data-testid="question-own-send">Send</button>}
+        </label>
+      </div>
+    </div>
+  )
+}
+
 /** The agent's plan, waiting for your OK: approve to start, or say what to change. */
 function PlanApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
   const p = req.plan!
@@ -245,24 +276,7 @@ export function PendingCard({ req, onRespond }: { req: PendingRequest; onRespond
   if (req.kind === 'connect' && req.preset) return <ConnectCard req={req} onRespond={onRespond} />
   if (req.kind === 'questions' && req.questions) return <QuestionsCard req={req} onRespond={onRespond} />
   if (req.kind === 'plan' && req.plan) return <PlanApprovalCard req={req} onRespond={onRespond} />
-  if (req.kind === 'question') {
-    return (
-      <div className="question" data-testid="question-card">
-        <div className="question-title">{req.question}</div>
-        {req.options?.length ? (
-          <div className="question-options">
-            {req.options.map((o, i) => (
-              <button key={o} className="question-option" onClick={() => onRespond(req.id, o)}>
-                <span className="letter">{String.fromCharCode(65 + i)}</span>{o}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="hint">Answer in the message box below.</div>
-        )}
-      </div>
-    )
-  }
+  if (req.kind === 'question') return <QuestionCard req={req} onRespond={onRespond} />
   return <ApprovalCard req={req} onRespond={onRespond} />
 }
 

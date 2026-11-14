@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { ModelInfo, Settings } from '@shared/types'
 import { isLocal, isOllama, keepAliveValue, localDefaults, pinContextWindow, type WireTool } from './client'
 import { machine, root } from './models'
-import { pick } from './router'
+import { isAuto, pick } from './router'
 import { timer } from './timing'
 
 // Local model warm-up. The first message after launch (or after switching models) otherwise waits for
@@ -52,7 +52,7 @@ export async function loadedModels(baseUrl: string, signal?: AbortSignal): Promi
  */
 export function warmTarget(o: { usable: ModelInfo[]; defaultModel: string; recent?: string; explicit?: string }): ModelInfo | undefined {
   const local = o.usable.filter((m) => m.installed && m.note !== 'remote' && m.note !== 'added by you' && (m.fits || m.maxFittingWindow >= 16384))
-  const want = o.explicit && o.explicit !== 'auto' ? o.explicit : o.defaultModel !== 'auto' ? o.defaultModel : undefined
+  const want = o.explicit && !isAuto(o.explicit) ? o.explicit : !isAuto(o.defaultModel) ? o.defaultModel : undefined
   if (want) return local.find((m) => sameModel(m.id, want))
   const recent = o.recent ? local.find((m) => sameModel(m.id, o.recent!)) : undefined
   return recent ?? pick(local, 2)

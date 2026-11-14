@@ -68,7 +68,9 @@ describe('phase 2: agent loop + permissions + context', () => {
     // Tools were sent natively, core set only.
     const names = (llm.requests.at(-1)!.tools as Array<{ function: { name: string } }>).map((t) => t.function.name)
     // Built-in tools are all there (no cap); connector tools only after find_tools.
-    expect(names).toEqual(expect.arrayContaining(['find_tools', 'todo', 'ask_user', 'file_read', 'file_write', 'file_manage', 'create_document', 'web_search', 'fetch_page', 'memory', 'browser', 'run_command', 'agents', 'computer', 'cursor', 'mac_apps', 'schedule']))
+    expect(names).toEqual(expect.arrayContaining(['find_tools', 'todo', 'ask_user', 'file_read', 'file_write', 'file_manage', 'create_document', 'web_search', 'fetch_page', 'memory', 'browser', 'run_command', 'agents', 'cursor', 'mac_apps', 'schedule']))
+    // Heavy tools (computer use, code, pages…) load only when a request needs them.
+    expect(names).not.toContain('computer')
 
     // Cross-thread memory: a brand-new thread's system prompt already knows.
     await page.click('[data-testid="main-bot"]')
@@ -132,6 +134,9 @@ describe('phase 2: agent loop + permissions + context', () => {
   test('ask_user pauses the run and feeds the answer back', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     llm.script.push(
+      // A task's first question before any research is sent back once ("research first")…
+      { toolCalls: [{ name: 'ask_user', arguments: '{"question":"Which format?","options":["PDF","Doc"]}' }] },
+      // …and a question that's purely the user's preference goes through on the second try.
       { toolCalls: [{ name: 'ask_user', arguments: '{"question":"Which format?","options":["PDF","Doc"]}' }] },
       { content: 'Going with PDF.' }
     )
@@ -139,6 +144,7 @@ describe('phase 2: agent loop + permissions + context', () => {
     await page.locator('[data-testid="question-card"]').waitFor()
     await page.locator('[data-testid="question-card"] button', { hasText: 'PDF' }).click()
     await idle(page)
+    expect(toolMessages(llm).some((m: any) => /Research first/.test(String(m.content)))).toBe(true)
     expect(toolMessages(llm).at(-1)!.content).toContain('User answered: PDF')
     // The question and the answer read as conversation.
     expect(await page.locator('[data-testid="answer-bubble"]').innerText()).toBe('PDF')

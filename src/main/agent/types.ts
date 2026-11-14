@@ -64,6 +64,10 @@ export interface ToolContext {
    * doing right now). Optional: tools must work without it. Shown on the tool's chip while it runs.
    */
   progress?(text: string): void
+  /** The user approved this exact call (an approval card), so commands it runs aren't sandboxed. */
+  approved?: boolean
+  /** Run terminal commands under the write sandbox (advanced.sandboxCommands; default on). */
+  sandbox?: boolean
 }
 
 export interface ToolDef<A = any> {
@@ -85,7 +89,7 @@ export interface ToolDef<A = any> {
    * For write_external calls: false when the action is routine (sign in, next page, search, save a draft),
    * so Auto mode runs it. Omitted means consequential: Auto asks.
    */
-  consequential?: (args: A, call: { threadId: string; unattended?: boolean }) => boolean
+  consequential?: (args: A, call: { threadId: string; unattended?: boolean; state?: ThreadState }) => boolean | 'project'
   /** Returns a reason when this call falls on the hard-stop list. */
   hardStop?: (args: A) => string | null
   /** Plain-English description of a call for the approval card, e.g. 'Click button "Send" on acme.com'. */
@@ -115,7 +119,8 @@ export interface ThreadState {
   /** A voice conversation: spoken-style prompt and a 16k window. */
   voice?: boolean
   /** Messages up to and including `boundaryId` are represented by `summary`. */
-  compaction?: { boundaryId: string; summary: string; at?: number }
+  /** tainted: the summarized turns held outside content; the summary is shown as untrusted data. */
+  compaction?: { boundaryId: string; summary: string; at?: number; tainted?: boolean }
   /** Auto mode: the tier the last request was routed to (follow-ups keep it). */
   lastTier?: 0 | 1 | 2 | 3
   /** Helper agents: how deep this one is (1 = started by the chat's agent) and the chat it all started in. */
@@ -137,6 +142,13 @@ export interface ThreadState {
    * request needs more it becomes 'full' for good, so the tool list (and the cached prefix) stays put.
    */
   toolMode?: 'quick' | 'full'
+  /**
+   * Project folders as this chat first saw them (git top level → commit, origin URL, git config hash):
+   * Autonomous installs and pulls only run while the lockfile and origin still match (tools/shell.ts).
+   */
+  projectTrust?: Record<string, { head: string; origin: string; config: string; at: number }>
+  /** Install config or git internals this chat wrote ('*': it touched some): installs and pulls ask again. */
+  written?: string[]
 }
 
 export const emptyState = (): ThreadState => ({ loaded: [], alwaysAllow: [], todos: [] })
@@ -157,6 +169,12 @@ export interface PermissionInput {
   tainted: boolean
   /** Arguments contain a vault secret's plain text. */
   leaksSecret: boolean
-  /** The outside action has real consequences (sends, buys, posts, deletes). Defaults to true. */
-  consequential?: boolean
+  /**
+   * The outside action has real consequences (sends, buys, posts, deletes). Defaults to true.
+   * 'project': it reaches outside only to set up the user's own project (installs from its lockfile into
+   * its folder, git fetch/pull): Autonomous runs it; Ask and Auto treat it as consequential.
+   */
+  consequential?: boolean | 'project'
+  /** A run with nobody watching (routine, goal wake-up, helper): Autonomous works like Auto. */
+  unattended?: boolean
 }
