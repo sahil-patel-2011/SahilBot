@@ -114,21 +114,23 @@ describe('human checks', () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
     llm.script.push(
       { toolCalls: [{ name: 'browser', arguments: JSON.stringify({ action: 'navigate', url: `${site.url}/check` }) }] },
-      (req) => {
-        const last = String([...req.messages].reverse().find((m: any) => m.role === 'tool')?.content ?? '')
-        return last.includes('human check') ? { toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ question: 'Please complete the check in the browser panel, then press Done.', options: ['Done', 'Skip'] }) }] } : { content: 'no check seen' }
-      },
       { content: 'Thanks, carrying on.' }
     )
     await page.fill('[data-testid="composer-input"]', `Open ${site.url}/check`)
     await page.keyboard.press('Enter')
-    // The browser panel opens by itself for the user, and the agent asks them to do the check.
-    await page.locator('[data-testid="question-card"]').waitFor({ timeout: 20_000 })
+    // The browser tool itself hands the check to the user: the panel opens and the card waits for them.
+    const card = page.locator('[data-testid="question-card"]')
+    await card.waitFor({ timeout: 20_000 })
     expect(await page.locator('[data-testid="right-panel"]').count()).toBe(1)
-    const told = llm.requests.at(-1)!.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content).join('\n')
-    expect(told).toContain("Don't try to solve it")
-    await page.locator('[data-testid="question-card"] button', { hasText: 'Done' }).click()
+    expect(await card.innerText()).toMatch(/complete it in the browser panel/)
+    // Nothing was sent to the model while it waited.
+    const before = llm.requests.length
+    await card.locator('button', { hasText: 'Done' }).click()
     await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 15_000 }).toContain('carrying on')
+    expect(llm.requests.length).toBe(before + 1)
+    // The model learns the outcome (the fixture page still shows its check after Done) and never how to solve it.
+    const told = llm.requests.at(-1)!.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content).join('\n')
+    expect(told).toMatch(/still shows a|completed the check/)
     await app.close()
     await site.close()
   })

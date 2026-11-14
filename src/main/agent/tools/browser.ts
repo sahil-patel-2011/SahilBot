@@ -315,8 +315,20 @@ Speed: navigate already returns a snapshot; act by ref; use fill_form for forms;
           if (!code) b.showToUser()
           const tail = code
             ? `\n\n[This page asks for a verification code. If it's for the user's own sign-in, use fill_otp (source "authenticator" with the saved login, or "email" / "sms" for a code the site just sent). Never guess codes. If none of those works, open the panel and call ask_user with "Please enter the code in the browser panel, then press Done." and options ["Done", "Skip"].]`
-            : `\n\n[This page is showing a ${check}. Don't try to solve it or get around it. The browser panel is now open for the user: call ask_user with the question "Please complete the check in the browser panel, then press Done." and options ["Done", "Skip"]. After Done, take a snapshot and continue; after Skip, try another source.]`
-          return { ...out, text: `${out.text}${tail}`, display: `${out.display ?? ''} · ${code ? 'needs a sign-in code' : `waiting for you (${check})`}` }
+            : ''
+          if (code) return { ...out, text: `${out.text}${tail}`, display: `${out.display ?? ''} · needs a sign-in code` }
+          // A human check is the user's to pass: hand it over right here (the panel is open and the
+          // "needs you" notification fires), then carry on. SahilBot never solves or gets around it.
+          const answer = await ctx.askUser(`This page is showing a ${check}. Please complete it in the browser panel, then press Done.`, ['Done', 'Skip'])
+          const still = /^done/i.test(answer) ? await b.humanCheck() : check
+          const after = /^done/i.test(answer)
+            ? still
+              ? `\n\n[The user pressed Done but the page still shows a ${still}. Ask them once more with ask_user, or try another source.]`
+              : '\n\n[The user completed the check. Take a snapshot and continue the task.]'
+            : /^skip/i.test(answer)
+              ? `\n\n[The user skipped the ${check}. Don't retry this page; try another source or tell the user what you couldn't reach.]`
+              : `\n\n[Nobody could complete the ${check} now (it needs the user). Skip this page, note it in your summary, and continue with what you can do.]`
+          return { ...out, text: `${out.text}${after}`, display: `${out.display ?? ''} · ${!still && /^done/i.test(answer) ? 'you passed the check' : `${check}: handed to you`}` }
         }
       }
       return out
