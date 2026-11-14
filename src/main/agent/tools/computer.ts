@@ -1,12 +1,14 @@
-import { execFile, spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolDef, ToolContext, ToolOutput } from '../types'
-import { buildSnapshot, byRef, describeChange, elementAt, formatSnapshot, guardAction, redactClipboard, relocate, sameState, selfTarget, short, type AxElement, type AxSnapshot, type Guard, type RawSnapshot, type SelfInfo, type UiState } from '../../computer/ax'
+import { buildSnapshot, byRef, describeChange, elementAt, formatSnapshot, guardAction, isSecure, redactClipboard, relocate, sameState, selfTarget, settingsStop, short, type AxElement, type AxSnapshot, type Guard, type RawSnapshot, type SelfInfo, type UiState } from '../../computer/ax'
+import { chooseInputMethod, describeRestore, jxaClipboard, textLanded, withTemporaryClipboard, type ClipboardIO, type InputMethod, type JxaRunner } from '../../computer/clipboard'
 import { center, clipToDisplays, describeDisplays, displayAt, displayByNumber, fitImage, imageLimits, makeFrame, ordered, toScreen, type DisplayInfo, type Frame, type Rect } from '../../computer/geometry'
 import { parseCombo, riskyCombo, type KeyCombo } from '../../computer/keys'
-import { ACTIVATE, APPS, ELEMENT, KEY, MENU, MOUSE, QUIT, SNAPSHOT, STATE, TYPE, WINDOWS, wrap } from '../../computer/scripts'
+import { noOverlay, type Overlay, type OverlayAction } from '../../computer/overlay'
+import { ACTIVATE, APPS, ELEMENT, KEY, MENU, MOUSE, QUIT, SNAPSHOT, STATE, TYPE, VALUE, WINDOWS, wrap } from '../../computer/scripts'
 import { waitForSettle } from '../../computer/settle'
 
 // Computer use: SahilBot sees the screen and drives the Mac like a person would, for apps that have no
@@ -20,12 +22,17 @@ import { waitForSettle } from '../../computer/settle'
 // Safety: one OK per task (per chat); quitting apps and risky shortcuts always ask; password fields,
 // system password/Touch ID prompts, Apple Pay sheets and buy/subscribe buttons are handed to the user.
 // The mini window's Stop and Ctrl+Option+Esc stop the run (the abort signal is checked between steps).
+// Text: short plain ASCII is typed; long, multi-line or non-ASCII text is pasted (the user's clipboard is
+// saved and put back) and every entry is checked against the field's value afterwards.
+// The visible cursor (overlay.ts) is shown right before every real pointer or keyboard event, with a
+// status line per step; it is hidden when the run stops or computer use goes idle.
 
 type Action =
   | 'screenshot' | 'ui' | 'apps' | 'windows' | 'wait' | 'clipboard_read'
   | 'click' | 'double_click' | 'triple_click' | 'right_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key'
   | 'click_ref' | 'type_ref' | 'set_value' | 'press' | 'click_element'
   | 'open_app' | 'activate_app' | 'quit_app' | 'focus_window' | 'menu' | 'clipboard_write'
+  | 'paste_text' | 'copy' | 'select_all'
 
 type Args = {
   action: Action
@@ -35,6 +42,10 @@ type Args = {
   coords?: 'screenshot' | 'screen'
   amount?: number; dx?: number
   text?: string; clear?: boolean; submit?: boolean
+  /** type/type_ref: type key by key, paste, or choose (default). */
+  method?: 'auto' | 'type' | 'paste'
+  /** copy: put the user's clipboard back after reading what was copied. */
+  restore?: boolean
   keys?: string
   /** Held during a click: "cmd", "shift", "cmd+shift"… */
   modifiers?: string
@@ -70,9 +81,32 @@ export interface ComputerDeps {
   displays?(): DisplayInfo[]
   /** SahilBot's own processes and windows: never clicked, typed into or driven by computer use. */
   self?(): SelfInfo
+  /** The visible cursor: every pointer and keyboard step is shown on it first (default: none). */
+  overlay?: Overlay
+  /** Runs a JXA function with JSON input (default: osascript). Tests pass a fake. */
+  osa?: JxaRunner
+  /** The clipboard (default: the real pasteboard through JXA). Tests pass a fake. */
+  clipboard?: ClipboardIO
 }
 
+/** What other tools (the app tool) use to drive the Mac through computer use, with its guards and cursor. */
+export interface ComputerControl {
+  run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutput>
+  /** The chat already said OK to computer use for this task. */
+  isGranted(threadId: string): boolean
+  /** The run is over: shows "done" on the cursor and hides it. */
+  finish(): void
+}
+
+let current: ComputerControl | undefined
+/** The computer tool registered in this app, for tools built on top of it. */
+export const computerControl = (): ComputerControl | undefined => current
+
 const READ = new Set<Action>(['screenshot', 'ui', 'apps', 'windows', 'wait', 'clipboard_read'])
+/** Acting actions that can't change a setting by themselves (no System Settings hard stop). */
+const NAVIGATE = new Set<Action>(['open_app', 'activate_app', 'focus_window', 'move', 'scroll', 'copy', 'select_all', 'clipboard_write'])
+/** How long computer use stays idle before the cursor is put away. */
+const IDLE_MS = 20_000
 /** Apps SahilBot never quits (itself, and parts of macOS). */
 const NO_QUIT = /^(sahilbot|electron|finder|dock|systemuiserver|windowserver|loginwindow|controlcenter|notificationcenter)$/i
 /** Menu items that always ask, even mid-task. */
@@ -83,22 +117,10 @@ function sh(cmd: string, args: string[], timeout = 15_000): Promise<string> {
   return new Promise((ok, fail) => execFile(cmd, args, { timeout, maxBuffer: 16 * 1024 * 1024 }, (e, out, err) => (e ? fail(new Error((err || e.message).toString().trim().slice(0, 400))) : ok(out.toString()))))
 }
 
-/** Runs a command with text on stdin (pbcopy). */
-function shIn(cmd: string, args: string[], input: string): Promise<void> {
-  return new Promise((ok, fail) => {
-    const p = spawn(cmd, args, { stdio: ['pipe', 'ignore', 'pipe'] })
-    let err = ''
-    p.stderr.on('data', (d) => { err += String(d) })
-    p.on('error', fail)
-    p.on('close', (code) => (code === 0 ? ok() : fail(new Error(err.trim().slice(0, 200) || `${cmd} failed`))))
-    p.stdin.end(input)
-  })
-}
-
 /** Runs a JXA function with JSON input (never string-spliced into the script). */
-async function jxa<T = unknown>(fn: string, input: unknown, timeout = 20_000): Promise<T> {
+const osascriptJxa: JxaRunner = async (fn, input, timeout) => {
   const out = await sh('osascript', ['-l', 'JavaScript', '-e', wrap(fn), JSON.stringify(input ?? {})], timeout)
-  return JSON.parse(out || 'null') as T
+  return JSON.parse(out || 'null')
 }
 
 /** Modifier flags for a click ("cmd+shift" → CGEvent flags). */
@@ -124,7 +146,16 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 const pad = (r: Rect, p: number): Rect => ({ x: r.x - p, y: r.y - p, width: r.width + 2 * p, height: r.height + 2 * p })
 
-export function computerTool(d: ComputerDeps): ToolDef<Args> {
+type ValueRead = { none?: boolean; role?: string; secure?: boolean; value?: string; selected?: number; x?: number; y?: number; w?: number; h?: number }
+
+export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: ComputerControl } {
+  const jxa = <T = unknown>(fn: string, input: unknown, timeout = 20_000): Promise<T> => (d.osa ?? osascriptJxa)(fn, input ?? {}, timeout) as Promise<T>
+  let clipIO: ClipboardIO | undefined
+  const clip = (): ClipboardIO => (clipIO ??= d.clipboard ?? jxaClipboard((fn, input, t) => jxa(fn, input, t)))
+  const overlay = d.overlay ?? noOverlay
+  /** The latest read of what's in front (any chat): System Settings hard stops for coordinate actions. */
+  let lastFront: UiState | undefined
+
   // One OK per task: after the first approved action in a chat, control continues until it's idle for 15 min.
   const granted = new Map<string, number>()
   const isGranted = (threadId: string): boolean => (granted.get(threadId) ?? 0) > Date.now() - 15 * 60_000
@@ -136,7 +167,85 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
   const alive = (ctx: ToolContext): void => { if (ctx.signal.aborted) throw new DOMException('Stopped by the user.', 'AbortError') }
   const displays = (): DisplayInfo[] => { try { return d.displays?.() ?? [] } catch { return [] } }
 
-  const probe = (target?: { pid?: number; path: number[] }): Promise<UiState> => jxa<UiState>(STATE, { target })
+  const probe = async (target?: { pid?: number; path: number[] }): Promise<UiState> => {
+    const s = await jxa<UiState>(STATE, { target })
+    if (s && typeof s === 'object') lastFront = s
+    return s
+  }
+
+  // ------------------------------------------------------------------ the visible cursor
+  let idle: ReturnType<typeof setTimeout> | undefined
+  let showing = false
+  const watched = new WeakSet<AbortSignal>()
+
+  /**
+   * Shows a step on the cursor, right before the real event. Never blocks a step for long or fails it:
+   * the cursor is there so the user can follow along, not part of the action. A Stop pressed while it
+   * animates is honoured before the event goes out.
+   */
+  async function show(ctx: ToolContext, step: OverlayAction): Promise<void> {
+    if (!watched.has(ctx.signal)) {
+      watched.add(ctx.signal)
+      ctx.signal.addEventListener('abort', () => finish(), { once: true })
+    }
+    if (idle) clearTimeout(idle)
+    idle = setTimeout(() => finish(), IDLE_MS)
+    idle.unref?.()
+    showing = true
+    let t: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([overlay.show(step), new Promise<void>((r) => { t = setTimeout(r, 1500); t.unref?.() })])
+    } catch { /* the cursor never fails a step */ } finally {
+      if (t) clearTimeout(t)
+    }
+    alive(ctx)
+  }
+
+  /** The run is over (stopped, or idle): "done" on the cursor, then hide it. */
+  function finish(): void {
+    if (idle) { clearTimeout(idle); idle = undefined }
+    if (!showing) return
+    showing = false
+    let t: ReturnType<typeof setTimeout> | undefined
+    void Promise.race([Promise.resolve().then(() => overlay.show({ kind: 'done' })), new Promise<void>((r) => { t = setTimeout(r, 1500); t.unref?.() })])
+      .catch(() => undefined)
+      .finally(() => { if (t) clearTimeout(t); try { overlay.hide() } catch { /* nothing to hide */ } })
+  }
+
+  /** A short, non-secret status line for a step. */
+  const statusLabel = (a: Args): string => {
+    const el = a.ref ? elLabel(a.ref) : ''
+    switch (a.action) {
+      case 'screenshot': return 'Looking at the screen'
+      case 'ui': return `Reading ${a.app ?? 'the app in front'}`
+      case 'apps': return 'Checking which apps are open'
+      case 'windows': return 'Listing windows'
+      case 'wait': return 'Waiting'
+      case 'clipboard_read': return 'Reading the clipboard'
+      case 'clipboard_write': return 'Copying to the clipboard'
+      case 'copy': return 'Copying the selection'
+      case 'select_all': return `Selecting all${el ? ` in ${el}` : ''}`
+      case 'type': case 'type_ref': case 'paste_text': return `Typing${el ? ` into ${el}` : ''}`
+      case 'set_value': return `Setting ${el || 'a value'}`
+      case 'click_ref': case 'press': return `Clicking ${el || 'an element'}`
+      case 'click_element': return `Clicking "${(a.name ?? '').slice(0, 40)}"`
+      case 'key': return `Pressing ${a.keys}`
+      case 'menu': return `Choosing ${(a.path ?? '').slice(0, 60)}`
+      case 'open_app': return `Opening ${a.app}`
+      case 'activate_app': return `Switching to ${a.app}`
+      case 'quit_app': return `Quitting ${a.app}`
+      case 'focus_window': return 'Bringing a window forward'
+      case 'drag': return 'Dragging'
+      case 'scroll': return 'Scrolling'
+      default: return a.action.replace('_', ' ')
+    }
+  }
+  const elLabel = (ref: string): string => { const e = byRef(snapshotsAny(ref), ref); return e ? `"${e.label.slice(0, 40)}"` : '' }
+  const snapshotsAny = (ref: string): AxSnapshot | undefined => { for (const s of snapshots.values()) if (byRef(s, ref)) return s; return undefined }
+  const mid = (r?: { x?: number; y?: number; w?: number; h?: number }): { x: number; y: number } | undefined =>
+    r && r.x !== undefined && r.y !== undefined && r.w !== undefined && r.h !== undefined ? center({ x: r.x, y: r.y, width: r.w, height: r.h }) : undefined
+  /** Text for the cursor's typing bubble: never anything that looks like a secret. */
+  const bubble = (text: string): string => { const r = redactClipboard(text); return r.text.length > 200 ? `${r.text.slice(0, 199)}…` : r.text }
 
   /**
    * Refuses any action that would land on SahilBot itself: its process (or helpers), its app name, its
@@ -150,7 +259,7 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
     const snap = snapshots.get(tid)
     const el = a.ref ? byRef(snap, a.ref) : undefined
     const el2 = a.ref2 ? byRef(snap, a.ref2) : undefined
-    if (['click_ref', 'press', 'type_ref', 'set_value'].includes(a.action) || (a.ref && ['click', 'double_click', 'triple_click', 'right_click', 'move', 'drag', 'scroll'].includes(a.action))) {
+    if (['click_ref', 'press', 'type_ref', 'set_value'].includes(a.action) || (a.ref && ['click', 'double_click', 'triple_click', 'right_click', 'move', 'drag', 'scroll', 'paste_text', 'copy', 'select_all'].includes(a.action))) {
       why.push(selfTarget(self, { app: snap?.app, pid: snap?.pid, window: el?.window }))
       if (el?.rect) why.push(selfTarget(self, { point: center(el.rect) }))
       if (el2?.rect) why.push(selfTarget(self, { point: center(el2.rect) }))
@@ -169,7 +278,7 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
       if (w) why.push(selfTarget(self, { app: w.app, pid: w.pid }))
     }
     // Keystrokes and menu choices go to the app in front.
-    if (['type', 'key', 'menu', 'click_element'].includes(a.action) && !a.app) {
+    if (['type', 'key', 'menu', 'click_element', 'paste_text', 'copy', 'select_all'].includes(a.action) && !a.app && !a.ref) {
       const front = await probe().catch(() => undefined)
       if (front) why.push(selfTarget(self, { app: front.app }))
     }
@@ -262,6 +371,79 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
     }
   }
 
+  /** One key or shortcut, shown on the cursor first. */
+  async function pressKey(ctx: ToolContext, k: { code?: number; char?: string; using: string[] }, label: string): Promise<void> {
+    await show(ctx, { kind: 'key', keys: label, label })
+    await jxa(KEY, { code: k.code, char: k.char, using: k.using })
+  }
+
+  /** A mouse event, shown on the cursor first. */
+  async function mouse(ctx: ToolContext, m: { kind: string; x: number; y: number; x2?: number; y2?: number; flags?: number; dy?: number; dx?: number }, label?: string): Promise<void> {
+    const step: OverlayAction = m.kind === 'move' ? { kind: 'move', x: m.x, y: m.y, label }
+      : m.kind === 'drag' ? { kind: 'drag', x: m.x, y: m.y, x2: m.x2!, y2: m.y2!, label }
+        : m.kind === 'scroll' ? { kind: 'scroll', x: m.x, y: m.y, dy: m.dy ?? 0, label }
+          : { kind: 'click', x: m.x, y: m.y, button: m.kind === 'right' ? 'right' : 'left', count: m.kind === 'triple' ? 3 : m.kind === 'double' ? 2 : 1, label }
+    await show(ctx, step)
+    await jxa(MOUSE, m)
+  }
+
+  const readValue = (target?: { pid?: number; path: number[] }): Promise<ValueRead | undefined> => jxa<ValueRead>(VALUE, { target }, 10_000).then((v) => (v && typeof v === 'object' ? v : undefined)).catch(() => undefined)
+
+  /** After cmd+v: waits until the field shows the text (or a short while if it can't be read), so the clipboard isn't put back before the app took it. */
+  async function waitLanded(ctx: ToolContext, before: string | undefined, text: string, target?: { pid?: number; path: number[] }): Promise<'yes' | 'no' | 'unknown'> {
+    const start = Date.now()
+    let last: 'yes' | 'no' | 'unknown' = 'unknown'
+    while (Date.now() - start < 1500) {
+      await sleep(100)
+      alive(ctx)
+      const now = await readValue(target)
+      last = textLanded(before, now?.value, text)
+      if (last === 'yes') { await sleep(60); return 'yes' }
+      if (last === 'unknown' && Date.now() - start >= 400) return 'unknown'
+    }
+    return last
+  }
+
+  type Entered = { refused?: boolean; how: InputMethod; why: string; landed: 'yes' | 'no' | 'unknown'; clipboard: string }
+
+  /**
+   * Types or pastes text into the focused element (target: the element it should be, for the value
+   * check). Refuses password fields. Pasting saves and restores the user's clipboard; afterwards the
+   * field's value is read to check the text landed. A paste that visibly didn't land is retyped when the
+   * text is plain ASCII on one line (some fields block paste).
+   */
+  async function enterText(ctx: ToolContext, text: string, o: { method?: Args['method']; target?: { pid?: number; path: number[] }; point?: { x: number; y: number }; label: string; secretLabel?: boolean }): Promise<Entered> {
+    const choice = chooseInputMethod(text, o.method ?? 'auto')
+    const before = await readValue(o.target)
+    if (before?.secure) return { refused: true, how: choice.method, why: choice.why, landed: 'unknown', clipboard: '' }
+    const at = mid(before) ?? o.point
+    // The cursor's typing chip shows no text unless the field is confirmed not to be a password field.
+    const secure = !before || !!before.none || !!o.secretLabel
+    const chip = (): OverlayAction => ({ kind: 'type', x: at?.x, y: at?.y, text: secure ? '' : bubble(text), label: o.label, secure })
+    await show(ctx, chip())
+    if (choice.method === 'type') {
+      await typeText(ctx, text)
+      const after = await readValue(o.target)
+      return { how: 'type', why: choice.why, landed: textLanded(before?.value, after?.value, text), clipboard: '' }
+    }
+    const r = await withTemporaryClipboard(clip(), text, async () => {
+      alive(ctx)
+      await jxa(KEY, { char: 'v', using: ['command down'] })
+      return waitLanded(ctx, before?.value, text, o.target)
+    })
+    let landed = r.result
+    let why = choice.why
+    if (landed === 'no' && (o.method ?? 'auto') === 'auto' && /^[\x20-\x7e]{1,400}$/.test(text)) {
+      await show(ctx, chip())
+      await typeText(ctx, text)
+      landed = textLanded(before?.value, (await readValue(o.target))?.value, text)
+      return { how: 'type', why: 'the paste didn\'t land, so it was typed instead', landed, clipboard: describeRestore(r.restore, r.error) }
+    }
+    return { how: 'paste', why, landed, clipboard: describeRestore(r.restore, r.error) }
+  }
+
+  const landedNote = (e: Entered): string => e.landed === 'yes' ? 'The field shows the text.' : e.landed === 'no' ? 'The field\'s value doesn\'t show the text: it may have gone elsewhere or been changed by the app. Check with ui or a screenshot.' : 'This app doesn\'t expose the field\'s text, so check it with a screenshot (or ui).'
+
   async function windowsList(tid: string, app?: string): Promise<Array<{ ref: string; app: string; pid?: number; index: number; title: string; rect?: Rect; front?: boolean; minimized?: boolean }>> {
     const r = await jxa<Array<{ app: string; pid?: number; index: number; title: string; x?: number; y?: number; w?: number; h?: number; front?: boolean; minimized?: boolean }>>(WINDOWS, { app }, 30_000)
     const list = (r ?? []).map((w, i) => ({ ref: `w${i + 1}`, app: w.app, pid: w.pid, index: w.index, title: w.title, front: w.front, minimized: w.minimized, rect: w.x !== undefined && w.w !== undefined ? { x: w.x, y: w.y!, width: w.w, height: w.h! } : undefined }))
@@ -343,6 +525,9 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
     switch (a.action) {
       case 'type': return `Take control of your Mac and type "${(a.text ?? '').slice(0, 80)}"`
       case 'type_ref': return `Type "${(a.text ?? '').slice(0, 80)}" into ${el(a.ref)}`
+      case 'paste_text': return `Paste "${(a.text ?? '').slice(0, 80)}"${(a.text ?? '').length > 80 ? ` (${(a.text ?? '').length} characters)` : ''}${a.ref ? ` into ${el(a.ref)}` : ''} (your clipboard is put back afterwards)`
+      case 'copy': return `Copy the selection${a.ref ? ` in ${el(a.ref)}` : ''} and read it`
+      case 'select_all': return `Select all${a.ref ? ` in ${el(a.ref)}` : ''}`
       case 'set_value': return `Set ${el(a.ref)} to "${(a.value ?? '').slice(0, 80)}"`
       case 'click_ref': case 'press': return `${a.action === 'press' ? `${a.ax_action ?? 'Press'}` : 'Click'} ${el(a.ref)}`
       case 'open_app': return `Take control of your Mac: open ${a.app}`
@@ -358,12 +543,21 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
 
   const hardStop = (a: Args): string | null => {
     if (a.action === 'quit_app') return `quitting ${a.app ?? 'an app'}`
-    if (a.action === 'key' && a.keys) { try { return riskyCombo(parseCombo(a.keys)) } catch { return null } }
+    if (a.action === 'key' && a.keys) { try { const r = riskyCombo(parseCombo(a.keys)); if (r) return r } catch { /* reported by the action */ } }
     if (a.action === 'menu' && a.path) { const last = a.path.split('>').pop()?.trim() ?? ''; if (RISKY_MENU.test(last)) return `choosing "${a.path}"` }
+    // Security and privacy panes in System Settings: every change asks.
+    if (!READ.has(a.action) && !NAVIGATE.has(a.action)) {
+      const s = a.ref ? snapshotsAny(a.ref) : undefined
+      const e = s && a.ref ? byRef(s, a.ref) : undefined
+      const stop = e && s ? settingsStop(s.app, e.window, e.label) ?? settingsStop(s.app, lastFront?.app === s.app ? lastFront.window : undefined) : settingsStop(a.app ?? lastFront?.app, a.app && a.app !== lastFront?.app ? undefined : lastFront?.window)
+      if (stop) return stop
+    }
     return null
   }
 
-  return {
+  const isGranted0 = (tid: string): boolean => isGranted(tid)
+
+  const def: ToolDef<Args> = {
     name: 'computer',
     label: 'Computer',
     core: true,
@@ -374,29 +568,32 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> {
     consequential: (a, c) => a.action === 'quit_app' || (!READ.has(a.action) && a.action !== 'clipboard_write' && (!!c.unattended || !isGranted(c.threadId))),
     hardStop,
     describe,
-    description: `Use the Mac like a person, for apps that have no other tool (prefer the browser tool for websites and app tools for Notes, Calendar, Cursor…).
+    description: `Use the Mac like a person, for apps that have no other tool (prefer the app tool for Finder, Safari/Chrome, Office/iWork, Messages, Music, Slack, Xcode, System Settings…; the browser tool for websites).
 Accessibility first:
 - ui {app?, window?, query?}: the app's windows and elements (buttons, fields, checkboxes, menus, text) with refs like e12, values, focus and disabled state. app brings that app to the front first. query filters.
-- click_ref {ref, modifiers?}: press/click an element. type_ref {ref, text, clear?, submit?}: focus a field and type (clear replaces its text; submit presses Return). set_value {ref, value}: set a field/slider/checkbox value directly. press {ref, ax_action}: an Accessibility action (AXPress, AXShowMenu, AXIncrement, AXDecrement, AXConfirm, AXCancel, AXRaise).
+- click_ref {ref, modifiers?}: press/click an element. type_ref {ref, text, clear?, submit?, method?}: focus a field and enter text (clear replaces its text; submit presses Return). set_value {ref, value}: set a field/slider/checkbox value directly. press {ref, ax_action}: an Accessibility action (AXPress, AXShowMenu, AXIncrement, AXDecrement, AXConfirm, AXCancel, AXRaise).
 Screen: screenshot {display?, window?, ref?, region?}: the main display, another display, one window (window: ref from windows or part of its title), around an element, or a region [x,y,w,h] of the last screenshot (zoom in for small text; smaller images cost less).
 Coordinates (fallback): click/double_click/triple_click/right_click/move {x,y, modifiers?}, drag {x,y,x2,y2 or ref,ref2}, scroll {x,y or ref, amount: lines, negative = down, dx?: sideways}. x,y are pixels of the LAST screenshot (coords:"screen" for global screen points).
-Keyboard: type {text} into whatever is focused; key {keys: "cmd+s", "return", "cmd+shift+t", "ctrl+option+left", "cmd+plus"}.
+Text: type {text, method?} into whatever is focused. Short plain text is typed key by key; long, multi-line or non-ASCII text (emoji, accents, CJK) is pasted automatically (method "type" or "paste" forces one). paste_text {text, ref?}: paste exactly (fast for long text); the user's clipboard is put back afterwards. Every entry reports whether the field now shows the text. select_all {ref?}: cmd+a (in that field). copy {ref?, restore?}: cmd+c and returns what was copied (secrets hidden; ref copies that whole field; restore puts the user's clipboard back).
+Keyboard: key {keys: "cmd+s", "return", "cmd+shift+t", "ctrl+option+left", "cmd+plus"}.
 Apps: apps (running apps), windows {app?} (every window with refs w1…), open_app {app}, activate_app {app}, focus_window {window, app?}, quit_app {app} (asks first), menu {path: "File > Export > PDF…", app?} (a path ending at a menu lists its items).
 Clipboard: clipboard_read, clipboard_write {text}. wait {seconds}.
-Every action reports what changed afterwards (app, window, dialog, focus, values) or that nothing did: if nothing changed, look before retrying. SahilBot never types passwords, never confirms payments or purchases, and never answers system password/Touch ID prompts: those steps go to the user automatically. Stop and ask the user for CAPTCHAs and 2-factor codes.`,
+Every action reports what changed afterwards (app, window, dialog, focus, values) or that nothing did: if nothing changed, look before retrying. SahilBot never types passwords, never confirms payments or purchases, and never answers system password/Touch ID prompts: those steps go to the user automatically. Changes on System Settings security/privacy panes always ask. Stop and ask the user for CAPTCHAs and 2-factor codes.`,
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['screenshot', 'ui', 'apps', 'windows', 'wait', 'clipboard_read', 'click', 'double_click', 'triple_click', 'right_click', 'move', 'drag', 'scroll', 'type', 'key', 'click_ref', 'type_ref', 'set_value', 'press', 'click_element', 'open_app', 'activate_app', 'quit_app', 'focus_window', 'menu', 'clipboard_write'] },
+        action: { type: 'string', enum: ['screenshot', 'ui', 'apps', 'windows', 'wait', 'clipboard_read', 'click', 'double_click', 'triple_click', 'right_click', 'move', 'drag', 'scroll', 'type', 'key', 'click_ref', 'type_ref', 'set_value', 'press', 'click_element', 'open_app', 'activate_app', 'quit_app', 'focus_window', 'menu', 'clipboard_write', 'paste_text', 'copy', 'select_all'] },
         ref: { type: 'string', description: 'Element ref from ui, e.g. "e12"' },
         ref2: { type: 'string', description: 'For drag: the element to drop on' },
         x: { type: 'number' }, y: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' },
         coords: { type: 'string', enum: ['screenshot', 'screen'], description: 'x,y are pixels of the last screenshot (default) or global screen points' },
         amount: { type: 'integer', minimum: -50, maximum: 50, description: 'For scroll: lines; negative scrolls down' },
         dx: { type: 'integer', minimum: -50, maximum: 50, description: 'For scroll: sideways lines; negative scrolls left' },
-        text: { type: 'string', description: 'For type, type_ref, clipboard_write' },
+        text: { type: 'string', description: 'For type, type_ref, paste_text, clipboard_write' },
         clear: { type: 'boolean', description: 'For type_ref: replace the field\'s current text' },
         submit: { type: 'boolean', description: 'For type_ref: press Return afterwards' },
+        method: { type: 'string', enum: ['auto', 'type', 'paste'], description: 'For type/type_ref: auto (default) types short plain text and pastes the rest' },
+        restore: { type: 'boolean', description: 'For copy: put the user\'s clipboard back after reading the copy' },
         keys: { type: 'string', description: 'For key, e.g. "cmd+v", "return", "escape", "cmd+shift+t"' },
         modifiers: { type: 'string', description: 'For clicks: keys held, e.g. "cmd" or "shift"' },
         app: { type: 'string', description: 'App name, e.g. "Finder", "Numbers"' },
@@ -414,7 +611,7 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
       required: ['action'],
       additionalProperties: false,
       allOf: [
-        { if: { properties: { action: { const: 'type' } } }, then: { required: ['text'] } },
+        { if: { properties: { action: { enum: ['type', 'paste_text'] } } }, then: { required: ['text'] } },
         { if: { properties: { action: { const: 'key' } } }, then: { required: ['keys'] } },
         { if: { properties: { action: { enum: ['open_app', 'activate_app', 'quit_app'] } } }, then: { required: ['app'] } },
         { if: { properties: { action: { enum: ['click_ref', 'press', 'set_value', 'type_ref'] } } }, then: { required: ['ref'] } },
@@ -426,9 +623,11 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
         { if: { properties: { action: { const: 'clipboard_write' } } }, then: { required: ['text'] } }
       ]
     },
-    async run(a, ctx) {
+    async run(input, ctx) {
       const tid = ctx.threadId
-      await notSelf(a, tid)
+      await notSelf(input, tid)
+      // paste_text is type (or type_ref with a ref) that always pastes.
+      const a: Args = input.action === 'paste_text' ? { ...input, action: input.ref ? 'type_ref' : 'type', method: 'paste' } : input
       const acting = !READ.has(a.action) && a.action !== 'clipboard_write'
       if (acting) {
         needAx()
@@ -436,259 +635,342 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
         d.enterMini(ctx.state.rootId ?? tid)
       }
       alive(ctx)
-      switch (a.action) {
-        case 'screenshot':
-          return screenshot(a, ctx)
-
-        case 'ui': {
-          needAx()
-          let pid: number | undefined
-          let windowIndex: number | undefined
-          let app = a.app
-          if (a.window && /^w\d+$/i.test(a.window.trim())) {
-            const w = windowLists.get(tid)?.find((x) => x.ref === a.window!.trim().toLowerCase())
-            if (!w) throw new Error(`No window ${a.window} in the last windows list. Run windows first.`)
-            pid = w.pid; windowIndex = w.index; app = w.app
-          }
-          const snap = await snapshot(tid, { app, pid, activate: !!app, window: windowIndex })
-          let text = formatSnapshot(snap, { query: a.query })
-          if (a.window && windowIndex === undefined) {
-            const want = a.window.toLowerCase()
-            const w = snap.windows.find((x) => x.title.toLowerCase().includes(want))
-            if (w) text = formatSnapshot({ ...snap, windows: [w], elements: snap.elements.filter((e) => e.win === w.index) }, { query: a.query })
-          }
-          if (!snap.elements.length) text += '\n(No readable elements: this app may draw its own UI. Take a screenshot and use coordinates.)'
-          return { text: `${text}\nAct on elements by ref (click_ref, type_ref, set_value, press). Refs stay valid while the element is on screen.`, display: `Read ${snap.app}'s window` }
-        }
-
-        case 'apps': {
-          const r = await jxa<Array<{ name: string; front: boolean }>>(APPS, {})
-          return { text: r.map((x) => `- ${x.name}${x.front ? ' (in front)' : ''}`).join('\n'), display: `${r.length} apps open` }
-        }
-
-        case 'windows': {
-          needAx()
-          const list = await windowsList(tid, a.app)
-          const ds = displays()
-          const where = (r?: Rect): string => { if (!r || ds.length < 2) return ''; const disp = displayAt(ds, center(r).x, center(r).y); return disp ? ` on display ${ordered(ds).indexOf(disp) + 1}` : ' (off screen)' }
-          return { text: list.length ? list.map((w) => `[${w.ref}] ${w.app}: "${w.title || '(untitled)'}"${w.front ? ' (in front)' : ''}${w.minimized ? ' (minimized)' : ''}${where(w.rect)}`).join('\n') + '\nUse focus_window {window: "w3"}, ui {window: "w3"} or screenshot {window: "w3"}.' : 'No open windows.', display: `${list.length} windows` }
-        }
-
-        case 'wait': {
-          const ms = Math.min(10, a.seconds ?? 1) * 1000
-          for (let t = 0; t < ms; t += 200) { alive(ctx); await sleep(Math.min(200, ms - t)) }
-          return { text: `Waited ${a.seconds ?? 1}s.`, display: 'waited' }
-        }
-
-        case 'clipboard_read': {
-          // Sensitive: the contents go to the model only (never into the chip or logs), secrets blanked.
-          const raw = await sh('pbpaste', [])
-          const { text, redacted } = redactClipboard(raw)
-          const cut = text.length > 8000 ? `${text.slice(0, 8000)}\n… (${text.length - 8000} more characters)` : text
-          return { text: raw ? `Clipboard text${redacted ? ' (parts that look like passwords, keys or card numbers are hidden)' : ''}:\n${cut}` : 'The clipboard has no text.', display: 'read the clipboard' }
-        }
-
-        case 'clipboard_write':
-          await shIn('pbcopy', [], a.text!)
-          return { text: `Copied ${a.text!.length} characters to the clipboard.`, display: `copied ${a.text!.length} characters` }
-
-        case 'click_ref': case 'click_element': {
-          let ref = a.ref
-          if (a.action === 'click_element') {
-            // Older form: by name (and role) in the front app.
-            const snap = await snapshot(tid, { app: a.app, activate: !!a.app })
-            const want = a.name!.toLowerCase()
-            const pool = snap.elements.filter((e) => !a.role || short(e.role).toLowerCase().includes(a.role.toLowerCase()))
-            const hit = pool.find((e) => e.label.toLowerCase() === want) ?? pool.find((e) => e.label.toLowerCase().includes(want))
-            if (!hit) throw new Error(`No element named "${a.name}" in ${snap.app}. Read the window with ui to see what's there, or take a screenshot.`)
-            ref = hit.ref
-          }
-          if (!ref) throw new Error('Give a ref from ui.')
-          const known = byRef(snapshots.get(tid), ref)
-          const before = await probe().catch(() => undefined)
-          const g = known && guardAction({ action: 'click', app: snapshots.get(tid)!.app, window: known.window || before?.window, el: known })
-          if (g) return handOff(g, ctx)
-          const flags = clickFlags(a.modifiers)
-          let how = ''
-          const v = await verified(ctx, async () => {
-            if (known?.pressable && !flags) {
-              const { el, res } = await onElement(tid, ref!, { op: 'press' })
-              if (res.done) { how = 'pressed'; return }
-              const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
-              if (!r) throw new Error(`Couldn't press ${ref} (${res.error ?? 'no AXPress'}) and it has no position to click.`)
-              await jxa(MOUSE, { kind: 'click', ...center(r) }); how = 'clicked'
-              return
-            }
-            const { el, res } = await onElement(tid, ref!, { op: 'read' })
-            const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
-            if (!r) throw new Error(`${ref} has no position to click.`)
-            await jxa(MOUSE, { kind: 'click', ...center(r), flags }); how = 'clicked'
-          }, { before, target: known ? { pid: snapshots.get(tid)?.pid, path: known.path } : undefined })
-          const el = byRef(snapshots.get(tid), ref)
-          return { text: `${how === 'pressed' ? 'Pressed' : 'Clicked'} ${ref}${el ? ` (${short(el.role)} "${el.label}")` : ''}. ${v.text}`, display: `${how} "${(el?.label ?? ref).slice(0, 40)}"${v.changed ? '' : ' (no change)'}` }
-        }
-
-        case 'press': {
-          const known = byRef(snapshots.get(tid), a.ref!)
-          const name = a.ax_action?.trim() || 'AXPress'
-          const axName = /^AX/.test(name) ? name : `AX${name[0].toUpperCase()}${name.slice(1)}`
-          const before = await probe().catch(() => undefined)
-          const g = known && /^AX(Press|Confirm|Pick)$/.test(axName) ? guardAction({ action: 'press', app: snapshots.get(tid)!.app, window: known.window || before?.window, el: known }) : null
-          if (g) return handOff(g, ctx)
-          let failed = undefined as ElementResult | undefined
-          const v = await verified(ctx, async () => {
-            const { res } = await onElement(tid, a.ref!, { op: 'action', action: axName })
-            if (!res.done) failed = res
-          }, { before, target: known ? { pid: snapshots.get(tid)?.pid, path: known.path } : undefined, timeoutMs: 2000 })
-          if (failed) throw new Error(`${a.ref} doesn't support ${axName}${failed.actions?.length ? `; it supports ${failed.actions.join(', ')}` : ''}.`)
-          return { text: `Performed ${axName} on ${a.ref}${known ? ` (${short(known.role)} "${known.label}")` : ''}. ${v.text}`, display: `${axName.replace(/^AX/, '').toLowerCase()} "${(known?.label ?? a.ref!).slice(0, 40)}"` }
-        }
-
-        case 'type_ref': case 'set_value': {
-          const snap = snapshots.get(tid)
-          const known = byRef(snap, a.ref!)
-          if (!snap || !known) throw new Error(`No element ${a.ref} in the last ui snapshot. Read the app with ui first.`)
-          const before = await probe().catch(() => undefined)
-          const g = guardAction({ action: a.action, app: snap.app, window: known.window || before?.window, el: known, typing: true })
-          if (g) return handOff(g, ctx)
-          const target = { pid: snap.pid, path: known.path }
-          if (a.action === 'set_value') {
-            let res = undefined as ElementResult | undefined
-            const v = await verified(ctx, async () => { res = (await onElement(tid, a.ref!, { op: 'set_value', value: a.value })).res }, { before, target })
-            if (res?.refused === 'secure') return handOff(guardAction({ action: 'set_value', app: snap.app, el: { ...known, secure: true }, typing: true })!, ctx)
-            if (!res?.done) throw new Error(`Couldn't set ${a.ref}'s value (${res?.error ?? 'not settable'}). Try type_ref, or click it and type.`)
-            const now = v.after.target?.value
-            const ok = now === undefined || now === a.value || (now === '1' && /^(true|on|1|yes)$/i.test(a.value!)) || (now === '0' && /^(false|off|0|no)$/i.test(a.value!))
-            return { text: `Set ${a.ref} (${short(known.role)} "${known.label}") to "${a.value!.slice(0, 80)}". ${v.text}${ok ? '' : ` Its value reads "${now}" now, not what was set: the app may not accept direct values. Try type_ref instead.`}`, display: `set "${known.label.slice(0, 30)}"` }
-          }
-          // type_ref: the app must be in front (keystrokes go to the front app), then focus the field, then type.
-          if (before && before.app !== snap.app) await jxa(ACTIVATE, { app: snap.app })
-          let refused = false as boolean
-          const v = await verified(ctx, async () => {
-            const { el, res } = await onElement(tid, a.ref!, { op: 'focus', forTyping: true })
-            if (res.refused === 'secure') { refused = true; return }
-            if (!res.done) {
-              const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
-              if (!r) throw new Error(`Couldn't focus ${a.ref}.`)
-              await jxa(MOUSE, { kind: 'click', ...center(r) })
-              await sleep(150)
-            }
-            // Focus landed somewhere else (or on a password field): stop before typing.
-            const now = await probe().catch(() => undefined)
-            if (now?.focused?.secure) { refused = true; return }
-            if (a.clear) { await jxa(KEY, { char: 'a', using: ['command down'] }); await jxa(KEY, { code: 51, using: [] }) }
-            await typeText(ctx, a.text!)
-            if (a.submit) await jxa(KEY, { code: 36, using: [] })
-          }, { before, target })
-          if (refused) return handOff({ kind: 'password', reason: `typing into a password field ("${known.label}") in ${snap.app}`, ask: `The next step is typing a password into "${known.label}" in ${snap.app}. I never type passwords: please type it yourself, then tell me when you're done.` }, ctx)
-          const val = v.after.target?.value
-          const landed = val === undefined || a.submit || val.includes(a.text!.slice(-Math.min(20, a.text!.length)))
-          return { text: `Typed ${a.text!.length} characters into ${a.ref} (${short(known.role)} "${known.label}")${a.submit ? ' and pressed Return' : ''}. ${v.text}${landed ? '' : ' The field\'s value doesn\'t show the typed text: the keystrokes may have gone elsewhere. Check with ui.'}`, display: `typed "${a.text!.slice(0, 40)}"` }
-        }
-
-        case 'click': case 'double_click': case 'triple_click': case 'right_click': case 'move': {
-          const p = pointOf(tid, a)
-          const before = await probe().catch(() => undefined)
-          if (a.action !== 'move') {
-            const snap = freshSnapshot(tid, before?.app)
-            const el = p.el ?? elementAt(snap, p.x, p.y)
-            const g = guardAction({ action: 'click', app: before?.app ?? '', window: before?.window, el })
-            if (g) return handOff(g, ctx)
-          }
-          const kind = { click: 'click', double_click: 'double', triple_click: 'triple', right_click: 'right', move: 'move' }[a.action]
-          const flags = clickFlags(a.modifiers)
-          const v = await verified(ctx, () => jxa(MOUSE, { kind, x: p.x, y: p.y, flags }).then(() => undefined), { before, timeoutMs: a.action === 'move' ? 600 : 2500 })
-          const label = a.action.replace('_', ' ')
-          return { text: `${label} at screen point (${p.x}, ${p.y})${p.el ? ` on ${p.el.ref} "${p.el.label}"` : ''}. ${v.text}`, display: `${label} at ${p.x}, ${p.y}${v.changed || a.action === 'move' ? '' : ' (no change)'}` }
-        }
-
-        case 'drag': {
-          const p1 = pointOf(tid, a, 1)
-          const p2 = pointOf(tid, a, 2)
-          const v = await verified(ctx, () => jxa(MOUSE, { kind: 'drag', x: p1.x, y: p1.y, x2: p2.x, y2: p2.y }).then(() => undefined))
-          return { text: `Dragged from (${p1.x}, ${p1.y}) to (${p2.x}, ${p2.y}). ${v.text}`, display: 'dragged' }
-        }
-
-        case 'scroll': {
-          let p: { x: number; y: number }
-          try { p = pointOf(tid, a) } catch {
-            // No point given: the middle of the main display.
-            const main = displayByNumber(displays(), 1)
-            p = main ? center(main.bounds) : { x: 700, y: 450 }
-          }
-          const dy = a.amount ?? -5
-          const v = await verified(ctx, async () => {
-            try { await jxa(MOUSE, { kind: 'scroll', x: p.x, y: p.y, dy, dx: a.dx ?? 0 }) } catch { await jxa(KEY, { code: dy < 0 ? 121 : 116, using: [] }) }
-          }, { timeoutMs: 1200 })
-          return { text: `Scrolled ${dy < 0 ? 'down' : 'up'} ${Math.abs(dy)} lines${a.dx ? ` and ${a.dx < 0 ? 'left' : 'right'} ${Math.abs(a.dx)}` : ''} at (${p.x}, ${p.y}). ${v.changed ? v.text : 'Scrolling only shows in a screenshot or a new ui read.'}`, display: `scrolled ${dy < 0 ? 'down' : 'up'}` }
-        }
-
-        case 'type': {
-          const before = await probe().catch(() => undefined)
-          const g = guardAction({ action: 'type', app: before?.app ?? '', window: before?.window, focused: before?.focused, typing: true })
-          if (g) return handOff(g, ctx)
-          const v = await verified(ctx, () => typeText(ctx, a.text!), { before })
-          return { text: `Typed ${a.text!.length} characters into ${before?.focused ? `${short(before.focused.role)}${before.focused.label ? ` "${before.focused.label}"` : ''}` : 'the focused element'}. ${v.text}`, display: `typed "${a.text!.slice(0, 40)}"` }
-        }
-
-        case 'key': {
-          let k: KeyCombo
-          try { k = parseCombo(a.keys!) } catch (e) { throw new Error((e as Error).message) }
-          const before = await probe().catch(() => undefined)
-          // A pasted or typed character into a password field is typing a password.
-          const typesText = !!k.char && (!k.using.some((m) => m !== 'shift down') || (k.char === 'v' && k.using.includes('command down')))
-          const g = guardAction({ action: 'key', app: before?.app ?? '', window: before?.window, focused: before?.focused, typing: typesText })
-          if (g) return handOff(g, ctx)
-          const v = await verified(ctx, () => jxa(KEY, { code: k.code, char: k.char, using: k.using }).then(() => undefined), { before })
-          return { text: `Pressed ${k.label}. ${v.text}`, display: `pressed ${k.label}${v.changed ? '' : ' (no change)'}` }
-        }
-
-        case 'open_app': case 'activate_app': {
-          const v = await verified(ctx, async () => {
-            if (a.action === 'open_app') await sh('open', ['-a', a.app!])
-            const r = await jxa<{ front?: string; error?: string; timeout?: boolean }>(ACTIVATE, { app: a.app }, 15_000)
-            if (r?.error) throw new Error(`Couldn't ${a.action === 'open_app' ? 'open' : 'bring up'} ${a.app}: ${r.error}`)
-          }, { timeoutMs: 1500 })
-          const front = v.after.app
-          const ok = !front || front.toLowerCase() === a.app!.toLowerCase()
-          return { text: `${a.action === 'open_app' ? 'Opened' : 'Brought up'} ${a.app}. ${v.text}${ok ? '' : ` ${front} is in front instead: ${a.app} may still be starting or showing a dialog; check with ui or apps.`}`, display: `${a.action === 'open_app' ? 'opened' : 'switched to'} ${a.app}` }
-        }
-
-        case 'quit_app': {
-          if (NO_QUIT.test(a.app!.trim())) throw new Error(`SahilBot doesn't quit ${a.app}.`)
-          const r = await jxa<{ ok?: boolean; error?: string }>(QUIT, { app: a.app }, 30_000)
-          if (r?.error) throw new Error(`Couldn't quit ${a.app}: ${r.error}`)
-          return { text: `Asked ${a.app} to quit. If it had unsaved work it may be showing a save dialog: check with ui.`, display: `quit ${a.app}` }
-        }
-
-        case 'focus_window': {
-          const w = await findWindow(tid, a.window!, a.app)
-          let res = undefined as ElementResult | undefined
-          const v = await verified(ctx, async () => {
-            await jxa(ACTIVATE, { app: w.app })
-            res = await jxa<ElementResult>(ELEMENT, { pid: w.pid, path: [w.index], op: 'raise' })
-          }, { timeoutMs: 1500 })
-          if (res?.missing) throw new Error(`The window "${w.title}" is gone. List windows again.`)
-          return { text: `Brought ${w.app}'s window "${w.title}" to the front. ${v.text}`, display: `focused ${w.app}` }
-        }
-
-        case 'menu': {
-          type MenuResult = { app?: string; clicked?: string; listed?: string; disabled?: string; missing?: number; walked?: string; options?: string[]; error?: string }
-          let r = undefined as MenuResult | undefined
-          const v = await verified(ctx, async () => {
-            r = await jxa<MenuResult>(MENU, { path: a.path, app: a.app, activate: !!a.app }, 20_000)
-          }, { timeoutMs: 2000 })
-          if (!r || r.error) throw new Error(r?.error ?? 'Couldn\'t read the menu bar.')
-          if (r.listed) return { text: `${r.listed} menu in ${r.app}:\n${(r.options ?? []).map((o) => `- ${o}`).join('\n')}\nChoose one with menu {path: "${r.listed} > …"}.`, display: `read menu ${r.listed.slice(0, 40)}` }
-          if (r.disabled) throw new Error(`"${r.disabled}" is disabled right now in ${r.app} (select something first, or it doesn't apply here).`)
-          if (r.missing !== undefined) {
-            const parts = a.path!.split('>').map((s) => s.trim())
-            throw new Error(`No menu item "${parts[r.missing] ?? a.path}"${r.walked ? ` under ${r.walked}` : ''} in ${r.app}.${r.options?.length ? ` Available: ${r.options.slice(0, 40).join(' · ')}` : ''}`)
-          }
-          return { text: `Chose ${r.clicked} in ${r.app}. ${v.text}`, display: `menu: ${(r.clicked ?? '').slice(0, 50)}` }
-        }
+      await show(ctx, { kind: 'status', label: statusLabel(input) })
+      try {
+        return await step(a, ctx)
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') finish()
+        throw e
       }
-      throw new Error(`Unknown action ${(a as { action: string }).action}.`)
     }
   }
+
+  async function step(a: Args, ctx: ToolContext): Promise<ToolOutput> {
+    const tid = ctx.threadId
+    switch (a.action) {
+      case 'screenshot':
+        return screenshot(a, ctx)
+
+      case 'ui': {
+        needAx()
+        let pid: number | undefined
+        let windowIndex: number | undefined
+        let app = a.app
+        if (a.window && /^w\d+$/i.test(a.window.trim())) {
+          const w = windowLists.get(tid)?.find((x) => x.ref === a.window!.trim().toLowerCase())
+          if (!w) throw new Error(`No window ${a.window} in the last windows list. Run windows first.`)
+          pid = w.pid; windowIndex = w.index; app = w.app
+        }
+        const snap = await snapshot(tid, { app, pid, activate: !!app, window: windowIndex })
+        let text = formatSnapshot(snap, { query: a.query })
+        if (a.window && windowIndex === undefined) {
+          const want = a.window.toLowerCase()
+          const w = snap.windows.find((x) => x.title.toLowerCase().includes(want))
+          if (w) text = formatSnapshot({ ...snap, windows: [w], elements: snap.elements.filter((e) => e.win === w.index) }, { query: a.query })
+        }
+        if (!snap.elements.length) text += '\n(No readable elements: this app may draw its own UI. Take a screenshot and use coordinates.)'
+        return { text: `${text}\nAct on elements by ref (click_ref, type_ref, set_value, press). Refs stay valid while the element is on screen.`, display: `Read ${snap.app}'s window` }
+      }
+
+      case 'apps': {
+        const r = await jxa<Array<{ name: string; front: boolean }>>(APPS, {})
+        return { text: r.map((x) => `- ${x.name}${x.front ? ' (in front)' : ''}`).join('\n'), display: `${r.length} apps open` }
+      }
+
+      case 'windows': {
+        needAx()
+        const list = await windowsList(tid, a.app)
+        const ds = displays()
+        const where = (r?: Rect): string => { if (!r || ds.length < 2) return ''; const disp = displayAt(ds, center(r).x, center(r).y); return disp ? ` on display ${ordered(ds).indexOf(disp) + 1}` : ' (off screen)' }
+        return { text: list.length ? list.map((w) => `[${w.ref}] ${w.app}: "${w.title || '(untitled)'}"${w.front ? ' (in front)' : ''}${w.minimized ? ' (minimized)' : ''}${where(w.rect)}`).join('\n') + '\nUse focus_window {window: "w3"}, ui {window: "w3"} or screenshot {window: "w3"}.' : 'No open windows.', display: `${list.length} windows` }
+      }
+
+      case 'wait': {
+        const ms = Math.min(10, a.seconds ?? 1) * 1000
+        for (let t = 0; t < ms; t += 200) { alive(ctx); await sleep(Math.min(200, ms - t)) }
+        return { text: `Waited ${a.seconds ?? 1}s.`, display: 'waited' }
+      }
+
+      case 'clipboard_read': {
+        // Sensitive: the contents go to the model only (never into the chip or logs), secrets blanked.
+        const r = await clip().read()
+        if (r.concealed) return { text: 'The clipboard holds a password manager\'s hidden item; SahilBot doesn\'t read those.', display: 'read the clipboard' }
+        const raw = r.text ?? ''
+        const { text, redacted } = redactClipboard(raw)
+        const cut = text.length > 8000 ? `${text.slice(0, 8000)}\n… (${text.length - 8000} more characters)` : text
+        return { text: raw ? `Clipboard text${redacted ? ' (parts that look like passwords, keys or card numbers are hidden)' : ''}:\n${cut}` : `The clipboard has no text${r.types.length ? ` (it holds ${r.types.slice(0, 4).join(', ')})` : ''}.`, display: 'read the clipboard' }
+      }
+
+      case 'clipboard_write':
+        await clip().writeText(a.text!)
+        return { text: `Copied ${a.text!.length} characters to the clipboard.`, display: `copied ${a.text!.length} characters` }
+
+      case 'copy': {
+        const io = clip()
+        const saved = a.restore ? await io.save() : undefined
+        try {
+          if (a.ref) await focusRef(ctx, a.ref, { selectAll: true })
+          const n0 = await io.changeCount()
+          await pressKey(ctx, { char: 'c', using: ['command down'] }, 'cmd+c')
+          let n = n0
+          for (let t = 0; t < 1500 && n === n0; t += 100) { await sleep(100); alive(ctx); n = await io.changeCount() }
+          if (n === n0) return { text: `Nothing was copied (the clipboard didn't change). Select something first: select_all, a triple_click on a line, or drag over the text${a.ref ? '' : ', or pass ref to copy a whole field'}.`, display: 'nothing copied' }
+          const r = await io.read()
+          if (a.restore && saved) await io.restore(saved)
+          const restored = a.restore ? ' The user\'s clipboard was put back.' : ' It is on the clipboard now (cmd+v pastes it).'
+          if (r.concealed) return { text: `Copied a password manager's hidden item; SahilBot doesn't read those.${restored}`, display: 'copied (hidden)' }
+          if (r.text === undefined) return { text: `Copied something that isn't text (${r.types.slice(0, 4).join(', ') || 'unknown type'}).${restored}`, display: 'copied' }
+          const { text, redacted } = redactClipboard(r.text)
+          const cut = text.length > 20_000 ? `${text.slice(0, 20_000)}\n… (${text.length - 20_000} more characters)` : text
+          return { text: `Copied ${r.text.length} characters${redacted ? ' (parts that look like passwords, keys or card numbers are hidden)' : ''}:\n${cut}\n${restored.trim()}`, display: `copied ${r.text.length} characters` }
+        } finally {
+          if (saved) io.discard?.(saved)
+        }
+      }
+
+      case 'select_all': {
+        const v = await verified(ctx, async () => {
+          if (a.ref) await focusRef(ctx, a.ref, { selectAll: false })
+          await pressKey(ctx, { char: 'a', using: ['command down'] }, 'cmd+a')
+        }, { timeoutMs: 1000 })
+        const val = await readValue()
+        return { text: `Selected all${val?.selected !== undefined ? ` (${val.selected} characters selected)` : ''}. ${v.text}`, display: 'selected all' }
+      }
+
+      case 'click_ref': case 'click_element': {
+        let ref = a.ref
+        if (a.action === 'click_element') {
+          // Older form: by name (and role) in the front app.
+          const snap = await snapshot(tid, { app: a.app, activate: !!a.app })
+          const want = a.name!.toLowerCase()
+          const pool = snap.elements.filter((e) => !a.role || short(e.role).toLowerCase().includes(a.role.toLowerCase()))
+          const hit = pool.find((e) => e.label.toLowerCase() === want) ?? pool.find((e) => e.label.toLowerCase().includes(want))
+          if (!hit) throw new Error(`No element named "${a.name}" in ${snap.app}. Read the window with ui to see what's there, or take a screenshot.`)
+          ref = hit.ref
+        }
+        if (!ref) throw new Error('Give a ref from ui.')
+        const known = byRef(snapshots.get(tid), ref)
+        const before = await probe().catch(() => undefined)
+        const g = known && guardAction({ action: 'click', app: snapshots.get(tid)!.app, window: known.window || before?.window, el: known })
+        if (g) return handOff(g, ctx)
+        const flags = clickFlags(a.modifiers)
+        let how = ''
+        const label = known ? `Click "${known.label.slice(0, 40)}"` : 'Click'
+        const v = await verified(ctx, async () => {
+          if (known?.pressable && !flags) {
+            if (known.rect) await show(ctx, { kind: 'click', ...center(known.rect), label })
+            const { el, res } = await onElement(tid, ref!, { op: 'press' })
+            if (res.done) { how = 'pressed'; return }
+            const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
+            if (!r) throw new Error(`Couldn't press ${ref} (${res.error ?? 'no AXPress'}) and it has no position to click.`)
+            await mouse(ctx, { kind: 'click', ...center(r) }, label); how = 'clicked'
+            return
+          }
+          const { el, res } = await onElement(tid, ref!, { op: 'read' })
+          const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
+          if (!r) throw new Error(`${ref} has no position to click.`)
+          await mouse(ctx, { kind: 'click', ...center(r), flags }, label); how = 'clicked'
+        }, { before, target: known ? { pid: snapshots.get(tid)?.pid, path: known.path } : undefined })
+        const el = byRef(snapshots.get(tid), ref)
+        return { text: `${how === 'pressed' ? 'Pressed' : 'Clicked'} ${ref}${el ? ` (${short(el.role)} "${el.label}")` : ''}. ${v.text}`, display: `${how} "${(el?.label ?? ref).slice(0, 40)}"${v.changed ? '' : ' (no change)'}` }
+      }
+
+      case 'press': {
+        const known = byRef(snapshots.get(tid), a.ref!)
+        const name = a.ax_action?.trim() || 'AXPress'
+        const axName = /^AX/.test(name) ? name : `AX${name[0].toUpperCase()}${name.slice(1)}`
+        const before = await probe().catch(() => undefined)
+        const g = known && /^AX(Press|Confirm|Pick)$/.test(axName) ? guardAction({ action: 'press', app: snapshots.get(tid)!.app, window: known.window || before?.window, el: known }) : null
+        if (g) return handOff(g, ctx)
+        let failed = undefined as ElementResult | undefined
+        const v = await verified(ctx, async () => {
+          if (known?.rect) await show(ctx, { kind: 'focus', x: known.rect.x, y: known.rect.y, w: known.rect.width, h: known.rect.height, label: `${axName.replace(/^AX/, '')} "${known.label.slice(0, 40)}"` })
+          const { res } = await onElement(tid, a.ref!, { op: 'action', action: axName })
+          if (!res.done) failed = res
+        }, { before, target: known ? { pid: snapshots.get(tid)?.pid, path: known.path } : undefined, timeoutMs: 2000 })
+        if (failed) throw new Error(`${a.ref} doesn't support ${axName}${failed.actions?.length ? `; it supports ${failed.actions.join(', ')}` : ''}.`)
+        return { text: `Performed ${axName} on ${a.ref}${known ? ` (${short(known.role)} "${known.label}")` : ''}. ${v.text}`, display: `${axName.replace(/^AX/, '').toLowerCase()} "${(known?.label ?? a.ref!).slice(0, 40)}"` }
+      }
+
+      case 'type_ref': case 'set_value': {
+        const snap = snapshots.get(tid)
+        const known = byRef(snap, a.ref!)
+        if (!snap || !known) throw new Error(`No element ${a.ref} in the last ui snapshot. Read the app with ui first.`)
+        const before = await probe().catch(() => undefined)
+        const g = guardAction({ action: a.action, app: snap.app, window: known.window || before?.window, el: known, typing: true })
+        if (g) return handOff(g, ctx)
+        const target = { pid: snap.pid, path: known.path }
+        if (a.action === 'set_value') {
+          let res = undefined as ElementResult | undefined
+          const v = await verified(ctx, async () => {
+            if (known.rect) await show(ctx, { kind: 'focus', x: known.rect.x, y: known.rect.y, w: known.rect.width, h: known.rect.height, label: `Set "${known.label.slice(0, 40)}"` })
+            res = (await onElement(tid, a.ref!, { op: 'set_value', value: a.value })).res
+          }, { before, target })
+          if (res?.refused === 'secure') return handOff(guardAction({ action: 'set_value', app: snap.app, el: { ...known, secure: true }, typing: true })!, ctx)
+          if (!res?.done) throw new Error(`Couldn't set ${a.ref}'s value (${res?.error ?? 'not settable'}). Try type_ref, or click it and type.`)
+          const now = v.after.target?.value
+          const ok = now === undefined || now === a.value || (now === '1' && /^(true|on|1|yes)$/i.test(a.value!)) || (now === '0' && /^(false|off|0|no)$/i.test(a.value!))
+          return { text: `Set ${a.ref} (${short(known.role)} "${known.label}") to "${a.value!.slice(0, 80)}". ${v.text}${ok ? '' : ` Its value reads "${now}" now, not what was set: the app may not accept direct values. Try type_ref instead.`}`, display: `set "${known.label.slice(0, 30)}"` }
+        }
+        // type_ref: the app must be in front (keystrokes go to the front app), then focus the field, then type or paste.
+        if (before && before.app !== snap.app) await jxa(ACTIVATE, { app: snap.app })
+        let refused = false as boolean
+        let entered: Entered | undefined
+        const v = await verified(ctx, async () => {
+          const { el, res } = await onElement(tid, a.ref!, { op: 'focus', forTyping: true })
+          if (res.refused === 'secure') { refused = true; return }
+          if (!res.done) {
+            const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
+            if (!r) throw new Error(`Couldn't focus ${a.ref}.`)
+            await mouse(ctx, { kind: 'click', ...center(r) }, `Click "${known.label.slice(0, 40)}"`)
+            await sleep(150)
+          }
+          // Focus landed somewhere else (or on a password field): stop before typing.
+          const now = await probe().catch(() => undefined)
+          if (now?.focused?.secure) { refused = true; return }
+          if (a.clear) {
+            await pressKey(ctx, { char: 'a', using: ['command down'] }, 'cmd+a')
+            await pressKey(ctx, { code: 51, using: [] }, 'delete')
+          }
+          entered = await enterText(ctx, a.text!, { method: a.method, target, point: known.rect ? center(known.rect) : undefined, label: `Typing into "${known.label.slice(0, 40)}"`, secretLabel: isSecure(known) })
+          if (entered.refused) { refused = true; return }
+          if (a.submit) await pressKey(ctx, { code: 36, using: [] }, 'return')
+        }, { before, target })
+        if (refused) return handOff({ kind: 'password', reason: `typing into a password field ("${known.label}") in ${snap.app}`, ask: `The next step is typing a password into "${known.label}" in ${snap.app}. I never type passwords: please type it yourself, then tell me when you're done.` }, ctx)
+        const e = entered!
+        const verb = e.how === 'paste' ? 'Pasted' : 'Typed'
+        // The value was checked before Return (which may clear a search field or send a message).
+        const landed = e.landed
+        return { text: `${verb} ${a.text!.length} characters (${e.why}) into ${a.ref} (${short(known.role)} "${known.label}")${a.submit ? ' and pressed Return' : ''}. ${landedNote(e)}${e.clipboard ? ` ${e.clipboard}` : ''} ${v.text}`, display: `${verb.toLowerCase()} "${a.text!.slice(0, 40)}"${landed === 'no' ? ' (not seen in the field)' : ''}` }
+      }
+
+      case 'click': case 'double_click': case 'triple_click': case 'right_click': case 'move': {
+        const p = pointOf(tid, a)
+        const before = await probe().catch(() => undefined)
+        let el: AxElement | undefined
+        if (a.action !== 'move') {
+          const snap = freshSnapshot(tid, before?.app)
+          el = p.el ?? elementAt(snap, p.x, p.y)
+          const g = guardAction({ action: 'click', app: before?.app ?? '', window: before?.window, el })
+          if (g) return handOff(g, ctx)
+        }
+        const kind = { click: 'click', double_click: 'double', triple_click: 'triple', right_click: 'right', move: 'move' }[a.action]
+        const flags = clickFlags(a.modifiers)
+        const label = a.action.replace('_', ' ')
+        const v = await verified(ctx, () => mouse(ctx, { kind, x: p.x, y: p.y, flags }, el ? `${label} "${el.label.slice(0, 40)}"` : label), { before, timeoutMs: a.action === 'move' ? 600 : 2500 })
+        return { text: `${label} at screen point (${p.x}, ${p.y})${p.el ? ` on ${p.el.ref} "${p.el.label}"` : ''}. ${v.text}`, display: `${label} at ${p.x}, ${p.y}${v.changed || a.action === 'move' ? '' : ' (no change)'}` }
+      }
+
+      case 'drag': {
+        const p1 = pointOf(tid, a, 1)
+        const p2 = pointOf(tid, a, 2)
+        const v = await verified(ctx, () => mouse(ctx, { kind: 'drag', x: p1.x, y: p1.y, x2: p2.x, y2: p2.y }, 'Dragging'))
+        return { text: `Dragged from (${p1.x}, ${p1.y}) to (${p2.x}, ${p2.y}). ${v.text}`, display: 'dragged' }
+      }
+
+      case 'scroll': {
+        let p: { x: number; y: number }
+        try { p = pointOf(tid, a) } catch {
+          // No point given: the middle of the main display.
+          const main = displayByNumber(displays(), 1)
+          p = main ? center(main.bounds) : { x: 700, y: 450 }
+        }
+        const dy = a.amount ?? -5
+        const v = await verified(ctx, async () => {
+          try { await mouse(ctx, { kind: 'scroll', x: p.x, y: p.y, dy, dx: a.dx ?? 0 }, dy < 0 ? 'Scrolling down' : 'Scrolling up') } catch (e) {
+            if ((e as Error).name === 'AbortError') throw e
+            await pressKey(ctx, { code: dy < 0 ? 121 : 116, using: [] }, dy < 0 ? 'pagedown' : 'pageup')
+          }
+        }, { timeoutMs: 1200 })
+        return { text: `Scrolled ${dy < 0 ? 'down' : 'up'} ${Math.abs(dy)} lines${a.dx ? ` and ${a.dx < 0 ? 'left' : 'right'} ${Math.abs(a.dx)}` : ''} at (${p.x}, ${p.y}). ${v.changed ? v.text : 'Scrolling only shows in a screenshot or a new ui read.'}`, display: `scrolled ${dy < 0 ? 'down' : 'up'}` }
+      }
+
+      case 'type': {
+        const before = await probe().catch(() => undefined)
+        const g = guardAction({ action: 'type', app: before?.app ?? '', window: before?.window, focused: before?.focused, typing: true })
+        if (g) return handOff(g, ctx)
+        let e: Entered | undefined
+        const v = await verified(ctx, async () => { e = await enterText(ctx, a.text!, { method: a.method, point: mid(before?.focused), secretLabel: !before?.focused || isSecure(before.focused), label: `Typing into ${before?.focused?.label ? `"${before.focused.label.slice(0, 40)}"` : before?.app ?? 'the focused field'}` }) }, { before })
+        if (e?.refused) return handOff({ kind: 'password', reason: `typing into a password field in ${before?.app ?? 'the app in front'}`, ask: `The next step is typing a password in ${before?.app ?? 'the app in front'}. I never type passwords: please type it yourself, then tell me when you're done.` }, ctx)
+        const verb = e!.how === 'paste' ? 'Pasted' : 'Typed'
+        return { text: `${verb} ${a.text!.length} characters (${e!.why}) into ${before?.focused ? `${short(before.focused.role)}${before.focused.label ? ` "${before.focused.label}"` : ''}` : 'the focused element'}. ${landedNote(e!)}${e!.clipboard ? ` ${e!.clipboard}` : ''} ${v.text}`, display: `${verb.toLowerCase()} "${a.text!.slice(0, 40)}"${e!.landed === 'no' ? ' (not seen in the field)' : ''}` }
+      }
+
+      case 'key': {
+        let k: KeyCombo
+        try { k = parseCombo(a.keys!) } catch (e) { throw new Error((e as Error).message) }
+        const before = await probe().catch(() => undefined)
+        // A pasted or typed character into a password field is typing a password.
+        const typesText = !!k.char && (!k.using.some((m) => m !== 'shift down') || (k.char === 'v' && k.using.includes('command down')))
+        const g = guardAction({ action: 'key', app: before?.app ?? '', window: before?.window, focused: before?.focused, typing: typesText })
+        if (g) return handOff(g, ctx)
+        const v = await verified(ctx, () => pressKey(ctx, k, k.label), { before })
+        return { text: `Pressed ${k.label}. ${v.text}`, display: `pressed ${k.label}${v.changed ? '' : ' (no change)'}` }
+      }
+
+      case 'open_app': case 'activate_app': {
+        const v = await verified(ctx, async () => {
+          if (a.action === 'open_app') await sh('open', ['-a', a.app!])
+          const r = await jxa<{ front?: string; error?: string; timeout?: boolean }>(ACTIVATE, { app: a.app }, 15_000)
+          if (r?.error) throw new Error(`Couldn't ${a.action === 'open_app' ? 'open' : 'bring up'} ${a.app}: ${r.error}`)
+        }, { timeoutMs: 1500 })
+        const front = v.after.app
+        const ok = !front || front.toLowerCase() === a.app!.toLowerCase()
+        return { text: `${a.action === 'open_app' ? 'Opened' : 'Brought up'} ${a.app}. ${v.text}${ok ? '' : ` ${front} is in front instead: ${a.app} may still be starting or showing a dialog; check with ui or apps.`}`, display: `${a.action === 'open_app' ? 'opened' : 'switched to'} ${a.app}` }
+      }
+
+      case 'quit_app': {
+        if (NO_QUIT.test(a.app!.trim())) throw new Error(`SahilBot doesn't quit ${a.app}.`)
+        const r = await jxa<{ ok?: boolean; error?: string }>(QUIT, { app: a.app }, 30_000)
+        if (r?.error) throw new Error(`Couldn't quit ${a.app}: ${r.error}`)
+        return { text: `Asked ${a.app} to quit. If it had unsaved work it may be showing a save dialog: check with ui.`, display: `quit ${a.app}` }
+      }
+
+      case 'focus_window': {
+        const w = await findWindow(tid, a.window!, a.app)
+        let res = undefined as ElementResult | undefined
+        const v = await verified(ctx, async () => {
+          await jxa(ACTIVATE, { app: w.app })
+          res = await jxa<ElementResult>(ELEMENT, { pid: w.pid, path: [w.index], op: 'raise' })
+        }, { timeoutMs: 1500 })
+        if (res?.missing) throw new Error(`The window "${w.title}" is gone. List windows again.`)
+        return { text: `Brought ${w.app}'s window "${w.title}" to the front. ${v.text}`, display: `focused ${w.app}` }
+      }
+
+      case 'menu': {
+        type MenuResult = { app?: string; clicked?: string; listed?: string; disabled?: string; missing?: number; walked?: string; options?: string[]; error?: string }
+        let r = undefined as MenuResult | undefined
+        const v = await verified(ctx, async () => {
+          r = await jxa<MenuResult>(MENU, { path: a.path, app: a.app, activate: !!a.app }, 20_000)
+        }, { timeoutMs: 2000 })
+        if (!r || r.error) throw new Error(r?.error ?? 'Couldn\'t read the menu bar.')
+        if (r.listed) return { text: `${r.listed} menu in ${r.app}:\n${(r.options ?? []).map((o) => `- ${o}`).join('\n')}\nChoose one with menu {path: "${r.listed} > …"}.`, display: `read menu ${r.listed.slice(0, 40)}` }
+        if (r.disabled) throw new Error(`"${r.disabled}" is disabled right now in ${r.app} (select something first, or it doesn't apply here).`)
+        if (r.missing !== undefined) {
+          const parts = a.path!.split('>').map((s) => s.trim())
+          throw new Error(`No menu item "${parts[r.missing] ?? a.path}"${r.walked ? ` under ${r.walked}` : ''} in ${r.app}.${r.options?.length ? ` Available: ${r.options.slice(0, 40).join(' · ')}` : ''}`)
+        }
+        return { text: `Chose ${r.clicked} in ${r.app}. ${v.text}`, display: `menu: ${(r.clicked ?? '').slice(0, 50)}` }
+      }
+    }
+    throw new Error(`Unknown action ${(a as { action: string }).action}.`)
+  }
+
+  /** Focuses a field by ref (clicking it when AX focus doesn't take), optionally selecting all of it. */
+  async function focusRef(ctx: ToolContext, ref: string, o: { selectAll: boolean }): Promise<void> {
+    const known = byRef(snapshots.get(ctx.threadId), ref)
+    if (!known) throw new Error(`No element ${ref} in the last ui snapshot. Read the app with ui first.`)
+    const { el, res } = await onElement(ctx.threadId, ref, { op: 'focus' })
+    if (!res.done) {
+      const r = res.x !== undefined ? { x: res.x, y: res.y!, width: res.w!, height: res.h! } : el.rect
+      if (!r) throw new Error(`Couldn't focus ${ref}.`)
+      await mouse(ctx, { kind: 'click', ...center(r) }, `Click "${known.label.slice(0, 40)}"`)
+      await sleep(150)
+    }
+    if (o.selectAll) await pressKey(ctx, { char: 'a', using: ['command down'] }, 'cmd+a')
+  }
+
+  const control: ComputerControl = { run: (args, ctx) => def.run(args as Args, ctx), isGranted: isGranted0, finish }
+  current = control
+  return Object.assign(def, { control })
 }

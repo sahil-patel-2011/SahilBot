@@ -1,0 +1,386 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`scripts > AppleScripts take their data as argv only 1`] = `
+{
+  "EXCEL_EXPORT_PDF": "on run argv
+  set wbName to item 1 of argv
+  set outPath to my hfs(item 2 of argv)
+  tell application "Microsoft Excel"
+    if wbName is "" then
+      set wb to active workbook
+    else
+      set wb to workbook wbName
+    end if
+    save workbook as wb filename outPath file format PDF file format
+    return name of wb
+  end tell
+end run
+
+on flat(v)
+  try
+    set t to v as text
+  on error
+    set t to ""
+  end try
+  set t to my rep(t, tab, " ")
+  set t to my rep(t, return, " ")
+  set t to my rep(t, linefeed, " ")
+  return t
+end flat
+
+on rep(t, a, b)
+  set AppleScript's text item delimiters to a
+  set parts to text items of t
+  set AppleScript's text item delimiters to b
+  set t to parts as text
+  set AppleScript's text item delimiters to ""
+  return t
+end rep
+
+on hfs(p)
+  return (POSIX file p) as text
+end hfs
+",
+  "EXCEL_READ": "on run argv
+  set wbName to item 1 of argv
+  set wsName to item 2 of argv
+  set addr to item 3 of argv
+  set maxCells to (item 4 of argv) as integer
+  tell application "Microsoft Excel"
+    if wbName is "" then
+      set wb to active workbook
+    else
+      set wb to workbook wbName
+    end if
+    if wsName is "" then
+      set ws to active sheet of wb
+    else
+      set ws to worksheet wsName of wb
+    end if
+    if addr is "" then
+      set r to used range of ws
+    else
+      set r to range addr of ws
+    end if
+    set nr to count of rows of r
+    set nc to count of columns of r
+    if nr * nc > maxCells then error "That range has " & (nr * nc) & " cells; read at most " & maxCells & " at a time (give a smaller range)."
+    set v to value of r
+    set firstAddr to get address of r
+    set sheetName to name of ws
+    set bookName to name of wb
+  end tell
+  if class of v is not list then set v to {{v}}
+  if (count of v) > 0 and class of (item 1 of v) is not list then set v to {v}
+  set acc to bookName & tab & sheetName & tab & firstAddr & linefeed
+  repeat with rw in v
+    set rowText to ""
+    set i to 0
+    repeat with c in rw
+      set i to i + 1
+      if i > 1 then set rowText to rowText & tab
+      set rowText to rowText & my flat(contents of c)
+    end repeat
+    set acc to acc & rowText & linefeed
+  end repeat
+  return acc
+end run
+
+on flat(v)
+  try
+    set t to v as text
+  on error
+    set t to ""
+  end try
+  set t to my rep(t, tab, " ")
+  set t to my rep(t, return, " ")
+  set t to my rep(t, linefeed, " ")
+  return t
+end flat
+
+on rep(t, a, b)
+  set AppleScript's text item delimiters to a
+  set parts to text items of t
+  set AppleScript's text item delimiters to b
+  set t to parts as text
+  set AppleScript's text item delimiters to ""
+  return t
+end rep
+
+on hfs(p)
+  return (POSIX file p) as text
+end hfs
+",
+  "EXCEL_SAVE": "on run argv
+  set wbName to item 1 of argv
+  tell application "Microsoft Excel"
+    if wbName is "" then
+      set wb to active workbook
+    else
+      set wb to workbook wbName
+    end if
+    save wb
+    return name of wb
+  end tell
+end run",
+  "EXCEL_WORKBOOKS": "on run argv
+  set acc to ""
+  tell application "Microsoft Excel"
+    repeat with wb in workbooks
+      set acc to acc & "workbook" & tab & (name of wb) & linefeed
+      repeat with ws in worksheets of wb
+        set addr to ""
+        try
+          set addr to get address of (used range of ws)
+        end try
+        set acc to acc & "sheet" & tab & (name of ws) & tab & addr & linefeed
+      end repeat
+    end repeat
+  end tell
+  return acc
+end run",
+  "EXCEL_WRITE": "on run argv
+  set wbName to item 1 of argv
+  set wsName to item 2 of argv
+  tell application "Microsoft Excel"
+    if wbName is "" then
+      set wb to active workbook
+    else
+      set wb to workbook wbName
+    end if
+    if wsName is "" then
+      set ws to active sheet of wb
+    else
+      set ws to worksheet wsName of wb
+    end if
+    set n to count of argv
+    set i to 3
+    set doneCount to 0
+    repeat while i < n
+      set formula of range (item i of argv) of ws to (item (i + 1) of argv)
+      set doneCount to doneCount + 1
+      set i to i + 2
+    end repeat
+    return (name of wb) & tab & (name of ws) & tab & doneCount
+  end tell
+end run",
+  "MESSAGES_SEND": "on run argv
+  set target to item 1 of argv
+  set msg to item 2 of argv
+  set mode to item 3 of argv
+  tell application "Messages"
+    if mode is "chat" then
+      send msg to chat id target
+    else
+      set svc to 1st account whose service type = iMessage
+      send msg to participant target of svc
+    end if
+  end tell
+  return "sent"
+end run",
+  "POWERPOINT_ADD_SLIDE": "on run argv
+  set pName to item 1 of argv
+  set theTitle to item 2 of argv
+  set theBody to item 3 of argv
+  tell application "Microsoft PowerPoint"
+    if pName is "" then
+      set p to active presentation
+    else
+      set p to presentation pName
+    end if
+    set s to make new slide at end of p with properties {layout:slide layout text slide}
+    set filled to ""
+    if theTitle is not "" then
+      try
+        set content of text range of text frame of shape 1 of s to theTitle
+        set filled to filled & "title "
+      end try
+    end if
+    if theBody is not "" then
+      try
+        set content of text range of text frame of shape 2 of s to theBody
+        set filled to filled & "body"
+      end try
+    end if
+    return ((count of slides of p) as text) & tab & filled
+  end tell
+end run",
+  "POWERPOINT_EXPORT_PDF": "on run argv
+  set pName to item 1 of argv
+  set outPath to item 2 of argv
+  tell application "Microsoft PowerPoint"
+    if pName is "" then
+      set p to active presentation
+    else
+      set p to presentation pName
+    end if
+    save p in (POSIX file outPath) as save as PDF
+    return name of p
+  end tell
+end run",
+  "POWERPOINT_PRESENTATIONS": "on run argv
+  set acc to ""
+  tell application "Microsoft PowerPoint"
+    repeat with p in presentations
+      set acc to acc & (name of p) & tab & (count of slides of p) & linefeed
+    end repeat
+  end tell
+  return acc
+end run",
+  "POWERPOINT_READ": "on run argv
+  set pName to item 1 of argv
+  set acc to ""
+  tell application "Microsoft PowerPoint"
+    if pName is "" then
+      set p to active presentation
+    else
+      set p to presentation pName
+    end if
+    set acc to (name of p) & linefeed
+    repeat with i from 1 to count of slides of p
+      set s to slide i of p
+      set acc to acc & "## Slide " & i & linefeed
+      repeat with sh in shapes of s
+        try
+          if has text frame of sh then
+            set t to content of text range of text frame of sh
+            if t is not "" then set acc to acc & t & linefeed
+          end if
+        end try
+      end repeat
+    end repeat
+  end tell
+  return acc
+end run",
+  "POWERPOINT_SAVE": "on run argv
+  set pName to item 1 of argv
+  tell application "Microsoft PowerPoint"
+    if pName is "" then
+      set p to active presentation
+    else
+      set p to presentation pName
+    end if
+    save p
+    return name of p
+  end tell
+end run",
+  "WORD_APPEND": "on run argv
+  set docName to item 1 of argv
+  set t to item 2 of argv
+  tell application "Microsoft Word"
+    if docName is "" then
+      set d to active document
+    else
+      set d to document docName
+    end if
+    insert text t at end of text object of d
+    return name of d
+  end tell
+end run",
+  "WORD_DOCUMENTS": "on run argv
+  set acc to ""
+  tell application "Microsoft Word"
+    repeat with d in documents
+      set acc to acc & (name of d) & tab & (full name of d) & linefeed
+    end repeat
+  end tell
+  return acc
+end run",
+  "WORD_EXPORT_PDF": "on run argv
+  set docName to item 1 of argv
+  set outPath to my hfs(item 2 of argv)
+  tell application "Microsoft Word"
+    if docName is "" then
+      set d to active document
+    else
+      set d to document docName
+    end if
+    save as d file name outPath file format format PDF
+    return name of d
+  end tell
+end run
+
+on flat(v)
+  try
+    set t to v as text
+  on error
+    set t to ""
+  end try
+  set t to my rep(t, tab, " ")
+  set t to my rep(t, return, " ")
+  set t to my rep(t, linefeed, " ")
+  return t
+end flat
+
+on rep(t, a, b)
+  set AppleScript's text item delimiters to a
+  set parts to text items of t
+  set AppleScript's text item delimiters to b
+  set t to parts as text
+  set AppleScript's text item delimiters to ""
+  return t
+end rep
+
+on hfs(p)
+  return (POSIX file p) as text
+end hfs
+",
+  "WORD_READ": "on run argv
+  set docName to item 1 of argv
+  tell application "Microsoft Word"
+    if docName is "" then
+      set d to active document
+    else
+      set d to document docName
+    end if
+    return (name of d) & linefeed & (content of text object of d)
+  end tell
+end run",
+  "WORD_SAVE": "on run argv
+  set docName to item 1 of argv
+  tell application "Microsoft Word"
+    if docName is "" then
+      set d to active document
+    else
+      set d to document docName
+    end if
+    save d
+    return name of d
+  end tell
+end run",
+}
+`;
+
+exports[`the app tool > cell writes go to Numbers as JSON and to Excel as address/value pairs 1`] = `
+[
+  {
+    "input": {
+      "doc": undefined,
+      "sheet": undefined,
+      "table": undefined,
+      "writes": [
+        {
+          "cell": "B2",
+          "value": 1,
+        },
+        {
+          "cell": "C2",
+          "value": "=B2*2",
+        },
+      ],
+    },
+    "kind": "jxa",
+  },
+  {
+    "args": [
+      "",
+      "Q3",
+      "C5",
+      "Total",
+      "D5",
+      "TRUE",
+    ],
+    "kind": "as",
+  },
+]
+`;

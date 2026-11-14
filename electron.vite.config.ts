@@ -8,10 +8,14 @@ export default defineConfig({
     build: { rollupOptions: { external: ['node:sqlite'] } }
   },
   preload: {
-    resolve: { alias: { '@shared': resolve('src/shared') } }
+    resolve: { alias: { '@shared': resolve('src/shared') } },
+    // overlay: the SahilBot cursor overlay's tiny bridge (src/main/computer/overlay-window.ts).
+    build: { rollupOptions: { input: { index: resolve('src/preload/index.ts'), overlay: resolve('src/preload/overlay.ts') } } }
   },
   renderer: {
     resolve: { alias: { '@shared': resolve('src/shared') } },
-    plugins: [react()]
+    plugins: [react()],
+    // overlay.html: the SahilBot cursor overlay page (static, strict CSP).
+    build: { rollupOptions: { input: { index: resolve('src/renderer/index.html'), overlay: resolve('src/renderer/overlay.html') } } }
   }
 })

@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import { BrowserWindow, WebContentsView, session as electronSession, type Rectangle, type Session, type WebContents } from 'electron'
+import { BrowserWindow, WebContentsView, session as electronSession, systemPreferences, type Rectangle, type Session, type WebContents } from 'electron'
 import type { BrowserState, TeachStep } from '@shared/types'
 import { readable } from '../agent/tools/web'
 import { TeachRecorder } from './teach'
+import { moveDuration, pageCursorCss, type Point } from '../computer/overlay'
 import { COMMERCE_FN, COOKIE_SCRIPT, PAGE_LIB, SHOT_MASK_CSS, cardValuesFor, countryNames, fillAddressScript, fillCardScript, isProcessorHost, locateCardScript, maskScript, pickTotal, regionNames, splitItem, type CardValues, type Money } from './checkout'
 
 /** Size the page renders at while the panel is closed (a typical laptop viewport). */
@@ -1018,6 +1019,59 @@ export class BrowserManager {
     return { x: (q[0] + q[2] + q[4] + q[6]) / 4, y: (q[1] + q[3] + q[5] + q[7]) / 4 }
   }
 
+  // ------------------------------------------------------------- the SahilBot cursor in the panel
+  // While you watch the panel, browser clicks and typing show the SahilBot cursor gliding to the element
+  // (and the element's box pulsing) before the real event. CSS only (insertCSS): no DOM nodes, so the
+  // page's scripts and the "page changed" check never see it. Typing shows "Typing…", never the text.
+  private cursorCss = new Map<number, { key: string; timer: NodeJS.Timeout }>()
+  private cursorAt = new Map<number, Point>()
+  private cursorSeq = 0
+
+  private panelShown(): boolean {
+    if (process.env.SAHILBOT_HIDDEN) return false
+    const w = this.win()
+    return !!(w && !w.isDestroyed() && w.isVisible() && this.bounds && this.bounds.width > 0 && this.view && w.contentView.children.includes(this.view))
+  }
+
+  /** Glides the in-page cursor to the element; resolves as it arrives (the real event follows). */
+  private async showCursor(wc: WebContents, backendNodeId: number, kind: 'click' | 'type', at?: Point): Promise<void> {
+    if (!this.panelShown()) return
+    try {
+      if (kind === 'type') await this.cdp(wc, 'DOM.scrollIntoViewIfNeeded', { backendNodeId }).catch(() => undefined)
+      const { model } = await this.cdp<{ model: { border: number[] } }>(wc, 'DOM.getBoxModel', { backendNodeId })
+      const q = model.border
+      const xs = [q[0], q[2], q[4], q[6]]
+      const ys = [q[1], q[3], q[5], q[7]]
+      const box = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) }
+      // Typing: the tip rests on the field's lower-left edge so the "Typing…" tag hangs below the text.
+      const to = at ?? { x: box.x + Math.min(14, box.width / 2), y: box.y + Math.max(2, box.height - 3) }
+      const from = this.cursorAt.get(wc.id) ?? { x: (this.bounds?.width ?? PARK.width) - 48, y: (this.bounds?.height ?? PARK.height) - 48 }
+      let reduce = false
+      try { reduce = systemPreferences.getAnimationSettings().prefersReducedMotion } catch { reduce = false }
+      const ms = moveDuration(from, to, reduce)
+      const key = await wc.insertCSS(pageCursorCss({ id: `c${++this.cursorSeq}`, from, to, box, moveMs: ms, kind, reduceMotion: reduce }))
+      // The new step's sheet goes in before the old one comes out, so the cursor never blinks.
+      const old = this.cursorCss.get(wc.id)
+      if (old) { clearTimeout(old.timer); void wc.removeInsertedCSS(old.key).catch(() => undefined) }
+      const timer = setTimeout(() => {
+        if (this.cursorCss.get(wc.id)?.key !== key) return
+        this.cursorCss.delete(wc.id)
+        if (!wc.isDestroyed()) void wc.removeInsertedCSS(key).catch(() => undefined)
+      }, ms + 2200)
+      this.cursorCss.set(wc.id, { key, timer })
+      this.cursorAt.set(wc.id, to)
+      if (ms > 0) await sleep(ms)
+    } catch { /* the cursor is decoration: never fail the action over it */ }
+  }
+
+  private async clearCursor(wc: WebContents): Promise<void> {
+    const c = this.cursorCss.get(wc.id)
+    if (!c) return
+    clearTimeout(c.timer)
+    this.cursorCss.delete(wc.id)
+    await wc.removeInsertedCSS(c.key).catch(() => undefined)
+  }
+
   async click(ref: string): Promise<string> {
     return this.control(async (wc) => {
       const r = this.node(ref)
@@ -1028,6 +1082,7 @@ export class BrowserManager {
       const hit = { result: { value: await this.hitTest(wc, r.backendNodeId, x, y) } }
       if (hit.result.value === 'disabled') throw new Error(`${r.role} "${r.name}" is disabled; nothing was clicked. Fill in what the form needs first.`)
       if (hit.result.value.startsWith('covered:')) throw new Error(`${r.role} "${r.name}" is covered by ${hit.result.value.slice(8)}; nothing was clicked. Close or answer that first.`)
+      await this.showCursor(wc, r.backendNodeId, 'click', { x, y })
       const outcome = await this.observe(wc, async () => {
         await this.cdp(wc, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
         await this.cdp(wc, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
@@ -1095,6 +1150,7 @@ export class BrowserManager {
   async type(ref: string, text: string, submit = false): Promise<string> {
     return this.control(async (wc) => {
       const r = this.node(ref)
+      await this.showCursor(wc, r.backendNodeId, 'type')
       if (submit) {
         const outcome = await this.observe(wc, () => this.setText(wc, r.backendNodeId, text, true))
         return `Typed into ${r.role} "${r.name}" and pressed Enter. ${outcome}`
@@ -1145,6 +1201,8 @@ export class BrowserManager {
 
   async screenshot(): Promise<string> {
     return this.control(async (wc) => {
+      // The SahilBot cursor is for the user watching the panel, never in the model's screenshot.
+      await this.clearCursor(wc)
       if (this.controlCssKey) {
         await wc.removeInsertedCSS(this.controlCssKey).catch(() => undefined)
         this.controlCssKey = null

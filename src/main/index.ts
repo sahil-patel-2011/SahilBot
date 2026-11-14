@@ -43,12 +43,14 @@ import { SkillStore } from './skills'
 import { docxText, pdfText, pptxText } from './docs/read'
 import { RuleStore } from './rules'
 import { cursorTool, macAppsTool } from './agent/tools/apps'
+import { appHelpTool, appTool } from './computer/apps/tool'
 import { shellTool } from './agent/tools/shell'
 import { codeTool, gitTool } from './agent/tools/code'
 import { researchTool } from './agent/tools/research'
 import { agentsTool } from './agent/tools/agents'
 import { handoffTool } from './agent/tools/handoff'
 import { computerTool } from './agent/tools/computer'
+import { createOverlay } from './computer/overlay-window'
 import { consultTool } from './agent/tools/consult'
 import { frcCodeTool } from './agent/tools/frc_code'
 import { frcMechTool } from './agent/tools/frc_mech'
@@ -231,10 +233,21 @@ app.whenReady().then(() => {
    * Screenshot. Default: the main display, scaled so one image pixel = one screen point. With rect
    * (global points, any display): that area (screencapture -R), resized to width×height pixels.
    */
+  // The SahilBot cursor (computer use): click-through windows that show each step; Stop on its pill (or
+  // Ctrl+Option+Esc) stops the run. Made on first use; hidden test runs never make them.
+  const cursorOverlay = createOverlay({
+    hidden: HIDDEN,
+    rendererUrl: process.env.ELECTRON_RENDERER_URL,
+    onStop: () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini(); cursorOverlay.overlay.hide() }
+  })
+  app.on('before-quit', () => cursorOverlay.windows()?.dispose())
   const captureScreen = async (file: string, opts?: { rect?: Electron.Rectangle; width?: number; height?: number }): Promise<{ dataUrl: string; width: number; height: number }> => {
     const r = opts?.rect
     const area = r ? ['-R', `${Math.round(r.x)},${Math.round(r.y)},${Math.max(1, Math.round(r.width))},${Math.max(1, Math.round(r.height))}`] : []
-    await new Promise<void>((ok, fail) => execFile('screencapture', ['-x', '-C', ...area, '-t', 'png', file], { timeout: 15_000 }, (e) => (e ? fail(e) : ok())))
+    const shoot = (): Promise<void> => new Promise<void>((ok, fail) => execFile('screencapture', ['-x', '-C', ...area, '-t', 'png', file], { timeout: 15_000 }, (e) => (e ? fail(e) : ok())))
+    // The SahilBot cursor is never in the model's screenshots (content protection, and invisible while capturing).
+    const ov = cursorOverlay.windows()
+    await (ov ? ov.aroundCapture(shoot) : shoot())
     const d = screen.getPrimaryDisplay()
     const width = opts?.width ?? (r ? Math.round(r.width) : d.size.width)
     const height = opts?.height ?? (r ? Math.round(r.height) : d.size.height)
@@ -248,6 +261,7 @@ app.whenReady().then(() => {
   let mini: { bounds: Electron.Rectangle; threadId: string } | null = null
   const exitMini = (): void => {
     globalShortcut.unregister('Control+Option+Escape')
+    cursorOverlay.overlay.hide()
     if (!mini || !win || win.isDestroyed()) { mini = null; return }
     win.setAlwaysOnTop(false)
     win.setMinimumSize(900, 600)
@@ -263,6 +277,7 @@ app.whenReady().then(() => {
     win.setAlwaysOnTop(true, 'floating')
     win.setBounds({ x: workArea.x + workArea.width - 300 - 14, y: workArea.y + 14, width: 300, height: 176 }, true)
     toWin('mini', { on: true, threadId })
+    cursorOverlay.overlay.warm()
     // A way out that works whatever app is in front.
     globalShortcut.register('Control+Option+Escape', () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini() })
   }
@@ -404,6 +419,9 @@ app.whenReady().then(() => {
     { ...macAppsTool(), core: true },
     // Email through Apple Mail (every account in Mail; drafts by default, sending and bulk changes ask).
     { ...mailTool(), core: true },
+    // Mac apps through their own scripting (Finder, browsers, Office, iWork, Messages, Slack, Music, Xcode, System Settings…).
+    appTool(() => settings.get().workspaceDir),
+    appHelpTool(),
     shellTool(),
     // Coding: search, symbols, exact edits, patches, tests/type checks/lint with parsed failures; git with a secret scan.
     codeTool({ getWorkspace: () => settings.get().workspaceDir }),
@@ -412,6 +430,7 @@ app.whenReady().then(() => {
     agentsTool(),
     computerTool({
       enterMini: (id) => enterMini(id),
+      overlay: cursorOverlay.overlay,
       trusted: (prompt) => systemPreferences.isTrustedAccessibilityClient(prompt),
       capture: (file, opts) => captureScreen(file, opts),
       displays: () => {
@@ -420,7 +439,7 @@ app.whenReady().then(() => {
       },
       // SahilBot's own processes and windows: computer use never clicks or types into them.
       self: () => {
-        const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.isVisible())
+        const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.isVisible() && !cursorOverlay.windows()?.owns(w))
         return {
           pids: [process.pid, ...app.getAppMetrics().map((m) => m.pid)],
           names: [...new Set([app.getName(), 'SahilBot', ...(app.isPackaged ? [] : ['Electron'])])],

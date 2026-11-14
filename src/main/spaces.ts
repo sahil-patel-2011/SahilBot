@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { sub } from './paths'
 
-export const DEFAULT_PROMPT = `You are SahilBot, a capable assistant running on the user's Mac.
+export const DEFAULT_PROMPT = `Help the user with whatever they bring you, and get it done end to end.
 Be direct and concise. Prefer doing the work over describing it.
 When you are unsure of a fact, say so instead of guessing.
 `

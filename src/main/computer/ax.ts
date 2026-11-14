@@ -209,7 +209,7 @@ export interface UiState {
   sheets: number
   /** Children of the focused window (a cheap sign that its contents changed). */
   kids?: number
-  focused?: { role: string; subrole?: string; label: string; value?: string; secure: boolean }
+  focused?: { role: string; subrole?: string; label: string; value?: string; secure: boolean; x?: number; y?: number; w?: number; h?: number }
   /** The element the action targeted, read again. */
   target?: { exists: boolean; value?: string; enabled?: boolean; focused?: boolean; label?: string }
 }
@@ -354,4 +354,20 @@ export function redactClipboard(text: string): { text: string; redacted: boolean
   let out = text
   for (const re of patterns) out = out.replace(re, '[hidden: looks like a secret]')
   return { text: out, redacted: out !== text }
+}
+
+// ---------------------------------------------------------------------------------------------- System Settings
+
+const SETTINGS_APPS = /^(System Settings|System Preferences)$/i
+/** Panes (and controls) where a change weakens the Mac's security or grants an app power over it. */
+const SECURITY_PANE = /\b(privacy|security|passwords?|users?( & | and )groups|login (items|password|options)|lock screen|touch id|filevault|firewall|sharing|remote (login|management)|profiles?|device management|screen time|accessibility|full disk access|screen (recording|& system audio recording)|automation|input monitoring|developer tools|app management|apple (id|account)|icloud|keychain|gatekeeper|allow applications|location services|camera|microphone|contacts|passkeys?)\b/i
+
+/**
+ * A hard stop for acting in System Settings on a security or privacy pane: clicking, typing or setting
+ * values there always asks the user first, whatever the mode. Returns why, or null.
+ */
+export function settingsStop(app: string | undefined, window?: string, label?: string): string | null {
+  if (!app || !SETTINGS_APPS.test(app.trim())) return null
+  const hit = [window, label].find((s) => !!s && SECURITY_PANE.test(s))
+  return hit ? `changing a security or privacy setting in System Settings ("${hit.slice(0, 60)}")` : null
 }
