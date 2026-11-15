@@ -1,11 +1,11 @@
 import type { Session } from './store'
 import type { ActivityService } from './service'
 
-// "Know what I'm working on" (opt-in activity awareness). See service.ts for what is collected and
+// "Know what I'm working on" (activity awareness, on by default and local only). See service.ts for what is collected and
 // when, rules.ts for what is never kept, context.ts for what a run sees.
 
 export { activityContext, runMayUseActivity, setActivitySource } from './context'
-export { ActivityService, cleanActivitySettings, DEFAULT_ACTIVITY } from './service'
+export { ActivityService, activityExplicit, cleanActivitySettings, DEFAULT_ACTIVITY } from './service'
 export type { Session as ActivitySession } from './store'
 
 let service: ActivityService | null = null

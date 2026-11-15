@@ -6,7 +6,8 @@ import { toast } from '../lib/toast'
 import '../styles-activity.css'
 import { ClampText } from './ui'
 
-// Settings → Privacy & Permissions → Know what I'm working on. Off by default. Shows exactly what is
+// Settings → Privacy & Permissions → Know what I'm working on. On by default (local only, nothing that
+// prompts until the user's own permission check; cloud sharing stays off). Shows exactly what is
 // collected, what never is, how long it's kept, and a live preview of what a bot would see right now.
 
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
@@ -88,7 +89,7 @@ export function ActivitySettings() {
 
   return (
     <div className="act" data-testid="activity-settings">
-      <Block title="Know what I'm working on" sub={<>Lets bots understand "this", "the doc I have open" and "what I'm doing". Off by default; it's kept on this Mac and only ever added to <b>your own</b> chats' background context, and only for local models unless you turn on sharing with cloud models below.</>}>
+      <Block title="Know what I'm working on" sub={<>Lets bots understand "this", "the doc I have open" and "what I'm doing". On by default; it's kept on this Mac and only ever added to <b>your own</b> chats' background context, and only for local models unless you turn on sharing with cloud models below. Until you check permissions, only the front app's name is seen.</>}>
         <Line title={<>Know what I'm working on{s.enabled && <span className={`tier-badge${st.collecting ? ' ok' : ''}`}>{paused ? 'Paused' : st.collecting ? 'On' : 'Waiting'}</span>}</>}
           sub={s.enabled ? (paused ? `${st.reason ?? 'Paused.'} Nothing is collected or shared until then.` : `Looks once a minute while you're using your Mac (not when idle, locked or SahilBot is closed).${st.lastSampleAt ? ` Last look ${hm(st.lastSampleAt)}.` : ''}`) : 'SahilBot never looks at other apps while this is off.'}
           testId="activity-enabled-row">
@@ -127,7 +128,7 @@ export function ActivitySettings() {
       </Block>
 
       <Block title="Where it goes and how long it's kept" sub={s.shareWithCloud ? "Never synced. Sent only inside your own chats' background context: to local models, and to cloud models too (you turned that on below)." : "Never synced. Sent only inside your own chats' background context, and only to models running on this Mac. Chats using a cloud model don't get it."}>
-        <Line title="Also share with cloud models" sub="Off by default. When on, chats that use a cloud model (Claude, OpenAI and other online providers) get the same background section, so your window titles and page addresses leave this Mac with the request.">
+        <Line title="Also share with cloud models" sub="Off by default, and stays off unless you turn it on: screen contents can include other people's messages. When on, chats that use a cloud model (Claude, OpenAI and other online providers) get the same background section, so your window titles and page addresses leave this Mac with the request.">
           <Switch on={s.shareWithCloud} disabled={busy || !s.enabled} onChange={(v) => void set({ shareWithCloud: v })} label="Also share with cloud models" testId="activity-cloud" />
         </Line>
         <Line title="Timeline" sub="Recent looks are kept for at most 2 hours, then rolled into a short timeline like “10:05–10:40 Onshape — Intake v3 Part Studio”.">
@@ -135,7 +136,7 @@ export function ActivitySettings() {
             {RETENTION.map((h) => <option key={h} value={h}>{h === 1 ? '1 hour' : `${h} hours`}</option>)}
           </select>
         </Line>
-        <Line title="Let SahilBot learn from my activity" sub="Separate from the above, off by default. When on, SahilBot's learning pass may read the timeline to pick up your projects and habits.">
+        <Line title="Let SahilBot learn from my activity" sub="Separate from the above, on by default. SahilBot's learning pass may read the timeline to pick up your projects and habits (People & Places; only models on this Mac see what it learns from it). Turn it off here or in Vault → People & Places → Privacy.">
           <Switch on={s.learn} disabled={busy || !s.enabled} onChange={(v) => void set({ learn: v })} label="Let SahilBot learn from my activity" testId="activity-learn" />
         </Line>
       </Block>

@@ -10,6 +10,7 @@ import { AUTO_ENTRIES, autoLabel, autoUnavailableReason, pickerModels, toDownloa
 import { AttachmentChips, DropOverlay, WorkFolderChip, useFolderCounts } from './Attachments'
 import { fromTransfer, mergeAttachments, oversize, rejectedText } from '../lib/attachments'
 import { toast } from '../lib/toast'
+import { findSecrets } from '@shared/secret-detect'
 
 const THINKING: Array<{ id: EffortChoice; label: string; sub: string }> = [
   { id: 'auto', label: 'Auto', sub: 'Recommended. Picks for each request: more for coding, research and real tasks, less for quick chats' },
@@ -348,6 +349,13 @@ export const Composer = forwardRef<ComposerHandle, {
           }}
           data-testid="composer-input"
         />
+        {(() => {
+          // A password, key, card or ID number in the message: say it stays out of the model's sight.
+          const found = text.length > 3 && text.length < 20_000 ? findSecrets(text) : []
+          if (!found.length) return null
+          const what = [...new Set(found.map((f) => (f.kind === 'card' ? 'card number' : f.kind === 'api_key' ? 'API key' : f.kind === 'id_number' ? 'ID number' : 'password')))].join(' and ')
+          return <div className="composer-secret-hint" data-testid="composer-secret-hint"><I.Shield size={12} />That looks like a {what}. SahilBot hides it from the model and offers to save it to your Vault.</div>
+        })()}
         <div className="composer-bar">
           <Popover label={<I.Plus size={19} />} className="plus-pop" title="Attach files or a folder">
             {(close) => (

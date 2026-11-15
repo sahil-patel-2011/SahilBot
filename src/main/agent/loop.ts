@@ -30,7 +30,10 @@ import { def as providerDef } from '../llm/providers'
 import { attachmentNotes } from '../attach-process'
 import { localOff } from '@shared/local-mode'
 import { pick, routingPrefs } from '../llm/router'
-import { autoPreference, routeTask } from '../llm/routing-table'
+import { autoPreference } from '../llm/routing-table'
+import { autoRoute, budgetTightFor, planFallback } from '../llm/auto-route'
+import { modelHealth } from '../llm/model-health'
+import { spendingMode } from '../llm/budget'
 import { effortChoice, escalateEffort, resolveEffort } from '../llm/auto-effort'
 import { fallbackNotice, mayReplaceForInvalidCalls } from './choices'
 // Model routing's classifier (category + difficulty); agent/intent.ts classifyTask is the chat-mode one.
@@ -100,7 +103,7 @@ export interface AgentDeps {
   /** Clamp the window to what the model can actually hold on this Mac. */
   fitWindow: (model: string, window: number) => number
   /** Catalog matches for an unconnected app, and a one-click connect returning the new tool names. */
-  connectors?: { suggest(q: string): import('@shared/types').ConnectorPreset[]; connectPreset(id: string): Promise<{ state: string; toolNames?: string[] }>; disabledToolNames?(): Set<string> }
+  connectors?: { suggest(q: string, o?: { fullName?: boolean }): import('@shared/types').ConnectorPreset[]; connectPreset(id: string): Promise<{ state: string; toolNames?: string[] }>; disabledToolNames?(): Set<string>; presetTools?(id: string): string[]; settle?(id: string, ms?: number): Promise<string[]> }
   /** Override for tests. */
   counter?: (baseUrl: string, model: string) => TokenCounter
   /**
@@ -351,6 +354,11 @@ export class Agent {
 
   isRunning(threadId: string): boolean {
     return this.runs.has(threadId)
+  }
+
+  /** Chats working right now (a reopened window or web tab seeds its sidebar's running marks from this). */
+  runningThreads(): string[] {
+    return [...this.runs.keys()]
   }
 
   pending(threadId: string): PendingRequest[] {
@@ -1527,7 +1535,8 @@ export class Agent {
     // Nothing fits comfortably: still use what's installed (the server can run it, just slower).
     let usable = this.d.endpoints.usable()
     // (Local models off: never a local one, even here.)
-    if (!usable.length) usable = (this.d.endpoints.last?.models ?? []).filter((m) => m.installed && !s.hiddenModels.includes(m.id) && (!localOff(s) || process.env.FOREMAN_BASE_URL || !providerDef(m.provider).local))
+    // (Only local models: a cloud model missing from usable() is off, unaffordable or over the spending limit.)
+    if (!usable.length) usable = (this.d.endpoints.last?.models ?? []).filter((m) => m.installed && !s.hiddenModels.includes(m.id) && (!isRemoteModel(m) || !!process.env.FOREMAN_BASE_URL) && (!localOff(s) || process.env.FOREMAN_BASE_URL || !providerDef(m.provider).local))
     const all = this.d.db.listMessages(thread.id)
     const last = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
     const files = [...((last?.meta?.files as Array<{ name: string; path: string }>) ?? []).map((f) => ({ kind: /\.(png|jpe?g|gif|webp|heic)$/i.test(f.path) ? 'image' : 'file', path: f.path, name: f.name })),
@@ -1545,6 +1554,7 @@ export class Agent {
       ...requestTokens({ text: last?.content ?? '', files, history: all.slice(Math.max(0, cut)).filter((m) => m !== last) })
     })
     const r = { tier: task.difficulty, why: task.why }
+    const prevCategory = state.lastCategory
     state.lastCategory = task.category
     // A chosen model that's gone (deleted, or its cloud key removed) falls back to Auto, said once.
     if (!autoVariant(requested) && await this.modelGone(requested, thread)) requested = 'auto'
@@ -1552,27 +1562,26 @@ export class Agent {
     const variant = autoVariant(requested)
     // A chosen model keeps its choice; the difficulty still sets how hard it thinks.
     if (state.voice && s.taskModels.voice && variant) return this.remember(thread.id, s.taskModels.voice, { tier: r.tier, why: r.why, manual: true, category: task.category, task })
-    if (!variant) { state.lastTier = r.tier; return this.remember(thread.id, requested, { tier: r.tier, why: r.why, manual: true, category: task.category, task }) }
+    if (!variant) { state.lastTier = r.tier; state.lastAutoModel = undefined; return this.remember(thread.id, requested, { tier: r.tier, why: r.why, manual: true, category: task.category, task }) }
     // Auto (local) routes among downloaded models only, Auto (cloud) among keyed cloud models only.
     const pool = autoPool(variant, usable)
     if (!pool.length && variant !== 'auto') {
       const keyed = Object.entries(s.keys ?? {}).some(([id, on]) => on && (id === 'anthropic' || id === 'openai' || id === 'openrouter'))
       throw new Error(`${variant === 'auto:local' ? 'Auto (local)' : 'Auto (cloud)'} has no model to use: ${autoUnavailable(variant, usable, { enabled: s.cloud.enabled, keyed })}.`)
     }
-    // Auto prefers (Settings → Models): Best result (default) / Balanced / Cheapest; a nearly spent budget routes as Cheapest.
+    // Auto prefers (Settings → Models): Best result (default) / Balanced / Cheapest; a nearly spent budget routes as
+    // Cheapest; models cooling down after a failure are skipped; a follow-up keeps the chat's model when it is as
+    // good a choice (llm/auto-route.ts autoRoute: the same decision the simulator checks).
     const preference = autoPreference(s)
-    const left = this.d.endpoints.budgetLeft?.()
-    const budgetTight = left !== undefined && s.cloudBudgetUsd > 0 && left < s.cloudBudgetUsd * 0.1
-    // Voice conversations: a small, fast local model so replies start right away (unless the request is hard),
-    // except on Best result with cloud first, where the routing table's fast cloud models answer.
-    const cloudVoice = preference === 'best' && routingPrefs.preferCloud && !budgetTight
-    const fast = state.voice && !cloudVoice && r.tier <= 2 && variant !== 'auto:cloud' ? pick(pool.filter((m) => m.note !== 'remote' && m.tier <= 1), 0) : undefined
-    const routed = fast ? undefined : routeTask(pool, task, { preference, variant, budgetTight })
-    const chosen = fast ?? routed?.model
-    if (!chosen) throw new Error('No models are available. Start Ollama or LM Studio, or add an API key in Settings → Models.')
+    const budgetTight = budgetTightFor(spendingMode(s), s.cloudBudgetUsd, this.d.endpoints.budgetLeft?.(), usable)
+    const routed = autoRoute({
+      requested, usable, task, preference, budgetTight, voice: !!state.voice,
+      previous: state.lastAutoModel ? { model: state.lastAutoModel, category: prevCategory } : undefined
+    })
     state.lastTier = r.tier
+    state.lastAutoModel = routed.model
     const reason = CATEGORY_LABEL[task.category]
-    return this.remember(thread.id, chosen.id, { tier: r.tier, why: routed?.why ?? r.why, label: routed?.label ?? `${chosen.label || chosen.id} · ${reason}`, variant, category: task.category, reason, task })
+    return this.remember(thread.id, routed.model, { tier: r.tier, why: routed.why, label: routed.label, variant, category: task.category, reason, task })
   }
 
   /**
@@ -1589,7 +1598,7 @@ export class Agent {
       const r = await cua.start({
         threadId: thread.id, state, goal: opener?.content ?? '', category: routed?.category ?? '', difficulty: routed?.tier ?? 2, routed: model,
         variant: routed?.manual ? undefined : routed?.variant ?? 'auto', preference: autoPreference(s), fableForHardest: routingPrefs.fableForHardest,
-        budgetTight: left !== undefined && s.cloudBudgetUsd > 0 && left < s.cloudBudgetUsd * 0.1, signal: run.ctrl.signal,
+        budgetTight: budgetTightFor(spendingMode(s), s.cloudBudgetUsd, left, this.d.endpoints.usable()), signal: run.ctrl.signal,
         skip: !opener || !!(run.helper || run.group || run.intro || run.sampling || state.voice)
       })
       if (!r) return undefined
@@ -1690,14 +1699,31 @@ export class Agent {
       const fromName = modelName()
       const now = settings.get()
       const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
-      const next = nextStronger(this.d.endpoints.usable(), model, {
-        cloud: now.cloud.enabled,
-        // Out of cloud budget: only a local model can carry on.
-        localOnly: !!err && /cloud budget/i.test(err.message),
-        exclude: tried,
-        sideways,
-        needsVision: !!lastUser?.images?.length
-      })
+      let next: ModelInfo | undefined
+      let note: string | undefined
+      if (err && routed?.task) {
+        // A failed call: Auto's fallback for this request (llm/auto-route.ts planFallback): out of credit, a refused
+        // key or the ChatGPT plan's limit rule out the provider, a too-long prompt needs a bigger window, a refusal
+        // goes to another provider; then the routing table's next-best candidate, the same provider first mid-run.
+        const usable = this.d.endpoints.usable().filter((m) => now.cloud.enabled || !isRemoteModel(m))
+        const cur = usable.find((m) => m.id === model) ?? this.d.endpoints.last?.models.find((m) => m.id === model) ?? ({ id: model, provider: ep.provider } as ModelInfo)
+        const plan = planFallback({
+          usable, task: routed.task, current: cur, err, tried, preference: autoPreference(now),
+          variant: routed.manual ? 'auto' : routed.variant ?? 'auto', midRun: stepsDone > 0,
+          budgetTight: budgetTightFor(spendingMode(now), now.cloudBudgetUsd, this.d.endpoints.budgetLeft?.(), usable)
+        })
+        next = plan.model
+        note = plan.note
+      } else {
+        next = nextStronger(this.d.endpoints.usable(), model, {
+          cloud: now.cloud.enabled,
+          // Out of cloud budget: only a local model can carry on.
+          localOnly: !!err && /cloud budget/i.test(err.message),
+          exclude: tried,
+          sideways,
+          needsVision: !!lastUser?.images?.length
+        })
+      }
       if (!next) return false
       tried.add(next.id)
       switches++
@@ -1707,11 +1733,15 @@ export class Agent {
       window = windowFor(model, claude)
       cm = makeCm()
       this.lastModel.set(thread.id, model)
+      // The run carries on here: the chat's next request keeps it (Auto's stability rule).
+      if (!routed?.manual) state.lastAutoModel = model
       if (routed) routed = { ...routed, label: [next.label ?? next.id, routed.reason].filter(Boolean).join(' · ') }
       // The chosen model couldn't answer: the chat says which model answered instead, and why (never silent).
-      this.notice(thread.id, err ? fallbackNotice(fromName, next.label ?? next.id, err, { rest: true }) : `Switched to ${next.label ?? next.id} for the rest of this task: ${reason}`)
+      this.notice(thread.id, note ?? (err ? fallbackNotice(fromName, next.label ?? next.id, err, { rest: true }) : `Switched to ${next.label ?? next.id} for the rest of this task: ${reason}`))
       return true
     }
+    /** Model steps that completed in this run (a fallback after the first one keeps the provider when it can). */
+    let stepsDone = 0
     const modelName = (): string => this.d.endpoints.last?.models.find((m) => m.id === model)?.label ?? model
     let invalidStreak = 0
     let sincePlan = 0
@@ -1927,7 +1957,8 @@ export class Agent {
         }
         built.end({ step, used: prepared.used, window, tools: wireTools.length, mode: state.toolMode })
         // Cloud models: what the next request costs at this context size (cached prefix read, new tail written).
-        const stepPrice = isLocal(ep.baseUrl) ? undefined : stepCost(model, prepared.used)
+        // ChatGPT plan models have no per-token charge (the plan's limits apply instead), so no price.
+        const stepPrice = isLocal(ep.baseUrl) || ep.provider === 'chatgpt' ? undefined : stepCost(model, prepared.used)
         this.d.emit({ threadId: thread.id, type: 'progress', step, actions, plan: planPos(), used: prepared.used, window, model, routed, ...(stepPrice ? { cost: stepPrice } : {}) })
 
         // Keep the plan in view on long runs. Reminders are stored (hidden) and sent exactly as stored: one that
@@ -1949,8 +1980,11 @@ export class Agent {
         let assistant: Message
         try {
           assistant = await this.stream(thread.id, model, prepared.wire, wireTools, window, run, speaker, routed, effortNow())
+          stepsDone++
         } catch (e) {
           if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') throw e
+          // Remembered (llm/model-health.ts): out of credit, rate limited, gone… later requests skip it for a while.
+          modelHealth.mark(this.d.endpoints.last?.models.find((m) => m.id === model) ?? { id: model, provider: ep.provider }, e)
           // The failed reply stays visible as an error bubble (it's left out of the history); redo this step.
           if (switchModel(`${modelName()} failed (${(e as Error).message.replace(/\s+/g, ' ').slice(0, 140)})`, true, e as Error)) { step--; continue }
           throw e
@@ -2587,11 +2621,22 @@ export class Agent {
       loadTools: (names) => registry.load(state, names),
       searchTools: (q) => registry.search(q, state),
       readResult: (id) => this.d.results.get(id),
-      offerConnect: async (q) => {
-        const preset = this.d.connectors?.suggest(q)[0]
-        if (!preset || run.unattended) return []
+      offerConnect: async (q, o) => {
+        const preset = this.d.connectors?.suggest(q, o)[0]
+        if (!preset) return []
+        // The app's own tools (whatever its connector is named), so they load in this chat from the next step.
+        const own = (): Array<{ name: string; description: string; loaded: boolean }> => {
+          const listed = new Set(registry.listFor(state).map((t) => t.name))
+          return (this.d.connectors?.presetTools?.(preset.id) ?? []).map((n) => registry.get(n)).filter((t): t is NonNullable<typeof t> => !!t)
+            .map((t) => ({ name: t.name, description: t.description, loaded: listed.has(t.name) }))
+        }
+        // Still connecting on its own (just after launch): no card for an app that's a moment from ready.
+        if ((await this.d.connectors?.settle?.(preset.id))?.length) return own()
+        if (run.unattended) return []
         const answer = await this.ask(thread.id, run, { kind: 'connect', preset, question: `Connect ${preset.name}?` })
-        return answer === 'connected' ? registry.search(preset.name, state).map((h) => h.name) : []
+        if (answer !== 'connected') return []
+        const tools = own()
+        return tools.length ? tools : registry.search(preset.name, state)
       },
       spawnAgents: (tasks) => this.runTeam(thread, run, call.id, tasks),
       askBot: (a) => this.askBot(thread, run, a),

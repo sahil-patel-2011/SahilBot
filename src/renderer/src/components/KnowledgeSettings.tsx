@@ -82,7 +82,7 @@ export function KnowledgeSettings() {
     void api.knowledge.search(q.trim(), { k: 8 }).then((r) => setHits(r.hits)).catch((e) => toast(clean(e)))
   }
   if (!st) return <><h2>Knowledge</h2><div className="hint">Loading…</div></>
-  const state = st.paused ? 'Paused' : st.indexing ? `Indexing${st.queued ? ` · ${st.queued} files to go` : ''}…` : `Up to date · checked ${ago(st.lastScan)}`
+  const state = st.paused ? 'Paused' : st.indexing ? `Indexing${st.queued ? ` · ${st.queued} files to go` : ''}…` : st.lastScan ? `Up to date · checked ${ago(st.lastScan)}` : 'Not checked yet'
   return (
     <div data-testid="knowledge-settings">
       <h2>Knowledge</h2>
@@ -121,8 +121,8 @@ export function KnowledgeSettings() {
           <Line
             key={s.path}
             testId={`knowledge-source-${s.kind}`}
-            title={<>{s.label} <span className="tier-badge">{KIND[s.kind]}</span></>}
-            sub={<>{s.path}<br />{s.problem ? `Not indexed: ${s.problem}` : `${s.files.toLocaleString()} files${s.skipped ? ` · ${s.skipped} skipped` : ''} · updated ${ago(s.lastIndexed)}${s.truncated ? ' · file limit reached (add smaller sub-folders instead)' : ''}`}</>}
+            title={<>{s.label}{KIND[s.kind] !== s.label && <> <span className="tier-badge">{KIND[s.kind]}</span></>}</>}
+            sub={<>{s.path}<br />{s.problem ? `Not indexed: ${s.problem}` : `${s.files.toLocaleString()} files${s.skipped ? ` · ${s.skipped} skipped` : ''} · ${s.lastIndexed ? `updated ${ago(s.lastIndexed)}` : 'not indexed yet'}${s.truncated ? ' · file limit reached (add smaller sub-folders instead)' : ''}`}</>}
           >
             {s.removable && <button className="icon-btn" title="Remove from knowledge" onClick={() => act(api.knowledge.removeFolder(s.path))}><I.Trash size={14} /></button>}
           </Line>

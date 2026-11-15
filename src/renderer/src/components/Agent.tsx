@@ -21,16 +21,26 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const p = req.preset!
+  // Answered once: a connect from here, from Connect apps or from another chat all end the card.
+  const answered = useRef(false)
+  const respond = (answer: string): void => { if (answered.current) return; answered.current = true; void onRespond(req.id, answer) }
   // Gmail, Calendar and Drive need "Set up Google once" first: shown right here in the card.
   const [googleSetup, setGoogleSetup] = useState(false)
   useEffect(() => { if (p.auth === 'google') void api.connectors.googleClient().then((c) => setGoogleSetup(!c)).catch(() => undefined) }, [p.auth])
+  // Connected somewhere else meanwhile (Connect apps, another chat's card): the chat goes on with it.
+  useEffect(() => api.connectors.onChange(() => {
+    void api.connectors.list().then((r) => {
+      const ids = new Set(r.configs.filter((c) => c.preset === p.id).map((c) => c.id))
+      if (r.statuses.some((st) => ids.has(st.id) && st.state === 'connected')) respond('connected')
+    }).catch(() => undefined)
+  }), [p.id])
   const go = async (): Promise<void> => {
     setBusy(true)
     setErr(null)
     try {
       const st = await api.connectors.connectPreset(p.id)
-      if (st.state === 'connected') onRespond(req.id, 'connected')
-      else setErr(st.error ?? 'Sign-in did not finish.')
+      if (st.state === 'connected') respond('connected')
+      else setErr(st.error ?? 'Sign-in did not finish. Press Connect to try again.')
     } catch (e) {
       const m = (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
       if (p.auth === 'google' && /one-time setup/i.test(m)) setGoogleSetup(true)
@@ -48,7 +58,7 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
           Connect {p.name} with your API key to continue?
         </div>
         <div className="hint">{p.description} The key is kept in your Mac's Keychain and only sent to {p.name}.</div>
-        <Lazy fallback="inline"><ApiKeyPanel compact preset={p} onCancel={() => onRespond(req.id, 'skip')} onDone={(st) => { if (st.state === 'connected') onRespond(req.id, 'connected') }} /></Lazy>
+        <Lazy fallback="inline"><ApiKeyPanel compact preset={p} onCancel={() => respond('skip')} onDone={(st) => { if (st.state === 'connected') respond('connected') }} /></Lazy>
       </div>
     )
   }
@@ -59,7 +69,7 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
           <span className="conn-logo" style={{ background: p.color }}>{p.name[0]}</span>
           Set up Google once to connect {p.name}
         </div>
-        <Lazy fallback="inline"><GoogleSetup compact forApp={p.name} onCancel={() => onRespond(req.id, 'skip')} onDone={() => { setGoogleSetup(false); void go() }} /></Lazy>
+        <Lazy fallback="inline"><GoogleSetup compact forApp={p.name} onCancel={() => respond('skip')} onDone={() => { setGoogleSetup(false); void go() }} /></Lazy>
       </div>
     )
   }
@@ -70,10 +80,11 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
         Connect {p.name} to continue?
       </div>
       <div className="hint">{p.description} {p.auth === 'none' ? 'No sign-in needed.' : 'You sign in on their site; your login is stored in your Mac\'s Keychain.'}</div>
-      {err && <div className="hint error">{err}</div>}
+      {busy && p.auth !== 'none' && <div className="hint" data-testid="connect-card-waiting">Finish signing in to {p.name} in your browser; this chat goes on by itself once you're back.</div>}
+      {err && <div className="hint error" data-testid="connect-card-error">{err}</div>}
       <div className="pending-actions">
-        <button className="btn primary" disabled={busy} onClick={() => void go()} data-testid="connect-card-go">{busy ? (p.auth === 'none' ? 'Connecting…' : 'Waiting for sign-in…') : `Connect ${p.name}`}</button>
-        <button className="btn" onClick={() => onRespond(req.id, 'skip')}>Not now</button>
+        <button className="btn primary" disabled={busy} onClick={() => void go()} data-testid="connect-card-go">{busy ? (p.auth === 'none' ? 'Connecting…' : 'Waiting for sign-in…') : err ? 'Try again' : `Connect ${p.name}`}</button>
+        <button className="btn" onClick={() => respond('skip')} data-testid="connect-card-skip">Not now</button>
       </div>
     </div>
   )

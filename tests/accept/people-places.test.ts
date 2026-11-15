@@ -8,7 +8,8 @@ import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 
 // People & Places (src/main/context-engine), end to end and hidden: a chat about a person and a place →
 // the idle learning pass → a new chat asks about them and its <context> block has the right cards →
-// "Forget" in Vault → People & Places removes them (and Undo puts them back).
+// "Forget" in Vault → People & Places removes them (and Undo puts them back). The Privacy panel: every
+// source and sensitive category on by default, each one click to turn off; Pause; locked never-stored rows.
 
 let llm: MockLlm
 beforeAll(async () => { llm = await startMockLlm() })
@@ -71,6 +72,43 @@ describe('People & Places', () => {
     await expect.poll(async () => (await page.evaluate(() => window.foreman.people.list())).some((e) => e.name === 'Priya Patel')).toBe(false)
     expect(existsSync(join(vaultRoot, 'Shared/People/Priya Patel.md'))).toBe(false)
     expect(readdirSync(join(vaultRoot, '.trash')).some((f) => f.includes('Priya Patel'))).toBe(true)
+    // Privacy: every source and sensitive category on by default, one click to turn each off; a master
+    // Pause; what's never stored is locked; activity stays off cloud models.
+    const st0 = await page.evaluate(() => window.foreman.people.status())
+    expect(st0.settings.sources).toEqual({ chats: true, files: true, connectorsInChats: true, activity: true })
+    expect(Object.values(st0.settings.sensitive).every(Boolean)).toBe(true)
+    expect(st0.connectors.find((c) => c.id === 'gmail')?.on).toBe(true)
+    const act = await page.evaluate(() => window.foreman.activity.status())
+    expect(act.settings).toMatchObject({ enabled: true, learn: true, shareWithCloud: false })
+    expect(act.collecting).toBe(false)
+    await page.click('[data-testid="people-tab-privacy"]')
+    await page.locator('[data-testid="people-privacy"]').waitFor()
+    for (const id of ['chats', 'files', 'connectors', 'gmail', 'gcal', 'activity']) {
+      await expect.poll(() => page.locator(`[data-testid="privacy-source-${id}"]`).getAttribute('data-on')).toBe('true')
+    }
+    for (const id of ['health', 'finance', 'credentials', 'govId', 'sexualOrientation', 'religion', 'politics', 'children']) {
+      expect(await page.locator(`[data-testid="privacy-sensitive-${id}"]`).getAttribute('data-on')).toBe('true')
+    }
+    const never = await page.locator('[data-testid="privacy-never-stored"]').innerText()
+    expect(never).toMatch(/Passwords, codes and keys/)
+    expect(never).toMatch(/Card, bank account and ID numbers/)
+    expect(await page.locator('[data-testid="privacy-never-stored"] [role="switch"]').count()).toBe(0)
+    expect(await page.locator('[data-testid="privacy-activity-cloud"]').innerText()).toContain('activity only goes to models on this Mac')
+    await page.click('[data-testid="people-src-files"]')
+    await expect.poll(async () => (await page.evaluate(() => window.foreman.people.status())).settings.sources.files).toBe(false)
+    await expect.poll(() => page.locator('[data-testid="privacy-source-files"]').getAttribute('data-on')).toBe('false')
+    await page.click('[data-testid="people-sens-health"]')
+    await expect.poll(async () => (await page.evaluate(() => window.foreman.people.status())).settings.sensitive.health).toBe(false)
+    await page.click('[data-testid="privacy-pause"]')
+    await expect.poll(async () => (await page.evaluate(() => window.foreman.people.status())).settings.paused).toBe(true)
+    await expect.poll(() => page.locator('[data-testid="privacy-pause"]').innerText()).toContain('Resume learning')
+    await page.click('[data-testid="privacy-pause"]')
+    await expect.poll(async () => (await page.evaluate(() => window.foreman.people.status())).settings.paused).toBe(false)
+    await page.click('[data-testid="people-src-files"]')
+    await page.click('[data-testid="people-sens-health"]')
+    await expect.poll(async () => { const s = (await page.evaluate(() => window.foreman.people.status())).settings; return s.sources.files && s.sensitive.health }).toBe(true)
+    await page.click('[data-testid="people-tab-cards"]')
+
     await page.click('[data-testid="vault-tab-note"]')
     await page.click('[data-testid="vault-close"]')
 

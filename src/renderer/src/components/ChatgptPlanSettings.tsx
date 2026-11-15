@@ -17,7 +17,8 @@ const when = (ms?: number): string => {
   return sameDay ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })
 }
 
-export function ChatgptPlanSettings({ onRefresh }: { onRefresh?: () => void }) {
+/** embedded: inside first-run setup, whose own row already names and explains the plan (no repeated heading). */
+export function ChatgptPlanSettings({ onRefresh, embedded }: { onRefresh?: () => void; embedded?: boolean }) {
   const [st, setSt] = useState<ChatgptPlanStatus | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const load = useCallback((refresh = false) => api.chatgptPlan.status(refresh).then(setSt).catch(() => undefined), [])
@@ -44,10 +45,14 @@ export function ChatgptPlanSettings({ onRefresh }: { onRefresh?: () => void }) {
 
   return (
     <section className="set-section" data-testid="chatgpt-plan">
-      <div className="set-label">ChatGPT plan (via Codex)</div>
-      <div className="set-sub">
-        Use your ChatGPT subscription through OpenAI's Codex app on this Mac, with no API charges. You sign in in Codex; SahilBot never sees your password or tokens.
-      </div>
+      {!embedded && (
+        <>
+          <div className="set-label">ChatGPT plan (via Codex)</div>
+          <div className="set-sub">
+            Use your ChatGPT subscription through OpenAI's Codex app on this Mac, with no API charges. You sign in in Codex; SahilBot never sees your password or tokens.
+          </div>
+        </>
+      )}
       <div className="set-card">
         <div className="set-row">
           <div className="set-row-text">

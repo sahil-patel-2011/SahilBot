@@ -17,6 +17,8 @@ import { Popover } from './components/Popover'
 import { toast, Toasts } from './lib/toast'
 import { VaultAuthDialog } from './components/VaultAuthDialog'
 import { Speaker } from './lib/audio'
+import { useAttention } from './lib/attention'
+import { dividerKind, newestAt, newestReplyAt } from '@shared/read-state'
 // Split chunks (src/renderer/src/lazy.tsx): loaded on idle after the first paint, opened from there.
 import { BotDetails, BotEditor, ConnectApps, Lazy, Onboarding, preloadSurfaces, Scheduled, SettingsModal, VoiceMode } from './lazy'
 
@@ -44,6 +46,8 @@ export function App() {
   const [spaceId, setSpaceId] = useState<string | null>(null)
   const [thread, setThread] = useState<Thread | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  /** The open chat once its messages are fetched, with your read mark from when you opened it (the NEW divider). */
+  const [opened, setOpened] = useState<{ id: string; readAt: number } | null>(null)
   const [running, setRunning] = useState<Set<string>>(new Set())
   const [pending, setPending] = useState<PendingRequest[]>([])
   const [progress, setProgress] = useState<Record<string, Extract<ChatEvent, { type: 'progress' }>>>({})
@@ -98,6 +102,18 @@ export function App() {
   }, [])
   const [toolProgress, setToolProgress] = useState<Record<string, string | null>>({})
   const [runSince, setRunSince] = useState<Record<string, number>>({})
+  // Bots with an open question or approval waiting in Needs you (the bot kept working): their sidebar row shows
+  // the accent "needs you" dot like a card open in a running chat does.
+  const [queuedBots, setQueuedBots] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    let alive = true
+    const load = (): void => {
+      void api.needsYou.list().then((items) => { if (alive) setQueuedBots(new Set(items.filter((i) => i.status === 'open' && i.source === 'queue').map((i) => i.botId))) }).catch(() => undefined)
+    }
+    load()
+    const off = api.needsYou.onChange(load)
+    return () => { alive = false; off() }
+  }, [])
   // Messages typed while SahilBot is working wait here and go out when the run ends.
   const [queue, setQueue] = useState<Record<string, Outgoing[]>>({})
   const [renamingTitle, setRenamingTitle] = useState(false)
@@ -173,8 +189,11 @@ export function App() {
   // Load a thread's messages; merge with live events that may arrive before the fetch returns.
   useEffect(() => {
     setPending([])
+    setOpened(null)
     if (!thread) return setMessages([])
     const id = thread.id
+    // Where you'd read to when you opened it: the NEW divider goes after this (bots and agent chats).
+    const readAt = thread.lastReadAt ?? thread.createdAt
     let alive = true
     setMessages((cur) => cur.filter((m) => m.threadId === id))
     void api.chat.pending(id).then((ps) => { if (alive) setPending(ps) })
@@ -183,8 +202,8 @@ export function App() {
       const live = cur.filter((m) => m.threadId === id && !ids.has(m.id))
       const merged = fetched.map((m) => cur.find((c) => c.id === m.id && c.content.length > m.content.length) ?? m)
       return [...merged, ...live].sort((a, b) => a.createdAt - b.createdAt)
-    }) })
-    if (thread.unread) void api.threads.update(id, { unread: false }).then(() => refreshSpaces())
+    }); if (alive) setOpened({ id, readAt }) })
+    // Opening a chat no longer reads it by itself: see the read-state effect below (visible, focused, at the bottom).
     return () => { alive = false }
   }, [thread?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -265,10 +284,8 @@ export function App() {
       return
     }
     if (e.type === 'thread') {
-      if (e.thread.id === threadRef.current) {
-        setThread({ ...e.thread, unread: false })
-        if (e.thread.unread) void api.threads.update(e.thread.id, { unread: false })
-      }
+      // Read state included: the read-state effect clears it again if you're watching the bottom of this chat.
+      if (e.thread.id === threadRef.current) setThread(e.thread)
       void refreshSpaces()
       return
     }
@@ -315,6 +332,14 @@ export function App() {
   }), [])
 
   useEffect(() => api.onMini(setMini), [])
+  // A reopened window (or a web tab that joins mid-run) picks up chats that are already working.
+  useEffect(() => {
+    void api.chat.running?.().then((list) => {
+      if (!list.length) return
+      setRunning((r) => new Set([...r, ...list.map((x) => x.threadId)]))
+      setRunSpaces((m) => ({ ...Object.fromEntries(list.map((x) => [x.threadId, x.spaceId])), ...m }))
+    }).catch(() => undefined)
+  }, [])
   // "Open in SahilBot" from Quick Ask.
   useEffect(() => api.onOpenThread((id) => { void refreshSpaces().then(() => openAnyChatRef.current(id)) }), [refreshSpaces])
 
@@ -488,6 +513,35 @@ export function App() {
   // How many helper agents this Mac can run with the model in use.
   const capModel = thread?.model ?? draft.model ?? settings?.defaultModel ?? 'auto'
   useEffect(() => { void api.models.teamCapacity(capModel).then(setTeamCap) }, [capModel, models])
+
+  // Read state (shared/read-state.ts). The open chat is read while you can see it (window or tab visible and
+  // focused) and you're at or near the bottom; a reply that lands while you watch is read too. The mark is
+  // "up to the newest message on screen", kept in the database so the Mac app and the web UI agree.
+  const attention = useAttention()
+  const atBottomRef = useRef(true)
+  const [atBottom, setAtBottom] = useState(true)
+  const onAtBottom = useCallback((b: boolean) => { atBottomRef.current = b; setAtBottom(b) }, [])
+  useEffect(() => { atBottomRef.current = true; setAtBottom(true) }, [thread?.id])
+  const readTo = useRef<Record<string, number>>({})
+  const marking = useRef(new Set<string>())
+  const [markTick, setMarkTick] = useState(0)
+  const ready = !!thread && opened?.id === thread.id
+  const latestReply = newestReplyAt(messages)
+  const latestReplyRef = useRef(0)
+  latestReplyRef.current = latestReply
+  useEffect(() => {
+    if (!thread || !ready || !attention || !atBottomRef.current) return
+    const id = thread.id
+    const readAt = Math.max(readTo.current[id] ?? 0, thread.lastReadAt ?? 0)
+    if ((!thread.unread && latestReply <= readAt) || marking.current.has(id)) return
+    marking.current.add(id)
+    void api.threads.markRead(id, Math.max(newestAt(messages), latestReply)).then((t) => {
+      readTo.current[id] = Math.max(readTo.current[id] ?? 0, t.lastReadAt ?? 0)
+      setThread((cur) => (cur?.id === id ? { ...cur, unread: t.unread, lastReadAt: t.lastReadAt, unreadCount: t.unreadCount } : cur))
+      // A reply that came in while this was on its way: once more.
+      if (latestReplyRef.current > (t.lastReadAt ?? 0)) setMarkTick((x) => x + 1)
+    }).catch(() => undefined).finally(() => marking.current.delete(id))
+  }, [thread?.id, thread?.unread, thread?.lastReadAt, ready, attention, atBottom, latestReply, markTick]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // All hooks above this line: the early return below must not change the hook count.
   // Docs: a chat's documents are its own, so switching chats shows the new chat's latest (or the one asked for).
@@ -663,7 +717,7 @@ export function App() {
   const chatStyle = { '--bot': botColor ?? 'var(--accent)', '--bot-text': readableOn(botColor ?? '#ff6a1a') } as React.CSSProperties
   const detailsSpace = chatBot ?? main
   const needThreads = new Set(Object.keys(needs))
-  const needSpaces = new Set(Object.keys(needs).map((t) => runSpaces[t] ?? (t === thread?.id ? thread.spaceId : chats.find((c) => c.id === t)?.spaceId ?? needSpaceOf[t] ?? '')).filter(Boolean))
+  const needSpaces = new Set([...Object.keys(needs).map((t) => runSpaces[t] ?? (t === thread?.id ? thread.spaceId : chats.find((c) => c.id === t)?.spaceId ?? needSpaceOf[t] ?? '')).filter(Boolean), ...queuedBots])
 
   return (
     <div className="app">
@@ -789,7 +843,9 @@ export function App() {
           <ProjectsView spaces={spaces} onOpen={(id) => void openBot(id)} onNew={() => setEditor({ space: null, mode: 'project' })} />
         ) : thread ? (
           <>
-            <ThreadView messages={messages} running={isRunning} pending={pending} teams={teams}
+            <ThreadView key={thread.id} messages={messages} running={isRunning} pending={pending} teams={teams}
+              ready={ready} onAtBottom={onAtBottom}
+              unreadAfter={opened?.id === thread.id && dividerKind({ space: spaces.find((s) => s.id === thread.spaceId), thread, messages }) ? opened.readAt : null}
               drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id] ?? null}
               actions={{
                 onRetry: () => void api.chat.retry(thread.id).catch((e: Error) => toast(e.message, 'error')),

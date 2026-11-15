@@ -6,11 +6,11 @@ import type { Message } from '../../src/shared/types'
 import { Db } from '../../src/main/db'
 import { MemoryStore } from '../../src/main/memory'
 import { VaultService } from '../../src/main/vault/service'
-import { ContextEngine } from '../../src/main/context-engine/service'
+import { ContextEngine, cleanEngineSettings, engineExplicit } from '../../src/main/context-engine/service'
 import { CARDS_HEADER, WORLD_TITLE, worldBudget, estTokens } from '../../src/main/context-engine/assemble'
 import { nameMatch, normName } from '../../src/main/context-engine/resolve'
 import { categoriesOf, screen } from '../../src/main/context-engine/sensitive'
-import { DEFAULT_CONTEXT_ENGINE } from '../../src/shared/context-engine'
+import { DEFAULT_CONTEXT_ENGINE, ENGINE_SETTINGS_VERSION, SENSITIVE_CATEGORIES } from '../../src/shared/context-engine'
 import {
   ENTITY_SYSTEM, extractConnectorOutput, extractEmailHeaders, extractFromUserText, extractQuoted, parseCalendarJson, calendarFacts, parseDate, parseEntityReply, vetModelFacts, daysUntil
 } from '../../src/main/learning/extract-entities'
@@ -20,7 +20,9 @@ import { memoryTool } from '../../src/main/agent/tools/memory'
 
 const DAY = 86_400_000
 const NOW = Date.UTC(2026, 10, 15, 15)
-const OFF = DEFAULT_CONTEXT_ENGINE.sensitive
+/** Every sensitive category off / on (on is the default). */
+const OFF = Object.fromEntries(SENSITIVE_CATEGORIES.map((c) => [c.id, false])) as typeof DEFAULT_CONTEXT_ENGINE.sensitive
+const ALL_ON = Object.fromEntries(SENSITIVE_CATEGORIES.map((c) => [c.id, true])) as typeof DEFAULT_CONTEXT_ENGINE.sensitive
 
 function setup(o: { vault?: boolean } = {}) {
   const db = new Db(':memory:')
@@ -192,8 +194,10 @@ describe('extraction', () => {
 })
 
 describe('sensitive categories', () => {
-  test('excluded by default; each category opts in alone; secrets and ID numbers never', () => {
+  test('on by default; each category can be turned off alone', () => {
+    expect(DEFAULT_CONTEXT_ENGINE.sensitive).toEqual(ALL_ON)
     expect(categoriesOf('Priya was diagnosed with diabetes')).toContain('health')
+    expect(screen('Priya allergy peanuts', DEFAULT_CONTEXT_ENGINE.sensitive).ok).toBe(true)
     expect(screen('Priya allergy peanuts', OFF).ok).toBe(false)
     expect(screen('Sam goes to church every Sunday', OFF).why).toBe('religion')
     expect(screen('Sam votes for the Republicans', OFF).why).toBe('politics')
@@ -201,27 +205,116 @@ describe('sensitive categories', () => {
     expect(screen('Sam is gay', OFF).why).toBe('sexualOrientation')
     expect(screen('Priya likes peonies', OFF).ok).toBe(true)
     expect(screen('Priya allergy peanuts', { ...OFF, health: true }).ok).toBe(true)
-    expect(screen('Sam SSN 123-45-6789', { ...OFF, govId: true }).ok).toBe(false)
-    expect(screen('MRN: 00123456 Priya', { ...OFF, health: true }).ok).toBe(false)
-    // Children: name, relation and birthday only.
+    expect(screen('Priya allergy peanuts', { ...ALL_ON, health: false }).why).toBe('health')
+    expect(screen('Sam goes to church every Sunday', { ...ALL_ON, health: false }).ok).toBe(true)
+    // Children: name, relation and birthday only when that category is off.
     expect(screen('Leo school Lincoln Elementary', OFF, { child: true, key: 'school' }).why).toBe('children')
+    expect(screen('Leo school Lincoln Elementary', ALL_ON, { child: true, key: 'school' }).ok).toBe(true)
     expect(screen('Leo birthday May 2', OFF, { child: true, key: 'birthday' }).ok).toBe(true)
   })
 
-  test('the pipeline drops excluded facts before storing', async () => {
+  test('never stored, even with every category on: passwords, card numbers, SSNs, record numbers', () => {
+    for (const optins of [ALL_ON, OFF]) {
+      expect(screen('Sam password is hunter22!', optins).ok).toBe(false)
+      expect(screen('Sam password: Tr0ub4dor&3', optins).why).toBe('secret')
+      expect(screen('Sam card 4242 4242 4242 4242', optins).ok).toBe(false)
+      expect(screen('Sam card number 4242424242424242 exp 12/28', optins).ok).toBe(false)
+      expect(screen('Sam SSN 123-45-6789', optins).ok).toBe(false)
+      expect(screen('Sam social security number is 123-45-6789', optins).ok).toBe(false)
+      expect(screen('MRN: 00123456 Priya', optins).ok).toBe(false)
+      expect(screen('Priya medical record number MRN 7781234 at Emory', optins).ok).toBe(false)
+    }
+    // The vault's saved values too.
+    expect(screen('Sam uses the code blue-falcon-91', ALL_ON, { secretValues: ['blue-falcon-91'] }).why).toBe('secret')
+  })
+
+  test('the pipeline: sensitive facts are kept by default, dropped once their category is off; ID numbers never', async () => {
     const h = setup({ vault: false })
     const t = h.thread()
-    h.msg(t, 'user', 'My brother Raj Patel was diagnosed with diabetes. Raj loves cricket. My son Leo Patel loves dinosaurs and his birthday is May 2. My SSN is 123-45-6789.')
+    h.msg(t, 'user', 'My brother Raj Patel is allergic to peanuts. Raj loves cricket. My SSN is 123-45-6789. My card is 4242 4242 4242 4242.')
     h.msg(t, 'assistant', 'Got it.')
     h.advance(3 * 60_000)
     await h.engine.learn(h.hooks())
     const all = JSON.stringify(h.engine.store.exportAll())
-    expect(all).not.toMatch(/diabetes|123-45-6789/)
     expect(all).toMatch(/cricket/)
-    const leo = h.engine.list().find((e) => e.name === 'Leo Patel')!
-    const leoFacts = h.engine.card(leo.id)!.attributes.map((a) => `${a.key}:${a.value}`)
+    expect(all).toMatch(/peanuts/)
+    expect(all).not.toMatch(/123-45-6789|4242 4242|4242424242424242/)
+
+    const h2 = setup({ vault: false })
+    h2.engine.setSettings({ sensitive: { health: false, children: false } })
+    const t2 = h2.thread()
+    h2.msg(t2, 'user', 'My brother Raj Patel was diagnosed with diabetes. Raj is allergic to peanuts. Raj loves cricket. My son Leo Patel loves dinosaurs and his birthday is May 2. My SSN is 123-45-6789.')
+    h2.msg(t2, 'assistant', 'Got it.')
+    h2.advance(3 * 60_000)
+    await h2.engine.learn(h2.hooks())
+    const all2 = JSON.stringify(h2.engine.store.exportAll())
+    expect(all2).not.toMatch(/diabetes|peanuts|123-45-6789/)
+    expect(all2).toMatch(/cricket/)
+    const leo = h2.engine.list().find((e) => e.name === 'Leo Patel')!
+    const leoFacts = h2.engine.card(leo.id)!.attributes.map((a) => `${a.key}:${a.value}`)
     expect(leoFacts).toEqual(expect.arrayContaining(['relationship:your son']))
     expect(leoFacts.some((f) => /dinosaur/.test(f))).toBe(false)
+  })
+})
+
+describe('settings: on by default, migration, explicit choices', () => {
+  const KEY = 'contextEngine:settings'
+
+  test('nothing saved (or junk): every source, connector and sensitive category on', () => {
+    for (const v of [undefined, null, 'nope', 42, [], { sources: 'x', sensitive: [1], connectors: null }, { enabled: 'yes', sensitive: { health: 'no' } }]) {
+      const s = cleanEngineSettings(v)
+      expect(s).toMatchObject({ enabled: true, paused: false, sources: { chats: true, files: true, connectorsInChats: true, activity: true } })
+      expect(s.sensitive).toEqual(ALL_ON)
+      expect(s.connectors).toEqual({})
+    }
+    const h = setup({ vault: false })
+    expect(h.engine.settings()).toEqual(DEFAULT_CONTEXT_ENGINE)
+    expect(h.engine.explicitChoices()).toEqual([])
+  })
+
+  test('old settings: a value equal to the old default takes the new one; a value that differs was the user\'s choice', () => {
+    const old = {
+      enabled: true, paused: false,
+      sources: { chats: false, files: true, connectorsInChats: true, activity: true },
+      connectors: { gmail: false, gcal: true },
+      sensitive: { health: false, finance: true, credentials: false, govId: false, sexualOrientation: false, religion: false, politics: false, children: false }
+    }
+    const s = cleanEngineSettings(old)
+    // Sensitive false was the old default: now on. finance was turned on: stays on.
+    expect(s.sensitive).toEqual(ALL_ON)
+    // A source the user turned off stays off; the rest are on.
+    expect(s.sources).toEqual({ chats: false, files: true, connectorsInChats: true, activity: true })
+    // Gmail turned off stays off; Calendar turned on stays on; a connector never touched is on.
+    expect(s.connectors).toEqual({ gmail: false, gcal: true })
+    expect([...engineExplicit(old)].sort()).toEqual(['connectors.gcal', 'connectors.gmail', 'sensitive.finance', 'sources.chats'])
+    expect(cleanEngineSettings({ enabled: false, paused: true })).toMatchObject({ enabled: false, paused: true })
+  })
+
+  test('the engine migrates a stored old settings object, and a set records the touched keys as explicit', async () => {
+    const h = setup({ vault: false })
+    h.db.setSetting(KEY, { enabled: true, paused: false, sources: { chats: true, files: false, connectorsInChats: true, activity: true }, connectors: { gmail: false }, sensitive: { health: false, finance: false } })
+    expect(h.engine.settings().sensitive.health).toBe(true)
+    expect(h.engine.settings().sources.files).toBe(false)
+    expect(h.engine.status().connectors.find((c) => c.id === 'gmail')?.on).toBe(false)
+    expect(h.engine.status().connectors.find((c) => c.id === 'gcal')?.on).toBe(true)
+    h.engine.setSettings({ sensitive: { religion: false }, sources: { chats: false } })
+    const stored = h.db.getSetting<{ version: number; explicit: string[] }>(KEY)!
+    expect(stored.version).toBe(ENGINE_SETTINGS_VERSION)
+    expect(stored.explicit).toEqual(['connectors.gmail', 'sensitive.religion', 'sources.chats', 'sources.files'])
+    expect(h.engine.explicitChoices()).toEqual(stored.explicit)
+    expect(h.engine.settings()).toMatchObject({ sources: { chats: false, files: false, connectorsInChats: true }, sensitive: { health: true, religion: false }, connectors: { gmail: false } })
+    // Turning one back on is a choice too (it stays on whatever a later default says).
+    h.engine.setSettings({ sources: { files: true }, paused: true })
+    expect(h.engine.explicitChoices()).toEqual(['connectors.gmail', 'paused', 'sensitive.religion', 'sources.chats', 'sources.files'])
+    expect(h.engine.settings()).toMatchObject({ paused: true, sources: { files: true } })
+    // Version 2: what isn't explicit is the current default, whatever was written alongside it.
+    expect(cleanEngineSettings({ version: 2, explicit: ['sources.chats'], sources: { chats: false, files: false }, sensitive: { health: false } })).toMatchObject({ sources: { chats: false, files: true }, sensitive: { health: true } })
+    expect(cleanEngineSettings({ version: 2, explicit: ['sources.chats', 'bogus', 7, 'connectors.bad id!'], sources: { chats: 'no' } }).sources.chats).toBe(true)
+    // Junk in a patch is ignored, not recorded.
+    h.engine.setSettings({ sensitive: { health: 'yes' }, connectors: { 'bad id!': true, gcal: 1 }, enabled: 'no' } as never)
+    expect(h.engine.explicitChoices()).not.toEqual(expect.arrayContaining(['sensitive.health']))
+    expect(h.engine.settings()).toMatchObject({ enabled: true, connectors: { gmail: false } })
+    expect(Object.keys(h.engine.settings().connectors)).toEqual(['gmail'])
   })
 })
 
@@ -284,7 +377,7 @@ describe('the learning job', () => {
     expect(card.attributes.find((a) => a.key === 'likes')?.value).toMatch(/Wes Anderson/)
   })
 
-  test('paused or off: nothing is learned; connectors are read only when opted in', async () => {
+  test('paused or off: nothing is learned; connected apps are read unless turned off', async () => {
     const h = setup({ vault: false })
     priyaChat(h)
     h.engine.setSettings({ paused: true })
@@ -299,13 +392,24 @@ describe('the learning job', () => {
       db: h2.db, memory: h2.memory, now: h2.now,
       connectors: { connected: (id) => id === 'gmail', call: async (_id, tool) => { calls.push(tool); return JSON.stringify({ threads: [{ id: 't1', messages: [{ from: 'Ana Silva <ana@x.pt>', subject: 'Porto trip', date: '2026-11-14T10:00:00Z' }] }] }) } }
     })
-    await engine.learn(h2.hooks())
-    expect(calls).toEqual([])
-    engine.setSettings({ connectors: { gmail: true } })
+    // On by default once connected (no opt-in needed).
+    expect(engine.status().connectors.find((c) => c.id === 'gmail')).toMatchObject({ on: true, connected: true })
+    expect(engine.status().connectors.find((c) => c.id === 'gcal')).toMatchObject({ on: true, connected: false })
     await engine.learn(h2.hooks())
     expect(calls).toEqual(['search_threads'])
     expect(engine.list().find((e) => e.name === 'Ana Silva')).toBeTruthy()
-    expect(engine.status().connectors.find((c) => c.id === 'gmail')).toMatchObject({ on: true, connected: true })
+    // Turned off: never read again.
+    const h3 = setup({ vault: false })
+    const calls3: string[] = []
+    const off = new ContextEngine({
+      db: h3.db, memory: h3.memory, now: h3.now,
+      connectors: { connected: (id) => id === 'gmail', call: async (_id, tool) => { calls3.push(tool); return '{}' } }
+    })
+    off.setSettings({ connectors: { gmail: false } })
+    expect(off.wants()).toBe(false)
+    await off.learn(h3.hooks())
+    expect(calls3).toEqual([])
+    expect(off.status().connectors.find((c) => c.id === 'gmail')).toMatchObject({ on: false, connected: true })
   })
 
   test('activity: only with activity learning allowed, never shown to cloud models', async () => {
@@ -462,7 +566,11 @@ describe('tools', () => {
     await run({ action: 'remember', name: 'Priya Patel', key: 'likes', value: 'jazz' }, { tainted: true })
     const jazz = h.engine.card(card.id)!.attributes.find((a) => a.value === 'jazz')!
     expect(jazz).toMatchObject({ trust: 'quoted', scope: h.main.id })
-    await expect(run({ action: 'remember', name: 'Priya Patel', key: 'note', value: 'diagnosed with asthma' })).rejects.toThrow(/health/)
+    // Health is kept by default; with the category off it's refused.
+    expect((await run({ action: 'remember', name: 'Priya Patel', key: 'note', value: 'diagnosed with asthma' })).text).toMatch(/Saved for Priya Patel/)
+    await expect(run({ action: 'remember', name: 'Priya Patel', key: 'note', value: 'her password is hunter22!' })).rejects.toThrow()
+    h.engine.setSettings({ sensitive: { health: false } })
+    await expect(run({ action: 'remember', name: 'Priya Patel', key: 'note', value: 'diagnosed with migraines' })).rejects.toThrow(/health/)
     await expect(run({ action: 'forget', name: 'Priya Patel' }, { tainted: true })).rejects.toThrow(/outside content/)
     expect((await run({ action: 'forget', name: 'Priya Patel' })).text).toMatch(/Forgot everything about Priya Patel/)
     expect(h.engine.list().some((e) => e.name === 'Priya Patel')).toBe(false)

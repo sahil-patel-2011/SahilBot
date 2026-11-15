@@ -43,10 +43,10 @@ export interface ToolContext {
   /** Load tools by name into the thread's tool set (find_tools). */
   loadTools(names: string[]): string[]
   /** Search across tools not currently loaded. */
-  searchTools(query: string): Array<{ name: string; description: string; loaded: boolean }>
+  searchTools(query: string): Array<{ name: string; description: string; loaded: boolean; connector?: boolean }>
   readResult(id: string): string | undefined
-  /** Offers a one-click connect card for an app that isn't connected; resolves true once connected. */
-  offerConnect?(query: string): Promise<string[]>
+  /** Offers a one-click connect card for an app that isn't connected; resolves to the app's tools once connected (empty if not). `fullName`: only an app the query names in full. */
+  offerConnect?(query: string, o?: { fullName?: boolean }): Promise<Array<{ name: string; description: string; loaded: boolean }>>
   /** The model this run uses. */
   model?: string
   /** Group chats: the bot speaking right now (its own memories, rules and work log are its, not shared). */
@@ -151,6 +151,8 @@ export interface ThreadState {
   lastTier?: 0 | 1 | 2 | 3
   /** Auto mode: the kind of task the last request was (task-classifier.ts; follow-ups keep it). */
   lastCategory?: import('../llm/task-classifier').TaskCategory
+  /** Auto mode: the model Auto used for the last request (a follow-up keeps it when it is as good: routing-table keepPrevious). */
+  lastAutoModel?: string
   /** Helper agents: how deep this one is (1 = started by the chat's agent) and the chat it all started in. */
   depth?: number
   rootId?: string

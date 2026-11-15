@@ -1,7 +1,10 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { BrowserWindow, WebContentsView, session as electronSession, systemPreferences, type Rectangle, type Session, type WebContents } from 'electron'
-import type { BrowserState, TeachStep } from '@shared/types'
+import { randomUUID } from 'node:crypto'
+import type { BrowserState, TeachStep, VaultSaveOffer } from '@shared/types'
+import { parseSaveReport, watchForSaves } from './save-watch'
+import type { BrowserCapture } from '../secure/offers'
 import { readable } from '../agent/tools/web'
 import { TeachRecorder } from './teach'
 import { FIELD_FACTS, FillGuardError, IS_FOCUSED, fieldProblem, type FieldFacts, type FieldKind } from '../secure/guards'
@@ -186,6 +189,11 @@ export class BrowserManager {
   private groups = new Map<string, { label: string; lines: string[]; backendNodeId?: number }>()
   /** Called with a finished Teach recording's steps before it becomes a chat message (site playbooks learn from it). */
   onTeach?: (r: { steps: TeachStep[]; name?: string }) => void
+  /** "Save login to Vault?" (secure/offers.ts, set by main): takes what the user submitted by hand. */
+  saveOffers?: { fromBrowser(c: BrowserCapture): VaultSaveOffer | null; browserOffer(): VaultSaveOffer | null }
+  /** Proves a save report came from this app's own listener (it lives in an isolated world). */
+  private readonly saveToken = randomUUID()
+  private lastSave = { payload: '', at: 0 }
 
   constructor(private win: () => BrowserWindow | null, private emit: (s: BrowserState) => void, private requestOpen?: () => void) {
     this.ses = electronSession.fromPartition('persist:foreman-browser')
@@ -332,6 +340,8 @@ export class BrowserManager {
     } catch {
       /* already attached */
     }
+    // "Save login to Vault?": a sign-in or payment the user submits by hand here (never SahilBot's own steps).
+    void watchForSaves(wc, this.saveToken, (payload) => this.onSaveReport(wc, payload))
     const id = wc.id
     const live = new Map<string, number>()
     this.inflight.set(id, live)
@@ -455,8 +465,26 @@ export class BrowserManager {
       canGoForward: !!this.view?.webContents.navigationHistory.canGoForward(),
       controlling: this.controlling,
       takenOver: this.takenOver,
-      teach: this.teach.state()
+      teach: this.teach.state(),
+      ...(() => { const o = this.saveOffers?.browserOffer(); return o ? { saveOffer: o } : {} })()
     }
+  }
+
+  /** The user submitted a sign-in or card form by hand: offer to save it (values stay in main). */
+  private onSaveReport(wc: WebContents, payload: string): void {
+    // SahilBot's own steps (it only ever types saved values) and recordings in progress aren't offers.
+    if (this.agentActing() || wc.isDestroyed() || !this.saveOffers) return
+    const c = parseSaveReport(payload, this.saveToken, wc.getURL())
+    if (!c) return
+    // The same form reported twice (the submit and the click, or two copies of the listener): one offer.
+    if (payload === this.lastSave.payload && Date.now() - this.lastSave.at < 5000) return
+    this.lastSave = { payload, at: Date.now() }
+    try { if (this.saveOffers.fromBrowser(c)) this.publish() } catch { /* nothing offered */ }
+  }
+
+  /** Main's offers changed (saved, dismissed, expired): show the panel's current state. */
+  refreshOffers(): void {
+    this.publish()
   }
 
   private publish(): void {

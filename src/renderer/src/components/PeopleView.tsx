@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { ContextEngineStatus, EntityCard, EntitySummary, EntityType, Trust } from '@shared/context-engine'
-import { ENTITY_TYPES, SENSITIVE_CATEGORIES } from '@shared/context-engine'
+import { ENTITY_TYPES, NEVER_STORED, SENSITIVE_CATEGORIES } from '@shared/context-engine'
+import type { ActivityStatus } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
@@ -10,7 +11,8 @@ import '../styles-people.css'
 
 // Vault → People & Places: what SahilBot knows about the people, places and things in the user's life
 // (src/main/context-engine). Cards with every fact's source and date; edit, merge, forget (with Undo);
-// and the privacy panel: which sources it learns from, sensitive categories, export, pause.
+// and the privacy panel: a master Pause, every source it learns from and every sensitive category (all
+// on by default, each one click to turn off), what's never stored (locked), export.
 
 const TYPE_LABEL: Record<EntityType, string> = {
   person: 'People', place: 'Places', organization: 'Organizations', project: 'Projects', event: 'Events', date: 'Dates', item: 'Things',
@@ -79,7 +81,7 @@ export function PeopleView(p: { onOpenNote?: (path: string) => void }) {
         </div>
         <div className="vault-list">
           {list === null ? <div className="vault-empty">Loading…</div> : !list.length ? (
-            <div className="vault-empty">Nothing yet. While SahilBot is open and idle it learns who and what you talk about (from chats, files and the apps you allow) and keeps it here, with where each fact came from.</div>
+            <div className="vault-empty">Nothing yet. While SahilBot is open and idle it learns who and what you talk about (from chats, files, connected apps and your activity on this Mac) and keeps it here, with where each fact came from. Privacy has a switch for each.</div>
           ) : groups.map((g) => (
             <div key={g.t}>
               <div className="vault-group">{TYPE_LABEL[g.t]}</div>
@@ -235,51 +237,126 @@ function AliasAdd({ onAdd }: { onAdd: (v: string) => void }) {
   )
 }
 
+/** Settings → Privacy & Permissions, where "Know what I'm working on" lives. */
+function openActivitySettings(): void {
+  window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: 'privacy' }))
+}
+
 function PrivacyPanel({ status, onChange, onUndo }: { status: ContextEngineStatus; onChange: (s: ContextEngineStatus) => void; onUndo: (trashId: string) => void }) {
   const s = status.settings
+  const [act, setAct] = useState<ActivityStatus | null>(null)
+  const loadAct = useCallback((): void => { try { void api.activity?.status().then(setAct).catch(() => undefined) } catch { /* not in this runtime */ } }, [])
+  useEffect(() => {
+    loadAct()
+    let off: (() => void) | undefined
+    try { off = api.activity?.onChange(loadAct) } catch { off = undefined }
+    return () => off?.()
+  }, [loadAct])
   const set = async (patch: Parameters<typeof api.people.setSettings>[0]): Promise<void> => {
     try { onChange(await api.people.setSettings(patch)) } catch (e) { toast(clean(e), 'error') }
   }
   const exportData = async (): Promise<void> => {
     try { const f = await api.people.exportData(); toast(`Exported to ${f}`, 'ok') } catch (e) { toast(clean(e), 'error') }
   }
-  const row = (title: string, sub: string, on: boolean, change: (v: boolean) => void, testId: string, disabled?: boolean) => (
-    <div className={`set-row${disabled ? ' off' : ''}`}>
-      <div className="set-row-text"><div className="set-row-title">{title}</div><ClampText>{sub}</ClampText></div>
-      <div className="set-row-ctl"><Toggle on={on} onChange={change} label={title} testId={testId} /></div>
+  // "Your activity on this Mac": People & Places' own switch, plus "Know what I'm working on" and its
+  // learning switch (both on by default). Turning it on here turns those on too (no permission prompt:
+  // window titles and browser tabs still wait for the check in Settings).
+  const activityOn = s.sources.activity && status.activityAllowed
+  const setActivity = async (v: boolean): Promise<void> => {
+    if (v && !status.activityAllowed) {
+      try { setAct(await api.activity.set({ enabled: true, learn: true })) } catch (e) { toast(clean(e), 'error'); return }
+    }
+    await set({ sources: { activity: v } })
+  }
+  const learning = s.enabled && !s.paused
+  const row = (o: { id: string; title: string; sub: string; on: boolean; change: (v: boolean) => void; testId: string; disabled?: boolean; extra?: ReactNode }) => (
+    <div className={`set-row${o.disabled ? ' off' : ''}`} data-testid={o.id} data-on={o.on ? 'true' : 'false'}>
+      <div className="set-row-text"><div className="set-row-title">{o.title}</div><ClampText>{o.sub}</ClampText>{o.extra}</div>
+      <div className="set-row-ctl"><Toggle on={o.on} onChange={o.change} label={o.title} testId={o.testId} /></div>
     </div>
   )
+  const gmail = status.connectors.find((c) => c.id === 'gmail')
+  const gcal = status.connectors.find((c) => c.id === 'gcal')
+  const others = status.connectors.filter((c) => c.id !== 'gmail' && c.id !== 'gcal')
+  const connRow = (c: ContextEngineStatus['connectors'][number], title: string) => row({
+    id: `privacy-source-${c.id}`, title, sub: `${c.what} Never the message text, and never sent to a model.${c.connected ? '' : ' Starts once you connect it.'}`,
+    on: c.on, change: (v) => void set({ connectors: { [c.id]: v } }), testId: `people-conn-${c.id}`
+  })
+  const onCount = [s.sources.chats, s.sources.files, s.sources.connectorsInChats, gmail?.on, gcal?.on, activityOn].filter(Boolean).length
   return (
     <div className="vault-doc" data-testid="people-privacy">
       <div className="vault-doc-inner ppl-privacy">
+        <div className={`ppl-pause${s.paused ? ' paused' : ''}${s.enabled ? '' : ' disabled'}`} data-testid="people-paused">
+          <div className="ppl-pause-text">
+            <div className="ppl-pause-title">{!s.enabled ? 'People & Places is off' : s.paused ? 'Learning is paused' : 'Learning is on'}</div>
+            <div className="ppl-pause-sub">{!s.enabled
+              ? 'Nothing is learned and no cards are shown. Turn it back on below.'
+              : s.paused
+                ? 'Nothing new is learned. What\'s already saved stays (bots still see it) until you resume.'
+                : `Learning from ${onCount} of 6 sources below, in the background while SahilBot is idle. Everything stays on this Mac.`}</div>
+          </div>
+          <button className={`btn ppl-pause-btn${s.paused ? ' on' : ''}`} aria-pressed={s.paused} disabled={!s.enabled} onClick={() => void set({ paused: !s.paused })} data-testid="privacy-pause">
+            {s.paused ? <><I.Play size={12} />Resume learning</> : <><I.Clock size={12} />Pause learning</>}
+          </button>
+        </div>
+
+        <section className="set-section">
+          <div className="set-label">Learn from</div>
+          <div className="set-sub">All on by default. Turn off any one; what it already taught stays until you forget it.</div>
+          <div className={`set-card${learning ? '' : ' ppl-dim'}`}>
+            {row({ id: 'privacy-source-chats', title: 'Chats', sub: 'What you tell your bots. Only your own words count as yours; what a bot reads elsewhere is kept as quoted.', on: s.sources.chats, change: (v) => void set({ sources: { chats: v } }), testId: 'people-src-chats' })}
+            {row({ id: 'privacy-source-files', title: 'Files & attached folders', sub: 'Documents in your knowledge base, folders you attach and files you add to a chat (kept as quoted: someone else wrote them).', on: s.sources.files, change: (v) => void set({ sources: { files: v } }), testId: 'people-src-files' })}
+            {row({ id: 'privacy-source-connectors', title: 'Connected apps\' results in chats', sub: 'What Gmail, Calendar and other apps returned in a chat: senders, attendees and meetings.', on: s.sources.connectorsInChats, change: (v) => void set({ sources: { connectorsInChats: v } }), testId: 'people-src-connectors' })}
+            {gmail && connRow(gmail, 'Gmail metadata')}
+            {gcal && connRow(gcal, 'Calendar metadata')}
+            {others.map((c) => connRow(c, `${c.name} metadata`))}
+            {row({
+              id: 'privacy-source-activity', title: 'Your activity on this Mac',
+              sub: status.activityAllowed
+                ? 'Which apps, files and pages you spend time in (from "Know what I\'m working on"). Only models on this Mac see what it teaches.'
+                : act && !act.settings.enabled
+                  ? '"Know what I\'m working on" is off, so there\'s nothing to learn from. Turning this on turns it back on.'
+                  : '"Let SahilBot learn from my activity" is off or paused in Know what I\'m working on. Turning this on turns it back on.',
+              on: activityOn, change: (v) => void setActivity(v), testId: 'people-src-activity',
+              extra: <button className="link-btn ppl-inline-link" onClick={openActivitySettings} data-testid="privacy-activity-settings">Know what I'm working on settings</button>
+            })}
+          </div>
+        </section>
+
+        <section className="set-section">
+          <div className="set-label">Sensitive details</div>
+          <div className="set-sub">Kept by default so cards are complete. Turn a category off and new facts in it are left out.</div>
+          <div className="set-card">
+            {SENSITIVE_CATEGORIES.map((c) => row({ id: `privacy-sensitive-${c.id}`, title: c.label, sub: c.hint || `${c.label} details people mention.`, on: s.sensitive[c.id], change: (v) => void set({ sensitive: { [c.id]: v } }), testId: `people-sens-${c.id}` }))}
+          </div>
+        </section>
+
+        <section className="set-section" data-testid="privacy-never-stored">
+          <div className="set-label">Never stored</div>
+          <div className="set-sub">Always off, whatever the switches above say. These are dropped before anything is saved.</div>
+          <div className="set-card">
+            {NEVER_STORED.map((n) => (
+              <div key={n.id} className="set-row ppl-locked" data-testid={`privacy-never-stored-${n.id}`}>
+                <div className="set-row-text"><div className="set-row-title"><I.Shield size={13} />{n.label}</div><ClampText>{n.hint}</ClampText></div>
+                <div className="set-row-ctl"><span className="ppl-lock-badge" aria-label="Always off, can't be changed">Never kept</span></div>
+              </div>
+            ))}
+            <div className="set-row ppl-locked" data-testid="privacy-activity-cloud">
+              <div className="set-row-text">
+                <div className="set-row-title"><I.Shield size={13} />Activity to cloud models{act?.settings.shareWithCloud ? <span className="ppl-lock-badge warn">On</span> : null}</div>
+                <ClampText>{act?.settings.shareWithCloud
+                  ? 'You turned on "Also share with cloud models", so cloud models get your activity too. Screen contents can include other people\'s messages; turn it off in Know what I\'m working on.'
+                  : 'Screen contents can include other people\'s messages, so activity only goes to models on this Mac unless you turn this on in Know what I\'m working on.'}</ClampText>
+              </div>
+              <div className="set-row-ctl"><button className="btn" onClick={openActivitySettings} data-testid="privacy-activity-cloud-settings">Open settings</button></div>
+            </div>
+          </div>
+        </section>
+
         <section className="set-section">
           <div className="set-label">People &amp; Places</div>
           <div className="set-card">
-            {row('Learn about people, places and things', 'Builds cards from your chats, files and the apps you allow, and gives each bot the cards a request is about. Off: nothing is learned and no cards are shown.', s.enabled, (v) => void set({ enabled: v }), 'people-enabled')}
-            {row('Pause learning', 'Keeps what\'s saved (bots still see it) but learns nothing new until you turn this off.', s.paused, (v) => void set({ paused: v }), 'people-paused')}
-          </div>
-        </section>
-        <section className="set-section">
-          <div className="set-label">Learn from</div>
-          <div className="set-card">
-            {row('Chats', 'What you tell your bots. Only your own words count as yours; what a bot reads elsewhere is kept as quoted.', s.sources.chats, (v) => void set({ sources: { chats: v } }), 'people-src-chats')}
-            {row('Files', 'Documents in your knowledge base and files you attach (kept as quoted: someone else wrote them).', s.sources.files, (v) => void set({ sources: { files: v } }), 'people-src-files')}
-            {row('Connected apps in chats', 'Results from Gmail, Calendar and other apps that showed up in a chat: senders, attendees and meetings.', s.sources.connectorsInChats, (v) => void set({ sources: { connectorsInChats: v } }), 'people-src-connectors')}
-            {row('Activity', status.activityAllowed ? 'Which apps you use most (from "Know what I\'m working on"). Never sent to cloud models.' : 'Needs "Know what I\'m working on" and "Let SahilBot learn from my activity" on (Settings → Activity). Never sent to cloud models.', s.sources.activity, (v) => void set({ sources: { activity: v } }), 'people-src-activity', !status.activityAllowed)}
-          </div>
-        </section>
-        <section className="set-section">
-          <div className="set-label">Read connected apps on a schedule</div>
-          <div className="set-sub">Off unless you turn one on. Only metadata (who, when, where), never message text, and never sent to a model.</div>
-          <div className="set-card">
-            {status.connectors.map((c) => row(c.name, `${c.what}${c.connected ? '' : ' (not connected)'}`, c.on, (v) => void set({ connectors: { [c.id]: v } }), `people-conn-${c.id}`, !c.connected))}
-          </div>
-        </section>
-        <section className="set-section">
-          <div className="set-label">Sensitive details</div>
-          <div className="set-sub">Left out unless you allow a category. Passwords, codes, keys, card, account and ID numbers are never kept.</div>
-          <div className="set-card">
-            {SENSITIVE_CATEGORIES.map((c) => row(c.label, c.hint || `Keep ${c.label.toLowerCase()} details.`, s.sensitive[c.id], (v) => void set({ sensitive: { [c.id]: v } }), `people-sens-${c.id}`))}
+            {row({ id: 'privacy-enabled', title: 'Learn about people, places and things', sub: 'Builds cards from the sources above and gives each bot the cards a request is about. Off: nothing is learned and no cards are shown.', on: s.enabled, change: (v) => void set({ enabled: v }), testId: 'people-enabled' })}
           </div>
         </section>
         <section className="set-section">

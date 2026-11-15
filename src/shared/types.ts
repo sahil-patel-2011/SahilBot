@@ -71,6 +71,8 @@ export interface Space {
   lastPreview?: string
   lastAt?: number
   unread?: boolean
+  /** Replies you haven't seen across the bot's chats (capped at 99; see shared/read-state.ts). */
+  unreadCount?: number
 }
 
 export interface Thread {
@@ -88,6 +90,12 @@ export interface Thread {
   lastPreview?: string
   /** Set on a helper agent's thread: the chat that started it. */
   parentId?: string | null
+  /** Read up to here (ms, the main process's clock): replies after it are unread. Same on every device. */
+  lastReadAt?: number
+  /** Replies after lastReadAt (capped at 99). `unread` is also true when you marked the chat unread. */
+  unreadCount?: number
+  /** How the agent runs here: 'chat' (only conversation so far) or 'full' (it has done real work); unset = never ran / older chat. */
+  toolMode?: 'chat' | 'full'
 }
 
 export interface Sampling {
@@ -424,6 +432,8 @@ export interface BrowserState {
   takenOver: boolean
   /** "Teach a task": a recording of the user's own browser steps, while one is running or awaiting Done. */
   teach?: TeachState
+  /** "Save login for <site> to Vault?" after the user signed in (or paid) by hand. Metadata only. */
+  saveOffer?: VaultSaveOffer
 }
 
 /** One recorded step of "Teach a task" (values of secret fields are never recorded: text is ‹secret›). */
@@ -674,6 +684,59 @@ export interface VaultPrefs {
   lockOnSleep: boolean
   reauthPasswords: boolean
   touchId: boolean
+}
+
+/**
+ * "Save to Vault?": a login or card the user typed into a page in the browser panel, or a password, API
+ * key, card or ID number they typed into the composer. The values stay in main until the user clicks
+ * Save; this is all the window gets (the site, a masked username, brand and last 4).
+ */
+export interface VaultSaveOffer {
+  id: string
+  source: 'browser' | 'chat'
+  kind: 'login' | 'card' | 'api_key' | 'id_number'
+  /** "Save login for example.com to Vault?" */
+  title: string
+  /** The site as shown ("example.com"), '' when unknown. */
+  site: string
+  /** The site it will be saved for ("https://example.com"), '' when unknown (chat: the user adds it). */
+  origin: string
+  /** Suggested item name (editable). */
+  name: string
+  /** Browser: masked ("sa•••@example.test"). Chat: the username typed next to the password. */
+  username?: string
+  /** A saved login for this site and username has a different password: "Update saved password?". */
+  update?: boolean
+  /** The saved login an update changes. */
+  updates?: string
+  /** "Password", "Visa ending 4242", "OpenAI API key", "Social Security number". */
+  label: string
+  brand?: string
+  last4?: string
+  expMonth?: number
+  expYear?: number
+  holder?: string
+  /** The page had a security code (saved only when the user ticks "Remember the security code"). */
+  hasCvc?: boolean
+  idKind?: string
+  /** What the user must fill in before saving. */
+  needs?: Array<'site' | 'expiry' | 'holder'>
+  /** Chat: which placeholder in the message this value replaced (0-based). */
+  ordinal?: number
+  status?: 'pending' | 'saved' | 'dismissed'
+  /** The vault item it was saved as. */
+  savedAs?: string
+}
+
+/** What the user changed on a "Save to Vault?" card. */
+export interface VaultSaveEdits {
+  name?: string
+  site?: string
+  username?: string
+  expMonth?: string | number
+  expYear?: string | number
+  holder?: string
+  rememberCvc?: boolean
 }
 
 export interface VaultStatus {
@@ -1146,6 +1209,8 @@ export interface SahilBotApi {
     search(query: string): Promise<Thread[]>
     create(spaceId: string): Promise<Thread>
     update(id: string, patch: Partial<Pick<Thread, 'title' | 'pinned' | 'unread' | 'permissionMode' | 'model' | 'spaceId' | 'effort'>>): Promise<Thread>
+    /** You've seen the chat up to `upTo` (the newest message on screen; default: now). Idempotent; only moves forward. */
+    markRead(id: string, upTo?: number): Promise<Thread>
     remove(id: string): Promise<void>
     messages(id: string): Promise<Message[]>
     react(messageId: string, emoji: string | null): Promise<Message>
@@ -1293,6 +1358,17 @@ export interface SahilBotApi {
     rollback(): Promise<VaultStatus>
     resign(): Promise<VaultStatus>
     authPending(): Promise<VaultAuthRequest[]>
+    /** "Save to Vault?": the user's click on Save (asks for Touch ID or the master password when locked). */
+    offerSave(id: string, edits?: VaultSaveEdits, messageId?: string): Promise<{ ok: boolean; name: string }>
+    /** "Not now": the value is forgotten. */
+    offerDismiss(id: string, messageId?: string): Promise<{ ok: boolean }>
+    /** "Never for this site": forgotten, and never asked on that site again. Returns the never-list. */
+    offerNever(id: string): Promise<string[]>
+    /** Which of these offers SahilBot still holds the value for (a restart forgets them). */
+    offerAlive(ids: string[]): Promise<string[]>
+    /** Sites "Never for this site" was chosen on. */
+    neverSave(): Promise<string[]>
+    removeNeverSave(origin: string): Promise<string[]>
     authRespond(id: string, answer: { password?: string; cancel?: boolean; touchId?: boolean }): Promise<{ ok: boolean; error?: string; retryInMs?: number }>
     onAuth(cb: (e: VaultAuthRequest | { id: string; done: true }) => void): () => void
     onChanged(cb: () => void): () => void
@@ -1419,6 +1495,8 @@ export interface SahilBotApi {
     pending(threadId: string): Promise<PendingRequest[]>
     /** Chats waiting on the user, with their open request ids. */
     allPending(): Promise<Record<string, string[]>>
+    /** Chats working right now and the bot each belongs to (a reopened window or web tab picks up runs already going). */
+    running(): Promise<Array<{ threadId: string; spaceId: string }>>
     onEvent(cb: (e: ChatEvent) => void): () => void
   }
 }
@@ -1984,7 +2062,7 @@ export interface ActivitySettings {
   windowTitles: boolean
   /** The front browser tab's title and address (needs Automation for each browser). */
   browserTabs: boolean
-  /** "Let SahilBot learn from my activity": the learning pass may read the timeline. Separate, off by default. */
+  /** "Let SahilBot learn from my activity": the learning pass may read the timeline. Separate, on by default. */
   learn: boolean
   /** How long the session timeline is kept, 1–72 hours (raw samples: at most 2 hours). */
   retentionHours: number

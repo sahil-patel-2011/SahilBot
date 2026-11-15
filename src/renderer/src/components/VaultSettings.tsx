@@ -117,6 +117,7 @@ export function SecretVaultSettings() {
 
       {t.type && <ItemsTab key={t.type} type={t.type} items={items.filter((i) => i.type === t.type)} addresses={items.filter((i) => i.type === 'address')} st={st} onChange={refresh} />}
       {tab === 'logins' && <OtpGrants />}
+      {tab === 'logins' && <NeverSave />}
       {tab === 'security' && <SecurityTab st={st} act={act} busy={busy} />}
       {tab === 'activity' && <Activity />}
     </>
@@ -351,6 +352,24 @@ function OtpGrants() {
         <div className="set-row" key={g}>
           <div className="set-row-text"><div className="set-row-title">{g}</div></div>
           <button className="icon-btn" title="Remove" aria-label={`Stop allowing ${g}`} onClick={() => void api.vault.revokeOtpGrant(g).then(setGrants)}><I.Trash size={14} /></button>
+        </div>
+      ))}
+    </Section>
+  )
+}
+
+// ------------------------------------------------------------------ "Never for this site" (logins tab)
+
+function NeverSave() {
+  const [sites, setSites] = useState<string[]>([])
+  useEffect(() => void api.vault.neverSave().then(setSites).catch(() => undefined), [])
+  return (
+    <Section title="Offers to save" sub="When you sign in or pay by hand in SahilBot's browser, or type a password, key, card or ID number into a chat, SahilBot offers to save it here. Nothing is saved unless you click Save.">
+      {!sites.length && <Row title="Asks on every site" sub="Choose “Never for this site” on an offer to stop asking there." testId="vault-never-empty" />}
+      {sites.map((o) => (
+        <div className="set-row" key={o} data-testid="vault-never-row">
+          <div className="set-row-text"><div className="set-row-title">Never for {o.replace(/^https:\/\//, '')}</div></div>
+          <button className="icon-btn" title="Ask again" aria-label={`Ask again on ${o}`} onClick={() => void api.vault.removeNeverSave(o).then(setSites)}><I.Trash size={14} /></button>
         </div>
       ))}
     </Section>

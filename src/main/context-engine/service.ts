@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ContextEngineSettings, ContextEngineStatus, EntityCard, EntityPatch, EntitySummary, EntityType, FactSource, Trust } from '@shared/context-engine'
-import { DEFAULT_CONTEXT_ENGINE, ENTITY_TYPES, SENSITIVE_CATEGORIES } from '@shared/context-engine'
+import { DEFAULT_CONTEXT_ENGINE, ENGINE_SETTINGS_VERSION, ENTITY_TYPES, SENSITIVE_CATEGORIES } from '@shared/context-engine'
 import type { Message } from '@shared/types'
 import type { Db } from '../db'
 import { isRelayed } from '../agent/loop'
@@ -21,7 +21,7 @@ import { CHILD_REL, cleanSnippet, screen } from './sensitive'
 import { GraphStore, TRUST_RANK, normKey } from './store'
 
 // The context engine, put together: settings and privacy controls, the extraction job the idle
-// learning pass runs (chats, files, connector results seen in chats, opted-in connector metadata,
+// learning pass runs (chats, files, connector results seen in chats, connected apps' metadata,
 // activity), the per-run context section, the about tool's lookups, and what People & Places needs.
 
 const SETTINGS_KEY = 'contextEngine:settings'
@@ -32,23 +32,73 @@ const IDLE_MS = 2 * 60_000
 const LOOKBACK_DAYS = 90
 const PER_PASS = { chats: 4, docs: 2, modelCalls: 6, connectorItems: 40, mirrors: 30 }
 
+type SourceKey = keyof ContextEngineSettings['sources']
+const SOURCE_KEYS: SourceKey[] = ['chats', 'files', 'connectorsInChats', 'activity']
+const CONNECTOR_ID = /^[\w-]{1,40}$/
+const PATH_RX = /^(enabled|paused|sources\.\w{1,40}|sensitive\.\w{1,40}|connectors\.[\w-]{1,40})$/
+
+/** Every boolean a stored settings object holds, by path ("sources.chats", "connectors.gmail"…). */
+function storedValues(v: unknown): Map<string, boolean> {
+  const out = new Map<string, boolean>()
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out
+  const x = v as Record<string, unknown>
+  const obj = (o: unknown): Record<string, unknown> => (o && typeof o === 'object' && !Array.isArray(o) ? o as Record<string, unknown> : {})
+  for (const k of ['enabled', 'paused'] as const) if (typeof x[k] === 'boolean') out.set(k, x[k] as boolean)
+  const sources = obj(x.sources)
+  for (const k of SOURCE_KEYS) if (typeof sources[k] === 'boolean') out.set(`sources.${k}`, sources[k] as boolean)
+  const sensitive = obj(x.sensitive)
+  for (const c of SENSITIVE_CATEGORIES) if (typeof sensitive[c.id] === 'boolean') out.set(`sensitive.${c.id}`, sensitive[c.id] as boolean)
+  for (const [k, on] of Object.entries(obj(x.connectors)).slice(0, 100)) if (typeof on === 'boolean' && CONNECTOR_ID.test(k)) out.set(`connectors.${k}`, on)
+  return out
+}
+
+/** The defaults before version 2 (sensitive categories and scheduled connector reads were off). */
+function oldDefault(path: string): boolean {
+  if (path === 'paused') return false
+  if (path.startsWith('sensitive.') || path.startsWith('connectors.')) return false
+  return true
+}
+
+/**
+ * The paths the user chose themselves. Version 2 records them; older settings are inferred: a stored
+ * value that differs from the old default was a choice (sensitive on, a source off, paused, the engine
+ * off), and so is any stored connector entry (it was only ever written by the user's toggle); a value
+ * equal to the old default wasn't, so it takes the new default.
+ */
+export function engineExplicit(v: unknown): Set<string> {
+  const vals = storedValues(v)
+  const x = (v && typeof v === 'object' ? v : {}) as { version?: unknown; explicit?: unknown }
+  if (typeof x.version === 'number' && x.version >= ENGINE_SETTINGS_VERSION) {
+    const list = Array.isArray(x.explicit) ? x.explicit : []
+    return new Set(list.filter((p): p is string => typeof p === 'string' && PATH_RX.test(p)).slice(0, 300))
+  }
+  const out = new Set<string>()
+  for (const [path, on] of vals) if (path.startsWith('connectors.') || on !== oldDefault(path)) out.add(path)
+  return out
+}
+
+/**
+ * Settings as the engine uses them: each explicit choice as stored, everything else the current
+ * default (every source and sensitive category on, connectors absent = on). Junk reads as the default.
+ */
 export function cleanEngineSettings(v: unknown): ContextEngineSettings {
-  const x = (v ?? {}) as Partial<ContextEngineSettings>
   const d = DEFAULT_CONTEXT_ENGINE
-  const bool = (a: unknown, def: boolean): boolean => (typeof a === 'boolean' ? a : def)
-  const sources = (x.sources ?? {}) as Partial<ContextEngineSettings['sources']>
-  const sensitive = (x.sensitive ?? {}) as Partial<ContextEngineSettings['sensitive']>
+  const vals = storedValues(v)
+  const explicit = engineExplicit(v)
+  const pick = (path: string, def: boolean): boolean => (explicit.has(path) && vals.has(path) ? vals.get(path)! : def)
   const connectors: Record<string, boolean> = {}
-  for (const [k, on] of Object.entries(x.connectors ?? {}).slice(0, 100)) if (typeof on === 'boolean' && /^[\w-]{1,40}$/.test(k)) connectors[k] = on
+  for (const [path, on] of vals) if (path.startsWith('connectors.') && explicit.has(path)) connectors[path.slice('connectors.'.length)] = on
   return {
-    enabled: bool(x.enabled, d.enabled),
-    paused: bool(x.paused, d.paused),
-    sources: { chats: bool(sources.chats, true), files: bool(sources.files, true), connectorsInChats: bool(sources.connectorsInChats, true), activity: bool(sources.activity, true) },
+    enabled: pick('enabled', d.enabled),
+    paused: pick('paused', d.paused),
+    sources: Object.fromEntries(SOURCE_KEYS.map((k) => [k, pick(`sources.${k}`, d.sources[k])])) as ContextEngineSettings['sources'],
     connectors,
-    // Sensitive categories are on only when exactly true.
-    sensitive: Object.fromEntries(SENSITIVE_CATEGORIES.map((c) => [c.id, sensitive[c.id] === true])) as ContextEngineSettings['sensitive']
+    sensitive: Object.fromEntries(SENSITIVE_CATEGORIES.map((c) => [c.id, pick(`sensitive.${c.id}`, d.sensitive[c.id])])) as ContextEngineSettings['sensitive']
   }
 }
+
+/** A connector's scheduled metadata read is on unless the user turned it off. */
+export const connectorOn = (s: ContextEngineSettings, id: string): boolean => s.connectors[id] !== false
 
 interface EngineState {
   threads: Record<string, number>
@@ -133,18 +183,27 @@ export class ContextEngine {
 
   settings(): ContextEngineSettings { return cleanEngineSettings(this.d.db.getSetting(SETTINGS_KEY)) }
 
+  /** The paths the user set themselves (see engineExplicit). */
+  explicitChoices(): string[] { return [...engineExplicit(this.d.db.getSetting(SETTINGS_KEY))].sort() }
+
+  /** Applies the user's change; every key it touches is recorded as their explicit choice. */
   setSettings(patch: Parameters<import('@shared/context-engine').PeopleApi['setSettings']>[0]): ContextEngineSettings {
-    const cur = this.settings()
-    const next = cleanEngineSettings({
-      ...cur, ...patch,
-      sources: { ...cur.sources, ...(patch.sources ?? {}) },
-      sensitive: { ...cur.sensitive, ...(patch.sensitive ?? {}) },
-      connectors: { ...cur.connectors, ...(patch.connectors ?? {}) }
-    })
-    this.d.db.setSetting(SETTINGS_KEY, next)
+    const raw = this.d.db.getSetting(SETTINGS_KEY)
+    const cur = cleanEngineSettings(raw)
+    const explicit = engineExplicit(raw)
+    const p = (patch ?? {}) as Record<string, unknown>
+    const obj = (o: unknown): Record<string, unknown> => (o && typeof o === 'object' && !Array.isArray(o) ? o as Record<string, unknown> : {})
+    const next: ContextEngineSettings = { ...cur, sources: { ...cur.sources }, sensitive: { ...cur.sensitive }, connectors: { ...cur.connectors } }
+    for (const k of ['enabled', 'paused'] as const) if (typeof p[k] === 'boolean') { next[k] = p[k] as boolean; explicit.add(k) }
+    const sources = obj(p.sources)
+    for (const k of SOURCE_KEYS) if (typeof sources[k] === 'boolean') { next.sources[k] = sources[k] as boolean; explicit.add(`sources.${k}`) }
+    const sensitive = obj(p.sensitive)
+    for (const c of SENSITIVE_CATEGORIES) if (typeof sensitive[c.id] === 'boolean') { next.sensitive[c.id] = sensitive[c.id] as boolean; explicit.add(`sensitive.${c.id}`) }
+    for (const [k, on] of Object.entries(obj(p.connectors)).slice(0, 100)) if (typeof on === 'boolean' && CONNECTOR_ID.test(k)) { next.connectors[k] = on; explicit.add(`connectors.${k}`) }
+    this.d.db.setSetting(SETTINGS_KEY, { version: ENGINE_SETTINGS_VERSION, ...next, explicit: [...explicit].sort() })
     this.cache.clear()
     this.changed()
-    return next
+    return this.settings()
   }
 
   private state(): EngineState {
@@ -168,7 +227,7 @@ export class ContextEngine {
     const stats = this.store.stats()
     return {
       settings: s, entities: stats.entities, facts: stats.facts, byType: stats.byType, lastRunAt: st.lastRunAt, lastSummary: st.lastSummary,
-      connectors: META_SOURCES.map((m) => ({ id: m.id, name: m.name, connected: !!this.d.connectors?.connected(m.id), on: s.connectors[m.id] === true, what: st.connectorErrors[m.id] ? `${m.what} Last read failed: ${st.connectorErrors[m.id]}` : m.what })),
+      connectors: META_SOURCES.map((m) => ({ id: m.id, name: m.name, connected: !!this.d.connectors?.connected(m.id), on: connectorOn(s, m.id), what: st.connectorErrors[m.id] ? `${m.what} Last read failed: ${st.connectorErrors[m.id]}` : m.what })),
       activityAllowed: !!this.d.activity?.allowed(),
       trash: this.store.trash(20)
     }
@@ -203,7 +262,7 @@ export class ContextEngine {
   private dueConnectors(now: number): string[] {
     const s = this.settings()
     const st = this.state()
-    return META_SOURCES.filter((m) => s.connectors[m.id] === true && this.d.connectors?.connected(m.id) && now - (st.connectors[m.id] ?? 0) >= m.everyMs).map((m) => m.id)
+    return META_SOURCES.filter((m) => connectorOn(s, m.id) && this.d.connectors?.connected(m.id) && now - (st.connectors[m.id] ?? 0) >= m.everyMs).map((m) => m.id)
   }
 
   /** There's something to read (the learning pass then runs even with learning itself off). */
@@ -271,7 +330,7 @@ export class ContextEngine {
       mark()
     }
 
-    // Opted-in connectors: metadata only, never to a model.
+    // Connected apps (unless turned off): metadata only, never to a model.
     for (const id of this.dueConnectors(now)) {
       h.check()
       const src = META_SOURCES.find((m) => m.id === id)!
@@ -402,7 +461,7 @@ export class ContextEngine {
     let n = 0
     const touched = new Map<string, { trust: Trust; evidence?: string; at: number; scope: string | null }>()
     for (const f of facts) {
-      // Quoted facts need somewhere to live: a bot's own scope, or shared (files, opted-in connectors).
+      // Quoted facts need somewhere to live: a bot's own scope, or shared (files, connected apps' metadata).
       if (f.trust === 'quoted' && c.quotedScope === undefined) continue
       const scope = c.forceScope ?? (f.trust === 'quoted' ? c.quotedScope ?? null : null)
       const at = f.at ?? c.at

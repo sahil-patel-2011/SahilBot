@@ -570,7 +570,7 @@ export class TeachRecorder {
     if (wc.isDestroyed() || !wc.debugger.isAttached()) return
     if (a.scriptId) void wc.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: a.scriptId }).catch(() => undefined)
     void wc.debugger.sendCommand('Runtime.removeBinding', { name: BINDING }).catch(() => undefined)
-    void wc.debugger.sendCommand('Runtime.disable').catch(() => undefined)
+    // Runtime stays enabled: the "Save to Vault?" listener (save-watch.ts) gets its binding calls through it.
   }
 
   /** A tab closed: forget it. */

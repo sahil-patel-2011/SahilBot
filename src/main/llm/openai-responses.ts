@@ -464,13 +464,16 @@ export async function* streamResponses(req: ChatRequest): AsyncGenerator<StreamP
     } else if (type === 'response.failed') {
       const r = ev.response as { error?: { code?: string; message?: string } } | undefined
       const code = r?.error?.code ?? 'server_error'
-      throw Object.assign(openaiError(EVENT_STATUS[code], { message: r?.error?.message, code }, undefined, req.model), { status: EVENT_STATUS[code] ?? (/server|overload/.test(code) ? 500 : undefined) })
+      // openaiError keeps its own status where it sets one (402 for billing: never retried, Auto moves on).
+      throw openaiError(EVENT_STATUS[code] ?? (/server|overload/.test(code) ? 500 : undefined), { message: r?.error?.message, code }, undefined, req.model)
     } else if (type === 'error') {
       // The details may sit on the event itself or in a nested `error` object.
       const e = (ev.error && typeof ev.error === 'object' ? ev.error : ev) as { code?: unknown; message?: unknown; param?: unknown; type?: unknown }
       const code = String(e.code ?? e.type ?? '')
       const status = EVENT_STATUS[code] ?? (/rate/.test(code) ? 429 : /overload|server/.test(code) ? 500 : undefined)
-      throw Object.assign(openaiError(status, { message: String(e.message ?? 'OpenAI stream error'), code, param: (e.param as string | null) ?? null }, undefined, req.model), { status })
+      // As seen live: {type:'error', error:{code:'insufficient_quota'}} on an account with no credit. openaiError
+      // gives it status 402 (not retried; Auto marks the model and moves on), so its status isn't overwritten.
+      throw openaiError(status, { message: String(e.message ?? 'OpenAI stream error'), code, param: (e.param as string | null) ?? null }, undefined, req.model)
     }
   }
   // The stream ended without a final event: the connection dropped. Worth another try.

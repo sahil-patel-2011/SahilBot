@@ -4,6 +4,7 @@ import type { BrowserState, FilePreview, Message, TeamMember } from '@shared/typ
 import { prettyName } from '../lib/steps'
 import { Markdown, SANITIZE } from './Markdown'
 import { api } from '../api'
+import { SaveOfferCard } from './VaultOffer'
 import * as I from '../icons'
 import { TeachBar } from './TeachBar'
 import { isPageCandidate, PageView } from './PageView'
@@ -296,7 +297,7 @@ function BrowserPane({ hidden, threadId }: { hidden: boolean; threadId?: string 
       window.removeEventListener('resize', sync)
       void api.browser.setBounds(null)
     }
-  }, [hidden, s?.controlling, s?.takenOver, s?.tabs.length, s?.teach?.status, !!s?.teach])
+  }, [hidden, s?.controlling, s?.takenOver, s?.tabs.length, s?.teach?.status, !!s?.teach, s?.saveOffer?.id])
 
   return (
     <div className="browser">
@@ -336,6 +337,7 @@ function BrowserPane({ hidden, threadId }: { hidden: boolean; threadId?: string 
           )}
         </div>
       )}
+      {s?.saveOffer && <SaveOfferCard key={s.saveOffer.id} offer={s.saveOffer} compact />}
       <div className="bview" ref={view}>
         {!current && <div className="right-body">SahilBot opens pages here when it browses. You can browse too; logins are kept between sessions.</div>}
       </div>

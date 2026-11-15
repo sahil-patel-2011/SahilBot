@@ -15,6 +15,7 @@ import { classifyTask } from '../../src/main/llm/task-classifier'
 import { classifyTask as classifyKind } from '../../src/main/agent/intent'
 import { fallbackNotice, mayEscalateEffort, mayReplaceForInvalidCalls, unavailableReason } from '../../src/main/agent/choices'
 import { fastTierFor } from '../../src/main/llm/fast-mode'
+import { modelHealth } from '../../src/main/llm/model-health'
 import { modeFlags } from '../../src/renderer/src/lib/swarm-view'
 import { contextChoices, savedChoice, withChoice } from '../../src/shared/context-choices'
 import type { Effort, EffortChoice, ModelInfo, Settings, Thread } from '../../src/shared/types'
@@ -30,7 +31,7 @@ let llm: MockLlm
 beforeAll(async () => { llm = await startMockLlm() })
 afterAll(async () => { await llm.close() })
 const savedRetry = { ...retryPolicy }
-afterEach(() => { Object.assign(retryPolicy, savedRetry); llm.script.length = 0; llm.requests.length = 0 })
+afterEach(() => { Object.assign(retryPolicy, savedRetry); llm.script.length = 0; llm.requests.length = 0; modelHealth.clear() })
 
 const model = (id: string, tier: 0 | 1 | 2 | 3, fit = 131072): ModelInfo => ({ id, provider: 'custom', providerName: 'Custom', enabled: true, installed: true, label: id.toUpperCase(), vision: false, tools: true, tier, requiredGB: 1, maxFittingWindow: fit, fits: true }) as ModelInfo
 
@@ -99,6 +100,26 @@ describe('model', () => {
     expect(await h.run(t, 'hello')).toBe('finished')
     expect(llm.requests.map((r) => r.model)).toEqual(['model-a', 'model-b'])
     expect(h.notices(t)[0]).toMatch(/^MODEL-A failed: .*; used MODEL-B for the rest of this task\.$/)
+  })
+
+  test('out of credit (402): never retried, the next model answers with one note, and later Auto requests skip it', async () => {
+    const h = harness([model('model-a', 1), { ...model('model-b', 2), provider: 'ollama' } as ModelInfo])
+    llm.script.push({ status: 402 }, { content: 'From B.', delay: 0 }, { content: 'Still B.', delay: 0 })
+    const t = h.thread('auto')
+    expect(await h.run(t, 'hello')).toBe('finished')
+    expect(await h.run(t, 'hello again')).toBe('finished')
+    expect(llm.requests.map((r) => r.model)).toEqual(['model-a', 'model-b', 'model-b'])
+    expect(h.notices(t)).toEqual(['MODEL-A is unavailable (out of API credit); used MODEL-B for the rest of this task.'])
+  })
+
+  test('a model picked by name that fails is said so every time, and still tried first (what you pick is what happens)', async () => {
+    const h = harness([model('model-a', 1), { ...model('model-b', 2), provider: 'ollama' } as ModelInfo])
+    llm.script.push({ status: 402 }, { content: 'From B.', delay: 0 }, { status: 402 }, { content: 'B again.', delay: 0 })
+    const t = h.thread('model-a')
+    expect(await h.run(t, 'hello')).toBe('finished')
+    expect(await h.run(t, 'hello again')).toBe('finished')
+    expect(llm.requests.map((r) => r.model)).toEqual(['model-a', 'model-b', 'model-a', 'model-b'])
+    expect(h.notices(t).filter((n) => /^MODEL-A is unavailable \(out of API credit\); used MODEL-B/.test(n))).toHaveLength(2)
   })
 
   test('the notice names the reason in words', () => {

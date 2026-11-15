@@ -107,6 +107,14 @@ describe('SahilBot Server', () => {
     // The model never saw a Mac-only tool.
     const tools = llm.requests.flatMap((r) => (r.tools ?? []).map((t: any) => t.function?.name))
     for (const t of ['computer', 'browser', 'mac_apps', 'mail', 'app']) expect(tools).not.toContain(t)
+    // Read state is in the database, over the same channels: unread until a device marks it read, and every
+    // connected device hears about it (a 'thread' event), so the Mac app and the web UI agree.
+    expect((await c.call('threads:list', main.id)).find((t: any) => t.id === thread.id)).toMatchObject({ unread: true, unreadCount: 1 })
+    const seenAt = c.events.length
+    const read = await c.call('threads:markRead', thread.id, Math.max(...msgs.map((m: any) => m.createdAt)))
+    expect(read).toMatchObject({ unread: false, unreadCount: 0 })
+    await until(() => c.events.slice(seenAt).some((e) => e.ch === 'chat:event' && e.args[0].type === 'thread' && e.args[0].thread.id === thread.id && !e.args[0].thread.unread))
+    expect(await c.call('threads:markRead', thread.id)).toMatchObject({ unread: false, unreadCount: 0 })
 
     // 2. An action that needs approval: the card arrives over the WebSocket, the answer goes back.
     const before = c.events.length

@@ -2,8 +2,9 @@ import { describe, expect, test, vi } from 'vitest'
 import { REVEAL_CHANNELS, vaultHandlers, type VaultFiles } from '../../src/main/secure/ipc'
 import { containsAny } from '../../src/main/secure/redact'
 import { fillVault, makeVault, SECRET } from '../fixtures/vault-kit'
+import { SaveOffers } from '../../src/main/secure/offers'
 
-const KNOWN = [SECRET.password, SECRET.card, '4242 4242 4242 4242', SECRET.cvc, SECRET.id, SECRET.totp, SECRET.note, SECRET.master, 'csv-secret-pw-1', 'backup password 1', 'sam@example.test', '1 Main St']
+const KNOWN = ['offered pw 77!', '5555555555554444', 'kim@offer.test', SECRET.password, SECRET.card, '4242 4242 4242 4242', SECRET.cvc, SECRET.id, SECRET.totp, SECRET.note, SECRET.master, 'csv-secret-pw-1', 'backup password 1', 'sam@example.test', '1 Main St']
 
 function setup() {
   const k = makeVault()
@@ -18,17 +19,24 @@ function setup() {
   }
   disk.set('/downloads/passwords.csv', 'name,url,username,password\nForum,https://forum.test,sam,csv-secret-pw-1\n')
   const protect = vi.fn()
+  const never: string[] = []
+  const offers = new SaveOffers({ vault: k.vault, never: { get: () => never, set: (l) => { never.splice(0, never.length, ...l) } } })
+  k.vault.pendingSecrets = () => offers.values()
   const handlers = vaultHandlers({
+    offers, onOffer: () => undefined,
     vault: k.vault, auth: k.vault.auth!, files, protect,
     purchases: { permanent: () => ['https://acme.test'], revokeOtp: () => [] },
     touchIdAvailable: () => false, keychainAvailable: () => true
   })
-  return { ...k, handlers, disk, protect }
+  return { ...k, handlers, disk, protect, offers }
 }
 
 describe('vault IPC replies never carry a value', () => {
   test('every handler (but the two Reveal ones) is called with a known secret saved; no reply or error contains it', async () => {
-    const { handlers, vault, ui, disk } = setup()
+    const { handlers, vault, ui, disk, offers } = setup()
+    const login = offers.fromBrowser({ kind: 'login', url: 'https://offer.test/login', username: 'kim@offer.test', password: 'offered pw 77!' })!
+    // One browser offer at a time; a card typed into the chat is held alongside it.
+    const card = offers.scanChat('card 5555 5555 5555 4444').offers[0]
     const calls: Array<[string, unknown[]]> = [
       ['vault:status', []], ['vault:list', []], ['vault:cards', []], ['vault:addresses', []], ['vault:items', []], ['vault:otpGrants', []], ['vault:audit', [500]], ['vault:authPending', []],
       ['vault:set', [{ name: 'acme', origin: 'https://acme.test', username: 'sam@example.test', password: SECRET.password }]],
@@ -49,7 +57,13 @@ describe('vault IPC replies never carry a value', () => {
       ['vault:removeMasterPassword', [SECRET.master]],
       ['vault:revokeOtpGrant', ['https://acme.test']],
       ['vault:remove', ['nope']], ['vault:removeCard', ['nope']], ['vault:removeAddress', ['nope']], ['vault:removeItem', ['nope']],
-      ['vault:authRespond', ['nope', { password: SECRET.master }]]
+      ['vault:authRespond', ['nope', { password: SECRET.master }]],
+      ['vault:offerAlive', [[login.id, card.id, 'nope']]],
+      ['vault:offerSave', [login.id, { name: 'x', site: 'evil.test' }]],
+      ['vault:offerNever', [card.id]],
+      ['vault:offerDismiss', ['nope']],
+      ['vault:neverSave', []],
+      ['vault:removeNeverSave', ['https://offer.test']]
     ]
     const out: string[] = []
     for (const [ch, args] of calls) {
@@ -59,6 +73,7 @@ describe('vault IPC replies never carry a value', () => {
     }
     const called = new Set(calls.map((c) => c[0]))
     for (const ch of Object.keys(handlers)) if (!REVEAL_CHANNELS.has(ch)) expect(called.has(ch), `${ch} not exercised`).toBe(true)
+    expect(vault.list().find((e) => e.origin.includes('offer.test'))?.origin).toBe('https://offer.test')
     const all = out.join("\n")
     for (const v of KNOWN) expect(containsAny(all, [v]), `${v} leaked:\n${all}`).toBe(false)
     // Sanity: the calls did something (an export was written, encrypted).

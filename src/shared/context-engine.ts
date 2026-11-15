@@ -35,7 +35,11 @@ export interface FactSource {
   link?: string
 }
 
-/** Sensitive categories: excluded unless the user opts in for that category (Privacy panel). */
+/**
+ * Sensitive categories: kept by default (each one can be turned off in the Privacy panel). Whatever
+ * these say, the values themselves are never kept: passwords, codes and keys, card and account
+ * numbers, government ID numbers and medical record or plan numbers (see NEVER_STORED).
+ */
 export type SensitiveCategory = 'health' | 'finance' | 'credentials' | 'govId' | 'sexualOrientation' | 'religion' | 'politics' | 'children'
 
 export const SENSITIVE_CATEGORIES: Array<{ id: SensitiveCategory; label: string; hint: string }> = [
@@ -127,7 +131,10 @@ export interface ContextEngineSettings {
     /** Only when "Let SahilBot learn from my activity" is on as well. */
     activity: boolean
   }
-  /** Periodic read of a connected app's metadata (senders, meetings): off until the user opts in, per connector preset. */
+  /**
+   * Periodic read of a connected app's metadata (senders, meetings), per connector preset: a preset
+   * that's absent is on (once that app is connected); only an explicit `false` turns it off.
+   */
   connectors: Record<string, boolean>
   sensitive: Record<SensitiveCategory, boolean>
 }
@@ -137,8 +144,22 @@ export const DEFAULT_CONTEXT_ENGINE: ContextEngineSettings = {
   paused: false,
   sources: { chats: true, files: true, connectorsInChats: true, activity: true },
   connectors: {},
-  sensitive: { health: false, finance: false, credentials: false, govId: false, sexualOrientation: false, religion: false, politics: false, children: false }
+  sensitive: { health: true, finance: true, credentials: true, govId: true, sexualOrientation: true, religion: true, politics: true, children: true }
 }
+
+/**
+ * Stored settings carry `version` and `explicit` (the paths the user set themselves: "enabled",
+ * "paused", "sources.chats", "sensitive.health", "connectors.gmail"…). A path that isn't explicit takes
+ * the current default, so changing a default never overrides the user's own choice.
+ */
+export const ENGINE_SETTINGS_VERSION = 2
+
+/** What's never stored, whatever the settings say (the Privacy panel shows these as locked rows). */
+export const NEVER_STORED: Array<{ id: string; label: string; hint: string }> = [
+  { id: 'credentials', label: 'Passwords, codes and keys', hint: 'Passwords, one-time codes, recovery phrases, API keys and anything saved in your Vault.' },
+  { id: 'numbers', label: 'Card, bank account and ID numbers', hint: 'Card numbers, account and routing numbers, Social Security, passport and license numbers.' },
+  { id: 'phi', label: 'Medical record and health plan numbers', hint: 'Record, member and plan IDs. A health fact can be kept; the identifiers in it never are.' }
+]
 
 export interface ContextEngineStatus {
   settings: ContextEngineSettings

@@ -69,6 +69,8 @@ describe('always-on bots', () => {
       { content: 'Booked nothing yet: shortlisted the Airport Inn near the airport. All done.' }
     )
     await page.click('[data-testid="nav-tasks"]')
+    // The bot's sidebar row shows the "needs you" dot while its question waits in the inbox.
+    await expect.poll(() => page.locator('[data-testid="needs-you"]').count(), { timeout: 10_000 }).toBeGreaterThan(0)
     const item = page.locator('[data-testid="needs-you-item"]')
     await item.waitFor({ timeout: 10_000 })
     expect(await item.innerText()).toContain('Which hotel area do you prefer?')

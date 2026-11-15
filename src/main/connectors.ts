@@ -360,6 +360,39 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'custom', name: 'Custom MCP server', url: '', color: '#7C5CFF', category: 'Other', auth: 'oauth', description: 'Any MCP server: a URL, or a local command.' }
 ]
 
+/**
+ * Test-only one-click catalog entries for acceptance tests (a local fake OAuth + MCP server), from
+ * SAHILBOT_TEST_PRESETS (a JSON array of { id, name, url, description?, auth? }). Honoured only in a
+ * hidden test run (SAHILBOT_HIDDEN=1), only for loopback server URLs, only for one-click auth
+ * ('oauth' or 'none'), and never replacing a real catalog entry. A normal run ignores it.
+ */
+export function testPresets(env: NodeJS.ProcessEnv = process.env, existing: Array<Pick<ConnectorPreset, 'id'>> = PRESETS): ConnectorPreset[] {
+  if (env.SAHILBOT_HIDDEN !== '1' || !env.SAHILBOT_TEST_PRESETS) return []
+  let raw: unknown
+  try { raw = JSON.parse(env.SAHILBOT_TEST_PRESETS) } catch { return [] }
+  if (!Array.isArray(raw)) return []
+  const taken = new Set(existing.map((p) => p.id))
+  const out: ConnectorPreset[] = []
+  for (const x of raw.slice(0, 5) as Array<Record<string, unknown>>) {
+    const id = typeof x?.id === 'string' ? x.id : ''
+    const name = typeof x?.name === 'string' ? x.name.trim().slice(0, 40) : ''
+    const url = typeof x?.url === 'string' ? x.url : ''
+    const auth = x?.auth === 'none' ? 'none' : 'oauth'
+    if (!/^test-[a-z0-9-]{1,30}$/.test(id) || !name || taken.has(id) || !/^http:\/\//.test(url) || !isLoopbackUrl(url)) continue
+    taken.add(id)
+    out.push({ id, name, url, auth, color: '#64748B', category: 'Other', description: typeof x.description === 'string' ? x.description.slice(0, 200) : `${name} (test app).` })
+  }
+  return out
+}
+PRESETS.push(...testPresets())
+
+/** The app's whole name appears in the text as words ("Google Calendar" in "check my google calendar"). */
+export function namedIn(text: string, name: string): boolean {
+  const n = name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  if (n.length < 3) return false
+  return ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `.includes(` ${n} `)
+}
+
 /** Signs in with one click: the server registers SahilBot itself (or needs no sign-in). */
 export function isOneClick(p: Pick<ConnectorPreset, 'auth'>): boolean {
   return p.auth === 'oauth' || p.auth === 'none'
@@ -1445,6 +1478,7 @@ export function explainAuthError(message: string, ctx: { name: string; url?: str
   if (/invalid_scope/i.test(m)) return `${ctx.name} refused the permissions SahilBot asked for (invalid_scope).${ctx.staticClient ? ` Add the scopes listed in the setup steps to your ${ctx.name} app, then connect again.` : ''}`
   if (/access_denied/i.test(m)) return `Sign-in was cancelled or ${ctx.name} denied access. Press Connect to try again.`
   if (/state mismatch/i.test(m)) return 'The sign-in link was out of date. Press Connect again.'
+  if (/^Sign-in timed out/i.test(m)) return `Sign-in to ${ctx.name} didn't finish in the browser within 5 minutes. Press Connect to open it again.`
   return m
 }
 
@@ -1463,11 +1497,14 @@ export class Connectors {
   }
 
   /** Catalog entries that match a request and aren't connected yet (for in-chat connect cards): by name first, then by what they do ("seo" → Semrush). */
-  suggest(query: string): ConnectorPreset[] {
+  suggest(query: string, o: { fullName?: boolean } = {}): ConnectorPreset[] {
     const q = query.toLowerCase()
     const connected = new Set(this.list().filter((c) => this.status.get(c.id)?.state === 'connected').map((c) => c.preset))
     const words = q.split(/[^a-z0-9.]+/).filter((w) => w.length > 2)
     const open = PRESETS.filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app')
+    // Only apps the request names in full ("google calendar", "notion"): for a find_tools search that also
+    // matched built-in tools, so "calendar" still means the built-in one and "browser" isn't Browserbase.
+    if (o.fullName) return open.filter((p) => namedIn(q, p.name)).sort((a, b) => Number(isOneClick(b)) - Number(isOneClick(a)))
     // Everyday words don't pick apps by name either ("data" isn't a request for Datadog or Crustdata).
     const byName = open.filter((p) => words.some((w) => !SUGGEST_STOP.has(w) && (p.name.toLowerCase().includes(w) || p.id.startsWith(w))))
     const byUse = open.filter((p) => !byName.includes(p) && words.some((w) => !SUGGEST_STOP.has(w) && p.description.toLowerCase().split(/[^a-z0-9]+/).includes(w)))
@@ -1881,6 +1918,22 @@ export class Connectors {
 
   // ---------------------------------------------------------------- calls from SahilBot itself (not the model)
 
+  /**
+   * Waits (up to `ms`) while a connector made from this catalog entry is still connecting on its own (at
+   * launch, or reconnecting after a drop), so a chat doesn't offer a Connect card for an app that's a moment
+   * away from being ready. Returns its tool names once live (empty if it isn't).
+   */
+  async settle(preset: string, ms = 8000): Promise<string[]> {
+    const busy = (): boolean => this.list().some((c) => c.preset === preset && c.enabled && this.status.get(c.id)?.state === 'connecting')
+    for (const end = Date.now() + ms; busy() && Date.now() < end;) await new Promise((r) => setTimeout(r, 100))
+    return this.presetTools(preset)
+  }
+
+  /** The agent tool names a live connector made from this catalog entry offers (empty when it isn't live). */
+  presetTools(preset: string): string[] {
+    return this.list().filter((c) => c.preset === preset).flatMap((c) => this.live.get(c.id)?.tools ?? [])
+  }
+
   /** True when a connector made from this catalog entry is live. */
   presetConnected(preset: string): boolean {
     return this.list().some((c) => c.preset === preset && this.live.has(c.id))
@@ -1915,6 +1968,8 @@ export class Connectors {
       name,
       label: c.name,
       group: c.name,
+      // A connected app's tool: a chat may use it without turning into agent work (registry chatAllowed).
+      connector: true,
       effect: policy.effect,
       untrusted: true,
       consequential: (args) => toolPolicy(c.preset, t.name, t.annotations, args).consequential,

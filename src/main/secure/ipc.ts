@@ -7,6 +7,7 @@ import type { VaultStatus } from '@shared/types'
 import type { Vault } from '../vault'
 import { VaultLockedError } from './core'
 import type { VaultAuth } from './auth'
+import type { SaveOffers } from './offers'
 
 export interface VaultFiles {
   /** Save / open dialogs (null = cancelled). */
@@ -26,7 +27,13 @@ export interface VaultIpcDeps {
   files: VaultFiles
   /** Hides the asking window from screenshots and screen recording while a value is shown. */
   protect(sender: unknown, ms: number): void
+  /** "Save to Vault?" offers (browser panel and chat). */
+  offers?: SaveOffers
+  /** An offer was saved, dismissed or turned into "never" (main updates the chat message and the panel). */
+  onOffer?(e: { id: string; status: 'saved' | 'dismissed'; name?: string; messageId?: string; offer?: VaultSaveOfferLike }): void
 }
+
+type VaultSaveOfferLike = import('@shared/types').VaultSaveOffer
 
 export type VaultHandler = (sender: unknown, ...args: any[]) => unknown
 
@@ -164,6 +171,31 @@ export function vaultHandlers(d: VaultIpcDeps): Record<string, VaultHandler> {
       vault.core.resign()
       return status()
     },
+    // ---- "Save to Vault?" (values never cross: only ids, the user's edits and the saved item's name)
+    'vault:offerSave': async (_s, id: string, edits?: import('@shared/types').VaultSaveEdits, messageId?: string) => {
+      if (!d.offers) throw new Error('Saving from here is not available.')
+      const e = (edits && typeof edits === 'object' ? edits : {}) as import('@shared/types').VaultSaveEdits
+      const clean: import('@shared/types').VaultSaveEdits = {}
+      for (const k of ['name', 'site', 'username', 'holder'] as const) if (typeof e[k] === 'string') clean[k] = String(e[k]).slice(0, 300)
+      for (const k of ['expMonth', 'expYear'] as const) if (typeof e[k] === 'string' || typeof e[k] === 'number') clean[k] = String(e[k]).slice(0, 4)
+      if (e.rememberCvc === true) clean.rememberCvc = true
+      const r = await d.offers.save(String(id ?? ''), clean)
+      d.onOffer?.({ id: String(id), status: 'saved', name: r.name, ...(typeof messageId === 'string' ? { messageId } : {}), offer: r.offer })
+      return { ok: true, name: r.name }
+    },
+    'vault:offerDismiss': (_s, id: string, messageId?: string) => {
+      d.offers?.dismiss(String(id ?? ''))
+      d.onOffer?.({ id: String(id), status: 'dismissed', ...(typeof messageId === 'string' ? { messageId } : {}) })
+      return { ok: true }
+    },
+    'vault:offerNever': (_s, id: string) => {
+      const list = d.offers?.never(String(id ?? '')) ?? []
+      d.onOffer?.({ id: String(id), status: 'dismissed' })
+      return list
+    },
+    'vault:offerAlive': (_s, ids: string[]) => (Array.isArray(ids) ? ids.slice(0, 50).map(String).filter((x) => !!d.offers?.alive(x)) : []),
+    'vault:neverSave': () => d.offers?.neverList() ?? [],
+    'vault:removeNeverSave': (_s, origin: string) => d.offers?.removeNever(String(origin ?? '')) ?? [],
     'vault:authPending': () => auth.open(),
     'vault:authRespond': (_s, id: string, answer: { password?: string; cancel?: boolean; touchId?: boolean }) => auth.respond(String(id ?? ''), answer ?? {})
   }

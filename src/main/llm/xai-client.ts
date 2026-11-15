@@ -229,8 +229,9 @@ export async function* streamXai(req: ChatRequest): AsyncGenerator<StreamPart> {
     } else if (type === 'response.failed' || type === 'error') {
       const e = (type === 'error' ? (ev.error && typeof ev.error === 'object' ? ev.error : ev) : (ev.response as { error?: unknown } | undefined)?.error ?? {}) as { code?: unknown; message?: unknown; type?: unknown }
       const code = String(e.code ?? e.type ?? 'server_error')
-      const status = EVENT_STATUS[code] ?? (/rate/.test(code) ? 429 : /overload|server|internal/.test(code) ? 500 : undefined)
-      throw xaiError(status, String(e.message ?? 'xAI stream error'), undefined, req.model)
+      // Out of credits mid-stream: 402, so it isn't retried and Auto moves on (xaiError's billing rule).
+      const status = EVENT_STATUS[code] ?? (/quota|credit|billing|spend/i.test(code) ? 402 : /rate/.test(code) ? 429 : /overload|server|internal/.test(code) ? 500 : undefined)
+      throw xaiError(status, String(e.message ?? `xAI stream error (${code})`), undefined, req.model)
     }
   }
   // No final event: use the finished items if the stream delivered them, else the connection dropped.

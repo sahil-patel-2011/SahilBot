@@ -51,6 +51,7 @@ const api: SahilBotApi = {
     search: call('threads:search') as never,
     create: call('threads:create') as never,
     update: call('threads:update') as never,
+    markRead: call('threads:markRead') as never,
     remove: call('threads:remove') as never,
     messages: call('threads:messages') as never,
     react: call('threads:react') as never
@@ -247,6 +248,8 @@ const api: SahilBotApi = {
     audit: call('vault:audit') as never, exportBackup: call('vault:exportBackup') as never, importBackup: call('vault:importBackup') as never, importCsv: call('vault:importCsv') as never,
     purgeLegacy: call('vault:purgeLegacy') as never, rollback: call('vault:rollback') as never, resign: call('vault:resign') as never,
     authPending: call('vault:authPending') as never, authRespond: call('vault:authRespond') as never,
+    offerSave: call('vault:offerSave') as never, offerDismiss: call('vault:offerDismiss') as never, offerNever: call('vault:offerNever') as never,
+    offerAlive: call('vault:offerAlive') as never, neverSave: call('vault:neverSave') as never, removeNeverSave: call('vault:removeNeverSave') as never,
     onAuth(cb) {
       const fn = (_e: unknown, ev: Parameters<typeof cb>[0]): void => cb(ev)
       ipcRenderer.on('vault:auth', fn)
@@ -410,6 +413,7 @@ const api: SahilBotApi = {
     exportThread: call('chat:export') as never,
     pending: call('chat:pending') as never,
     allPending: call('chat:allPending') as never,
+    running: call('chat:running') as never,
     onEvent(cb) {
       const fn = (_e: unknown, ev: ChatEvent): void => cb(ev)
       ipcRenderer.on('chat:event', fn)

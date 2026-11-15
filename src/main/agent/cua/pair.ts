@@ -1,5 +1,7 @@
 import type { ModelInfo, Tier } from '@shared/types'
 import { isPremiumOpenAI } from '../../llm/openai-models'
+import { isGrok } from '../../llm/xai-models'
+import { isPlanModel } from '../../llm/codex/ids'
 import { type AutoVariant, autoPool, pick } from '../../llm/router'
 import { type AutoPreference, routeTier, slotOf, slotsFor, type Slot } from '../../llm/routing-table'
 import type { CuaMode } from './protocol'
@@ -111,16 +113,19 @@ export function choosePair(i: PairInput): PairDecision {
   if (!forced && i.budgetTight) return { pair: false, why: 'little cloud budget left this month' }
   if (!forced && !multiStep(i.text)) return { pair: false, why: 'a short computer-use step: one model is enough' }
   // Auto (local) pairs among local models, Auto (cloud) among cloud models; a model picked by name stays the executor.
-  const pool = autoPool(i.variant ?? 'auto', i.models).filter((m) => m.installed !== false)
+  const all = autoPool(i.variant ?? 'auto', i.models).filter((m) => m.installed !== false)
+  // Auto never plans or executes with Grok (no computer-use result anywhere) or the ChatGPT plan (Codex gets the
+  // screenshots tools return as text only: docs/chatgpt-plan.md). A model set in Settings or picked by name stays.
+  const pool = all.filter((m) => m.provider !== 'xai' && !isGrok(m.id) && !isPlanModel(m.id) && m.provider !== 'chatgpt')
   const vision = (m: ModelInfo | undefined): boolean => !!m && m.vision !== false
-  let executor = byId(pool, i.executorSetting) ?? (i.variant ? undefined : byId(i.models, i.routed))
+  let executor = byId(all, i.executorSetting) ?? (i.variant ? undefined : byId(i.models, i.routed))
   if (!executor && i.variant !== 'auto:local') {
     for (const s of executorSlots(i.budgetTight ? 'cheapest' : i.preference)) { const m = bySlot(pool, s); if (m) { executor = m; break } }
   }
   executor ??= byId(pool, i.routed) ?? byId(i.models, i.routed)
   if (!executor) return { pair: false, why: 'no executor model is available' }
 
-  let planner = byId(pool, i.plannerSetting)
+  let planner = byId(all, i.plannerSetting)
   if (!planner && i.variant !== 'auto:local') {
     for (const s of plannerSlots(i.difficulty, i.budgetTight ? 'cheapest' : i.preference, i.fableForHardest)) {
       if (s === 'fable' && !(i.fableForHardest && i.difficulty >= 2)) continue
@@ -129,7 +134,7 @@ export function choosePair(i: PairInput): PairDecision {
     }
   }
   // Local only (or nothing in the table): the strongest local model plans.
-  if (!planner) planner = pick(pool, 3, { preferCloud: i.variant !== 'auto:local' })
+  if (!planner && pool.length) planner = pick(pool, 3, { preferCloud: i.variant !== 'auto:local' })
   if (!planner) return { pair: false, why: 'no planner model is available' }
   if (!vision(executor) && !forced) return { pair: false, why: `${label(executor, executor.id)} can't see screenshots` }
   if (planner.id === executor.id && !forced) return { pair: false, why: `the strongest planner is the executor itself (${label(planner, planner.id)})` }
