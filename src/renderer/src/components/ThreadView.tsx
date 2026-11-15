@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { HeavyBoard, Message, PendingRequest, TeamMember } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
@@ -231,6 +231,14 @@ function StatusLine({ drafting, since, progress }: { drafting: string | null; si
   )
 }
 
+/**
+ * Long chats stay smooth: the thread shows its latest WINDOW blocks and pulls in earlier ones as you
+ * scroll up (or press "Show earlier messages"), so opening a chat with hundreds of messages mounts a
+ * bounded amount of DOM. Each block is a memoized row: while a reply streams, only the block whose
+ * message changed renders again (App batches stream deltas to one update per frame).
+ */
+export const WINDOW = 120
+
 export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress }: {
   messages: Message[]
   /** Live Team of Experts boards by agents call id. */
@@ -245,6 +253,26 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
 }) {
   const scroller = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
+  const threadId = messages[0]?.threadId
+  // How many blocks to show, per chat (a different chat starts again from the latest WINDOW).
+  const [win, setWin] = useState<{ threadId?: string; limit: number }>({ limit: WINDOW })
+  const limit = win.threadId === threadId ? win.limit : WINDOW
+  /** Distance from the bottom before earlier blocks went in, so the view doesn't jump. */
+  const keepFromBottom = useRef<number | null>(null)
+
+  // The parent makes a new actions object every render; rows get a stable one that always calls the latest.
+  const live = useRef(actions)
+  live.current = actions
+  const stable = useMemo<ThreadActions>(() => ({
+    onRetry: () => live.current.onRetry(),
+    onEditLast: (text) => live.current.onEditLast(text),
+    onRespond: (id, answer) => live.current.onRespond(id, answer),
+    onReact: (id, emoji) => live.current.onReact(id, emoji),
+    onReply: (text) => live.current.onReply(text),
+    onOpenFile: (path) => live.current.onOpenFile(path),
+    onOpenDoc: (id) => live.current.onOpenDoc?.(id)
+  }), [])
+  const hasDocs = !!actions.onOpenDoc
 
   useLayoutEffect(() => {
     const el = scroller.current
@@ -254,18 +282,34 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   useEffect(() => {
     const el = scroller.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages[0]?.threadId])
+  }, [threadId])
 
-  const bs = blocks(messages)
-  const lastActivity = [...bs].reverse().find((b) => b.kind === 'activity')
-  const lastPlan = [...bs].reverse().find((b) => b.kind === 'plan')
+  // Earlier blocks went in above: keep what you were reading where it was.
+  useLayoutEffect(() => {
+    const el = scroller.current
+    // Instant, not the thread's smooth scrolling: an animated jump would pass the top again and load everything.
+    if (el && keepFromBottom.current !== null) el.scrollTo({ top: el.scrollHeight - keepFromBottom.current, behavior: 'instant' })
+    keepFromBottom.current = null
+  }, [limit])
+
+  const bs = useMemo(() => blocks(messages), [messages])
+  const first = Math.max(0, bs.length - limit)
+  const showEarlier = (): void => {
+    const el = scroller.current
+    if (el) keepFromBottom.current = el.scrollHeight - el.scrollTop
+    setWin({ threadId, limit: limit + WINDOW })
+  }
+  const lastOf = (kind: Block['kind']): Block | undefined => { for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind === kind) return bs[i]; return undefined }
+  const lastActivity = lastOf('activity')
+  const lastPlan = lastOf('plan')
   const tail = bs[bs.length - 1]
   const last = messages[messages.length - 1]
   const waiting = running && !pending.length && tail?.kind !== 'activity' && (!last || last.role !== 'assistant' || (last.status === 'streaming' && !last.content && !last.reasoning && !last.toolCalls))
   const approvalWaiting = pending.some((p) => p.kind === 'approval')
-  const tailText = [...bs].reverse().find((b) => b.kind !== 'notice' && b.kind !== 'compacted')
+  let tailText: Block | undefined
+  for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind !== 'notice' && bs[i].kind !== 'compacted') { tailText = bs[i]; break }
   const lastText = tailText?.kind === 'text'
-  const lastUserId = [...bs].reverse().find((b) => b.kind === 'user')?.m?.id
+  const lastUserId = (lastOf('user') as Extract<Block, { kind: 'user' }> | undefined)?.m.id
 
   return (
     <>
@@ -273,59 +317,120 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
         onScroll={(e) => {
           const el = e.currentTarget
           setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40)
+          // Near the top with more above: bring in the next batch.
+          if (first > 0 && el.scrollTop < 240 && keepFromBottom.current === null) showEarlier()
         }}>
         <div className="thread">
-          {bs.map((b, i) => {
+          {first > 0 && (
+            <button className="show-earlier" onClick={showEarlier} data-testid="show-earlier">
+              <I.Chevron size={13} style={{ transform: 'rotate(180deg)' }} />Show earlier messages
+            </button>
+          )}
+          {bs.slice(first).map((b, j) => {
+            const i = first + j
             const prev = bs[i - 1]
-            const atOf = (x: Block): number => (x.kind === 'activity' ? x.steps[0].at : x.kind === 'qa' || x.kind === 'plan' || x.kind === 'team' || x.kind === 'heavy' ? x.at : x.m.createdAt)
-            const at = atOf(b)
-            const prevAt = prev ? atOf(prev) : undefined
-            const time = stamp(at, prevAt)
+            const time = stamp(atOf(b), prev ? atOf(prev) : undefined)
             // Back-to-back replies from the same bot stack tightly, like short progress messages.
             const cont = !time && b.kind === 'text' && prev?.kind === 'text' && (b.m.meta?.botName ?? '') === (prev.m.meta?.botName ?? '')
             return (
-              <div key={b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.kind === 'heavy' ? `h-${b.id}` : b.m.id}
-                className={`block b-${b.kind}${cont ? ' cont' : ''}`}>
-                {time && <div className="stamp">{time}</div>}
-                {b.kind === 'qa' ? (
-                  <>
-                    <div className="row"><div className="bubble-wrap"><div className="bubble ai">{b.question}</div></div></div>
-                    {b.answer && <div className="row me"><div className="bubble-wrap"><div className="bubble me" data-testid="answer-bubble">{b.answer}</div></div></div>}
-                  </>
-                ) : b.kind === 'team' ? (
-                  <TeamCard id={b.id} titles={b.titles} members={teams?.[b.id] ?? b.final} summary={b.summary} live={running && !b.final} />
-                ) : b.kind === 'heavy' ? (
-                  <HeavyCard board={b.board} groupId={b.groupId} live={running} />
-                ) : b.kind === 'plan' ? (
-                  <PlanCard items={b.items} live={running && b === lastPlan} />
-                ) : b.kind === 'activity' ? (
-                  <>
-                    <Activity steps={b.steps} live={running && b === lastActivity && tail === b} waitingApproval={approvalWaiting && b === lastActivity} onOpenFile={actions.onOpenFile} />
-                    {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
-                    {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
-                    {actions.onOpenDoc && docsFromSteps(b.steps).map((d) => <DocCard key={d.key} doc={d.doc} at={d.at} exported={d.exported} onOpen={actions.onOpenDoc!} />)}
-                  </>
-                ) : (
-                  <Row b={b} actions={actions} editable={!running && b.kind === 'user' && b.m.id === lastUserId} cont={cont} />
-                )}
-              </div>
+              <BlockItem key={blockKey(b)} b={b} time={time} cont={cont} actions={stable} hasDocs={hasDocs}
+                // Live state goes only to the blocks it concerns, so the others keep their memoized render.
+                running={(b.kind === 'team' || b.kind === 'heavy') && running}
+                live={running && b === lastActivity && tail === b}
+                waitingApproval={approvalWaiting && b === lastActivity}
+                planLive={running && b === lastPlan}
+                members={b.kind === 'team' ? teams?.[b.id] : undefined}
+                editable={!running && b.kind === 'user' && b.m.id === lastUserId} />
             )
           })}
-          {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={actions.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={actions.onRespond} />))}
+          {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} />))}
           {running && !pending.length && (waiting || drafting || progress) && <StatusLine drafting={drafting ?? null} since={since ?? Date.now()} progress={progress} />}
           {!running && lastText && !pending.length && (
             <div className="after-actions">
-              <button className="chip-btn" onClick={actions.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>
+              <button className="chip-btn" onClick={stable.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>
             </div>
           )}
         </div>
       </div>
       {!atBottom && (
-        <button className="jump" onClick={() => setAtBottom(true)} title="Jump to latest"><I.Down /></button>
+        <button className="jump" onClick={() => setAtBottom(true)} title="Jump to latest" aria-label="Jump to latest"><I.Down /></button>
       )}
     </>
   )
 }
+
+const atOf = (x: Block): number => (x.kind === 'activity' ? x.steps[0].at : x.kind === 'qa' || x.kind === 'plan' || x.kind === 'team' || x.kind === 'heavy' ? x.at : x.m.createdAt)
+const blockKey = (b: Block): string => (b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.kind === 'heavy' ? `h-${b.id}` : b.m.id)
+
+type BlockProps = {
+  b: Block
+  time: string | null
+  cont: boolean
+  actions: ThreadActions
+  hasDocs: boolean
+  running: boolean
+  live: boolean
+  waitingApproval: boolean
+  planLive: boolean
+  members?: TeamMember[]
+  editable: boolean
+}
+
+/**
+ * Same content? blocks() builds fresh objects on every update, but the messages inside them are the
+ * same objects until they change, so identity of the message (or of each step's call and result) says
+ * whether a row needs to render again.
+ */
+export function sameBlock(a: Block, b: Block): boolean {
+  if (a === b) return true
+  switch (a.kind) {
+    case 'user': case 'text': case 'notice': case 'compacted':
+      return a.kind === b.kind && a.m === (b as typeof a).m
+    case 'activity': {
+      if (b.kind !== 'activity' || a.id !== b.id || a.steps.length !== b.steps.length) return false
+      return a.steps.every((s, i) => s.call === b.steps[i].call && s.result === b.steps[i].result && s.at === b.steps[i].at)
+    }
+    case 'qa':
+      return b.kind === 'qa' && a.id === b.id && a.question === b.question && a.answer === b.answer && a.at === b.at
+    case 'plan':
+      return b.kind === 'plan' && a.id === b.id && a.items.length === b.items.length && a.items.every((t, i) => t.text === b.items[i].text && t.status === b.items[i].status)
+    case 'team':
+      return b.kind === 'team' && a.id === b.id && a.final === b.final && a.summary === b.summary && a.titles.join('\n') === b.titles.join('\n')
+    case 'heavy':
+      return b.kind === 'heavy' && a.id === b.id && a.groupId === b.groupId && a.board === b.board && a.at === b.at
+  }
+}
+
+const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, running, live, waitingApproval, planLive, members, editable }: BlockProps) {
+  return (
+    <div className={`block b-${b.kind}${cont ? ' cont' : ''}`}>
+      {time && <div className="stamp">{time}</div>}
+      {b.kind === 'qa' ? (
+        <>
+          <div className="row"><div className="bubble-wrap"><div className="bubble ai">{b.question}</div></div></div>
+          {b.answer && <div className="row me"><div className="bubble-wrap"><div className="bubble me" data-testid="answer-bubble">{b.answer}</div></div></div>}
+        </>
+      ) : b.kind === 'team' ? (
+        <TeamCard id={b.id} titles={b.titles} members={members ?? b.final} summary={b.summary} live={running && !b.final} />
+      ) : b.kind === 'heavy' ? (
+        <HeavyCard board={b.board} groupId={b.groupId} live={running} />
+      ) : b.kind === 'plan' ? (
+        <PlanCard items={b.items} live={planLive} />
+      ) : b.kind === 'activity' ? (
+        <>
+          <Activity steps={b.steps} live={live} waitingApproval={waitingApproval} onOpenFile={actions.onOpenFile} />
+          {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
+          {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
+          {hasDocs && docsFromSteps(b.steps).map((d) => <DocCard key={d.key} doc={d.doc} at={d.at} exported={d.exported} onOpen={actions.onOpenDoc!} />)}
+        </>
+      ) : (
+        <Row b={b} actions={actions} editable={editable} cont={cont} />
+      )}
+    </div>
+  )
+}, (a, b) => a.time === b.time && a.cont === b.cont && a.actions === b.actions && a.hasDocs === b.hasDocs && a.running === b.running &&
+  a.live === b.live && a.waitingApproval === b.waitingApproval && a.planLive === b.planLive && a.members === b.members &&
+  a.editable === b.editable && sameBlock(a.b, b.b))
 
 function stamp(at: number, prev?: number): string | null {
   if (prev && at - prev < 30 * 60_000) return null

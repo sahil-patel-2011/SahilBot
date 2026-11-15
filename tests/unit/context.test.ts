@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { COMPACT_AT, ContextManager, KEEP_SHARE, OUTPUT_RESERVE, ResultStore, SUMMARY_MAX_TOKENS, estimate, toWire, wrapToolOutput, type TokenCounter } from '../../src/main/agent/context'
+import { COMPACT_AT, ContextManager, KEEP_SHARE, OUTPUT_RESERVE, RESULT_LIMIT, ResultStore, SUMMARY_MAX_TOKENS, ServerTokenCounter, estimate, resultLimit, toWire, upperEstimate, wrapToolOutput, type TokenCounter } from '../../src/main/agent/context'
 import { emptyState } from '../../src/main/agent/types'
 import type { Message } from '../../src/shared/types'
 
@@ -89,12 +89,36 @@ describe('compaction', () => {
       ms.push(msg('assistant', '', { toolCalls: [{ id: `c${i}`, name: 'fetch_page', arguments: '{}' }] }))
       ms.push(msg('tool', `page ${i} ` + 'text '.repeat(1500), { toolCallId: `c${i}`, toolName: 'fetch_page' }))
     }
-    const r = await cm.prepare({ system: 's', toolsJson: '[]', messages: ms, state: emptyState(), window: 16384 })
+    // 32K: eliding is enough here (at 16K the six newest outputs alone don't fit; see the next test).
+    const r = await cm.prepare({ system: 's', toolsJson: '[]', messages: ms, state: emptyState(), window: 32768 })
+    expect(r.compacted).toBeUndefined()
     const tools = r.wire.filter((w) => w.role === 'tool').map((w) => String(w.content))
     expect(tools.slice(0, 8).every((t) => t.includes('read_result id="msg-'))).toBe(true)
     expect(tools.slice(-6).every((t) => !t.includes('read_result'))).toBe(true)
     const id = tools[0].match(/id="([^"]+)"/)![1]
     expect(store.get(id)).toContain('page 0')
+  })
+
+  test('a single-turn run that still overflows after eliding is compacted step by step, and the history still opens with a user turn', async () => {
+    const store = new ResultStore(mkdtempSync(join(tmpdir(), 'res-')))
+    let seen = ''
+    const cm = new ContextManager(counter, async (t) => { seen = t; return 'checkpoint' }, store)
+    const ms: Message[] = [msg('user', 'research this')]
+    for (let i = 0; i < 40; i++) {
+      ms.push(msg('assistant', '', { toolCalls: [{ id: `d${i}`, name: 'fetch_page', arguments: '{}' }] }))
+      ms.push(msg('tool', `page ${i} ` + 'text '.repeat(1500), { toolCallId: `d${i}`, toolName: 'fetch_page' }))
+    }
+    const state = emptyState()
+    const r = await cm.prepare({ system: 's', toolsJson: '[]', messages: ms, state, window: 16384 })
+    expect(r.compacted).toBeDefined()
+    expect(r.used).toBeLessThanOrEqual(16384 - OUTPUT_RESERVE)
+    expect(seen).toContain('USER: research this')
+    // Cut between steps: every call in the prompt still has its result, and a user turn comes first.
+    expect(r.wire[1].role).toBe('user')
+    const calls = r.wire.flatMap((w) => w.tool_calls?.map((c) => c.id) ?? [])
+    const results = r.wire.filter((w) => w.role === 'tool').map((w) => w.tool_call_id)
+    expect(results).toEqual(calls)
+    expect(calls.at(-1)).toBe('d39')
   })
 })
 
@@ -113,6 +137,33 @@ describe('large tool results', () => {
     expect(part).toContain('line 1004 ')
     expect(part).not.toContain('line 1005 ')
     expect(store.read('r-1', 1)).toMatch(/Next: start=\d+/)
+  })
+  test('the offload limit grows with the window, and a bigger limit keeps a bigger head and tail', async () => {
+    expect(resultLimit(32768)).toBe(RESULT_LIMIT)
+    expect(resultLimit(128_000)).toBe(5120)
+    expect(resultLimit(936_000)).toBe(32_000)
+    const store = new ResultStore(mkdtempSync(join(tmpdir(), 'res-')))
+    const big = Array.from({ length: 20000 }, (_, i) => `line ${i + 1} some content here`).join('\n')
+    const small = await store.maybeOffload(big, 'r-s', counter)
+    const large = await store.maybeOffload(big, 'r-l', counter, 16_000)
+    expect(large.offloaded).toBe(true)
+    expect(large.text.length).toBeGreaterThan(6 * small.text.length)
+    // read_result pages are bigger too when the loop passes a budget.
+    expect(store.read('r-l', 1, undefined, 16_000).length).toBeGreaterThan(8 * store.read('r-l', 1).length)
+  })
+  test('the token counter never sends prompt text to a cloud API, and errs high without a tokenizer', async () => {
+    const calls: string[] = []
+    const real = globalThis.fetch
+    globalThis.fetch = (async (u: string) => { calls.push(String(u)); throw new Error('offline') }) as unknown as typeof fetch
+    try {
+      const text = 'const x = {"a": [1, 2, 3]};\n'.repeat(40)
+      const n = await new ServerTokenCounter('https://api.anthropic.com/v1', 'claude-opus-5-5').count(text)
+      expect(calls).toEqual([])
+      expect(n).toBe(upperEstimate(text))
+      expect(n).toBeGreaterThan(estimate(text))
+    } finally {
+      globalThis.fetch = real
+    }
   })
   test('small results pass through', async () => {
     const store = new ResultStore(mkdtempSync(join(tmpdir(), 'res-')))

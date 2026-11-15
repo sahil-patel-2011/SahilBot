@@ -17,7 +17,9 @@ describe('phase 4: connectors + web search', () => {
   afterAll(async () => { await llm.close() })
 
   test('connect a local MCP server from Connect apps; the agent finds and uses its tools with the right permissions', async () => {
-    const { app, page } = await launch(tempProfile(), llm.url)
+    // The 64 GB target Mac: on a small Mac the local window (16-32K) is mostly taken by the prompt and tools,
+    // and the run compacts every step, which isn't what this test is about.
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
     await page.click('[data-testid="connect-apps"]')
     await page.click('[data-testid="preset-custom"]')
     await page.fill('.conn-form input >> nth=0', 'Notes')

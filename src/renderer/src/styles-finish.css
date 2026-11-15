@@ -1,0 +1,78 @@
+/* ================================================================ finishing pass (performance + polish)
+   Loaded after styles-polish.css. Placeholders for split chunks, the long-chat "show earlier" control,
+   the composer at narrow widths, the context gauge, toasts, and one reduced-motion rule for everything.
+   Tokens only, so light and dark stay in step. */
+
+:root { --ctx-track: color-mix(in srgb, var(--text) 12%, transparent); --skel: color-mix(in srgb, var(--text) 7%, transparent); --skel-hi: color-mix(in srgb, var(--text) 12%, transparent); }
+
+/* ---------------------------------------------------------------- loading placeholders (lazy.tsx)
+   Shapes of the content to come with a soft sheen, instead of a spinner or a blank area. */
+.lazy-skel { display: flex; flex-direction: column; gap: 12px; padding: 22px 20px; }
+.lazy-panel { width: 340px; height: 100%; flex: none; border-left: 1px solid var(--line); background: var(--bg); padding-top: 72px; }
+.lazy-sheet { width: min(720px, 90vw); margin: 12vh auto 0; border-radius: 18px; background: var(--panel); box-shadow: var(--shadow); }
+.lazy-inline { padding: 16px 4px; }
+.lazy-skel .sk-line, .lazy-skel .sk-block, .skel-line {
+  display: block; height: 11px; border-radius: 6px;
+  background: linear-gradient(90deg, var(--skel) 0%, var(--skel-hi) 45%, var(--skel) 90%) 0 0 / 300% 100%;
+  animation: sk-sheen 1.4s ease-in-out infinite;
+}
+.lazy-skel .w60 { width: 60%; } .lazy-skel .w75 { width: 75%; } .lazy-skel .w90 { width: 90%; }
+.lazy-skel .sk-block { height: 120px; border-radius: 12px; margin-top: 6px; }
+@keyframes sk-sheen { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
+/* ---------------------------------------------------------------- long chats */
+.show-earlier {
+  display: flex; align-items: center; gap: 6px; margin: 4px auto 18px; padding: 6px 14px;
+  border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text-2); font-size: 12.5px;
+  transition: background .14s ease-out, color .14s ease-out;
+}
+.show-earlier:hover { background: var(--hover); color: var(--text); }
+.jump { border: 1px solid var(--line); color: var(--text-2); transition: background .14s ease-out, color .14s ease-out, transform .14s ease-out; }
+.jump:hover { background: var(--hover); color: var(--text); }
+
+/* ---------------------------------------------------------------- composer at narrow widths
+   The mode chips show only their icons before the row can wrap: the send and mic buttons never drop to a
+   second line (the 900px minimum window, or a chat with the details panel open). */
+.composer-bar { flex-wrap: nowrap; }
+@container (max-width: 700px) {
+  .composer .chip-label { display: none; }
+  .composer .team-chip { padding: 0 10px; }
+}
+
+/* ---------------------------------------------------------------- context gauge (header) */
+.ctx-ring { width: auto; gap: 5px; padding: 0 8px 0 6px; display: inline-flex; align-items: center; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; cursor: default; }
+.ctx-ring.full { color: var(--accent); }
+.ctx-ring svg { flex: none; }
+
+/* ---------------------------------------------------------------- toasts
+   One look for every kind (an inverted pill with a status dot), a fixed width range so a stack lines up,
+   a count for repeats and an optional next step. */
+.toasts { gap: 6px; }
+.toast { display: flex; align-items: center; gap: 10px; min-width: 240px; max-width: min(460px, calc(100vw - 48px)); padding: 9px 14px 9px 12px; line-height: 1.35; }
+.toast.error { background: var(--text); color: var(--bg); }
+.toast.error::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 35%, transparent); }
+.toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-count { flex: none; font-size: 11.5px; opacity: .6; font-variant-numeric: tabular-nums; }
+.toast-action {
+  flex: none; margin: -3px -6px -3px 2px; padding: 4px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+  color: inherit; background: color-mix(in srgb, var(--bg) 16%, transparent);
+}
+.toast-action:hover { background: color-mix(in srgb, var(--bg) 26%, transparent); }
+
+/* ---------------------------------------------------------------- reduced motion
+   One rule for every animation and transition in the app (spinners stop on their first frame). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
+/* ---------------------------------------------------------------- model picker
+   An Auto entry with nothing to route to (e.g. Auto (cloud) without a key) is dimmed with a badge. */
+.model-menu .menu-item.unavailable > span:nth-child(2) { color: var(--text-2); }
+.model-menu .mm-badge {
+  align-self: flex-start; flex: none; margin-left: auto; padding: 2px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 500; color: var(--text-3); border: 1px solid var(--line); white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- ⌘K palette: a command's own shortcut stays visible */
+.pal-item .kbd.keys { opacity: .7; }
+.pal-item.on .kbd.keys { opacity: 1; }

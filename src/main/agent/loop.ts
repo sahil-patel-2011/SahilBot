@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { intentTools } from './intent'
+import { intentTools, likelyTools } from './intent'
 import { usageScope } from '../usage'
 import type { ApprovalAnswer, Attachment, ChatEvent, Effort, TeamMember, Message, ModelInfo, PendingRequest, PermissionMode, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
 import type { Db } from '../db'
@@ -25,11 +25,14 @@ import { def as providerDef } from '../llm/providers'
 import { decide as route, pick } from '../llm/router'
 import { isPremiumClaude } from '../llm/claude-models'
 // Claude long context, native tools and Auto variants (llm/claude-models, llm/claude-native, llm/router).
-import { claudeInfo, claudeOptions, claudeWindow, compactionTrigger } from '../llm/claude-models'
+import { claudeInfo, claudeOptions, compactionTrigger } from '../llm/claude-models'
 import { HALT_TEXT } from '../llm/claude-native'
 import { stepCost } from '../llm/budget'
+// OpenAI's Responses models run append-only like Claude, in their table's window (llm/openai-responses).
+import { cloudWindow, openaiChatWindow, openaiRequest, openaiServerCompaction } from '../llm/openai-responses'
+import { usesResponses } from '../llm/openai-models'
 import { autoPool, autoUnavailable, autoVariant } from '../llm/router'
-import { ContextManager, OUTPUT_RESERVE, ResultStore, ServerTokenCounter, SUMMARY_INSTRUCTIONS, pinRunContext, withPinned, wrapToolOutput, type TokenCounter } from './context'
+import { ContextManager, OUTPUT_RESERVE, ResultStore, ServerTokenCounter, SUMMARY_INSTRUCTIONS, pinRunContext, resultLimit, taskBrief, withPinned, wrapToolOutput, type TokenCounter } from './context'
 import { ALWAYS_TAINT_CHECKED, appReadRisk, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, ruleVerdict, stricterMode } from './permissions'
 import { VOICE_SUFFIX, contextSections, groupNote, harnessPrompt, type ContextSection } from './prompt'
 import { chooseToolMode, quickEligible, type ToolRegistry } from './registry'
@@ -45,8 +48,16 @@ import { ACTIVITY_TITLE, activityAllowedFor, activityContext } from '../activity
  * (each finished plan item buys more room). HARD_CAP only stops a runaway loop.
  */
 export const START_BUDGET = 24
-export const HARD_CAP = 160
+/**
+ * 400: long real tasks (audits, migrations, research sweeps) run hundreds of steps, and the budget only gets
+ * near this while the plan keeps open items and the agent keeps finishing them. Loops are caught earlier
+ * (LoopGuard, the repeated-error nudge); the cloud budget cap still bounds spend. (Was 160, which cut a
+ * 300-step endurance task off at step 160 with its plan half done.)
+ */
+export const HARD_CAP = 400
 export const PER_PLAN_ITEM = 10
+/** Steps between stored plan reminders on a long run (see the step loop). */
+export const REMIND_EVERY = 10
 
 export interface AgentDeps {
   db: Db
@@ -1158,14 +1169,15 @@ export class Agent {
     let model = chosen.model
     let routed = chosen.routed
     let ep = this.d.endpoints.for(model)
-    let claude = ep.provider === 'anthropic'
+    // `claude`: an append-only cloud chat (Claude, or an OpenAI model on the Responses API).
+    let claude = ep.provider === 'anthropic' || usesResponses(ep.baseUrl, model)
     // Voice keeps a 16k window so replies start fast. Claude works in its real window as the context strategy
     // allows (Settings → Models: max = the whole 1M, balanced = 400K, economy = 128K), cached.
     // Auto (0): the largest window that fits this Mac with this model.
     const claudeOpts = claudeOptions(s)
-    const windowFor = (m: string, isClaude: boolean): number => Math.min(isClaude ? claudeWindow(m, claudeOpts.contextStrategy) : this.d.fitWindow(m, s.contextWindow || 131072), state.voice ? 16384 : Infinity)
-    // Claude models with threshold compaction summarize on the server near the window (the model id: see prepare()).
-    const serverCompactFor = (m: string, isClaude: boolean): string | undefined => (isClaude && !state.voice && claudeInfo(m)?.compaction ? m : undefined)
+    const windowFor = (m: string, isClaude: boolean): number => Math.min(isClaude ? cloudWindow(m, claudeOpts.contextStrategy) : openaiChatWindow(this.d.endpoints.for(m).provider, m, claudeOpts.contextStrategy) ?? this.d.fitWindow(m, s.contextWindow || 131072), state.voice ? 16384 : Infinity)
+    // Claude / OpenAI models with threshold compaction summarize on the server near the window (the model id: see prepare()).
+    const serverCompactFor = (m: string, isClaude: boolean): string | undefined => (isClaude && !state.voice && (claudeInfo(m)?.compaction || openaiServerCompaction(this.d.endpoints.for(m).baseUrl, m)) ? m : undefined)
     let window = windowFor(model, claude)
     const system = this.systemFor(thread, state, speaker, group)
     db.setState(thread.id, state)
@@ -1202,7 +1214,7 @@ export class Agent {
       switches++
       model = next.id
       ep = this.d.endpoints.for(model)
-      claude = ep.provider === 'anthropic'
+      claude = ep.provider === 'anthropic' || usesResponses(ep.baseUrl, model)
       window = windowFor(model, claude)
       cm = makeCm()
       this.lastModel.set(thread.id, model)
@@ -1214,6 +1226,20 @@ export class Agent {
     let invalidStreak = 0
     let sincePlan = 0
     let planReminded = false
+    // Stored plan reminders: the step of the last one, and the budget a "close to the budget" note was sent for.
+    let remindedAt = 1
+    let lateAt = -1
+    /**
+     * After Claude compacted on the server in `compactedAt`, the task brief (context.ts taskBrief) is stored as a
+     * hidden message after that step's results: the API ignores everything before the compaction block and the
+     * server's summary is its own, so the goal and constraints go back in verbatim. Stored, so append-only.
+     */
+    const storeBrief = (compactedAt: string): void => {
+      const ms = view(db.listMessages(thread.id))
+      const upTo = ms.findIndex((m) => m.id === compactedAt)
+      const text = taskBrief(ms, state, { upTo: upTo < 0 ? ms.length : upTo, window })
+      if (text) db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: text, meta: { hidden: true, brief: true, ...mine } })
+    }
 
     // Untrusted text seen in this thread, for the taint check on outside actions: outside tool output
     // (pages, email, other bots' replies), other bots' handoffs and Teach recordings. The user's own words
@@ -1317,7 +1343,16 @@ export class Agent {
         if (step === 1 && state.toolMode !== 'quick' && opener) {
           const folder = (space?.kind === 'project' ? space.folder : null) ?? db.getSpace(thread.spaceId)?.folder ?? null
           const codeProject = !!folder && ['.git', 'package.json', 'build.gradle', 'pyproject.toml', 'Cargo.toml', 'go.mod'].some((f) => existsSync(join(folder, f)))
-          const want = intentTools(opener.content, new Set(registry.all().map((t) => t.name)), { codeProject }).filter((n) => !state.loaded.includes(n))
+          const known = new Set(registry.all().map((t) => t.name))
+          const want = intentTools(opener.content, known, { codeProject }).filter((n) => !state.loaded.includes(n))
+          // Claude on a big window: the tools a chat is likely to need later (and read_result, which an offloaded
+          // result points to) load up front, on the chat's first run only. Every tool is in the cached prefix
+          // (tools → system → messages), so a tool loaded mid-chat makes the next request re-write the whole
+          // prompt at 1.25x: at 300K tokens on Opus 5.5 that one miss costs about what 300 steps of these extra
+          // tools cost to read from the cache. The screen and app tools stay on demand (they show the model the
+          // user's screen and apps; a request that needs them still loads them).
+          // (read_result alone on smaller Claude windows: it is small, and the first long result needs it.)
+          if (claude && !all.some((m) => m.role === 'assistant')) want.push(...likelyTools(known).filter((n) => (window >= 200_000 || n === 'read_result') && !state.loaded.includes(n) && !want.includes(n)))
           if (want.length) registry.load(state, want)
         }
         // This run's context (date, memories): pinned once to the message that opened it (or a steer).
@@ -1336,7 +1371,9 @@ export class Agent {
             meta: { before: prepared.compacted.before, after: prepared.compacted.after, boundaryId: prepared.compacted.boundaryId, ...(summarizedBy ? { summarizedBy } : {}) }
           })
           this.d.emit({ threadId: thread.id, type: 'message', message: marker })
-          // Earlier context blocks were summarized away: this run's block carries everything again.
+          // Earlier context blocks were summarized away: this run's block carries everything again. (The task
+          // brief, the goal and constraints verbatim with the plan and notes, rides in the system text with the
+          // summary: see ContextManager.systemText.)
           if (opener && this.pinContext(thread, state, db.listMessages(thread.id), opener, system, speaker, true)) {
             taintActivity()
             db.setState(thread.id, state)
@@ -1348,14 +1385,21 @@ export class Agent {
         const stepPrice = isLocal(ep.baseUrl) ? undefined : stepCost(model, prepared.used)
         this.d.emit({ threadId: thread.id, type: 'progress', step, actions, plan: planPos(), used: prepared.used, window, model, routed, ...(stepPrice ? { cost: stepPrice } : {}) })
 
-        // Keep the plan in view on long runs (appended at the end, so the cached prefix is untouched).
+        // Keep the plan in view on long runs. Reminders are stored (hidden) and sent exactly as stored: one that
+        // was only added to a request would be missing from the next, so every request after it changed the
+        // prompt where it had been, a cache miss for that step and, on preserved-thinking models, a dropped
+        // thinking block for every turn after it (endurance: 34 prefix breaks and ~1,600 dropped thinking
+        // blocks in 160 Claude steps). Right after a client compaction the task brief carries the plan instead.
         const open = state.todos.filter((t) => t.status !== 'done')
-        const late = step >= budget - 2 ? ' You are close to this run\'s step budget: finish the current item, then summarize what is done and what is left.' : ''
-        // Working notes ride along with the plan, and always come back right after a summary.
-        const notes = state.notes ? `\nYour working notes:\n${state.notes}` : ''
-        if (open.length && (prepared.compacted || (step > 1 && step % 5 === 0) || late)) prepared.wire.push({ role: 'user', content: `[Plan reminder from the app]${late}\n${planText(state)}${notes}` })
-        else if (prepared.compacted && notes) prepared.wire.push({ role: 'user', content: `[From the app] Older messages were summarized.${notes}` })
-        else if (late) prepared.wire.push({ role: 'user', content: `[From the app]${late}` })
+        const late = step >= budget - 2 && lateAt !== budget ? ' You are close to this run\'s step budget: finish the current item, then summarize what is done and what is left.' : ''
+        if (late) lateAt = budget
+        const remind = (content: string): void => {
+          const m = db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content, meta: { hidden: true, reminder: true, ...mine } })
+          prepared.wire.push({ role: 'user', content: m.content })
+          remindedAt = step
+        }
+        if (!prepared.compacted && open.length && ((step > 1 && step - remindedAt >= REMIND_EVERY) || late)) remind(`[Plan reminder from the app]${late}\n${planText(state)}`)
+        else if (late) remind(`[From the app]${late}`)
 
         let assistant: Message
         try {
@@ -1457,10 +1501,16 @@ export class Agent {
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: `[From the app] Your plan still has open items:\n${planText(state)}\nContinue working on them, or update the plan with todo (mark items done, or remove ones that no longer apply) and explain why.`, meta: { hidden: true, ...mine } })
             continue
           }
+          // Claude compacted on this final reply: the brief goes in after it, so the next message still carries
+          // the goal and the user's rules from before the compaction block.
+          if (assistant.meta?.serverCompacted) storeBrief(assistant.id)
           break
         }
 
         const ran = await this.executeAll(thread, run, state, assistant.toolCalls, { failures, untrusted, userText, guard, track, window })
+        // Claude compacted on the server in this reply: everything before its compaction block is gone from the
+        // model's view, so the task brief goes in after this step's results (the same thing the client does).
+        if (assistant.meta?.serverCompacted) storeBrief(assistant.id)
         // Small talk turned into real work: every tool from the next step on.
         registry.escalate(state, assistant.toolCalls.map((c) => c.name))
 
@@ -1575,7 +1625,9 @@ export class Agent {
         // Local models stay loaded between messages.
         keepAlive: s.localKeepAlive,
         // Claude: native tool types, cache lifetime and server-side compaction (ignored by other providers).
-        ...this.claudeRequest(threadId, model, window, run, effort)
+        ...this.claudeRequest(threadId, model, window, run, effort),
+        // OpenAI Responses: built-in web search, per-chat cache key and lifetime, server-side compaction.
+        ...openaiRequest({ baseUrl: ep.baseUrl, model, threadId, window, voice: !!this.d.db.getState(threadId).voice, web: s.search?.provider !== 'none', long: !!run.helper || effort === 'xhigh' || effort === 'max' })
       })) {
         if (part.type === 'content') {
           const text = takeHead(part.text)
@@ -1588,7 +1640,8 @@ export class Agent {
         } else if (part.type === 'tool_calls') {
           // Some servers reuse ids like "call_0" every step; results are matched by id, so make them unique.
           // Claude's ids are already unique and must match its stored blocks exactly.
-          m.toolCalls = part.calls.map((c) => (c.id.startsWith('toolu_') ? c : { ...c, id: `${c.id || 'call'}-${randomUUID().slice(0, 8)}` }))
+          // So are OpenAI's Responses call ids (call_…), which its replayed function_call items carry.
+          m.toolCalls = part.calls.map((c) => (c.id.startsWith('toolu_') || (c.id && usesResponses(ep.baseUrl, model)) ? c : { ...c, id: `${c.id || 'call'}-${randomUUID().slice(0, 8)}` }))
         } else if (part.type === 'tool_pending') {
           this.d.emit({ threadId, type: 'drafting', tool: part.name })
         } else if (part.type === 'reset') {
@@ -1941,7 +1994,7 @@ export class Agent {
       },
       spawnAgents: (tasks) => this.runTeam(thread, run, call.id, tasks),
       progress: (text) => this.d.emit({ threadId: thread.id, type: 'tool_progress', callId: call.id, tool: tool.name, text: text.slice(0, 300) }),
-      outputBudget: tool.name === 'agents' ? teamShare(ctx.window) : undefined,
+      outputBudget: tool.name === 'agents' ? teamShare(ctx.window) : tool.name === 'read_result' && !isLocal(this.d.endpoints.for(this.lastModel.get(thread.id) ?? thread.model ?? s.defaultModel).baseUrl) ? resultLimit(ctx.window) : undefined,
       model: this.lastModel.get(thread.id),
       speakerId: run.group ? run.speaker?.id : undefined,
       provenance,
@@ -1966,7 +2019,8 @@ export class Agent {
     const counter = this.d.counter?.(cep.baseUrl, cm) ?? new ServerTokenCounter(cep.baseUrl, cm)
     const id = `r-${call.id.replace(/[^\w-]/g, '').slice(-12)}-${Date.now().toString(36)}`
     // The team's reports are the work itself: the lead must see them whole, so they get a big share of the window.
-    const off = await this.d.results.maybeOffload(out.text, id, counter, tool.name === 'agents' ? teamShare(ctx.window) : undefined)
+    // Cloud windows hold bigger results whole (resultLimit); local models keep the 2K that keeps prefill fast.
+    const off = await this.d.results.maybeOffload(out.text, id, counter, tool.name === 'agents' ? teamShare(ctx.window) : isLocal(cep.baseUrl) ? undefined : resultLimit(ctx.window))
     if (effect !== 'read') ctx.track.changed = true
     // A tool that wrote install config or git internals: this chat's installs and pulls ask again (shell.ts).
     if (effect !== 'read' && tool.name !== 'run_command') noteTrustWrites(state, `${call.arguments}\n${out.path ?? ''}`)

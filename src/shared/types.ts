@@ -691,11 +691,34 @@ export interface ConnectorPreset {
    * oauth-static: the provider needs a one-time setup (the user creates an OAuth app there and pastes its client ID, see `setup`);
    * google: needs your Google OAuth client ID; browser: sign in once in SahilBot's browser; app: built into SahilBot.
    */
-  auth: 'oauth' | 'none' | 'oauth-static' | 'google' | 'browser' | 'app'
+  auth: 'oauth' | 'none' | 'oauth-static' | 'google' | 'browser' | 'app' | 'apikey'
   /** The app's own site, for its icon, when the server URL's host doesn't map to it (gmailmcp.googleapis.com → mail.google.com/mail/). */
   domain?: string
   /** One-time setup for oauth-static apps: exact steps with links, and the redirect URL to register. */
   setup?: ConnectorSetup
+  /** apikey apps: how the user's key is sent and where they get it (the key itself lives in the Keychain). */
+  apiKey?: ConnectorApiKey
+}
+
+/**
+ * How an official MCP server takes the user's own API key. The key is kept in the Keychain and added
+ * to each request when it's made: never to the saved URL, settings, logs or error text.
+ */
+export interface ConnectorApiKey {
+  /** A request header, or a query parameter added to the URL at request time only. */
+  in: 'header' | 'query'
+  /** Header name (Authorization, x-api-key) or query parameter name. */
+  name: string
+  /** Header value with {key} where the key goes (default "{key}"), e.g. "Bearer {key}". */
+  format?: string
+  /** The vendor's page where the user creates a key. */
+  getKeyUrl: string
+  /** Where on that page, e.g. "Account Settings → API Keys → Create API Key". */
+  hint: string
+  /** What a key looks like, for the paste box. */
+  placeholder?: string
+  /** Light format check (a regex source); main checks again. */
+  pattern?: string
 }
 
 /** A provider-specific "create an OAuth app once" guide (oauth-static presets and custom servers). */
@@ -1057,7 +1080,7 @@ export interface SahilBotApi {
   }
   connectors: {
     presets(): Promise<ConnectorPreset[]>
-    list(): Promise<{ configs: ConnectorConfig[]; statuses: ConnectorStatus[] }>
+    list(): Promise<{ configs: ConnectorConfig[]; statuses: ConnectorStatus[]; /** Connector ids with an API key saved (the keys never leave main). */ keys?: string[] }>
     save(c: Omit<ConnectorConfig, 'id'> & { id?: string; headerValue?: string; clientSecret?: string }): Promise<ConnectorConfig>
     remove(id: string): Promise<void>
     connect(id: string): Promise<ConnectorStatus>
@@ -1076,6 +1099,8 @@ export interface SahilBotApi {
     googleClient(): Promise<{ clientId: string; hasSecret: boolean } | null>
     setGoogleClient(clientId: string, clientSecret: string): Promise<{ clientId: string; hasSecret: boolean }>
     clearGoogleClient(): Promise<void>
+    /** Saves an API key for an apikey catalog app (Keychain), adds the app if needed, and connects. */
+    setApiKey(presetId: string, key: string): Promise<ConnectorStatus>
   }
   vault: {
     list(): Promise<VaultEntry[]>

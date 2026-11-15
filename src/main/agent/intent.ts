@@ -40,3 +40,13 @@ export function intentTools(text: string, known: Set<string>, extra: { codeProje
   if (extra.codeProject) for (const t of GROUPS[0].tools) out.add(t)
   return [...out].filter((t) => known.has(t))
 }
+
+/**
+ * Every on-demand tool a request might load, except the screen and app tools, plus read_result (the call an
+ * offloaded result points to): what a Claude chat on a big window loads up front (loop.ts), so the cached
+ * tool list stays the same for the whole chat. Only names that exist in `known`.
+ */
+export function likelyTools(known: Set<string>): string[] {
+  const out = GROUPS.filter((g) => !g.tools.includes('computer')).flatMap((g) => g.tools)
+  return ['read_result', ...out].filter((t) => known.has(t))
+}

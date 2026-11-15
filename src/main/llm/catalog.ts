@@ -1,4 +1,5 @@
 import type { Sampling, Tier } from '@shared/types'
+import { gptLabel, openaiInfo, openaiRank } from './openai-models'
 
 // Models SahilBot knows by name. Anything else still works; it just gets
 // generic sampling and a size estimate from the name or the server.
@@ -97,11 +98,15 @@ export const RECOMMENDED: Recommended[] = [
 export function prettyName(id: string): string | undefined {
   const m = id.match(/^claude-([a-z]+)-(\d+)(?:-(\d+))?(?:-\d{8})?$/i)
   if (m) return `Claude ${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}`
-  return undefined
+  // GPT: gpt-6.1-sol -> GPT-6.1 Sol (openai-models.ts).
+  return gptLabel(id)
 }
 
 /** Capability tier for Auto: from the catalog, else from the parameter count, else "standard". */
 export function tierOf(id: string, paramsB?: number): Tier {
+  // OpenAI's lineup by role (openai-models.ts): Luna 0, Terra 1, Sol 2, Astra 3.
+  const o = openaiInfo(id)
+  if (o) return o.tier
   const t = lookup(id)?.tier
   if (t !== undefined) return t
   const p = paramsB ?? paramsFromName(id)
@@ -149,7 +154,8 @@ export function rankOf(id: string, mlx = isMlx(id)): number {
   if (/^claude-opus/i.test(id)) return 5 + ver
   if (/^claude-sonnet/i.test(id)) return 4 + ver
   if (/^claude-haiku/i.test(id)) return 3 + ver
-  return 0
+  // GPT: newer generations first, below Claude's ranks (Claude stays first at a tier when both are keyed).
+  return openaiRank(id) ?? 0
 }
 
 export function lookup(id: string): CatalogEntry | undefined {

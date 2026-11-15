@@ -108,6 +108,10 @@ import { embeddingProvider } from './knowledge/embeddings'
 import { OPENAI_URL } from './llm/providers'
 import { fromWav } from './voice/audio'
 import { swarmSpend } from './agent/swarm/ledger'
+import { mark, TIMING } from './timing'
+
+// SAHILBOT_TIMING=1: launch phases in the log (src/main/timing.ts).
+mark('main module loaded')
 
 /** Set by the automated tests: run without ever showing a window. */
 const HIDDEN = !!process.env.SAHILBOT_HIDDEN
@@ -197,6 +201,13 @@ function createWindow(bounds: Partial<Electron.Rectangle> = {}): BrowserWindow {
   })
   // Automated test runs stay invisible: no window, no Dock icon, no stealing focus.
   if (!HIDDEN) w.once('ready-to-show', () => w.show())
+  if (TIMING) {
+    mark('window created')
+    w.once('ready-to-show', () => mark('window ready to show'))
+    w.webContents.once('did-finish-load', () => mark('renderer page loaded'))
+    // The renderer's own first paint of the app (see main.tsx); no preload bridge needed for a log line.
+    w.webContents.on('console-message', (e) => { const m = /^\[sb-timing\] (.*)$/.exec(e.message); if (m) mark(`renderer: ${m[1]}`) })
+  }
   // Links in chat open in the user's browser, never inside the app shell.
   w.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) void shell.openExternal(url)
@@ -231,8 +242,10 @@ function createQuickWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  mark('app ready')
   setupApp()
   const db = new Db(join(dataDir(), 'foreman.db'))
+  mark('database open')
   db.sweepStreaming()
   // ---------------------------------------------------------------- always on: runs cut off last time
   // Before anything can run: chats whose run was cut off by a quit or crash get a notice with Continue.
@@ -892,7 +905,7 @@ app.whenReady().then(() => {
     return found.filter((x): x is NonNullable<typeof x> => !!x)
   })
   handle('connectors:presets', () => PRESETS)
-  handle('connectors:list', () => ({ configs: connectors.list(), statuses: connectors.statuses() }))
+  handle('connectors:list', () => ({ configs: connectors.list(), statuses: connectors.statuses(), keys: connectors.keyIds() }))
   handle('connectors:save', (c: Parameters<Connectors['save']>[0] & { headerValue?: string; clientSecret?: string }) => {
     const { headerValue, clientSecret, ...rest } = c
     const saved = connectors.save(rest)
@@ -912,6 +925,8 @@ app.whenReady().then(() => {
   handle('connectors:googleClient', () => connectors.googleClient())
   handle('connectors:setGoogleClient', (clientId: string, clientSecret: string) => connectors.setGoogleClient(clientId, clientSecret))
   handle('connectors:clearGoogleClient', () => connectors.clearGoogleClient())
+  // The key goes straight to the Keychain; only a status comes back (errors are redacted in connectors.ts).
+  handle('connectors:setApiKey', (presetId: string, key: string) => connectors.setApiKey(presetId, key))
   void connectors.connectAll()
   // Health: a tools/list check every few minutes; dropped connections reconnect with backoff.
   connectors.startHealth()
@@ -1483,6 +1498,7 @@ app.whenReady().then(() => {
   // Bypass resets on every launch.
   db.sql.prepare(`UPDATE threads SET permission_mode = 'auto' WHERE permission_mode = 'bypass'`).run()
 
+  mark('services, tools and handlers set up')
   const ws = windowState(db)
   const open = (): BrowserWindow => {
     const w = createWindow(ws.bounds)
@@ -1637,6 +1653,7 @@ app.whenReady().then(() => {
     // The browser's hidden parking window doesn't count as an open window.
     if (!win || win.isDestroyed()) reopen()
   })
+  mark('main startup finished')
 })
 
 app.on('window-all-closed', () => {

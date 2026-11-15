@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import type { KnowledgeHit, KnowledgeSource, KnowledgeStatus } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
-import { Toggle } from './SettingsModal'
+import { Toggle } from './Toggle'
 import { toast } from '../lib/toast'
 
 // Settings → Knowledge: the folders SahilBot can search (with counts), meaning search (an Ollama

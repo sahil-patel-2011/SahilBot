@@ -313,6 +313,7 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
     let content: Anthropic.Beta.Messages.BetaContentBlock[] = []
     let input = 0
     let output = 0
+    let prompt = 0
     let searches = 0
     let final: Anthropic.Beta.Messages.BetaMessage | undefined
     try {
@@ -339,6 +340,9 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
         const b = billedUsage(final.model ?? req.model, final.usage as Usage)
         input += b.input
         output += b.output
+        // The real prompt size (input + cache writes + cache reads) picks the price tier (budget.tierTokens).
+        const u = final.usage as Usage
+        prompt = Math.max(prompt, (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0))
         if (final.stop_reason !== 'pause_turn' || cont >= MAX_CONTINUATIONS || req.signal?.aborted) break
       }
     } catch (e) {
@@ -365,8 +369,7 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
     // Billing-equivalent input: cache writes 1.25x (1h: 2x), reads 0.1x (0.05x Opus 5.5, 0.025x Fable 5.1),
     // compaction iterations, and web searches at $10 per 1,000.
     const fee = serverToolUsd({ searches })
-    if (fee) input += billedUsage(served, { input_tokens: 0 }, fee).input
-    yield { type: 'usage', promptTokens: input, completionTokens: output }
+    yield { type: 'usage', promptTokens: input, completionTokens: output, prompt, ...(fee ? { extraUsd: fee } : {}) }
 
     // Server tools (web search / fetch) ran inside the request: their sources and their outside text.
     const found = serverFindings(content)

@@ -59,6 +59,21 @@ test('connect apps shots', async () => {
   }
   await page.emulateMedia({ colorScheme: 'light' })
   await page.screenshot({ path: `${out}/ca-sidebar.png` })
+  // New sections with counts, category search, and the API-key panel (nothing is sent: the paste is checked locally).
+  await page.locator('[data-testid="connect-apps"]').first().click()
+  await page.fill('[data-testid="conn-search"]', 'tickets')
+  await page.waitForTimeout(200)
+  if (!(await page.locator('[data-testid="preset-helpscout"]').count())) throw new Error('search "tickets" did not find Help Scout')
+  await page.screenshot({ path: `${out}/ca-search-support.png` })
+  await page.fill('[data-testid="conn-search"]', 'render')
+  await page.click('[data-testid="preset-render"]')
+  await page.waitForSelector('[data-testid="api-key-panel"]')
+  if (!(await page.getAttribute('[data-testid="api-key-link"]', 'href'))?.startsWith('https://dashboard.render.com/')) throw new Error('key link')
+  await page.fill('[data-testid="api-key-input"]', 'has a space')
+  await page.click('[data-testid="api-key-save"]')
+  await page.waitForSelector('[data-testid="api-key-error"]')
+  await page.screenshot({ path: `${out}/ca-api-key.png` })
+  await page.keyboard.press('Escape')
   // Adding a template creates the bot with its first message.
   await page.locator('[data-testid="connect-apps"]').first().click()
   await page.click('[data-testid="bot-templates"]')

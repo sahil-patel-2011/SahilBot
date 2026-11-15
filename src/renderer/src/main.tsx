@@ -15,8 +15,10 @@ import './styles-tasks.css'
 import './styles-jobs.css'
 import './styles-docs.css'
 import './styles-heavy.css'
-// Loaded last: the polish layer refines everything above.
+// Loaded last: the polish layer refines everything above, then the finishing pass (lazy placeholders,
+// long chats, narrow composer, toasts, reduced motion).
 import './styles-polish.css'
+import './styles-finish.css'
 
 // The same page serves the main window and the Quick Ask bar (#quick).
 const quick = location.hash === '#quick'

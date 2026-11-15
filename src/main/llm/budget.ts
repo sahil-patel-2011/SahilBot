@@ -1,5 +1,6 @@
 import type { Db } from '../db'
 import { CACHE_WRITE_FACTOR, claudeInfo } from './claude-models'
+import { openaiInfo, writeFactors } from './openai-models'
 
 // Cloud spending guard. Every request to a paid (non-local) endpoint is priced before it is
 // sent, using the worst case (full max_tokens of output), and refused if it could push this
@@ -7,7 +8,8 @@ import { CACHE_WRITE_FACTOR, claudeInfo } from './claude-models'
 
 /**
  * $ per 1M tokens, from the Claude model table (claude-models.ts: Anthropic first-party rates, cached
- * 2026-10-06). Other paid models are listed here.
+ * 2026-10-06) and the OpenAI model table (openai-models.ts: pricing.md, read 2026-11-15). Other paid
+ * models are listed here.
  */
 const OTHER_PRICES: Array<[RegExp, number, number]> = []
 /** Unknown paid models are priced pessimistically (the most expensive tier) so the cap still holds. */
@@ -22,6 +24,15 @@ export function priceFor(model: string, inputTokens = 0): { input: number; outpu
     // A model newer than the table: the family's highest known prices, flagged as an estimate.
     if (spec.estimated) return { input: spec.price.input, output: spec.price.output, known: false, estimated: true, cacheRead: spec.price.cacheRead }
     return { input: spec.price.input, output: spec.price.output, known: true, cacheRead: spec.price.cacheRead }
+  }
+  // OpenAI (openai-models.ts: pricing.md Standard rates). Above 272K prompt tokens the whole request is billed
+  // at 2x input and cache rates and 1.5x output; a GPT id newer than the table is the role's highest, estimated.
+  const o = openaiInfo(model)
+  if (o) {
+    const lc = o.longContext && inputTokens > o.longContext.above ? o.longContext : undefined
+    const fi = lc?.input ?? 1
+    const fo = lc?.output ?? 1
+    return { input: o.price.input * fi, output: o.price.output * fo, cacheRead: o.price.cacheRead * fi, known: !o.estimated, ...(o.estimated ? { estimated: true } : {}) }
   }
   const hit = OTHER_PRICES.find(([re]) => re.test(model))
   if (!hit) return { input: UNKNOWN[0], output: UNKNOWN[1], known: false, estimated: true }
@@ -38,8 +49,41 @@ export function stepCost(model: string, contextTokens: number, o: { fresh?: numb
   const reply = o.reply ?? 2000
   const p = priceFor(model, contextTokens)
   const read = p.cacheRead ?? p.input * 0.1
-  const usd = ((contextTokens - fresh) * read + fresh * p.input * CACHE_WRITE_FACTOR + reply * p.output) / 1e6
+  // OpenAI: 30-minute cache writes cost 1.25x on GPT-5.6+ and nothing extra before (openai-models.ts).
+  const write = openaiInfo(model) ? writeFactors(model).m30 : CACHE_WRITE_FACTOR
+  const usd = ((contextTokens - fresh) * read + fresh * p.input * write + reply * p.output) / 1e6
   return { usd, estimated: !p.known }
+}
+
+/** Prompt size above which a model bills the whole request at long-context rates (undefined: no such rule). */
+export function longContextAbove(model: string): number | undefined {
+  return claudeInfo(model)?.longContext?.above ?? openaiInfo(model)?.longContext?.above
+}
+
+/**
+ * The tokens to record for one request so that cost() charges what it really cost. `input` is billing-
+ * equivalent input (cache reads and writes weighted against the standard input rate), which can sit far
+ * below the real prompt: a 300K-token prompt that is mostly cached is still a long-context request (Claude
+ * Haiku 5.5 above 100K, OpenAI above 272K), so the tier comes from `prompt`, the real prompt size (input
+ * + cache reads + cache writes). When cost() would pick another tier for `input` than the prompt paid, the
+ * same dollars are expressed at the standard tier: input up to the threshold, the rest carried as output.
+ * extraUsd: tool fees (web search) on top.
+ */
+export function tierTokens(model: string, prompt: number, input: number, output: number, extraUsd = 0): { promptTokens: number; completionTokens: number } {
+  const above = longContextAbove(model)
+  const paid = priceFor(model, prompt)
+  const usd = (input * paid.input + output * paid.output) / 1e6 + extraUsd
+  const asIs = { promptTokens: Math.round(input), completionTokens: Math.round(output) }
+  if (above === undefined && !extraUsd) return asIs
+  if (Math.abs(cost(model, asIs.promptTokens, asIs.completionTokens) - usd) <= 1e-9 + usd * 1e-6) return asIs
+  // Same tier as paid, with the fee folded into input (long tier: input above the threshold keeps the tier).
+  const recordTier = (i: number): boolean => above === undefined || (i > above) === (prompt > above)
+  const withFee = Math.round(input + (extraUsd * 1e6) / paid.input)
+  if (recordTier(withFee)) return { promptTokens: withFee, completionTokens: asIs.completionTokens }
+  // Otherwise the standard tier: input up to the threshold, the rest of the dollars as output tokens.
+  const std = priceFor(model, 0)
+  const i = Math.max(0, Math.min(Math.round((input * paid.input + extraUsd * 1e6) / std.input), above ?? Infinity))
+  return { promptTokens: i, completionTokens: Math.max(0, Math.round((usd * 1e6 - i * std.input) / std.output)) }
 }
 
 export const cost = (model: string, input: number, output: number): number => {

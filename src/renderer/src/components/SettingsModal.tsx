@@ -4,6 +4,7 @@ import { BRAND_NAME, cardProblem, digitsOnly, formatCardNumber, normalizeExpiry,
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
+import { Toggle } from './Toggle'
 import { recommendedRows } from '@shared/model-picker'
 import { MemoryManager } from './MemoryManager'
 import { KnowledgeSettings } from './KnowledgeSettings'
@@ -61,9 +62,8 @@ function Row({ title, sub, children, testId }: { title: ReactNode; sub?: ReactNo
   )
 }
 
-export function Toggle({ on, onChange, label, testId }: { on: boolean; onChange: (v: boolean) => void; label?: string; testId?: string }) {
-  return <button role="switch" aria-checked={on} aria-label={label} className={`switch${on ? ' on' : ''}`} onClick={() => onChange(!on)} data-testid={testId}><i /></button>
-}
+// Re-exported for anything that still imports it from here; it lives in its own module (see Toggle.tsx).
+export { Toggle }
 
 /** A text box that saves when you press Enter or leave it. */
 function Field({ value, onSave, placeholder, type = 'text', testId, width }: { value: string; onSave: (v: string) => void; placeholder?: string; type?: string; testId?: string; width?: number }) {

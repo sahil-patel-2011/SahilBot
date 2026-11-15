@@ -3,26 +3,21 @@ import { autoLabel } from '@shared/model-picker'
 import type { BrowserState, ChatEvent, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
 import { api } from './api'
 import { readableOn, SpaceAvatar } from './brand'
-import { BotDetails } from './components/BotDetails'
-import { BotEditor } from './components/BotEditor'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
-import { ConnectApps } from './components/ConnectApps'
 import { FilesView, Home, ProjectsView } from './components/Home'
 import { TasksView } from './components/TasksView'
-import { Onboarding } from './components/Onboarding'
 import { RightPanel, type PanelTab } from './components/RightPanel'
 import { JobsChip, RunSummary } from './components/JobsPanel'
-import { SettingsModal } from './components/SettingsModal'
 import { Sidebar, type MainView } from './components/Sidebar'
 import { ThreadView } from './components/ThreadView'
-import { VoiceMode } from './components/VoiceMode'
 import { ProjectHome } from './components/ProjectHome'
-import { Scheduled } from './components/Scheduled'
 import * as I from './icons'
 import { Popover } from './components/Popover'
 import { toast, Toasts } from './lib/toast'
 import { Speaker } from './lib/audio'
+// Split chunks (src/renderer/src/lazy.tsx): loaded on idle after the first paint, opened from there.
+import { BotDetails, BotEditor, ConnectApps, Lazy, Onboarding, preloadSurfaces, Scheduled, SettingsModal, VoiceMode } from './lazy'
 
 type Editor = { space: Space | null; mode: 'bot' | 'group' | 'project' } | null
 
@@ -160,7 +155,26 @@ export function App() {
     return () => { alive = false }
   }, [thread?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Stream deltas arrive per token; applying each one re-rendered the whole app dozens of times a second.
+  // They collect here and go in together once per frame (or within 50 ms when frames are throttled, e.g. a
+  // hidden window). Any other event for the chat flushes them first, so the order of updates is kept.
+  const deltaBuf = useRef(new Map<string, { content: string; reasoning: string }>())
+  const deltaTimer = useRef<{ raf: number; to: ReturnType<typeof setTimeout> } | null>(null)
+  const flushDeltas = useCallback(() => {
+    if (deltaTimer.current) { cancelAnimationFrame(deltaTimer.current.raf); clearTimeout(deltaTimer.current.to); deltaTimer.current = null }
+    const buf = deltaBuf.current
+    if (!buf.size) return
+    deltaBuf.current = new Map()
+    setMessages((ms) => ms.map((m) => {
+      const d = buf.get(m.id)
+      return d ? { ...m, content: m.content + d.content, reasoning: d.reasoning ? (m.reasoning ?? '') + d.reasoning : m.reasoning } : m
+    }))
+  }, [])
+  // A chat switch drops what was buffered for the old one (its messages are reloaded anyway).
+  useEffect(() => { deltaBuf.current = new Map() }, [thread?.id])
+
   useEffect(() => api.chat.onEvent((e: ChatEvent) => {
+    if (e.type !== 'delta') flushDeltas()
     if (e.type === 'spaces') { void refreshSpaces(); return }
     if (e.type === 'drafting') { setDrafting((d) => ({ ...d, [e.threadId]: e.tool })); return }
     if (e.type === 'tool_progress') { setToolProgress((p) => ({ ...p, [e.threadId]: e.text })); return }
@@ -172,7 +186,9 @@ export function App() {
       else {
         setDrafting((d) => ({ ...d, [e.threadId]: null }))
         setSteering((s) => ({ ...s, [e.threadId]: 0 }))
-        if (e.status === 'error' && e.error) toast(e.error, 'error')
+        // A problem in a chat you're not looking at says where, with a way there (that chat has Retry).
+        const elsewhere = e.threadId !== threadRef.current
+        if (e.status === 'error' && e.error) toast(e.error, 'error', elsewhere ? { action: { label: 'Open chat', run: () => openAnyChatRef.current(e.threadId) } } : {})
       }
       setRunning((r) => {
         const n = new Set(r)
@@ -184,7 +200,7 @@ export function App() {
       setRunSpaces((m) => { const n = { ...m }; if (e.status === 'started' && e.spaceId) n[e.threadId] = e.spaceId; else delete n[e.threadId]; return n })
       if (e.status !== 'started') setNeeds((x) => { if (!x[e.threadId]) return x; const n = { ...x }; delete n[e.threadId]; return n })
       // A chat you're not looking at finished: say so.
-      if (e.status === 'finished' && e.threadId !== threadRef.current && e.title) toast(`Done: ${e.title.replace(/^⏰ /, '').slice(0, 60)}`, 'ok')
+      if (e.status === 'finished' && e.threadId !== threadRef.current && e.title) toast(`Done: ${e.title.replace(/^⏰ /, '').slice(0, 60)}`, 'ok', { action: { label: 'Open', run: () => openAnyChatRef.current(e.threadId) } })
       // Deep Research: open the finished report.
       if (e.status === 'finished' && e.threadId === threadRef.current) {
         void api.threads.messages(e.threadId).then((ms) => {
@@ -244,13 +260,13 @@ export function App() {
         return next
       })
     } else if (e.type === 'delta') {
-      setMessages((ms) => ms.map((m) => m.id !== e.messageId ? m : {
-        ...m,
-        content: m.content + (e.content ?? ''),
-        reasoning: e.reasoning ? (m.reasoning ?? '') + e.reasoning : m.reasoning
-      }))
+      const d = deltaBuf.current.get(e.messageId) ?? { content: '', reasoning: '' }
+      d.content += e.content ?? ''
+      if (e.reasoning) d.reasoning += e.reasoning
+      deltaBuf.current.set(e.messageId, d)
+      if (!deltaTimer.current) deltaTimer.current = { raf: requestAnimationFrame(flushDeltas), to: setTimeout(flushDeltas, 50) }
     }
-  }), [refreshSpaces])
+  }), [refreshSpaces, flushDeltas])
 
   // Menu bar commands.
   useEffect(() => api.onMenu((a) => {
@@ -394,6 +410,9 @@ export function App() {
     else if (a.kind === 'projects' || a.kind === 'files' || a.kind === 'tasks') { setView(a.kind); setThread(null) }
     else if (a.kind === 'connect') setShowConnect(true)
     else if (a.kind === 'settings') setShowSettings(true)
+    else if (a.kind === 'panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
+    else if (a.kind === 'voice') setVoiceOn(true)
+    else if (a.kind === 'dictate') requestAnimationFrame(() => composer.current?.toggleDictation())
     else if (a.kind === 'chat') void openAnyChat(a.id)
     else void openBot(a.id)
   }
@@ -449,6 +468,17 @@ export function App() {
     window.addEventListener('sahilbot:open-doc', on)
     return () => window.removeEventListener('sahilbot:open-doc', on)
   }, [])
+
+  // First real paint (settings loaded, shell on screen): log it for SAHILBOT_TIMING (main reads console
+  // lines starting [sb-timing]), then fetch the split chunks in the background.
+  const painted = !!settings
+  useEffect(() => {
+    if (!painted) return
+    requestAnimationFrame(() => setTimeout(() => {
+      console.debug(`[sb-timing] first paint of the app at ${Math.round(performance.now())}ms after page start`)
+      preloadSurfaces()
+    }, 0))
+  }, [painted])
 
   if (!settings) return null
 
@@ -676,10 +706,14 @@ export function App() {
               </button>
             )}
             {prog && prog.used / prog.window >= 0.2 && (
-              <span className="ctx-ring" title={`Conversation memory: ${Math.round((prog.used / prog.window) * 100)}% full (${prog.used.toLocaleString()} of ${prog.window.toLocaleString()} tokens). Older parts are summarized only when it's nearly full.`} data-testid="ctx-ring">
-                <svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--line)" strokeWidth="2.5" />
-                  <circle cx="10" cy="10" r="8" fill="none" stroke={prog.used / prog.window > 0.85 ? 'var(--accent)' : 'var(--text-3)'} strokeWidth="2.5" strokeLinecap="round"
-                    strokeDasharray={`${Math.max(2, Math.min(1, prog.used / prog.window) * 50.3)} 50.3`} transform="rotate(-90 10 10)" /></svg>
+              // A gauge, not a spinner: a filled track, the share used, and the number beside it.
+              <span className={`ctx-ring${prog.used / prog.window > 0.85 ? ' full' : ''}`} role="img"
+                aria-label={`Conversation memory ${Math.round((prog.used / prog.window) * 100)}% full`}
+                title={`Conversation memory: ${Math.round((prog.used / prog.window) * 100)}% full (${prog.used.toLocaleString()} of ${prog.window.toLocaleString()} tokens). Older parts are summarized only when it's nearly full.`} data-testid="ctx-ring">
+                <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--ctx-track)" strokeWidth="3" />
+                  <circle cx="10" cy="10" r="7.5" fill="none" stroke={prog.used / prog.window > 0.85 ? 'var(--accent)' : 'var(--text-2)'} strokeWidth="3"
+                    strokeDasharray={`${Math.max(2, Math.min(1, prog.used / prog.window) * 47.1)} 47.1`} transform="rotate(-90 10 10)" /></svg>
+                <span className="ctx-pct">{Math.round(Math.min(1, prog.used / prog.window) * 100)}%</span>
               </span>
             )}
             {prog?.cost && (
@@ -743,10 +777,12 @@ export function App() {
         )}
       </main>
       {panel === 'details' && detailsSpace ? (
-        <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)}
-          onCustomize={() => setEditor({ space: detailsSpace, mode: detailsSpace.kind })}
-          onChanged={() => void refreshSpaces()}
-          onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }} />
+        <Lazy fallback="panel">
+          <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)}
+            onCustomize={() => setEditor({ space: detailsSpace, mode: detailsSpace.kind })}
+            onChanged={() => void refreshSpaces()}
+            onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }} />
+        </Lazy>
       ) : panel && panel !== 'details' && (
         <RightPanel tab={panel} onTab={setPanel} hidden={modal} messages={messages} file={file}
           onOpenFile={openFile} browserState={browser} onClose={() => setPanel(null)} threadId={thread?.id ?? null}
@@ -755,27 +791,35 @@ export function App() {
           docId={docId} onDocId={setDocId} botColor={botColor} botName={chatBot?.name}
           onAsk={(text, title) => { composer.current?.insert(`About this part of “${title}”:\n> ${text.replace(/\s+/g, ' ').slice(0, 800)}\n`); composer.current?.focus() }} />
       )}
-      {!settings.onboarded && <Onboarding settings={settings} onDone={(s) => { setSettings(s); void refreshModels() }} />}
+      {!settings.onboarded && <Lazy><Onboarding settings={settings} onDone={(s) => { setSettings(s); void refreshModels() }} /></Lazy>}
       {voiceOn && (
-        <VoiceMode threadId={thread?.id ?? null} space={space} onClose={() => setVoiceOn(false)}
-          onThread={(id) => { if (thread?.id !== id) void api.threads.list(space?.id).then((ts) => { const t = ts.find((x) => x.id === id); if (t) setThread(t) }) }} />
+        <Lazy>
+          <VoiceMode threadId={thread?.id ?? null} space={space} onClose={() => setVoiceOn(false)}
+            onThread={(id) => { if (thread?.id !== id) void api.threads.list(space?.id).then((ts) => { const t = ts.find((x) => x.id === id); if (t) setThread(t) }) }} />
+        </Lazy>
       )}
       {palette && <CommandPalette spaces={spaces} chats={chats} onPick={onPalette} onClose={() => setPalette(false)} />}
       {showSettings && (
-        <SettingsModal settings={settings} models={models} sys={sys} spaces={spaces} initialPage={settingsPage}
-          onClose={() => { setShowSettings(false); setSettingsPage(undefined) }}
-          onSaved={setSettings} onRefreshModels={() => void refreshModels()} />
+        <Lazy>
+          <SettingsModal settings={settings} models={models} sys={sys} spaces={spaces} initialPage={settingsPage}
+            onClose={() => { setShowSettings(false); setSettingsPage(undefined) }}
+            onSaved={setSettings} onRefreshModels={() => void refreshModels()} />
+        </Lazy>
       )}
-      {showConnect && <ConnectApps onClose={() => setShowConnect(false)} onBrowse={(url) => { setPanel('browser'); void api.browser.navigate(url) }}
+      {showConnect && <Lazy><ConnectApps onClose={() => setShowConnect(false)} onBrowse={(url) => { setPanel('browser'); void api.browser.navigate(url) }}
         onOpenBot={(id) => { setShowConnect(false); void refreshSpaces().then(() => openBot(id)) }}
-        onOpenSettings={(page) => { setShowConnect(false); setSettingsPage(page); setShowSettings(true) }} />}
+        onOpenSettings={(page) => { setShowConnect(false); setSettingsPage(page); setShowSettings(true) }} /></Lazy>}
       {showScheduled && (
-        <Scheduled spaces={spaces.filter((x) => x.kind !== 'group')} onClose={() => setShowScheduled(false)}
-          onOpen={(t) => { setShowScheduled(false); void api.threads.list(t.spaceId).then((ts) => { const th = ts.find((x) => x.id === t.threadId); if (th) { setSpaceId(t.spaceId); setThread(th) } }) }} />
+        <Lazy>
+          <Scheduled spaces={spaces.filter((x) => x.kind !== 'group')} onClose={() => setShowScheduled(false)}
+            onOpen={(t) => { setShowScheduled(false); void api.threads.list(t.spaceId).then((ts) => { const th = ts.find((x) => x.id === t.threadId); if (th) { setSpaceId(t.spaceId); setThread(th) } }) }} />
+        </Lazy>
       )}
       {editor && (
-        <BotEditor space={editor.space} spaces={spaces} models={models} mode={editor.mode} onClose={() => setEditor(null)}
-          onSaved={(id) => void refreshSpaces().then(() => openBot(id))} />
+        <Lazy>
+          <BotEditor space={editor.space} spaces={spaces} models={models} mode={editor.mode} onClose={() => setEditor(null)}
+            onSaved={(id) => void refreshSpaces().then(() => openBot(id))} />
+        </Lazy>
       )}
     </div>
   )

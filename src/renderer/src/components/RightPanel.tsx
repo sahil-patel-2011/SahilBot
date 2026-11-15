@@ -7,12 +7,12 @@ import { api } from '../api'
 import * as I from '../icons'
 import { TeachBar } from './TeachBar'
 import { isPageCandidate, PageView } from './PageView'
-import { Watchlist } from './Watchlist'
 import { ChartIcon } from './StockCard'
 import { useWatchlist } from '../lib/stocks'
 import { JobsPanel, TerminalIcon, useJobs } from './JobsPanel'
 // Docs: the Document tab (live documents shared with the bot).
-import { DocPane } from './DocEditor'
+// The docs editor and the watchlist are their own chunks (src/renderer/src/lazy.tsx).
+import { DocPane, Lazy, Watchlist } from '../lazy'
 import { DocIcon, useThreadDocs } from './doc/DocCard'
 
 export type PanelTab = 'progress' | 'browser' | 'file' | 'watchlist' | 'jobs' | 'doc'
@@ -65,8 +65,8 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
       </div>
       {tab === 'browser' && <BrowserPane hidden={hidden} threadId={threadId} />}
       {tab === 'progress' && <ProgressPane messages={messages} onOpenFile={onOpenFile} browserState={browserState} onBrowser={() => onTab('browser')} running={!!running} progress={progress} />}
-      {tab === 'watchlist' && <Watchlist />}
-      {tab === 'doc' && <DocPane threadId={threadId ?? null} docId={docId ?? null} onDocId={(id) => onDocId?.(id)} onAsk={(t, title) => onAsk?.(t, title)} botColor={botColor} botName={botName} />}
+      {tab === 'watchlist' && <Lazy fallback="inline"><Watchlist /></Lazy>}
+      {tab === 'doc' && <Lazy fallback="inline"><DocPane threadId={threadId ?? null} docId={docId ?? null} onDocId={(id) => onDocId?.(id)} onAsk={(t, title) => onAsk?.(t, title)} botColor={botColor} botName={botName} /></Lazy>}
       {tab === 'jobs' && <JobsPanel threadId={threadId ?? null} onOpenUrl={(url) => { onTab('browser'); void api.browser.navigate(url) }} />}
       {tab === 'file' && (isPageCandidate(file) ? <PageView key={file} path={file} hidden={hidden} fallback={<FilePane path={file} />} /> : <FilePane path={file} />)}
     </aside>

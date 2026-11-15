@@ -48,8 +48,9 @@ export function coreTools(results: ResultStore): ToolDef[] {
       required: ['id'],
       additionalProperties: false
     },
-    async run({ id, start, end }) {
-      return { text: results.read(id, start, end), display: `${id}${start ? ` from line ${start}` : ''}` }
+    // outputBudget: a bigger page on a big cloud window (the loop sets it from the window).
+    async run({ id, start, end }, ctx) {
+      return { text: results.read(id, start, end, ctx.outputBudget), display: `${id}${start ? ` from line ${start}` : ''}` }
     }
   }
 

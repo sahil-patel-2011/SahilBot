@@ -386,10 +386,12 @@ describe('MCP server over HTTP', () => {
       await status({ headers: { ...auth, host: `rebind.evil.example:${h.port}` } }),
       await status({ headers: { ...auth, 'content-type': 'text/plain' } }),
       await status({ method: 'GET', headers: auth, body: '' }),
-      await status({ path: '/', headers: auth }),
-      await status({ headers: auth, body: 'x'.repeat(1024 * 1024 + 10) })
+      await status({ path: '/', headers: auth })
     ]
-    expect(got).toEqual([403, 403, 403, 415, 405, 404, 413])
+    expect(got).toEqual([403, 403, 403, 415, 405, 404])
+    // Too big: 413 and the server hangs up at once, so a client still sending may see the reset first.
+    // Either way the request was refused unread.
+    expect(String(await status({ headers: auth, body: 'x'.repeat(1024 * 1024 + 10) }))).toMatch(/^413$|EPIPE|ECONNRESET|socket hang up/)
     const pre = await raw(h.port, { method: 'OPTIONS', headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' }, body: '' })
     expect(pre.status).toBe(403)
     expect(pre.headers['access-control-allow-origin']).toBeUndefined()

@@ -2,6 +2,9 @@ import type { Sampling, ToolCall } from '@shared/types'
 import { lookup } from './catalog'
 import { isAnthropic } from './providers'
 import { claudeMaxTokens, fallbacks, listAnthropicModels, streamAnthropic } from './anthropic'
+import { streamResponses } from './openai-responses'
+import { openaiEffort, openaiInfo, openaiMaxTokens, usesResponses } from './openai-models'
+import { tierTokens } from './budget'
 import { httpError, retryInfo, withRetries } from './retry'
 import { timer } from './timing'
 import { toolTurnSampling, withToolPrimer } from './local-tools'
@@ -48,8 +51,10 @@ export interface ChatRequest {
   native?: { enabled: boolean; web?: boolean }
   /** Claude: prompt-cache lifetime ('1h' for long agent runs and team helpers, where gaps pass 5 minutes). */
   cacheTtl?: '5m' | '1h'
-  /** Claude: server-side compaction starts at this many input tokens (undefined: no server compaction). */
+  /** Claude / OpenAI: server-side compaction starts at this many input tokens (undefined: no server compaction). */
   compactAt?: number
+  /** OpenAI: prompt_cache_key (the chat), so its requests share a cache and are accounted together. */
+  cacheKey?: string
 }
 
 /** Defaults for local servers. keepAlive follows the localKeepAlive setting (the agent passes it per request). */
@@ -100,9 +105,15 @@ export type StreamPart =
   | { type: 'content'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'tool_calls'; calls: ToolCall[] }
-  | { type: 'usage'; promptTokens: number; completionTokens: number }
+  /**
+   * Token usage in billing terms (cache reads and writes weighted at the model's standard input rate).
+   * prompt: the real prompt size, which picks the price tier (long-context rates); extraUsd: tool fees.
+   * paidAttempt turns these into the tokens the budget records (budget.tierTokens).
+   */
+  | { type: 'usage'; promptTokens: number; completionTokens: number; prompt?: number; extraUsd?: number; cachedTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }
   | { type: 'finish'; reason: string }
-  | { type: 'raw'; provider: 'anthropic'; model: string; content: unknown; compacted?: boolean }
+  /** Provider-native output to replay unchanged (Claude's content blocks, OpenAI's Responses output items). */
+  | { type: 'raw'; provider: 'anthropic' | 'openai'; model: string; content: unknown; compacted?: boolean }
   /** Claude's server tools ran inside the request: sources found and read, and the outside text they brought in. */
   | { type: 'server_tools'; found: Array<{ title: string; url: string }>; read: Array<{ title: string; url: string }>; untrusted: string[]; searches: number; fetches: number; errors: string[] }
   /** A tool call has started streaming: its name is known, its arguments aren't yet. */
@@ -187,8 +198,10 @@ export function buildBody(req: ChatRequest): Record<string, unknown> {
     body.tools = req.tools
     body.tool_choice = 'auto'
   }
-  // OpenAI reasoning models take a coarser effort scale.
-  if (req.effort && /^(gpt-5|o\d)/i.test(req.model) && !isLocal(req.baseUrl)) body.reasoning_effort = req.effort === 'xhigh' || req.effort === 'max' ? 'high' : req.effort
+  // OpenAI reasoning models: the model's own effort values (openai-models.ts), never one it rejects; models
+  // the table doesn't describe keep the coarse scale.
+  if (req.effort && !isLocal(req.baseUrl) && openaiInfo(req.model)?.efforts) body.reasoning_effort = openaiEffort(req.model, req.effort)
+  else if (req.effort && /^(gpt-5|o\d)/i.test(req.model) && !isLocal(req.baseUrl)) body.reasoning_effort = req.effort === 'xhigh' || req.effort === 'max' ? 'high' : req.effort
   return body
 }
 
@@ -431,7 +444,9 @@ async function* paidAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
   const chars = JSON.stringify(req.messages).length + JSON.stringify(req.tools ?? []).length
   const estimatedInput = Math.ceil((chars / 3) * 1.1)
   const claude = isAnthropic(req.baseUrl)
-  const maxOutput = claude ? claudeMaxTokens(req.maxTokens, req.effort, req.model) : req.maxTokens
+  // OpenAI models on api.openai.com go over the Responses API (openai-responses.ts); other servers keep Chat Completions.
+  const responses = !claude && usesResponses(req.baseUrl, req.model)
+  const maxOutput = claude ? claudeMaxTokens(req.maxTokens, req.effort, req.model) : responses ? openaiMaxTokens(req.maxTokens, req.effort, req.model) : req.maxTokens
   // If a refusal fallback could answer instead, price the worst case at the most expensive tier.
   spendHooks.before?.(req, estimatedInput, maxOutput, claude && fallbacks(req.model) ? 'claude-fable-5-1' : req.model)
   let input = 0
@@ -440,8 +455,12 @@ async function* paidAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
   let served = req.model
   let rejected = false
   try {
-    for await (const part of claude ? streamAnthropic(req) : streamOpenAI(req)) {
-      if (part.type === 'usage') { input = part.promptTokens; output = part.completionTokens }
+    for await (let part of claude ? streamAnthropic(req) : responses ? streamResponses(req) : streamOpenAI(req)) {
+      if (part.type === 'usage') {
+        // Recorded at the price tier the real prompt size pays (a 300K mostly-cached prompt is long context).
+        if (part.prompt !== undefined || part.extraUsd) part = { ...part, ...tierTokens(req.model, part.prompt ?? part.promptTokens, part.promptTokens, part.completionTokens, part.extraUsd) }
+        if (part.type === 'usage') { input = part.promptTokens; output = part.completionTokens }
+      }
       if (part.type === 'reset') produced = 0
       if (part.type === 'content' || part.type === 'reasoning') produced += part.text.length
       if (part.type === 'tool_calls') produced += JSON.stringify(part.calls).length

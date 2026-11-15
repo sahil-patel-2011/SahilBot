@@ -6,9 +6,11 @@ import * as I from '../icons'
 export type PaletteAction =
   | { kind: 'new-chat' } | { kind: 'new-bot' } | { kind: 'new-group' } | { kind: 'new-project' }
   | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'tasks' } | { kind: 'connect' } | { kind: 'settings' }
+  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' }
   | { kind: 'open'; id: string } | { kind: 'chat'; id: string }
 
-type Item = { a: PaletteAction; label: string; sub?: string; icon: React.ReactNode; group: string }
+/** keys: the command's own shortcut, shown on the row so the palette teaches it. */
+type Item = { a: PaletteAction; label: string; sub?: string; icon: React.ReactNode; group: string; keys?: string[] }
 
 /** ⌘K: jump to any bot or chat, or run a command (new bot, Projects, Files, Scheduled…). ⌘1…⌘9 picks. */
 export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces: Space[]; chats?: Thread[]; onPick: (a: PaletteAction) => void; onClose: () => void }) {
@@ -26,7 +28,11 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       { a: { kind: 'tasks' }, label: 'Tasks', sub: 'Goals your bots are working on', icon: ico(<I.Check size={15} />), group: 'Go to' },
       { a: { kind: 'scheduled' }, label: 'Scheduled', sub: 'Routines and scheduled tasks', icon: ico(<I.Clock size={15} />), group: 'Go to' },
       { a: { kind: 'connect' }, label: 'Connect apps', icon: ico(<I.Plug size={15} />), group: 'Go to' },
-      { a: { kind: 'settings' }, label: 'Settings', icon: ico(<I.Gear size={15} />), group: 'Go to' }
+      { a: { kind: 'settings' }, label: 'Settings', icon: ico(<I.Gear size={15} />), group: 'Go to', keys: ['⌘', ','] },
+      // Shortcuts worth knowing: last in the default list, and found by searching.
+      { a: { kind: 'panel' }, label: 'Toggle side panel', sub: 'Progress, browser, files and documents', icon: ico(<I.Panel size={15} />), group: 'Shortcuts', keys: ['⌘', '\\'] },
+      { a: { kind: 'voice' }, label: 'Voice chat', sub: 'Talk with SahilBot', icon: ico(<I.Wave size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'V'] },
+      { a: { kind: 'dictate' }, label: 'Dictate a message', sub: 'Speak into the message box', icon: ico(<I.Mic size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'D'] }
     ]
     const bots: Item[] = [...spaces].sort((a, b) => Number(b.isMain) - Number(a.isMain)).map((s) => ({
       a: { kind: 'open', id: s.id } as PaletteAction,
@@ -37,9 +43,9 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
     }))
     const recent: Item[] = chats.slice(0, 30).map((t) => ({ a: { kind: 'chat', id: t.id }, label: t.title.replace(/^⏰ /, ''), icon: ico(<I.Reply size={14} style={{ transform: 'scaleX(-1)' }} />), group: 'Chats' }))
     const t = q.trim().toLowerCase()
-    // Without a query: start something, your bots, places to go, projects, then a few recent chats.
-    if (!t) return [...commands.filter((c) => c.group === 'Start'), ...bots.filter((b) => b.group === 'Bots'), ...commands.filter((c) => c.group === 'Go to'), ...bots.filter((b) => b.group === 'Projects'), ...recent.slice(0, 5)]
-    return [...bots, ...commands, ...recent].filter((x) => x.label.toLowerCase().includes(t) || (x.group !== 'Chats' && x.sub?.toLowerCase().includes(t)))
+    // Without a query: start something, your bots, places to go, projects, a few recent chats, then shortcuts.
+    if (!t) return [...commands.filter((c) => c.group === 'Start'), ...bots.filter((b) => b.group === 'Bots'), ...commands.filter((c) => c.group === 'Go to'), ...bots.filter((b) => b.group === 'Projects'), ...recent.slice(0, 5), ...commands.filter((c) => c.group === 'Shortcuts')]
+    return [...bots, ...commands, ...recent].filter((x) => x.label.toLowerCase().includes(t) || (x.group !== 'Chats' && x.sub?.toLowerCase().includes(t)) || (x.group === 'Shortcuts' && /^(short|keys?|kbd)/.test(t)))
   }, [spaces, chats, q])
 
   useEffect(() => setSel(0), [q])
@@ -72,7 +78,8 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
             <button className={`pal-item${i === sel ? ' on' : ''}`} onMouseEnter={() => setSel(i)} onClick={() => onPick(it.a)}>
               {it.icon}
               <span className="pal-label">{it.label}{it.sub && <span className="pal-sub">{it.sub}</span>}</span>
-              {i < 9 && <span className="kbd"><kbd>⌘</kbd><kbd>{i + 1}</kbd></span>}
+              {it.keys ? <span className="kbd keys" aria-label={`Shortcut ${it.keys.join(' ')}`}>{it.keys.map((k, j) => <kbd key={j}>{k}</kbd>)}</span>
+                : i < 9 && <span className="kbd"><kbd>⌘</kbd><kbd>{i + 1}</kbd></span>}
             </button>
           </div>
         ))}

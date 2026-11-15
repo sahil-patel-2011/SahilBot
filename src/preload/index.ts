@@ -177,6 +177,7 @@ const api: SahilBotApi = {
     googleClient: call('connectors:googleClient') as never,
     setGoogleClient: call('connectors:setGoogleClient') as never,
     clearGoogleClient: call('connectors:clearGoogleClient') as never,
+    setApiKey: call('connectors:setApiKey') as never,
     onIcons(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('connectors:icons', fn)

@@ -9,7 +9,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { UnauthorizedError, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
-import type { ConnectorConfig, ConnectorPreset, ConnectorSetup, ConnectorStatus, ToolEffect } from '@shared/types'
+import type { ConnectorApiKey, ConnectorConfig, ConnectorPreset, ConnectorSetup, ConnectorStatus, ToolEffect } from '@shared/types'
 import type { ToolRegistry } from './agent/registry'
 import type { ToolDef } from './agent/types'
 import { CONSEQUENTIAL } from './agent/permissions'
@@ -103,6 +103,14 @@ const S = {
       { title: 'Paste the Client ID and Client secret here', text: 'Basic Information → App Credentials.', links: [] }
     ]
   },
+  front: {
+    minutes: 4, needsSecret: true, redirectUri: R('localhost'), idHint: 'the developer app\'s page', docs: 'https://dev.frontapp.com/docs/mcp-server',
+    steps: [
+      { title: 'Create a developer app in Front', text: 'Settings → Company → Developer → create an app named "SahilBot". Front\'s MCP server doesn\'t let apps register themselves, so this one-time app stands in.', links: [['Open Front', 'https://app.frontapp.com/'], ['Front MCP guide', 'https://dev.frontapp.com/docs/mcp-server']] },
+      { title: 'Add the Front MCP feature and the redirect URL', text: 'In the app\'s Features tab: Add feature → Front MCP. Add the redirect URL below. Under Resource permissions pick read and write; add send only if SahilBot should send messages (it still asks you every time). Save.', links: [] },
+      { title: 'Paste the Client ID and Client secret here', text: 'Both are on the app page. Each teammate then signs in to Front with their own account.', links: [] }
+    ]
+  },
   crunchbase: {
     minutes: 10, needsSecret: false, redirectUri: R('127.0.0.1'), idHint: 'issued by Crunchbase', docs: 'https://data.crunchbase.com/docs',
     steps: [
@@ -143,19 +151,41 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'fireflies', name: 'Fireflies', url: 'https://mcp.fireflies.ai/mcp', color: '#E1308A', category: 'Productivity', domain: 'fireflies.ai', auth: 'oauth', description: 'Meeting recordings and summaries.' }, // 2026-11-14: 401+PRM, DCR mcp.fireflies.ai/register
   { id: 'jotform', name: 'Jotform', url: 'https://mcp.jotform.com/', color: '#FF6100', category: 'Productivity', auth: 'oauth', description: 'Forms and submissions.' }, // 2026-11-14: 401+PRM, DCR oauth2.jotform.com/register-public-client
   { id: 'docusign', name: 'Docusign', url: 'https://mcp.docusign.com/mcp', color: '#4C00FF', category: 'Productivity', auth: 'oauth-static', setup: S.docusign, description: 'Agreements and envelopes.' }, // 2026-11-14: 401+PRM, AS has no registration_endpoint; Docusign: bring your own integration key (was 'oauth': fixed)
+  // NEW 2026-11-15 (URLs from each vendor's listing in Anthropic's connector directory / MCP registry, probed read-only)
+  { id: 'trello', name: 'Trello', url: 'https://mcp.trello.com/v1', color: '#0079BF', category: 'Productivity', domain: 'trello.com', auth: 'oauth', description: 'Boards, lists and cards.' }, // NEW 2026-11-15: 401+PRM, DCR auth.atlassian.com/…/dcr/register (Atlassian-hosted)
+  { id: 'coda', name: 'Coda (Superhuman Docs)', url: 'https://docs.superhuman.com/apis/mcp', color: '#EE5A29', category: 'Productivity', domain: 'coda.io', auth: 'oauth', description: 'Docs, pages and tables in Coda / Superhuman Docs.' }, // NEW 2026-11-15: 401+PRM, DCR id.superhuman.com/tokens/v4/api/oauth2/register
+  { id: 'readwise', name: 'Readwise', url: 'https://mcp2.readwise.io/mcp', color: '#F4C430', category: 'Productivity', domain: 'readwise.io', auth: 'oauth', description: 'Your highlights, Reader saves and daily review.' }, // NEW 2026-11-15: 401+PRM, DCR readwise.io/o/register/
+  { id: 'egnyte', name: 'Egnyte', url: 'https://mcp-server.egnyte.com/mcp', color: '#00A5A8', category: 'Productivity', domain: 'egnyte.com', auth: 'oauth', description: 'Search and read files in Egnyte.' }, // NEW 2026-11-15: 401+PRM, DCR mcp-oauth.egnyte.com/clients
+  { id: 'guru', name: 'Guru', url: 'https://mcp.api.getguru.com/mcp', color: '#4B4BF7', category: 'Productivity', domain: 'getguru.com', auth: 'oauth', description: 'Search your company knowledge and draft cards.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.api.getguru.com/oauth/mcp/register
+  { id: 'docsend', name: 'DocSend', url: 'https://docsend.com/mcp', color: '#1E7AF0', category: 'Productivity', domain: 'docsend.com', auth: 'oauth', description: 'Data rooms, shared links and who viewed what.' }, // NEW 2026-11-15: 401+PRM, DCR docsend.com/oauth/register
+  { id: 'gdocs', name: 'Google Docs', url: 'https://docsmcp.googleapis.com/mcp/v1', color: '#4285F4', category: 'Productivity', domain: 'docs.google.com/document/', auth: 'google', description: 'Read and edit your Google Docs.' }, // NEW 2026-11-15: initialize 200, PRM → accounts.google.com (no DCR): uses "Set up Google once"
+  { id: 'basecamp', name: 'Basecamp', url: 'https://mcp.basecamp.com/mcp', color: '#1D2D35', category: 'Productivity', domain: 'basecamp.com', auth: 'oauth', description: 'Projects, to-dos, message boards and schedules.' }, // NEW 2026-11-15: 401+PRM, DCR app.basecamp.com/oauth/clients (DPoP offered, not required); URL from basecamp.com/ai
   // Communication
   { id: 'slack', name: 'Slack', url: 'https://mcp.slack.com/mcp', color: '#4A154B', category: 'Communication', auth: 'oauth-static', setup: S.slack, description: 'Search, read and post in channels.' }, // 2026-11-14: 401+PRM, no registration_endpoint; Slack docs: "We do not support … Dynamic Client Registration" (was 'oauth': fixed)
   { id: 'zoom', name: 'Zoom', url: 'https://mcp.zoom.us/mcp/zoom/streamable', color: '#0B5CFF', category: 'Communication', auth: 'oauth-static', setup: S.zoom, description: 'Meetings, recordings, summaries and Zoom Docs.' }, // NEW 2026-11-14: 401+PRM (zoom.us), AS zoom.us has no registration_endpoint; Zoom docs: manual client registration
-  { id: 'intercom', name: 'Intercom', url: 'https://mcp.intercom.com/mcp', color: '#1F8DED', category: 'Communication', auth: 'oauth', description: 'Conversations and help center.' }, // 2026-11-14: 401+PRM, DCR mcp.intercom.com/register
+  { id: 'intercom', name: 'Intercom', url: 'https://mcp.intercom.com/mcp', color: '#1F8DED', category: 'Support', auth: 'oauth', description: 'Conversations, tickets and help center articles.' }, // 2026-11-14: 401+PRM, DCR mcp.intercom.com/register (moved to Support 2026-11-15)
+  { id: 'livestorm', name: 'Livestorm', url: 'https://mcp.livestorm.co/mcp', color: '#00B37E', category: 'Communication', domain: 'livestorm.co', auth: 'oauth', description: 'Webinars, sessions and registrants.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.livestorm.co/register
+  { id: 'bird', name: 'Bird', url: 'https://mcp.bird.com/', color: '#0E5CFF', category: 'Communication', domain: 'bird.com', auth: 'oauth', description: 'Email, SMS and WhatsApp through your Bird workspace; sending always asks.' }, // NEW 2026-11-15: 401+PRM, DCR platform.bird.com/v1/oauth/register
+  { id: 'superhuman-mail', name: 'Superhuman Mail', url: 'https://mcp.mail.superhuman.com/mcp', color: '#6E56CF', category: 'Communication', domain: 'superhuman.com', auth: 'oauth', description: 'Search, read and draft email in Superhuman; sending always asks.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.auth.mail.superhuman.com/oauth2/register; URL from help.superhuman.com
+  { id: 'mandrill', name: 'Mailchimp Transactional', url: 'https://mandrillapp.com/mcp', color: '#FFE01B', category: 'Communication', domain: 'mandrillapp.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://mandrillapp.com/settings', hint: 'Mandrill → Settings → API Keys → New API Key (a Transactional key, not a Marketing one).' }, description: 'Transactional email: templates, message status and sending (sending always asks).' }, // NEW 2026-11-15: initialize 200 with JSON-RPC error "Authorization: Bearer <api_key> required"; header from mailchimp.com/developer/transactional/guides/how-to-use-mailchimps-transactional-messaging-mcp/
+  // Support
+  { id: 'chatbase', name: 'Chatbase', url: 'https://mcp.chatbase.co/api/mcp', color: '#111111', category: 'Support', domain: 'chatbase.co', auth: 'oauth', description: 'Your support agents, their sources, conversations and tickets.' }, // NEW 2026-11-15: 401+PRM, DCR chatbase.co/api/oauth/register
+  { id: 'helpscout', name: 'Help Scout', url: 'https://mcp.helpscout.net/mcp', color: '#1292EE', category: 'Support', domain: 'helpscout.com', auth: 'oauth', description: 'Search conversations and pull support reports (read-only).' }, // NEW 2026-11-15: 401+PRM, DCR mcp.helpscout.net/oauth/register; URL from docs.helpscout.com
+  { id: 'front', name: 'Front', url: 'https://mcp.frontapp.com/mcp', color: '#A857F1', category: 'Support', domain: 'front.com', auth: 'oauth-static', setup: S.front, description: 'Shared inboxes, conversations and replies; sending always asks.' }, // NEW 2026-11-15: 401+PRM, AS app.frontapp.com has no registration_endpoint; dev.frontapp.com/docs/mcp-server: "doesn't support Dynamic Client Registration"
   // Design & media
   { id: 'figma', name: 'Figma', url: 'https://mcp.figma.com/mcp', color: '#A259FF', category: 'Design', auth: 'oauth', description: 'Design files and components.' }, // 2026-11-14: 401+PRM, DCR api.figma.com/v1/oauth/mcp/register
   { id: 'canva', name: 'Canva', url: 'https://mcp.canva.com/mcp', color: '#00C4CC', category: 'Design', auth: 'oauth', description: 'Designs, templates and exports.' }, // 2026-11-14: 401+PRM, DCR mcp.canva.com/register
   { id: 'miro', name: 'Miro', url: 'https://mcp.miro.com/', color: '#FFD02F', category: 'Design', auth: 'oauth', description: 'Boards, stickies and diagrams.' }, // 2026-11-14: 401+PRM, DCR mcp.miro.com/register
   { id: 'gamma', name: 'Gamma', url: 'https://mcp.gamma.app/mcp', color: '#7C3AED', category: 'Design', domain: 'gamma.app', auth: 'oauth', description: 'Generate decks and docs.' }, // 2026-11-14: 401+PRM, DCR auth.gamma.app/oauth/register
-  { id: 'heygen', name: 'HeyGen', url: 'https://mcp.heygen.com/mcp/v1/', color: '#7559FF', category: 'Design', domain: 'heygen.com', auth: 'oauth', description: 'AI avatar videos and voice, on your plan\'s credits.' }, // NEW 2026-11-14: 401+PRM /mcp/v1, DCR api2.heygen.com/v1/oauth/register; URL from developers.heygen.com/mcp/overview
-  { id: 'hyperframes', name: 'HyperFrames by HeyGen', url: 'https://mcp.heygen.com/mcp/hyperframes', color: '#5B3DF5', category: 'Design', domain: 'heygen.com', auth: 'oauth', description: 'Animated slides and motion-graphics videos made from HTML.' }, // NEW 2026-11-14: 401+PRM /mcp/hyperframes, DCR api2.heygen.com/v1/oauth/register; MCP registry
+  { id: 'heygen', name: 'HeyGen', url: 'https://mcp.heygen.com/mcp/v1/', color: '#7559FF', category: 'Media & AI', domain: 'heygen.com', auth: 'oauth', description: 'AI avatar videos and voice, on your plan\'s credits.' }, // NEW 2026-11-14: 401+PRM /mcp/v1, DCR api2.heygen.com/v1/oauth/register; URL from developers.heygen.com/mcp/overview
+  { id: 'hyperframes', name: 'HyperFrames by HeyGen', url: 'https://mcp.heygen.com/mcp/hyperframes', color: '#5B3DF5', category: 'Media & AI', domain: 'heygen.com', auth: 'oauth', description: 'Animated slides and motion-graphics videos made from HTML.' }, // NEW 2026-11-14: 401+PRM /mcp/hyperframes, DCR api2.heygen.com/v1/oauth/register; MCP registry
   { id: 'webflow', name: 'Webflow', url: 'https://mcp.webflow.com/mcp', color: '#4353FF', category: 'Design', auth: 'oauth', description: 'Sites and CMS collections.' }, // 2026-11-14: 401+PRM, DCR mcp.webflow.com/oauth/register
   { id: 'wix', name: 'Wix', url: 'https://mcp.wix.com/mcp', color: '#0C6EFC', category: 'Design', auth: 'oauth', description: 'Sites, stores and bookings.' }, // 2026-11-14: 401+PRM, DCR mcp.wix.com/register
+  { id: 'frontify', name: 'Frontify', url: 'https://mcp.frontify-integrations.com/mcp', color: '#2D3232', category: 'Design', domain: 'frontify.com', auth: 'oauth', description: 'Brand guidelines, assets and templates.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.frontify-integrations.com/oauth/register
+  // Media & AI
+  { id: 'higgsfield', name: 'Higgsfield', url: 'https://mcp.higgsfield.ai/mcp', color: '#C7F23A', category: 'Media & AI', domain: 'higgsfield.ai', auth: 'oauth', description: 'AI images, video and voice on your plan\'s credits; publishing always asks.' }, // NEW 2026-11-15: 401+PRM /mcp, DCR clerk.higgsfield.ai/oauth/register
+  { id: 'descript', name: 'Descript', url: 'https://api.descript.com/v2/mcp', color: '#3D5AFE', category: 'Media & AI', domain: 'descript.com', auth: 'oauth', description: 'Import media and edit video and podcasts with prompts.' }, // NEW 2026-11-15: 401+PRM (resource /v2/mcp), DCR auth.descript.com/v1/oauth2/register
+  { id: 'picsart', name: 'Picsart Media Studio', url: 'https://api.picsart.com/connectors/media-tools/mcp', color: '#C209C1', category: 'Media & AI', domain: 'picsart.com', auth: 'oauth', description: 'Turn clips and photos into finished videos.' }, // NEW 2026-11-15: 401+PRM, DCR auth.picsart.com/api/oauth2/register
   // Sales & marketing
   { id: 'hubspot', name: 'HubSpot', url: 'https://mcp.hubspot.com/', color: '#FF7A59', category: 'Sales & marketing', auth: 'oauth-static', setup: S.hubspot, description: 'Contacts, deals and companies.' }, // 2026-11-14: 401+PRM, no registration_endpoint; HubSpot docs: MCP auth app (was 'oauth': fixed)
   { id: 'apollo', name: 'Apollo', url: 'https://mcp.apollo.io/mcp', color: '#2E3A59', category: 'Sales & marketing', auth: 'oauth', description: 'Prospects and enrichment.' }, // 2026-11-14: 401+PRM, DCR mcp.apollo.io/…/register_oauth_client
@@ -168,12 +198,27 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'ahrefs', name: 'Ahrefs', url: 'https://api.ahrefs.com/mcp/mcp', color: '#FF8800', category: 'Sales & marketing', auth: 'oauth', description: 'Backlinks and keyword research.' }, // 2026-11-14: 401+PRM, DCR api.ahrefs.com/mcp/register
   { id: 'similarweb', name: 'Similarweb', url: 'https://mcp.similarweb.com/mcp', color: '#092540', category: 'Sales & marketing', auth: 'oauth', description: 'Website traffic and market data.' }, // 2026-11-14: 401+PRM, DCR mcp-auth.similarweb.com/register
   { id: 'crunchbase', name: 'Crunchbase', url: 'https://mcp.crunchbase.com/mcp', color: '#146AFF', category: 'Sales & marketing', auth: 'oauth-static', setup: S.crunchbase, description: 'Companies, funding and people.' }, // 2026-11-14: 401+PRM, AS crunchbase.com has no registration_endpoint (client-ID metadata documents only) (was 'oauth': fixed)
+  { id: 'buffer', name: 'Buffer', url: 'https://mcp.buffer.com/mcp', color: '#231F20', category: 'Social', domain: 'buffer.com', auth: 'oauth', description: 'Draft, queue and schedule social posts; publishing asks.' }, // NEW 2026-11-15: 401+PRM, DCR auth.buffer.com/reg; URL from developers.buffer.com
+  { id: 'brevo', name: 'Brevo', url: 'https://mcp.brevo.com/v1/brevo/mcp', color: '#0B996E', category: 'Sales & marketing', domain: 'brevo.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://app.brevo.com/settings/keys/api', hint: 'Account → SMTP & API → API Keys → Generate a new key, and tick the MCP option.' }, description: 'Contacts, lists, email and SMS campaigns; sending always asks.' }, // NEW 2026-11-15: 401+PRM /v1/brevo/mcp; developers.brevo.com/docs/mcp-protocol: "Authorization: Bearer <MCP token>"
+  { id: 'supermetrics', name: 'Supermetrics', url: 'https://mcp.supermetrics.com/mcp', color: '#4B2FD6', category: 'Sales & marketing', domain: 'supermetrics.com', auth: 'oauth', description: 'Ad, SEO and social reporting: Google, Meta, TikTok, LinkedIn Ads and more.' }, // NEW 2026-11-15: 401+PRM, DCR api.supermetrics.com/oauth/register
+  { id: 'crustdata', name: 'Crustdata', url: 'https://mcp.crustdata.com/mcp', color: '#0A0A0A', category: 'Sales & marketing', domain: 'crustdata.com', auth: 'oauth', description: 'Search and enrich company and people data.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.crustdata.com/register
+  { id: 'replicate', name: 'Replicate', url: 'https://mcp.replicate.com/sse', color: '#202020', category: 'Media & AI', domain: 'replicate.com', auth: 'oauth', description: 'Run AI models for images, video, audio and text; runs bill your account.' }, // NEW 2026-11-15: 401 (/sse), PRM resource mcp.replicate.com, DCR mcp.replicate.com/register; URL from replicate.com/docs/reference/mcp
+  { id: 'runway', name: 'Runway', url: 'https://mcp.runwayml.com/mcp', color: '#0A0A0A', category: 'Media & AI', domain: 'runwayml.com', auth: 'oauth', description: 'Generate and edit video and images on your Runway credits.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.runwayml.com/register; URL from runwayml.com/mcp
+  // Social
+  { id: 'typefully', name: 'Typefully', url: 'https://mcp.typefully.com/mcp', color: '#1D9BF0', category: 'Social', domain: 'typefully.com', auth: 'oauth', description: 'Draft and schedule posts for X, LinkedIn, Threads, Bluesky and more; publishing asks.' }, // NEW 2026-11-15: 401+PRM, DCR api.typefully.com/oauth2/register
+  { id: 'metricool', name: 'Metricool', url: 'https://ai.metricool.com/mcp', color: '#2C2C80', category: 'Social', domain: 'metricool.com', auth: 'oauth', description: 'Social analytics, best times to post and scheduled posts.' }, // NEW 2026-11-15: 401+PRM, DCR app.metricool.com/oauth/register
+  { id: 'windsor-social', name: 'Windsor.ai Social', url: 'https://mcp.windsor.ai/social_media', color: '#1F3B73', category: 'Social', domain: 'windsor.ai', auth: 'oauth', description: 'Organic social stats and posts across Instagram, Facebook, TikTok, YouTube and LinkedIn.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.windsor.ai/social_media/register
   // Finance & commerce
   { id: 'stripe', name: 'Stripe', url: 'https://mcp.stripe.com', color: '#635BFF', category: 'Finance & commerce', auth: 'oauth', description: 'Payments, customers and invoices.' }, // 2026-11-14: 401+PRM, DCR access.stripe.com/mcp/oauth2/register
   { id: 'paypal', name: 'PayPal', url: 'https://mcp.paypal.com/mcp', color: '#003087', category: 'Finance & commerce', auth: 'oauth', description: 'Invoices, orders and disputes.' }, // 2026-11-14: 401+PRM, DCR mcp.paypal.com/register
   { id: 'square', name: 'Square', url: 'https://mcp.squareup.com/mcp', color: '#3E4348', category: 'Finance & commerce', domain: 'squareup.com', auth: 'oauth', description: 'Payments, orders and catalog.' }, // 2026-11-14: 401+PRM /mcp (Streamable HTTP), DCR mcp.squareup.com/register (was /sse: moved to the streamable endpoint)
   { id: 'plaid', name: 'Plaid', url: 'https://mcp.plaid.com/mcp', color: '#111111', category: 'Finance & commerce', auth: 'oauth', description: 'Your Plaid developer dashboard: items, logs and usage.' }, // 2026-11-14: 401+PRM, DCR api.dashboard.plaid.com/oauth/register
   { id: 'xero', name: 'Xero', url: 'https://mcp.xero.com/mcp', color: '#13B5EA', category: 'Finance & commerce', auth: 'oauth-static', setup: S.xero, description: 'Accounting: invoices and contacts.' }, // 2026-11-14: 401+PRM, AS identity.xero.com has no registration_endpoint (was 'oauth': fixed)
+  { id: 'mercury', name: 'Mercury', url: 'https://mcp.mercury.com/mcp', color: '#5266EB', category: 'Finance & commerce', domain: 'mercury.com', auth: 'oauth', description: 'Accounts, transactions and cash flow; payments always ask.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.mercury.com/register
+  { id: 'brex', name: 'Brex', url: 'https://api.brex.com/mcp', color: '#F46A35', category: 'Finance & commerce', domain: 'brex.com', auth: 'oauth', description: 'Your cards, expenses, limits and policy.' }, // NEW 2026-11-15: 401+PRM (resource api.brex.com), DCR api.brex.com/v3/clients
+  { id: 'mollie', name: 'Mollie', url: 'https://mcp.mollie.com/mcp', color: '#0A0A0A', category: 'Finance & commerce', domain: 'mollie.com', auth: 'oauth', description: 'Payments, refunds, subscriptions and settlements.' }, // NEW 2026-11-15: 401+PRM, DCR api.mollie.com/oauth2/register
+  { id: 'navan', name: 'Navan', url: 'https://mcp.navan.com/mcp', color: '#0B2A4A', category: 'Finance & commerce', domain: 'navan.com', auth: 'oauth', description: 'Travel and expense data from Navan.' }, // NEW 2026-11-15: 401+PRM, DCR login.navan.com/oidc/register
+  { id: 'bigcommerce', name: 'BigCommerce', url: 'https://api.bigcommerce.com/mcp', color: '#121118', category: 'Finance & commerce', domain: 'bigcommerce.com', auth: 'oauth', description: 'Your store\'s products, orders and customers (early access; turn on MCP in store settings).' }, // NEW 2026-11-15: 401+PRM, DCR login.bigcommerce.com/oauth/register; URL from docs.bigcommerce.com/developer/api-reference/mcp/overview
   // Code
   { id: 'github', name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', color: '#24292F', category: 'Code', domain: 'github.com', auth: 'oauth-static', setup: S.github, description: 'Repos, issues and pull requests.' }, // 2026-11-14: 401+PRM, AS github.com/login/oauth has no registration_endpoint; GitHub host guide: DCR not supported (was 'oauth': fixed)
   { id: 'sentry', name: 'Sentry', url: 'https://mcp.sentry.dev/mcp', color: '#362D59', category: 'Code', domain: 'sentry.io', auth: 'oauth', description: 'Errors and performance issues.' }, // 2026-11-14: 401+PRM, DCR mcp.sentry.dev/oauth/register
@@ -188,14 +233,36 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'deepwiki', name: 'DeepWiki', url: 'https://mcp.deepwiki.com/mcp', color: '#0F172A', category: 'Code', auth: 'none', description: 'Explains any public GitHub repo. No sign-in.' }, // 2026-11-14: initialize 200, open
   { id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', color: '#059669', category: 'Code', auth: 'none', description: 'Up-to-date library docs. No sign-in.' }, // 2026-11-14: initialize 200, open
   { id: 'mslearn', name: 'Microsoft Learn', url: 'https://learn.microsoft.com/api/mcp', color: '#0078D4', category: 'Code', domain: 'learn.microsoft.com', auth: 'none', description: 'Official Microsoft docs. No sign-in.' }, // 2026-11-14: initialize 200, open
+  { id: 'railway', name: 'Railway', url: 'https://mcp.railway.com/', color: '#0B0D0E', category: 'Code', domain: 'railway.com', auth: 'oauth', description: 'Deploy and debug apps, databases and logs on Railway.' }, // NEW 2026-11-15: 401+PRM, DCR backboard.railway.com/oauth/register
+  { id: 'postman', name: 'Postman', url: 'https://mcp.postman.com/minimal', color: '#FF6C37', category: 'Code', domain: 'postman.com', auth: 'oauth', description: 'Workspaces, collections, specs and environments.' }, // NEW 2026-11-15: 401+PRM /minimal, DCR mcp.postman.com/register
+  { id: 'grafana', name: 'Grafana Cloud', url: 'https://mcp.grafana.com/mcp', color: '#F46800', category: 'Code', domain: 'grafana.com', auth: 'oauth', description: 'Metrics, logs, traces, dashboards and alerts.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.grafana.com/mcp/oauth/register
+  { id: 'honeycomb', name: 'Honeycomb', url: 'https://mcp.honeycomb.io/mcp', color: '#FFB000', category: 'Code', domain: 'honeycomb.io', auth: 'oauth', description: 'Query traces, datasets and SLOs (US region).' }, // NEW 2026-11-15: 401+PRM, DCR ui.honeycomb.io/oauth/register
+  { id: 'circleci', name: 'CircleCI', url: 'https://mcp.circleci.com/v1/mcp', color: '#343434', category: 'Code', domain: 'circleci.com', auth: 'oauth', description: 'Pipelines, failed builds, logs and flaky tests.' }, // NEW 2026-11-15: 401+PRM, DCR app.circleci.com/oauth/register
+  { id: 'planetscale', name: 'PlanetScale', url: 'https://mcp.pscale.dev/mcp/planetscale', color: '#000000', category: 'Code', domain: 'planetscale.com', auth: 'oauth', description: 'Your Postgres and MySQL databases, branches and schema.' }, // NEW 2026-11-15: 401+PRM, DCR auth.planetscale.com/oauth/registration
+  { id: 'betterstack', name: 'Better Stack', url: 'https://mcp.betterstack.com/', color: '#2F2F7A', category: 'Code', domain: 'betterstack.com', auth: 'oauth', description: 'Logs, metrics, uptime monitors and incidents.' }, // NEW 2026-11-15: 401+PRM, DCR betterstack.com/oauth/register
+  { id: 'mapbox', name: 'Mapbox', url: 'https://mcp.mapbox.com/mcp', color: '#4264FB', category: 'Code', domain: 'mapbox.com', auth: 'oauth', description: 'Geocoding, place search, routing and maps.' }, // NEW 2026-11-15: 401+PRM, DCR api.mapbox.com/oauth/register
+  { id: 'gitlab', name: 'GitLab', url: 'https://gitlab.com/api/v4/mcp', color: '#FC6D26', category: 'Code', domain: 'gitlab.com', auth: 'oauth', description: 'Projects, issues, merge requests and pipelines on GitLab.com.' }, // NEW 2026-11-15: 401+PRM, DCR gitlab.com/oauth/register; URL from docs.gitlab.com/user/model_context_protocol/mcp_server/
+  { id: 'buildkite', name: 'Buildkite', url: 'https://mcp.buildkite.com/mcp', color: '#14CC80', category: 'Code', domain: 'buildkite.com', auth: 'oauth', description: 'Pipelines, builds, jobs, logs and test results.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.buildkite.com/oauth/register; URL from buildkite.com/docs/apis/mcp-server
+  { id: 'prisma', name: 'Prisma Postgres', url: 'https://mcp.prisma.io/mcp', color: '#2D3748', category: 'Code', domain: 'prisma.io', auth: 'oauth', description: 'Create and manage Prisma Postgres databases, backups and queries.' }, // NEW 2026-11-15: 401+PRM, DCR auth.prisma.io/register; URL from prisma.io/docs/ai/tools/mcp-server
+  { id: 'datadog', name: 'Datadog', url: 'https://mcp.datadoghq.com/v1/mcp', color: '#632CA6', category: 'Code', domain: 'datadoghq.com', auth: 'oauth', description: 'Logs, metrics, traces, monitors and incidents (US1 site; an admin turns on MCP access).' }, // NEW 2026-11-15: 401+PRM, DCR app.datadoghq.com/api/v2/oauth2/register; URL from docs.datadoghq.com/bits_ai/mcp_server/setup
+  { id: 'render', name: 'Render', url: 'https://mcp.render.com/mcp', color: '#8A05FF', category: 'Code', domain: 'render.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://dashboard.render.com/u/settings?add-api-key', hint: 'Account Settings → API Keys → Create API Key.', placeholder: 'rnd_…' }, description: 'Services, deploys, logs, metrics and databases on Render.' }, // NEW 2026-11-15: 401+PRM, AS api.render.com has no registration_endpoint; render.com/docs/mcp-server: header "Authorization: Bearer <YOUR_API_KEY>"
+  { id: 'pagerduty', name: 'PagerDuty', url: 'https://mcp.pagerduty.com/mcp', color: '#06AC38', category: 'Code', domain: 'pagerduty.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Token token={key}', getKeyUrl: 'https://support.pagerduty.com/main/docs/api-access-keys', hint: 'In PagerDuty: My Profile → User Settings → Create API User Token (US service region).' }, description: 'Incidents, services and on-call; paging people always asks.' }, // NEW 2026-11-15: 401+PRM, AS app.pagerduty.com has no registration_endpoint; docs.pagerduty.com/developer/mcp-tooling-remote-server: "Authorization": "Token token=<key>"
   // Data & analytics
   { id: 'posthog', name: 'PostHog', url: 'https://mcp.posthog.com/mcp', color: '#F54E00', category: 'Data & analytics', auth: 'oauth', description: 'Product analytics and flags.' }, // 2026-11-14: 401+PRM, DCR oauth.posthog.com/oauth/register/
   { id: 'amplitude', name: 'Amplitude', url: 'https://mcp.amplitude.com/mcp', color: '#1E61F0', category: 'Data & analytics', auth: 'oauth', description: 'Product analytics.' }, // 2026-11-14: 401+PRM, DCR mcp.amplitude.com/register
   { id: 'mixpanel', name: 'Mixpanel', url: 'https://mcp.mixpanel.com/mcp', color: '#7856FF', category: 'Data & analytics', auth: 'oauth', description: 'Events, funnels and dashboards (US data region).' }, // NEW 2026-11-14: 401+PRM, DCR mixpanel.com/oauth/mcp/register/ (EU projects: mcp-eu.mixpanel.com, also DCR, as a custom server)
   { id: 'cloudflare-radar', name: 'Cloudflare Radar', url: 'https://radar.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Data & analytics', domain: 'radar.cloudflare.com', auth: 'oauth', description: 'Internet traffic trends, outages and attacks.' }, // NEW 2026-11-14: 401+PRM, DCR radar.mcp.cloudflare.com/register
   { id: 'vanta', name: 'Vanta', url: 'https://mcp.vanta.com/mcp', color: '#5E2DE5', category: 'Data & analytics', auth: 'oauth', description: 'Compliance tests, controls and evidence.' }, // NEW 2026-11-14: 401+PRM, DCR api.vanta.com/oauth/register
+  { id: 'bigquery', name: 'BigQuery', url: 'https://bigquery.googleapis.com/mcp', color: '#4285F4', category: 'Data & analytics', domain: 'cloud.google.com', auth: 'google', description: 'Datasets, tables and SQL queries in your Google Cloud.' }, // NEW 2026-11-15: initialize 200, PRM → accounts.google.com (no DCR): uses "Set up Google once"
+  { id: 'alphavantage', name: 'Alpha Vantage', url: 'https://mcp.alphavantage.co/mcp', color: '#1A8F5A', category: 'Data & analytics', domain: 'alphavantage.co', auth: 'oauth', description: 'Stock, forex, crypto and economic data, fundamentals and news.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.alphavantage.co/register
+  { id: 'hex', name: 'Hex', url: 'https://app.hex.tech/mcp', color: '#473982', category: 'Data & analytics', domain: 'hex.tech', auth: 'oauth', description: 'Ask the Hex agent questions over your data and projects (Team plan and up).' }, // NEW 2026-11-15: 401+PRM, DCR auth.app.hex.tech/oauth2/register; URL from learn.hex.tech/docs/administration/mcp-server
+  { id: 'pendo', name: 'Pendo', url: 'https://app.pendo.io/mcp/v0/shttp', color: '#E01F5D', category: 'Data & analytics', domain: 'pendo.io', auth: 'oauth', description: 'Product usage, accounts, guides and segments (US region; an admin turns on AI access).' }, // NEW 2026-11-15: 401+PRM, DCR app.pendo.io/oauth/v1/register; URL from support.pendo.io
   // Research
   { id: 'exa', name: 'Exa search', url: 'https://mcp.exa.ai/mcp', color: '#1F40ED', category: 'Research', auth: 'none', description: 'High-quality web search and page contents. No sign-in.' }, // 2026-11-14: initialize 200, open
+  { id: 'perplexity', name: 'Perplexity', url: 'https://api.perplexity.ai/mcp', color: '#20808D', category: 'Research', domain: 'perplexity.ai', auth: 'oauth', description: 'Web-grounded answers and search with citations (bills your API account).' }, // NEW 2026-11-15: 401+PRM (resource api.perplexity.ai), DCR api.perplexity.ai/oauth/register; URL from docs.perplexity.ai
+  { id: 'tavily', name: 'Tavily', url: 'https://mcp.tavily.com/mcp', color: '#4F46E5', category: 'Research', domain: 'tavily.com', auth: 'oauth', description: 'Web search, extract, crawl and research.' }, // NEW 2026-11-15: 401+PRM, DCR mcp.tavily.com/register
+  { id: 'firecrawl', name: 'Firecrawl', url: 'https://mcp.firecrawl.dev/v2/mcp-oauth', color: '#FA5D19', category: 'Research', domain: 'firecrawl.dev', auth: 'oauth', description: 'Search the web and scrape pages into clean text.' }, // NEW 2026-11-15: 401+PRM /v2/mcp-oauth (docs.firecrawl.dev/mcp-server: OAuth variant), DCR firecrawl.dev/api/oauth/register
+  { id: 'parallel', name: 'Parallel Search', url: 'https://search.parallel.ai/mcp', color: '#111111', category: 'Research', domain: 'parallel.ai', auth: 'none', description: 'Free web search and page fetch. No sign-in.' }, // NEW 2026-11-15: initialize 200, open
   { id: 'custom', name: 'Custom MCP server', url: '', color: '#7C5CFF', category: 'Other', auth: 'oauth', description: 'Any MCP server: a URL, or a local command.' }
 ]
 
@@ -453,6 +520,183 @@ export const EFFECT_MAPS: Record<string, EffectRule[]> = {
   ],
   todoist: [
     [/^delete-object$/i, DESTROY]
+  ],
+  // ---- NEW 2026-11-15 apps. Names are the servers' own (as listed in their directory entries); money
+  // and mass-sends are hard stops, outward actions (posting, paging people, deploying) ask.
+  mercury: [
+    [/^(get|list|search)/i, READ],
+    // requestSendMoney / requestTransferMoney set a payment up for approval: still money.
+    [/(send|transfer)_?money|payment|recipient|^(approve|cancel)/i, SEND_HARD('moves money from your Mercury account')]
+  ],
+  brex: [
+    [/^(get|list)_/i, READ],
+    [/(pay|transfer|reimburse)/i, SEND_HARD('moves money in Brex')]
+  ],
+  mollie: [
+    [/^(aggregate|get|list|search)/i, READ],
+    [/(Refund|Capture|Payment|Payout|Transfer|Mandate|Charge)/i, SEND_HARD('takes, refunds or moves money in Mollie')],
+    [/^cancel/i, ASK]
+  ],
+  railway: [
+    [/(^|-)(deploy|accept-deploy|deploy-artifact|create-deployment|redeploy|restart)/i, ASK],
+    [/(^|-)(delete|remove)/i, DESTROY],
+    [/^(get|list|search)-/i, READ]
+  ],
+  render: [
+    // Creating services and databases starts billing on the account.
+    [/^(create|deploy|restart|suspend|resume|scale)_|update_(env|environment)/i, ASK],
+    [/^(get|list|query)_/i, READ]
+  ],
+  pagerduty: [
+    // Incidents and responders page real people.
+    [/^(create_incident|add_responders|escalate|reassign|create_status_update|send_)/i, SEND_HARD('pages or notifies people through PagerDuty')],
+    [/^(resolve|acknowledge|merge|snooze|manage)_|^(create|update)_schedule/i, ASK],
+    [/^(get|list|search)_/i, READ]
+  ],
+  circleci: [
+    [/^(run|rerun|trigger|cancel|approve)_/i, ASK],
+    [/^(get|list|find|analyze|download)_/i, READ]
+  ],
+  planetscale: [
+    [/execute_write_query|create_(branch|deploy_request)|deploy|promote|revert/i, ASK],
+    [/(delete|drop)/i, DESTROY],
+    [/^planetscale_(get|list|search|execute_read_query)/i, READ]
+  ],
+  grafana: [
+    [/(create|add_activity_to)_incident|alerting_manage|create_annotation|update_dashboard/i, ASK],
+    [/^(get|list|search|query|find|describe|ask_assistant)/i, READ]
+  ],
+  betterstack: [
+    [/(acknowledge|resolve|escalate)_incident|create_(incident|monitor|heartbeat)/i, ASK]
+  ],
+  bigquery: [
+    // SQL can change tables and every query is billed.
+    [/^execute_sql$/i, ASK],
+    [/^(list|get)_/i, READ]
+  ],
+  trello: [
+    [/^trelloRead/i, READ],
+    [/^trello(Delete|Archive)/i, DESTROY]
+  ],
+  egnyte: [
+    [/create_link|share/i, ASK]
+  ],
+  docsend: [
+    [/create_space_link|create_link|send|invite|add_.*(permission|member)/i, ASK]
+  ],
+  higgsfield: [
+    [/(publish|deploy_website|tiktok_prepare_publish|participate_in_contest)/i, SEND_HARD('publishes something publicly through Higgsfield')],
+    [/(cancel_trial_auto_renewal|select_workspace)/i, ASK],
+    // Generations spend plan credits.
+    [/(generate|upscale|create_voice|reframe|outpaint|remove_background|dubbing|voice_change|motion_control|execute_preset|build_ai_influencer|scene_builder_3d_generate|video_analysis_create)/i, ASK],
+    [/^(get_|list_|show_|search_|balance|transactions|models_explore|job_display|jobs_wait)/i, READ]
+  ],
+  descript: [
+    [/^(prompt_project_agent|import_media)$/i, { effect: 'write_external', consequential: false }],
+    [/^(get|list)_/i, READ]
+  ],
+  typefully: [
+    [/^(get|list|search)_/i, READ],
+    // A scheduled or published draft goes out to the user's social accounts.
+    [/(publish|schedule|share)/i, SEND_HARD('posts to your social accounts through Typefully')]
+  ],
+  metricool: [
+    [/^(create|update)ScheduledPost$/i, SEND_HARD('schedules a post to your social accounts through Metricool')],
+    [/^get/i, READ]
+  ],
+  'windsor-social': [
+    [/^(get|list|search)_/i, READ],
+    [/^(execute_action|create_destination_task)$/i, SEND_HARD('posts or changes your social accounts through Windsor.ai')]
+  ],
+  supermetrics: [
+    // manage_* tools change live ad campaigns (and spend) or social accounts.
+    [/^manage_(campaign|social_media)$/i, SEND_HARD('changes live ad campaigns or social posts through Supermetrics')],
+    [/^(data_query|campaign_and_resource_get|marketing_utilities)$/i, READ]
+  ],
+  bird: [
+    [/(_list|_get)$/i, READ],
+    [/(send|broadcast|call|campaigns?_(launch|start|schedule)|messages?_create)/i, SEND_HARD('sends email, SMS, WhatsApp or calls through Bird')]
+  ],
+  livestorm: [
+    [/^livestorm_(get|list|search)/i, READ],
+    // Registering people emails them invitations.
+    [/(bulk_register|register_people|invite|send)/i, SEND_HARD('registers or emails people through Livestorm')]
+  ],
+  chatbase: [
+    [/^chatbase_(get|list|export|search)/i, READ],
+    [/create_ticket_message|reply/i, ASK]
+  ],
+  gitlab: [
+    [/^(merge_merge_request|accept_merge_request|merge)$|^merge_/i, SEND_HARD('merges code on GitLab')],
+    [/^(get|list|search)_/i, READ],
+    [/(create|update)_(issue|merge_request|note|comment|workitem|work_item)|create_branch|(create|run|retry|cancel)_pipeline/i, ASK]
+  ],
+  buildkite: [
+    [/^(get|list|search|read)_|_logs?$/i, READ],
+    [/(create_build|rebuild|unblock|cancel_build|retry|trigger)/i, ASK]
+  ],
+  prisma: [
+    [/(delete|drop)/i, DESTROY],
+    [/(execute|run)_?(sql|query)|create_(database|backup)|restore/i, ASK]
+  ],
+  datadog: [
+    [/^(search|get|analyze|aggregate|list)_/i, READ]
+  ],
+  front: [
+    [/^(get|list|search)_/i, READ],
+    [/(send|reply|forward)/i, SEND_HARD('sends a message to customers through Front')]
+  ],
+  'superhuman-mail': [
+    [/^(get|list|search|read)_/i, READ],
+    [/(^|_)(send|reply|forward)(_|$)/i, SEND_HARD('sends email as you through Superhuman')]
+  ],
+  mandrill: [
+    [/^account_status$/i, READ],
+    // call_api reaches the whole Transactional API, including sending: it always asks.
+    [/^call_api$|send/i, SEND_HARD('calls the Mailchimp Transactional API, which can send email')]
+  ],
+  brevo: [
+    [/(^|_)(get|list)_/i, READ],
+    [/(send|schedule)/i, SEND_HARD('sends email or SMS through Brevo')]
+  ],
+  buffer: [
+    [/^(get|list|search)_/i, READ],
+    [/(post|publish|share|schedule|queue)/i, SEND_HARD('posts to your social accounts through Buffer')]
+  ],
+  bigcommerce: [
+    [/refund/i, SEND_HARD('refunds an order in BigCommerce')],
+    [/(order|price|inventory|publish|channel)/i, ASK]
+  ],
+  replicate: [
+    // Model runs bill the account.
+    [/(create_prediction|run|create_training|create_deployment|predict)/i, ASK]
+  ],
+  runway: [
+    [/(generate|image_to|text_to|video_to|upscale|create)/i, ASK]
+  ],
+  perplexity: [
+    [/(search|ask|research|reason)/i, READ]
+  ],
+  pendo: [
+    // Read-only analytics (names like accountQuery, guideMetrics, segmentList).
+    [/./, READ]
+  ],
+  firecrawl: [
+    // Search and scrape only read the web (they spend credits, nothing else).
+    [/^firecrawl_/i, READ]
+  ],
+  tavily: [
+    [/^tavily_/i, READ]
+  ],
+  alphavantage: [
+    // Market data only: every tool is a read (names are like TIME_SERIES_DAILY).
+    [/./, READ]
+  ],
+  mapbox: [
+    [/_tool$/i, READ]
+  ],
+  crustdata: [
+    [/^crustdata_/i, READ]
   ]
 }
 
@@ -479,11 +723,79 @@ export function toolPolicy(preset: string | undefined, name: string, ann?: { rea
 
 // ---------------------------------------------------------------- Google: one OAuth client for Gmail, Calendar and Drive
 
-export const GOOGLE_PRESETS = ['gmail', 'gcal', 'gdrive']
+export const GOOGLE_PRESETS = ['gmail', 'gcal', 'gdrive', 'gdocs', 'bigquery']
 const GOOGLE_CLIENT_KEY = 'google:oauthClient'
 /** The error for an app that needs its one-time OAuth app first. */
 export function setupNeeded(p: Pick<ConnectorPreset, 'name' | 'setup'>): string {
   return `${p.name} needs a one-time setup (about ${p.setup?.minutes ?? 5} minutes): open Connect apps → ${p.name} and follow the steps, then it connects with one click.`
+}
+
+// ---------------------------------------------------------------- API keys (official servers that take the user's own key)
+//
+// The key lives in the Keychain under mcp:<id>:apiKey. It's put on each request as it's built (a
+// header, or a query parameter on a copy of the URL), so the saved URL, settings, status text and
+// errors never contain it; every error from such a server is redacted before it's shown or stored.
+
+const keySecret = (id: string): string => `mcp:${id}:apiKey`
+
+/** The error for an API-key app that has no key yet. */
+export function apiKeyNeeded(p: Pick<ConnectorPreset, 'name'>): string {
+  return `${p.name} needs your ${p.name} API key: open Connect apps → ${p.name}, paste the key, and it connects.`
+}
+
+/** A pasted key, tidied: outer spaces and quotes go, and a "Bearer " the format adds anyway is dropped. */
+export function normalizeApiKey(raw: string, spec: Pick<ConnectorApiKey, 'format'>): string {
+  let k = String(raw ?? '').trim().replace(/^["'`]+|["'`]+$/g, '').trim()
+  const prefix = /^(\S+\s+)\{key\}/.exec(spec.format ?? '')?.[1]
+  if (prefix && k.toLowerCase().startsWith(prefix.toLowerCase())) k = k.slice(prefix.length).trim()
+  return k
+}
+
+/** Problems with a pasted key, or null when it looks right (the server has the final say). */
+export function validateApiKey(key: string, p: Pick<ConnectorPreset, 'name' | 'apiKey'>): string | null {
+  const k = String(key ?? '')
+  if (!k) return `Paste your ${p.name} API key.`
+  if (/\s/.test(k)) return 'The key has spaces or line breaks in it; copy it again.'
+  if (!/^[\x21-\x7e]+$/.test(k) || k.length < 8 || k.length > 512) return `That doesn't look like a ${p.name} API key; copy it again.`
+  if (p.apiKey?.pattern && !new RegExp(p.apiKey.pattern).test(k)) return `That doesn't look like a ${p.name} API key${p.apiKey.placeholder ? ` (they look like ${p.apiKey.placeholder})` : ''}.`
+  return null
+}
+
+/** Same scheme, host and port (an API key is sent only to its preset's own server). */
+export function sameOrigin(a: string | undefined, b: string): boolean {
+  try { return !!a && new URL(a).origin === new URL(b).origin } catch { return false }
+}
+
+/** The URL and headers for one connection: the key goes in only here, at request time. */
+export function apiKeyRequest(url: string, spec: ConnectorApiKey, key: string): { url: URL; headers: Record<string, string> } {
+  const u = new URL(url)
+  if (spec.in === 'query') { u.searchParams.set(spec.name, key); return { url: u, headers: {} } }
+  return { url: u, headers: { [spec.name]: (spec.format ?? '{key}').replace('{key}', key) } }
+}
+
+/**
+ * Text with secrets taken out: the exact values given (and their URL-encoded forms), plus anything
+ * shaped like a credential (key=… query parameters, Bearer tokens), so a server or SDK error that
+ * echoes a request can't leak a key into the UI, settings or logs.
+ */
+export function redactSecret(text: string, ...secrets: Array<string | undefined | null>): string {
+  let t = String(text ?? '')
+  for (const s of secrets) {
+    if (!s || s.length < 4) continue
+    for (const v of new Set([s, encodeURIComponent(s)])) t = t.split(v).join('••••')
+  }
+  return t
+    .replace(/((?:^|[?&\s,;("'])(?:x-)?(?:api[_-]?key|apikey|key|token|access[_-]?token|auth|secret)\s*[=:]\s*)(?!••••)[^&\s"'<>,;)]+/gi, '$1••••')
+    .replace(/\b(Bearer|Token|Basic)\s+(?!••••)[A-Za-z0-9._~+/=-]{8,}/g, '$1 ••••')
+}
+
+/** A refused key, in plain words with where to get a new one. */
+export function explainKeyError(message: string, p: Pick<ConnectorPreset, 'name' | 'apiKey'>): string {
+  const m = String(message ?? '')
+  if (/\b(401|403)\b|unauthori[sz]ed|forbidden|invalid[_ ]?(api[_ ]?)?(key|token)|UnauthorizedError/i.test(m)) {
+    return `${p.name} didn't accept the API key. Make a new one${p.apiKey ? ` at ${p.apiKey.getKeyUrl}` : ''} and paste it under Connect apps → ${p.name}.`
+  }
+  return m
 }
 
 export const GOOGLE_SETUP_NEEDED = 'Google apps need a one-time setup (about 5 minutes): open Connect apps → Gmail → "Set up Google once", then connect again.'
@@ -738,7 +1050,8 @@ export class Connectors {
     const connected = new Set(this.list().filter((c) => this.status.get(c.id)?.state === 'connected').map((c) => c.preset))
     const words = q.split(/[^a-z0-9.]+/).filter((w) => w.length > 2)
     const open = PRESETS.filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app')
-    const byName = open.filter((p) => words.some((w) => p.name.toLowerCase().includes(w) || p.id.startsWith(w)))
+    // Everyday words don't pick apps by name either ("data" isn't a request for Datadog or Crustdata).
+    const byName = open.filter((p) => words.some((w) => !SUGGEST_STOP.has(w) && (p.name.toLowerCase().includes(w) || p.id.startsWith(w))))
     const byUse = open.filter((p) => !byName.includes(p) && words.some((w) => !SUGGEST_STOP.has(w) && p.description.toLowerCase().split(/[^a-z0-9]+/).includes(w)))
     // One-click apps first within each group: the in-chat card can connect them right away.
     const ready = (xs: ConnectorPreset[]): ConnectorPreset[] => [...xs.filter(isOneClick), ...xs.filter((p) => !isOneClick(p))]
@@ -752,6 +1065,7 @@ export class Connectors {
     if (p.auth === 'google' && !this.googleClient()) throw new Error(GOOGLE_SETUP_NEEDED)
     const existing = this.list().find((c) => c.preset === id)
     if (p.auth === 'oauth-static' && !existing?.clientId) throw new Error(setupNeeded(p))
+    if (p.auth === 'apikey' && !(existing && this.secrets.get(keySecret(existing.id)))) throw new Error(apiKeyNeeded(p))
     const cfg = existing ?? this.save({ name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true })
     return this.connect(cfg.id, true)
   }
@@ -786,6 +1100,33 @@ export class Connectors {
   clearGoogleClient(): void {
     this.secrets.set(GOOGLE_CLIENT_KEY, null)
     this.changed()
+  }
+
+  // ---------------------------------------------------------------- API-key apps
+
+  /**
+   * Saves the user's key for an API-key catalog app (Keychain only), adds the app if it isn't yet,
+   * and connects. A key the server refuses isn't kept, so background reconnects don't keep sending it.
+   */
+  async setApiKey(presetId: string, raw: string): Promise<ConnectorStatus> {
+    const p = PRESETS.find((x) => x.id === presetId)
+    if (!p || p.auth !== 'apikey' || !p.apiKey) throw new Error('This app doesn\'t sign in with an API key.')
+    const key = normalizeApiKey(raw, p.apiKey)
+    const problem = validateApiKey(key, p)
+    if (problem) throw new Error(problem)
+    const cfg = this.list().find((c) => c.preset === presetId) ?? this.save({ name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true })
+    this.secrets.set(keySecret(cfg.id), key)
+    const st = await this.connect(cfg.id, false)
+    if (st.state !== 'connected' && /didn't accept the API key/.test(st.error ?? '')) {
+      this.secrets.set(keySecret(cfg.id), null)
+      this.changed()
+    }
+    return st
+  }
+
+  /** Connectors with an API key saved (ids only: keys never leave main). */
+  keyIds(): string[] {
+    return this.list().filter((c) => !!this.secrets.get(keySecret(c.id))).map((c) => c.id)
   }
 
   private sharedGoogle(): { clientId: string; clientSecret?: string } | null {
@@ -870,6 +1211,7 @@ export class Connectors {
   async remove(id: string): Promise<void> {
     await this.disconnect(id)
     new Oauth(id, this.secrets).invalidateCredentials('all')
+    this.secrets.set(keySecret(id), null)
     this.db.setSetting('connectors', this.list().filter((c) => c.id !== id))
     this.status.delete(id)
     this.changed()
@@ -916,6 +1258,21 @@ export class Connectors {
       if (c.kind === 'stdio') {
         const env = Object.fromEntries(Object.entries({ ...process.env, ...(c.env ?? {}) }).filter(([k, v]) => v !== undefined && !SAFE_ENV_BLOCK.test(k))) as Record<string, string>
         await client.connect(new StdioClientTransport({ command: c.command!, args: c.args ?? [], env, stderr: 'ignore' }))
+      } else if (preset?.auth === 'apikey' && preset.apiKey) {
+        // The user's own key, added to this connection's requests only (never to c.url).
+        const key = this.secrets.get(keySecret(id))
+        if (!key) throw new Error(apiKeyNeeded(preset))
+        // The key only ever goes to the app's own server: a saved URL edited to point anywhere else is refused.
+        if (!sameOrigin(c.url, preset.url)) throw new Error(`${preset.name}'s address was changed, so SahilBot won't send your ${preset.name} key to it. Remove the app and connect it again.`)
+        const req = apiKeyRequest(c.url!, preset.apiKey, key)
+        const requestInit = { headers: req.headers }
+        try {
+          await client.connect(new StreamableHTTPClientTransport(req.url, { requestInit }))
+        } catch (e) {
+          if (/\b(401|403)\b|unauthori[sz]ed|forbidden/i.test((e as Error).message)) throw e
+          // Older servers only speak SSE (the SDK sends requestInit headers on its event stream too).
+          await client.connect(new SSEClientTransport(req.url, { requestInit }))
+        }
       } else {
         // Google apps share the client from "Set up Google once" unless this connector has its own.
         const isGoogle = preset?.auth === 'google'
@@ -968,13 +1325,14 @@ export class Connectors {
       return st
     } catch (e) {
       await client.close().catch(() => undefined)
-      const raw = (e as Error).message
+      // Nothing secret survives into status text or errors (keys, header values, tokens in URLs).
+      const raw = redactSecret((e as Error).message, this.secrets.get(keySecret(id)), this.secrets.get(`mcp:${id}:header`))
       // RFC 8707: a server that rejects resource indicators gets one more sign-in without them.
       if (auth && !auth.noResource && /invalid_target/i.test(raw)) {
         auth.dropResource()
         if (interactive) return this.connect(id, interactive, fromRetry)
       }
-      const msg = c.kind === 'remote' ? explainAuthError(raw, { name: c.name, url: c.url, hasSetup: !!preset?.setup, staticClient: !!(c.clientId || preset?.auth === 'google'), redirect: c.clientId ? redirectFor(c.preset) : undefined }) : raw
+      const msg = preset?.auth === 'apikey' ? explainKeyError(raw, preset) : c.kind === 'remote' ? explainAuthError(raw, { name: c.name, url: c.url, hasSetup: !!preset?.setup, staticClient: !!(c.clientId || preset?.auth === 'google'), redirect: c.clientId ? redirectFor(c.preset) : undefined }) : raw
       const st: ConnectorStatus = { id, state: 'error', tools: 0, error: msg.slice(0, 400) }
       this.setStatus(st)
       if (fromRetry || isConnectionError(msg)) this.scheduleReconnect(id, msg)
@@ -1087,6 +1445,8 @@ export class Connectors {
   private toToolDef(c: ConnectorConfig, client: Client, t: ServerTool, name: string): ToolDef {
     const policy = toolPolicy(c.preset, t.name, t.annotations)
     const lost = (reason: string): void => { if (this.live.get(c.id)?.client === client) this.lost(c.id, reason) }
+    // An API-key server's errors may echo the request: keep its key out of what the agent sees.
+    const scrub = (m: string): string => (c.kind === 'remote' ? redactSecret(m, this.secrets.get(keySecret(c.id)), this.secrets.get(`mcp:${c.id}:header`)) : m)
     return {
       name,
       label: c.name,
@@ -1103,15 +1463,15 @@ export class Connectors {
         try {
           r = await client.callTool({ name: t.name, arguments: args as Record<string, unknown> }, undefined, { signal: ctx.signal, timeout: 120_000 })
         } catch (e) {
-          const m = (e as Error).message
+          const m = scrub((e as Error).message)
           if (!ctx.signal.aborted && isConnectionError(m)) {
             lost(m)
             throw new Error(`${c.name} lost its connection (${m.slice(0, 80)}). SahilBot is reconnecting on its own: try again in a minute, or tell the user to check Connect apps.`)
           }
-          throw e
+          throw m === (e as Error).message ? e : new Error(m)
         }
         const { text, images } = contentOf(r)
-        if (r.isError) throw new Error(text || `${t.name} failed`)
+        if (r.isError) throw new Error(scrub(text) || `${t.name} failed`)
         return { text: text || '(no output)', images: images.length ? images : undefined, display: t.annotations?.title ?? t.name.replace(/_/g, ' ') }
       }
     }

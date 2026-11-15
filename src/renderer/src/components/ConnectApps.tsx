@@ -5,7 +5,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { SpaceAvatar } from '../brand'
 import { AppIcon, IconStack, connectedApps, useAppIcons } from './ConnectedIcons'
-import { CUSTOM_REDIRECT, MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, connectBadge, matches, recommended } from '../lib/connect-catalog'
+import { CUSTOM_REDIRECT, MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, connectBadge, easiestFirst, keyProblem, matches, recommended, searchApps, type Badge } from '../lib/connect-catalog'
 import { importBot } from './BotShare'
 
 const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
@@ -24,7 +24,19 @@ const prettyTool = (n: string): string => n.replace(/[_\-.]+/g, ' ').replace(/^\
 const ACRONYMS = /^(pdf|pcb|sql|seo|ci|api|ios|gdt|dfm)$/i
 const prettySkill = (n: string): string => n.split('-').map((w) => (ACRONYMS.test(w) ? w.toUpperCase() : w)).join(' ').replace(/^\w/, (c) => c.toUpperCase())
 
-type View = 'browse' | 'manage' | 'templates' | 'form' | 'google' | 'setup'
+type View = 'browse' | 'manage' | 'templates' | 'form' | 'google' | 'setup' | 'key'
+
+/** Badge look: one click is green, a pasted key blue, a setup grey. */
+const BADGE_STYLE: Record<Badge, { cls: string; tint: string; color: string }> = {
+  'One click': { cls: 'one-click', tint: 'var(--ok, #2e9d5b)', color: 'var(--ok, #2e9d5b)' },
+  'API key': { cls: 'api-key', tint: 'var(--accent, #3b82f6)', color: 'var(--accent, #3b82f6)' },
+  'Needs setup': { cls: 'setup', tint: 'var(--text-3, #888)', color: 'var(--text-2, #666)' }
+}
+const badgeTitle = (b: Badge, p: ConnectorPreset): string =>
+  b === 'One click' ? 'Sign in on the app\'s own page; nothing to set up'
+  : b === 'API key' ? `Paste your ${p.name} API key once (kept in your Keychain), then it connects`
+  : p.auth === 'google' ? 'One-time Google setup (about 5 minutes), then one click'
+  : `One-time setup at ${p.name} (about ${p.setup?.minutes ?? 5} minutes), then one click`
 type Form = { preset: ConnectorPreset; name: string; kind: 'remote' | 'stdio'; url: string; command: string; headerName: string; headerValue: string; clientId: string; clientSecret: string }
 
 /**
@@ -58,6 +70,10 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const [google, setGoogle] = useState<{ clientId: string; hasSecret: boolean } | null>(null)
   /** The app whose one-time OAuth setup is open (oauth-static presets). */
   const [setupFor, setSetupFor] = useState<ConnectorPreset | null>(null)
+  /** The API-key app whose paste-your-key panel is open. */
+  const [keyFor, setKeyFor] = useState<ConnectorPreset | null>(null)
+  /** Connector ids with an API key saved (main never sends the keys themselves). */
+  const [keys, setKeys] = useState<Set<string>>(new Set())
   /** Test connection results by connector id. */
   const [tests, setTests] = useState<Record<string, { ok: boolean; text: string }>>({})
   const body = useRef<HTMLDivElement>(null)
@@ -67,6 +83,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     const r = await api.connectors.list()
     setConfigs(r.configs)
     setStatuses(r.statuses)
+    setKeys(new Set(r.keys ?? []))
     setGoogle(await api.connectors.googleClient().catch(() => null))
   }
   useEffect(() => {
@@ -116,6 +133,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     if (p.auth === 'google' && !google && !existing?.clientId && status(existing?.id ?? '')?.state !== 'connected') { setGoogleFor(p); go('google'); return }
     // Apps without self-registration: create their OAuth app once, then they connect in one click.
     if (p.auth === 'oauth-static' && !existing?.clientId) { setSetupFor(p); go('setup'); return }
+    // API-key apps: paste the key once (it goes to the Keychain), then they connect.
+    if (p.auth === 'apikey' && !(existing && keys.has(existing.id))) { setKeyFor(p); go('key'); return }
     if (existing) {
       if (status(existing.id)?.state === 'connected') { setOpen(existing.id); go('manage'); return }
       try { await api.connectors.connect(existing.id) } catch (e) { setErr(clean(e)) }
@@ -197,6 +216,12 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     try { await api.connectors.connect(saved.id) } catch (e) { setErr(clean(e)) }
   }
 
+  /** A key was accepted (or refused): show the app in Connected apps either way, with its status. */
+  const afterKey = async (st: ConnectorStatus): Promise<void> => {
+    await load()
+    if (st.state === 'connected') { setKeyFor(null); setOpen(st.id); go('manage') }
+  }
+
   /** Google is set up: connect the app that was waiting for it (the browser opens to sign in). */
   const afterGoogle = async (info: { clientId: string; hasSecret: boolean }): Promise<void> => {
     setGoogle(info)
@@ -228,6 +253,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
       st?.state === 'connected' ? ['Connected', 'done'] :
       busy ? ['Connecting…', 'ghost'] :
       p.auth === 'oauth-static' && !cfg?.clientId ? ['Set up', 'ghost'] :
+      p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? ['Add key', 'ghost'] :
       cfg ? ['Connect', 'solid'] : ['Add', 'ghost']
     const badge = st?.state === 'connected' ? null : connectBadge(p)
     const act = (): void => { if (!busy) void start(p) }
@@ -238,9 +264,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           ? <span className="ca-icon vault" style={{ width: 44, height: 44, borderRadius: 12 }}><I.Shield size={22} /></span>
           : <AppIcon src={icons[p.id]} name={p.name} color={p.color} />}
         <span className="ca-item-text">
-          <b>{p.name}{badge && <small className={`ca-badge ${badge === 'One click' ? 'one-click' : 'setup'}`} data-testid={`badge-${p.id}`} title={badge === 'One click' ? 'Sign in on the app\'s own page; nothing to set up' : p.auth === 'google' ? 'One-time Google setup (about 5 minutes), then one click' : `One-time setup at ${p.name} (about ${p.setup?.minutes ?? 5} minutes), then one click`}
-            style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 600, verticalAlign: 1, background: badge === 'One click' ? 'color-mix(in srgb, var(--ok, #2e9d5b) 16%, transparent)' : 'color-mix(in srgb, var(--text-3, #888) 18%, transparent)', color: badge === 'One click' ? 'var(--ok, #2e9d5b)' : 'var(--text-2, #666)' }}>{badge}</small>}</b>
-          <span>{st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !cfg?.clientId ? `${p.description} One-time setup first.` : p.description}</span>
+          <b>{p.name}{badge && <small className={`ca-badge ${BADGE_STYLE[badge].cls}`} data-testid={`badge-${p.id}`} title={badgeTitle(badge, p)}
+            style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 600, verticalAlign: 1, background: `color-mix(in srgb, ${BADGE_STYLE[badge].tint} ${badge === 'Needs setup' ? 18 : 16}%, transparent)`, color: BADGE_STYLE[badge].color }}>{badge}</small>}</b>
+          <span>{st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !cfg?.clientId ? `${p.description} One-time setup first.` : p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? `${p.description} Paste your API key once.` : p.description}</span>
         </span>
         <span className={`ca-btn ${tone}`} aria-disabled={busy || undefined}>
           {label}{tone === 'done' && <I.Check size={13} />}
@@ -249,13 +275,13 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     )
   }
 
-  const section = (title: string, items: ConnectorPreset[], opts: { limit?: number; viewAll?: string; note?: string } = {}): ReactNode => {
+  const section = (title: string, items: ConnectorPreset[], opts: { limit?: number; viewAll?: string; note?: string; count?: boolean } = {}): ReactNode => {
     if (!items.length) return null
     const shown = opts.limit ? items.slice(0, opts.limit) : items
     return (
-      <section className="ca-section" key={title}>
+      <section className="ca-section" key={title} data-testid={`section-${title}`}>
         <div className="ca-section-head">
-          <h3>{title}</h3>
+          <h3>{title}{opts.count !== false && <span className="ca-section-n" data-testid="section-count" style={{ marginLeft: 6, fontWeight: 500, fontSize: '0.85em', color: 'var(--text-3, #888)' }}>{items.length}</span>}</h3>
           {opts.note && <span className="ca-note">{opts.note}</span>}
           {opts.viewAll && items.length > shown.length && (
             <button className="ca-viewall" onClick={() => setChip(opts.viewAll!)}>View all {items.length}<I.Chevron size={13} style={{ transform: 'rotate(-90deg)' }} /></button>
@@ -282,7 +308,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const browse = (): ReactNode => {
     const query = q.trim()
     if (query) {
-      const apps = catalog.filter((p) => matches(query, p.name, p.description, p.category))
+      // Name, description, category and the category's everyday words ("tickets" → Support); best matches first.
+      const apps = searchApps(query, catalog)
       const sk = skills.filter((s) => matches(query, s.name.replace(/-/g, ' '), s.description, s.category)).slice(0, 12)
       if (!apps.length && !sk.length) {
         return (
@@ -306,13 +333,13 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
       )
     }
     if (chip !== 'All') {
-      return section(chip, byCategory(chip), chip === 'Built in' ? { note: 'No setup' } : {})
+      return section(chip, easiestFirst(byCategory(chip)), chip === 'Built in' ? { note: 'No setup' } : {})
     }
     return (
       <>
-        {section('Recommended for you', recommended(presets, connectedPresetIds))}
-        {SECTION_ORDER.map((cat) => section(cat, byCategory(cat), { limit: 6, viewAll: cat, note: cat === 'Built in' ? 'No setup' : undefined }))}
-        <p className="ca-foot">Sign-in happens in your browser; tokens stay in your Mac's Keychain. Connected tools load only when a task needs them.</p>
+        {section('Recommended for you', recommended(presets, connectedPresetIds), { count: false })}
+        {SECTION_ORDER.map((cat) => section(cat, easiestFirst(byCategory(cat)), { limit: 6, viewAll: cat, note: cat === 'Built in' ? 'No setup' : undefined }))}
+        <p className="ca-foot">Sign-in happens in your browser; tokens and API keys stay in your Mac's Keychain. Connected tools load only when a task needs them.</p>
       </>
     )
   }
@@ -364,6 +391,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
                 )}
                 {preset?.setup && (
                   <button className="btn" title={`Change the OAuth app ${c.name} signs in with`} data-testid="connector-setup" onClick={() => { setSetupFor(preset); go('setup') }}>Setup</button>
+                )}
+                {preset?.auth === 'apikey' && (
+                  <button className="btn" title={`Replace the ${c.name} API key`} data-testid="connector-key" onClick={() => { setKeyFor(preset); go('key') }}>Key</button>
                 )}
                 <button className="icon-btn" title="Remove" aria-label={`Remove ${c.name}`} onClick={() => { if (confirm(`Remove ${c.name}? You can add it again later.`)) void guard(() => api.connectors.remove(c.id)) }}><I.Trash size={15} /></button>
               </div>
@@ -465,14 +495,14 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   // ---------------------------------------------------------------- frame
 
   const moreLabel = MORE_CATEGORIES.includes(chip) ? chip : 'More'
-  const title = view === 'manage' ? 'Connected apps' : view === 'templates' ? 'Bot templates' : view === 'form' ? 'Add an app' : view === 'google' ? 'Set up Google once' : view === 'setup' && setupFor ? `Set up ${setupFor.name} once` : 'Connect Apps'
+  const title = view === 'manage' ? 'Connected apps' : view === 'templates' ? 'Bot templates' : view === 'form' ? 'Add an app' : view === 'google' ? 'Set up Google once' : view === 'setup' && setupFor ? `Set up ${setupFor.name} once` : view === 'key' && keyFor ? `Connect ${keyFor.name}` : 'Connect Apps'
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal connect-modal ca" data-testid="connect-apps-modal" role="dialog" aria-label={title}>
         <header className="ca-head">
           {view !== 'browse' && (
-            <button className="icon-btn ca-back" aria-label="Back" onClick={() => { setForm(null); setSetupFor(null); go('browse') }}>
+            <button className="icon-btn ca-back" aria-label="Back" onClick={() => { setForm(null); setSetupFor(null); setKeyFor(null); go('browse') }}>
               <I.Chevron size={18} style={{ transform: 'rotate(90deg)' }} />
             </button>
           )}
@@ -536,6 +566,13 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
               hasClient={!!configOf(setupFor)?.clientId}
               onCancel={() => { setSetupFor(null); go('browse') }}
               onDone={(id, secret) => afterSetup(setupFor, id, secret)} />
+          )}
+          {view === 'key' && keyFor && (
+            <ApiKeyPanel
+              preset={keyFor}
+              hasKey={!!configOf(keyFor) && keys.has(configOf(keyFor)!.id)}
+              onCancel={() => { setKeyFor(null); go('browse') }}
+              onDone={(st) => afterKey(st)} />
           )}
           {view === 'google' && (
             <GoogleSetup
@@ -645,6 +682,78 @@ export function AppSetup({ preset, hasClient, onDone, onCancel }: {
   )
 }
 
+// ---------------------------------------------------------------- API key (apps whose official server takes your own key)
+
+/**
+ * Connect with an API key: a link to the vendor's key page, a paste box, Connect. The key goes
+ * straight to main (then the Keychain) and is never shown again, here or anywhere: this panel only
+ * learns whether one is saved. On success SahilBot lists the app's tools.
+ */
+export function ApiKeyPanel({ preset, hasKey, onDone, onCancel, compact }: {
+  preset: ConnectorPreset
+  hasKey?: boolean
+  onDone: (st: ConnectorStatus) => Promise<void> | void
+  onCancel?: () => void
+  compact?: boolean
+}) {
+  const spec = preset.apiKey
+  const [key, setKey] = useState('')
+  const [touched, setTouched] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [ok, setOk] = useState('')
+  if (!spec) return <div className="hint">{preset.name} doesn't use an API key.</div>
+  const problem = keyProblem(key, preset)
+  const save = async (): Promise<void> => {
+    setTouched(true)
+    if (problem) return
+    setBusy(true)
+    setErr('')
+    setOk('')
+    try {
+      const st = await api.connectors.setApiKey(preset.id, key)
+      // The paste box empties either way: the key now lives only in main.
+      setKey('')
+      setTouched(false)
+      if (st.state === 'connected') setOk(`Connected · ${st.toolNames?.length ?? st.tools} tools`)
+      else setErr(st.error ?? 'It didn\'t connect. Check the key and try again.')
+      await onDone(st)
+    } catch (e) {
+      setErr(clean(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="conn-form ca-key" data-testid="api-key-panel">
+      {!compact && (
+        <p className="ca-lede" style={{ marginTop: 0 }}>
+          {preset.name}'s official server signs in with your own {preset.name} API key. Paste it once: it's kept in your Mac's Keychain and only sent to {preset.name}.
+        </p>
+      )}
+      <div className="field">
+        <label>1. Get your key</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <a className="ca-btn ghost" href={spec.getKeyUrl} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }} data-testid="api-key-link">Get your {preset.name} key ↗</a>
+          <span className="hint" style={{ margin: 0 }}>{spec.hint}</span>
+        </div>
+      </div>
+      <div className="field">
+        <label>2. Paste it here{hasKey ? <span className="ca-note"> · replaces the saved key</span> : null}</label>
+        <input type="password" value={key} onChange={(e) => { setKey(e.target.value); setErr(''); setOk('') }} onBlur={() => key && setTouched(true)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void save() }}
+          placeholder={spec.placeholder ?? 'API key'} spellCheck={false} autoComplete="off" autoFocus data-testid="api-key-input" />
+      </div>
+      {(touched && problem) || err ? <div className="hint" style={{ color: 'var(--danger)' }} data-testid="api-key-error">{err || problem}</div> : null}
+      {ok && <div className="hint" style={{ color: 'var(--ok, #2e9d5b)' }} data-testid="api-key-ok">{ok}</div>}
+      <div className="modal-actions">
+        {onCancel && <button className="btn" onClick={onCancel}>Cancel</button>}
+        <button className="btn primary" disabled={busy || (touched && !!problem)} onClick={() => void save()} data-testid="api-key-save">{busy ? 'Connecting…' : hasKey ? `Replace key and reconnect` : `Connect ${preset.name}`}</button>
+      </div>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------- Set up Google once
 
 /** Same checks as main (connectors.validateGoogleClient), for feedback while typing. */
@@ -664,8 +773,8 @@ const GOOGLE_STEPS: Array<{ title: string; text: string; links: Array<[string, s
   { title: 'Create a Google Cloud project', text: 'Any name works, e.g. "SahilBot". It\'s free; no billing needed.', links: [['Create project', `${CONSOLE}/projectcreate`]] },
   {
     title: 'Turn on the Gmail, Calendar and Drive APIs',
-    text: 'With the new project picked at the top of the page, press Enable on each. If the API Library also lists MCP versions of them, enable those too.',
-    links: [['Gmail API', `${CONSOLE}/apis/library/gmail.googleapis.com`], ['Calendar API', `${CONSOLE}/apis/library/calendar-json.googleapis.com`], ['Drive API', `${CONSOLE}/apis/library/drive.googleapis.com`], ['Search "MCP"', `${CONSOLE}/apis/library?q=mcp`]]
+    text: 'With the new project picked at the top of the page, press Enable on each. If the API Library also lists MCP versions of them, enable those too. Using Google Docs or BigQuery as well? Enable their APIs in the same project.',
+    links: [['Gmail API', `${CONSOLE}/apis/library/gmail.googleapis.com`], ['Calendar API', `${CONSOLE}/apis/library/calendar-json.googleapis.com`], ['Drive API', `${CONSOLE}/apis/library/drive.googleapis.com`], ['Docs API', `${CONSOLE}/apis/library/docs.googleapis.com`], ['BigQuery API', `${CONSOLE}/apis/library/bigquery.googleapis.com`], ['Search "MCP"', `${CONSOLE}/apis/library?q=mcp`]]
   },
   {
     title: 'Set up the consent screen',
