@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { cpus, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, expect, test } from 'vitest'
@@ -88,6 +88,7 @@ test('20 bots × 5 concurrent chats', async () => {
     avgCpuPercentOfOneCore: Math.round((cpuSec / (wall / 1000)) * 100),
     note: 'In-process: the mock model server runs in the same process, so CPU is an over-estimate.'
   }
+  mkdirSync(join(process.cwd(), 'test-results'), { recursive: true })
   writeFileSync(join(process.cwd(), 'test-results', 'server-load.json'), JSON.stringify(result, null, 2))
   console.log('[load]', JSON.stringify(result))
   expect(peakRss).toBeLessThan(1500)
