@@ -94,7 +94,7 @@ export function decide(input: RouteInput): Route {
  * Terra for quick questions, 6.1 Sol for tasks, 6 Astra for the hardest), 'local' keeps free, private local
  * models first.
  */
-export const routingPrefs: { preferCloud: boolean; fableForHardest: boolean } = { preferCloud: false, fableForHardest: false }
+export const routingPrefs: { preferCloud: boolean; fableForHardest: boolean; localOn?: boolean } = { preferCloud: false, fableForHardest: false }
 
 // ---------------------------------------------------------------------------------------------------
 // Auto variants, stored as the model value of a chat, a bot or the default: 'auto' (best of both: local

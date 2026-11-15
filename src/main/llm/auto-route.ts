@@ -81,7 +81,7 @@ export function autoRoute(i: AutoRouteInput): AutoRouteResult {
     if (fast) return { model: fast.id, manual: false, variant, label: `${name(fast)} · ${cat}`, why: `${task.why} · a fast local model for voice`, tier: task.difficulty }
   }
   const routed = routeTask(pool, task, { preference: i.preference, variant, budgetTight: i.budgetTight, previous: i.previous, preferCloud: i.preferCloud, fableForHardest: i.fableForHardest })
-  if (!routed) throw new Error('No models are available. Start Ollama or LM Studio, or add an API key in Settings → Models.')
+  if (!routed) throw new Error(noModelsMessage())
   return { model: routed.model.id, manual: false, variant, pick: routed, label: routed.label, why: routed.why, tier: task.difficulty }
 }
 
@@ -142,6 +142,13 @@ export interface FallbackPlan {
  * for a failure of that one model: the run's history keeps its provider-specific parts, such as Claude's
  * thinking blocks and compaction, or OpenAI's reasoning items). Never a model already tried.
  */
+/** Nothing to route to: what to do about it (cloud first; local models only when they're on). */
+export function noModelsMessage(): string {
+  return routingPrefs.localOn === false
+    ? 'No models are available yet. Add a Claude, OpenAI or Grok key, or connect your ChatGPT plan, in Settings → Models.'
+    : 'No models are available. Add a Claude, OpenAI or Grok key or your ChatGPT plan in Settings → Models, or start a local model server.'
+}
+
 export function planFallback(i: FallbackInput): FallbackPlan {
   const kind = failureKind(i.err)
   // A content-policy refusal is an answer, not an outage: no fallback, the user sees why.
