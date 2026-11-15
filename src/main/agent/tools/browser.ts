@@ -248,7 +248,8 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     // pressing Enter to submit a form does too.
     consequential: (a) => {
       const r = a.ref ? b.refInfo(a.ref) : undefined
-      if (a.action === 'click') return !r || !benignClickLabel(r.name)
+      // A same-site navigation link with no money or commit words is just browsing (found live: "Small Residential Storage").
+      if (a.action === 'click') return !r || (!(r.role === 'link' && r.navLink === true && !weighty(r.name)) && !benignClickLabel(r.name))
       if (a.action === 'type' || a.action === 'enter') return a.action === 'enter' || !!a.submit
       if (a.action === 'recording') return a.op === 'start'
       if (a.action === 'fill_secret') return !standingRule(a)
