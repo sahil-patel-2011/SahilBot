@@ -392,9 +392,11 @@ function ModelMenu({ list, model, onPick, onRefresh, onManage }: { list: ModelLi
         // A variant with nothing to route to says why (and stays pickable: models may come back).
         const why = autoUnavailableReason(e.id, list)
         return (
-          <button key={e.id} className="menu-item" onClick={() => onPick(e.id)} data-testid="model-option" data-auto={e.id}>
+          <button key={e.id} className={`menu-item${why ? ' unavailable' : ''}`} onClick={() => onPick(e.id)} data-testid="model-option" data-auto={e.id}>
             <span className="check">{model === e.id && <I.Check size={14} />}</span>
             <span>{e.label}<span className="sub">{why ?? e.sub}</span></span>
+            {/* Still pickable (models may come back), but it reads as "not right now" at a glance. */}
+            {why && <span className="mm-badge" data-testid="auto-unavailable">Unavailable</span>}
           </button>
         )
       })}

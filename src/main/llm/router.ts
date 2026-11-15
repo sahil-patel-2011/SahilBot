@@ -1,5 +1,6 @@
 import type { Attachment, ModelInfo, Tier } from '@shared/types'
 import { isPremiumClaude } from './claude-models'
+import { isPremiumOpenAI } from './openai-models'
 import { RECOMMENDED } from './catalog'
 
 // Auto mode: decide how hard a request is, then send it to the cheapest model that is strong enough.
@@ -86,7 +87,9 @@ export function decide(input: RouteInput): Route {
 /**
  * Auto's standing preference, refreshed from Settings by Endpoints.usable() (which the agent reads right
  * before every pick): 'cloud' sends each tier to the cloud model first (Claude Haiku for light requests,
- * Sonnet for standard ones, Opus for the hardest), 'local' keeps free, private local models first.
+ * Sonnet for standard ones, Opus for the hardest; with only an OpenAI key: GPT-6 Luna for small talk, 6.1
+ * Terra for quick questions, 6.1 Sol for tasks, 6 Astra for the hardest), 'local' keeps free, private local
+ * models first.
  */
 export const routingPrefs: { preferCloud: boolean; fableForHardest: boolean } = { preferCloud: false, fableForHardest: false }
 
@@ -159,19 +162,21 @@ export function pick(models: ModelInfo[], tier: Tier, o: PickOptions = {}): Mode
   // Premium cloud models come last, except at the hardest tier when the user lets Auto use them there.
   const premiumFirst = tier === 3 && (o.premiumHardest ?? routingPrefs.fableForHardest)
   const premium = (m: ModelInfo): number => Number(m.note === 'remote' && isPremiumClaude(m.id)) * (premiumFirst ? -1 : 1)
+  // OpenAI's pro models (GPT-5.5 Pro: $30 / $180) always come last: only picked by name.
+  const pro = (m: ModelInfo): number => Number(isPremiumOpenAI(m.id))
   const best = (a: ModelInfo, b: ModelInfo): number =>
-    premium(a) - premium(b) || remote(a) - remote(b) || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0)
+    pro(a) - pro(b) || premium(a) - premium(b) || remote(a) - remote(b) || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0)
   // A light request with no model at its level goes up a tier: there, speed matters more than the last
   // bit of quality, so the fastest capable model wins (a mixture-of-experts with few active parameters).
   const speed = (m: ModelInfo): number => {
     const r = RECOMMENDED.find((x) => m.id === x.pull || m.id.startsWith(`${x.pull}-`))
     return r ? r.activeB ?? r.paramsB : (m.sizeBytes ?? 0) / 1e9 || Infinity
   }
-  const fastest = (a: ModelInfo, b: ModelInfo): number => premium(a) - premium(b) || remote(a) - remote(b) || speed(a) - speed(b) || best(a, b)
+  const fastest = (a: ModelInfo, b: ModelInfo): number => pro(a) - pro(b) || premium(a) - premium(b) || remote(a) - remote(b) || speed(a) - speed(b) || best(a, b)
   for (let t = tier; t <= 3; t++) {
-    const at = pool.filter((m) => m.tier === t && capable(m)).sort(t > tier && tier <= 1 ? fastest : best)
+    const at = pool.filter((m) => m.tier === t && capable(m) && !pro(m)).sort(t > tier && tier <= 1 ? fastest : best)
     if (at.length) return at[0]
   }
   const pool2 = pool.some(capable) ? pool.filter(capable) : pool
-  return [...pool2].sort((a, b) => b.tier - a.tier || premium(a) - premium(b) || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))[0]
+  return [...pool2].sort((a, b) => pro(a) - pro(b) || b.tier - a.tier || premium(a) - premium(b) || (b.rank ?? 0) - (a.rank ?? 0) || (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))[0]
 }

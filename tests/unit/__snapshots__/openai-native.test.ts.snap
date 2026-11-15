@@ -1,0 +1,765 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`request bodies > gpt-5.4-mini 1`] = `
+{
+  "context_management": [
+    {
+      "compact_threshold": 204800,
+      "type": "compaction",
+    },
+  ],
+  "include": [
+    "reasoning.encrypted_content",
+    "web_search_call.action.sources",
+  ],
+  "input": [
+    {
+      "content": [
+        {
+          "text": "You are SahilBot.",
+          "type": "input_text",
+        },
+      ],
+      "role": "developer",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "What is on screen?",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "encrypted_content": "enc-rs_1",
+      "id": "rs_1",
+      "summary": [
+        {
+          "text": "Thinking it over",
+          "type": "summary_text",
+        },
+      ],
+      "type": "reasoning",
+    },
+    {
+      "content": [
+        {
+          "annotations": [],
+          "text": "Looking.",
+          "type": "output_text",
+        },
+      ],
+      "id": "msg_0",
+      "phase": "commentary",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message",
+    },
+    {
+      "arguments": "{"q":"x"}",
+      "call_id": "call_A",
+      "id": "fc_1",
+      "name": "look",
+      "status": "completed",
+      "type": "function_call",
+    },
+    {
+      "call_id": "call_A",
+      "output": [
+        {
+          "text": "a chart",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "type": "function_call_output",
+    },
+    {
+      "content": "Checked.
+[Called gone_tool {}]",
+      "phase": "final_answer",
+      "role": "assistant",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "[Result of gone_tool]
+ok",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "Thanks, now summarize.",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+  ],
+  "max_output_tokens": 64000,
+  "max_tool_calls": 8,
+  "model": "gpt-5.4-mini",
+  "prompt_cache_key": "sahilbot:t1",
+  "reasoning": {
+    "effort": "xhigh",
+    "summary": "auto",
+  },
+  "store": false,
+  "stream": true,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "description": "look tool",
+      "name": "look",
+      "parameters": {
+        "properties": {
+          "q": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "q",
+        ],
+        "type": "object",
+      },
+      "strict": false,
+      "type": "function",
+    },
+    {
+      "type": "web_search",
+    },
+  ],
+}
+`;
+
+exports[`request bodies > gpt-5.5 1`] = `
+{
+  "context_management": [
+    {
+      "compact_threshold": 204800,
+      "type": "compaction",
+    },
+  ],
+  "include": [
+    "reasoning.encrypted_content",
+    "web_search_call.action.sources",
+  ],
+  "input": [
+    {
+      "content": [
+        {
+          "text": "You are SahilBot.",
+          "type": "input_text",
+        },
+      ],
+      "role": "developer",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "What is on screen?",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "encrypted_content": "enc-rs_1",
+      "id": "rs_1",
+      "summary": [
+        {
+          "text": "Thinking it over",
+          "type": "summary_text",
+        },
+      ],
+      "type": "reasoning",
+    },
+    {
+      "content": [
+        {
+          "annotations": [],
+          "text": "Looking.",
+          "type": "output_text",
+        },
+      ],
+      "id": "msg_0",
+      "phase": "commentary",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message",
+    },
+    {
+      "arguments": "{"q":"x"}",
+      "call_id": "call_A",
+      "id": "fc_1",
+      "name": "look",
+      "status": "completed",
+      "type": "function_call",
+    },
+    {
+      "call_id": "call_A",
+      "output": [
+        {
+          "text": "a chart",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "type": "function_call_output",
+    },
+    {
+      "content": "Checked.
+[Called gone_tool {}]",
+      "phase": "final_answer",
+      "role": "assistant",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "[Result of gone_tool]
+ok",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "Thanks, now summarize.",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+  ],
+  "max_output_tokens": 64000,
+  "max_tool_calls": 8,
+  "model": "gpt-5.5",
+  "prompt_cache_key": "sahilbot:t1",
+  "reasoning": {
+    "effort": "xhigh",
+    "summary": "auto",
+  },
+  "store": false,
+  "stream": true,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "description": "look tool",
+      "name": "look",
+      "parameters": {
+        "properties": {
+          "q": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "q",
+        ],
+        "type": "object",
+      },
+      "strict": false,
+      "type": "function",
+    },
+    {
+      "type": "web_search",
+    },
+  ],
+}
+`;
+
+exports[`request bodies > gpt-6.1-sol 1`] = `
+{
+  "context_management": [
+    {
+      "compact_threshold": 204800,
+      "type": "compaction",
+    },
+  ],
+  "include": [
+    "reasoning.encrypted_content",
+    "web_search_call.action.sources",
+  ],
+  "input": [
+    {
+      "content": [
+        {
+          "prompt_cache_breakpoint": {
+            "mode": "explicit",
+          },
+          "text": "You are SahilBot.",
+          "type": "input_text",
+        },
+      ],
+      "role": "developer",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "What is on screen?",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "encrypted_content": "enc-rs_1",
+      "id": "rs_1",
+      "summary": [
+        {
+          "text": "Thinking it over",
+          "type": "summary_text",
+        },
+      ],
+      "type": "reasoning",
+    },
+    {
+      "content": [
+        {
+          "annotations": [],
+          "text": "Looking.",
+          "type": "output_text",
+        },
+      ],
+      "id": "msg_0",
+      "phase": "commentary",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message",
+    },
+    {
+      "arguments": "{"q":"x"}",
+      "call_id": "call_A",
+      "id": "fc_1",
+      "name": "look",
+      "status": "completed",
+      "type": "function_call",
+    },
+    {
+      "call_id": "call_A",
+      "output": [
+        {
+          "text": "a chart",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "type": "function_call_output",
+    },
+    {
+      "content": "Checked.
+[Called gone_tool {}]",
+      "phase": "final_answer",
+      "role": "assistant",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "[Result of gone_tool]
+ok",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "Thanks, now summarize.",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+  ],
+  "max_output_tokens": 64000,
+  "max_tool_calls": 8,
+  "model": "gpt-6.1-sol",
+  "prompt_cache_key": "sahilbot:t1",
+  "prompt_cache_options": {
+    "ttl": "30m",
+  },
+  "reasoning": {
+    "context": "all_turns",
+    "effort": "max",
+    "summary": "auto",
+  },
+  "store": false,
+  "stream": true,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "description": "look tool",
+      "name": "look",
+      "parameters": {
+        "properties": {
+          "q": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "q",
+        ],
+        "type": "object",
+      },
+      "strict": false,
+      "type": "function",
+    },
+    {
+      "type": "web_search",
+    },
+  ],
+}
+`;
+
+exports[`request bodies > gpt-6-astra 1`] = `
+{
+  "context_management": [
+    {
+      "compact_threshold": 204800,
+      "type": "compaction",
+    },
+  ],
+  "include": [
+    "reasoning.encrypted_content",
+    "web_search_call.action.sources",
+  ],
+  "input": [
+    {
+      "content": [
+        {
+          "prompt_cache_breakpoint": {
+            "mode": "explicit",
+          },
+          "text": "You are SahilBot.",
+          "type": "input_text",
+        },
+      ],
+      "role": "developer",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "What is on screen?",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "encrypted_content": "enc-rs_1",
+      "id": "rs_1",
+      "summary": [
+        {
+          "text": "Thinking it over",
+          "type": "summary_text",
+        },
+      ],
+      "type": "reasoning",
+    },
+    {
+      "content": [
+        {
+          "annotations": [],
+          "text": "Looking.",
+          "type": "output_text",
+        },
+      ],
+      "id": "msg_0",
+      "phase": "commentary",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message",
+    },
+    {
+      "arguments": "{"q":"x"}",
+      "call_id": "call_A",
+      "id": "fc_1",
+      "name": "look",
+      "status": "completed",
+      "type": "function_call",
+    },
+    {
+      "call_id": "call_A",
+      "output": [
+        {
+          "text": "a chart",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "type": "function_call_output",
+    },
+    {
+      "content": "Checked.
+[Called gone_tool {}]",
+      "phase": "final_answer",
+      "role": "assistant",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "[Result of gone_tool]
+ok",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "Thanks, now summarize.",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+  ],
+  "max_output_tokens": 64000,
+  "max_tool_calls": 8,
+  "model": "gpt-6-astra",
+  "prompt_cache_key": "sahilbot:t1",
+  "prompt_cache_options": {
+    "ttl": "30m",
+  },
+  "reasoning": {
+    "effort": "max",
+    "summary": "auto",
+  },
+  "store": false,
+  "stream": true,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "description": "look tool",
+      "name": "look",
+      "parameters": {
+        "properties": {
+          "q": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "q",
+        ],
+        "type": "object",
+      },
+      "strict": false,
+      "type": "function",
+    },
+    {
+      "type": "web_search",
+    },
+  ],
+}
+`;
+
+exports[`request bodies > gpt-6-luna 1`] = `
+{
+  "context_management": [
+    {
+      "compact_threshold": 204800,
+      "type": "compaction",
+    },
+  ],
+  "include": [
+    "reasoning.encrypted_content",
+    "web_search_call.action.sources",
+  ],
+  "input": [
+    {
+      "content": [
+        {
+          "prompt_cache_breakpoint": {
+            "mode": "explicit",
+          },
+          "text": "You are SahilBot.",
+          "type": "input_text",
+        },
+      ],
+      "role": "developer",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "What is on screen?",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "encrypted_content": "enc-rs_1",
+      "id": "rs_1",
+      "summary": [
+        {
+          "text": "Thinking it over",
+          "type": "summary_text",
+        },
+      ],
+      "type": "reasoning",
+    },
+    {
+      "content": [
+        {
+          "annotations": [],
+          "text": "Looking.",
+          "type": "output_text",
+        },
+      ],
+      "id": "msg_0",
+      "phase": "commentary",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message",
+    },
+    {
+      "arguments": "{"q":"x"}",
+      "call_id": "call_A",
+      "id": "fc_1",
+      "name": "look",
+      "status": "completed",
+      "type": "function_call",
+    },
+    {
+      "call_id": "call_A",
+      "output": [
+        {
+          "text": "a chart",
+          "type": "input_text",
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgo=",
+          "type": "input_image",
+        },
+      ],
+      "type": "function_call_output",
+    },
+    {
+      "content": "Checked.
+[Called gone_tool {}]",
+      "phase": "final_answer",
+      "role": "assistant",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "[Result of gone_tool]
+ok",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "content": [
+        {
+          "text": "Thanks, now summarize.",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+  ],
+  "max_output_tokens": 64000,
+  "max_tool_calls": 8,
+  "model": "gpt-6-luna",
+  "prompt_cache_key": "sahilbot:t1",
+  "prompt_cache_options": {
+    "ttl": "30m",
+  },
+  "reasoning": {
+    "effort": "max",
+    "summary": "auto",
+  },
+  "store": false,
+  "stream": true,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "description": "look tool",
+      "name": "look",
+      "parameters": {
+        "properties": {
+          "q": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "q",
+        ],
+        "type": "object",
+      },
+      "strict": false,
+      "type": "function",
+    },
+    {
+      "type": "web_search",
+    },
+  ],
+}
+`;

@@ -87,7 +87,12 @@ const MIGRATIONS: string[] = [
   KNOWLEDGE_SCHEMA,
   // Memory provenance: 'untrusted' = its wording followed outside content (a web page, email, another app
   // or bot). Those stay in the bot that saved them, are labelled, and never replace a trusted memory.
-  `ALTER TABLE memories ADD COLUMN provenance TEXT NOT NULL DEFAULT 'trusted';`
+  `ALTER TABLE memories ADD COLUMN provenance TEXT NOT NULL DEFAULT 'trusted';`,
+  // Hot paths: helper threads by their parent chat (team boards, childThreads) and the launch sweep of
+  // replies a quit left 'streaming' were full scans (7 ms at 120k messages, on every launch). Partial
+  // indexes: only helper threads and in-flight replies are in them, so they cost nothing to keep up.
+  `CREATE INDEX IF NOT EXISTS threads_parent ON threads(parent_id) WHERE parent_id IS NOT NULL;
+   CREATE INDEX IF NOT EXISTS messages_streaming ON messages(status) WHERE status = 'streaming';`
 ]
 
 type Row = Record<string, unknown>
@@ -126,10 +131,15 @@ export class Db {
   listSpaces(): Space[] {
     const rows = this.sql.prepare(`
       SELECT s.*, (
-        SELECT m.content FROM messages m JOIN threads t ON t.id = m.thread_id
-        WHERE t.space_id = s.id AND m.role IN ('user','assistant') AND m.content != '' AND json_extract(m.data, '$.meta.hidden') IS NULL
-          AND json_extract(m.data, '$.meta.routineNotice') IS NULL
-        ORDER BY m.created_at DESC, m.seq DESC LIMIT 1) AS last_preview,
+        -- Each chat's own latest line (a short backward walk of its (thread_id, seq) index), then the newest
+        -- of those. Sorting every message of the bot instead made this 8x slower on a big history, and the
+        -- sidebar asks for it after every run.
+        SELECT m2.content FROM threads t JOIN messages m2 ON m2.id = (
+          SELECT m.id FROM messages m WHERE m.thread_id = t.id AND m.role IN ('user','assistant') AND m.content != ''
+            AND json_extract(m.data, '$.meta.hidden') IS NULL AND json_extract(m.data, '$.meta.routineNotice') IS NULL
+          ORDER BY m.seq DESC LIMIT 1)
+        WHERE t.space_id = s.id
+        ORDER BY m2.created_at DESC, m2.seq DESC LIMIT 1) AS last_preview,
         (SELECT MAX(t.updated_at) FROM threads t WHERE t.space_id = s.id) AS last_at,
         (SELECT COUNT(*) FROM threads t WHERE t.space_id = s.id AND t.unread = 1) AS unread_count
       FROM spaces s ORDER BY s.is_main DESC, s.pinned DESC, COALESCE(last_at, s.created_at) DESC`).all() as Row[]

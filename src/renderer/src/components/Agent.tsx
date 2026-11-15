@@ -6,7 +6,8 @@ import { toast } from '../lib/toast'
 import { addRule, RULE_MAX_CHARS } from '../lib/approvalRules'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
-import { GoogleSetup } from './ConnectApps'
+// Lazy: Connect Apps is its own chunk; only a Google sign-in card needs this piece of it.
+import { ApiKeyPanel, GoogleSetup, Lazy } from '../lazy'
 
 const EFFECT_TEXT: Record<string, string> = {
   read: 'Reads only',
@@ -38,6 +39,19 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
       setBusy(false)
     }
   }
+  // API-key apps (Render, PagerDuty…): the key box right in the card; the key goes straight to main.
+  if (p.auth === 'apikey') {
+    return (
+      <div className="pending connect-card" data-testid="connect-card">
+        <div className="pending-title">
+          <span className="conn-logo" style={{ background: p.color }}>{p.name[0]}</span>
+          Connect {p.name} with your API key to continue?
+        </div>
+        <div className="hint">{p.description} The key is kept in your Mac's Keychain and only sent to {p.name}.</div>
+        <Lazy fallback="inline"><ApiKeyPanel compact preset={p} onCancel={() => onRespond(req.id, 'skip')} onDone={(st) => { if (st.state === 'connected') onRespond(req.id, 'connected') }} /></Lazy>
+      </div>
+    )
+  }
   if (googleSetup) {
     return (
       <div className="pending connect-card" data-testid="connect-card">
@@ -45,7 +59,7 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
           <span className="conn-logo" style={{ background: p.color }}>{p.name[0]}</span>
           Set up Google once to connect {p.name}
         </div>
-        <GoogleSetup compact forApp={p.name} onCancel={() => onRespond(req.id, 'skip')} onDone={() => { setGoogleSetup(false); void go() }} />
+        <Lazy fallback="inline"><GoogleSetup compact forApp={p.name} onCancel={() => onRespond(req.id, 'skip')} onDone={() => { setGoogleSetup(false); void go() }} /></Lazy>
       </div>
     )
   }

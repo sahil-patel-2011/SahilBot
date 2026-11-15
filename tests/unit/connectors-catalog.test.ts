@@ -3,7 +3,7 @@ import type { ConnectorPreset } from '@shared/types'
 import { Connectors, EFFECT_MAPS, Oauth, PRESETS, SETUP_PORT, explainAuthError, iconDomain, isOneClick, redirectFor, setupNeeded, setupRedirect, toolPolicy } from '../../src/main/connectors'
 import { CUSTOM_REDIRECT, SECTION_ORDER, connectBadge, isOneClick as isOneClickUi, needsSetup, recommended } from '../../src/renderer/src/lib/connect-catalog'
 
-const AUTHS = ['oauth', 'none', 'oauth-static', 'google', 'browser', 'app']
+const AUTHS = ['oauth', 'none', 'oauth-static', 'google', 'browser', 'app', 'apikey']
 const remote = PRESETS.filter((p) => p.auth !== 'app' && p.id !== 'custom')
 const preset = (id: string): ConnectorPreset => PRESETS.find((p) => p.id === id)!
 
@@ -223,5 +223,115 @@ describe('sign-in robustness', () => {
     const c = new Connectors({ getSetting: () => undefined, setSetting: () => undefined } as never, memSecrets() as never, { register: () => undefined, unregister: () => undefined } as never, () => undefined)
     const r = c.suggest('slack linear')
     expect(r.map((p) => p.id).slice(0, 2)).toEqual(['linear', 'slack'])
+  })
+})
+
+describe('2026-11-15 catalog additions', () => {
+  const added = PRESETS.filter((p) => /^(trello|coda|readwise|egnyte|guru|docsend|gdocs|basecamp|livestorm|bird|superhuman-mail|mandrill|helpscout|front|chatbase|frontify|higgsfield|descript|picsart|replicate|runway|typefully|metricool|windsor-social|buffer|brevo|supermetrics|crustdata|mercury|brex|mollie|navan|bigcommerce|railway|postman|grafana|honeycomb|circleci|planetscale|betterstack|mapbox|gitlab|buildkite|prisma|datadog|render|pagerduty|bigquery|alphavantage|hex|pendo|perplexity|tavily|firecrawl|parallel)$/.test(p.id))
+
+  test('at least 30 new apps, each with a brand color, an icon domain and a short plain description', () => {
+    expect(added.length).toBeGreaterThanOrEqual(50)
+    for (const p of added) {
+      expect(p.color, p.id).toMatch(/^#[0-9a-f]{6}$/i)
+      expect(p.domain, p.id).toBeTruthy()
+      expect(iconDomain(p), p.id).toBe(p.domain)
+      expect(p.description.length, p.id).toBeLessThanOrEqual(110)
+    }
+  })
+
+  test('new sections exist and hold the right apps', () => {
+    for (const c of ['Support', 'Media & AI', 'Social']) expect(SECTION_ORDER as readonly string[]).toContain(c)
+    expect(preset('intercom').category).toBe('Support')
+    expect(preset('heygen').category).toBe('Media & AI')
+    expect(preset('typefully').category).toBe('Social')
+  })
+
+  test('Google Docs and BigQuery reuse "Set up Google once"', () => {
+    expect(preset('gdocs').auth).toBe('google')
+    expect(preset('bigquery').auth).toBe('google')
+    expect(connectBadge(preset('gdocs'))).toBe('Needs setup')
+  })
+
+  test('money moves are hard stops in the finance apps', () => {
+    for (const [app, tool] of [['mercury', 'requestSendMoney'], ['mercury', 'requestTransferMoney'], ['mollie', 'CreatePayment'], ['mollie', 'CreateRefund'], ['mollie', 'CreateCapture'], ['brex', 'transfer_funds']] as const) {
+      expect(toolPolicy(app, tool).hardStop, `${app} ${tool}`).toBeTruthy()
+    }
+    for (const [app, tool] of [['mercury', 'listTransactions'], ['mercury', 'getAccounts'], ['mollie', 'ListPayments'], ['mollie', 'AggregatePayments'], ['brex', 'list_my_expenses']] as const) {
+      expect(toolPolicy(app, tool), `${app} ${tool}`).toEqual({ effect: 'read', consequential: false })
+    }
+  })
+
+  test('posting, sending and publishing ask (mass sends and public posts are hard stops)', () => {
+    expect(toolPolicy('typefully', 'schedule_draft').hardStop).toMatch(/social/)
+    expect(toolPolicy('typefully', 'create_draft').hardStop).toBeUndefined()
+    expect(toolPolicy('metricool', 'createScheduledPost').hardStop).toBeTruthy()
+    expect(toolPolicy('metricool', 'getScheduledPosts').effect).toBe('read')
+    expect(toolPolicy('bird', 'emails_send').hardStop).toBeTruthy()
+    expect(toolPolicy('bird', 'audiences_list').effect).toBe('read')
+    expect(toolPolicy('livestorm', 'livestorm_bulk_register_people').hardStop).toBeTruthy()
+    expect(toolPolicy('higgsfield', 'publish_website').hardStop).toBeTruthy()
+    expect(toolPolicy('higgsfield', 'generate_video')).toMatchObject({ effect: 'write_external', consequential: true })
+    expect(toolPolicy('higgsfield', 'balance').effect).toBe('read')
+    expect(toolPolicy('supermetrics', 'manage_campaign').hardStop).toBeTruthy()
+    expect(toolPolicy('supermetrics', 'data_query').effect).toBe('read')
+    expect(toolPolicy('windsor-social', 'execute_action').hardStop).toBeTruthy()
+    expect(toolPolicy('buffer', 'create_post').hardStop).toBeTruthy()
+    expect(toolPolicy('buffer', 'list_channels').effect).toBe('read')
+    expect(toolPolicy('brevo', 'email_campaigns_send_now').hardStop).toBeTruthy()
+    expect(toolPolicy('brevo', 'contacts_get_contacts').effect).toBe('read')
+    expect(toolPolicy('mandrill', 'call_api').hardStop).toBeTruthy()
+    expect(toolPolicy('front', 'send_reply').hardStop).toBeTruthy()
+    expect(toolPolicy('front', 'list_conversations').effect).toBe('read')
+    expect(toolPolicy('superhuman-mail', 'send_email').hardStop).toBeTruthy()
+    expect(toolPolicy('superhuman-mail', 'create_draft').hardStop).toBeUndefined()
+    expect(toolPolicy('pagerduty', 'create_incident').hardStop).toMatch(/pages/)
+    expect(toolPolicy('pagerduty', 'list_incidents').effect).toBe('read')
+    expect(toolPolicy('bigcommerce', 'create_refund').hardStop).toBeTruthy()
+  })
+
+  test('code hosts: merges are hard stops, MRs and pipelines ask', () => {
+    expect(toolPolicy('gitlab', 'merge_merge_request').hardStop).toMatch(/GitLab/)
+    expect(toolPolicy('gitlab', 'create_merge_request').hardStop).toBeUndefined()
+    expect(toolPolicy('gitlab', 'create_merge_request').consequential).toBe(true)
+    expect(toolPolicy('gitlab', 'get_issue').effect).toBe('read')
+    expect(toolPolicy('buildkite', 'create_build').consequential).toBe(true)
+    expect(toolPolicy('render', 'create_web_service').consequential).toBe(true)
+    expect(toolPolicy('render', 'list_services').effect).toBe('read')
+    expect(toolPolicy('prisma', 'delete_database').effect).toBe('destructive')
+    expect(toolPolicy('datadog', 'analyze_datadog_logs').effect).toBe('read')
+    expect(toolPolicy('replicate', 'create_prediction').consequential).toBe(true)
+  })
+
+  test('Front is a one-time setup app; Render, PagerDuty, Brevo and Mailchimp Transactional take API keys', () => {
+    expect(preset('front').auth).toBe('oauth-static')
+    expect(preset('front').setup?.needsSecret).toBe(true)
+    for (const id of ['render', 'pagerduty', 'brevo', 'mandrill']) expect(connectBadge(preset(id)), id).toBe('API key')
+    expect(preset('pagerduty').apiKey).toMatchObject({ in: 'header', name: 'Authorization', format: 'Token token={key}' })
+  })
+
+  test('deploys, pipelines, SQL and incidents ask; deletes are destructive', () => {
+    expect(toolPolicy('railway', 'create-deployment').consequential).toBe(true)
+    expect(toolPolicy('railway', 'deploy-artifact').consequential).toBe(true)
+    expect(toolPolicy('railway', 'delete-feature-flag').effect).toBe('destructive')
+    expect(toolPolicy('railway', 'get-logs').effect).toBe('read')
+    expect(toolPolicy('circleci', 'run_pipeline').consequential).toBe(true)
+    expect(toolPolicy('circleci', 'get_job_logs').effect).toBe('read')
+    expect(toolPolicy('planetscale', 'planetscale_execute_write_query').consequential).toBe(true)
+    expect(toolPolicy('planetscale', 'planetscale_execute_read_query').effect).toBe('read')
+    expect(toolPolicy('bigquery', 'execute_sql').consequential).toBe(true)
+    expect(toolPolicy('bigquery', 'list_dataset_ids').effect).toBe('read')
+    expect(toolPolicy('grafana', 'create_incident').consequential).toBe(true)
+    expect(toolPolicy('betterstack', 'acknowledge_incident').consequential).toBe(true)
+    expect(toolPolicy('trello', 'trelloReadBoard').effect).toBe('read')
+    expect(toolPolicy('trello', 'trelloDeleteCard').effect).toBe('destructive')
+    expect(toolPolicy('evernote', 'delete_note').effect).toBe('destructive')
+    expect(toolPolicy('postman', 'deleteCollection').effect).toBe('destructive')
+    expect(toolPolicy('postman', 'getCollection').effect).toBe('read')
+  })
+
+  test('search and data tools that only read are reads', () => {
+    for (const [app, tool] of [['perplexity', 'perplexity_ask'], ['pendo', 'accountQuery'], ['firecrawl', 'firecrawl_scrape'], ['tavily', 'tavily_crawl'], ['alphavantage', 'TIME_SERIES_DAILY'], ['mapbox', 'category_search_tool'], ['crustdata', 'crustdata_company_enrich'], ['parallel', 'web_fetch']] as const) {
+      expect(toolPolicy(app, tool).effect, `${app} ${tool}`).toBe('read')
+    }
   })
 })

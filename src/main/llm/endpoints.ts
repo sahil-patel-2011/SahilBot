@@ -5,7 +5,8 @@ import { RECOMMENDED, estimateMemory, isMlx, prettyName, rankOf, recommendedFor,
 import { claudeFamily, claudeInfo, claudeOptions, isPremiumClaude } from './claude-models'
 import { isAuto, routingPrefs } from './router'
 import { machine, providerModels, root } from './models'
-import { DEFS, baseUrlOf, def, isAnthropic } from './providers'
+import { DEFS, baseUrlOf, def, providerForUrl } from './providers'
+import { olderOpenAI, openaiInfo } from './openai-models'
 
 export interface Endpoint {
   provider: ProviderId
@@ -106,7 +107,8 @@ export class Endpoints {
   for(model: string): Endpoint {
     const s = this.settings.get()
     const o = this.override()
-    if (o) return { provider: isAnthropic(o) ? 'anthropic' : 'custom', baseUrl: o, apiKey: this.settings.keyFor(o) }
+    // A cloud API named by URL is that provider (https://api.openai.com/v1 is OpenAI, not a custom server).
+    if (o) return { provider: providerForUrl(o), baseUrl: o, apiKey: this.settings.keyFor(o) }
     const at = (provider: ProviderId): Endpoint => {
       const baseUrl = baseUrlOf(provider, s.providers)
       return { provider, baseUrl, apiKey: this.settings.keyFor(baseUrl) }
@@ -128,7 +130,7 @@ export class Endpoints {
     const window = s.contextWindow || 32768
     const o = this.override()
     const targets: Array<{ id: ProviderId; name: string; baseUrl: string }> = o
-      ? [{ id: isAnthropic(o) ? 'anthropic' : 'custom', name: isAnthropic(o) ? 'Anthropic' : 'Model server', baseUrl: o }]
+      ? [{ id: providerForUrl(o), name: providerForUrl(o) === 'custom' ? 'Model server' : def(providerForUrl(o)).name, baseUrl: o }]
       : DEFS.filter((d) => (d.local ? (d.id === 'custom' ? s.providers.custom.enabled : s.providers[d.id as 'ollama' | 'lmstudio'].enabled) : s.keys[d.id] && s.cloud.enabled) && d.id !== 'openrouter')
         .map((d) => ({ id: d.id, name: d.id === 'custom' ? s.providers.custom.name || d.name : d.name, baseUrl: baseUrlOf(d.id, s.providers) }))
 
@@ -171,9 +173,25 @@ export class Endpoints {
       } catch { /* older LM Studio: names still tell (…-mlx, mlx-community/…) */ }
     }))
 
+    // OpenAI lists image, audio, video and realtime models too: only chat models belong in the picker.
+    for (let i = models.length - 1; i >= 0; i--) if (models[i].provider === 'openai' && /sora|gpt-live|computer-use|moderation|babbage|davinci|-instruct\b/i.test(models[i].id)) models.splice(i, 1)
+
     // Cloud models: real context window, output cap and the price the budget charges.
     for (const m of models) {
       if (m.note !== 'remote' && m.provider !== 'anthropic') continue
+      // OpenAI (openai-models.ts): window, output cap, tier, label and price; a GPT id newer than the table is estimated.
+      const gpt = !claudeFamily(m.id) ? openaiInfo(m.id) : undefined
+      if (gpt) {
+        if (gpt.contextTokens) m.contextTokens = gpt.contextTokens
+        if (gpt.maxOutput) m.maxOutputTokens = gpt.maxOutput
+        m.tier = gpt.tier
+        m.vision = true
+        m.tools ??= true
+        const p = priceFor(m.id)
+        m.price = { input: p.input, output: p.output, ...(p.cacheRead !== undefined ? { cacheRead: p.cacheRead } : {}) }
+        if (!p.known) m.priceEstimated = true
+        continue
+      }
       // A Claude id newer than SahilBot's table gets its family's facts; its price is then an estimate.
       const spec = claudeInfo(m.id)
       if (spec?.contextTokens) m.contextTokens = spec.contextTokens
@@ -183,7 +201,8 @@ export class Endpoints {
       if (!p.known) m.priceEstimated = true
       if (claudeFamily(m.id)) { m.vision = true; m.tools ??= true }
     }
-    this.older = new Set([...olderClaude(models.filter((m) => m.provider === 'anthropic').map((m) => m.id))].filter((id) => !s.customModels.includes(id)))
+    // Older models start off: earlier Claude of each family, and every OpenAI model but the current lineup.
+    this.older = new Set([...olderClaude(models.filter((m) => m.provider === 'anthropic').map((m) => m.id)), ...olderOpenAI(models.filter((m) => m.provider === 'openai').map((m) => m.id))].filter((id) => !s.customModels.includes(id)))
 
     // On by default only if it fits this Mac comfortably (or you switched it on yourself).
     const hidden = new Set(s.hiddenModels)
@@ -242,13 +261,17 @@ export class Endpoints {
     const s = this.settings.get()
     if (!s.cloud.enabled || !s.cloud.hybrid) return undefined
     const pref = s.cloud.advisorModel.trim()
-    if (pref && !/^(opus|sonnet|haiku|fable|mythos)$/i.test(pref)) return pref
+    if (pref && !/^(opus|sonnet|haiku|fable|mythos|astra|sol|terra|luna)$/i.test(pref)) return pref
     const hidden = new Set(s.hiddenModels)
     const shown = new Set(s.shownModels)
     const cloud = (this.last?.models ?? []).filter((m) => m.note === 'remote' && m.installed && this.isOn(m, hidden, shown))
     const best = (ms: ModelInfo[]): string | undefined => [...ms].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id
     const family = (pref || 'opus').toLowerCase()
-    return best(cloud.filter((m) => claudeFamily(m.id) === family)) ?? best(cloud.filter((m) => !isPremiumClaude(m.id))) ?? best(cloud)
+    // An OpenAI role by name (astra, sol…); with no Claude key, '' / 'opus' means GPT-6.1 Sol's tier (near-Astra, a fifth of the price).
+    const gpt = (m: ModelInfo): boolean => !!openaiInfo(m.id) && !claudeFamily(m.id) && !openaiInfo(m.id)!.premium
+    return best(cloud.filter((m) => claudeFamily(m.id) === family)) ?? best(cloud.filter((m) => gpt(m) && openaiInfo(m.id)!.role === family))
+      ?? (family === 'opus' ? best(cloud.filter((m) => gpt(m) && openaiInfo(m.id)!.role === 'sol')) : undefined)
+      ?? best(cloud.filter((m) => !isPremiumClaude(m.id) && !openaiInfo(m.id)?.premium)) ?? best(cloud)
   }
 
   /** Models Auto may use: on, downloaded, fitting this Mac, and (cloud ones) allowed and affordable. */
@@ -259,7 +282,8 @@ export class Endpoints {
     const shown = new Set(s.shownModels)
     // Cloud first when chosen, or by default once a Claude key is saved (Settings → Models can say Local first).
     const o = claudeOptions(s)
-    routingPrefs.preferCloud = s.cloud.enabled && o.preferCloud
+    // A saved OpenAI key makes Auto cloud-first too, unless Settings say Local first (same rule as Claude's key).
+    routingPrefs.preferCloud = s.cloud.enabled && (o.preferCloud || (s.cloud.prefer === undefined && !!s.keys?.openai))
     routingPrefs.fableForHardest = s.cloud.enabled && o.fableForHardest
     return (this.last?.models ?? []).filter((m) => m.installed && this.isOn(m, hidden, shown) &&
       // Cloud switched off or its key removed (since the last listing): nothing goes to that cloud model.

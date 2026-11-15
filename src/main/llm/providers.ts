@@ -64,6 +64,25 @@ export const keyName = (baseUrl: string): string => {
 
 export const isAnthropic = (baseUrl: string): boolean => /(^|\.)anthropic\.com$/.test(safeHost(baseUrl))
 
+/**
+ * OpenAI's own API (api.openai.com), where GPT models run over the Responses API. FOREMAN_OPENAI_URL names
+ * another base URL that speaks it the same way (tests' fake server, a proxy in front of OpenAI).
+ */
+export function isOpenAI(baseUrl: string): boolean {
+  if (safeHost(baseUrl) === 'api.openai.com') return true
+  const alt = process.env.FOREMAN_OPENAI_URL
+  return !!alt && trimUrl(alt) === trimUrl(baseUrl)
+}
+
+export const isOpenRouter = (baseUrl: string): boolean => safeHost(baseUrl) === 'openrouter.ai'
+
+/** Which provider a base URL is (FOREMAN_BASE_URL pointing at a cloud API is that provider, not "custom"). */
+export function providerForUrl(baseUrl: string): ProviderId {
+  return isAnthropic(baseUrl) ? 'anthropic' : isOpenAI(baseUrl) ? 'openai' : isOpenRouter(baseUrl) ? 'openrouter' : 'custom'
+}
+
+const trimUrl = (u: string): string => u.trim().replace(/\/+$/, '')
+
 function safeHost(u: string): string {
   try {
     return new URL(u).hostname

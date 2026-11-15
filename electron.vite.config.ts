@@ -16,6 +16,9 @@ export default defineConfig({
     resolve: { alias: { '@shared': resolve('src/shared') } },
     plugins: [react()],
     // overlay.html: the SahilBot cursor overlay page (static, strict CSP).
-    build: { rollupOptions: { input: { index: resolve('src/renderer/index.html'), overlay: resolve('src/renderer/overlay.html') } } }
+    // minify: electron-vite leaves the renderer unminified by default; minified it parses and compiles in a
+    // fraction of the time at launch (1.6 MB → about a third). Rarely used surfaces are split out on top of
+    // that (src/renderer/src/lazy.tsx). The main process stays readable (its stack traces go in logs).
+    build: { minify: true, rollupOptions: { input: { index: resolve('src/renderer/index.html'), overlay: resolve('src/renderer/overlay.html') } } }
   }
 })

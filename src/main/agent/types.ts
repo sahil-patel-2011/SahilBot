@@ -120,7 +120,8 @@ export interface ThreadState {
   voice?: boolean
   /** Messages up to and including `boundaryId` are represented by `summary`. */
   /** tainted: the summarized turns held outside content; the summary is shown as untrusted data. */
-  compaction?: { boundaryId: string; summary: string; at?: number; tainted?: boolean }
+  /** brief: the task brief written with it (context.ts taskBrief): the user's summarized messages verbatim, plan, notes. */
+  compaction?: { boundaryId: string; summary: string; at?: number; tainted?: boolean; brief?: string }
   /** Auto mode: the tier the last request was routed to (follow-ups keep it). */
   lastTier?: 0 | 1 | 2 | 3
   /** Helper agents: how deep this one is (1 = started by the chat's agent) and the chat it all started in. */
