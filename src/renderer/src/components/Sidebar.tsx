@@ -9,6 +9,7 @@ import { duplicateBot, importBot, shareBot } from './BotShare'
 import { Target, useGoalsNeedingYou } from './TasksView'
 import { openUsageGlance } from './UsagePage'
 import { money, useSpend } from './SpendingLimit'
+import { countLabel } from '@shared/read-state'
 
 /** The profile menu's usage line: "Usage · $3.20 of $200 this month". */
 const spendLabel = (b: ReturnType<typeof useSpend>): string => !b ? 'Usage' : b.mode === 'amount' ? `Usage · ${money(b.spent)} of ${money(b.cap)} this month` : `Usage · ${money(b.spent)} this month`
@@ -187,11 +188,17 @@ export function Sidebar(p: {
     onDragEnd: () => { setDragging(null); setOver(null) }
   })
 
-  /** Working, needs you, or unread: one quiet mark on the right. */
-  const status = (working: boolean, needs: boolean, unread: boolean): ReactNode =>
-    working ? <span className="row-spin" title="Working" role="img" aria-label="Working" />
-      : needs ? <span className="need-dot" title="Needs you" role="img" aria-label="Needs you" data-testid="needs-you" />
-        : unread ? <span className="unread-dot" title="Unread" role="img" aria-label="Unread" /> : null
+  /**
+   * Needs you, working, or unread: one quiet mark on the right. Needs you (accent) wins: a run waiting on your
+   * answer isn't working. Unread is blue; a bot with more than one unread reply shows the count instead of the dot.
+   */
+  const status = (working: boolean, needs: boolean, unread: boolean, count?: number): ReactNode =>
+    needs ? <span className="need-dot" title="Needs you" role="img" aria-label="Needs you" data-testid="needs-you" />
+      : working ? <span className="row-spin" title="Working" role="img" aria-label="Working" />
+        : unread && countLabel(count) ? <span className="unread-count" title={`${countLabel(count)} unread`} role="img" aria-label={`${countLabel(count)} unread`} data-testid="unread-count">{countLabel(count)}</span>
+          : unread ? <span className="unread-dot" title="Unread" role="img" aria-label="Unread" data-testid="unread-dot" /> : null
+  /** A running chat or bot (not one waiting on you): its name gets a slow, quiet shimmer (CSS only; none with reduced motion). */
+  const runName = (on: boolean, waiting = false): string => (on && !waiting ? ' run-name' : '')
 
   const avatar = (s: Space, size: number): ReactNode => s.kind === 'project'
     ? <span className="proj-tile" style={{ background: s.color, width: Math.round(size * 0.8), height: Math.round(size * 0.8), borderRadius: Math.round(size * 0.26) }}><I.Folder size={Math.round(size * 0.36)} /></span>
@@ -200,6 +207,8 @@ export function Sidebar(p: {
   const testId = (s: Space): string => (s.isMain ? 'main-bot' : s.kind === 'project' ? 'project-item' : 'space-item')
   const needs = (s: Space): boolean => !!p.needSpaces?.has(s.id) && !isActive(s)
   const working = (s: Space): boolean => !!p.runningSpaces?.has(s.id)
+  /** Bots (and groups) count their unread replies; projects and SahilBot itself (its chats are listed below) just get the dot. */
+  const botCount = (s: Space): number | undefined => (s.kind === 'project' || s.isMain ? undefined : s.unreadCount)
 
   /** A pinned bot: a big avatar with its name under it. */
   const widget = (s: Space) => (
@@ -223,9 +232,9 @@ export function Sidebar(p: {
           <span className="pw-avatar">
             {avatar(s, 64)}
             {s.isMain && s.shape !== 'mascot' && <span className="pw-star"><Star /></span>}
-            {(working(s) || needs(s) || (s.unread && !isActive(s))) && <span className="pw-status">{status(working(s), needs(s), !!s.unread && !isActive(s))}</span>}
+            {(working(s) || needs(s) || (s.unread && !isActive(s))) && <span className="pw-status">{status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}</span>}
           </span>
-          <span className="pw-name">{s.name}</span>
+          <span className={`pw-name${runName(working(s), needs(s))}`}>{s.name}</span>
         </button>
       )}
     </div>
@@ -243,10 +252,10 @@ export function Sidebar(p: {
         <button className="br-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.name}>
           <span className="br-avatar">{avatar(s, 40)}</span>
           <span className="br-text">
-            <span className="br-name">{s.name}</span>
+            <span className={`br-name${runName(working(s), needs(s))}`}>{s.name}</span>
             <span className="br-preview">{s.lastPreview?.replace(/\s+/g, ' ').trim() || (s.kind === 'group' ? `${s.members.length} bots` : 'Say hi')}</span>
           </span>
-          {status(working(s), needs(s), !!s.unread && !isActive(s))}
+          {status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}
         </button>
       )}
     </div>
@@ -258,8 +267,8 @@ export function Sidebar(p: {
       {renaming === s.id ? renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v })) : (
         <button className="nav-btn" onClick={() => openSpace(s)} data-testid={id} title={s.lastPreview ? `${s.name}: ${s.lastPreview.slice(0, 120)}` : s.name}>
           <span className="row-icon">{avatar(s, 22)}</span>
-          <span className="t">{s.name}</span>
-          {status(working(s), needs(s), !!s.unread && !isActive(s))}
+          <span className={`t${runName(working(s), needs(s))}`}>{s.name}</span>
+          {status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}
         </button>
       )}
     </div>
@@ -270,7 +279,7 @@ export function Sidebar(p: {
       {renaming === t.id ? renameInput(t.id, t.title, (v) => api.threads.update(t.id, { title: v })) : (
         <button className="nav-btn chat" onClick={() => p.onOpenChat(t.id)} data-testid="thread-item" title={t.title}>
           {t.pinned && <I.Pin size={13} className="row-pin" />}
-          <span className="t">{t.title.replace(/^⏰ /, '')}</span>
+          <span className={`t${runName(!!p.runningThreads?.has(t.id), !!p.needThreads?.has(t.id) && t.id !== p.activeThreadId)}`}>{t.title.replace(/^⏰ /, '')}</span>
           {t.title.startsWith('⏰') && <I.Clock size={14} className="row-tail" />}
           {status(!!p.runningThreads?.has(t.id), !!p.needThreads?.has(t.id) && t.id !== p.activeThreadId, t.unread && t.id !== p.activeThreadId)}
         </button>

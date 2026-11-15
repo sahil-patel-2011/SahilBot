@@ -5,7 +5,7 @@ import { activityTimelineForLearning, registerActivityService } from '../../src/
 import { ACTIVITY_TITLE, CONTEXT_MAX_CHARS, activityContext, activityLines, hhmm, runMayUseActivity, setActivitySource } from '../../src/main/activity/context'
 import { classify, cleanText, cleanUrl, fileFromTitle, isSensitiveHost, labelOf, looksSecretTitle, normalizeDomain, type RawSample, type Rules } from '../../src/main/activity/rules'
 import { ARC_TAB_JS, CHROMIUM_TAB_JS, FRONT_JS, SAFARI_TAB_JS, SYSTEM_EVENTS_CHECK_JS, parseFront, parseTab, sampleOnce, type Jxa } from '../../src/main/activity/sampler'
-import { ActivityService, DEFAULT_ACTIVITY, SETTINGS_KEY, cleanActivitySettings, type ActivityDeps } from '../../src/main/activity/service'
+import { ACTIVITY_SETTINGS_VERSION, ActivityService, DEFAULT_ACTIVITY, SETTINGS_KEY, activityExplicit, cleanActivitySettings, type ActivityDeps } from '../../src/main/activity/service'
 import { ActivityStore, RAW_KEEP_MS, rollup, type StoredSample } from '../../src/main/activity/store'
 
 // Everything here runs on fakes: no osascript, no real apps, nothing from this Mac's screen.
@@ -300,17 +300,63 @@ describe('service', () => {
     return { svc, db, jxa, automation, advance: (ms: number) => { t += ms } }
   }
 
-  test('off by default: never looks, never shares', async () => {
-    const { svc, jxa } = make()
+  test('on by default (learning too, cloud sharing off); with nothing checked it never prompts: only the front app', async () => {
+    const { svc, jxa, automation } = make()
     expect(svc.settings()).toEqual(DEFAULT_ACTIVITY)
-    expect(svc.settings().enabled).toBe(false)
-    expect(svc.settings().learn).toBe(false)
+    expect(svc.settings()).toMatchObject({ enabled: true, learn: true, shareWithCloud: false })
+    svc.start()
+    expect(await svc.tick()).toBe('sampled')
+    // No window title (System Events not checked), no browser scripted, no permission asked.
+    expect(jxa.calls.map((c) => [c.fn === FRONT_JS, c.input])).toEqual([[true, { window: false }]])
+    expect(automation).toEqual([])
+    expect(jxa.calls.some((c) => c.fn === SYSTEM_EVENTS_CHECK_JS)).toBe(false)
+    // Local models only: a cloud run gets nothing.
+    setActivitySource(svc)
+    expect(activityContext({}, () => [{ role: 'user', meta: {} }], { local: false })).toBeUndefined()
+    expect(activityContext({}, () => [{ role: 'user', meta: {} }], { local: true })?.lines[0]).toMatch(/Chrome$/)
+    expect(svc.timelineForLearning()?.map((x) => x.label)).toEqual(['Chrome'])
+  })
+
+  test('turned off: never looks, never shares', async () => {
+    const { svc, jxa } = make()
+    svc.set({ enabled: false })
     svc.start()
     expect(await svc.tick()).toBe('off')
     expect(jxa.calls).toHaveLength(0)
     setActivitySource(svc)
     expect(activityContext(undefined, () => [{ role: 'user' }])).toBeUndefined()
     expect(svc.status().preview).toBe('')
+    expect(svc.timelineForLearning()).toBeNull()
+  })
+
+  test('migration: never saved → on; saved before → kept as stored; a set records what it touched', () => {
+    const a = make()
+    expect(a.svc.settings()).toMatchObject({ enabled: true, learn: true })
+    expect(a.svc.explicitChoices()).toEqual([])
+    // An old save (the user turned it on, then off): stays off, and learning stays as it was.
+    const b = make()
+    b.db.setSetting(SETTINGS_KEY, { enabled: false, windowTitles: true, browserTabs: true, learn: false, retentionHours: 24, excludedApps: [], excludedDomains: [], pausedUntil: null, shareWithCloud: false })
+    expect(b.svc.settings()).toMatchObject({ enabled: false, learn: false })
+    expect(b.svc.sharing()).toBe(false)
+    expect(b.svc.explicitChoices()).toContain('enabled')
+    // An old save with it on and learning off: learning stays off.
+    const c = make()
+    c.db.setSetting(SETTINGS_KEY, { enabled: true, learn: false, retentionHours: 8 })
+    expect(c.svc.settings()).toMatchObject({ enabled: true, learn: false, retentionHours: 8 })
+    // From now on: version 2 and the keys the user touched.
+    c.svc.set({ windowTitles: false })
+    const stored = c.db.getSetting<{ version: number; explicit: string[]; learn: boolean }>(SETTINGS_KEY)!
+    expect(stored.version).toBe(ACTIVITY_SETTINGS_VERSION)
+    expect(stored.explicit).toEqual(['enabled', 'windowTitles', 'learn', 'retentionHours'])
+    expect(c.svc.settings()).toMatchObject({ enabled: true, learn: false, windowTitles: false, retentionHours: 8 })
+    const d = make()
+    d.svc.set({ shareWithCloud: true })
+    expect(d.svc.explicitChoices()).toEqual(['shareWithCloud'])
+    d.svc.pause(30)
+    expect(d.svc.explicitChoices()).toEqual(['shareWithCloud'])
+    expect(d.svc.paused()).toBe(true)
+    expect(activityExplicit({ version: 2, explicit: ['learn', 'bogus', 3] })).toEqual(['learn'])
+    expect(activityExplicit('junk')).toEqual([])
   })
 
   test('on: samples while active, never while idle or locked; the background never prompts', async () => {
@@ -383,9 +429,11 @@ describe('service', () => {
     expect(svc.clear().samples).toBe(0)
     await svc.tick()
     expect(svc.store.counts().samples).toBe(1)
+    svc.set({ shareWithCloud: true })
     svc.set({ enabled: false })
     expect(svc.store.counts()).toEqual({ samples: 0, sessions: 0 })
-    expect(svc.settings().learn).toBe(false)
+    expect(svc.timelineForLearning()).toBeNull()
+    expect(svc.settings().shareWithCloud).toBe(false)
   })
 
   test('the preview is exactly what a run would get', async () => {
@@ -398,18 +446,22 @@ describe('service', () => {
     expect(sec.lines[0]).toMatch(/^- Now \(\d\d:\d\d\): Chrome$/)
   })
 
-  test('learning sees the timeline only with its own switch on', async () => {
+  test('learning sees the timeline only with its own switch on (on by default)', async () => {
     const { svc } = make()
     registerActivityService(svc)
-    expect(activityTimelineForLearning()).toBeNull()
-    svc.set({ enabled: true })
+    expect(activityTimelineForLearning()).toEqual([])
     await svc.tick()
+    expect(activityTimelineForLearning()?.map((x) => x.label)).toEqual(['Chrome'])
+    svc.set({ learn: false })
     expect(activityTimelineForLearning()).toBeNull()
     svc.set({ learn: true })
     expect(activityTimelineForLearning()?.map((x) => x.label)).toEqual(['Chrome'])
   })
 
-  test('settings are cleaned: retention 1–72 h, odd values read as off', () => {
+  test('settings are cleaned: retention 1–72 h, odd values read as off, nothing saved reads as the defaults', () => {
+    for (const v of [undefined, null, 'junk', 7, []]) expect(cleanActivitySettings(v)).toEqual(DEFAULT_ACTIVITY)
+    expect(cleanActivitySettings({ enabled: false, learn: false })).toMatchObject({ enabled: false, learn: false })
+    expect(cleanActivitySettings({ version: 2, explicit: ['enabled'], enabled: true, shareWithCloud: 'yes' })).toEqual(DEFAULT_ACTIVITY)
     expect(cleanActivitySettings({ retentionHours: 500 }).retentionHours).toBe(72)
     expect(cleanActivitySettings({ retentionHours: 0 }).retentionHours).toBe(1)
     expect(cleanActivitySettings({ enabled: 'yes', learn: 1 })).toMatchObject({ enabled: false, learn: false })

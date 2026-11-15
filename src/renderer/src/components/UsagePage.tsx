@@ -169,7 +169,7 @@ export function UsagePage() {
                     <span className="us-val">{money(b.usd)}</span>
                   </div>
                   <div className="us-track"><i className="cloud" style={{ width: `${Math.min(100, b.share * 100)}%` }} /></div>
-                  <div className="us-sub">{num(b.requests)} requests · {tokens(b.tokens)} tokens · {pct(b.share)}</div>
+                  <div className="us-sub">{num(b.requests)} {b.requests === 1 ? 'request' : 'requests'} · {tokens(b.tokens)} tokens · {pct(b.share)}</div>
                 </div>
               )) : <div className="us-empty">Nothing this month yet.</div>}
             </div>

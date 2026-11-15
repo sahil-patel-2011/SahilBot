@@ -16,7 +16,7 @@ The "routed" label on each reply names the model and the reason, for example "Cl
 | Option | What it does |
 |---|---|
 | **Best result** (default) | Routes one tier above the request's difficulty, so each kind of task gets the strongest model. Chat stops at tier 2 and voice at tier 1, so both stay quick. |
-| **Balanced** | Routes at the request's own difficulty: the cheapest model that is strong enough. This is how Auto worked before. Where GPT-6 Astra would lead the hardest row, its near-equal GPT-6.1 Sol leads instead, at a fifth of the price. |
+| **Balanced** | Routes at the request's own difficulty: the cheapest model that is strong enough. Where GPT-6 Astra would lead the hardest row, its near-equal GPT-6.1 Sol leads instead, at a fifth of the price. On a [close call](#balanced-close-calls) it takes Best result's pick when that costs at most 2x and isn't much slower. |
 | **Cheapest** | Routes one tier lower. Within a row, the cheapest model comes first. A free local model is used first whenever one is strong enough. |
 
 These settings and conditions still apply on top of the preference:
@@ -27,16 +27,61 @@ These settings and conditions still apply on top of the preference:
 | Auto (cloud) | Uses cloud models only. |
 | Local or cloud first | Local first keeps a free local model for quick chats and light work when it is strong enough. Agent work (difficulty 2 or more: coding, research, tasks) still goes to the strongest suitable cloud model whenever one is on. |
 | Use Fable for the hardest tasks | Fable leads the hardest row, but only where the evidence puts it ahead of Opus, so not for writing or office work. |
-| Monthly spending limit (a specific amount) | A model the limit can't pay for is skipped. With less than 10% of it left, Auto routes as if Cheapest were chosen. |
+| Monthly spending limit (a specific amount) | A model the limit can't pay for is skipped. With less than 10% of it left, Auto routes as if Cheapest were chosen, but only while a pay-per-use model could still be picked: when only the ChatGPT plan and local models are left (they cost nothing per token), the preference stands. |
 | Monthly spending limit: Unlimited | No cap. Spend is still recorded and shown on the Usage page. |
-| Monthly spending limit: None | No pay-per-use API model is used. Auto routes only to your ChatGPT plan (via Codex) and local models, and says why when neither is available. A model picked by name is refused before anything is sent. |
+| Monthly spending limit: None | No pay-per-use API model is used. Auto routes only to your ChatGPT plan (via Codex) and local models, at the chosen preference (never as Cheapest: nothing is being spent), and says why when neither is available. A model picked by name is refused before anything is sent. |
 | Fast mode | Auto uses a provider's fast tier only where Settings → Models → Fast mode allows it. By default that is only for speed-sensitive requests: voice, small talk and quick code questions. See [Fast mode](#fast-mode). |
 | Images in the request | Only models that can see images are considered. |
 | Context window | The model's window must fit the prompt. If none fits, Auto uses the model with the biggest window. |
+| Computer use and voice | Never Grok (no computer-use result on any board; about 10 s to its first token). With only Grok on, Auto says so and suggests a fix; Grok picked by name still works. |
+| Computer use on the ChatGPT plan | Codex passes the screenshots tools return back to the model as text only ([chatgpt-plan.md](chatgpt-plan.md)), so the plan's models are used for computer use only when no other model can see the screen, and the label says they work from page text. The planner + executor pair never uses them. |
+| Premium models | Fable only with "Use Fable for the hardest tasks"; GPT Pro models never (picked by name only). |
+| A follow-up in the same chat | Keeps the chat's previous model when it is still as good a choice ([Stability](#stability-across-a-conversation)). |
+| A model that failed recently | Skipped until its cooldown ends ([Failures](#failures-and-fallbacks)). |
 
 **Fallbacks:**
 - If the first choice is off or missing, the next candidate in the row is used, then the rows above, then the rows below.
 - Models the table doesn't name, such as OpenRouter models added by name, fall back to the older tier-based pick.
+- Within a slot, the same model on the ChatGPT plan comes before the pay-per-use API (no per-token charge).
+- A connected ChatGPT plan makes Auto cloud-first by default, like a saved OpenAI or xAI key (Settings can still say Local first).
+
+### Balanced close calls
+
+A request is a **close call** when the classifier isn't sure of it (confidence below `CONFIDENT`, so it may well be a tier harder) or it has stakes (legal, medical, money, production) at difficulty 1 or more. On Balanced, a close call compares Balanced's pick with Best result's pick (one tier up). It takes Best result's pick only when both hold:
+
+- **Price:** at most 2x Balanced's pick, blended at 3 input : 1 output tokens per 1M (the ChatGPT plan and local models count as $0).
+- **Latency:** its first answer token at most 1 s later for speed-sensitive requests (chat, quick code questions, voice), or 3 s later for everything else, by the AA time-to-first-token figures at low effort (Luna 1.57 s, Terra 1.96 s, Sonnet 2.50 s, Sol 3.22 s, Astra 3.82 s, Opus 5.32 s, Haiku 6.26 s, Grok 9.9 s; Fable has no figure and counts as Opus).
+
+So Sonnet → Opus (2.0x, +2.8 s) passes for an unsure coding or computer-use request, and Sol → Astra (5x) never does. Code: `routing-table.ts` `closeCall`, `CLOSE_CALL_PRICE`, `TTFT_S`.
+
+### Stability across a conversation
+
+Prompt caches are per model, so switching models mid-conversation re-sends the whole history uncached; switching providers also drops the provider-specific parts of the history (Claude's thinking blocks and compaction, OpenAI's reasoning items). Auto therefore keeps the chat's previous Auto model (`ThreadState.lastAutoModel`) when the new request continues the same work and that model is still as good a choice (`routing-table.ts` `keepPrevious`):
+
+- **Same work:** a follow-up ("yes, do it"), the same category, a related one (coding and code questions, office and writing, research and long documents), or a light chat turn (chat at difficulty 0-1, "thanks!").
+- **As good:** for light chat, at least the fresh pick's tier. Otherwise at least as strong for the category: no later than the fresh pick in the category's hardest row on Best result (which orders the models by measured quality), or tied with it within the benchmarks' noise (`ties` on each row, for example Opus 1295 and Sol 1293 on arena Vision, Astra and Sol on TB4 58.2 each).
+- **Otherwise the same provider:** when the previous model isn't as good, a model of its provider from the routed row that is as good comes before switching provider.
+- **Never** past a hard rule (keys, budget, vision, window, Fable, Grok, plan), never a dearer model on Cheapest, and never a paid model keeping a light chat turn from a free local one on Local first. A harder request still moves up (a Haiku chat gets Opus for hard coding).
+
+The label's tooltip says "same model as the last reply" or "same provider as the last reply".
+
+## Failures and fallbacks
+
+Transient failures are retried first with backoff (`retry.ts`: 429 honoring Retry-After, 5xx, dropped connections; never 402). When a call still fails, `model-health.ts` names the failure and remembers it, and `auto-route.ts` `planFallback` picks who carries on. The chat gets one note per switch ("GPT-6.1 Sol is unavailable (out of API credit); used Claude Sonnet 5.5 for the rest of this task."), a run switches at most twice and never to a model it already tried, and later requests skip the failed model until its cooldown ends.
+
+| Failure | Retried | Blocks | Cooldown | Carries on with |
+|---|---|---|---|---|
+| Rate limit (429) | yes | the model | its Retry-After (5 s-15 min), else 1 min | next-best candidate |
+| Overloaded (529 / 503) | yes | the model | 2 min | next-best candidate |
+| Out of credit (402, `insufficient_quota`, also the stream error `{type:'error', error:{code:'insufficient_quota'}}`, Anthropic's "credit balance is too low", xAI out of credits) | never | Anthropic, xAI: the provider. OpenAI: the model (on a new account the cheap models still answered while the larger ones returned `insufficient_quota`) | 30 min | next-best candidate of another provider (OpenAI: another model) |
+| Model not found / deprecated (404) | never | the model | 24 h | next-best candidate |
+| Context too long | never | nothing | - | a model with a bigger window |
+| Content-policy refusal | never | nothing | - | another provider (which applies its own policies) |
+| Network drop | yes | the provider | 30 s | another provider |
+| ChatGPT plan limit | never | the plan | until its reset time, else 1 h | next-best candidate |
+| Monthly spending limit (SahilBot's own) | never | nothing | - | the ChatGPT plan or a local model |
+
+"Next-best candidate" is the routing table's pick for the same request among what is left. Mid-run, a failure of one model goes to the same provider first when it has a candidate, so the run keeps its provider-specific history. When every model is cooling down, the soft cooldowns (rate limit, overload, server error, network) are ignored, since the limit may have passed; the hard ones never are. A model picked by name is still tried first on every request (what you pick is what happens), and each fallback from it is said in the chat.
 
 ## Auto thinking
 
@@ -207,7 +252,7 @@ What the app does with each manual choice (tests in `tests/unit/manual-choices.t
 
 | Choice | What the app does |
 |---|---|
-| Model (chat, bot, default) | Used for every step. If it's gone (deleted, key removed), the chat says so and that chat, bot or default moves to Auto. If it errors after retries, the next stronger model answers and the chat says which and why: "Claude Opus 5.5 is unavailable (rate limited); used Claude Sonnet 5.5 for the rest of this task." A picked model is never swapped for making invalid tool calls; only Auto's own picks are. |
+| Model (chat, bot, default) | Used for every step. If it's gone (deleted, key removed), the chat says so and that chat, bot or default moves to Auto. If it errors after retries, Auto's fallback for the request answers ([Failures](#failures-and-fallbacks)) and the chat says which and why: "Claude Opus 5.5 is unavailable (rate limited); used Claude Sonnet 5.5 for the rest of this task." It is still tried first on the next request. A picked model is never swapped for making invalid tool calls; only Auto's own picks are. |
 | Effort (chat, bot, default) | Sent exactly on every step: no floors, no adaptive shift, no escalation. Each provider maps it to the nearest level the model accepts. |
 | Context window (per model) | Used exactly, clamped only to the provider's maximum. |
 | Plan first, Team, Deep Research | Sent as chosen. Each makes the run full agent work, and each sets a difficulty floor. Deep Research turns on its team. |
@@ -215,6 +260,47 @@ What the app does with each manual choice (tests in `tests/unit/manual-choices.t
 | Permission mode | The chat's mode is left as chosen. It is only ever made stricter, for a handoff from a stricter bot or untrusted relayed content (security). |
 | Fast mode | A per-model "on" / "off" / "ultrafast" is honored exactly. Auto's "only where speed matters" rule applies only to models Auto picked. |
 | Per-bot model and effort | Used for the bot's chats. The chat's own pick wins over the bot's. |
+
+## Simulated guarantees
+
+`tests/unit/auto-matrix.test.ts` (with `tests/fixtures/auto-sim.ts`) runs Auto's real decision (`auto-route.ts` `autoRoute`, the function `loop.ts` `chooseModel` calls) over every realistic setup and every request of the routing eval set, with no network and no model calls, in about 4 seconds:
+
+- **Setups (900):** 10 key setups (Claude only, OpenAI only, Grok only, Claude+OpenAI, Claude+Grok, OpenAI+Grok, all three, ChatGPT plan only, plan+Claude, plan+all) × local models on/off × Best / Balanced / Cheapest × monthly limit (plenty left, under 10% left, exhausted, Unlimited, None) × Fable on/off × (for the 5 setups with an OpenAI API key) an account with no credit, where every OpenAI model but Luna and Terra answers with the live `insufficient_quota` stream error. Each pick is also checked under 3 fast-mode settings (off, on for Anthropic only, on everywhere with Auto's speed rule).
+- **Checked:** 900 setups × 554 items = **498,600 picks** (1,495,800 with the fast-mode settings).
+
+Invariants, each failure printed with its setup and item:
+
+| Never | Always |
+|---|---|
+| a model that isn't usable, or one cooling down after a failure | coding gets the strongest coding model the table offers (Best result and Balanced, budget not tight), never a local one while a cloud one is on |
+| a local model with local models off | Auto's effort is at least the rubric's (voice excepted: replies start fast) |
+| a pay-per-use model with the limit at None or exhausted | a model picked by name is used exactly, cooling down or not |
+| fast mode where Settings don't allow it, or outside Auto's speed rule; ever on the ChatGPT plan or a local model | the routed label names the model and the kind of task, and its tooltip says why (and when the model was kept, or a fallback answered) |
+| Fable without its setting (outside the hardest tier of a row it leads), GPT Pro ever | the same inputs give the same pick (determinism, checked on 99,720 picks twice) |
+| a window too small for the prompt when one fits | Best result at the hardest tier never answers with a light model while one the category's hardest row names is on |
+| a model that can't see images when the request has some and one can | Balanced takes Best result's pick on a close call exactly when it is within 2x the price and the latency allowance |
+| Grok for computer use or voice | an out-of-credit model is never retried, and never picked again until its cooldown ends |
+| the ChatGPT plan for computer use while another model can see the screen | |
+
+Also simulated:
+
+- **Stability:** 165 conversations built from the eval set (request, follow-up, request…, with the history growing each turn) × the 120 setups with budget to spare = 99,000 turns. Provider switches between turns that continue the same work: **3.64% before this change (3.10% with today's table but no stability rule) → 0.66%**; model switches **18.6% → 5.3%**. What is left is the request getting harder (Luna to Sonnet), Cheapest picking a cheaper model, or a prompt outgrowing a window.
+- **Failures:** 8 kinds (rate limit, overloaded, out of credit, not found, context too long, content policy, network drop, ChatGPT plan limit) × 20 key setups × 7 requests, mid-run and not: 1,582 fallbacks checked for the target (scope, bigger window, another provider), the table's order, one note naming both models and the reason, the cooldown and its end, and no loops (each model at most once, at most 3 per run). The live stream error is checked end to end through `streamResponses` and `withRetries` (sent once, status 402).
+- **Effort:** every model in the Claude, OpenAI and xAI tables (45) and 5 Codex effort lists × 5 levels: the built request body carries only a level the model accepts, the nearest below (185 bodies). 3,375 simulated long runs with failures, growing plans and a mid-run model switch: at most one bump, only on Auto, up to Extra, always a level the model takes.
+- **Swarm, council, pair:** for every key setup with budget, None and exhausted: 6,420 helper assignments (bots mix providers, agent chats stay on the lead's), council members (the best Claude and best GPT by the hardest agent-tools row; one provider: its two strongest, said so; fewer than two: no council, said why) and the computer-use pair (never Grok, never the ChatGPT plan, the executor sees screenshots), all within the spending limit and local opt-in.
+
+Found by the simulation and fixed (48,090 invariant violations before, 0 after):
+
+| Violations | What it was |
+|---|---|
+| 20,878 | Best result's hardest tier got a light model: an exhausted limit (or None) still routed the free ChatGPT plan and local models as Cheapest. |
+| 19,766 | An OpenAI model that returned `insufficient_quota` was tried again on every later request; and the stream error's 402 status was overwritten (`openai-responses.ts`), so the note read "failed: …". |
+| 2,700 + 2,700 | Coding not on the strongest model / on a local one: the same budget rule, on plan-only setups. |
+| 756 + 276 | Grok for computer use and voice: with only Grok on, the tier fallback picked it. |
+| 636 | Balanced had no close-call rule. |
+| 378 | The ChatGPT plan for computer use while a model that can see the screen was on. |
+| (pair, council) | The planner + executor pair could use the ChatGPT plan (blind to screenshots); an OpenAI-only council could seat GPT-5.5 Pro ($30 / $180). |
+| (fallbacks) | Fallbacks went by tier and rank (`nextStronger`), not the table's order for the task; Anthropic's credit-balance error was a plain 400; the voice shortcut's small local model ignored images and the window; a model a user can't pay for could be picked when `usable()` came back empty. |
 
 **Found in the audit and left to the owners:** Council and swarm merge / final steps (`loop.ts` swarm and council `final` callbacks) send effort `'high'` regardless of the chat's picked level.
 

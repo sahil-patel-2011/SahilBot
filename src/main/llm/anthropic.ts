@@ -384,9 +384,12 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
           if (Array.isArray(params.betas)) { params.betas = (params.betas as string[]).filter((b) => b !== BETA.fast); if (!(params.betas as string[]).length) delete params.betas }
           continue
         }
-        const err = new Error(status === 401 ? 'Anthropic rejected the API key. Check it in Settings.' : status === 429 ? 'Claude is rate-limiting requests right now. Try again in a moment.' : status === 529 || status === 408 || (status ?? 0) >= 500 ? 'Claude is overloaded or unavailable right now. Try again shortly.' : network ? `Couldn't reach Claude: ${why}` : `Claude rejected the request: ${why}`)
+        // "Your credit balance is too low to access the Anthropic API" comes as a 400: account-wide and not
+        // retryable, so it gets 402 (Auto skips Claude for a while and moves on: llm/model-health.ts).
+        const credit = /credit balance|billing/i.test(why) && (status === 400 || status === 402 || status === 403)
+        const err = new Error(credit ? `Anthropic won't run more requests on this account right now (${why}). Check your Anthropic billing.` : status === 401 ? 'Anthropic rejected the API key. Check it in Settings.' : status === 429 ? 'Claude is rate-limiting requests right now. Try again in a moment.' : status === 529 || status === 408 || (status ?? 0) >= 500 ? 'Claude is overloaded or unavailable right now. Try again shortly.' : network ? `Couldn't reach Claude: ${why}` : `Claude rejected the request: ${why}`)
         // What streamChat's retry needs: the status, the server's Retry-After, and whether the connection dropped.
-        Object.assign(err, { billed: false, status, retryAfterMs: retryAfterFrom(e.headers), network })
+        Object.assign(err, { billed: false, status: credit ? 402 : status, retryAfterMs: retryAfterFrom(e.headers), network })
         throw err
       }
       if (req.signal?.aborted || attempt >= 2) throw e

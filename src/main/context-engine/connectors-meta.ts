@@ -1,7 +1,7 @@
 import { calendarFacts, parseAddressList, parseCalendarJson, type ExtractedFact } from '../learning/extract-entities'
 import { parseGmailSearch } from '../mail/gmail'
 
-// The periodic read of connected apps, only for the connectors the user opted in to (Privacy panel),
+// The periodic read of connected apps (on for each connected app unless turned off in the Privacy panel),
 // budgeted (a few dozen items, every few hours, inside the idle learning pass). Only metadata is read:
 // who emailed the user (sender name and address, subject, date) and calendar events (title, time,
 // place, attendees). Email bodies are never fetched here, and nothing read here goes to a model.

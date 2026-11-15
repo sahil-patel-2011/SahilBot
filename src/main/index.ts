@@ -98,6 +98,8 @@ import { BrowserManager } from './browser/manager'
 import { Vault } from './vault'
 import { VaultAuth } from './secure/auth'
 import { vaultHandlers } from './secure/ipc'
+import { SaveOffers } from './secure/offers'
+import { findSecrets, redactFound, replacePlaceholder, savedPlaceholder } from './secure/detect'
 import { electronTouchId, electronVaultFiles, protectSender, registerVaultIpc, startAutoLock } from './secure/electron'
 import { PurchaseGate } from './browser/checkout'
 import { recentEmail, recentTexts, setEmailCodeSource } from './otp'
@@ -143,6 +145,12 @@ import { setupRemoteServer } from './remote-server'
 
 // SAHILBOT_TIMING=1: launch phases in the log (src/main/timing.ts).
 mark('main module loaded')
+
+// A promise that fails with nobody listening is a bug: log it with a clear marker (tests/accept/no-errors
+// fails on it) rather than crash the app or stay silent.
+process.on('unhandledRejection', (reason) => {
+  console.error('[sahilbot] unhandledRejection:', reason instanceof Error ? reason.stack ?? reason.message : reason)
+})
 
 /** Set by the automated tests: run without ever showing a window. */
 const HIDDEN = !!process.env.SAHILBOT_HIDDEN
@@ -418,7 +426,11 @@ app.whenReady().then(() => {
   }
   /** Chats with a bot's question or approval waiting in Needs you (set once the queue exists). */
   const openQuestionThreads: { current: () => string[] } = { current: () => [] }
-  /** Dock badge: chats waiting on you + unread chats (top-level, not hidden bots, not the one you're reading). */
+  /**
+   * Dock badge: chats waiting on you + unread chats (top-level, not hidden bots, not the one you're reading).
+   * Unread includes bots' chats with replies you haven't seen (Db: flag or replies after last_read_at); it is
+   * one set of chat ids, so a bot that needs you and has unread replies still counts once.
+   */
   let badgeTimer: ReturnType<typeof setTimeout> | null = null
   const refreshBadge = (): void => {
     if (badgeTimer || QUIET) return
@@ -503,6 +515,43 @@ app.whenReady().then(() => {
   browser.teach.secretValues = () => vault.secretValues()
   // Saved card numbers never leave the browser unless the user approved that purchase step.
   browser.cardNumbers = () => { try { return vault.cardNumbers() } catch { return [] } }
+  // "Save to Vault?" (src/main/secure/offers.ts): a sign-in or card the user typed by hand in the browser
+  // panel, or a secret typed into the composer. Held in memory here until the user clicks Save; masked
+  // everywhere meanwhile; the window only sees the site, a masked username, brand and last 4.
+  const saveOffers = new SaveOffers({
+    vault,
+    never: { get: () => db.getSetting<string[]>('vault:neverSave') ?? [], set: (list) => db.setSetting('vault:neverSave', list) },
+    onBrowserChange: () => browser.refreshOffers()
+  })
+  vault.pendingSecrets = () => saveOffers.values()
+  browser.saveOffers = saveOffers
+  /** A chat message's offer was saved or dismissed: the model now sees [saved to vault: name] there. */
+  const offerOnMessage = (e: { id: string; status: 'saved' | 'dismissed'; name?: string; messageId?: string }): void => {
+    const m = e.messageId ? db.getMessage(e.messageId) : undefined
+    const offers = Array.isArray(m?.meta?.vaultOffers) ? (m!.meta!.vaultOffers as import('@shared/types').VaultSaveOffer[]) : null
+    const o = offers?.find((x) => x.id === e.id)
+    if (!m || m.role !== 'user' || !offers || !o) return
+    const content = e.status === 'saved' && e.name && typeof o.ordinal === 'number' ? replacePlaceholder(m.content, o.ordinal, savedPlaceholder(e.name)) : m.content
+    const next = { ...m, content, meta: { ...m.meta, vaultOffers: offers.map((x) => (x.id === e.id ? { ...x, status: e.status, ...(e.name ? { savedAs: e.name } : {}) } : x)) } }
+    db.updateMessage(next)
+    emit({ threadId: m.threadId, type: 'message', message: next })
+  }
+  /**
+   * Text the user typed, before it's stored or reaches a model: passwords, API keys, card and ID numbers
+   * become [redacted] (secure/detect.ts) and get a "Save to Vault?" card next to the message.
+   */
+  const guardUserText = (threadId: string, text: string): { text: string; offers: import('@shared/types').VaultSaveOffer[] } => {
+    try { return saveOffers.scanChat(String(text ?? ''), threadId) } catch { return { text: String(text ?? ''), offers: [] } }
+  }
+  /** Offers for a message sent another way (steer, edit): attached to the newest user message with that text. */
+  const attachOffers = (threadId: string, text: string, offers: import('@shared/types').VaultSaveOffer[]): void => {
+    if (!offers.length) return
+    const m = [...db.listMessages(threadId)].reverse().find((x) => x.role === 'user' && x.content === text && !x.meta?.vaultOffers)
+    if (!m) { for (const o of offers) saveOffers.dismiss(o.id); return }
+    const next = { ...m, meta: { ...m.meta, vaultOffers: offers } }
+    db.updateMessage(next)
+    emit({ threadId, type: 'message', message: next })
+  }
   // Site playbooks: what SahilBot learns about each website from its browser runs and Teach recordings
   // (never secrets: saved passwords, cards and recent codes are checked against everything stored).
   const sites = new SiteStore(sub('sites'), () => { try { return [...vault.secretValues(), ...browser.hiddenValues()] } catch { return [] } })
@@ -749,7 +798,7 @@ app.whenReady().then(() => {
   applyTheme(settings.get().theme)
 
   /** Calls that change what's unread refresh the Dock badge. */
-  const BADGE_IPC = new Set(['threads:update', 'threads:remove', 'spaces:markUnread', 'spaces:update', 'spaces:remove'])
+  const BADGE_IPC = new Set(['threads:update', 'threads:markRead', 'threads:remove', 'spaces:markUnread', 'spaces:update', 'spaces:remove'])
   const handle = <A extends unknown[], R>(ch: string, fn: (...args: A) => R | Promise<R>): void => {
     if (BADGE_IPC.has(ch)) registerHandler(ch, async (_ctx, ...args) => { try { return await fn(...(args as A)) } finally { refreshBadge() } })
     else registerHandler(ch, (_ctx, ...args) => fn(...(args as A)))
@@ -820,7 +869,10 @@ app.whenReady().then(() => {
     }
     const clip = opts.clipboard ? String(await clipboard.readText()).slice(0, 20_000) : ''
     // Answer quickly and briefly: it's a floating bar.
-    await chat.send({ threadId: t.id, text, images, note: `[Asked from Quick Ask, a small floating bar: answer briefly and directly; the user can open the full chat for more.]${clip ? `\n[The user's clipboard:\n${clip}]` : ''}`, meta: { quick: true } })
+    // Secrets typed into the bar or sitting on the clipboard never reach the model as they are.
+    const qg = guardUserText(t.id, String(text ?? ''))
+    const qclip = clip ? redactFound(clip, findSecrets(clip)) : ''
+    await chat.send({ threadId: t.id, text: qg.text, images, note: `[Asked from Quick Ask, a small floating bar: answer briefly and directly; the user can open the full chat for more.]${qclip ? `\n[The user's clipboard:\n${qclip}]` : ''}`, meta: { quick: true, ...(qg.offers.length ? { vaultOffers: qg.offers } : {}) } })
     return t.id
   })
   handle('quick:open', (threadId: string) => {
@@ -975,7 +1027,7 @@ app.whenReady().then(() => {
   })
   handle('spaces:markUnread', (id: string) => {
     const t = db.listThreads(id)[0]
-    if (t) db.updateThread(t.id, { unread: true })
+    if (t) emit({ threadId: t.id, type: 'thread', thread: db.markUnread(t.id) })
   })
   handle('spaces:remove', (id: string) => {
     if (db.getSpace(id)?.isMain) throw new Error("The main bot can't be deleted.")
@@ -1008,7 +1060,24 @@ app.whenReady().then(() => {
     }
     // A local model picked for this chat: load it while the user types.
     if (patch.model && warmupAllowed()) warmup.soon(patch.model)
+    // "Mark as Unread" opens on a NEW divider at the bot's latest reply (Db.markUnread).
+    if (patch?.unread === true) {
+      const { unread: _u, ...rest } = patch
+      db.markUnread(id)
+      const t = Object.keys(rest).length ? db.updateThread(id, rest) : db.getThread(id)!
+      emit({ threadId: id, type: 'thread', thread: t })
+      return t
+    }
     return db.updateThread(id, patch)
+  })
+  // Read state lives in the database, so the Mac app and the web UI agree: every window and paired browser
+  // hears about it (a 'thread' event) and refreshes its sidebar.
+  handle('threads:markRead', (id: string, upTo?: number) => {
+    const before = db.getThread(id)
+    if (!before) throw new Error('That chat no longer exists.')
+    const t = db.markRead(id, typeof upTo === 'number' ? upTo : undefined)
+    if (before.unread !== t.unread || before.lastReadAt !== t.lastReadAt) emit({ threadId: id, type: 'thread', thread: t })
+    return t
   })
   handle('threads:remove', (id: string) => {
     chat.stop(id)
@@ -1033,6 +1102,11 @@ app.whenReady().then(() => {
       try { if (!knowledge.sources().some((x) => !x.problem && (x.path === f || f.startsWith(`${x.path}/`)))) knowledge.addFolder(f, 'attached', sid) } catch { /* refused (home, ~/Library…): readable, not indexed */ }
     }
     // The chat was cut off by SahilBot closing: "continue" picks the task up where it stopped.
+    // Secrets typed into the composer never reach the model, the database or the logs as they are.
+    {
+      const g = guardUserText(input.threadId, input.text)
+      if (g.offers.length) input = { ...input, text: g.text, meta: { ...(input.meta ?? {}), vaultOffers: g.offers } }
+    }
     const resumed = !chat.isRunning(input.threadId) && work.isInterrupted(input.threadId)
     const note = resumed ? [input.note, RESUME_NEXT_NOTE].filter(Boolean).join('\n') : input.note
     await chat.send({ ...input, ...(note ? { note } : {}), attachments: (input.attachments ?? []).filter((a) => ok.has(a.path)) })
@@ -1664,7 +1738,7 @@ app.whenReady().then(() => {
 
   // ---------------------------------------------------------------- the context engine (src/main/context-engine, docs/context.md)
   // An entity graph of the user's world (people, places, organizations, events, dates, things…) built by
-  // the idle learning pass from chats, files, connector results and (opt-in) connector metadata and
+  // the idle learning pass from chats, files, connector results and connected apps' metadata and
   // activity; each run gets the cards its request is about, merged with memories and vault notes.
   let worldNotify: ReturnType<typeof setTimeout> | null = null
   const world = new ContextEngine({
@@ -1930,9 +2004,20 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc === win?.webContents))
   session.defaultSession.setPermissionCheckHandler((wc, perm) => perm === 'media' && wc === win?.webContents)
   handle('chat:stop', (threadId: string) => chat.stop(threadId))
-  handle('chat:steer', (threadId: string, text: string) => chat.steer(threadId, String(text).slice(0, 20_000)))
-  handle('chat:respond', (threadId: string, id: string, answer: string) => chat.respond(threadId, id, answer))
+  handle('chat:steer', async (threadId: string, text: string) => {
+    const g = guardUserText(threadId, String(text).slice(0, 20_000))
+    const r = await chat.steer(threadId, g.text)
+    attachOffers(threadId, g.text, g.offers)
+    return r
+  })
+  handle('chat:respond', async (threadId: string, id: string, answer: string) => {
+    const g = guardUserText(threadId, String(answer ?? ''))
+    const r = await chat.respond(threadId, id, g.text)
+    attachOffers(threadId, g.text, g.offers)
+    return r
+  })
   // The main window asks for a chat's open requests whenever it opens that chat: that's how main knows what you're reading.
+  handle('chat:running', () => chat.runningThreads().map((threadId) => ({ threadId, spaceId: db.getThread(threadId)?.spaceId ?? '' })).filter((x) => x.spaceId))
   handle('chat:allPending', () => {
     const all = chat.allPending()
     for (const t of purchases.threads()) all[t] = [...(all[t] ?? []), ...purchases.pending(t).map((r) => r.id)]
@@ -1952,7 +2037,11 @@ app.whenReady().then(() => {
     chat.intro(threadId, RESUME_NOTE)
   })
   handle('chat:interrupted', () => work.interrupted())
-  handle('chat:editLast', (threadId: string, text: string) => chat.editLast(threadId, text))
+  handle('chat:editLast', async (threadId: string, text: string) => {
+    const g = guardUserText(threadId, String(text ?? ''))
+    await chat.editLast(threadId, g.text)
+    attachOffers(threadId, g.text, g.offers)
+  })
   handle('chat:export', async (threadId: string) => {
     const t = db.getThread(threadId)
     if (!t) return null
@@ -1973,7 +2062,9 @@ app.whenReady().then(() => {
     touchIdAvailable: () => electronTouchId(HIDDEN).available(),
     keychainAvailable: () => secrets.available(),
     files: electronVaultFiles(() => win),
-    protect: protectSender
+    protect: protectSender,
+    offers: saveOffers,
+    onOffer: (e) => offerOnMessage(e)
   }), (wc) => !!win && !win.isDestroyed() && wc.id === win.webContents.id)
   // Only a click in the main window's own page approves a purchase or a one-time code (not the Quick
   // bar, not a Page, not a bot or a message relayed from anywhere else).
@@ -2150,7 +2241,7 @@ app.whenReady().then(() => {
     }
   })
   app.on('before-quit', () => { void mcp.dispose() })
-  // ---------------------------------------------------------------- know what I'm working on (opt-in, off by default)
+  // ---------------------------------------------------------------- know what I'm working on (on by default, local only)
   // Only while SahilBot runs; local only; stops on quit. See activity/ for what is (and is never) collected.
   setupActivity({ db, mainWindow: () => win, hidden: HIDDEN })
   // Chats a connected app started: anything learned from them is tagged.

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { EffortChoice, LibraryItem, Message, PermissionMode, Space, Thread } from '@shared/types'
 import { emptyState, type ThreadState } from './agent/types'
 import { KNOWLEDGE_SCHEMA } from './knowledge/schema'
+import { UNREAD_CAP } from '@shared/read-state'
 
 export const uid = (): string => randomUUID()
 
@@ -136,6 +137,42 @@ export function ensureUsageColumns(sql: DatabaseSync): void {
   sql.exec('CREATE INDEX IF NOT EXISTS usage_at ON usage(at); CREATE INDEX IF NOT EXISTS usage_month ON usage(month)')
 }
 
+/**
+ * Read state (shared/read-state.ts): threads.last_read_at is when you last saw the chat (main's clock, so every
+ * device agrees), and an index finds the replies after it without walking the whole chat. Added by checking
+ * the table's columns rather than by migration number, so it is idempotent and safe on any database. The first
+ * time, chats you had read count as read up to their last change; chats still marked unread count as read up
+ * to your last message in them (what the bot said after that is what you missed).
+ */
+export function ensureReadColumns(sql: DatabaseSync): void {
+  const have = new Set((sql.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map((c) => c.name))
+  if (!have.has('last_read_at')) {
+    sql.exec('BEGIN')
+    try {
+      sql.exec(`ALTER TABLE threads ADD COLUMN last_read_at INTEGER;
+        UPDATE threads SET last_read_at = CASE WHEN unread = 0 THEN updated_at ELSE COALESCE((
+          SELECT MAX(m.created_at) FROM messages m WHERE m.thread_id = threads.id AND m.role = 'user'
+            AND json_extract(m.data, '$.meta.hidden') IS NULL), created_at) END;`)
+      sql.exec('COMMIT')
+    } catch (e) { sql.exec('ROLLBACK'); throw e }
+  }
+  sql.exec('CREATE INDEX IF NOT EXISTS messages_thread_at ON messages(thread_id, created_at)')
+}
+
+/** When a chat was last read (a chat never marked counts from its creation). */
+const READ_AT = (t: string): string => `COALESCE(${t}.last_read_at, ${t}.created_at)`
+
+/**
+ * Unread replies in chat `t` (shared/read-state.ts countsAsUnread, in SQL), capped at UNREAD_CAP. Only chats
+ * changed since they were read are counted at all, so a sidebar of read chats costs one comparison each.
+ */
+export const UNREAD_SQL = (t: string): string => `(CASE WHEN ${t}.updated_at > ${READ_AT(t)} THEN (
+    SELECT COUNT(*) FROM (SELECT 1 FROM messages m WHERE m.thread_id = ${t}.id AND m.created_at > ${READ_AT(t)}
+      AND m.role = 'assistant' AND m.kind = 'normal' AND m.content != ''
+      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0
+      AND json_extract(m.data, '$.meta.routineNotice') IS NULL
+      LIMIT ${UNREAD_CAP})) ELSE 0 END)`
+
 export class Db {
   readonly sql: DatabaseSync
 
@@ -145,6 +182,8 @@ export class Db {
     this.migrate()
     // Usage detail columns (idempotent; see ensureUsageColumns).
     ensureUsageColumns(this.sql)
+    // Read state: last_read_at and its index (idempotent; see ensureReadColumns).
+    ensureReadColumns(this.sql)
   }
 
   private migrate(): void {
@@ -182,13 +221,16 @@ export class Db {
         WHERE t.space_id = s.id
         ORDER BY m2.created_at DESC, m2.seq DESC LIMIT 1) AS last_preview,
         (SELECT MAX(t.updated_at) FROM threads t WHERE t.space_id = s.id) AS last_at,
-        (SELECT COUNT(*) FROM threads t WHERE t.space_id = s.id AND t.unread = 1) AS unread_count
+        -- Your chats with the bot (not its helpers' hidden ones): marked unread, or with replies you haven't seen.
+        (SELECT COUNT(*) FROM threads t WHERE t.space_id = s.id AND t.parent_id IS NULL AND (t.unread = 1 OR ${UNREAD_SQL('t')} > 0)) AS unread_count,
+        (SELECT COALESCE(SUM(${UNREAD_SQL('t')}), 0) FROM threads t WHERE t.space_id = s.id AND t.parent_id IS NULL) AS unread_n
       FROM spaces s ORDER BY s.is_main DESC, s.pinned DESC, COALESCE(last_at, s.created_at) DESC`).all() as Row[]
     return rows.map((r) => ({
       ...toSpace(r),
       lastPreview: plain(r.last_preview as string | null),
       lastAt: (r.last_at as number | null) ?? undefined,
-      unread: (r.unread_count as number) > 0
+      unread: (r.unread_count as number) > 0,
+      unreadCount: Math.min(UNREAD_CAP, (r.unread_n as number) ?? 0)
     }))
   }
 
@@ -256,10 +298,16 @@ export class Db {
   }
 
   // ---------- threads ----------
+  // tool_mode: a substring check on the saved agent state (JSON.stringify writes it exactly so) instead of
+  // json_extract, which would parse every chat's whole state on each sidebar refresh.
   private threadSelect = `
     SELECT t.*, (SELECT m.content FROM messages m WHERE m.thread_id = t.id
                  AND m.role IN ('user','assistant') AND m.content != '' AND json_extract(m.data, '$.meta.hidden') IS NULL
-                 ORDER BY m.seq DESC LIMIT 1) AS last_preview
+                 ORDER BY m.seq DESC LIMIT 1) AS last_preview,
+      ${UNREAD_SQL('t')} AS unread_n,
+      (SELECT CASE WHEN instr(ts.data, '"toolMode":"full"') > 0 THEN 'full'
+                   WHEN instr(ts.data, '"toolMode":"chat"') > 0 OR instr(ts.data, '"toolMode":"quick"') > 0 THEN 'chat' END
+         FROM thread_state ts WHERE ts.thread_id = t.id) AS tool_mode
     FROM threads t`
 
   /** Files SahilBot made or changed, newest first (from successful file and document tool calls). */
@@ -302,17 +350,48 @@ export class Db {
   createThread(spaceId: string, mode: PermissionMode, model: string | null, parentId: string | null = null): Thread {
     const now = Date.now()
     const id = uid()
-    this.sql.prepare(`INSERT INTO threads(id, space_id, title, permission_mode, model, created_at, updated_at, parent_id)
-      VALUES(?,?,?,?,?,?,?,?)`).run(id, spaceId, 'New thread', mode, model, now, now, parentId)
+    this.sql.prepare(`INSERT INTO threads(id, space_id, title, permission_mode, model, created_at, updated_at, parent_id, last_read_at)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(id, spaceId, 'New thread', mode, model, now, now, parentId, now)
     return this.getThread(id)!
   }
 
+  /**
+   * `unread` sets or clears the chat's own "marked unread" flag (the derived Thread.unread also counts replies
+   * after lastReadAt). Clearing it reads the chat to now, like markRead().
+   */
   updateThread(id: string, patch: Partial<Pick<Thread, 'title' | 'pinned' | 'unread' | 'permissionMode' | 'model' | 'spaceId' | 'effort'>>, touch = false): Thread {
     const cur = this.getThread(id)
     if (!cur) throw new Error(`No thread ${id}`)
     const n = { ...cur, ...patch }
+    const flag = patch.unread !== undefined ? patch.unread : ((this.sql.prepare('SELECT unread FROM threads WHERE id = ?').get(id) as Row).unread === 1)
     this.sql.prepare(`UPDATE threads SET title=?, pinned=?, unread=?, permission_mode=?, model=?, space_id=?, effort=?, updated_at=? WHERE id=?`)
-      .run(n.title, n.pinned ? 1 : 0, n.unread ? 1 : 0, n.permissionMode, n.model, n.spaceId, effortOrNull(n.effort), touch ? Date.now() : cur.updatedAt, id)
+      .run(n.title, n.pinned ? 1 : 0, flag ? 1 : 0, n.permissionMode, n.model, n.spaceId, effortOrNull(n.effort), touch ? Date.now() : cur.updatedAt, id)
+    if (patch.unread === false) this.sql.prepare('UPDATE threads SET last_read_at = MAX(COALESCE(last_read_at, 0), ?) WHERE id = ?').run(Date.now(), id)
+    return this.getThread(id)!
+  }
+
+  /**
+   * You've seen the chat up to `upTo` (the newest message on your screen; default and at most: now). Clears the
+   * "marked unread" flag. Only ever moves forward, so repeating it (or a slower device) changes nothing.
+   */
+  markRead(id: string, upTo?: number): Thread {
+    const now = Date.now()
+    const at = typeof upTo === 'number' && Number.isFinite(upTo) && upTo > 0 ? Math.min(now, upTo) : now
+    const r = this.sql.prepare('UPDATE threads SET unread = 0, last_read_at = MAX(COALESCE(last_read_at, created_at), ?) WHERE id = ?').run(at, id)
+    if (!r.changes) throw new Error(`No thread ${id}`)
+    return this.getThread(id)!
+  }
+
+  /**
+   * "Mark as Unread": the flag, and the read mark moved back to just before the bot's latest reply, so the
+   * chat opens on a NEW divider there (like other chat apps).
+   */
+  markUnread(id: string): Thread {
+    const last = this.sql.prepare(`SELECT MAX(m.created_at) AS at FROM messages m WHERE m.thread_id = ? AND m.role = 'assistant' AND m.kind = 'normal' AND m.content != ''
+      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND json_extract(m.data, '$.meta.routineNotice') IS NULL`).get(id) as { at: number | null } | undefined
+    const r = this.sql.prepare('UPDATE threads SET unread = 1, last_read_at = CASE WHEN ? IS NULL THEN last_read_at ELSE MIN(COALESCE(last_read_at, created_at), ? - 1) END WHERE id = ?')
+      .run(last?.at ?? null, last?.at ?? null, id)
+    if (!r.changes) throw new Error(`No thread ${id}`)
     return this.getThread(id)!
   }
 
@@ -429,19 +508,24 @@ function hostOf(url: string): string {
 }
 
 function toThread(r: Row): Thread {
+  const unreadN = Math.min(UNREAD_CAP, (r.unread_n as number | undefined) ?? 0)
   return {
     id: r.id as string,
     spaceId: r.space_id as string,
     title: r.title as string,
     pinned: r.pinned === 1,
-    unread: r.unread === 1,
+    // Marked unread, or replies you haven't seen.
+    unread: r.unread === 1 || unreadN > 0,
     permissionMode: r.permission_mode as PermissionMode,
     model: (r.model as string | null) ?? null,
     effort: effortOrNull(r.effort),
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
     lastPreview: plain(r.last_preview as string | null),
-    parentId: (r.parent_id as string | null) ?? null
+    parentId: (r.parent_id as string | null) ?? null,
+    lastReadAt: (r.last_read_at as number | null) ?? (r.created_at as number),
+    unreadCount: unreadN,
+    ...(r.tool_mode === 'full' || r.tool_mode === 'chat' ? { toolMode: r.tool_mode } : {})
   }
 }
 

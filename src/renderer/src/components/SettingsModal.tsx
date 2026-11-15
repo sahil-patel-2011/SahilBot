@@ -296,9 +296,10 @@ function General({ s, patch }: P) {
         )}
         {s.search.provider === 'searxng' && <Row title="SearXNG address"><Field value={s.search.searxngUrl} placeholder="http://localhost:8888" onSave={(v) => void patch({ search: { ...s.search, searxngUrl: v } })} /></Row>}
       </Section>
-      <Section title="Cloud" sub="Local models are free and private. Cloud models (Claude, GPT) are optional and capped by your monthly limit.">
-        <Row title="Use cloud models" sub="Off: nothing is ever sent to a cloud model. Your keys stay saved."><Toggle on={s.cloud.enabled} onChange={(v) => void patch({ cloud: { ...s.cloud, enabled: v } })} label="Use cloud models" testId="cloud-enabled" /></Row>
-        {s.cloud.enabled && (
+      {/* Cloud first: with local models off, cloud models are the only ones, and Hybrid (a local model asking the cloud) doesn't apply. */}
+      <Section title="Cloud" sub={localIsOn(s) ? 'Local models are free and private. Cloud models (Claude, GPT) are optional and capped by your monthly limit.' : 'Cloud models (Claude, GPT, Grok, your ChatGPT plan) do the work. Pay-per-use spending is capped by your monthly limit.'}>
+        <Row title="Use cloud models" sub={localIsOn(s) ? 'Off: nothing is ever sent to a cloud model. Your keys stay saved.' : 'Off: nothing is sent to a cloud model, so with local models off there\'s no model to chat with. Your keys stay saved.'}><Toggle on={s.cloud.enabled} onChange={(v) => void patch({ cloud: { ...s.cloud, enabled: v } })} label="Use cloud models" testId="cloud-enabled" /></Row>
+        {s.cloud.enabled && localIsOn(s) && (
           <>
             <Row title="Hybrid: local model asks the cloud for help" sub="Your local model does the work and can ask a cloud model for a plan, best practices, or help when it's stuck. Only a few short questions per request.">
               <Toggle on={s.cloud.hybrid} onChange={(v) => void patch({ cloud: { ...s.cloud, hybrid: v } })} label="Hybrid mode" testId="cloud-hybrid" />
@@ -725,7 +726,7 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
   return (
     <>
       <h2>Voice</h2>
-      <div className="set-sub" style={{ marginTop: -6 }}>Dictation, read-aloud and voice conversations run on this Mac (Whisper listens, Kokoro speaks).</div>
+      <div className="set-sub" style={{ marginTop: -6 }}>{localIsOn(s) ? 'Dictation, read-aloud and voice conversations run on this Mac (Whisper listens, Kokoro speaks).' : 'Dictation, read-aloud and voice conversations. Replies can be read in your Mac\'s own voice; voice input uses OpenAI (or local models, when they\'re on).'}</div>
       <Section title="Speaking">
         <Row title="Read replies aloud" sub="Speak every reply as it arrives. You can also press the speaker button on any message."><Toggle on={s.speakReplies} onChange={(v) => void patch({ speakReplies: v })} label="Read replies aloud" testId="speak-replies" /></Row>
         <VoiceOutputRow s={s} patch={patch} output={voice?.output} />
@@ -983,7 +984,8 @@ function Advanced({ s, models, patch }: P & { models: ModelList | null }) {
         <Row title="Context window" sub="How much of the conversation a local model holds. Auto gives each model up to 64k on Macs with 48 GB or more and 32k on smaller ones, never more than fits in memory. Older turns are summarized only when it's almost full.">
           <div className="seg">{WINDOWS.map((w) => <button key={w} className={s.contextWindow === w ? 'on' : ''} onClick={() => void patch({ contextWindow: w })}>{w ? `${w / 1024}k` : 'Auto'}</button>)}</div>
         </Row>
-        <GpuRow />
+        {/* Only local models use the GPU memory setting: with them off it's just noise. */}
+        {localIsOn(s) && <GpuRow />}
         <Row title="Hard stops in Bypass" sub="Always ask before payments, typing credentials, account or security settings, and permanent deletes.">
           <Toggle on={s.advanced.hardStopsEnabled} onChange={(v) => void patch({ advanced: { hardStopsEnabled: v } })} label="Hard stops" />
         </Row>

@@ -117,3 +117,15 @@
   .sv-reveal, .sv-auth { animation: none; }
   .sv-status-icon { transition: none; }
 }
+
+/* "Save to Vault?" (VaultOffer.tsx): in the browser panel above the page, and under a chat message. */
+.vault-offer { display: flex; flex-direction: column; }
+.vault-offer.compact { margin: 6px 8px; padding: 12px 14px; gap: 8px; border-radius: 12px; }
+.vault-offer .pending-title > span { min-width: 0; overflow-wrap: anywhere; }
+.vault-offer-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.vault-offer-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-3); }
+.vault-offer-fields input { font: inherit; font-size: 13px; color: var(--text); padding: 6px 8px; border-radius: 8px; border: 1px solid var(--surface-line, var(--line)); background: var(--surface-sunken, var(--bg)); min-width: 0; }
+.vault-offers { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; max-width: 520px; align-self: flex-end; width: 100%; }
+.vault-offer-done { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); justify-content: flex-end; }
+.vault-offer-done.muted { opacity: 0.8; }
+.composer-secret-hint { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); padding: 4px 12px 0; }

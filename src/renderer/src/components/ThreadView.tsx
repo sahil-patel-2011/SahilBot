@@ -1,6 +1,8 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { HeavyBoard, Message, PendingRequest, TeamMember } from '@shared/types'
+import { firstUnread } from '@shared/read-state'
 import { api } from '../api'
+import { ChatVaultOffers } from './VaultOffer'
 import { toast } from '../lib/toast'
 import { legibleOn } from '../brand'
 import * as I from '../icons'
@@ -252,8 +254,28 @@ function StatusLine({ drafting, since, progress }: { drafting: string | null; si
  * message changed renders again (App batches stream deltas to one update per frame).
  */
 export const WINDOW = 120
+/** Blocks kept above the NEW divider when the window grows to reach it, so you see what came before. */
+export const DIVIDER_CONTEXT = 3
 
-export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress }: {
+/**
+ * Where the NEW divider goes: before the block of the first unread reply, moved up over the work that led to
+ * it (tool steps, a plan, a question, a notice) when that is newer than your read mark too, so you catch up
+ * from the start of what you missed. Never above one of your own messages. -1: no divider.
+ */
+export function dividerBlock(bs: Block[], first: Pick<Message, 'id' | 'createdAt'>, after: number): number {
+  let i = bs.findIndex((b) => b.kind === 'text' && b.m.id === first.id)
+  if (i < 0) i = bs.findIndex((b) => b.kind !== 'user' && atOf(b) >= first.createdAt)
+  if (i < 0) return -1
+  while (i > 0 && bs[i - 1].kind !== 'user' && bs[i - 1].kind !== 'compacted' && atOf(bs[i - 1]) > after) i--
+  return i
+}
+
+/** How many blocks to mount: the usual window, grown (once) to reach the NEW divider with a little context. */
+export function windowLimit(limit: number, total: number, dividerAt: number): number {
+  return dividerAt < 0 ? limit : Math.max(limit, total - dividerAt + DIVIDER_CONTEXT)
+}
+
+export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, ready = true, unreadAfter = null, onAtBottom }: {
   messages: Message[]
   /** Live Team of Experts boards by agents call id. */
   teams?: Record<string, TeamMember[]>
@@ -264,15 +286,34 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   since?: number
   /** Live progress from a long-running tool (tests, builds, a Cursor agent). */
   progress?: string | null
+  /** The chat's messages are all in (not just live events that beat the fetch): the NEW divider is placed then. */
+  ready?: boolean
+  /** Bots and agent chats: your read mark when you opened the chat (null: no NEW divider here). */
+  unreadAfter?: number | null
+  /** You're at (or near) the bottom: reported straight away, so read state never runs ahead of the scroll. */
+  onAtBottom?: (atBottom: boolean) => void
 }) {
   const scroller = useRef<HTMLDivElement>(null)
-  const [atBottom, setAtBottom] = useState(true)
+  const [atBottom, setAtBottomState] = useState(true)
+  const reportBottom = useRef(onAtBottom)
+  reportBottom.current = onAtBottom
+  const setAtBottom = (b: boolean): void => { setAtBottomState(b); reportBottom.current?.(b) }
   const threadId = messages[0]?.threadId
   // How many blocks to show, per chat (a different chat starts again from the latest WINDOW).
   const [win, setWin] = useState<{ threadId?: string; limit: number }>({ limit: WINDOW })
-  const limit = win.threadId === threadId ? win.limit : WINDOW
   /** Distance from the bottom before earlier blocks went in, so the view doesn't jump. */
   const keepFromBottom = useRef<number | null>(null)
+  // The NEW divider: worked out once, when the chat's messages are in, and kept while you stay in the chat
+  // (replies that arrive while you watch go below it). App mounts one ThreadView per chat, so leaving resets it.
+  const divider = useRef<{ id: string; createdAt: number; after: number } | null | undefined>(undefined)
+  if (divider.current === undefined && ready) {
+    const f = unreadAfter == null ? undefined : firstUnread(messages, unreadAfter)
+    divider.current = f && unreadAfter != null ? { id: f.id, createdAt: f.createdAt, after: unreadAfter } : null
+  }
+  const bs = useMemo(() => blocks(messages), [messages])
+  const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
+  // Long chats mount their latest WINDOW blocks; an older first unread grows the window to include it.
+  const limit = windowLimit(win.threadId === threadId ? win.limit : WINDOW, bs.length, dividerAt)
 
   // The parent makes a new actions object every render; rows get a stable one that always calls the latest.
   const live = useRef(actions)
@@ -295,8 +336,26 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
 
   useEffect(() => {
     const el = scroller.current
-    if (el) el.scrollTop = el.scrollHeight
+    // Opening on the NEW divider: that effect (below) decides where the view starts.
+    if (el && !divider.current) el.scrollTop = el.scrollHeight
   }, [threadId])
+
+  // Opened with replies you haven't seen: start at the divider rather than the bottom. Runs after the
+  // bottom-scroll above, in the same commit, and reports where it landed before anything marks the chat read.
+  const landed = useRef(false)
+  const lastTop = useRef(0)
+  useLayoutEffect(() => {
+    if (landed.current || !ready) return
+    landed.current = true
+    const el = scroller.current
+    const d = el?.querySelector<HTMLElement>('[data-testid="new-divider"]')
+    if (!el || !d) return
+    // A little of what came before stays in view, clear of the floating header.
+    const top = d.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 72
+    el.scrollTo({ top: Math.max(0, top), behavior: 'instant' })
+    lastTop.current = el.scrollTop
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40)
+  }, [ready]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Earlier blocks went in above: keep what you were reading where it was.
   useLayoutEffect(() => {
@@ -306,7 +365,6 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     keepFromBottom.current = null
   }, [limit])
 
-  const bs = useMemo(() => blocks(messages), [messages])
   const first = Math.max(0, bs.length - limit)
   const showEarlier = (): void => {
     const el = scroller.current
@@ -330,7 +388,12 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
       <div className="thread-scroll" ref={scroller} data-testid="thread"
         onScroll={(e) => {
           const el = e.currentTarget
-          setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40)
+          // At the bottom once within 40px; away from it only when the view moved up (you scrolled), so the
+          // smooth scroll that follows a new reply down never counts as leaving the bottom on its way there.
+          const near = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+          if (near) setAtBottom(true)
+          else if (el.scrollTop < lastTop.current - 1) setAtBottom(false)
+          lastTop.current = el.scrollTop
           // Near the top with more above: bring in the next batch.
           if (first > 0 && el.scrollTop < 240 && keepFromBottom.current === null) showEarlier()
         }}>
@@ -345,9 +408,16 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
             const prev = bs[i - 1]
             const time = stamp(atOf(b), prev ? atOf(prev) : undefined)
             // Back-to-back replies from the same bot stack tightly, like short progress messages.
-            const cont = !time && b.kind === 'text' && prev?.kind === 'text' && (b.m.meta?.botName ?? '') === (prev.m.meta?.botName ?? '')
+            // (Not across the NEW divider: the first reply you missed starts afresh.)
+            const cont = !time && i !== dividerAt && b.kind === 'text' && prev?.kind === 'text' && (b.m.meta?.botName ?? '') === (prev.m.meta?.botName ?? '')
             return (
-              <BlockItem key={blockKey(b)} b={b} time={time} cont={cont} actions={stable} hasDocs={hasDocs}
+              <Fragment key={blockKey(b)}>
+              {i === dividerAt && (
+                <div className="new-divider" role="separator" aria-label="New messages" data-testid="new-divider">
+                  <span className="nd-line" /><span className="nd-pill">New</span>
+                </div>
+              )}
+              <BlockItem b={b} time={time} cont={cont} actions={stable} hasDocs={hasDocs}
                 // Live state goes only to the blocks it concerns, so the others keep their memoized render.
                 running={(b.kind === 'team' || b.kind === 'heavy' || (b.kind === 'notice' && isCardNotice(b.m))) && running}
                 live={running && b === lastActivity && tail === b}
@@ -355,6 +425,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                 planLive={running && b === lastPlan}
                 members={b.kind === 'team' ? teams?.[b.id] : undefined}
                 editable={!running && b.kind === 'user' && b.m.id === lastUserId} />
+              </Fragment>
             )
           })}
           {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} />))}
@@ -365,10 +436,16 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
             </div>
           )}
         </div>
+        {/* Pinned to the bottom of the visible thread, just above the composer (whatever its height). */}
+        {!atBottom && (
+          <div className="jump-dock">
+            {/* With a NEW divider on screen it says what it does; otherwise the round arrow. */}
+            <button className={`jump${dividerAt >= 0 ? ' labeled' : ''}`} onClick={() => setAtBottom(true)} title="Jump to latest" aria-label="Jump to latest" data-testid="jump-latest">
+              <I.Down />{dividerAt >= 0 && <span>Jump to latest</span>}
+            </button>
+          </div>
+        )}
       </div>
-      {!atBottom && (
-        <button className="jump" onClick={() => setAtBottom(true)} title="Jump to latest" aria-label="Jump to latest"><I.Down /></button>
-      )}
     </>
   )
 }
@@ -594,6 +671,7 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
             {m.content}
           </div>
           {!!m.meta?.steer && <div className="steered-tag" data-testid="steered"><I.Reply size={11} style={{ transform: 'scaleX(-1)' }} />Steered while working</div>}
+          {Array.isArray(m.meta?.vaultOffers) && <ChatVaultOffers m={m} />}
           {reactions.bot && <span className="reaction left" title="SahilBot reacted" data-testid="bot-reaction">{reactions.bot}</span>}
         </div>
       </div>

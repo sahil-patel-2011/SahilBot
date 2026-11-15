@@ -18,17 +18,25 @@ export function coreTools(results: ResultStore): ToolDef[] {
     },
     async run({ query }, ctx) {
       let hits = ctx.searchTools(query)
-      if (!hits.length && ctx.offerConnect) {
-        // An app that isn't connected yet: the user gets a one-click Connect card right in the chat.
-        const added = await ctx.offerConnect(query)
-        if (added.length) hits = ctx.searchTools(query)
-        else return { text: `No connected tools match "${query}". The user chose not to connect an app for this (or none matched). Continue another way${isServer() ? '.' : ': the browser tool works with any website the user is signed into.'}${serverToolsNote()}`, display: `nothing for "${query}"` }
+      let connected = false
+      // An app that isn't connected yet: the user gets a one-click Connect card right in the chat. When
+      // built-in tools matched too, only for an app the query names in full ("acme tasks", "google calendar").
+      if (ctx.offerConnect && !hits.some((h) => h.connector)) {
+        const app = await ctx.offerConnect(query, hits.length ? { fullName: true } : undefined)
+        if (app.length) {
+          // The app just connected: its tools that match the request, else all of them (the request's words
+          // picked the app, e.g. "seo" → Semrush, but needn't appear in its tools' descriptions).
+          const own = new Set(app.map((h) => h.name))
+          const matching = ctx.searchTools(query).filter((h) => own.has(h.name))
+          hits = matching.length ? matching : app
+          connected = true
+        } else if (!hits.length) return { text: `No connected tools match "${query}". The user chose not to connect an app for this (or none matched). Continue another way${isServer() ? '.' : ': the browser tool works with any website the user is signed into.'}${serverToolsNote()}`, display: `nothing for "${query}"` }
       }
       if (!hits.length) return { text: `No tools match "${query}". Connectors are added under Connect apps${isServer() ? '.' : '; the browser tool works with any website.'}${serverToolsNote()}`, display: `nothing for "${query}"` }
       const toLoad = hits.filter((h) => !h.loaded).slice(0, 8).map((h) => h.name)
       const added = ctx.loadTools(toLoad)
       const lines = hits.slice(0, 8).map((h) => `- ${h.name}: ${h.description.split('\n')[0]}${added.includes(h.name) ? ' (loaded now)' : h.loaded ? ' (already loaded)' : ' (not loaded: tool limit reached)'}`)
-      return { text: `Tools matching "${query}":\n${lines.join('\n')}`, display: added.length ? `loaded ${added.join(', ')}` : `searched "${query}"` }
+      return { text: `${connected ? 'The app is connected now. ' : ''}Tools matching "${query}":\n${lines.join('\n')}${connected && added.length ? '\nThey are callable from your next step: use them now to answer.' : ''}`, display: added.length ? `loaded ${added.join(', ')}` : `searched "${query}"` }
     }
   }
 

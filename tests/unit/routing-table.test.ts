@@ -208,7 +208,10 @@ describe('routeTask: Claude and OpenAI keys', () => {
   })
   test('computer use: Claude', () => {
     expect(routed('Open Safari and log in to my bank site', 'both')).toBe('claude-opus-5-5')
-    expect(routed('Open Safari and log in to my bank site', 'both', {}, { preference: 'balanced' })).toBe('claude-sonnet-5-5')
+    expect(routed('Open Safari and click the blue Download button on the page', 'both', {}, { preference: 'balanced' })).toBe('claude-sonnet-5-5')
+    // A bank site has stakes: a Balanced close call takes Best result's pick (Opus at 2x Sonnet's price, +2.8 s to
+    // the first token, within the 3 s allowance); on GPT, Astra is 5x Sol's price, so Sol stays.
+    expect(routed('Open Safari and log in to my bank site', 'both', {}, { preference: 'balanced' })).toBe('claude-opus-5-5')
     expect(routed('Open Safari and log in to my bank site', 'openai', {}, { preference: 'balanced' })).toBe('gpt-6.1-sol')
   })
   test('research: Astra at the top, Sol for everyday research, Opus with only Claude', () => {

@@ -31,15 +31,32 @@ const CLOUD: Array<{ id: CloudId; title: string; url: string; placeholder: strin
   { id: 'xai', title: 'Connect Grok (API key)', url: 'https://api.x.ai/v1', placeholder: 'xai-…', sub: 'xAI\'s Grok models.', testId: 'onboarding-key-xai' }
 ]
 
+/** Why a key check failed, in words: a refused key, no connection, or the provider's own message. */
+function keyProblem(title: string, error?: string): string {
+  const e = error ?? ''
+  const who = title.replace(/^Connect | \(API key\)$/g, '')
+  if (!e || /\b(401|403)\b|invalid|unauthori[sz]ed|authentication|permission|incorrect api key/i.test(e)) return 'That key was rejected. Check that you copied all of it.'
+  if (/fetch failed|connection|network|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|timed? ?out|abort/i.test(e)) return `Couldn't reach ${who}. Check your internet connection, then press Check.`
+  return `${who} didn't accept the check: ${e.replace(/^Error invoking remote method '[^']+': (Error: )?/, '').slice(0, 140)}`
+}
+
 function CloudKey({ c, saved, onSaved }: { c: typeof CLOUD[number]; saved: boolean; onSaved: () => void }) {
   const [key, setKey] = useState('')
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(saved ? { ok: true, text: 'Connected' } : null)
+  // Enter and then leaving the box both check: only one check (and one save) at a time.
+  const busy = useRef(false)
   const check = async (): Promise<void> => {
-    if (!key) return
+    if (!key || busy.current) return
+    busy.current = true
+    try { await checkNow() } finally { busy.current = false }
+  }
+  const checkNow = async (): Promise<void> => {
     setMsg({ ok: true, text: 'Checking…' })
     const r = await api.models.test(c.url, key).catch((e: Error) => ({ ok: false, count: 0, error: e.message }))
-    if (!r.ok) { setMsg({ ok: false, text: 'That key was rejected.' }); return }
-    await api.settings.set({ setKeys: { [c.id]: key } })
+    if (!r.ok) { setMsg({ ok: false, text: keyProblem(c.title, r.error) }); return }
+    // Saving can fail (e.g. the Keychain is locked): say so here rather than leave an unhandled rejection.
+    const saved = await api.settings.set({ setKeys: { [c.id]: key } }).then(() => '', (e: Error) => e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))
+    if (saved) { setMsg({ ok: false, text: `Couldn't save the key: ${saved}` }); return }
     setKey('')
     setMsg({ ok: true, text: `Connected · ${r.count} models` })
     onSaved()
@@ -178,7 +195,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
                 <div className="connect-text"><b>Use my ChatGPT plan (Codex)</b><div className="hint">Your ChatGPT subscription through OpenAI's Codex app, within your plan's limits. No API charges.</div></div>
                 {!plan && <button className="btn" onClick={() => setPlan(true)} data-testid="onboarding-chatgpt-plan">Set up</button>}
               </div>
-              {plan && <ChatgptPlanSettings />}
+              {plan && <ChatgptPlanSettings embedded />}
             </div>
             <div className="onboard-local" data-testid="onboarding-local">
               <b>Also use free local models on this Mac?</b> <span className="hint">(optional, downloads ~5–20 GB)</span>

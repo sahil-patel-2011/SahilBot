@@ -422,3 +422,55 @@
   .modes-menu .menu-item .mode-ico { margin-top: 0; }
   .modes-menu .menu-item { align-items: center; }
 }
+
+/* ---------------------------------------------------------------- read state (shared/read-state.ts)
+   Unread is a calm blue (its own token, so it never reads as the accent's "needs you"); the NEW divider in a
+   chat is a thin accent line with a small pill; a running chat or bot gets a slow shimmer across its name. */
+:root {
+  --unread: #2b7de9;
+  --unread-text: #1d5fbf;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --unread: #4c9bff;
+    --unread-text: #8fbfff;
+  }
+}
+.unread-dot, .sb2 .unread-dot { background: var(--unread); }
+.unread-count {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); flex: none;
+  background: color-mix(in srgb, var(--unread) 15%, transparent); color: var(--unread-text);
+  font-size: var(--fs-2xs); font-weight: var(--fw-semibold); line-height: 18px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.pw-status:has(.unread-count) { width: auto; min-width: 18px; border-radius: var(--r-pill); }
+
+/* The NEW divider: where you left off in a bot's or an agent's chat. */
+.new-divider { display: flex; align-items: center; gap: var(--sp-2); margin: 2px 0 -6px; scroll-margin-top: var(--sp-3); }
+.new-divider .nd-line { flex: 1; height: 1px; background: color-mix(in srgb, var(--accent) 65%, transparent); }
+.new-divider .nd-pill {
+  flex: none; padding: 0 7px; border-radius: var(--r-pill); line-height: 17px;
+  font-size: 10.5px; font-weight: var(--fw-semibold); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--accent-text); background: var(--tint-accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+/* "Jump to latest" rides at the bottom of the visible thread, clear of the composer's fade (and its run summary). */
+.jump-dock { position: sticky; bottom: 44px; height: 0; z-index: 2; pointer-events: none; }
+.jump-dock .jump { bottom: 0; pointer-events: auto; }
+/* "Jump to latest" says so while a NEW divider is on screen. */
+.jump.labeled { width: auto; height: 32px; padding: 0 14px 0 10px; border-radius: var(--r-pill); display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); font-weight: var(--fw-medium); white-space: nowrap; }
+
+/* A running chat or bot: a soft band sweeps across its name every ~2.6s. Only background-position moves;
+   with reduced motion there is no sweep, and the row's working mark (below) stands still. */
+@media (prefers-reduced-motion: no-preference) {
+  .sb2 .run-name {
+    --run-ink: var(--text);
+    background-image: linear-gradient(100deg, var(--run-ink) 0%, var(--run-ink) 40%, color-mix(in srgb, var(--run-ink) 40%, transparent) 50%, var(--run-ink) 60%, var(--run-ink) 100%);
+    background-size: 300% 100%; background-position: 100% 0; background-repeat: no-repeat;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: sb-run-sweep 2.6s ease-in-out infinite;
+  }
+  .sb-hidden .run-name { --run-ink: var(--text-2); }
+}
+@keyframes sb-run-sweep { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .row-spin { animation: none; border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+}

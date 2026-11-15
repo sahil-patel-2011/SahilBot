@@ -174,6 +174,7 @@ The code lives in `src/main/llm/codex/session.ts`. **Codex is the model; SahilBo
 | Usage display | Plan windows (% used, reset time). Per-step dollar cost is $0; tokens are shown as Codex reports them. |
 | Per-step budget accounting, swarm and goal $ caps | Not applicable. The plan isn't billed per token; the plan's own limits apply. |
 | Images in the user's message | The latest message's images go as `localImage` inputs. Images returned by tools reach Codex as text only. |
+| Computer use | Because tool screenshots reach Codex as text only, Auto routes computer use to the plan only when no other model that can see the screen is on (the label then says it works from page text), and the planner + executor pair never uses it. A plan model picked by name is used as picked. |
 | SahilBot's prompt cache, server compaction, Claude-native or OpenAI-native tools | Not used. Codex manages its own context. A conversation SahilBot compacts starts a new Codex thread. |
 | Codex's own shell, file edits, web search | Off or declined by design. SahilBot's tools do this work, with approvals. |
 | Exact sampling (temperature, top_p) | Not available (plan preview limits). |

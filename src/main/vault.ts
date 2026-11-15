@@ -60,6 +60,8 @@ export class Vault {
   readonly core: SecureVault
   /** Touch ID / master password prompts (set by main once the window exists). */
   auth: VaultAuth | null = null
+  /** Values waiting on a "Save to Vault?" card (secure/offers.ts): masked and leak-checked like saved ones. */
+  pendingSecrets: () => string[] = () => []
   private readonly legacySrc: LegacySource
 
   constructor(private db: Db, secrets: SecretStrings, o: VaultOptions = {}) {
@@ -456,7 +458,7 @@ export class Vault {
    */
   secretValues(): string[] {
     const out: string[] = []
-    for (const v of this.core.guardValues()) {
+    for (const v of [...this.core.guardValues(), ...this.pending()]) {
       out.push(v)
       if (/^\d{12,19}$/.test(v)) { const spaced = formatCardNumber(v); out.push(spaced, spaced.replace(/ /g, '-')) }
     }
@@ -465,7 +467,11 @@ export class Vault {
 
   /** Masks any saved value in text bound for the model (tool results, page text, errors). */
   redact(text: string): string {
-    return redactSecrets(text, this.core.guardValues())
+    return redactSecrets(text, [...this.core.guardValues(), ...this.pending()])
+  }
+
+  private pending(): string[] {
+    try { return this.pendingSecrets().filter((v) => typeof v === 'string' && v.length >= 4) } catch { return [] }
   }
 
   // ------------------------------------------------------------------ addresses

@@ -237,7 +237,7 @@ export class ToolRegistry {
     return true
   }
 
-  search(query: string, state: ThreadState): Array<{ name: string; description: string; loaded: boolean; score: number }> {
+  search(query: string, state: ThreadState): Array<{ name: string; description: string; loaded: boolean; score: number; connector: boolean }> {
     const words = query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1)
     // Built-in tools that this thread's mode or profile doesn't list can be found (and loaded) too.
     const listed = new Set(this.listFor(state).map((t) => t.name))
@@ -246,7 +246,7 @@ export class ToolRegistry {
       .map((t) => {
         const hay = `${t.name} ${t.group ?? ''} ${t.description}`.toLowerCase()
         const score = words.reduce((n, w) => n + (hay.includes(w) ? (t.name.includes(w) || (t.group ?? '').toLowerCase().includes(w) ? 3 : 1) : 0), 0)
-        return { name: t.name, description: t.description, loaded: listed.has(t.name), score }
+        return { name: t.name, description: t.description, loaded: listed.has(t.name), score, connector: isConnectorTool(t) }
       })
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score)

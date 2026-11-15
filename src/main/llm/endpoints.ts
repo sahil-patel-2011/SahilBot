@@ -330,9 +330,9 @@ export class Endpoints {
     const shown = new Set(s.shownModels)
     // Cloud first when chosen, or by default once a Claude key is saved (Settings → Models can say Local first).
     const o = claudeOptions(s)
-    // A saved OpenAI key makes Auto cloud-first too, unless Settings say Local first (same rule as Claude's key).
-    // With local models off there's nothing local to prefer: cloud first.
-    routingPrefs.preferCloud = s.cloud.enabled && (o.preferCloud || (s.cloud.prefer === undefined && (!!s.keys?.openai || !!s.keys?.xai)) || !localOn(s))
+    // A saved OpenAI or xAI key, or a connected ChatGPT plan, makes Auto cloud-first too, unless Settings say Local
+    // first (same rule as Claude's key). With local models off there's nothing local to prefer: cloud first.
+    routingPrefs.preferCloud = s.cloud.enabled && (o.preferCloud || (s.cloud.prefer === undefined && (!!s.keys?.openai || !!s.keys?.xai || chatgptPlan.available())) || !localOn(s))
     routingPrefs.fableForHardest = s.cloud.enabled && o.fableForHardest
     // Monthly spending limit: None keeps Auto on the ChatGPT plan and local models (routing-table.ts).
     spendingPrefs.mode = spendingMode(s)

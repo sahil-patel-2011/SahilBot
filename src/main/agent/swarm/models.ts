@@ -1,5 +1,6 @@
 import type { HelperRole, ModelInfo, Tier } from '@shared/types'
 import { claudeFamily, isPremiumClaude } from '../../llm/claude-models'
+import { isPremiumOpenAI } from '../../llm/openai-models'
 import { routingPrefs } from '../../llm/router'
 import { slotOf, slotsFor, type Slot } from '../../llm/routing-table'
 import type { TaskCategory } from '../../llm/task-classifier'
@@ -68,8 +69,11 @@ export function modelForSlot(slot: Slot, usable: ModelInfo[], provider?: string,
   return usable.filter((m) => cloudOk(m) && slotOf(m) === slot && m.tier <= maxTier && (!provider || providerOf(m) === provider) && providerOf(m) !== exclude).sort(strongest)[0]
 }
 
+/** OpenAI's Pro models ($30 / $180 per 1M): only ever picked by name. */
+const pro = (m: ModelInfo): boolean => isPremiumOpenAI(m.id.replace(/^[\w-]+\//, ''))
+
 /** The strongest usable model of a provider. */
-export const bestOf = (usable: ModelInfo[], provider: string): ModelInfo | undefined => usable.filter((m) => cloudOk(m) && providerOf(m) === provider && !isPremiumClaude(m.id)).sort(strongest)[0]
+export const bestOf = (usable: ModelInfo[], provider: string): ModelInfo | undefined => usable.filter((m) => cloudOk(m) && providerOf(m) === provider && !isPremiumClaude(m.id) && !pro(m)).sort(strongest)[0]
 
 export interface AssignInput {
   usable: ModelInfo[]
@@ -146,7 +150,7 @@ export function councilMembers(setting: 'auto' | string[], usable: ModelInfo[], 
   }
   const picks = (['anthropic', 'openai'] as const).map(best).filter((m): m is ModelInfo => !!m)
   if (picks.length >= 2) return { members: order(picks.map((m) => m.id)), critics: [] }
-  const ranked = cloud.filter((m) => !isPremiumClaude(m.id) || fable).sort(strongest)
+  const ranked = cloud.filter((m) => (!isPremiumClaude(m.id) || fable) && !pro(m)).sort(strongest)
   // One of them plus another provider (Grok), or one provider's two strongest, said so.
   if (picks.length === 1) {
     const other = ranked.find((m) => providerOf(m) !== providerOf(picks[0]))
@@ -159,5 +163,5 @@ export function councilMembers(setting: 'auto' | string[], usable: ModelInfo[], 
 /** A second opinion for a council: the strongest model from a provider none of the members come from. */
 export function secondOpinionFor(members: string[], usable: ModelInfo[]): string | undefined {
   const have = new Set(members.map((m) => providerOf(usable.find((x) => x.id === m) ?? m)))
-  return usable.filter((m) => cloudOk(m) && !have.has(providerOf(m)) && !isPremiumClaude(m.id)).sort(strongest)[0]?.id
+  return usable.filter((m) => cloudOk(m) && !have.has(providerOf(m)) && !isPremiumClaude(m.id) && !pro(m)).sort(strongest)[0]?.id
 }
