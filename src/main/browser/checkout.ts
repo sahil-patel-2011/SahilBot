@@ -197,10 +197,17 @@ export function labelHasPrice(label?: string): boolean {
 const BENIGN_CLICK = /^(add to (?:cart|bag|basket|wish ?list|list)|view (?:cart|bag|basket|details|more|all)|continue shopping|sign in|log in|login|next|previous|prev|back|search|go|more|show|hide|expand|collapse|close|cancel|menu|filter|sort|open|view|load more|see (?:all|more)|read more|learn more|details|accept(?: all)?(?: cookies)?|reject(?: all)?(?: cookies)?|dismiss|ok|got it|skip|toggle|play|pause|zoom|×|x|edit|select|choose|apply(?: filters?)?|clear(?: filters?)?|home|help|settings|profile|account|sign up|register|create account|forgot password\??|show password|hide password)$/i
 
 /** A click whose label clearly has no outside consequence (no money, no sending, no commitment). */
+/** A browsing verb first ("Select the budget category", "View plans", "Compare models"): navigation, not a commitment. */
+const BENIGN_VERB = /^(select|choose|view|show|open|see|browse|explore|compare|filter|sort|expand|read|learn|find|search|go to|jump to|more about|details (?:for|of|about))\b/i
+/** Words that commit to something: these win over a browsing verb ("Select and pay", "View and confirm"). */
+const COMMIT_WORDS = /\b(submit|send|confirm|delete|remove|cancel (?:my|your|the) (?:account|subscription|order|plan)|pay|buy|purchase|order|checkout|check out|book|reserve|publish|post|tweet|share|invite|subscribe|unsubscribe|donate|transfer|withdraw|sign(?: up| in)? (?:and|&)|agree|accept (?:the )?(?:terms|offer)|apply now|enroll|enrol|register for|claim|redeem|upload|install|authorize|authorise|grant|approve)\b/i
+
 export function benignClickLabel(label?: string): boolean {
   const l = clean(label ?? '', 120)
   if (!l || purchaseWording(l) || labelHasPrice(l)) return false
-  return BENIGN_CLICK.test(l)
+  if (BENIGN_CLICK.test(l)) return true
+  // Found live: "Select the Budget Category" on a state incentive site asked for approval in Auto.
+  return BENIGN_VERB.test(l) && !COMMIT_WORDS.test(l)
 }
 
 /** Whether an action is a purchase step, and why (in words for the card). */
