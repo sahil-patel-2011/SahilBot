@@ -117,7 +117,7 @@ export class OnshapeClient {
     return u.protocol === 'https:' && !!onshapeOrigin(u.hostname)
   }
 
-  async request<T = unknown>(verb: 'GET' | 'POST', path: string, opts: RequestOptions = {}): Promise<OnshapeResponse<T>> {
+  async request<T = unknown>(verb: 'GET' | 'POST' | 'DELETE', path: string, opts: RequestOptions = {}): Promise<OnshapeResponse<T>> {
     let method = verb
     const keys = this.o.keys()
     if (!keys?.accessKey || !keys.secretKey) {
@@ -180,6 +180,11 @@ export class OnshapeClient {
 
   post<T = unknown>(path: string, body: unknown, opts: Omit<RequestOptions, 'body'> = {}): Promise<T> {
     return this.request<T>('POST', path, { ...opts, body }).then((r) => r.data)
+  }
+
+  /** DELETE (a feature or a tab); the tools only call it after the user approved that exact deletion. */
+  del<T = unknown>(path: string, opts: Omit<RequestOptions, 'body'> = {}): Promise<T> {
+    return this.request<T>('DELETE', path, opts).then((r) => r.data)
   }
 
   /** Waits for a translation (export) to finish: polls GET /translations/{id} with a gentle backoff. */

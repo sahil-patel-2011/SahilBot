@@ -1,15 +1,20 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
-import type { Attachment, Effort, ModelList, PermissionMode } from '@shared/types'
+import type { Attachment, EffortChoice, ModelList, PermissionMode } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
 import { Mic } from '../lib/audio'
 import { Popover } from './Popover'
 import { modeFlags } from '../lib/swarm-view'
 import { AUTO_ENTRIES, autoLabel, autoUnavailableReason, pickerModels, toDownload } from '@shared/model-picker'
+// Attachments: drop, paste, the + menu (files, folder, screenshot) and the working folder (components/Attachments.tsx).
+import { AttachmentChips, DropOverlay, WorkFolderChip, useFolderCounts } from './Attachments'
+import { fromTransfer, mergeAttachments, oversize, rejectedText } from '../lib/attachments'
+import { toast } from '../lib/toast'
 
-const THINKING: Array<{ id: Effort; label: string; sub: string }> = [
+const THINKING: Array<{ id: EffortChoice; label: string; sub: string }> = [
+  { id: 'auto', label: 'Auto', sub: 'Recommended. Picks for each request: more for coding, research and real tasks, less for quick chats' },
   { id: 'low', label: 'Low', sub: 'Fastest. Quick answers, little thinking' },
-  { id: 'medium', label: 'Medium', sub: 'Balanced (recommended). Thinks harder when the problem needs it' },
+  { id: 'medium', label: 'Medium', sub: 'Balanced. Some thinking on every request' },
   { id: 'high', label: 'High', sub: 'Thinks things through more carefully' },
   { id: 'xhigh', label: 'Extra', sub: 'Deep thinking for hard problems and long tasks' },
   { id: 'max', label: 'Max', sub: 'Thinks as long as it needs. Slowest; uses the most tokens' }
@@ -51,6 +56,12 @@ export interface Outgoing {
   fromLink?: boolean
   /** Heavy: several independent attempts, then a judge compares them and writes the answer. */
   heavy?: boolean
+  /** Swarm (bot chats): temporary helpers, then the bot compiles. */
+  swarm?: true
+  /** Council: true = Auto members, or the chosen model ids. */
+  council?: true | string[]
+  /** A working folder picked before the chat existed (sent with its first message). */
+  workingFolder?: string
 }
 
 export const Composer = forwardRef<ComposerHandle, {
@@ -72,8 +83,8 @@ export const Composer = forwardRef<ComposerHandle, {
   onVoice?: () => void
   /** Opens Settings → Models. */
   onManageModels?: () => void
-  thinking?: Effort
-  onThinking?: (e: Effort) => void
+  thinking?: EffortChoice
+  onThinking?: (e: EffortChoice) => void
   /** Left side of the row under the box (Home: the project or folder picker). */
   context?: ReactNode
   /** The big Home version of the box. */
@@ -83,6 +94,14 @@ export const Composer = forwardRef<ComposerHandle, {
   /** Team of Experts capacity for the current model (null = unknown yet). */
   team?: { on: boolean; maxAgents: number; heavy: boolean; why: string } | null
   onTeam?: (on: boolean) => void
+  /** A bot chat: its Swarm setting (the Swarm chip shows unless it's off). */
+  swarm?: { mode: 'off' | 'auto' | 'always' } | null
+  /** Cloud models a Council can use (the Council chip shows with two or more). */
+  council?: Array<{ id: string; label: string }> | null
+  /** This chat (the Working folder chip); none for a chat that doesn't exist yet. */
+  threadId?: string
+  /** The bot's or project's folder, the working folder when the chat doesn't pick one. */
+  inheritedFolder?: string | null
 }>(function Composer(p, ref) {
   const [dictating, setDictating] = useState(false)
   const [dictError, setDictError] = useState<string | null>(null)
@@ -92,9 +111,12 @@ export const Composer = forwardRef<ComposerHandle, {
   const [images, setImages] = useState<string[]>([])
   const [atts, setAtts] = useState<Attachment[]>([])
   const [drag, setDrag] = useState(false)
+  const [draftFolder, setDraftFolder] = useState<string | null>(null)
   const [deep, setDeep] = useState(false)
   const [planFirst, setPlanFirst] = useState(false)
   const [heavy, setHeavy] = useState(false)
+  const [swarmOn, setSwarmOn] = useState(p.swarm?.mode === 'always')
+  const [council, setCouncil] = useState<true | string[] | null>(null)
   /** Text a sahilbot:// link put in the box (null: none). Cleared when the box is emptied or sent. */
   const [linkText, setLinkText] = useState<string | null>(null)
   const ta = useRef<HTMLTextAreaElement>(null)
@@ -197,35 +219,100 @@ export const Composer = forwardRef<ComposerHandle, {
     // Sent exactly as the link had it: not the user's own words (the agent treats it as relayed text).
     const fromLink = linkText !== null && text.trim() === linkText.trim()
     // Heavy replaces Team, Deep Research and Plan first for this message (see modeFlags).
-    p.onSend({ text: text.trim(), images, attachments: atts, ...modeFlags({ team: p.team?.on, deep, planFirst, heavy }), queue, ...(fromLink ? { fromLink } : {}) })
+    p.onSend({ text: text.trim(), images, attachments: atts, ...(draftFolder && !p.threadId ? { workingFolder: draftFolder } : {}), ...modeFlags({ team: p.team?.on, deep, planFirst, heavy, swarm: swarmOn && !!p.swarm && p.swarm.mode !== 'off', council }), queue, ...(fromLink ? { fromLink } : {}) })
     setDeep(false)
     setHeavy(false)
+    setCouncil(null)
+    setSwarmOn(p.swarm?.mode === 'always')
     setLinkText(null)
     setText('')
     setImages([])
     setAtts([])
   }
 
-  const addAtts = (xs: Attachment[]): void => setAtts((cur) => [...cur, ...xs.filter((x) => !cur.some((c) => c.path === x.path))])
+  const addAtts = (xs: Attachment[]): void => setAtts((cur) => mergeAttachments(cur, xs))
   addRef.current = addAtts
+  // Attached folders show a live count of what SahilBot can index.
+  useFolderCounts(atts, (path, patch) => setAtts((xs) => xs.map((a) => (a.path === path ? { ...a, ...patch } : a))))
+
+  /** Dropped or pasted files (with or without a path: a screenshot on the clipboard, an image from a web page). */
+  const addFiles = async (files: File[]): Promise<void> => {
+    const { ok, rejected } = oversize(files)
+    let r = { added: [] as Attachment[], rejected }
+    if (ok.length) {
+      try { const x = await api.attach.fromFiles(ok); r = { added: x.added, rejected: [...rejected, ...x.rejected] } } catch (e) { r.rejected.push({ name: ok[0].name || 'Item', reason: (e as Error).message }) }
+    }
+    if (r.added.length) addAtts(r.added)
+    if (r.rejected.length) toast(rejectedText(r.rejected), 'error')
+  }
 
   const onDrop = async (e: React.DragEvent): Promise<void> => {
     e.preventDefault()
     setDrag(false)
-    const files = Array.from(e.dataTransfer.files)
-    if (files.length) addAtts(await api.files.fromDrop(files))
+    const { files, urls } = fromTransfer(e.dataTransfer)
+    if (files.length) return addFiles(files)
+    // A link dragged from a browser (no file behind it): it goes in the message as text.
+    if (urls.length) setText((cur) => [cur.trim(), ...urls].filter(Boolean).join('\n'))
   }
 
   const onPaste = (e: React.ClipboardEvent): void => {
-    // Screenshots pasted from the clipboard have no path: keep them as inline images.
-    for (const f of Array.from(e.clipboardData.files)) {
-      if (!f.type.startsWith('image/')) continue
-      const r = new FileReader()
-      r.onload = () => setImages((xs) => [...xs, r.result as string])
-      r.readAsDataURL(f)
-    }
+    // Pasted screenshots and copied files become attachments (text pastes as usual).
+    const files = Array.from(e.clipboardData.files)
+    if (!files.length) return
+    // Copied text that comes with a picture of itself (cells from Excel or Numbers): paste the text.
+    // Files copied in Finder carry their names as text, so they still attach.
+    const plain = e.clipboardData.getData('text/plain')
+    if (plain.trim() && !files.every((f) => f.name && plain.includes(f.name))) return
+    e.preventDefault()
+    void addFiles(files)
   }
 
+  const takeScreenshot = async (): Promise<void> => {
+    try { const a = await api.attach.screenshot(); if (a) addAtts([a]) } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') }
+  }
+  const pick = async (kind: 'files' | 'folder'): Promise<void> => {
+    try {
+      const r = await api.attach.pick(kind)
+      if (r.added.length) addAtts(r.added)
+      if (r.rejected.length) toast(rejectedText(r.rejected), 'error')
+    } catch (e) { toast((e as Error).message, 'error') }
+  }
+
+  // Modes (one menu; the ones that are on show as removable chips). Heavy replaces Team, Deep Research and Plan
+  // first for a message, and Council and Heavy exclude each other (see modeFlags): those show as unavailable.
+  const swarmAvail = !!p.swarm && p.swarm.mode !== 'off'
+  const modeList: ModeItem[] = []
+  if (p.team) {
+    modeList.push({ id: 'plan', testId: 'plan-toggle', label: 'Plan first', sub: 'Questions and a plan to approve first', icon: <I.ListIcon size={15} />,
+      on: planFirst && !heavy, toggle: () => setPlanFirst((x) => !x), blocked: heavy ? 'Off while Heavy is on' : undefined,
+      title: 'Plan first: SahilBot asks what it needs to know, shows you its plan, and starts only when you approve' })
+    modeList.push({ id: 'deep', testId: 'deep-toggle', label: 'Deep Research', sub: 'A team researches; you get a cited PDF', icon: <I.Search size={15} />,
+      on: deep && !heavy, toggle: () => setDeep((d) => !d), blocked: heavy ? 'Off while Heavy is on' : undefined,
+      title: 'Deep Research: a team of helper agents researches in parallel, then SahilBot writes a cited report and saves it as a PDF' })
+    if (p.onTeam) {
+      const t = p.team
+      modeList.push({ id: 'team', testId: 'team-toggle', label: 'Team of Experts', chipLabel: 'Team', sub: `${Math.min(10, t.maxAgents)} to ${t.maxAgents} helpers research in parallel`, icon: <I.Users size={15} />,
+        on: t.on && !deep && !heavy, toggle: () => p.onTeam!(!t.on), blocked: heavy ? 'Off while Heavy is on' : deep ? 'Deep Research already uses a team' : undefined,
+        title: `Team of Experts: helper agents research in parallel, then SahilBot puts it together (${t.why})` })
+    }
+  }
+  if (swarmAvail) {
+    modeList.push({ id: 'swarm', testId: 'swarm-toggle', label: 'Swarm', sub: 'Many helpers, then the bot compiles', icon: <I.Layers size={15} />,
+      on: swarmOn && !heavy && !council, toggle: () => setSwarmOn((x) => !x), blocked: heavy ? 'Off while Heavy is on' : council ? 'Off while Council is on' : undefined,
+      title: 'Swarm: temporary helpers (each with its own angle or slice) work on the job, then the bot compiles their work with credits. On Auto the bot decides on its own' })
+  }
+  if (p.council) {
+    const names = Array.isArray(council) ? council.map((id) => p.council!.find((m) => m.id === id)?.label ?? id).join(' + ') : 'the best Claude + the best GPT'
+    modeList.push({ id: 'council', testId: 'council-toggle', label: 'Council', chipLabel: `Council${Array.isArray(council) ? ` (${council.length})` : ''}`, sub: 'Several providers plan and review', icon: <I.Shield size={15} />,
+      on: !!council && !heavy, toggle: () => setCouncil((c) => (c ? null : true)), blocked: heavy ? 'Off while Heavy is on' : undefined,
+      title: council ? `Council is on: ${names} plan, critique each other, merge one plan, carry it out and review each other (you OK the cost first)` : 'Council: frontier models from different providers plan together, critique each other, then carry it out and review each other' })
+  }
+  if (p.team) {
+    modeList.push({ id: 'heavy', testId: 'heavy-toggle', label: 'Heavy', sub: 'Several attempts, then a judge', icon: <I.Sparkle size={15} />,
+      on: heavy && !council, toggle: () => setHeavy((h) => !h), blocked: council ? 'Off while Council is on' : undefined,
+      title: 'Heavy: several independent attempts, then a judge compares them, checks what they disagree on and writes the final answer (you OK the cost first when it is more than a little)' })
+  }
+  const activeModes = modeList.filter((m) => m.on)
   const current = p.models?.models.find((m) => m.id === p.model)
   const modelLabel = (p.model ? autoLabel(p.model) : undefined) ?? (current?.label || p.model || 'Choose model')
   const mode = MODES.find((m) => m.id === p.mode) ?? MODES[1]
@@ -235,23 +322,13 @@ export const Composer = forwardRef<ComposerHandle, {
     <div className="composer-inner">
       <div className={`composer${drag ? ' dragging' : ''}${p.big ? ' big' : ''}`}
         onDragOver={(e) => { e.preventDefault(); setDrag(true) }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={(e) => void onDrop(e)}>
-        {(images.length > 0 || atts.length > 0) && (
-          <div className="attachments" data-testid="attachments">
-            {images.map((src, i) => (
-              <div className="a" key={`i${i}`}><img src={src} alt="" /><button onClick={() => setImages((xs) => xs.filter((_, j) => j !== i))}>×</button></div>
-            ))}
-            {atts.map((a) => (
-              <div className={`a ${a.kind}`} key={a.path} title={a.path}>
-                {a.kind === 'image' && a.dataUrl ? <img src={a.dataUrl} alt="" /> : (
-                  <span className="att-pill">{a.kind === 'folder' ? <I.Folder size={14} /> : <I.File size={14} />}<span>{a.name}</span></span>
-                )}
-                <button onClick={() => setAtts((xs) => xs.filter((x) => x.path !== a.path))}>×</button>
-              </div>
-            ))}
-          </div>
-        )}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDrag(false) }}
+        onDrop={(e) => void onDrop(e)}
+        data-testid="composer-drop">
+        <DropOverlay show={drag} />
+        <AttachmentChips images={images} atts={atts}
+          onRemoveImage={(i) => setImages((xs) => xs.filter((_, j) => j !== i))}
+          onRemove={(path) => setAtts((xs) => xs.filter((x) => x.path !== path))} />
         <textarea
           ref={ta}
           rows={p.big ? 2 : 1}
@@ -275,34 +352,57 @@ export const Composer = forwardRef<ComposerHandle, {
           <Popover label={<I.Plus size={19} />} className="plus-pop" title="Attach files or a folder">
             {(close) => (
               <>
-                <button className="menu-item" onClick={() => { close(); void api.files.pick('files').then(addAtts) }} data-testid="attach-files"><I.Paperclip size={15} />Upload files or photos</button>
-                <button className="menu-item" onClick={() => { close(); void api.files.pick('folder').then(addAtts) }} data-testid="attach-folder"><I.Folder size={15} />Attach a folder<span className="sub">SahilBot can read and edit files inside it</span></button>
+                <button className="menu-item" onClick={() => { close(); void pick('files') }} data-testid="attach-files"><I.Paperclip size={15} />Upload files or photos<span className="sub">Any type, up to 100 MB each. You can also drop or paste them</span></button>
+                <button className="menu-item" onClick={() => { close(); void pick('folder') }} data-testid="attach-folder"><I.Folder size={15} />Attach a folder<span className="sub">SahilBot can read, search and edit files inside it</span></button>
+                <button className="menu-item" onClick={() => { close(); void takeScreenshot() }} data-testid="attach-screenshot"><I.Image size={15} />Take screenshot<span className="sub">Drag over part of the screen (Esc cancels)</span></button>
               </>
             )}
           </Popover>
-          {p.team && !heavy && (
-            <button className={`team-chip${planFirst ? ' on' : ''}`} onClick={() => setPlanFirst((x) => !x)} data-testid="plan-toggle"
-              title="Plan first: SahilBot asks what it needs to know, shows you its plan, and starts only when you approve">
-              <I.ListIcon size={15} /><span className="chip-label">Plan first</span>
-            </button>
+          {modeList.length > 0 && (
+            <Popover
+              label={<><I.Sliders size={16} /><span className="modes-label">Modes</span>{activeModes.length > 0 && <span className="modes-count" aria-label={`${activeModes.length} on`}>{activeModes.length}</span>}</>}
+              className={`modes-pop${activeModes.length ? ' on' : ''}`} menuClass="modes-wrap" title="Modes: Plan first, Deep Research, Team, Swarm, Council, Heavy" testId="modes-menu">
+              {(close) => (
+                <div className="modes-menu" role="menu" aria-label="Modes">
+                  {modeList.map((m) => (
+                    <button key={m.id} className={`menu-item${m.on ? ' on' : ''}`} role="menuitemcheckbox" aria-checked={m.on} disabled={!!m.blocked}
+                      onClick={() => { m.toggle(); close() }} data-testid={m.testId} title={m.title}>
+                      <span className="mode-ico" aria-hidden>{m.icon}</span>
+                      <span className="mode-text">{m.label}<span className="sub">{m.blocked ?? m.sub}</span></span>
+                      <span className="mode-state" aria-hidden>{m.on && <I.Check size={15} />}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Popover>
           )}
-          {p.team && !heavy && (
-            <button className={`team-chip${deep ? ' on' : ''}`} onClick={() => setDeep((d) => !d)} data-testid="deep-toggle"
-              title="Deep Research: a team of helper agents researches in parallel, then SahilBot writes a cited report and saves it as a PDF">
-              <I.Search size={15} /><span className="chip-label">Deep Research</span>
-            </button>
-          )}
-          {p.team && p.onTeam && !deep && !heavy && (
-            <button className={`team-chip${p.team.on ? ' on' : ''}`} onClick={() => p.onTeam!(!p.team!.on)} data-testid="team-toggle"
-              title={p.team.on ? `Team of Experts is on: ${Math.min(10, p.team.maxAgents)} to ${p.team.maxAgents} helper agents research in parallel, then SahilBot puts it together (${p.team.why})` : `Team of Experts: at least ${Math.min(10, p.team.maxAgents)} helper agents research in parallel, then SahilBot puts it together (${p.team.why})`}>
-              <I.Users size={15} /><span className="chip-label">Team of Experts</span>
-            </button>
-          )}
-          {p.team && (
-            <button className={`team-chip heavy-chip${heavy ? ' on' : ''}`} onClick={() => setHeavy((h) => !h)} data-testid="heavy-toggle" aria-pressed={heavy}
-              title={heavy ? 'Heavy is on: several independent attempts work on this, then a judge compares them and writes the answer (you OK the cost first when it is more than a little)' : 'Heavy: several independent attempts, then a judge compares them, checks what they disagree on and writes the final answer'}>
-              <I.Sparkle size={15} /><span className="chip-label">Heavy</span>
-            </button>
+          {activeModes.length > 0 && (
+            <span className="mode-chips">
+              {activeModes.map((m) => (
+                <span key={m.id} className="mode-chip" data-testid={`mode-chip-${m.id}`} title={m.title}>
+                  {m.icon}<span className="mode-chip-label">{m.chipLabel ?? m.label}</span>
+                  {m.id === 'council' && p.council && (
+                    <Popover label={<I.Chevron size={12} />} className="council-pick" title="Choose the council's members" testId="council-pick">
+                      {(close) => (
+                        <>
+                          <button className={`menu-item${council === true ? ' on' : ''}`} onClick={() => { setCouncil(true); close() }}>Auto<span className="sub">The best Claude and the best GPT available</span></button>
+                          {p.council!.map((cm) => {
+                            const picked = Array.isArray(council) && council.includes(cm.id)
+                            return (
+                              <button key={cm.id} className={`menu-item${picked ? ' on' : ''}`} data-testid="council-member-pick"
+                                onClick={() => setCouncil((c) => { const cur = Array.isArray(c) ? c : []; const next = cur.includes(cm.id) ? cur.filter((x) => x !== cm.id) : [...cur, cm.id].slice(0, 4); return next.length ? next : true })}>
+                                {picked ? <I.Check size={13} /> : <span style={{ width: 13 }} />}{cm.label}
+                              </button>
+                            )
+                          })}
+                        </>
+                      )}
+                    </Popover>
+                  )}
+                  <button className="mode-chip-x" onClick={m.toggle} aria-label={`Turn off ${m.label}`} title={`Turn off ${m.label}`}><I.Close size={12} /></button>
+                </span>
+              ))}
+            </span>
           )}
           <span className="spacer" />
           {dictating && (
@@ -323,15 +423,16 @@ export const Composer = forwardRef<ComposerHandle, {
       </div>
       <div className="under">
         {p.context}
+        <WorkFolderChip threadId={p.threadId} inherited={p.inheritedFolder} draft={draftFolder} onDraft={setDraftFolder} />
         <span className="spacer" />
         <Popover label={<><I.Cpu size={14} />{modelLabel}</>} className="under-pick" title="Model" testId="model-picker" menuClass="right">
           {(close) => <ModelMenu list={p.models} model={p.model} onPick={(id) => { p.onModel(id); close() }} onRefresh={p.onRefreshModels} onManage={p.onManageModels ? () => { close(); p.onManageModels!() } : undefined} />}
         </Popover>
         {p.thinking && p.onThinking && (
-          <Popover label={<><I.Sparkle size={14} /><span className="dim">{THINKING.find((t) => t.id === p.thinking)?.label}</span></>} className="under-pick" title="Thinking (adapts to each problem)" testId="thinking-picker" menuClass="right">
+          <Popover label={<><I.Sparkle size={14} /><span className="dim">{THINKING.find((t) => t.id === p.thinking)?.label}</span></>} className="under-pick" title="Thinking for this chat" testId="thinking-picker" menuClass="right">
             {(close) => (
               <>
-                <div className="menu-head">Thinking · adapts to each problem</div>
+                <div className="menu-head">Thinking · a level you pick is used as is</div>
                 {THINKING.map((t) => (
                   <button key={t.id} className="menu-item" onClick={() => { p.onThinking!(t.id); close() }} data-testid={`thinking-${t.id}`}>
                     <span className="check">{t.id === p.thinking && <I.Check size={14} />}</span>
@@ -356,7 +457,7 @@ export const Composer = forwardRef<ComposerHandle, {
               {modes.map((m) => (
                 <button key={m.id} className="menu-item" onClick={() => { p.onMode(m.id); close() }} data-testid={`mode-${m.id}`} aria-checked={m.id === p.mode} role="menuitemradio">
                   <span className="check">{m.id === p.mode && <I.Check size={14} />}</span>
-                  <span>{m.id === 'bypass' ? <span style={{ color: 'var(--danger)' }}>{m.label}</span> : m.label}<span className="sub">{m.sub}</span></span>
+                  <span>{m.id === 'bypass' ? <span className="ui-text-danger">{m.label}</span> : m.label}<span className="sub">{m.sub}</span></span>
                 </button>
               ))}
               <div className="menu-foot">Passwords are never shared, and purchases always ask, at every level.</div>
@@ -380,6 +481,9 @@ export const Composer = forwardRef<ComposerHandle, {
 
 const TIER = ['Instant', 'Light', 'Standard', 'Heavy']
 
+/** One entry in the composer's Modes menu. */
+type ModeItem = { id: string; testId: string; label: string; chipLabel?: string; sub: string; icon: ReactNode; on: boolean; toggle: () => void; blocked?: string; title: string }
+
 function ModelMenu({ list, model, onPick, onRefresh, onManage }: { list: ModelList | null; model: string; onPick: (id: string) => void; onRefresh: () => void; onManage?: () => void }) {
   if (!list) return <div className="menu-head">Loading models…</div>
   // Only models that can run now: downloaded local ones and cloud ones with a key. Downloads live in Settings.
@@ -388,7 +492,7 @@ function ModelMenu({ list, model, onPick, onRefresh, onManage }: { list: ModelLi
   const more = toDownload(list).length
   return (
     <div className="model-menu">
-      {AUTO_ENTRIES.map((e) => {
+      {AUTO_ENTRIES.filter((e) => e.id !== 'auto:local' || !list.localOff).map((e) => {
         // A variant with nothing to route to says why (and stays pickable: models may come back).
         const why = autoUnavailableReason(e.id, list)
         return (

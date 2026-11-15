@@ -4,6 +4,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { Toggle } from './Toggle'
 import { toast } from '../lib/toast'
+import { ClampText } from './ui'
 
 // Settings → Knowledge: the folders SahilBot can search (with counts), meaning search (an Ollama
 // embedding model) or keyword only, add/remove folders, pause and rebuild.
@@ -47,7 +48,7 @@ function Card({ title, sub, children }: { title?: string; sub?: ReactNode; child
 function Line({ title, sub, children, testId }: { title: ReactNode; sub?: ReactNode; children?: ReactNode; testId?: string }) {
   return (
     <div className="set-row" data-testid={testId}>
-      <div className="set-row-text"><div className="set-row-title">{title}</div>{sub && <div className="set-row-sub">{sub}</div>}</div>
+      <div className="set-row-text"><div className="set-row-title">{title}</div>{sub && <ClampText>{sub}</ClampText>}</div>
       {children && <div className="set-row-ctl">{children}</div>}
     </div>
   )
@@ -85,8 +86,8 @@ export function KnowledgeSettings() {
   return (
     <div data-testid="knowledge-settings">
       <h2>Knowledge</h2>
-      <div className="set-sub" style={{ marginTop: -6 }}>
-        SahilBot can search your own files: the workspace, every project's folder and any folders you add here. Bots use it when you ask about your documents and cite the file they used. Everything stays on this Mac. Secrets (.env files, keys, keychains), hidden folders, dependencies, build output and anything in .gitignore are never indexed.
+      <div className="set-sub" title="Secrets (.env files, keys, keychains), hidden folders, dependencies, build output and anything in .gitignore are never indexed.">
+        Bots search your workspace, project folders and folders you add, and cite the file they used. Everything stays on this Mac; secrets, hidden folders and build output are never indexed.
       </div>
 
       <Card title="Search">
@@ -98,6 +99,7 @@ export function KnowledgeSettings() {
           title="Meaning search"
           sub={st.embedModel
             ? <>On, with {st.embedModel} ({st.totals.chunks ? Math.min(100, Math.round((st.embedded / st.totals.chunks) * 100)) : 100}% of passages ready). Runs in the background only while no chat is working.</>
+            : st.localOff ? <>Keyword search. For search by meaning, turn on OpenAI embeddings below (local models are off, so nothing is downloaded).</>
             : <>Keyword search only. Install <b>{st.suggestedModel}</b> in Ollama (Settings → Models, or <code>ollama pull {st.suggestedModel}</code>) for smarter search that finds passages by meaning, not just matching words.</>}
           testId="knowledge-embed"
         />

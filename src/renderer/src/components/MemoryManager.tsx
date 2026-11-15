@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react'
-import type { MemoryImportPreview, MemoryItem, MemoryKind, Space } from '@shared/types'
+import type { MemoryItem, MemoryKind, Space } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { LearningLog } from './LearningLog'
+import { ImportMemoryDialog } from './ImportMemoryDialog'
+import { ClampText } from './ui'
 
 // Settings → Memory: everything SahilBot remembers, shared ("About you") or per bot. Search, filter,
 // edit inline, forget, import from another assistant, or switch memory off.
@@ -27,7 +29,6 @@ const LOG_PREVIEW = 6
 
 type Filter = 'all' | 'me' | string
 type Draft = { id: string; text: string; kind: MemoryKind; scope: string }
-type PreviewRow = MemoryImportPreview['items'][number] & { on: boolean }
 
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
 
@@ -198,9 +199,9 @@ export function MemoryManager({ spaces }: { spaces: Space[] }) {
           <div className="set-row">
             <div className="set-row-text">
               <div className="set-row-title">Use memory</div>
-              <div className="set-row-sub">{enabled === false
+              <ClampText>{enabled === false
                 ? 'Off: bots don\'t read or save memories. What\'s saved below is kept until you delete it.'
-                : 'Bots remember what matters across chats: facts about you are shared, each bot keeps its own rules and work log.'}</div>
+                : 'Bots remember what matters across chats: facts about you are shared, each bot keeps its own rules and work log.'}</ClampText>
             </div>
             <div className="set-row-ctl">
               <button role="switch" aria-checked={enabled !== false} aria-label="Use memory" className={`switch${enabled !== false ? ' on' : ''}`} onClick={() => void toggle(enabled === false)} data-testid="memory-enabled"><i /></button>
@@ -216,7 +217,7 @@ export function MemoryManager({ spaces }: { spaces: Space[] }) {
             onKeyDown={(e) => { if (e.key === 'Escape' && q) { e.stopPropagation(); setQ('') } }} />
           {q && <button className="mm-clear" aria-label="Clear search" onClick={() => setQ('')}><I.Close size={12} /></button>}
         </label>
-        <button className={`mm-btn${importing ? ' on' : ''}`} onClick={() => setImporting((v) => !v)} data-testid="memory-import-open"><I.Down size={14} />Import memories</button>
+        <button className={`mm-btn${importing ? ' on' : ''}`} onClick={() => setImporting(true)} data-testid="memory-import-open"><I.Down size={14} />Import from another AI</button>
       </div>
 
       <div className="mm-chips" role="tablist" aria-label="Filter memories">
@@ -230,13 +231,13 @@ export function MemoryManager({ spaces }: { spaces: Space[] }) {
         ))}
       </div>
 
-      {importing && <ImportPanel onClose={() => setImporting(false)} onDone={() => { setImporting(false); reload() }} />}
+      {importing && <ImportMemoryDialog onClose={() => setImporting(false)} onDone={() => { setImporting(false); reload() }} />}
 
       <section className="set-section mm-list">
         {items === null ? <div className="set-card"><div className="set-empty">Loading…</div></div>
           : groups.length === 0 ? (
             <div className="set-card"><div className="mm-empty">
-              {all.length === 0 ? <>Nothing yet. Bots save things as you talk (“I'll remember that…”), or add one below, or <button className="link-btn" onClick={() => setImporting(true)}>import from ChatGPT or Claude</button>.</>
+              {all.length === 0 ? <>Nothing yet. Bots save things as you talk (“I'll remember that…”), or add one below, or <button className="link-btn" onClick={() => setImporting(true)}>import from ChatGPT, Claude or Gemini</button>.</>
                 : <>No memories match{q ? ` “${q}”` : ''}.</>}
             </div></div>
           ) : groups.map((g) => {
@@ -270,93 +271,5 @@ export function MemoryManager({ spaces }: { spaces: Space[] }) {
 
       <LearningLog spaces={spaces} />
     </div>
-  )
-}
-
-/** Paste an export from another assistant → preview with checkboxes → add the chosen lines (shared). */
-function ImportPanel({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [text, setText] = useState('')
-  const [rows, setRows] = useState<PreviewRow[] | null>(null)
-  const [counts, setCounts] = useState({ duplicates: 0, skipped: 0 })
-  const [busy, setBusy] = useState(false)
-
-  const preview = async (): Promise<void> => {
-    setBusy(true)
-    try {
-      const p = await api.memory.importPreview(text)
-      setRows(p.items.map((i) => ({ ...i, on: true })))
-      setCounts({ duplicates: p.duplicates, skipped: p.skipped })
-    } catch (e) { toast(clean(e), 'error') } finally { setBusy(false) }
-  }
-
-  const picked = (rows ?? []).filter((r) => r.on && r.content.trim())
-  const commit = async (): Promise<void> => {
-    setBusy(true)
-    try {
-      const n = await api.memory.importCommit(picked.map((r) => ({ content: r.content.trim(), category: r.category })))
-      toast(n === 1 ? 'Added 1 memory' : `Added ${n} memories`, 'ok')
-      onDone()
-    } catch (e) { toast(clean(e), 'error') } finally { setBusy(false) }
-  }
-  const set = (i: number, patch: Partial<PreviewRow>): void => setRows((rs) => (rs ?? []).map((r, j) => (j === i ? { ...r, ...patch } : r)))
-
-  return (
-    <section className="set-section mm-import" data-testid="memory-import">
-      <div className="set-card">
-        <div className="mm-import-head">
-          <div>
-            <div className="set-row-title">Import memories</div>
-            <div className="set-row-sub">
-              From ChatGPT: Settings → Personalization → Manage memories, select everything and copy. From Claude or another assistant: ask it to
-              “list everything you remember about me”, then copy the answer. Any notes work too, one fact per line. Imports are shared with every bot.
-            </div>
-          </div>
-          <button className="icon-btn" aria-label="Close import" onClick={onClose}><I.Close size={14} /></button>
-        </div>
-        {rows === null ? (
-          <>
-            <textarea className="mm-paste" rows={8} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} autoFocus
-              placeholder={'- Prefers concise answers\n- Lives in Atlanta, GA\n- Always ask before sending email'} data-testid="memory-import-text" />
-            <div className="mm-import-bar">
-              <span className="mm-hint">Nothing is saved until you choose what to add.</span>
-              <span className="mm-grow" />
-              <button className="mm-btn primary" disabled={!text.trim() || busy} onClick={() => void preview()} data-testid="memory-import-preview">{busy ? 'Reading…' : 'Preview'}</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="mm-import-sum">
-              {rows.length ? `Found ${rows.length} new ${rows.length === 1 ? 'memory' : 'memories'}` : 'Nothing new to add'}
-              {counts.duplicates > 0 && ` · ${counts.duplicates} already saved`}
-              {counts.skipped > 0 && ` · ${counts.skipped} lines skipped (headings, filler or secrets)`}
-              {rows.length > 1 && (
-                <span className="mm-sel">
-                  <button className="link-btn" onClick={() => setRows(rows.map((r) => ({ ...r, on: true })))}>All</button>
-                  <button className="link-btn" onClick={() => setRows(rows.map((r) => ({ ...r, on: false })))}>None</button>
-                </span>
-              )}
-            </div>
-            <div className="mm-preview">
-              {rows.map((r, i) => (
-                <label className={`mm-prow${r.on ? '' : ' off'}`} key={i} data-testid="memory-import-row">
-                  <input type="checkbox" checked={r.on} onChange={(e) => set(i, { on: e.target.checked })} />
-                  <input className="mm-pinput" value={r.content} onChange={(e) => set(i, { content: e.target.value })} spellCheck={false} aria-label="Memory text" />
-                  <select className="mm-select" value={r.category} onChange={(e) => set(i, { category: e.target.value as MemoryKind })} aria-label="Kind">
-                    {KINDS.filter((x) => x.k !== 'worklog').map((x) => <option key={x.k} value={x.k}>{x.one}</option>)}
-                  </select>
-                </label>
-              ))}
-            </div>
-            <div className="mm-import-bar">
-              <button className="mm-btn" onClick={() => setRows(null)}>Back</button>
-              <span className="mm-grow" />
-              <button className="mm-btn primary" disabled={!picked.length || busy} onClick={() => void commit()} data-testid="memory-import-commit">
-                {busy ? 'Adding…' : `Add ${picked.length || ''} to memory`.replace('  ', ' ')}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </section>
   )
 }

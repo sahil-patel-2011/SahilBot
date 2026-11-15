@@ -41,7 +41,7 @@
 
 /* ---------------------------------------------------------------- context gauge (header) */
 .ctx-ring { width: auto; gap: 5px; padding: 0 8px 0 6px; display: inline-flex; align-items: center; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; cursor: default; }
-.ctx-ring.full { color: var(--accent); }
+.ctx-ring.full { color: var(--accent-text); }
 .ctx-ring svg { flex: none; }
 
 /* ---------------------------------------------------------------- toasts

@@ -4,6 +4,7 @@ description: Branch, review, commit safely (secret scan) and open a pull request
 source: you
 uses: 0
 category: Coding
+triggers: commit this, commit my changes, open a pr, pull request, push the branch, create a pr, commit message
 ---
 
 1. git(action="status"). If on main/master and the change is real work: git(action="branch", name="fix/short-topic").

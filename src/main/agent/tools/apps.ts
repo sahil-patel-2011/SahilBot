@@ -3,11 +3,12 @@ import { existsSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve, sep } from 'node:path'
 import { runCheck } from '../../code/checks'
-import { backoff, cloudRunning, composeCursorPrompt, type CursorBrief, describeCloud, newRunState, prUrlsOf, readCursorEvent, readCursorJson, type RepoFacts } from '../../code/cursor'
+import { backoff, briefGaps, cloudRunning, composeCursorPrompt, type CursorBrief, describeCloud, formatReview, newRunState, prUrlsOf, readCursorEvent, readCursorJson, type RepoFacts, reviewCursorChange } from '../../code/cursor'
 import { formatFindings, gh, ghInstalled, git, scanDiffForSecrets } from '../../code/git'
 import { clip, runProcess, stripAnsi } from '../../code/proc'
 import { detectProject } from '../../code/project'
 import { isGitRepo } from '../../code/search'
+import { renderNotes } from '../notes'
 import type { ToolContext, ToolDef } from '../types'
 import { classify } from './shell'
 
@@ -59,6 +60,11 @@ export type CursorArgs = {
 
 /** Cursor agent chats by project folder, so follow-ups continue the same session. */
 const cursorSessions = new Map<string, string>()
+/** The first brief per folder (local) or cloud agent id, so follow-ups restate it and reviews check against it. */
+const cursorBriefs = new Map<string, CursorArgs>()
+const rememberBrief = (key: string | undefined, a: CursorArgs): void => { if (key && a.goal?.trim()) cursorBriefs.set(key, a) }
+/** The brief a follow-up or resumed run continues (undefined for a fresh one). */
+const firstBrief = (a: CursorArgs, mode: CursorBrief['mode'], folder?: string): CursorArgs | undefined => (mode === 'followup' && a.id ? cursorBriefs.get(a.id) : a.resume && folder ? cursorBriefs.get(folder) : undefined)
 
 const CURSOR_API = 'https://api.cursor.com'
 
@@ -94,7 +100,8 @@ function promptFor(a: CursorArgs, mode: CursorBrief['mode'], folder?: string): s
       facts.existing = Object.fromEntries((a.files ?? []).map((f) => [f, existsSync(isAbsolute(f) ? f : join(folder, f))]))
     } catch { /* best effort */ }
   } else if (a.repo) facts.name = a.repo.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
-  const brief = composeCursorPrompt({ goal: a.goal, context: a.context, files: a.files, errors: a.errors, constraints: a.constraints, dontChange: a.dont_change, acceptance: a.acceptance, tests: a.tests, mode }, facts)
+  const first = firstBrief(a, mode, folder)
+  const brief = composeCursorPrompt({ goal: a.goal, context: a.context, files: a.files, errors: a.errors, constraints: a.constraints, dontChange: a.dont_change, acceptance: a.acceptance, tests: a.tests, mode, ...(first?.goal ? { original: { goal: first.goal, acceptance: first.acceptance } } : {}) }, facts)
   return a.task?.trim() ? `${brief}\n\n# More instructions\n${a.task.trim()}` : brief
 }
 
@@ -115,7 +122,7 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
       : a.action === 'cloud_launch' ? `Start a Cursor cloud agent on ${a.repo}${a.ref ? ` (${a.ref})` : ''}; it works on a branch and opens a PR. Prompt:\n\n${shownPrompt(a, 'cloud')}`
         : a.action === 'cloud_followup' ? `Send Cursor agent ${a.id} a follow-up:\n\n${shownPrompt(a, 'followup')}`
           : a.action === 'cloud_stop' ? `Stop Cursor agent ${a.id}` : a.action === 'open' ? `Open ${a.path} in Cursor` : a.action === 'prompt' ? 'Draft a Cursor prompt' : `Cursor ${a.action.replace('_', ' ')}`,
-    description: `Cursor, the AI code editor, and its agents. Delegate well-scoped coding work; review what comes back before calling it done.
+    description: `Cursor, the AI code editor, and its agents. Delegate well-scoped coding work; review what comes back before calling it done. Cursor sees none of this chat: the brief must carry everything (skill cursor-task-brief). Results end with an automatic review against the brief; work through it before reporting.
 - status: what is installed and connected. open(path, line?): show a file or folder in Cursor.
 - prompt(goal, context?, files?, errors?, constraints?, dont_change?, acceptance?, tests?, folder?): draft the complete prompt a Cursor agent would get (goal, constraints, files, acceptance criteria, commands to verify, definition of done) so you can show or refine it. agent and cloud_launch take the same fields and build this prompt themselves (or take a raw task).
 - agent(folder, goal… or task, resume?, verify?, minutes?): run Cursor's agent on this Mac in a project folder with live progress; returns its summary, the exact diff it made (against a restore point taken before it started), and the test/type-check results (verify, default on). resume: true continues its previous chat there (follow-ups, fixes).
@@ -177,13 +184,18 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
         case 'prompt': {
           const folder = a.folder ? allowed(a.folder, ctx) : undefined
           const text = promptFor(a, a.repo && !folder ? 'cloud' : 'local', folder)
-          return { text: `Draft Cursor prompt (${text.length} characters). Show it to the user if they want to see it, then pass the same fields to cursor(action="agent") or cloud_launch:\n\n${text}`, display: 'drafted a Cursor prompt' }
+          const info = folder ? detectProject(folder) : undefined
+          const notes = renderNotes(ctx.state, 2500)
+          const gaps = a.goal ? briefGaps({ ...a, goal: a.goal }, { projectChecks: !!(info?.test || info?.typecheck.length), notes }) : ['No goal: pass goal (plus files, context, acceptance, tests) so the brief is complete.']
+          const fromNotes = notes ? `\n\nYour working notes (copy the user's constraints into constraints, and the decisions, paths and IDs Cursor needs into context):\n${notes}` : ''
+          return { text: `Draft Cursor prompt (${text.length} characters).${gaps.length ? `\n\nImprove the brief first (Cursor sees none of this chat):\n${gaps.map((g) => `- ${g}`).join('\n')}` : ' The brief is complete.'}${fromNotes}\n\nShow it to the user if they want to see it, then pass the same fields to cursor(action="agent") or cloud_launch:\n\n${text}`, display: gaps.length ? `drafted a Cursor prompt (${gaps.length} gaps)` : 'drafted a Cursor prompt' }
         }
         case 'agent': return localAgent(a, ctx)
         case 'cloud_launch': {
           const prompt = promptFor(a, 'cloud')
           const r = await cursorApi(key!, 'POST', '/v1/agents', { prompt: { text: prompt }, repos: [{ url: a.repo, ...(a.ref ? { startingRef: a.ref } : {}) }], ...(a.model ? { model: { id: a.model } } : {}), autoCreatePR: true }, ctx.signal)
           const id = r.agent?.id ?? r.id
+          rememberBrief(id, a)
           const started = `Started Cursor cloud agent ${id} (${r.run?.status ?? 'creating'}). Watch it at ${r.agent?.url ?? 'cursor.com/agents'}.`
           if (!a.wait || !id) return { text: `${started} Check it with cloud_wait (bounded wait with backoff) or cloud_status; then review the PR with cloud_review before reporting.`, display: `started ${id}` }
           const w = await waitCloud(key!, id, a.minutes, ctx)
@@ -233,6 +245,8 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
                 if (checks.length) parts.push(`Checks: ${checks.map((c) => `${c.name ?? c.context}=${c.conclusion || c.state || c.status}`).join(', ')}`)
                 const diff = await gh(cwd, ['pr', 'diff', url, '--color', 'never'], { signal: ctx.signal, timeoutMs: 90_000 })
                 parts.push(`Diff:\n${clip(diff.trim(), 40_000)}`)
+                const failing = checks.some((c) => /fail|error|cancel|timed_out/i.test(`${c.conclusion ?? ''} ${c.state ?? ''}`))
+                parts.push(formatReview(reviewCursorChange({ brief: briefOf(cursorBriefs.get(a.id!)), diff, checksRun: checks.length > 0, checksOk: checks.length ? !failing : undefined, summary: latest?.result }), `cursor(action="cloud_followup", id="${a.id}", goal=…)`))
               } catch (e) { parts.push(`\nCouldn't read ${url} with gh: ${(e as Error).message}`) }
             }
             parts.push('\nReview: does the diff do exactly the goal, nothing more? Any failing checks, missing tests, secrets, or risky changes? Send fixes with cloud_followup; tell the user what you verified.')
@@ -285,6 +299,7 @@ async function localAgent(a: CursorArgs, ctx: ToolContext): Promise<{ text: stri
   if (!statSync(folder).isDirectory()) throw new Error(`${a.folder} is not a folder.`)
   const prompt = promptFor(a, 'local', folder)
   if (!prompt) throw new Error('Give the agent a goal (or task).')
+  if (!a.resume || !cursorBriefs.has(folder)) rememberBrief(folder, a)
   // A restore point: the working tree as it is now, so the report shows only what Cursor changed.
   const repo = await isGitRepo(folder)
   let basePoint: string | undefined
@@ -321,11 +336,15 @@ async function localAgent(a: CursorArgs, ctx: ToolContext): Promise<{ text: stri
   }
   const parts = [`Cursor's agent finished in ${folder}${prev ? ' (continued its previous chat)' : ''}${st.durationMs ? ` after ${Math.round(st.durationMs / 1000)}s` : ''}${r.timedOut ? ' (time limit reached)' : ''}.`, '', 'Its summary (verify it; don\'t just trust it):', summary || '(no summary)']
   let changed = false
+  let fullDiff = ''
+  let freshFiles: string[] = []
   if (repo && basePoint) {
     const stat = (await git(folder, ['diff', '--stat', basePoint], { signal: ctx.signal }).catch(() => '')).trim()
     const diff = (await git(folder, ['diff', basePoint], { signal: ctx.signal, timeoutMs: 60_000 }).catch(() => '')).trim()
     const fresh = (await git(folder, ['ls-files', '--others', '--exclude-standard'], { signal: ctx.signal }).catch(() => '')).split('\n').filter((f) => f && !untrackedBefore.has(f))
     changed = !!stat || fresh.length > 0
+    fullDiff = diff
+    freshFiles = fresh
     parts.push('', `What it changed (against restore point ${basePoint.slice(0, 10)}; undo with: git stash && git checkout ${basePoint.slice(0, 10)} -- . if needed, which asks the user):`)
     parts.push(stat || '(no changes to tracked files)')
     if (fresh.length) parts.push(`New files: ${fresh.slice(0, 40).join(', ')}`)
@@ -338,6 +357,7 @@ async function localAgent(a: CursorArgs, ctx: ToolContext): Promise<{ text: stri
   }
   if (st.commands.length) parts.push('', `Commands it ran: ${st.commands.slice(0, 15).map((c) => `\`${c.slice(0, 100)}\``).join(', ')}`)
   let verdict = ''
+  let checksOk: boolean | undefined
   if (a.verify !== false && changed) {
     const info = detectProject(folder)
     const specs = (a.tests?.length ? a.tests : [...info.typecheck.map((t) => t.command), ...(info.test ? [info.test.command] : [])])
@@ -354,10 +374,18 @@ async function localAgent(a: CursorArgs, ctx: ToolContext): Promise<{ text: stri
         if (res.stopped) break
       }
       verdict = ok ? 'checks passed' : 'checks failed'
+      checksOk = ok
       parts.push('', ok ? 'All checks passed. Still read the diff for scope and style before reporting.' : 'Checks failed: send Cursor a follow-up with the failures (agent with resume: true and errors), or fix it yourself with the code tool.')
     } else parts.push('', 'No test or type-check command found: review the diff by reading it, and run the app if you can.')
   }
+  // The automatic review: against the first brief for this folder (a resumed run keeps the original criteria).
+  if (repo && basePoint) parts.push(formatReview(reviewCursorChange({ brief: briefOf(a.resume ? cursorBriefs.get(folder) ?? a : a), diff: fullDiff, newFiles: freshFiles, checksOk, checksRun: checksOk !== undefined, summary }), `cursor(action="agent", folder, resume: true, goal=…, errors=…)`))
   return { text: parts.join('\n'), display: `Cursor agent ${changed ? 'made changes' : 'finished (no changes)'}${verdict ? ` · ${verdict}` : ''}` }
+}
+
+/** The tool's fields as a brief for the review. */
+function briefOf(a: CursorArgs | undefined): Partial<CursorBrief> | undefined {
+  return a ? { goal: a.goal ?? a.task, files: a.files, dontChange: a.dont_change, acceptance: a.acceptance } : undefined
 }
 
 // ------------------------------------------------------------------ Apple Notes, Reminders, Calendar

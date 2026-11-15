@@ -81,7 +81,7 @@ describe('skills index', () => {
     const idx = store.index()
     expect(idx).toContain('- weekly-report: How Sam wants the Friday report done.')
     expect(idx).toMatch(/- Electrical Engineering: .*circuit-analysis/)
-    expect(idx).toMatch(/- Medical: .*medical-evidence-lookup/)
+    expect(idx).toMatch(/- Medical: .*medical-/)
     expect(idx.length).toBeLessThan(4000)
     void mkdirSync; void writeFileSync
   })

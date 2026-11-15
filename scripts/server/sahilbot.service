@@ -1,0 +1,27 @@
+# SahilBot Server as a systemd user service (install.sh fills in @PREFIX@, @PORT@ and @HEAP@).
+#   systemctl --user status sahilbot      journalctl --user -u sahilbot -f
+# Stronger secrets at rest: put a master key in a systemd credential instead of the key file, e.g.
+#   sahilbot-server key | systemd-creds encrypt --user --name=sahilbot-master-key - ~/.config/sahilbot.cred
+# and add:  LoadCredentialEncrypted=sahilbot-master-key:%h/.config/sahilbot.cred   (docs/server.md)
+[Unit]
+Description=SahilBot Server (always-on bots)
+Documentation=file://@PREFIX@/docs/server.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@PREFIX@/bin/sahilbot-server serve --port @PORT@
+Restart=on-failure
+RestartSec=5
+# Let a run in progress save its state before a stop or an update.
+TimeoutStopSec=20
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-old-space-size=@HEAP@
+UMask=0077
+NoNewPrivileges=yes
+# Low priority next to anything interactive on the same machine.
+Nice=5
+
+[Install]
+WantedBy=default.target

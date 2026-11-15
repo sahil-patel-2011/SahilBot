@@ -4,6 +4,7 @@ description: Do a tolerance stack-up for an assembly (worst case and statistical
 source: you
 uses: 0
 category: Mechanical Engineering
+triggers: tolerance stackup, stack-up, worst case tolerance, rss tolerance, tolerance chain
 ---
 
 1. List the chain of dimensions that sets the gap or fit, with signs, nominals and tolerances.

@@ -3,6 +3,7 @@ import type { ChatRequest, StreamPart, WireMessage } from './client'
 import { retryAfterFrom } from './retry'
 import { openaiCompactAt, openaiEffort, openaiInfo, openaiMaxTokens, openaiWindow, usesResponses, writeFactors, type ContextStrategy } from './openai-models'
 import { claudeWindow } from './claude-models'
+import { fastSupport } from './fast-mode'
 
 // OpenAI over the Responses API (POST /v1/responses), for every OpenAI-hosted model that uses it
 // (openai-models.ts). Request and event shapes follow OpenAI's reference and guides, read 2026-11-15:
@@ -47,7 +48,7 @@ export const OPENAI_WEB_SEARCH_USD = 0.01
 export const OPENAI_MAX_TOOL_CALLS = 8
 
 /** Request fields that some models or accounts reject, dropped (and remembered per model) on a 400 naming them. */
-const OPTIONAL = ['reasoning.summary', 'reasoning.context', 'prompt_cache_options', 'prompt_cache_breakpoint', 'prompt_cache_key', 'context_management', 'include', 'max_tool_calls'] as const
+const OPTIONAL = ['reasoning.summary', 'reasoning.context', 'prompt_cache_options', 'prompt_cache_breakpoint', 'prompt_cache_key', 'context_management', 'include', 'max_tool_calls', 'service_tier'] as const
 type Optional = typeof OPTIONAL[number]
 const dropped = new Map<string, Set<Optional>>()
 /** Forget what earlier requests learned (tests). */
@@ -159,6 +160,24 @@ export function toResponsesInput(wire: WireMessage[], model: string, o: InputOpt
   return out
 }
 
+/**
+ * Fast mode's service_tier (guides/fast-mode, /ultrafast-mode): "fast" ("priority" behaves the same), or
+ * "ultrafast" on gpt-6-astra / gpt-6.1-sol only. undefined: standard.
+ */
+export function openaiServiceTier(req: Pick<ChatRequest, 'model' | 'fast'>): 'fast' | 'ultrafast' | undefined {
+  const s = req.fast ? fastSupport(req.model) : undefined
+  if (s?.provider !== 'openai') return undefined
+  return req.fast === 'ultrafast' && s.ultrafast ? 'ultrafast' : 'fast'
+}
+
+/** The tier a response reports: "priority" / "fast" → fast, "ultrafast", "default" (or a downgrade) → standard. */
+export function servedTier(t: unknown): 'fast' | 'ultrafast' | 'standard' | undefined {
+  if (t === 'priority' || t === 'fast') return 'fast'
+  if (t === 'ultrafast') return 'ultrafast'
+  if (t === 'default' || t === 'auto' || t === 'flex' || t === 'standard') return 'standard'
+  return undefined
+}
+
 /** The Responses request body for one call (pure, so it can be pinned down in tests). */
 export function buildResponsesRequest(req: ChatRequest, drop: Set<string> = dropped.get(req.model) ?? new Set()): { body: Record<string, unknown>; web: boolean } {
   const spec = openaiInfo(req.model)
@@ -196,8 +215,13 @@ export function buildResponsesRequest(req: ChatRequest, drop: Set<string> = drop
     ...(!drop.has('include') ? { include } : {}),
     ...(req.cacheKey && !drop.has('prompt_cache_key') ? { prompt_cache_key: req.cacheKey } : {}),
     ...(cache && !drop.has('prompt_cache_options') ? { prompt_cache_options: { ttl: '30m' } } : {}),
+    // Compaction takes only type and compact_threshold (guides/compaction: no custom prompt), and its item is opaque
+    // (encrypted_content), so the checkpoint's format can't be asked for or checked here: the task brief stored right
+    // after the compaction (agent/loop.ts storeBrief) carries the notes, the user's messages, the identifiers and the
+    // failed attempts in full instead.
     ...(req.compactAt && spec?.compaction && !drop.has('context_management') ? { context_management: [{ type: 'compaction', compact_threshold: Math.max(1000, Math.round(req.compactAt)) }] } : {}),
-    ...(web && !drop.has('max_tool_calls') ? { max_tool_calls: OPENAI_MAX_TOOL_CALLS } : {})
+    ...(web && !drop.has('max_tool_calls') ? { max_tool_calls: OPENAI_MAX_TOOL_CALLS } : {}),
+    ...(openaiServiceTier(req) && !drop.has('service_tier') ? { service_tier: openaiServiceTier(req) } : {})
   }
   return { body, web }
 }
@@ -297,6 +321,7 @@ export function optionalParam(status: number, body: { message?: string; param?: 
   if (sent.prompt_cache_options && /prompt_cache_options/i.test(`${param} ${msg}`)) return 'prompt_cache_options'
   if (sent.prompt_cache_key && /prompt_cache_key/i.test(`${param} ${msg}`)) return 'prompt_cache_key'
   if (sent.include && /\binclude\b|encrypted_content/i.test(`${param} ${msg}`)) return 'include'
+  if (sent.service_tier && /service_tier|ultrafast|fast mode|priority/i.test(`${param} ${msg}`)) return 'service_tier'
   return undefined
 }
 
@@ -407,7 +432,7 @@ export async function* streamResponses(req: ChatRequest): AsyncGenerator<StreamP
     throw openaiError(res.status, err, res.headers, req.model)
   }
 
-  let final: { status?: string; model?: string; output?: Item[]; usage?: ResponsesUsage | null; incomplete_details?: { reason?: string } | null } | undefined
+  let final: { status?: string; model?: string; output?: Item[]; usage?: ResponsesUsage | null; incomplete_details?: { reason?: string } | null; service_tier?: string } | undefined
   let streamedText = false
   let lastTextItem: unknown
   let lastSummary: string | undefined
@@ -466,7 +491,9 @@ export async function* streamResponses(req: ChatRequest): AsyncGenerator<StreamP
   if (final.usage) {
     const c = responsesCost(served, final.usage, web.searches + web.fetches)
     // Billing-equivalent tokens at the standard rate; the real prompt size picks the price tier (budget.tierTokens).
-    yield { type: 'usage', promptTokens: c.billedInput, completionTokens: c.output, prompt: c.prompt, extraUsd: c.extraUsd, cachedTokens: c.cached, cacheWriteTokens: c.written, reasoningTokens: c.reasoning }
+    // The tier that ran, when fast mode was asked for (a downgraded request says "default": standard price).
+    const ran = built.body.service_tier ? servedTier(final.service_tier) ?? (built.body.service_tier as 'fast' | 'ultrafast') : undefined
+    yield { type: 'usage', promptTokens: c.billedInput, completionTokens: c.output, prompt: c.prompt, extraUsd: c.extraUsd, cachedTokens: c.cached, cacheWriteTokens: c.written, reasoningTokens: c.reasoning, webCalls: web.searches + web.fetches, ...(ran ? { serviceTier: ran } : {}) }
   }
   if (web.searches || web.fetches || web.found.length || web.read.length) yield { type: 'server_tools', ...web }
 

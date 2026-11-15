@@ -60,6 +60,8 @@ export interface Space {
   members: string[]
   /** Model override for this bot; null = the app default. */
   model: string | null
+  /** Thinking override for this bot ('auto' or a level); null = the app default. */
+  effort?: EffortChoice | null
   /** One-line label under the bot's name ("Add a label"). */
   label?: string | null
   /** Desktop notifications when this bot finishes or needs you (default on). */
@@ -79,6 +81,8 @@ export interface Thread {
   unread: boolean
   permissionMode: PermissionMode
   model: string | null
+  /** Thinking chosen for this chat ('auto' or a level); null = the bot's, else the app default. */
+  effort?: EffortChoice | null
   createdAt: number
   updatedAt: number
   lastPreview?: string
@@ -96,7 +100,7 @@ export interface Sampling {
 }
 
 /** Model servers that can be on at the same time; each model is routed to the one that serves it. */
-export type ProviderId = 'ollama' | 'lmstudio' | 'custom' | 'anthropic' | 'openai' | 'openrouter'
+export type ProviderId = 'ollama' | 'lmstudio' | 'custom' | 'anthropic' | 'openai' | 'openrouter' | 'chatgpt' | 'xai'
 
 export interface ProviderSettings {
   ollama: { enabled: boolean; baseUrl: string }
@@ -143,7 +147,7 @@ export interface Settings {
   hasApiKey: boolean
   providers: ProviderSettings
   /** Which providers have a key saved in the Keychain. */
-  keys: Record<ProviderId, boolean>
+  keys: Record<Exclude<ProviderId, 'chatgpt' | 'xai'>, boolean> & { chatgpt?: boolean; xai?: boolean }
   /** A Cursor API key is saved (Cursor cloud agents). */
   hasCursorKey: boolean
   /** The Blue Alliance read key (FRC scouting), kept in the Keychain. */
@@ -163,7 +167,8 @@ export interface Settings {
   /** Global shortcut for Quick Ask ('' = off). */
   quickKey: string
   /** Thinking level (Low, Medium, High, Extra, Max). Medium by default; adapts to each problem. */
-  thinking: Effort
+  /** Thinking for chats that don't choose their own: 'auto' (default) picks per request; a level is used exactly. */
+  thinking: EffortChoice
   /**
    * Cloud models: on/off without removing keys. Hybrid: a local model may consult a cloud model for a
    * plan, best practices, or when it's stuck (capped per request; the monthly budget still applies).
@@ -181,6 +186,8 @@ export interface Settings {
     nativeTools?: boolean
     /** Auto may use Claude Fable for the hardest tier (default off: Fable only when picked by name). */
     fableForHardest?: boolean
+    /** What Auto aims for (Settings → Models): 'best' (default) the strongest model for each task, 'balanced' the cheapest strong enough, 'cheapest' one step cheaper (docs/model-routing.md). */
+    autoPrefers?: 'best' | 'balanced' | 'cheapest'
   }
   /** 0 = Auto: the largest window that fits this Mac's memory with the model (agents get more room). */
   contextWindow: 0 | 16384 | 32768 | 65536 | 131072
@@ -255,6 +262,8 @@ export type Tier = 0 | 1 | 2 | 3
 
 /** How hard the model thinks. Adaptive: the level is a center point that shifts with how hard the request is. */
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+/** A thinking level, or 'auto': the app picks one for each request from the task (llm/auto-effort.ts). */
+export type EffortChoice = Effort | 'auto'
 
 export interface ModelInfo {
   id: string
@@ -357,11 +366,26 @@ export interface MemoryItem {
   updatedAt: number
 }
 
-/** Import preview: one candidate memory per line of the pasted export. */
+/** Import preview: one candidate memory per entry of the pasted export (src/main/memory-import.ts). */
 export interface MemoryImportPreview {
-  items: Array<{ content: string; category: MemoryKind }>
+  items: Array<{
+    content: string
+    category: MemoryKind
+    /** The export section it came from: instructions, identity, career, projects, preferences, other. */
+    section?: import('./memory-import').ImportSection
+    /** The source date (YYYY-MM-DD), or null when the other assistant didn't know it. */
+    date?: string | null
+    /** From the Instructions section: saved as a rule every chat follows. */
+    asRule?: boolean
+  }>
   duplicates: number
   skipped: number
+  /** Left out for safety (secrets redacted from the text), with the reason. */
+  dropped?: Array<{ text: string; why: string }>
+  /** What the other assistant said: complete (true), not complete (false), or nothing (null). */
+  complete?: boolean | null
+  structured?: boolean
+  truncated?: boolean
 }
 
 /** A procedure the agent learned (or you wrote): when to use it and the steps that work. */
@@ -474,7 +498,7 @@ export interface SitePitfall { kind: SitePitfallKind; text: string; count: numbe
 export interface SiteLogin {
   /** password (a saved login), sso (another site signs you in), none, or unknown */
   method: 'password' | 'sso' | 'none' | 'unknown'
-  /** The saved login's name in Settings > Passwords (never the secret itself). */
+  /** The saved login's name in Settings > Vault (never the secret itself). */
   savedLogin?: string
   /** SSO provider, e.g. "Google". */
   sso?: string
@@ -566,6 +590,8 @@ export interface CardInput {
   expYear: number | string
   holder: string
   billing?: string
+  /** Forget the saved security code (the default is not to keep one: SahilBot asks for it each time). */
+  clearCvc?: boolean
 }
 
 /** A saved shipping or billing address (stored encrypted; the model only sees its nickname). */
@@ -581,6 +607,121 @@ export interface AddressEntry {
   country: string
   phone?: string
   email?: string
+  /** Settings list: "City, Region, Country" (the full address is shown only on Reveal). */
+  summary?: string
+}
+
+// ---------------------------------------------------------------- secrets vault (src/main/secure)
+
+export type VaultItemType = 'login' | 'card' | 'identity' | 'note' | 'address'
+
+/** What Settings may know about a vault item: never a secret value. */
+export interface VaultItemSummary {
+  id: string
+  type: VaultItemType
+  name: string
+  /** Sites it may be filled on (logins: one; IDs: an optional allow-list). */
+  sites?: string[]
+  subdomains?: boolean
+  /** Standing rule: sign in on this site without an approval card. */
+  autoFill?: boolean
+  usernameHint?: string
+  hasTotp?: boolean
+  totpIssuer?: string
+  brand?: string
+  last4?: string
+  expMonth?: number
+  expYear?: number
+  hasCvc?: boolean
+  billing?: string
+  kind?: string
+  summary?: string
+  updated: number
+}
+
+/** Saving any item from Settings. Secret fields are sent once, straight to main; empty on edit = keep. */
+export interface VaultItemInput {
+  id?: string
+  type: VaultItemType
+  name: string
+  site?: string
+  /** IDs: sites (comma-separated) it may be typed on. */
+  sites?: string
+  subdomains?: boolean
+  autoFill?: boolean
+  username?: string
+  password?: string
+  totp?: string
+  clearTotp?: boolean
+  notes?: string
+  number?: string
+  cvc?: string
+  clearCvc?: boolean
+  expMonth?: number | string
+  expYear?: number | string
+  holder?: string
+  billing?: string
+  kind?: string
+  fullName?: string
+  issuer?: string
+  country?: string
+  body?: string
+  address?: Omit<AddressEntry, 'id' | 'nickname' | 'summary'>
+}
+
+export interface VaultPrefs {
+  autoLockMinutes: number
+  lockOnSleep: boolean
+  reauthPasswords: boolean
+  touchId: boolean
+}
+
+export interface VaultStatus {
+  exists: boolean
+  locked: boolean
+  masterPassword: boolean
+  /** Touch ID can unlock while a master password is set. */
+  bio: boolean
+  touchIdAvailable: boolean
+  /** No master password and no Touch ID: unlocking is a click (Keychain protection only). */
+  presenceOnly: boolean
+  kdf?: { alg: string; cost: string; ms?: number }
+  counts: Record<VaultItemType, number>
+  tampered: boolean
+  retryInMs: number
+  prefs: VaultPrefs
+  keychain: boolean
+  /** The pre-upgrade copies (Keychain-only format) still on this Mac, and what migration did. */
+  legacy: { present: boolean; migrated: number; unreadable: string[]; rolledBack?: boolean }
+}
+
+export interface VaultAuditEntry {
+  id: number
+  at: number
+  event: string
+  item?: string
+  site?: string
+  outcome: 'ok' | 'denied' | 'failed' | 'blocked'
+  detail?: string
+}
+
+/** Main asks the window to unlock or confirm (the window never decides; it only sends what was typed). */
+export interface VaultAuthRequest {
+  id: string
+  kind: 'unlock' | 'reauth'
+  needs: 'password' | 'confirm'
+  title: string
+  reason: string
+  touchId: boolean
+  purpose?: string
+}
+
+/** Shown to the user after Touch ID or the master password, hidden again after hideAfterMs. Never sent to a model. */
+export interface VaultReveal {
+  id: string
+  type: VaultItemType
+  fields: Array<{ key: string; label: string; value: string; secret?: boolean }>
+  hideAfterMs: number
 }
 
 /**
@@ -698,6 +839,11 @@ export interface ConnectorPreset {
   setup?: ConnectorSetup
   /** apikey apps: how the user's key is sent and where they get it (the key itself lives in the Keychain). */
   apiKey?: ConnectorApiKey
+  /**
+   * Set when the app's server can't be used right now (it stopped answering, or moved without an
+   * official new address): why, in plain words. The entry stays in the catalog but doesn't connect.
+   */
+  unavailable?: string
 }
 
 /**
@@ -854,6 +1000,12 @@ export interface ConnectorStatus {
   /** While reconnecting: which try this is and when the next one starts. */
   attempt?: number
   retryAt?: number
+  /**
+   * Why it isn't connected, when that's known: expired (a sign-in that worked before was refused or
+   * revoked: one click on Reconnect signs in again), setup (a one-time setup or key is missing),
+   * unavailable (the app's server isn't answering, or the catalog marks it unavailable).
+   */
+  reason?: 'expired' | 'setup' | 'unavailable'
 }
 
 export interface VoiceStatus {
@@ -954,6 +1106,8 @@ export interface TeamMember {
 
 export interface SahilBotApi {
   system: { info(): Promise<SystemInfo> }
+  /** ChatGPT plan (via Codex): Settings → Models. */
+  chatgptPlan: import('./chatgpt-plan').ChatgptPlanApi & { onChanged(cb: () => void): () => void }
   settings: {
     get(): Promise<Settings>
     set(patch: Partial<Settings> & { apiKey?: string | null; braveKey?: string | null; cursorKey?: string | null; tbaKey?: string | null; setKeys?: Partial<Record<ProviderId, string | null>> }): Promise<Settings>
@@ -978,7 +1132,7 @@ export interface SahilBotApi {
   spaces: {
     list(): Promise<Space[]>
     create(input: { name?: string; color?: string; shape?: BotShape; kind?: 'bot' | 'group' | 'project'; members?: string[]; intro?: boolean; folder?: string }): Promise<{ space: Space; threadId: string }>
-    update(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify'>>): Promise<Space>
+    update(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort'>>): Promise<Space>
     /** Files and links from this bot's chats, newest first. */
     library(spaceId: string): Promise<LibraryItem[]>
     markUnread(id: string): Promise<void>
@@ -991,7 +1145,7 @@ export interface SahilBotApi {
     list(spaceId?: string): Promise<Thread[]>
     search(query: string): Promise<Thread[]>
     create(spaceId: string): Promise<Thread>
-    update(id: string, patch: Partial<Pick<Thread, 'title' | 'pinned' | 'unread' | 'permissionMode' | 'model' | 'spaceId'>>): Promise<Thread>
+    update(id: string, patch: Partial<Pick<Thread, 'title' | 'pinned' | 'unread' | 'permissionMode' | 'model' | 'spaceId' | 'effort'>>): Promise<Thread>
     remove(id: string): Promise<void>
     messages(id: string): Promise<Message[]>
     react(messageId: string, emoji: string | null): Promise<Message>
@@ -1040,7 +1194,7 @@ export interface SahilBotApi {
   exitMini(): Promise<void>
   /** Menu bar commands (File > New Chat, SahilBot > Settings…). */
   onMenu(cb: (action: string) => void): () => void
-  budget(): Promise<{ month: string; spent: number; cap: number; requests: number }>
+  budget(): Promise<{ month: string; spent: number; cap: number; requests: number; mode?: SpendingMode }>
   /** Cloud spend was recorded: refresh budget(). */
   onBudgetChanged(cb: () => void): () => void
   /** Finds local model servers already running and the best model on each that fits this Mac. */
@@ -1101,6 +1255,8 @@ export interface SahilBotApi {
     clearGoogleClient(): Promise<void>
     /** Saves an API key for an apikey catalog app (Keychain), adds the app if needed, and connects. */
     setApiKey(presetId: string, key: string): Promise<ConnectorStatus>
+    /** "Check all": re-tests every switched-on app (live ones list their tools; others reconnect without opening the browser). */
+    checkAll(): Promise<ConnectorStatus[]>
   }
   vault: {
     list(): Promise<VaultEntry[]>
@@ -1117,6 +1273,29 @@ export interface SahilBotApi {
     addresses(): Promise<AddressEntry[]>
     setAddress(a: Omit<AddressEntry, 'id'> & { id?: string }): Promise<AddressEntry[]>
     removeAddress(id: string): Promise<AddressEntry[]>
+    // The envelope vault (Settings → Vault). Replies carry metadata only, except reveal (after Touch ID or the master password).
+    status(): Promise<VaultStatus>
+    items(): Promise<VaultItemSummary[]>
+    saveItem(input: VaultItemInput): Promise<VaultItemSummary[]>
+    removeItem(id: string): Promise<VaultItemSummary[]>
+    unlock(): Promise<VaultStatus>
+    lock(): Promise<VaultStatus>
+    reveal(id: string): Promise<VaultReveal | null>
+    setPrefs(p: Partial<VaultPrefs>): Promise<VaultStatus>
+    setMasterPassword(next: string, current?: string): Promise<VaultStatus>
+    removeMasterPassword(current: string): Promise<VaultStatus>
+    setTouchIdUnlock(on: boolean): Promise<VaultStatus>
+    audit(limit?: number): Promise<VaultAuditEntry[]>
+    exportBackup(password: string): Promise<{ ok: boolean; path?: string; count?: number; error?: string }>
+    importBackup(password: string): Promise<{ ok: boolean; added?: number; skipped?: number; error?: string }>
+    importCsv(): Promise<{ ok: boolean; added?: number; skipped?: number; path?: string; error?: string }>
+    purgeLegacy(): Promise<VaultStatus>
+    rollback(): Promise<VaultStatus>
+    resign(): Promise<VaultStatus>
+    authPending(): Promise<VaultAuthRequest[]>
+    authRespond(id: string, answer: { password?: string; cancel?: boolean; touchId?: boolean }): Promise<{ ok: boolean; error?: string; retryInMs?: number }>
+    onAuth(cb: (e: VaultAuthRequest | { id: string; done: true }) => void): () => void
+    onChanged(cb: () => void): () => void
   }
   /** The Purchase approval card: only a click in the main window approves, once, for that exact card. */
   purchase: {
@@ -1159,7 +1338,11 @@ export interface SahilBotApi {
     /** Parses text exported from another assistant; nothing is saved yet. */
     importPreview(text: string): Promise<MemoryImportPreview>
     /** Saves the chosen lines as shared memories; returns how many were added. */
-    importCommit(items: Array<{ content: string; category?: MemoryKind }>): Promise<number>
+    importCommit(items: Array<{ content: string; category?: MemoryKind; date?: string | null; asRule?: boolean }>): Promise<number>
+    /** Same as importCommit, with counts: memories added, rules added (from Instructions), skipped. */
+    importSave(items: Array<{ content: string; category?: MemoryKind; date?: string | null; asRule?: boolean }>): Promise<{ memories: number; rules: number; skipped: number }>
+    /** Puts the import prompt (src/shared/memory-import.ts) on the clipboard. */
+    copyImportPrompt(): Promise<boolean>
     getEnabled(): Promise<boolean>
     setEnabled(on: boolean): Promise<void>
   }
@@ -1198,6 +1381,10 @@ export interface SahilBotApi {
     exportCsv(): Promise<string | null>
     /** Tokens and cloud cost of one run: a chat's model replies (and its helper agents') since `since`. */
     forRun(threadId: string, since: number, until?: number): Promise<RunUsage>
+    /** Settings → Usage: month against the limit, 30 days / 12 weeks of tokens, lifetime, per model / provider / bot. */
+    dashboard(): Promise<UsageDashboard>
+    /** The compact card (profile menu, ⌘K "Usage"). */
+    glance(): Promise<UsageGlance>
   }
   skills: {
     list(): Promise<Skill[]>
@@ -2063,7 +2250,7 @@ export interface TeamMember {
 
 /** A spend the user is asked to OK before a big swarm or a Heavy run starts. */
 export interface SpendApproval {
-  kind: 'team' | 'heavy'
+  kind: 'team' | 'heavy' | 'swarm' | 'council'
   count: number
   model: string
   estimateUsd: number
@@ -2133,4 +2320,586 @@ export interface Settings {
    * monthly cloud budget. Off: embeddings stay on this Mac (Ollama) or keyword search alone.
    */
   openaiEmbeddings?: boolean
+}
+
+// ---------------------------------------------------------------- Bot swarms (temporary helpers) and Council mode
+
+/** A bot's swarm setting: never, the bot decides (default), or every request. */
+export type BotSwarmMode = 'off' | 'auto' | 'always'
+
+/** Per-bot swarm settings (Settings.botSwarm[botId]; spaces.ts botSwarmConfig fills the defaults). */
+export interface BotSwarmSettings {
+  mode: BotSwarmMode
+  /** Most temporary helpers per swarm (1-50, default 20). */
+  maxHelpers: number
+  /** What one swarm may spend in a routine or goal wake-up, never asking (USD; 0 = no swarms unattended). Default $1. */
+  routineUsd: number
+}
+
+/** Council mode: frontier models from different providers plan, critique, merge, execute and review together. */
+export interface CouncilSettings {
+  /** 'auto' = the best Claude + the best GPT available; or model ids (2-4). */
+  members: 'auto' | string[]
+  /** Review rounds before it stops (1-4, default 2). */
+  rounds: number
+}
+
+export interface Settings {
+  /** Per-bot swarm settings, by bot id. */
+  botSwarm?: Record<string, Partial<BotSwarmSettings>>
+  council?: Partial<CouncilSettings>
+}
+
+export interface SendInput {
+  /** Swarm for this message (a bot chat): the bot runs temporary helpers, then compiles. */
+  swarm?: boolean
+  /** Council for this message: true = Auto members, or the chosen model ids. */
+  council?: boolean | string[]
+}
+
+/** What a swarm helper is for, which sets its model: cheap breadth, solid work, or the hardest slices. */
+export type HelperRole = 'breadth' | 'solid' | 'hard' | 'review'
+
+/** One temporary helper on the swarm card. */
+export interface SwarmHelperView {
+  id: string
+  /** H1, H2… (the credit tags in the compiled answer). */
+  n: number
+  title: string
+  /** Its distinct angle (ideation) or its slice of the work (divide and conquer). */
+  angle: string
+  role: HelperRole
+  model: string
+  label?: string
+  status: TeamMember['status']
+  detail?: string
+  usd?: number
+  tokens?: number
+  /** Idea titles parsed from its output so far. */
+  ideas?: string[]
+  /** Its final output (shortened). */
+  report?: string
+  /** Its hidden thread, for the transcript. */
+  childId?: string
+  /** Sent back to deepen or critique in round 2. */
+  refined?: boolean
+  /** How often the compiled answer credits it ([H3] tags). */
+  credit?: number
+}
+
+/** The swarm card: kept on a notice message's meta.swarm, updated live. */
+export interface SwarmBoard {
+  swarmId: string
+  bot?: string
+  pattern: 'ideate' | 'divide'
+  goal: string
+  helpers: SwarmHelperView[]
+  phase: 'running' | 'compiling' | 'refining' | 'done' | 'stopped' | 'failed'
+  lead: { model: string; label?: string }
+  /** The model that drafted the compile (the strongest), when it isn't the lead. */
+  compiler?: { model: string; label?: string }
+  /** How the helper count was chosen. */
+  sizing?: string
+  /** "Mixed models chosen by role (routing table)". */
+  routing?: string
+  ideas?: { total: number; distinct: number }
+  compiled?: { excerpt: string; credits: Array<{ n: number; count: number }> }
+  estimateUsd?: number
+  capUsd?: number
+  spentUsd?: number
+  unattended?: boolean
+  note?: string
+}
+
+export interface CouncilMemberView {
+  id: string
+  model: string
+  label?: string
+  provider?: string
+  /** The chair merges the plans and writes the final answer. */
+  chair: boolean
+  /** A critic seat: critiques and reviews, never plans, executes or writes the answer. */
+  critic?: boolean
+  status: 'waiting' | 'working' | 'done' | 'failed' | 'stopped'
+  detail?: string
+  usd?: number
+  plan?: string
+  critique?: string
+  /** Its sign-off on the merged plan. */
+  planOk?: boolean
+  objections?: string[]
+  childId?: string
+}
+
+export interface CouncilStep {
+  n: number
+  text: string
+  /** Member index (0-based) that owns it. */
+  owner: number
+  /** Done by an outside agent (Cursor) that the owner instructs and the other member reviews. */
+  via?: 'cursor'
+  repo?: string
+  status: 'queued' | 'working' | 'done' | 'failed' | 'skipped'
+  output?: string
+  /** Cursor: the instructions the owner wrote (after the other member's review). */
+  instructions?: string
+}
+
+export interface CouncilReview {
+  round: number
+  by: number
+  of: number
+  ok: boolean
+  notes: string
+}
+
+/** The Council card: kept on a notice message's meta.council, updated live. */
+export interface CouncilBoard {
+  councilId: string
+  goal: string
+  members: CouncilMemberView[]
+  phase: 'planning' | 'critiquing' | 'merging' | 'deciding' | 'executing' | 'reviewing' | 'writing' | 'done' | 'stopped' | 'failed'
+  merged?: { summary?: string; steps: CouncilStep[] }
+  disagreements: Array<{ point: string; positions: Array<{ member: number; view: string }>; resolution?: string }>
+  /** A second opinion on the merged plan from a third provider (when the chair asked for one). */
+  secondOpinion?: { model: string; label?: string; text: string }
+  reviews: CouncilReview[]
+  round: number
+  maxRounds: number
+  /** Why it stopped: everyone signed off, the round limit, the budget cap, a stop. */
+  stopReason?: string
+  estimateUsd?: number
+  capUsd?: number
+  spentUsd?: number
+  note?: string
+}
+
+// ---- Fast mode, monthly spending limit and the usage dashboard (llm/fast-mode.ts, llm/budget.ts, usage.ts) ----
+
+/** A faster, pricier service tier: Anthropic speed "fast", OpenAI service_tier fast / ultrafast, xAI priority. */
+export type FastTier = 'fast' | 'ultrafast'
+/** Per-model Fast mode: follow the provider's switch, always on, always off, or OpenAI Ultrafast (Astra, 6.1 Sol). */
+export type FastChoice = 'inherit' | 'on' | 'off' | 'ultrafast'
+
+export interface FastModeSettings {
+  /** Fast mode for every supported model of a provider (off by default). */
+  providers: { anthropic: boolean; openai: boolean; xai: boolean }
+  /** Per-model overrides by model id ('inherit' is not stored). */
+  models: Record<string, Exclude<FastChoice, 'inherit'>>
+  /** When Auto picks the model: 'speed' (default) only for speed-sensitive requests, 'allowed' whenever allowed, 'never'. */
+  auto: 'speed' | 'allowed' | 'never'
+}
+
+/**
+ * The monthly spending limit: 'amount' caps pay-per-use API spend at cloudBudgetUsd; 'unlimited' has no cap
+ * (spend is still shown); 'none' turns pay-per-use API spending off (only a ChatGPT plan via Codex and local
+ * models run). Unset: derived from cloudBudgetUsd (> 0 = 'amount', 0 = 'none', as $0 always refused requests).
+ */
+export type SpendingMode = 'amount' | 'unlimited' | 'none'
+
+export interface Settings {
+  fastMode?: FastModeSettings
+  spendingMode?: SpendingMode
+}
+
+/** Token detail for usage rows (the providers' own counts; cost is in usd). */
+export interface UsageTokens {
+  requests: number
+  /** Uncached input tokens. */
+  input: number
+  /** Input tokens read from the prompt cache. */
+  cached: number
+  /** Input tokens written to the prompt cache. */
+  cacheWrite: number
+  /** Output tokens as billed (visible output plus reasoning). */
+  output: number
+  /** The part of output that was reasoning, when the provider reports it. */
+  reasoning: number
+  usd: number
+}
+
+/** Settings → Usage: the full dashboard (spend against the monthly limit, charts, lifetime, breakdowns). */
+export interface UsageDashboard {
+  now: number
+  month: string
+  limit: { mode: SpendingMode; cap: number; spent: number; requests: number }
+  week: { start: number; usd: number; requests: number; tokens: number }
+  monthTotals: { usd: number; requests: number; tokens: number }
+  lifetime: UsageTokens & { since: number | null; local: { requests: number; input: number; output: number } }
+  /** Last 30 days, oldest first; tokens = input + cached + cacheWrite + output. */
+  days: Array<{ day: string; tokens: number; cloudTokens: number; localTokens: number; usd: number; requests: number }>
+  /** Last 12 weeks (weeks start Monday), oldest first. */
+  weeks: Array<{ start: string; tokens: number; cloudTokens: number; localTokens: number; usd: number; requests: number }>
+  /** This month, per model and per provider; share = part of this month's tokens (0..1). */
+  byModel: Array<UsageTokens & { model: string; provider: string; where: 'local' | 'cloud'; fastRequests: number; webCalls: number; share: number }>
+  byProvider: Array<UsageTokens & { provider: string; name: string; where: 'local' | 'cloud'; share: number }>
+  /** This month, per bot; share = part of this month's cloud spend. */
+  byBot: Array<{ spaceId: string | null; name: string; color: string | null; requests: number; tokens: number; usd: number; share: number }>
+}
+
+/** The compact usage card (sidebar profile menu, ⌘K "Usage"). */
+export interface UsageGlance {
+  month: string
+  mode: SpendingMode
+  cap: number
+  spent: number
+  weekUsd: number
+  lifetimeUsd: number
+  /** Last 7 days of tokens, oldest first. */
+  days: number[]
+}
+
+// ---------- the knowledge vault (src/main/vault; types in ./vault) ----------
+
+export interface SahilBotApi {
+  /** The knowledge vault: Obsidian-style notes your bots keep (Vault view, Settings → Memory). Not the password vault (`vault`). */
+  notesVault: {
+    status(): Promise<import('./vault').VaultStatus>
+    setSettings(patch: Partial<Omit<import('./vault').VaultSettings, 'bots'>>): Promise<import('./vault').VaultStatus>
+    /** One bot's vault setting (on/off, how much to remember); null fields go back to the default. */
+    setBot(spaceId: string, patch: { enabled?: boolean | null; level?: import('./vault').VaultLevel | null }): Promise<import('./vault').VaultStatus>
+    list(): Promise<import('./vault').VaultNoteInfo[]>
+    read(path: string): Promise<import('./vault').VaultNoteFull | null>
+    /** A [[link]] or title → its note's path (looked up from `from`'s area first). */
+    resolve(ref: string, from?: string): Promise<string | null>
+    search(query: string): Promise<import('./vault').VaultSearchHit[]>
+    /** Saves the user's edit of a whole note (a copy of the old one goes to .history). */
+    save(path: string, text: string): Promise<import('./vault').VaultNoteFull | null>
+    /** A new note (by title) in an area ("Shared" or "Bots/<name>"); returns its path. */
+    create(o: { title: string; type?: import('./vault').VaultNoteType; section?: string }): Promise<string>
+    /** Moves a note to the vault's trash (Undo in Changes puts it back). */
+    trash(path: string): Promise<void>
+    graph(): Promise<import('./vault').VaultGraph>
+    changes(limit?: number): Promise<import('./vault').VaultChangeInfo[]>
+    undo(id: string): Promise<import('./vault').VaultChangeInfo[]>
+    /** Opens the vault (or a note) in Obsidian when it's installed, else shows it in Finder. */
+    openInObsidian(path?: string): Promise<'obsidian' | 'finder'>
+    reveal(path?: string): Promise<void>
+    /** Zips the vault (notes only) into the workspace's exports folder; returns the file. */
+    exportZip(): Promise<string>
+    /** Compiles now (a learning pass) unless one is running or a chat is working. */
+    compileNow(): Promise<import('./vault').VaultStatus>
+    onChanged(cb: () => void): () => void
+  }
+  /** People & Places: the context engine's entity graph (src/main/context-engine; Vault view → People & Places). */
+  people: import('./context-engine').PeopleApi
+}
+
+/** Settings → Models → Fast mode: one supported model the user has (llm/fast-mode.ts). */
+export interface FastCatalogRow {
+  id: string
+  label: string
+  provider: 'anthropic' | 'openai' | 'xai'
+  /** Price multiplier at Fast (and Ultrafast, where offered). */
+  factor: number
+  ultrafast?: number
+  /** "Up to 2.5x faster output, 2x price" */
+  tradeoff: string
+  note?: string
+}
+
+export interface ForemanFastApi {
+  catalog(): Promise<FastCatalogRow[]>
+}
+
+export interface SahilBotApi {
+  /** Settings → Models → Fast mode: the supported models the user has, with each one's speed / price trade-off. */
+  fast: ForemanFastApi
+}
+
+// ---- Computer use: Planner + executor (src/main/agent/cua) ----
+
+/** Settings → Models → Computer use. */
+export interface ComputerUseSettings {
+  /** 'auto' (default): Planner + executor for multi-step computer use; 'single': one model; 'pair': always Planner + executor. */
+  mode?: 'auto' | 'single' | 'pair'
+  /** Executor model: '' = Auto (from the computer-use evidence), or a model id. */
+  executor?: string
+  /** Planner model: '' = Auto (by difficulty, from the routing table), or a model id. */
+  planner?: string
+}
+
+export interface Settings {
+  computerUse?: ComputerUseSettings
+}
+
+export interface Settings {
+  /**
+   * Per-model context window (Settings → Models → Context window): model id → tokens. Missing = Default (the
+   * context strategy decides). Only sizes the model's provider offers are offered (shared/context-choices.ts);
+   * the main process applies the choice exactly, clamped only to the provider's maximum (llm/context-window.ts).
+   */
+  modelContext?: Record<string, number>
+}
+
+// ---- Attachments, working folders and cloud-first local opt-in (main: attachments.ts, attach-process.ts,
+// knowledge/folder-scan.ts, settings.ts; renderer: components/Attachments.tsx, lib/attachments.ts) ----
+
+/** What an attached file is, for its chip and for how the agent reads it. */
+export type AttachCategory = 'image' | 'pdf' | 'office' | 'text' | 'code' | 'binary' | 'folder'
+
+export interface Attachment {
+  /** What kind of file it is (set by main when it registers the file). */
+  category?: AttachCategory
+  /** Its MIME type, when known. */
+  mime?: string
+  /** One line about it for the chip's tooltip and the agent (e.g. "HEIC converted to JPEG", "binary, can't be read as text"). */
+  note?: string
+  /** Folders: files SahilBot can index (after ignore rules), and whether that count hit the limit. */
+  files?: number
+  truncated?: boolean
+}
+
+/** Result of adding dropped, pasted or picked items: what was attached, and what wasn't (with why). */
+export interface AttachResult {
+  added: Attachment[]
+  rejected: Array<{ name: string; reason: string }>
+}
+
+/** Progress of a folder scan (counting what can be indexed, ignore rules applied). */
+export interface FolderScanEvent {
+  path: string
+  files: number
+  bytes: number
+  done: boolean
+  truncated?: boolean
+}
+
+/** A chat's working folder: where relative paths and commands start. source: who chose it. */
+export interface WorkingFolder {
+  path: string | null
+  source: 'chat' | 'bot' | 'project' | null
+}
+
+export interface SendInput {
+  /** The chat's working folder chosen before the chat existed (a path the user picked); null clears it. */
+  workingFolder?: string | null
+}
+
+/**
+ * Local models (Ollama, LM Studio, a custom server) are opt-in. enabled false: nothing installs or
+ * downloads local models, Auto never routes to them, warm-up never runs and nothing asks about them.
+ */
+export interface LocalSettings {
+  enabled: boolean
+  /** Set when the choice came from migrating an existing install (local models found on this Mac). */
+  migrated?: boolean
+}
+
+/** Speech output when local voices are off: OpenAI's TTS (needs a key and this switch) or the Mac's own voice. */
+export interface VoiceOutputSettings {
+  /** Use OpenAI text-to-speech when an OpenAI key is saved (paid, priced against the monthly cap). Default off. */
+  openai?: boolean
+}
+
+export interface Settings {
+  local?: LocalSettings
+  voiceOutput?: VoiceOutputSettings
+}
+
+export interface KnowledgeStatus {
+  /** Local models are off: meaning search uses OpenAI embeddings only if turned on, else keyword search. */
+  localOff?: boolean
+}
+
+export interface VoiceStatus {
+  /** The engine replies are spoken with: 'kokoro' (local), 'openai' (OpenAI TTS) or 'say' (the Mac's voice). */
+  output?: 'kokoro' | 'openai' | 'say'
+  /** Speech recognition for voice input: 'whisper' (this Mac), 'openai' (OpenAI transcription) or 'none' (inputNote says what it needs). */
+  input?: 'whisper' | 'openai' | 'none'
+  inputNote?: string
+}
+
+export interface SahilBotApi {
+  /** Attachments for the composer: dropped/pasted items, screenshots and folder scans (main: attachments.ts). */
+  attach: {
+    /** Dropped or pasted File objects: ones with a path are registered; ones without (a pasted screenshot, an image dragged from a browser) are saved to a temp file first. */
+    fromFiles(files: File[]): Promise<AttachResult>
+    /** Region screenshot (macOS screencapture -i): only from the user's click; null if cancelled. */
+    screenshot(): Promise<Attachment | null>
+    /** Counts what SahilBot can index in a folder the user attached (progress through onScan). */
+    scanFolder(path: string): Promise<FolderScanEvent>
+    onScan(cb: (e: FolderScanEvent) => void): () => void
+    /** The chat's working folder (its own choice, else the bot's or project's folder). */
+    folder(threadId: string): Promise<WorkingFolder>
+    /** Opens the folder picker and sets it as the chat's working folder (null when cancelled). */
+    pickFolder(threadId: string): Promise<WorkingFolder | null>
+    clearFolder(threadId: string): Promise<WorkingFolder>
+    /** A bot's default working folder ("Works in folder"): picker, or null to clear. */
+    pickBotFolder(spaceId: string): Promise<Space | null>
+    clearBotFolder(spaceId: string): Promise<Space>
+    /** The picker (files or folders), processed like a drop: what was added and what wasn't. */
+    pick(kind: 'files' | 'folder'): Promise<AttachResult>
+  }
+  /** Local models opt-in (Settings → Models, onboarding). */
+  local: {
+    status(): Promise<{ enabled: boolean; installed: boolean }>
+    set(enabled: boolean): Promise<Settings>
+  }
+}
+
+// ---------------------------------------------------------------- Always-on bots: autonomy, questions, digest
+// (main: agent/questions/**, goals/digest.ts; renderer: NeedsYou.tsx, BotDetails.tsx)
+
+/** Per-bot always-on settings (Settings.botAutonomy[botId]; agent/questions/policy.ts fills the defaults). */
+export interface BotAutonomySettings {
+  /** "Always ask for…": approval-rule phrases ("send email", "tool:github__*") that always ask in this bot, whatever its level. */
+  alwaysAsk: string[]
+  /** How long a posted question waits before the bot goes ahead with its recommended default (hours, 0.25-168; default 4). */
+  deadlineHours: number
+  /** The daily digest: what the bot did, what's pending, what needs you. */
+  digest: { enabled: boolean; time: string }
+}
+
+/** One question in a queued question card. */
+export interface QueueQuestion {
+  question: string
+  options?: string[]
+  /** The bot's recommended default, used if nobody answers by the deadline (only when that is safe). */
+  default?: string
+  /** The bot marked this a preference: the answer is remembered so it isn't asked again. */
+  preference?: boolean
+  /** false: the bot said going ahead with the default without the user is not safe (the deadline never picks it). */
+  safe?: boolean
+}
+
+/** A pending question or approval across all bots (the "Needs you" inbox). */
+export interface NeedsYouItem {
+  id: string
+  /** 'queue': persisted, the bot kept working. 'live': a card open in a running chat right now. */
+  source: 'queue' | 'live'
+  botId: string
+  botName: string
+  threadId: string
+  kind: 'question' | 'approval' | 'other'
+  questions?: QueueQuestion[]
+  approval?: { tool: string; label: string; summary?: string; reason?: string }
+  status: 'open' | 'answered' | 'defaulted' | 'cancelled'
+  /** Why this never goes ahead on its own (a hard stop: money, credentials, deleting, mass sends, public posts, "always ask"). */
+  hardStop?: string
+  deadline?: number | null
+  /** The deadline passed but there was no safe default: it waits for you. */
+  expired?: boolean
+  answers?: string[]
+  answeredBy?: 'user' | 'default'
+  /** The bot went ahead with its default: shown under "For your review" until you OK or change it. */
+  review?: boolean
+  createdAt: number
+  answeredAt?: number
+}
+
+export interface Settings {
+  /** Per-bot always-on settings, by bot id. */
+  botAutonomy?: Record<string, Partial<BotAutonomySettings>>
+}
+
+export interface SahilBotApi {
+  /** The "Needs you" inbox: pending questions and approvals across all bots (main: agent/questions). */
+  needsYou: {
+    list(): Promise<NeedsYouItem[]>
+    /** Answers a question (one answer per question), or 'approve' / 'deny' for an approval. A later answer resumes the bot. */
+    answer(id: string, answer: string[] | 'approve' | 'deny'): Promise<NeedsYouItem | null>
+    /** "Looks good" on an assumption the bot made: it leaves the review list. */
+    reviewed(id: string): Promise<void>
+    onChange(cb: () => void): () => void
+  }
+  botAutonomy: {
+    /** A bot's autonomy level: saved for its new chats and applied to its open conversations. */
+    setLevel(spaceId: string, level: PermissionMode): Promise<void>
+  }
+}
+
+// ---- SahilBot Server (src/server, docs/server.md) and the Mac app's link to one ----
+
+export interface ServerDeviceInfo {
+  id: string
+  name: string
+  kind: 'browser' | 'app'
+  createdAt: string
+  lastSeen?: string
+  lastIp?: string
+  revokedAt?: string
+  /** The device making this call. */
+  current?: boolean
+  /** Open tabs right now. */
+  sessions: number
+  /** Web Push is set up on it. */
+  push?: boolean
+}
+
+export interface ServerAuditEntry { at: string; kind: string; ip?: string; device?: string; detail?: string }
+
+export interface ServerInfo {
+  runtime: 'server'
+  version: string
+  platform: string
+  arch: string
+  node: string
+  /** Where it listens (e.g. http://127.0.0.1:8787). */
+  url: string
+  tls: boolean
+  selfSigned: boolean
+  /** Seconds. */
+  uptime: number
+  memory: { rssMB: number; heapMB: number; totalMB: number; freeMB: number }
+  load: number[]
+  cores: number
+  runs: { limit: number; running: number; queued: number; pressure: boolean; maxRunning: number; admitted: number }
+  helperCeiling: number | null
+  keySource: 'credential' | 'env' | 'passphrase' | 'keyfile'
+  push: boolean
+  /** Electron-only features that are off here. */
+  unavailable: string[]
+}
+
+export interface ServerApi {
+  info(): Promise<ServerInfo>
+  devices(): Promise<ServerDeviceInfo[]>
+  revokeDevice(id: string): Promise<ServerDeviceInfo[]>
+  renameDevice(id: string, name: string): Promise<ServerDeviceInfo[]>
+  /** A one-time code (10 minutes) to pair another phone or computer. */
+  pairingCode(): Promise<{ code: string; expires: number }>
+  audit(limit?: number): Promise<ServerAuditEntry[]>
+  /** Web Push: the server's public key, then this browser's subscription. */
+  pushKey(): Promise<string | null>
+  pushSubscribe(sub: { endpoint: string; keys: { p256dh: string; auth: string } }): Promise<boolean>
+  pushUnsubscribe(): Promise<boolean>
+  /** A test notification to this device. */
+  pushTest(): Promise<{ delivered: string[]; queued: string[]; pushed: string[] }>
+}
+
+export interface RemoteServerStatus {
+  /** Paired with a server. */
+  linked: boolean
+  url?: string
+  deviceName?: string
+  /** Reachable right now (null = not checked). */
+  online?: boolean | null
+  error?: string
+  /** Pinned self-signed certificate (SHA-256), when the server uses one. */
+  pinned?: string
+  info?: { version: string; uptime: number; bots: number; running: number; queued: number; routines: number; rssMB: number; platform: string; arch: string }
+}
+
+export interface RemoteServerApi {
+  status(refresh?: boolean): Promise<RemoteServerStatus>
+  /** Pairs with a server (URL + one-time code from it). */
+  connect(url: string, code: string): Promise<RemoteServerStatus>
+  disconnect(): Promise<RemoteServerStatus>
+  /** Opens the server's web UI in the browser, already signed in (a one-time code in the link's fragment). */
+  openUi(): Promise<void>
+}
+
+export interface SahilBotApi {
+  /** 'server' in a browser connected to SahilBot Server; 'electron' (or missing) in the Mac app. */
+  runtime?: 'electron' | 'server'
+  /** SahilBot Server only: paired devices, pairing codes, the audit log, notifications. */
+  server?: ServerApi
+  /** Mac app only: Settings → Always-on server. */
+  remoteServer?: RemoteServerApi
+}
+
+export interface ModelList {
+  /** Local models are switched off (cloud only): the picker hides Auto (local) and offers no downloads. */
+  localOff?: boolean
 }

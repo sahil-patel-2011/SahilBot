@@ -216,7 +216,7 @@ export class SiteStore {
     if (e.login) {
       const l = e.login
       const saved = l.saved_login !== undefined ? safeLabel(l.saved_login, secrets, 40) : undefined
-      if (l.saved_login && !saved) throw new Error('That saved-login name can\'t be stored (it looks like a secret or personal detail). Use the login\'s name from Settings > Passwords.')
+      if (l.saved_login && !saved) throw new Error('That saved-login name can\'t be stored (it looks like a secret or personal detail). Use the login\'s name from Settings > Vault.')
       if (l.sso && unsafeText(l.sso, secrets)) throw new Error('That SSO name can\'t be stored.')
       pb.login = {
         ...(pb.login ?? { method: 'unknown' }),

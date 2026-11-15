@@ -4,6 +4,7 @@ import { isLocal, isOllama, keepAliveValue, localDefaults, pinContextWindow, typ
 import { machine, root } from './models'
 import { isAuto, pick } from './router'
 import { timer } from './timing'
+import { localOff } from '@shared/local-mode'
 
 // Local model warm-up. The first message after launch (or after switching models) otherwise waits for
 // Ollama to load the model (seconds to a minute for a big one) and then to read the whole system prompt
@@ -84,12 +85,12 @@ export function lastUsedModel(db: { sql: { prepare(q: string): { get(...a: unkno
 
 export interface WarmupDeps {
   endpoints: { last: { models: ModelInfo[] } | null; list(): Promise<unknown>; usable(): ModelInfo[]; for(model: string): { baseUrl: string } }
-  settings: { get(): Pick<Settings, 'defaultModel' | 'contextWindow' | 'localKeepAlive'> }
+  settings: { get(): Pick<Settings, 'defaultModel' | 'contextWindow' | 'localKeepAlive' | 'local'> }
   /** The window chat requests use for this model (the agent's fitWindow). */
   fitWindow(model: string, window: number): number
   recentModel?(): string | undefined
   /** The main bot's system prompt and tool list, to read into the server's cache. */
-  prefix?(): { system: string; tools: WireTool[] } | undefined
+  prefix?(window?: number): { system: string; tools: WireTool[] } | undefined
   /** Free GPU memory budget in GB (defaults to this Mac's). */
   budgetGB?(): number
   /** A chat is running: don't reload its model or push its prompt out of the server's cache. */
@@ -124,6 +125,8 @@ export class Warmup {
   private async warm(explicit?: string): Promise<WarmResult> {
     if (this.d.busy?.()) return { status: 'skipped', reason: 'a chat is running' }
     const s = this.d.settings.get()
+    // Local models are off (the default until the user opts in): never load one.
+    if (localOff(s)) return { status: 'skipped', reason: 'local models are off' }
     if (!this.d.endpoints.last) await this.d.endpoints.list()
     const target = warmTarget({ usable: this.d.endpoints.usable(), defaultModel: s.defaultModel, recent: this.d.recentModel?.(), explicit })
     if (!target) return { status: 'skipped', reason: 'no local model to warm' }
@@ -152,7 +155,7 @@ export class Warmup {
     pinContextWindow(baseUrl, target.id, numCtx)
 
     // Read the main bot's prompt prefix into the server's cache: a new chat then starts right away.
-    const prefix = this.d.busy?.() ? undefined : this.d.prefix?.()
+    const prefix = this.d.busy?.() ? undefined : this.d.prefix?.(numCtx)
     if (prefix) {
       const key = createHash('sha1').update(`${numCtx}\n${prefix.system}\n${JSON.stringify(prefix.tools)}`).digest('hex')
       if (this.primed.get(target.id) !== key || !loadedRight) {

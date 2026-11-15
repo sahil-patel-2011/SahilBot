@@ -15,7 +15,7 @@
 .bs-x:hover { background: var(--hover); }
 .bs-desc { margin: 12px 0 0; font-size: 14px; color: var(--text-2); line-height: 1.45; overflow-wrap: anywhere; }
 .bs-warn { display: flex; gap: 10px; align-items: flex-start; margin: 14px 0 4px; padding: 10px 12px; border-radius: 12px; background: var(--soft, var(--hover)); border: 1px solid var(--line); font-size: 13px; line-height: 1.45; color: var(--text-2); }
-.bs-warn svg { flex: none; margin-top: 2px; color: var(--accent); }
+.bs-warn svg { flex: none; margin-top: 2px; color: var(--accent-text); }
 .bs-section { font-size: 12px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.04em; margin: 16px 2px 6px; }
 .bs-instructions { margin: 0; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; padding: 12px 14px; border-radius: 12px; background: var(--bubble-ai); border: 1px solid var(--line); color: var(--text); }
 .bs-empty { font-size: 13px; color: var(--text-3); padding: 2px 2px; }
@@ -31,7 +31,7 @@
 .bs-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--hover); color: var(--text-2); }
 .bs-chip.off { text-decoration: line-through; color: var(--text-3); }
 .bs-notes { margin: 12px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text-3); line-height: 1.45; }
-.bs-err { margin-top: 12px; font-size: 13px; color: var(--danger); }
+.bs-err { margin-top: 12px; font-size: 13px; color: var(--danger-text); }
 .bs-actions { display: flex; align-items: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
 .bs-hint { flex: 1; min-width: 160px; font-size: 12px; color: var(--text-3); }
 
@@ -51,7 +51,7 @@
 .us-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .us-csv { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 6px 12px; }
 .us-csv:disabled { opacity: 0.5; cursor: default; }
-.us-err { color: var(--danger); font-size: 13.5px; }
+.us-err { color: var(--danger-text); font-size: 13.5px; }
 .us-empty { color: var(--text-3); font-size: 13.5px; padding: 8px 4px; }
 .us-cap { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .us-cap-line { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }

@@ -1,13 +1,15 @@
 ---
 name: cursor-coding-handoff
-description: Hand a coding task to Cursor and verify the result.
+description: Quick path to hand one coding task to Cursor and verify it; points to cursor-task-brief and coding-cursor-orchestration for depth.
 source: you
 uses: 0
 category: Coding
+triggers: open in cursor, send to cursor, cursor handoff, cursor hand-off
 ---
 
-1. Make the task specific: goal, files/areas, constraints (style, no new dependencies) and how to verify (tests to run).
-2. Use cursor(action="agent", folder, task) for local work, or cloud_launch for a GitHub repo (it can open a PR).
-3. When it finishes, review: git diff, run the tests and the app. Don't just trust its summary.
-4. If something's wrong, send a follow-up with resume: true describing exactly what to fix.
-5. Report what changed and how you verified it.
+1. Explore the area first (code project/search/read) so you can write a complete brief and review the result.
+2. Brief (cursor-task-brief): goal (one outcome), context (what you found, decisions and the user's constraints from your notes), files, errors (exact output), constraints, dont_change, acceptance (checkable), tests (commands). Preview with cursor(action="prompt", …) and fix the gaps it lists.
+3. Run: cursor(action="agent", folder, …) for a folder on this Mac, or cursor(action="cloud_launch", repo, …) for a GitHub repo (opens a PR). Save the agent id in your notes.
+4. Review the result's "Automatic review": read the diff, tick every acceptance criterion with evidence, run the checks yourself if they weren't run. Cloud: cursor(action="cloud_review", id).
+5. Something wrong: send the suggested follow-up with the exact failure (local: resume: true; cloud: cloud_followup). Twice failed on the same point: fix it yourself.
+6. Report what changed, how you verified it, and anything left. Only open a file in Cursor (cursor action="open", path, line) when the user wants to look at it.

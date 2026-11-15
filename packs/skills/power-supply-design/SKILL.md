@@ -4,6 +4,7 @@ description: Design or review a power supply (LDO, buck, boost): component value
 source: you
 uses: 0
 category: Electrical Engineering
+triggers: buck converter, boost converter, ldo, power supply, regulator, switching regulator
 ---
 
 1. Pin down specs: Vin range, Vout, Iout max, ripple, efficiency target, size and cost limits.

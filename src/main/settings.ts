@@ -1,10 +1,15 @@
+import { isEffortChoice } from './llm/auto-effort'
 import { DEFAULT_PROVIDERS, DEFS, baseUrlOf, keyName } from './llm/providers'
 import { isBroadAllow } from './agent/permissions'
+import { cleanBotAutonomyMap } from './agent/questions/policy'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { Appearance, CustomRule, LearningSettings, MarketKeyProvider, MarketsSettings, McpServerSettings, PermissionMode, ProviderId, Settings } from '@shared/types'
 import type { Db } from './db'
 import type { Secrets } from './secrets'
+import type { LocalSettings, VoiceOutputSettings } from '@shared/types'
+import { migrateLocal } from '@shared/local-mode'
+import { hasLocalModels } from './local-detect'
 
 type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'hasOnshapeKeys' | 'onshapeKeyParts' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
 
@@ -21,7 +26,7 @@ export const DEFAULTS: Stored = {
   pinnedBots: null,
   speakReplies: false,
   quickKey: 'Alt+Space',
-  thinking: 'medium',
+  thinking: 'auto',
   cloud: { enabled: true, hybrid: true, advisorModel: '', maxConsultsPerRequest: 3 },
   contextWindow: 0,
   shownModels: [],
@@ -65,6 +70,19 @@ export function cleanLearning(v: unknown): LearningSettings {
   const x = (v ?? {}) as Partial<LearningSettings>
   const n = typeof x.dailyUsd === 'number' && Number.isFinite(x.dailyUsd) ? x.dailyUsd : 0.25
   return { ...(typeof x.enabled === 'boolean' ? { enabled: x.enabled } : {}), cloudAllowed: x.cloudAllowed === true, dailyUsd: Math.max(0, Math.min(5, Math.round(n * 100) / 100)) }
+}
+
+/** The local-models choice as saved (undefined: not decided yet, which counts as off). */
+export function cleanLocal(v: unknown): LocalSettings | undefined {
+  const x = (v ?? {}) as Partial<LocalSettings>
+  if (typeof x.enabled !== 'boolean') return undefined
+  return { enabled: x.enabled, ...(x.migrated === true ? { migrated: true } : {}) }
+}
+
+/** Speech output settings as saved. */
+export function cleanVoiceOutput(v: unknown): VoiceOutputSettings {
+  const x = (v ?? {}) as Partial<VoiceOutputSettings>
+  return { openai: x.openai === true }
 }
 
 export const MARKET_KEY_PROVIDERS: MarketKeyProvider[] = ['tiingo', 'polygon', 'alphavantage', 'finnhub']
@@ -142,7 +160,21 @@ export type SettingsPatch = Partial<Settings> & {
 }
 
 export class SettingsStore {
-  constructor(private db: Db, private secrets: Secrets) {}
+  constructor(private db: Db, private secrets: Secrets, o: { hasLocalModels?: () => boolean } = {}) {
+    // Local models became opt-in: an existing install keeps them on when it already has local models.
+    {
+      const saved = this.db.getSetting<Partial<Stored>>('settings')
+      const local = saved ? migrateLocal(saved, o.hasLocalModels ?? hasLocalModels) : null
+      if (saved && local) this.db.setSetting('settings', { ...saved, local })
+    }
+    // Auto thinking became the default: a saved 'medium' was the old default (which already adapted to each
+    // request), so it becomes Auto once. Any other saved level was a choice and is kept (now used exactly).
+    if (!this.db.getSetting<number>('effortAuto')) {
+      const saved = this.db.getSetting<Partial<Stored>>('settings')
+      if (saved && (saved.thinking === undefined || saved.thinking === 'medium')) this.db.setSetting('settings', { ...saved, thinking: 'auto' })
+      this.db.setSetting('effortAuto', 1)
+    }
+  }
 
   private stored(): Stored {
     const s = this.db.getSetting<Partial<Stored>>('settings') ?? {}
@@ -166,8 +198,12 @@ export class SettingsStore {
       markets: cleanMarkets(s.markets),
       mcpServer: cleanMcpServer(s.mcpServer),
       learning: cleanLearning(s.learning),
+      // Not decided yet (first run, before onboarding asks): off.
+      local: cleanLocal(s.local) ?? { enabled: false },
+      voiceOutput: cleanVoiceOutput(s.voiceOutput),
       defaultMode: cleanLevel(s.defaultMode) ?? 'auto',
-      botModes: cleanBotModes(s.botModes)
+      botModes: cleanBotModes(s.botModes),
+      thinking: isEffortChoice(s.thinking) ? s.thinking : 'auto'
     }
   }
 
@@ -213,7 +249,10 @@ export class SettingsStore {
       mcpServer: rest.mcpServer !== undefined ? cleanMcpServer({ ...cur.mcpServer, ...rest.mcpServer }) : cur.mcpServer,
       defaultMode: rest.defaultMode !== undefined ? cleanLevel(rest.defaultMode) ?? cur.defaultMode : cur.defaultMode,
       botModes: rest.botModes !== undefined ? cleanBotModes(rest.botModes) : cur.botModes,
+      botAutonomy: rest.botAutonomy !== undefined ? cleanBotAutonomyMap(rest.botAutonomy) : cur.botAutonomy,
       learning: rest.learning !== undefined ? cleanLearning({ ...cur.learning, ...rest.learning }) : cur.learning,
+      local: rest.local !== undefined ? cleanLocal({ ...cur.local, ...rest.local, migrated: false }) ?? cur.local : cur.local,
+      voiceOutput: rest.voiceOutput !== undefined ? cleanVoiceOutput({ ...cur.voiceOutput, ...rest.voiceOutput }) : cur.voiceOutput,
       providers: rest.providers ? {
         ollama: { ...cur.providers.ollama, ...rest.providers.ollama },
         lmstudio: { ...cur.providers.lmstudio, ...rest.providers.lmstudio },

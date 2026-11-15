@@ -19,4 +19,6 @@ Pages
 - Stamp: pdf_stamp(path, text: "DRAFT", position: "diagonal") or "Approved 2026-11-14" bottom-right. Page numbers: pdf_page_numbers(path, format: "Page {n} of {total}").
 - pdf_info for page count, sizes and whether it has form fields.
 
-Make a PDF report: create_document with a .pdf path and markdown (same features as Word: cover, [TOC], tables, footnotes, page numbers). Skill: make-pdf-report.
+Make a PDF: create_document with a .pdf path and markdown (themes modern | classic | minimal, templates report | proposal | memo | letter | resume | invoice, cover, contents with page numbers, bookmarks, ```chart blocks, tables whose header row repeats on every page, footnotes, "Page X of Y"). Layout is set with options, never by stamping or editing: fit_pages, margins, font_size, page_size, orientation. Skill: make-pdf-report.
+
+See any PDF: review_document(path) renders every page and attaches an overview picture (pages: "2" for one page full size), with checks for blank pages, cut-off content and a nearly empty last page. Use it on PDFs you made before presenting them, and on PDFs the user gives you when the layout matters (forms you filled: check the values landed in the boxes).

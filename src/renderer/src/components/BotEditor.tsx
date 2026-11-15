@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { BotShape, ModelList, Space } from '@shared/types'
+import type { BotShape, BotSwarmSettings, EffortChoice, ModelList, Space } from '@shared/types'
 import { api } from '../api'
 import { COLORS, SHAPES, SpaceAvatar } from '../brand'
 import * as I from '../icons'
@@ -19,10 +19,21 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
   const [shape, setShape] = useState<BotShape>(space?.shape ?? 'pebble')
   const [prompt, setPrompt] = useState('')
   const [model, setModel] = useState<string>(space?.model ?? '')
+  /** '' = the app default; 'auto' or a level overrides it for this bot's chats. */
+  const [effort, setEffort] = useState<EffortChoice | ''>(space?.effort ?? '')
   const [members, setMembers] = useState<string[]>(space?.members ?? [])
   const [path, setPath] = useState('')
   const [folder, setFolder] = useState<string | null>(space?.folder ?? null)
   const [err, setErr] = useState('')
+  // Swarm (bots): Off / Auto / Always and Max helpers; saved with the rest.
+  const [swarm, setSwarm] = useState<Partial<BotSwarmSettings>>({})
+  const [swarmAll, setSwarmAll] = useState<Record<string, Partial<BotSwarmSettings>>>({})
+  useEffect(() => { void api.settings.get().then((x) => { setSwarmAll(x.botSwarm ?? {}); if (space) setSwarm(x.botSwarm?.[space.id] ?? {}) }) }, [space])
+  const saveSwarm = async (id: string): Promise<void> => {
+    if (!Object.keys(swarm).length) return
+    await api.settings.set({ botSwarm: { ...swarmAll, [id]: { ...swarmAll[id], ...swarm } } })
+    window.dispatchEvent(new Event('sahilbot:settings-changed'))
+  }
   const bots = spaces.filter((s) => s.kind === 'bot')
 
   useEffect(() => {
@@ -42,13 +53,16 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
     setErr('')
     try {
       if (space) {
-        await api.spaces.update(space.id, { name: name.trim() || space.name, color, shape, model: model || null, ...(mode === 'group' ? { members } : {}) })
+        await api.spaces.update(space.id, { name: name.trim() || space.name, color, shape, model: model || null, effort: effort || null, ...(mode === 'group' ? { members } : {}) })
         if (mode !== 'group') await api.spaces.setPrompt(space.id, prompt)
+        if (mode === 'bot') await saveSwarm(space.id)
         onSaved(space.id)
       } else {
         if (mode === 'project' && !folder) throw new Error('Choose the project folder.')
         const r = await api.spaces.create({ name: name.trim() || undefined, color, shape, kind: mode, members, intro: mode === 'bot' && !prompt.trim(), folder: folder ?? undefined })
         if (mode !== 'group' && prompt.trim()) await api.spaces.setPrompt(r.space.id, prompt)
+        if (mode === 'bot') await saveSwarm(r.space.id)
+        if (model || effort) await api.spaces.update(r.space.id, { model: model || null, effort: effort || null })
         onSaved(r.space.id, r.threadId)
       }
       onClose()
@@ -107,9 +121,35 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
                 {pickerModels(models).map((m) => <option key={m.id} value={m.id} disabled={!m.fits && !m.maxFittingWindow}>{m.label || m.id}</option>)}
               </select>
             </div>
+            <div className="field"><label>Thinking</label>
+              <select value={effort} onChange={(e) => setEffort(e.target.value as EffortChoice | '')} data-testid="bot-effort">
+                <option value="">App default</option>
+                <option value="auto">Auto: picks for each request</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra</option>
+                <option value="max">Max</option>
+              </select>
+            </div>
+            <div className="field"><label>Swarm</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <select value={swarm.mode ?? 'auto'} onChange={(e) => setSwarm((x) => ({ ...x, mode: e.target.value as BotSwarmSettings['mode'] }))} data-testid="editor-swarm-mode" aria-label="Swarm">
+                  <option value="off">Off</option>
+                  <option value="auto">Auto: the bot decides</option>
+                  <option value="always">Always</option>
+                </select>
+                {(swarm.mode ?? 'auto') !== 'off' && (
+                  <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>Max helpers
+                    <input type="number" min={1} max={50} value={swarm.maxHelpers ?? 20} style={{ width: 64 }} data-testid="editor-swarm-max"
+                      onChange={(e) => { const n = Math.round(Number(e.target.value)); if (Number.isFinite(n)) setSwarm((x) => ({ ...x, maxHelpers: Math.min(50, Math.max(1, n)) })) }} />
+                  </label>
+                )}
+              </div>
+            </div>
             <h3>Personality and instructions</h3>
             <div className="hint" style={{ marginBottom: 6 }}>
-              {space ? <>Saved as a plain file: {path}</> : 'Leave empty and the bot will introduce itself and ask what to focus on.'}
+              {space ? <span title={path}>Saved as a plain file ({path.split('/').pop()}) next to the bot's other files.</span> : 'Leave empty and the bot will introduce itself and ask what to focus on.'}
             </div>
             <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Who is this bot? What should it focus on, and how should it talk?" />
           </>
@@ -128,7 +168,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
             </div>
           </>
         )}
-        {err && <div className="hint" style={{ color: 'var(--danger)', marginTop: 8 }}>{err}</div>}
+        {err && <div className="hint error" style={{ marginTop: 8 }}>{err}</div>}
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn primary" onClick={() => void save()} disabled={isGroup && members.length === 0} data-testid="bot-save">{space ? 'Save' : 'Create'}</button>

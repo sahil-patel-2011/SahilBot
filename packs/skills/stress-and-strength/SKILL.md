@@ -4,6 +4,7 @@ description: Check whether a part or beam is strong and stiff enough (stress, de
 source: you
 uses: 0
 category: Mechanical Engineering
+triggers: stress analysis, bending stress, deflection, safety factor, beam bending, will it break, yield strength, shear, buckling
 ---
 
 1. Define geometry, material (yield, ultimate, E), loads (size, direction, static or cyclic) and supports, in consistent units (SI preferred).

@@ -46,8 +46,11 @@ async function run(page: Page, text: string, timeoutMs = 15 * 60_000): Promise<R
       cards.push(`plan: ${(await page.locator('[data-testid="plan-approval"]').innerText()).replace(/\s+/g, ' ').slice(0, 400)}`)
       await page.click('[data-testid="plan-approve"]')
     } else if (await page.locator('[data-testid="approval-card"]').count()) {
-      cards.push(`approval: ${(await page.locator('[data-testid="approval-card"]').first().innerText()).replace(/\s+/g, ' ').slice(0, 200)}`)
-      await page.locator('[data-testid="approve-once"]').first().click()
+      const text = (await page.locator('[data-testid="approval-card"]').first().innerText()).replace(/\s+/g, ' ')
+      // Never let a test drive the user's other apps (Word, Finder, …) on their screen: deny those, allow the rest.
+      const outside = /osascript|tell application|\bopen -a\b|\bopen "|Microsoft|Finder|System Events|computer use|Click at|Type into/i.test(text)
+      cards.push(`${outside ? 'DENIED' : 'approval'}: ${text.slice(0, 200)}`)
+      await page.locator(outside ? '[data-testid="approve-deny"]' : '[data-testid="approve-once"]').first().click()
     } else if (!(await page.locator('[data-testid="stop"]').count())) break
     await page.waitForTimeout(400)
   }

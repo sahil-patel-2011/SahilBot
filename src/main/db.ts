@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
-import type { LibraryItem, Message, PermissionMode, Space, Thread } from '@shared/types'
+import type { EffortChoice, LibraryItem, Message, PermissionMode, Space, Thread } from '@shared/types'
 import { emptyState, type ThreadState } from './agent/types'
 import { KNOWLEDGE_SCHEMA } from './knowledge/schema'
 
@@ -92,10 +92,49 @@ const MIGRATIONS: string[] = [
   // replies a quit left 'streaming' were full scans (7 ms at 120k messages, on every launch). Partial
   // indexes: only helper threads and in-flight replies are in them, so they cost nothing to keep up.
   `CREATE INDEX IF NOT EXISTS threads_parent ON threads(parent_id) WHERE parent_id IS NOT NULL;
-   CREATE INDEX IF NOT EXISTS messages_streaming ON messages(status) WHERE status = 'streaming';`
+   CREATE INDEX IF NOT EXISTS messages_streaming ON messages(status) WHERE status = 'streaming';`,
+  // Thinking chosen per bot and per chat ('auto' or a level; NULL = inherit), like the model.
+  `ALTER TABLE spaces ADD COLUMN effort TEXT;
+   ALTER TABLE threads ADD COLUMN effort TEXT;`
 ]
 
 type Row = Record<string, unknown>
+
+/**
+ * The usage table's newer columns (Settings → Usage): the providers' own token detail for each paid request.
+ * Added by checking the table's columns rather than by migration number, so it is idempotent, safe on any
+ * database (fresh, old or already migrated) and never collides with other features' numbered migrations.
+ *   provider     which provider served it (anthropic, openai, xai, chatgpt…)
+ *   prompt       the real prompt size in tokens (input + cache reads + cache writes)
+ *   cached       input tokens read from the prompt cache
+ *   cache_write  input tokens written to the prompt cache
+ *   out_tokens   output tokens as billed (visible + reasoning); `output` stays billing-equivalent
+ *   reasoning    the reasoning part of the output, when reported
+ *   tier         'fast' / 'ultrafast' when fast mode ran (NULL: standard)
+ *   web_calls    server-side web searches / fetches
+ * `input` / `output` keep their meaning (billing-equivalent tokens that cost() prices), so old rows still add up.
+ */
+export const USAGE_COLUMNS: Array<[string, string]> = [
+  ['provider', 'TEXT'], ['prompt', 'INTEGER'], ['cached', 'INTEGER NOT NULL DEFAULT 0'], ['cache_write', 'INTEGER NOT NULL DEFAULT 0'],
+  ['out_tokens', 'INTEGER'], ['reasoning', 'INTEGER NOT NULL DEFAULT 0'], ['tier', 'TEXT'], ['web_calls', 'INTEGER NOT NULL DEFAULT 0']
+]
+
+export function ensureUsageColumns(sql: DatabaseSync): void {
+  sql.exec(`CREATE TABLE IF NOT EXISTS usage (
+     id INTEGER PRIMARY KEY AUTOINCREMENT, month TEXT NOT NULL, host TEXT NOT NULL, model TEXT NOT NULL,
+     input INTEGER NOT NULL, output INTEGER NOT NULL, usd REAL NOT NULL, at INTEGER NOT NULL)`)
+  const have = new Set((sql.prepare('PRAGMA table_info(usage)').all() as Array<{ name: string }>).map((c) => c.name))
+  // space_id belongs to the numbered migration that made the table's bot tag (it runs before this).
+  const missing = USAGE_COLUMNS.filter(([c]) => !have.has(c))
+  if (missing.length) {
+    sql.exec('BEGIN')
+    try {
+      for (const [c, type] of missing) sql.exec(`ALTER TABLE usage ADD COLUMN ${c} ${type}`)
+      sql.exec('COMMIT')
+    } catch (e) { sql.exec('ROLLBACK'); throw e }
+  }
+  sql.exec('CREATE INDEX IF NOT EXISTS usage_at ON usage(at); CREATE INDEX IF NOT EXISTS usage_month ON usage(month)')
+}
 
 export class Db {
   readonly sql: DatabaseSync
@@ -104,6 +143,8 @@ export class Db {
     this.sql = new DatabaseSync(file)
     this.sql.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
     this.migrate()
+    // Usage detail columns (idempotent; see ensureUsageColumns).
+    ensureUsageColumns(this.sql)
   }
 
   private migrate(): void {
@@ -168,13 +209,13 @@ export class Db {
     return r ? toSpace(r) : undefined
   }
 
-  updateSpace(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify'>>): Space {
+  updateSpace(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort'>>): Space {
     const cur = this.getSpace(id)
     if (!cur) throw new Error(`No space ${id}`)
     const n = { ...cur, ...patch }
     const label = typeof n.label === 'string' ? n.label.replace(/\s+/g, ' ').trim().slice(0, 80) || null : null
-    this.sql.prepare('UPDATE spaces SET name = ?, color = ?, shape = ?, pinned = ?, hidden = ?, members = ?, model = ?, folder = ?, label = ?, notify = ? WHERE id = ?')
-      .run(n.name, n.color, n.shape, n.pinned ? 1 : 0, n.hidden ? 1 : 0, JSON.stringify(n.members), n.model, n.folder, label, n.notify === false ? 0 : 1, id)
+    this.sql.prepare('UPDATE spaces SET name = ?, color = ?, shape = ?, pinned = ?, hidden = ?, members = ?, model = ?, folder = ?, label = ?, notify = ?, effort = ? WHERE id = ?')
+      .run(n.name, n.color, n.shape, n.pinned ? 1 : 0, n.hidden ? 1 : 0, JSON.stringify(n.members), n.model, n.folder, label, n.notify === false ? 0 : 1, effortOrNull(n.effort), id)
     return this.getSpace(id)!
   }
 
@@ -266,12 +307,12 @@ export class Db {
     return this.getThread(id)!
   }
 
-  updateThread(id: string, patch: Partial<Pick<Thread, 'title' | 'pinned' | 'unread' | 'permissionMode' | 'model' | 'spaceId'>>, touch = false): Thread {
+  updateThread(id: string, patch: Partial<Pick<Thread, 'title' | 'pinned' | 'unread' | 'permissionMode' | 'model' | 'spaceId' | 'effort'>>, touch = false): Thread {
     const cur = this.getThread(id)
     if (!cur) throw new Error(`No thread ${id}`)
     const n = { ...cur, ...patch }
-    this.sql.prepare(`UPDATE threads SET title=?, pinned=?, unread=?, permission_mode=?, model=?, space_id=?, updated_at=? WHERE id=?`)
-      .run(n.title, n.pinned ? 1 : 0, n.unread ? 1 : 0, n.permissionMode, n.model, n.spaceId, touch ? Date.now() : cur.updatedAt, id)
+    this.sql.prepare(`UPDATE threads SET title=?, pinned=?, unread=?, permission_mode=?, model=?, space_id=?, effort=?, updated_at=? WHERE id=?`)
+      .run(n.title, n.pinned ? 1 : 0, n.unread ? 1 : 0, n.permissionMode, n.model, n.spaceId, effortOrNull(n.effort), touch ? Date.now() : cur.updatedAt, id)
     return this.getThread(id)!
   }
 
@@ -369,8 +410,14 @@ function toSpace(r: Row): Space {
     folder: (r.folder as string | null) ?? null,
     label: (r.label as string | null) ?? null,
     notify: r.notify !== 0,
+    effort: effortOrNull(r.effort),
     createdAt: r.created_at as number
   }
+}
+
+/** A stored thinking choice ('auto' or a level), else null (inherit). */
+function effortOrNull(v: unknown): EffortChoice | null {
+  return v === 'auto' || v === 'low' || v === 'medium' || v === 'high' || v === 'xhigh' || v === 'max' ? v : null
 }
 
 function basenameOf(p: string): string {
@@ -390,6 +437,7 @@ function toThread(r: Row): Thread {
     unread: r.unread === 1,
     permissionMode: r.permission_mode as PermissionMode,
     model: (r.model as string | null) ?? null,
+    effort: effortOrNull(r.effort),
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
     lastPreview: plain(r.last_preview as string | null),

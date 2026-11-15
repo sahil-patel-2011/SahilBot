@@ -6,7 +6,7 @@
   flex: none; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center;
   background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text-2);
 }
-.ap-icon.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.ap-icon.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger-text); }
 .ap-head-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-top: 3px; }
 .ap-summary { font-size: 15px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .ap-meta { font-size: 12.5px; color: var(--text-3); }
@@ -40,4 +40,4 @@
 .ar-item-text code { font-family: var(--mono); font-size: 12.5px; }
 .ar-empty { padding: 13px 0; font-size: 13px; color: var(--text-3); }
 .ar-del { flex: none; color: var(--text-3); padding: 2px; border-radius: 6px; }
-.ar-del:hover { color: var(--danger); background: var(--hover); }
+.ar-del:hover { color: var(--danger-text); background: var(--hover); }

@@ -1,10 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { ToolCall } from '@shared/types'
+import { SERVER_COMPACTION_INSTRUCTIONS } from './summary-format'
 import type { ChatRequest, StreamPart, WireMessage } from './client'
 import { retryAfterFrom } from './retry'
 import { priceFor } from './budget'
 import { CACHE_WRITE_1H_FACTOR, CACHE_WRITE_FACTOR, cacheReadFactor, claudeInfo, claudeThinking } from './claude-models'
 import { nativePlan, serverFindings, serverToolUsd, type NativePlan } from './claude-native'
+import { fastSupport } from './fast-mode'
 
 export { forClaude } from './claude-native'
 
@@ -56,7 +58,9 @@ type Param = Anthropic.Beta.Messages.BetaMessageParam
 export const BETA = {
   fallback: 'server-side-fallback-2026-07-01',
   binding: 'thinking-binding-controls-2026-08-01',
-  compaction: 'compact-2026-01-12'
+  compaction: 'compact-2026-01-12',
+  /** Fast mode on Opus 5 (research preview) and Opus 4.8 (deprecated); Fable / Mythos 5.2 and Opus 5.5 need none. */
+  fast: 'fast-mode-2026-02-01'
 } as const
 
 /**
@@ -225,12 +229,22 @@ export function buildClaudeRequest(req: ChatRequest): { params: Record<string, u
   }
   // Server-side compaction near the end of the chat's context budget (never below the API's 50K minimum).
   if (req.compactAt && spec?.compaction) {
-    params.context_management = { edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: Math.max(50_000, Math.round(req.compactAt)) } }] }
+    // instructions: the same fixed checkpoint sections as the client summarizer (llm/summary-format.ts). They replace
+    // the default prompt entirely (compaction-threshold docs), so they restate its job too. (On the 5.5 / 5.2 models a
+    // custom prompt summarizes the visible conversation without earlier thinking; the app's brief and notes, re-sent
+    // after the block, are what carry the task's facts.)
+    params.context_management = { edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: Math.max(50_000, Math.round(req.compactAt)) }, instructions: SERVER_COMPACTION_INSTRUCTIONS }] }
     betas.add(BETA.compaction)
   }
   if (fallbacks(req.model)) {
     params.fallbacks = 'default'
     betas.add(BETA.fallback)
+  }
+  // Fast mode (llm/fast-mode.ts): speed "fast" on the models that have it, up to 2.5x output speed at 2x price.
+  const fastSup = req.fast ? fastSupport(req.model) : undefined
+  if (fastSup?.provider === 'anthropic') {
+    params.speed = 'fast'
+    if (fastSup.beta) betas.add(BETA.fast)
   }
   if (betas.size) params.betas = [...betas]
   return { params, plan }
@@ -305,6 +319,8 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
   if (!req.apiKey) throw new Error('Add your Anthropic API key in Settings to use Claude.')
   const { params, plan } = buildClaudeRequest(req)
   const baseMessages = params.messages as Param[]
+  /** Fast mode was asked for (the reply's usage.speed says whether it ran; a 429 / 529 falls back to standard). */
+  const askedFast = !!params.speed
 
   for (let attempt = 0; ; attempt++) {
     let streamed = false
@@ -315,6 +331,9 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
     let output = 0
     let prompt = 0
     let searches = 0
+    let cachedRead = 0
+    let cacheWrite = 0
+    let speed: string | undefined
     let final: Anthropic.Beta.Messages.BetaMessage | undefined
     try {
       for (let cont = 0; ; cont++) {
@@ -343,6 +362,10 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
         // The real prompt size (input + cache writes + cache reads) picks the price tier (budget.tierTokens).
         const u = final.usage as Usage
         prompt = Math.max(prompt, (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0))
+        cachedRead += u.cache_read_input_tokens ?? 0
+        cacheWrite += u.cache_creation_input_tokens ?? 0
+        // usage.speed: "fast" or "standard" (fast mode page "Checking which speed was used").
+        speed = (u as { speed?: string }).speed ?? speed
         if (final.stop_reason !== 'pause_turn' || cont >= MAX_CONTINUATIONS || req.signal?.aborted) break
       }
     } catch (e) {
@@ -354,6 +377,13 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
         // Errors sent mid-stream (an SSE "error" event on a 200) carry a type but no status: map it so retries work.
         const type = body?.error?.type ?? body?.type ?? (e as { type?: string }).type
         const status = e.status ?? STREAM_ERROR_STATUS[type ?? '']
+        // Fast mode over its own rate limit or capacity (429 / 529): the documented fallback is the same request at
+        // standard speed (and standard price), sent once, before anything streamed.
+        if (params.speed && (status === 429 || status === 529) && !streamed && !req.signal?.aborted) {
+          delete params.speed
+          if (Array.isArray(params.betas)) { params.betas = (params.betas as string[]).filter((b) => b !== BETA.fast); if (!(params.betas as string[]).length) delete params.betas }
+          continue
+        }
         const err = new Error(status === 401 ? 'Anthropic rejected the API key. Check it in Settings.' : status === 429 ? 'Claude is rate-limiting requests right now. Try again in a moment.' : status === 529 || status === 408 || (status ?? 0) >= 500 ? 'Claude is overloaded or unavailable right now. Try again shortly.' : network ? `Couldn't reach Claude: ${why}` : `Claude rejected the request: ${why}`)
         // What streamChat's retry needs: the status, the server's Retry-After, and whether the connection dropped.
         Object.assign(err, { billed: false, status, retryAfterMs: retryAfterFrom(e.headers), network })
@@ -369,7 +399,7 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
     // Billing-equivalent input: cache writes 1.25x (1h: 2x), reads 0.1x (0.05x Opus 5.5, 0.025x Fable 5.1),
     // compaction iterations, and web searches at $10 per 1,000.
     const fee = serverToolUsd({ searches })
-    yield { type: 'usage', promptTokens: input, completionTokens: output, prompt, ...(fee ? { extraUsd: fee } : {}) }
+    yield { type: 'usage', promptTokens: input, completionTokens: output, prompt, cachedTokens: cachedRead, cacheWriteTokens: cacheWrite, ...(searches ? { webCalls: searches } : {}), ...(askedFast ? { serviceTier: (speed ? speed === 'fast' : !!params.speed) ? 'fast' as const : 'standard' as const } : {}), ...(fee ? { extraUsd: fee } : {}) }
 
     // Server tools (web search / fetch) ran inside the request: their sources and their outside text.
     const found = serverFindings(content)

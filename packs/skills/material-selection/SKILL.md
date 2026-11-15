@@ -4,6 +4,7 @@ description: Pick a material for a part (strength, weight, cost, environment, ho
 source: you
 uses: 0
 category: Mechanical Engineering
+triggers: which material, choose a material, aluminum vs steel, 6061, delrin, polycarbonate, material for
 ---
 
 1. Requirements: loads, stiffness, temperature range, corrosion/chemicals, weight, cost, quantity, process (machined, cast, molded, printed, sheet).

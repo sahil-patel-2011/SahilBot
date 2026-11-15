@@ -18,6 +18,16 @@ export interface KnowledgeToolDeps {
   kb: KnowledgeService
   /** The bot or project a chat belongs to. */
   spaceOf: (threadId: string) => string | undefined
+  /** This chat's own folders: attached folders, its working folder and its bot's or project's folder. */
+  foldersOf?: (threadId: string) => string[]
+}
+
+/** The chat's folders that are in the knowledge base (scope "chat"), or why there are none. */
+export function chatScope(kb: Pick<KnowledgeService, 'sources'>, folders: string[]): { folders: string[]; label: string } | { error: string } {
+  const sources = kb.sources().filter((x) => !x.problem).map((x) => x.path)
+  const ok = [...new Set(folders.map(real))].filter((f) => sources.some((r) => inside(r, f)))
+  if (!ok.length) return { error: folders.length ? 'This chat\'s folders aren\'t in the knowledge base yet (they\'re added when attached; indexing may still be starting). Use scope "all", or read files with file_read.' : 'This chat has no attached or working folder. Use scope "all", or ask the user to attach a folder.' }
+  return { folders: ok, label: ok.length === 1 ? ok[0] : `this chat's ${ok.length} folders` }
 }
 
 /** Resolves the tool's scope argument to folders, or explains why it can't. */
@@ -46,12 +56,12 @@ export function knowledgeTools(deps: KnowledgeToolDeps): ToolDef[] {
     group: 'Knowledge',
     effect: 'read',
     untrusted: true,
-    description: 'Search the user\'s own documents, notes and project files (workspace, project folders and folders they added to the knowledge base: Markdown, text, code, PDF, Word, Excel/CSV, HTML). Use it for questions about their files, projects, notes or papers before answering from memory. Returns the best passages with path#line or #page citations. scope: "all" (default), "project" (this chat\'s project folder) or an absolute folder path. k: how many passages (default 6).',
+    description: 'Search the user\'s own documents, notes and project files (workspace, project and bot folders, folders attached to chats and folders they added to the knowledge base: Markdown, text, code, PDF, Word, Excel/CSV, HTML). Use it for questions about their files, projects, notes or papers before answering from memory. Returns the best passages with path#line or #page citations. scope: "all" (default), "chat" (this chat\'s attached folders, working folder and its bot\'s folder), "project" (this chat\'s project or bot folder) or an absolute folder path. k: how many passages (default 6).',
     parameters: {
       type: 'object',
       properties: {
         query: { type: 'string', minLength: 1, description: 'What to look for: the words or idea the file would contain' },
-        scope: { type: 'string', description: '"all", "project", or an absolute folder path inside an indexed folder' },
+        scope: { type: 'string', description: '"all", "chat", "project", or an absolute folder path inside an indexed folder' },
         k: { type: 'integer', minimum: 1, maximum: 20 }
       },
       required: ['query'],
@@ -59,7 +69,7 @@ export function knowledgeTools(deps: KnowledgeToolDeps): ToolDef[] {
     },
     async run({ query, scope, k }, ctx) {
       const kb = deps.kb
-      const sc = resolveScope(kb, scope, deps.spaceOf(ctx.threadId))
+      const sc = scope?.trim() === 'chat' ? chatScope(kb, deps.foldersOf?.(ctx.threadId) ?? []) : resolveScope(kb, scope, deps.spaceOf(ctx.threadId))
       if ('error' in sc) throw new Error(sc.error)
       const r = await kb.search(query, { scope: sc.folders, k: k ?? 6, signal: ctx.signal })
       const st = kb.status()
@@ -94,6 +104,7 @@ export function knowledgeTools(deps: KnowledgeToolDeps): ToolDef[] {
       const lines = st.sources.map((s) => `- ${s.label} (${s.kind}): ${s.path}${s.problem ? ` (not indexed: ${s.problem})` : `: ${s.files} files, ${s.chunks} passages${s.skipped ? `, ${s.skipped} skipped` : ''}${s.lastIndexed ? `, updated ${new Date(s.lastIndexed).toLocaleString()}` : ''}${s.truncated ? ' (file limit reached)' : ''}`}`)
       const search = st.embedModel
         ? `Search: keyword + meaning (${st.embedModel}; ${st.embedded} of ${st.totals.chunks} passages embedded).`
+        : st.localOff ? 'Search: keyword only (local models are off; meaning search can use OpenAI embeddings if the user turns that on in Settings → Knowledge).'
         : `Search: keyword only. Installing "${st.suggestedModel}" in Ollama turns on meaning search.`
       const state = st.paused ? 'Indexing is paused (Settings → Knowledge).' : st.indexing ? `Indexing now (${st.queued} files queued).` : 'Up to date.'
       return {

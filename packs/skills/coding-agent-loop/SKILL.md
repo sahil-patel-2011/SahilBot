@@ -4,6 +4,7 @@ description: The core loop for any code change - understand, plan, edit minimall
 source: you
 uses: 0
 category: Coding
+triggers: implement a feature, make this change, add a feature, change the code, code change, in this repo, edit the code, wire up, hook up
 ---
 
 1. Orient: code(action="project") gives languages, test/typecheck/lint commands, git branch and changes. Read AGENTS.md / CONTRIBUTING / README if present. git status: note existing uncommitted work so you don't mix it with yours.
@@ -20,3 +21,5 @@ Gotchas:
 - Edit says "occurs N times": add surrounding lines to old_string. "not found": re-read; the file changed or whitespace differs.
 - A missing tool ("command not found", "No module named"): install dependencies asks the user (npm install, pip install -r requirements.txt).
 - Long builds/tests: pass timeout; use a filter while iterating.
+
+Read alongside (memory read_skill): codebase-orientation (new repo), plan-a-code-change (multi-file work), match-code-style, test-first-development, debug-systematically / read-stack-traces (bugs), the stack playbook (typescript-project, python-project, react-frontend, swift-ios-app, java-kotlin-wpilib, rust-project, go-project), code-review on your own diff, and long-task-working-notes when the work will run long (record decisions, files and IDs with the notes tool at each milestone; re-read them after a summary).

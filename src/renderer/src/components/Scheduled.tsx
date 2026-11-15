@@ -81,13 +81,13 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
             <div className="field"><label>Run in</label>
               <select value={spaceId} onChange={(e) => setSpaceId(e.target.value)}>{spaces.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
             </div>
-            {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}
+            {err && <div className="hint error">{err}</div>}
             <div className="modal-actions"><button className="btn" onClick={() => setForm(false)}>Cancel</button><button className="btn primary" onClick={() => void create()} data-testid="schedule-save">Schedule</button></div>
           </div>
         )}
 
         <div style={{ marginTop: 14 }}>
-          {err && !form && <div className="hint" style={{ color: 'var(--danger)', marginBottom: 8 }} role="alert">{err}</div>}
+          {err && !form && <div className="hint error" style={{ marginBottom: 8 }} role="alert">{err}</div>}
           {tasks.length === 0 && !form && <div className="hint" style={{ padding: '18px 0', textAlign: 'center' }}>Nothing scheduled yet.</div>}
           {tasks.map((t) => (
             <div key={t.id} className="sched-row" data-testid="schedule-row">

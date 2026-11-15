@@ -7,8 +7,9 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ x, y })
   useLayoutEffect(() => {
-    const r = ref.current?.getBoundingClientRect()
-    if (r) setPos({ x: Math.min(x, window.innerWidth - r.width - 8), y: Math.min(y, window.innerHeight - r.height - 8) })
+    // offsetWidth/Height: the layout size (an opening animation's scale would understate the rect).
+    const el = ref.current
+    if (el) setPos({ x: Math.max(8, Math.min(x, window.innerWidth - el.offsetWidth - 8)), y: Math.max(8, Math.min(y, window.innerHeight - el.offsetHeight - 8)) })
   }, [x, y])
   useEffect(() => {
     const down = (e: MouseEvent): void => { if (!ref.current?.contains(e.target as Node)) onClose() }

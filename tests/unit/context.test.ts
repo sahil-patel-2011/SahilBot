@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { COMPACT_AT, ContextManager, KEEP_SHARE, OUTPUT_RESERVE, RESULT_LIMIT, ResultStore, SUMMARY_MAX_TOKENS, ServerTokenCounter, estimate, resultLimit, toWire, upperEstimate, wrapToolOutput, type TokenCounter } from '../../src/main/agent/context'
+import { COMPACT_AT, ContextManager, KEEP_SHARE, OUTPUT_RESERVE, REPAIR_MAX_TOKENS, RESULT_LIMIT, ResultStore, SUMMARY_MAX_TOKENS, ServerTokenCounter, estimate, resultLimit, toWire, upperEstimate, wrapToolOutput, type TokenCounter } from '../../src/main/agent/context'
 import { emptyState } from '../../src/main/agent/types'
 import type { Message } from '../../src/shared/types'
 
@@ -54,11 +54,14 @@ describe('compaction', () => {
     expect(transcriptSeen).not.toContain(`question ${first} `)
   })
 
-  test('summary is clamped to 800 tokens', async () => {
+  test('summary is clamped to 800 tokens (plus the deterministic repair\'s room)', async () => {
     const cm = new ContextManager(counter, async () => 'word '.repeat(5000))
     const state = emptyState()
     await cm.prepare({ system: 's', toolsJson: '[]', messages: conversation(20, 300), state, window: 16384 })
-    expect(estimate(state.compaction!.summary)).toBeLessThanOrEqual(SUMMARY_MAX_TOKENS)
+    // The model's part is clamped to SUMMARY_MAX_TOKENS; the fixed sections and what the repair puts back
+    // (constraints, failed attempts, identifiers it dropped) fit in REPAIR_MAX_TOKENS more.
+    expect(estimate(state.compaction!.summary)).toBeLessThanOrEqual(SUMMARY_MAX_TOKENS + REPAIR_MAX_TOKENS)
+    expect(state.compaction!.summary).toContain('## Constraints & preferences')
   })
 
   test('a second compaction merges the previous summary', async () => {

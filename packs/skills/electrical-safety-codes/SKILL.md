@@ -4,6 +4,7 @@ description: Answer wiring, electrical code and safety questions with sources.
 source: you
 uses: 0
 category: Electrical Engineering
+triggers: nec, electrical code, gfci, wiring code, breaker size, outlet wiring
 ---
 
 1. Identify the jurisdiction and code edition (NEC in the US, CEC, BS 7671, IEC); rules differ.

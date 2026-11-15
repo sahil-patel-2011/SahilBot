@@ -1,0 +1,512 @@
+import { randomUUID } from 'node:crypto'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join, relative, resolve, sep } from 'node:path'
+import {
+  TYPE_FOLDER, TYPE_LABEL, day, mergeBody, normalizeType, parseNote, plainText, renderNote, safeTitle, summaryOf, titleKey, wikilinks,
+  type Frontmatter, type NotePatch, type NoteType, type Trust
+} from './notes'
+
+// The vault on disk: a folder of Markdown notes the user can open in Obsidian.
+//   Home.md                      the map of everything (regenerated)
+//   Changelog.md                 every change, newest last (human-readable)
+//   Shared/                      about the user, shared by every bot
+//     Index.md                   this area's map of content (regenerated)
+//     People/ Projects/ Decisions/ Preferences/ Facts/ Digests/ Research/ Playbooks/
+//   Bots/<Bot name>/             one area per bot, same layout
+//   .history/                    the previous version of every note before each change
+//   .trash/                      notes "deleted" or merged away (never hard-deleted)
+//   .sahilbot/changes.jsonl      the change log Undo reads
+// Every write keeps a copy of what was there, so any change (the compiler's, a bot's, the user's) can be
+// put back.
+
+export const SHARED = 'Shared'
+const META_DIR = '.sahilbot'
+const GENERATED = new Set(['Home.md', 'Changelog.md'])
+
+export interface VaultNoteMeta {
+  /** Relative to the vault root, with forward slashes. */
+  path: string
+  title: string
+  type: NoteType
+  /** "Shared" or "Bots/<name>". */
+  section: string
+  tags: string[]
+  aliases: string[]
+  sources: string[]
+  created?: string
+  updated?: string
+  trust: Trust
+  links: string[]
+  summary: string
+  mtime: number
+  size: number
+  /** Index and changelog notes the app writes itself. */
+  generated: boolean
+}
+
+export interface VaultNote extends VaultNoteMeta {
+  text: string
+  body: string
+  fm: Frontmatter
+}
+
+export interface VaultChange {
+  id: string
+  at: number
+  /** 'compiler', 'you', or 'bot:<name>' (a bot's vault tool call). */
+  actor: string
+  op: 'create' | 'update' | 'trash' | 'restore' | 'revert'
+  path: string
+  title: string
+  why?: string
+  threadId?: string
+  /** The previous version's copy in .history (relative), for updates and trashes. */
+  history?: string
+  /** Where a trashed note went (relative). */
+  movedTo?: string
+  /** Changes made together (a merge: one note updated, its duplicate trashed). */
+  group?: string
+  undoneAt?: number
+}
+
+export interface ChangeInfo { actor: string; why?: string; threadId?: string; group?: string }
+
+export interface UpsertInput {
+  /** "Shared" or "Bots/<name>". */
+  section: string
+  type: NoteType
+  title: string
+  summary?: string
+  points?: string[]
+  quotes?: Array<{ text: string; source: string }>
+  related?: string[]
+  tags?: string[]
+  sources?: string[]
+  aliases?: string[]
+  trust?: Trust
+  /** Shown as the bot in frontmatter. */
+  bot?: string
+  from?: string
+  extra?: Record<string, string>
+}
+
+const posix = (p: string): string => p.split(sep).join('/')
+/** Titles that only differ by an article, a plural or punctuation ("The Q4 plans." ~ "Q4 plan"); numbers count. */
+export const looseKey = (t: string): string => titleKey(t).replace(/^(the|a|an) /, '').replace(/(\w{3,})s\b/g, '$1')
+const stamp = (t: number): string => new Date(t).toISOString().replace(/[-:]/g, '').replace('T', '-').replace(/\..+$/, '') + `-${String(t % 1000).padStart(3, '0')}`
+
+export class VaultStore {
+  private cache = new Map<string, VaultNote>()
+  private scanned: { at: number; list: VaultNoteMeta[] } | null = null
+
+  constructor(private rootOf: () => string, private clock: () => number = Date.now) {}
+
+  get root(): string { return resolve(this.rootOf()) }
+  now(): number { return this.clock() }
+
+  /** Absolute path for a relative one, refusing anything outside the vault. */
+  abs(rel: string): string {
+    const p = resolve(this.root, rel)
+    if (p !== this.root && !p.startsWith(this.root + sep)) throw new Error('That path is outside the vault.')
+    return p
+  }
+
+  rel(abs: string): string { return posix(relative(this.root, abs)) }
+
+  ensure(): void {
+    mkdirSync(join(this.root, SHARED), { recursive: true })
+    mkdirSync(join(this.root, META_DIR), { recursive: true })
+    if (!existsSync(join(this.root, 'Home.md'))) this.rebuildIndexes()
+  }
+
+  // ---------------------------------------------------------------- reading
+
+  private lastRoot = ''
+
+  /** Every note (dot folders skipped), newest first. Cached for a moment; any write clears it. */
+  list(): VaultNoteMeta[] {
+    if (this.lastRoot !== this.root) { this.cache.clear(); this.scanned = null; this.lastRoot = this.root }
+    if (this.scanned && this.now() - this.scanned.at < 1500) return this.scanned.list
+    const out: VaultNoteMeta[] = []
+    if (!existsSync(this.root)) return out
+    const walk = (dir: string, depth: number): void => {
+      if (depth > 8) return
+      let names: string[] = []
+      try { names = readdirSync(dir) } catch { return }
+      for (const name of names) {
+        if (name.startsWith('.')) continue
+        const p = join(dir, name)
+        let st
+        try { st = statSync(p) } catch { continue }
+        if (st.isDirectory()) { walk(p, depth + 1); continue }
+        if (!name.toLowerCase().endsWith('.md')) continue
+        const rel = this.rel(p)
+        const hit = this.cache.get(rel)
+        if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) { out.push(hit); continue }
+        try {
+          const n = this.parse(rel, readFileSync(p, 'utf8'), st.mtimeMs, st.size)
+          this.cache.set(rel, n)
+          out.push(n)
+        } catch { /* unreadable: skipped */ }
+      }
+    }
+    walk(this.root, 0)
+    out.sort((a, b) => b.mtime - a.mtime)
+    this.scanned = { at: this.now(), list: out }
+    return out
+  }
+
+  private parse(rel: string, text: string, mtime: number, size: number): VaultNote {
+    const { fm, body } = parseNote(text)
+    // A note made in Obsidian without frontmatter: its type from its folder.
+    if (!/^---\n(?:[\s\S]*?\n)?type:/.test(text.replace(/\r\n?/g, '\n'))) fm.type = VaultStore.typeOfPath(rel)
+    const file = rel.split('/').pop()!.replace(/\.md$/i, '')
+    const parts = rel.split('/')
+    const section = parts[0] === 'Bots' && parts.length > 2 ? `Bots/${parts[1]}` : parts.length > 1 ? parts[0] : SHARED
+    const generated = GENERATED.has(rel) || (fm.type === 'index' && /(^|\/)Index\.md$/.test(rel))
+    return {
+      path: rel, title: fm.title || file, type: fm.type, section, tags: fm.tags, aliases: fm.aliases, sources: fm.sources,
+      created: fm.created, updated: fm.updated, trust: fm.trust ?? 'trusted', links: wikilinks(body), summary: summaryOf(body),
+      mtime, size, generated, text, body, fm
+    }
+  }
+
+  read(rel: string): VaultNote | undefined {
+    const p = this.abs(rel)
+    if (!existsSync(p)) return undefined
+    const st = statSync(p)
+    const key = this.rel(p)
+    const hit = this.cache.get(key)
+    if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) return hit
+    const n = this.parse(key, readFileSync(p, 'utf8'), st.mtimeMs, st.size)
+    this.cache.set(key, n)
+    return n
+  }
+
+  /**
+   * A note by title, alias, file name or path. `prefer`: sections to look in first (this bot's, then
+   * Shared). Case and punctuation don't matter.
+   */
+  resolve(ref: string, prefer: string[] = []): VaultNoteMeta | undefined {
+    const r = ref.trim().replace(/^\[\[|\]\]$/g, '').replace(/\|.*$/, '').replace(/#.*$/, '')
+    if (!r) return undefined
+    const all = this.list()
+    const byPath = all.find((n) => n.path === r || n.path === `${r}.md`)
+    if (byPath) return byPath
+    const k = titleKey(r.split('/').pop()!.replace(/\.md$/i, ''))
+    const hits = all.filter((n) => titleKey(n.title) === k || n.aliases.some((a) => titleKey(a) === k) || titleKey(n.path.split('/').pop()!.replace(/\.md$/i, '')) === k)
+    if (!hits.length) return undefined
+    for (const s of prefer) { const h = hits.find((n) => n.section === s); if (h) return h }
+    return hits.find((n) => !n.generated) ?? hits[0]
+  }
+
+  /** Notes linking to this one, with the line that links. */
+  backlinks(rel: string): Array<{ path: string; title: string; context: string }> {
+    const n = this.read(rel)
+    if (!n) return []
+    const keys = new Set([n.title, ...n.aliases, rel.split('/').pop()!.replace(/\.md$/i, '')].map(titleKey))
+    const out: Array<{ path: string; title: string; context: string }> = []
+    for (const o of this.list()) {
+      if (o.path === rel || o.generated) continue
+      if (!o.links.some((l) => keys.has(titleKey(l)))) continue
+      const full = this.read(o.path)
+      const line = full?.body.split('\n').find((l) => wikilinks(l).some((x) => keys.has(titleKey(x)))) ?? ''
+      out.push({ path: o.path, title: o.title, context: plainText(line).replace(/^[-*]\s+/, '').trim().slice(0, 200) })
+    }
+    return out
+  }
+
+  /** Notes and links for the graph view (generated notes left out). */
+  graph(): { nodes: Array<{ id: string; title: string; type: NoteType; section: string; trust: Trust }>; edges: Array<{ from: string; to: string }> } {
+    const notes = this.list().filter((n) => !n.generated)
+    const byKey = new Map<string, string>()
+    for (const n of notes) for (const k of [n.title, ...n.aliases]) if (!byKey.has(titleKey(k))) byKey.set(titleKey(k), n.path)
+    const edges: Array<{ from: string; to: string }> = []
+    const seen = new Set<string>()
+    for (const n of notes) for (const l of n.links) {
+      const to = byKey.get(titleKey(l))
+      if (!to || to === n.path) continue
+      const key = [n.path, to].sort().join('→')
+      if (seen.has(key)) continue
+      seen.add(key)
+      edges.push({ from: n.path, to })
+    }
+    return { nodes: notes.map((n) => ({ id: n.path, title: n.title, type: n.type, section: n.section, trust: n.trust })), edges }
+  }
+
+  // ---------------------------------------------------------------- writing (always with a history copy)
+
+  private invalidate(rel?: string): void {
+    this.scanned = null
+    if (rel) this.cache.delete(rel)
+  }
+
+  private historyCopy(rel: string): string | undefined {
+    const p = this.abs(rel)
+    if (!existsSync(p)) return undefined
+    let h = `.history/${stamp(this.now())}-${rel.replace(/\//g, '__')}`
+    for (let i = 2; existsSync(this.abs(h)); i++) h = `.history/${stamp(this.now())}-${i}-${rel.replace(/\//g, '__')}`
+    mkdirSync(join(this.root, '.history'), { recursive: true })
+    writeFileSync(this.abs(h), readFileSync(p))
+    return h
+  }
+
+  private atomicWrite(rel: string, text: string): void {
+    const p = this.abs(rel)
+    mkdirSync(dirname(p), { recursive: true })
+    const tmp = `${p}.${randomUUID().slice(0, 8)}.tmp`
+    writeFileSync(tmp, text)
+    renameSync(tmp, p)
+    this.invalidate(rel)
+  }
+
+  private logChange(c: Omit<VaultChange, 'id' | 'at'>): VaultChange {
+    const change: VaultChange = { ...c, id: randomUUID(), at: this.now() }
+    mkdirSync(join(this.root, META_DIR), { recursive: true })
+    appendFileSync(join(this.root, META_DIR, 'changes.jsonl'), `${JSON.stringify(change)}\n`)
+    if (c.op !== 'revert' || c.title) this.appendChangelog(change)
+    return change
+  }
+
+  private appendChangelog(c: VaultChange): void {
+    const p = join(this.root, 'Changelog.md')
+    const head = '---\ntype: index\ntitle: Changelog\ntags: [sahilbot/changelog]\nsources: []\n---\n# Changelog\n\nEvery change to this vault, newest last. Undo any of them in SahilBot (Vault → Changes).\n\n'
+    const verb = { create: 'created', update: 'updated', trash: 'moved to trash', restore: 'restored', revert: 'undid a change to' }[c.op]
+    const when = new Date(c.at)
+    const line = `- ${day(c.at)} ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')} · ${c.actor} · ${verb} [[${c.title}]]${c.why ? ` · ${c.why.replace(/\s+/g, ' ').slice(0, 160)}` : ''}\n`
+    let text = existsSync(p) ? readFileSync(p, 'utf8') : head
+    if (!text.startsWith('---')) text = head + text
+    text += line
+    // Keep the last 1000 lines.
+    const lines = text.split('\n')
+    const firstEntry = lines.findIndex((l) => l.startsWith('- '))
+    const entries = lines.filter((l) => l.startsWith('- '))
+    if (entries.length > 1000 && firstEntry >= 0) text = `${lines.slice(0, firstEntry).join('\n')}\n${entries.slice(-1000).join('\n')}\n`
+    writeFileSync(p, text)
+    this.invalidate('Changelog.md')
+  }
+
+  /** Writes a whole note (the user's edit, or a bot's full rewrite). */
+  write(rel: string, text: string, info: ChangeInfo): VaultChange {
+    if (!/\.md$/i.test(rel)) throw new Error('Notes are Markdown files (.md).')
+    if (rel.split('/').some((p) => p.startsWith('.'))) throw new Error('That folder is reserved.')
+    const existed = existsSync(this.abs(rel))
+    const history = existed ? this.historyCopy(rel) : undefined
+    this.atomicWrite(rel, text)
+    const n = this.read(rel)!
+    return this.logChange({ actor: info.actor, op: existed ? 'update' : 'create', path: rel, title: n.title, why: info.why, threadId: info.threadId, history, group: info.group })
+  }
+
+  /** A section's folder for a bot: "Bots/<name>" (made safe for file names). */
+  static botSection(name: string): string {
+    return `Bots/${safeTitle(name)}`
+  }
+
+  /** Where a new note of this type goes. */
+  pathFor(section: string, type: NoteType, title: string): string {
+    const folder = TYPE_FOLDER[type]
+    const base = `${section}/${folder ? `${folder}/` : ''}${safeTitle(title)}`
+    let rel = `${base}.md`
+    for (let i = 2; existsSync(this.abs(rel)); i++) rel = `${base} ${i}.md`
+    return rel
+  }
+
+  /** The note this title names in this section (any type folder), by title or alias. */
+  find(section: string, title: string): VaultNoteMeta | undefined {
+    const k = titleKey(title)
+    const inSection = this.list().filter((n) => n.section === section && !n.generated)
+    return inSection.find((n) => titleKey(n.title) === k || n.aliases.some((a) => titleKey(a) === k))
+      ?? inSection.find((n) => looseKey(n.title) === looseKey(title) || n.aliases.some((a) => looseKey(a) === looseKey(title)))
+  }
+
+  /**
+   * Creates the note or merges into the one with this title (or a close variant) in the section: new
+   * points, quotes, links, tags and sources are added; nothing already there is lost. A quoted note never
+   * turns a trusted one quoted, and a quoted update never rewrites a trusted note's summary.
+   */
+  upsert(u: UpsertInput, info: ChangeInfo): { path: string; created: boolean; added: number; change?: VaultChange } {
+    const title = safeTitle(u.title)
+    const today = day(this.now())
+    const cur = this.find(u.section, title)
+    const patch: NotePatch = { title, summary: u.summary, points: u.points, quotes: u.quotes, related: u.related, day: today, from: u.from }
+    if (cur) {
+      const full = this.read(cur.path)!
+      if (u.trust === 'quoted' && cur.trust !== 'quoted') delete patch.summary
+      const merged = mergeBody(full.body, { ...patch, title: full.title })
+      const fm: Frontmatter = {
+        ...full.fm,
+        title: full.fm.title || full.title,
+        tags: [...new Set([...full.fm.tags, ...(u.tags ?? [])])],
+        aliases: [...new Set([...full.fm.aliases, ...(u.aliases ?? []), ...(titleKey(title) !== titleKey(full.title) && !full.fm.aliases.some((a) => titleKey(a) === titleKey(title)) ? [title] : [])])],
+        sources: [...new Set([...full.fm.sources, ...(u.sources ?? [])])].slice(-40),
+        extra: { ...full.fm.extra, ...(u.extra ?? {}) }
+      }
+      const sameMeta = fm.tags.length === full.fm.tags.length && fm.sources.length === full.fm.sources.length && fm.aliases.length === full.fm.aliases.length
+      if (!merged.added && sameMeta) return { path: cur.path, created: false, added: 0 }
+      fm.updated = today
+      const change = this.write(cur.path, renderNote({ fm, body: merged.body }), info)
+      return { path: cur.path, created: false, added: merged.added, change }
+    }
+    const fm: Frontmatter = {
+      type: u.type, title, tags: [...new Set([`sahilbot/${u.type}`, ...(u.tags ?? [])])], aliases: u.aliases ?? [], sources: [...new Set(u.sources ?? [])],
+      created: today, updated: today, bot: u.bot ?? (u.section === SHARED ? SHARED : u.section.replace(/^Bots\//, '')), trust: u.trust ?? 'trusted', extra: u.extra ?? {}
+    }
+    const { body, added } = mergeBody('', patch)
+    const rel = this.pathFor(u.section, u.type, title)
+    const change = this.write(rel, renderNote({ fm, body }), info)
+    return { path: rel, created: true, added, change }
+  }
+
+  /** "Delete": the note moves to .trash (Undo puts it back). */
+  trash(rel: string, info: ChangeInfo): VaultChange {
+    const p = this.abs(rel)
+    if (!existsSync(p)) throw new Error('That note is gone already.')
+    const n = this.read(rel)
+    let dest = `.trash/${stamp(this.now())}-${rel.replace(/\//g, '__')}`
+    for (let i = 2; existsSync(this.abs(dest)); i++) dest = `.trash/${stamp(this.now())}-${i}-${rel.replace(/\//g, '__')}`
+    mkdirSync(join(this.root, '.trash'), { recursive: true })
+    renameSync(p, this.abs(dest))
+    this.invalidate(rel)
+    return this.logChange({ actor: info.actor, op: 'trash', path: rel, title: n?.title ?? rel, why: info.why, threadId: info.threadId, movedTo: dest, group: info.group })
+  }
+
+  changes(limit = 200): VaultChange[] {
+    const p = join(this.root, META_DIR, 'changes.jsonl')
+    if (!existsSync(p)) return []
+    const all: VaultChange[] = []
+    for (const l of readFileSync(p, 'utf8').split('\n')) {
+      if (!l.trim()) continue
+      try { all.push(JSON.parse(l) as VaultChange) } catch { /* a torn line */ }
+    }
+    // Undo marks are separate lines: fold them in.
+    const undone = new Map<string, number>()
+    for (const c of all) if (c.op === 'revert' && c.why?.startsWith('undo:')) undone.set(c.why.slice(5), c.at)
+    return all.filter((c) => !(c.op === 'revert' && !c.title)).map((c) => (undone.has(c.id) ? { ...c, undoneAt: undone.get(c.id) } : c)).reverse().slice(0, limit)
+  }
+
+  /** Puts back what a change (and the rest of its group) did. Returns the changes undone. */
+  revert(id: string, info: ChangeInfo): VaultChange[] {
+    const all = this.changes(5000)
+    const c = all.find((x) => x.id === id)
+    if (!c) throw new Error('That change is no longer in the log.')
+    if (c.undoneAt) throw new Error('That change was undone already.')
+    const group = c.group ? all.filter((x) => x.group === c.group && !x.undoneAt) : [c]
+    const done: VaultChange[] = []
+    for (const g of group) {
+      if (g.op === 'create') {
+        if (existsSync(this.abs(g.path))) this.trash(g.path, { ...info, why: `undo: created by ${g.actor}` })
+      } else if (g.op === 'update' && g.history) {
+        if (!existsSync(this.abs(g.history))) throw new Error('The earlier version is missing from .history.')
+        const before = readFileSync(this.abs(g.history), 'utf8')
+        this.historyCopy(g.path)
+        this.atomicWrite(g.path, before)
+        this.logChange({ actor: info.actor, op: 'restore', path: g.path, title: g.title, why: `put back the version from before ${g.actor}'s change` })
+      } else if (g.op === 'trash' && g.movedTo) {
+        if (!existsSync(this.abs(g.movedTo))) throw new Error('The note is no longer in the vault\'s trash.')
+        let dest = g.path
+        for (let i = 2; existsSync(this.abs(dest)); i++) dest = g.path.replace(/\.md$/i, ` ${i}.md`)
+        mkdirSync(dirname(this.abs(dest)), { recursive: true })
+        renameSync(this.abs(g.movedTo), this.abs(dest))
+        this.invalidate(dest)
+        this.logChange({ actor: info.actor, op: 'restore', path: dest, title: g.title, why: 'back from the trash' })
+      } else continue
+      this.logChange({ actor: info.actor, op: 'revert', path: g.path, title: '', why: `undo:${g.id}` })
+      done.push(g)
+    }
+    return done
+  }
+
+  // ---------------------------------------------------------------- tidying
+
+  /**
+   * Merges notes in one section whose titles say the same thing ("Priya" / "Priya Patel" stay apart;
+   * "Q4 Pricing Page" / "Q4 pricing page." merge): the newer one's points, quotes and links move into the
+   * older, its title becomes an alias, and it goes to the trash. Returns the merges made.
+   */
+  mergeDuplicates(info: ChangeInfo): number {
+    const notes = this.list().filter((n) => !n.generated)
+    const bySection = new Map<string, VaultNoteMeta[]>()
+    for (const n of notes) bySection.set(`${n.section}|${n.type}`, [...(bySection.get(`${n.section}|${n.type}`) ?? []), n])
+    let merges = 0
+    for (const list of bySection.values()) {
+      // The older note is kept (made by hand without a date: its file date); on a tie, the plainer file name.
+      const born = (n: VaultNoteMeta): string => n.created ?? day(n.mtime)
+      const sorted = [...list].sort((a, b) => born(a).localeCompare(born(b)) || a.path.length - b.path.length || a.mtime - b.mtime)
+      const gone = new Set<string>()
+      for (let i = 0; i < sorted.length; i++) {
+        const keep = sorted[i]
+        if (gone.has(keep.path)) continue
+        for (let j = i + 1; j < sorted.length; j++) {
+          const drop = sorted[j]
+          if (gone.has(drop.path)) continue
+          const same = looseKey(keep.title) === looseKey(drop.title) || keep.aliases.some((a) => looseKey(a) === looseKey(drop.title))
+          if (!same) continue
+          if (keep.trust !== drop.trust && keep.trust === 'quoted') continue
+          const d = this.read(drop.path)!
+          const k = this.read(keep.path)!
+          const points = d.body.split('\n').filter((l) => /^\s*[-*]\s+/.test(l) && !/\[\[/.test(l)).map((l) => l.replace(/^\s*[-*]\s+(\[\d{4}-\d{2}-\d{2}\]\s*)?/, ''))
+          const quotes: Array<{ text: string; source: string }> = []
+          const ql = d.body.split('\n')
+          for (let q = 0; q < ql.length; q++) {
+            if (/^>\s/.test(ql[q]) && !/^>\s*—\s*source:/.test(ql[q]) && /^>\s*—\s*source:/.test(ql[q + 1] ?? '')) {
+              quotes.push({ text: ql[q].replace(/^>\s*/, '').trimEnd(), source: ql[q + 1].replace(/^>\s*—\s*source:\s*/, '').replace(/\s*\(\d{4}-\d{2}-\d{2}\)\s*$/, '') })
+            }
+          }
+          const merged = mergeBody(k.body, { title: k.title, points: drop.trust === 'quoted' && keep.trust !== 'quoted' ? [] : points, quotes: drop.trust === 'quoted' && keep.trust !== 'quoted' ? [...quotes, ...points.map((p) => ({ text: p, source: d.sources[0] ?? 'outside content' }))] : quotes, related: d.links, day: day(this.now()) })
+          const fm: Frontmatter = { ...k.fm, aliases: [...new Set([...k.fm.aliases, drop.title, ...d.fm.aliases].filter((a) => titleKey(a) !== titleKey(k.title)))], tags: [...new Set([...k.fm.tags, ...d.fm.tags])], sources: [...new Set([...k.fm.sources, ...d.fm.sources])], updated: day(this.now()) }
+          const group = randomUUID()
+          this.write(keep.path, renderNote({ fm, body: merged.body }), { ...info, group, why: `merged in its duplicate “${drop.title}”` })
+          this.trash(drop.path, { ...info, group, why: `merged into [[${keep.title}]]` })
+          gone.add(drop.path)
+          merges++
+        }
+      }
+    }
+    return merges
+  }
+
+  /** Regenerates Home.md and each area's Index.md (maps of content). Only writes what changed. */
+  rebuildIndexes(): void {
+    const notes = this.list().filter((n) => !n.generated)
+    const sections = [...new Set([SHARED, ...notes.map((n) => n.section)])].sort((a, b) => (a === SHARED ? -1 : b === SHARED ? 1 : a.localeCompare(b)))
+    const fmFor = (title: string): string => `---\ntype: index\ntitle: ${JSON.stringify(title)}\ntags: [sahilbot/index]\nsources: []\n---\n`
+    for (const s of sections) {
+      const mine = notes.filter((n) => n.section === s)
+      const name = s === SHARED ? 'Shared' : s.replace(/^Bots\//, '')
+      const lines = [`# ${name}`, '', s === SHARED ? '> What every bot knows: you, your people, projects, decisions and preferences.' : `> What ${name} keeps for its own work.`, '']
+      for (const t of Object.keys(TYPE_LABEL) as NoteType[]) {
+        if (t === 'index') continue
+        const ns = mine.filter((n) => n.type === t).sort((a, b) => a.title.localeCompare(b.title))
+        if (!ns.length) continue
+        lines.push(`## ${TYPE_LABEL[t]}`, ...ns.map((n) => `- [[${n.title}]]${n.summary ? ` · ${n.summary.slice(0, 100)}` : ''}`), '')
+      }
+      if (!mine.length) lines.push('_Nothing here yet. Notes appear as you chat; SahilBot compiles them while the app is idle._', '')
+      this.writeGenerated(`${s}/Index.md`, `${fmFor(`${name} index`)}${lines.join('\n')}`)
+    }
+    const home = ['# SahilBot Vault', '', '> Notes your bots keep about you and their work, linked like an Obsidian vault. Open any note, follow its links, or search.', '', '## Areas',
+      ...sections.map((s) => `- [[${s === SHARED ? 'Shared' : s.replace(/^Bots\//, '')} index]] (${notes.filter((n) => n.section === s).length} notes)`), '', '## Recently updated',
+      ...[...notes].sort((a, b) => b.mtime - a.mtime).slice(0, 12).map((n) => `- [[${n.title}]] · ${n.section}`), '', 'See also [[Changelog]].', '']
+    this.writeGenerated('Home.md', `${fmFor('Home')}${home.join('\n')}`)
+  }
+
+  private writeGenerated(rel: string, text: string): void {
+    const p = this.abs(rel)
+    if (existsSync(p) && readFileSync(p, 'utf8') === text) return
+    this.atomicWrite(rel, text)
+  }
+
+  /** Section folders that exist ("Shared", "Bots/…"). */
+  sections(): string[] {
+    const out = [SHARED]
+    const bots = join(this.root, 'Bots')
+    if (existsSync(bots)) for (const n of readdirSync(bots)) if (!n.startsWith('.') && statSync(join(bots, n)).isDirectory()) out.push(`Bots/${n}`)
+    return out
+  }
+
+  /** The type implied by a path's folder (for notes the user made in Obsidian without frontmatter). */
+  static typeOfPath(rel: string): NoteType {
+    const folder = rel.split('/').slice(-2, -1)[0] ?? ''
+    const hit = (Object.entries(TYPE_FOLDER) as Array<[NoteType, string]>).find(([, f]) => f && f === folder)
+    return hit ? hit[0] : normalizeType('fact')
+  }
+}

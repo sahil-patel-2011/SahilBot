@@ -97,11 +97,11 @@ describe('native computer batches in the agent loop', () => {
     const c = fakeComputer()
     const h = harness([c.tool])
     const t = h.thread()
-    script.push(turn([member('toolu_5', 'key', { text: 'Tab', repeat: 3 }), member('toolu_6', 'screenshot', {})]))
+    script.push(turn([member('toolu_5', 'key', { text: 'Tab', repeat: 80 }), member('toolu_6', 'screenshot', {})]))
     expect(await h.run(t, 'tab through the form')).toBe('finished')
     expect(c.ran).toEqual([])
     const out = toolMsgs(h.db, t)
-    expect(out[0].content).toMatch(/^Error: Pressing a key several times/)
+    expect(out[0].content).toMatch(/^Error: repeat is at most 50/)
     expect(out[1].content).toBe(HALT_TEXT)
   })
   test('translated calls go through approvals exactly like SahilBot\'s own (a write asks in Ask mode)', async () => {

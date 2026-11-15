@@ -214,6 +214,7 @@ test('polish screenshots', async () => {
     // Its own chat, so the plan waiting for approval doesn't follow the other screens around.
     await page.click('[data-testid="new-chat"]')
     await wait(page, 300)
+    await page.click('[data-testid="modes-menu"]')
     await page.click('[data-testid="plan-toggle"]')
     await send(page, 'Write this month\'s patient newsletter')
     await page.locator('[data-testid="questions-card"]').waitFor({ timeout: 15_000 })

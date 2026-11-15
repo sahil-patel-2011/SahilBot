@@ -4,6 +4,7 @@ description: Call a web API from code: auth, requests, errors and rate limits.
 source: you
 uses: 0
 category: Coding
+triggers: call the api, rest api client, api key, webhook, oauth token, rate limit, http request, integrate with
 ---
 
 1. Find the official docs (web_search + fetch_page): base URL, auth method, the exact endpoint, request and response fields. Don't guess field names.

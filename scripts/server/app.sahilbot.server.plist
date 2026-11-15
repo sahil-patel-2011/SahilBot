@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SahilBot Server as a launchd agent on a Mac (install.sh fills in @PREFIX@, @PORT@ and @HOME@).
+     launchctl kickstart -k gui/$(id -u)/app.sahilbot.server     restarts it. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>app.sahilbot.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PREFIX@/bin/sahilbot-server</string>
+    <string>serve</string>
+    <string>--port</string><string>@PORT@</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key><string>production</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key><string>@HOME@/Library/Logs/SahilBot Server.log</string>
+  <key>StandardErrorPath</key><string>@HOME@/Library/Logs/SahilBot Server.log</string>
+</dict>
+</plist>

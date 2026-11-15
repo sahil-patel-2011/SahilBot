@@ -4,6 +4,7 @@ description: Write and run a Python script safely, with its own virtual environm
 source: you
 uses: 0
 category: Coding
+triggers: python script, quick script, one-off script, automate with python, script to, venv for a script
 ---
 
 1. Put the script in the workspace (or the attached folder). Keep it in one file unless it's big.

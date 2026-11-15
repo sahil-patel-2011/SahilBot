@@ -4,14 +4,14 @@
 .mcp .set-row-title code { font-size: 12.5px; }
 .mcp .set-row-ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .mcp .switch[disabled] { opacity: 0.5; cursor: default; }
-.mcp-err { color: var(--danger); }
+.mcp-err { color: var(--danger-text); }
 
 .mcp-copy { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 13px; white-space: nowrap; }
 
 .mcp-new { padding: 16px 16px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
 .mcp-new:first-child { border-top: 0; }
 .mcp-new-head { display: flex; gap: 10px; align-items: flex-start; }
-.mcp-new-head > svg { margin-top: 3px; color: var(--accent); flex: none; }
+.mcp-new-head > svg { margin-top: 3px; color: var(--accent-text); flex: none; }
 .mcp-new-head b { font-size: 14px; font-weight: 600; }
 .mcp-token { display: flex; gap: 8px; align-items: center; }
 .mcp-token code { flex: 1; min-width: 0; padding: 8px 10px; font-size: 12.5px; border: 1px solid var(--line); background: var(--bg); user-select: all; }
@@ -33,5 +33,5 @@
 .mcp-act-app { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcp-act-tool { font-family: var(--mono); font-size: 11.5px; }
 .mcp-act-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mcp-act.bad .mcp-act-tool, .mcp-act.bad .mcp-act-detail { color: var(--danger); }
+.mcp-act.bad .mcp-act-tool, .mcp-act.bad .mcp-act-detail { color: var(--danger-text); }
 .mcp-more { align-self: flex-start; margin: 6px 16px; }

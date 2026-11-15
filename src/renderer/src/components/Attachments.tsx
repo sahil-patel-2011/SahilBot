@@ -1,0 +1,160 @@
+import { useEffect, useState } from 'react'
+import type { Attachment, WorkingFolder } from '@shared/types'
+import { api } from '../api'
+import * as I from '../icons'
+import { categoryFor, chipDetail, folderName, humanSize } from '../lib/attachments'
+import { toast } from '../lib/toast'
+import { Popover } from './Popover'
+import '../styles-attachments.css'
+
+// The composer's attachment pieces: chips (icon, name, type and size, remove, image thumbnails), the
+// "Drop files or folders" overlay, live folder counts, and the Working folder chip.
+
+const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+
+function Icon({ a }: { a: Attachment }) {
+  const c = categoryFor(a)
+  if (c === 'folder') return <I.Folder size={15} />
+  if (c === 'image') return <I.Image size={15} />
+  if (c === 'binary') return <I.Paperclip size={15} />
+  return <I.File size={15} />
+}
+
+/** Chips for what's attached: inline images (data URLs) first, then files and folders. */
+export function AttachmentChips({ images, atts, onRemoveImage, onRemove }: {
+  images: string[]
+  atts: Attachment[]
+  onRemoveImage: (i: number) => void
+  onRemove: (path: string) => void
+}) {
+  if (!images.length && !atts.length) return null
+  return (
+    <div className="attachments" data-testid="attachments">
+      {images.map((src, i) => (
+        <div className="a image" key={`i${i}`} data-testid="attachment-chip" data-kind="image">
+          <img src={src} alt="Pasted image" />
+          <button onClick={() => onRemoveImage(i)} aria-label="Remove image" title="Remove">×</button>
+        </div>
+      ))}
+      {atts.map((a) => {
+        const thumb = a.kind === 'image' && a.dataUrl
+        return (
+          <div className={`a ${a.kind}${thumb ? '' : ' att-chip'}`} key={a.path} title={[a.path, a.note].filter(Boolean).join('\n')} data-testid="attachment-chip" data-kind={categoryFor(a)}>
+            {thumb ? <img src={a.dataUrl} alt={a.name} /> : (
+              <span className="att-pill">
+                <Icon a={a} />
+                <span className="att-text">
+                  <span className="att-name">{a.name}</span>
+                  <span className="att-sub" data-testid="attachment-detail">{chipDetail(a)}{a.kind === 'folder' && a.files === undefined ? <span className="att-scan"> · counting…</span> : null}</span>
+                </span>
+              </span>
+            )}
+            <button onClick={() => onRemove(a.path)} aria-label={`Remove ${a.name}`} title="Remove">×</button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Shown over the composer while something is dragged over it. */
+export function DropOverlay({ show }: { show: boolean }) {
+  if (!show) return null
+  return (
+    <div className="drop-overlay" data-testid="drop-overlay" aria-hidden>
+      <I.Paperclip size={18} /><span>Drop files or folders</span>
+    </div>
+  )
+}
+
+/**
+ * Counts what SahilBot can index in attached folders (ignore rules applied), live, so a big folder shows
+ * progress: "Folder · 12,400 files". Updates the attachments through `update`.
+ */
+export function useFolderCounts(atts: Attachment[], update: (path: string, patch: Partial<Attachment>) => void): void {
+  const pending = atts.filter((a) => a.kind === 'folder' && a.files === undefined).map((a) => a.path).join('\n')
+  useEffect(() => {
+    if (!pending) return
+    const want = new Set(pending.split('\n'))
+    const off = api.attach.onScan((e) => { if (want.has(e.path)) update(e.path, { files: e.files, ...(e.truncated ? { truncated: true } : {}) }) })
+    for (const p of want) {
+      void api.attach.scanFolder(p).then((r) => update(p, { files: r.files, truncated: !!r.truncated, size: r.bytes })).catch(() => update(p, { files: 0 }))
+    }
+    return off
+  }, [pending])
+}
+
+/**
+ * The chat's working folder: relative paths, file tools and commands start there. A new chat (no thread
+ * yet) keeps the choice as a draft and sends it with the first message.
+ */
+export function WorkFolderChip({ threadId, inherited, draft, onDraft }: {
+  threadId?: string
+  /** The bot's or project's folder, used when the chat doesn't pick one. */
+  inherited?: string | null
+  draft: string | null
+  onDraft: (path: string | null) => void
+}) {
+  const [wf, setWf] = useState<WorkingFolder | null>(null)
+  useEffect(() => {
+    setWf(null)
+    if (!threadId) return
+    const load = (): void => { void api.attach.folder(threadId).then(setWf).catch(() => undefined) }
+    load()
+    // The first message of a new chat sets its folder in main: look again when that message arrives.
+    return api.chat.onEvent((e) => { if (e.threadId === threadId && e.type === 'message' && e.message.role === 'user') load() })
+  }, [threadId])
+  const path = threadId ? wf?.path ?? null : draft ?? inherited ?? null
+  const source = threadId ? wf?.source ?? null : draft ? 'chat' : inherited ? 'bot' : null
+  const pick = async (): Promise<void> => {
+    try {
+      if (threadId) { const r = await api.attach.pickFolder(threadId); if (r) setWf(r) }
+      else { const r = await api.attach.pick('folder'); const f = r.added.find((a) => a.kind === 'folder'); if (f) onDraft(f.path) }
+    } catch (e) { toast(clean(e), 'error') }
+  }
+  const clear = async (): Promise<void> => {
+    try {
+      if (threadId) setWf(await api.attach.clearFolder(threadId))
+      else onDraft(null)
+    } catch (e) { toast(clean(e), 'error') }
+  }
+  return (
+    <Popover
+      label={<><I.Folder size={14} /><span className="wf-name">{path ? folderName(path) : 'Working folder'}</span></>}
+      className={`under-pick wf-pick${path ? ' on' : ''}`}
+      title={path ? `Working folder: ${path}${source === 'bot' ? ' (the bot\'s)' : source === 'project' ? ' (the project\'s)' : ''}. Relative paths and commands start here.` : 'Choose a working folder for this chat: file tools and commands start there'}
+      testId="working-folder">
+      {(close) => (
+        <div className="wf-menu">
+          <div className="menu-head">Working folder{source === 'bot' ? ' · the bot\'s' : source === 'project' ? ' · the project\'s' : ''}</div>
+          {path && <div className="wf-path" data-testid="working-folder-path">{path}</div>}
+          <button className="menu-item" onClick={() => { close(); void pick() }} data-testid="working-folder-pick"><I.Folder size={15} />{path ? 'Choose another folder…' : 'Choose a folder…'}<span className="sub">SahilBot reads, writes and runs commands there. Anywhere else asks first.</span></button>
+          {path && source === 'chat' && <button className="menu-item" onClick={() => { close(); void clear() }} data-testid="working-folder-clear"><I.Close size={15} />{inherited ? 'Use the bot\'s folder' : 'No working folder'}</button>}
+        </div>
+      )}
+    </Popover>
+  )
+}
+
+export { humanSize }
+
+/** Bot details → "Works in folder": the bot's chats work there (relative paths, commands, search) unless a chat picks its own. */
+export function BotFolderRow({ space, onChanged }: { space: { id: string; kind: string; folder: string | null }; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false)
+  if (space.kind !== 'bot') return null
+  const run = async (f: () => Promise<unknown>): Promise<void> => {
+    setBusy(true)
+    try { const r = await f(); if (r) onChanged() } catch (e) { toast(clean(e), 'error') } finally { setBusy(false) }
+  }
+  return (
+    <div className="bd-row" data-testid="bot-folder-row">
+      <span className="bd-row-text">Works in folder
+        <span className="bd-row-sub">{space.folder ? <span className="bot-folder-path" data-testid="bot-folder-path">{space.folder}</span> : 'Its chats read, write, search and run commands there. Anywhere else asks first.'}</span>
+      </span>
+      <span style={{ display: 'flex', gap: 6 }}>
+        <button className="bd-btn" disabled={busy} onClick={() => void run(() => api.attach.pickBotFolder(space.id))} data-testid="bot-folder-pick">{space.folder ? 'Change…' : 'Choose…'}</button>
+        {space.folder && <button className="bd-btn" disabled={busy} onClick={() => void run(() => api.attach.clearBotFolder(space.id))} data-testid="bot-folder-clear" aria-label="Stop working in this folder">None</button>}
+      </span>
+    </div>
+  )
+}

@@ -13,6 +13,7 @@ test('plan screenshots', async () => {
     { toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ questions: [{ question: 'Who is this for?', options: ['Patients', 'Referring doctors', 'Staff'] }, { question: 'Which format do you want?', options: ['Email newsletter', 'Blog post', 'PDF handout'] }, { question: 'Anything it must mention?' }] }) }] },
     { toolCalls: [{ name: 'propose_plan', arguments: JSON.stringify({ goal: 'A 300-word patient email newsletter about treating an enlarged prostate, in plain words, ready for Dr. Patel to review.', steps: ['Check the current AUA guidance and MedlinePlus', 'Outline: what BPH is, treatment options, when to call us', 'Write the draft (about 300 words, 7th-grade reading level)', 'Fact-check every claim against the sources', 'Save it as a Word document and summarize the key points'], assumptions: ['Sent by email to existing patients', 'Signed by the practice'], risks: ['Medical claims need a physician\'s review before sending'] }) }] }
   )
+  await page.click('[data-testid="modes-menu"]')
   await page.click('[data-testid="plan-toggle"]')
   await page.fill('[data-testid="composer-input"]', 'Write this month\'s patient newsletter')
   await page.keyboard.press('Enter')

@@ -4,6 +4,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import '../styles-learning.css'
+import { ClampText } from './ui'
 
 // Settings → Memory → What I learned: everything SahilBot learned on its own while the app was idle
 // (memories, skills, lessons, and memory tidying), grouped by day, each with Undo; plus the switches
@@ -158,7 +159,7 @@ export function LearningLog({ spaces }: { spaces: Space[] }) {
         <div className="set-row">
           <div className="set-row-text">
             <div className="set-row-title">Learn while SahilBot is open</div>
-            <div className="set-row-sub">{status && !status.localAvailable && !st?.cloudAllowed ? 'Needs a local model (Ollama or LM Studio), or cloud learning below.' : 'Uses your background model, local first. Never after you quit.'}</div>
+            <ClampText>{status && !status.localAvailable && !st?.cloudAllowed ? 'Needs a local model (Ollama or LM Studio), or cloud learning below.' : 'Uses your background model, local first. Never after you quit.'}</ClampText>
           </div>
           <div className="set-row-ctl">
             <button role="switch" aria-checked={on} aria-label="Learn while SahilBot is open" className={`switch${on ? ' on' : ''}`} disabled={!status}
@@ -168,7 +169,7 @@ export function LearningLog({ spaces }: { spaces: Space[] }) {
         <div className="set-row">
           <div className="set-row-text">
             <div className="set-row-title">Use cloud models for learning</div>
-            <div className="set-row-sub">Only when no local model is available. Spending stops at the daily cap (it also counts toward your monthly cloud budget).</div>
+            <ClampText>Only when no local model is available. Spending stops at the daily cap (it also counts toward your monthly cloud budget).</ClampText>
           </div>
           <div className="set-row-ctl ll-cloud">
             {st?.cloudAllowed && (
@@ -186,10 +187,10 @@ export function LearningLog({ spaces }: { spaces: Space[] }) {
           <div className="set-row-text">
             <div className={`ll-status${status?.running ? ' live' : ''}${on && status?.blocked ? ' warn' : ''}`} data-testid="learning-status">{line()}</div>
             {status?.model && on && (
-              <div className="set-row-sub">
+              <ClampText>
                 {status.cloud ? 'Cloud' : 'Local'} model: {status.model}
                 {status.cloud && ` · $${status.spentTodayUsd.toFixed(2)} of $${status.settings.dailyUsd.toFixed(2)} used today`}
-              </div>
+              </ClampText>
             )}
           </div>
           <div className="set-row-ctl">

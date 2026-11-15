@@ -4,6 +4,7 @@ description: Containerize and deploy an app (Docker, docker compose, simple host
 source: you
 uses: 0
 category: Coding
+triggers: dockerfile, docker compose, containerize, docker image, deploy the app, host the app, fly.io, render.com
 ---
 
 1. Minimal Dockerfile: small base image, pinned versions, non-root user, multi-stage build for compiled apps, a .dockerignore.

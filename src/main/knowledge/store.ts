@@ -338,6 +338,38 @@ export class KnowledgeStore {
     return (this.sql.prepare(`SELECT COUNT(*) AS n FROM kb_chunks c JOIN kb_docs d ON d.id = c.doc_id WHERE c.emb_model = ? AND ${where}`).get(model, ...args) as Row).n as number
   }
 
+  // ---------------------------------------------------------------- the vault's document digests
+
+  /**
+   * Indexed documents worth a digest note (src/main/vault): prose kinds with passages, modified since
+   * `since`, not under any `exclude` folder (the vault itself), newest first.
+   */
+  recentDocs(o: { since: number; exclude?: string[]; kinds?: string[]; minSize?: number; limit?: number }): Array<{ path: string; kind: string; size: number; mtime: number; chunks: number }> {
+    const kinds = o.kinds ?? ['markdown', 'text', 'pdf', 'docx', 'pptx', 'html']
+    const rows = this.sql.prepare(`SELECT path, kind, size, mtime, chunks FROM kb_docs WHERE chunks > 0 AND mtime >= ? AND size >= ?
+      AND kind IN (${kinds.map(() => '?').join(',')}) ORDER BY mtime DESC LIMIT ?`).all(o.since, o.minSize ?? 400, ...kinds, Math.max(1, (o.limit ?? 50) * 4)) as Row[]
+    const ex = (o.exclude ?? []).map(withSep)
+    return rows
+      .map((r) => ({ path: r.path as string, kind: r.kind as string, size: r.size as number, mtime: r.mtime as number, chunks: r.chunks as number }))
+      .filter((d) => !ex.some((e) => d.path.startsWith(e) || withSep(d.path) === e))
+      .slice(0, o.limit ?? 50)
+  }
+
+  /** A document's indexed text (passages in order, already redacted), up to `maxChars`. */
+  docText(path: string, maxChars = 12_000): string {
+    const rows = this.sql.prepare(`SELECT c.text, c.heading, c.page FROM kb_chunks c JOIN kb_docs d ON d.id = c.doc_id WHERE d.path = ? ORDER BY c.seq`).all(path) as Row[]
+    const out: string[] = []
+    let used = 0
+    for (const r of rows) {
+      const head = r.page ? `[page ${r.page}] ` : r.heading ? `[${r.heading}] ` : ''
+      const t = `${head}${r.text as string}`
+      if (used + t.length > maxChars) { if (!out.length) out.push(t.slice(0, maxChars)); break }
+      out.push(t)
+      used += t.length + 2
+    }
+    return out.join('\n\n')
+  }
+
   // ---------------------------------------------------------------- counts
 
   totals(scope?: Scope): { files: number; skipped: number; chunks: number; lastIndexed: number | null } {

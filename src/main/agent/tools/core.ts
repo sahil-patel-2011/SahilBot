@@ -1,5 +1,7 @@
 import type { ToolDef } from '../types'
 import type { ResultStore } from '../context'
+import { milestoneHint, notesTool } from '../notes'
+import { isServer, serverToolsNote } from '../../runtime'
 
 export function coreTools(results: ResultStore): ToolDef[] {
   const findTools: ToolDef<{ query: string }> = {
@@ -20,9 +22,9 @@ export function coreTools(results: ResultStore): ToolDef[] {
         // An app that isn't connected yet: the user gets a one-click Connect card right in the chat.
         const added = await ctx.offerConnect(query)
         if (added.length) hits = ctx.searchTools(query)
-        else return { text: `No connected tools match "${query}". The user chose not to connect an app for this (or none matched). Continue another way: the browser tool works with any website the user is signed into.`, display: `nothing for "${query}"` }
+        else return { text: `No connected tools match "${query}". The user chose not to connect an app for this (or none matched). Continue another way${isServer() ? '.' : ': the browser tool works with any website the user is signed into.'}${serverToolsNote()}`, display: `nothing for "${query}"` }
       }
-      if (!hits.length) return { text: `No tools match "${query}". Connectors are added under Connect apps; the browser tool works with any website.`, display: `nothing for "${query}"` }
+      if (!hits.length) return { text: `No tools match "${query}". Connectors are added under Connect apps${isServer() ? '.' : '; the browser tool works with any website.'}${serverToolsNote()}`, display: `nothing for "${query}"` }
       const toLoad = hits.filter((h) => !h.loaded).slice(0, 8).map((h) => h.name)
       const added = ctx.loadTools(toLoad)
       const lines = hits.slice(0, 8).map((h) => `- ${h.name}: ${h.description.split('\n')[0]}${added.includes(h.name) ? ' (loaded now)' : h.loaded ? ' (already loaded)' : ' (not loaded: tool limit reached)'}`)
@@ -59,7 +61,7 @@ export function coreTools(results: ResultStore): ToolDef[] {
     label: 'Plan',
     core: true,
     effect: 'read',
-    description: 'Write or update your task plan. Send the full list every time. Use it for any task with 3 or more steps; mark exactly one item in_progress while you work on it. Never mark an item done while it still has errors, and never re-check work you already marked done. notes: your working notes for a long task (key facts, decisions, file paths, IDs, numbers you\'ll need later). They replace the previous notes and are kept even when older messages get summarized, so put anything there you must not lose.',
+    description: 'Write or update your task plan. Send the full list every time. Use it for any task with 3 or more steps; mark exactly one item in_progress while you work on it. Never mark an item done while it still has errors, and never re-check work you already marked done. notes: a scratch line of working notes (replaces the previous scratch; up to ~3,000 characters). For facts you must not lose (decisions and why, files, IDs, partial results, open questions, what failed) use the notes tool: its sections are kept word for word when older messages get summarized.',
     parameters: {
       type: 'object',
       properties: {
@@ -83,33 +85,48 @@ export function coreTools(results: ResultStore): ToolDef[] {
       additionalProperties: false
     },
     async run({ items, notes }, ctx) {
+      // Items that just became done: a milestone, where the result says what to record in the notes.
+      const wasDone = new Set(ctx.state.todos.filter((t) => t.status === 'done').map((t) => t.text))
+      const doneNow = items.filter((i) => i.status === 'done' && !wasDone.has(i.text)).map((i) => i.text)
       ctx.state.todos = items
       if (notes !== undefined) ctx.state.notes = notes.slice(0, 3000)
       const mark = { pending: '[ ]', in_progress: '[>]', done: '[x]' } as const
       const done = items.filter((i) => i.status === 'done').length
-      return { text: items.map((i) => `${mark[i.status]} ${i.text}`).join('\n'), display: `${done}/${items.length} done` }
+      // (Not on the first plan, or when the whole plan is written done at once.)
+      const hint = wasDone.size || doneNow.length < items.length ? milestoneHint(doneNow) : ''
+      return { text: items.map((i) => `${mark[i.status]} ${i.text}`).join('\n') + hint, display: `${done}/${items.length} done` }
     }
   }
 
-  const askUser: ToolDef<{ question?: string; options?: string[]; questions?: Array<{ question: string; options?: string[] }> }> = {
+  const askUser: ToolDef<{ question?: string; options?: string[]; default?: string; preference?: boolean; safe?: boolean; questions?: Array<{ question: string; options?: string[]; default?: string }> }> = {
     name: 'ask_user',
     label: 'Question',
     core: true,
     effect: 'read',
-    description: 'Ask the user and wait for the answer. Research first, then use it only for decisions that are theirs to make or information you can\'t find. Give up to 3 short options (put the one you recommend first, e.g. "Weekly (recommended)"); the card always adds a 4th "type your own answer" field, so never add "Other"/"Something else". Use fewer options when fewer make sense, or none for an open question. For a big or unclear task, ask everything at once with questions (up to 4) instead of one at a time.',
+    description: 'Ask the user only what blocks progress or is their preference, after researching (memory, notes, files, apps). Up to 3 short options, recommended first ("Weekly (recommended)"); a "type your own" field is added, so never add "Other". Ask everything at once with questions (up to 4).',
     parameters: {
       type: 'object',
       properties: {
         question: { type: 'string', description: 'One question' },
         options: { type: 'array', items: { type: 'string' }, maxItems: 3 },
+        default: { type: 'string', description: 'Used if no answer in time' },
+        preference: { type: 'boolean', description: 'Taste: remembered' },
+        safe: { type: 'boolean', description: 'false: risky default' },
         questions: {
-          type: 'array', minItems: 1, maxItems: 4, description: 'Several clarifying questions answered together',
-          items: { type: 'object', properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' }, maxItems: 3 } }, required: ['question'], additionalProperties: false }
+          type: 'array', minItems: 1, maxItems: 4, description: 'Several, answered together',
+          items: { type: 'object', properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' }, maxItems: 3 }, default: { type: 'string' } }, required: ['question'], additionalProperties: false }
         }
       },
       additionalProperties: false
     },
-    async run({ question, options, questions }, ctx) {
+    async run({ question, options, questions, default: dflt, preference, safe }, ctx) {
+      // An always-on bot: saved preferences, then the card or the Needs-you queue (it keeps working).
+      if (ctx.queueQuestions && (questions?.length || question)) {
+        // preference and safe apply to every question of a batch.
+        const qs = (questions?.length ? questions : [{ question: question!, options, default: dflt }]).map((q) => ({ ...q, ...(preference !== undefined ? { preference } : {}), ...(safe !== undefined ? { safe } : {}) }))
+        const out = await ctx.queueQuestions(qs)
+        if (out) return out
+      }
       if (questions?.length && ctx.askMany) {
         const raw = await ctx.askMany(questions)
         let answers: string[] = []
@@ -150,5 +167,5 @@ export function coreTools(results: ResultStore): ToolDef[] {
     }
   }
 
-  return [findTools, readResult, todo, askUser, proposePlan]
+  return [findTools, readResult, todo, notesTool(), askUser, proposePlan]
 }

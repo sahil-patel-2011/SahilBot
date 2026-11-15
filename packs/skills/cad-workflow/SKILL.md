@@ -6,6 +6,7 @@ uses: 0
 category: Mechanical Engineering
 ---
 
+0. To build in Onshape or FreeCAD, use the cad_design tool and follow cad-design-workflow (brief, concepts, plan, build, verify). This script route is for when neither is set up, or the user wants a code-driven model (CadQuery/OpenSCAD).
 1. Check what's installed (python3 -c "import cadquery", openscad --version). If nothing, ask before installing.
 2. Write a parametric script: all key dimensions as named variables at the top, in mm.
 3. Build features in order: base sketch, extrude, holes/pockets, fillets and chamfers last (they fail most often).

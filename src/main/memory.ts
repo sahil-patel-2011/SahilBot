@@ -1,5 +1,6 @@
 import type { Db } from './db'
 import { uid } from './db'
+import { grantsPermissions, importSecret, importTime, parseExport, type ExportPreview } from './memory-import'
 
 // Long-term memory. Each memory is either shared (about the user: name, timezone, preferences, people,
 // places) or belongs to one bot or project (its job rules, its work log, its decisions). The `scope`
@@ -38,6 +39,9 @@ export interface Memory {
 }
 
 export const isUntrusted = (m: Pick<Memory, 'provenance'>): boolean => m.provenance === 'untrusted'
+
+/** One picked import item as the dialog sends it back (category is loose: any kind name). */
+export interface ImportItemIn { content: string; category?: string; date?: string | null; asRule?: boolean }
 
 export interface ImportPreview {
   items: Array<{ content: string; category: MemoryKind }>
@@ -470,11 +474,12 @@ export class MemoryStore {
    * adding a duplicate. Work-log entries are dated and kept to the most recent few dozen per bot.
    * An untrusted save never rewrites a trusted memory (the trusted wording stays as it was).
    */
-  save(content: string, category: MemoryCategory | string = 'fact', spaceId: string | null = null, source: MemorySource = 'chat', provenance: MemoryProvenance = 'trusted'): { memory: Memory; replaced?: string } {
+  save(content: string, category: MemoryCategory | string = 'fact', spaceId: string | null = null, source: MemorySource = 'chat', provenance: MemoryProvenance = 'trusted', opts: { at?: number } = {}): { memory: Memory; replaced?: string } {
     const kind = normalizeKind(category)
     let text = content.trim().replace(/\s+/g, ' ')
     if (!text) throw new Error('Nothing to remember.')
-    const now = Date.now()
+    // `at`: when the fact was first noted (an import's source date); never in the future.
+    const now = opts.at !== undefined && opts.at < Date.now() ? opts.at : Date.now()
     if (kind === 'worklog' && !RX.worklog.test(text)) text = `${isoDay(now)}: ${text}`
     const peers = this.list(spaceId).filter((m) => m.spaceId === spaceId)
     const dup = kind === 'worklog'
@@ -483,8 +488,9 @@ export class MemoryStore {
     if (dup) {
       if (provenance === 'untrusted' && !isUntrusted(dup)) return { memory: dup, replaced: dup.content }
       // The user (or a trusted save) restating an unverified memory makes it trusted.
-      this.db.sql.prepare('UPDATE memories SET content = ?, category = ?, updated_at = ?, provenance = ? WHERE id = ?').run(text, kind, now, provenance, dup.id)
-      return { memory: { ...dup, content: text, category: kind, updatedAt: now, provenance }, replaced: dup.content }
+      const at = Math.max(now, dup.updatedAt)
+      this.db.sql.prepare('UPDATE memories SET content = ?, category = ?, updated_at = ?, provenance = ? WHERE id = ?').run(text, kind, at, provenance, dup.id)
+      return { memory: { ...dup, content: text, category: kind, updatedAt: at, provenance }, replaced: dup.content }
     }
     const m: Memory = { id: this.newId(), category: kind, content: text, spaceId, projectId: spaceId, source, provenance, createdAt: now, updatedAt: now }
     this.db.sql.prepare('INSERT INTO memories(id, category, content, created_at, updated_at, scope, source, provenance) VALUES(?,?,?,?,?,?,?,?)')
@@ -585,21 +591,40 @@ export class MemoryStore {
     return renderBlock(this.list(ctx.spaceId ?? null), ctx)
   }
 
-  /** Text pasted from another assistant → preview (nothing saved yet). */
-  importPreview(text: string): ImportPreview {
-    return parseImport(text, this.list().map((m) => m.content))
+  /**
+   * Text pasted from another assistant → preview (nothing saved yet): sections, dates, dedupe against
+   * memories and `existingRules`, and what was left out for safety (memory-import.ts).
+   */
+  importPreview(text: string, existingRules: string[] = []): ExportPreview {
+    return parseExport(text, { existing: this.list().map((m) => m.content), existingRules })
   }
 
   /** Saves the picked import lines as shared memories. Returns how many were added (repeats refresh). */
-  importCommit(items: Array<{ content: string; category?: string }>): number {
-    let added = 0
+  importCommit(items: ImportItemIn[], saveRule?: (text: string) => boolean): number {
+    const r = this.importSave(items, saveRule)
+    return r.memories + r.rules
+  }
+
+  /**
+   * The import's Save: each picked item becomes a shared memory dated with its source date; items from
+   * the Instructions section become rules (`saveRule`; without one they're saved as rule memories).
+   * Secrets and permission grants are refused here too, whatever the preview said.
+   */
+  importSave(items: ImportItemIn[], saveRule?: (text: string) => boolean): { memories: number; rules: number; skipped: number } {
+    const out = { memories: 0, rules: 0, skipped: 0 }
     for (const it of items.slice(0, 500)) {
-      const text = (it.content ?? '').trim()
-      if (!text || SECRETISH.test(text)) continue
-      const r = this.save(text, it.category ? normalizeKind(it.category) : classifyMemory(text), null, 'import')
-      if (!r.replaced) added++
+      const text = String(it.content ?? '').trim().replace(/\s+/g, ' ').slice(0, 1000)
+      if (!text || importSecret(text) || grantsPermissions(text)) { out.skipped++; continue }
+      if (it.asRule && saveRule) {
+        if (saveRule(text)) out.rules++
+        else out.skipped++
+        continue
+      }
+      const kind = it.category ? normalizeKind(it.category) : classifyMemory(text)
+      const r = this.save(text, kind === 'worklog' ? 'fact' : kind, null, 'import', 'trusted', { at: importTime(it.date ?? null) })
+      if (!r.replaced) out.memories++
     }
-    return added
+    return out
   }
 
   // ------------------------------------------------------------ internals

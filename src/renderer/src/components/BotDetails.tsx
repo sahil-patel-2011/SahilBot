@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import type { LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
+import type { BotSwarmSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { describeSchedule, groupLibrary, host, when } from '../routines'
 import { BotShareRows } from './BotShare'
 import { BotGoals } from './TasksView'
+import { VaultBotRows } from './VaultView'
+import { Disclosure } from './ui'
+import { BotFolderRow } from './Attachments'
+import { AlwaysOnRows } from './NeedsYou'
 
 type Tab = 'details' | 'library'
 type Filter = 'all' | 'file' | 'link'
@@ -190,11 +194,23 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                   <span className="bd-row-text">Model</span>
                   <span className="bd-row-value" title={space.model ?? 'Auto'}>{space.model ?? 'Auto'}</span>
                 </div>
-                <AutonomyRow spaceId={space.id} />
+                <div className="bd-row">
+                  <span className="bd-row-text">Thinking</span>
+                  <span className="bd-row-value" data-testid="bot-effort-value">{({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[space.effort ?? ''] ?? 'App default'}</span>
+                </div>
+                <AutonomyRow space={space} />
+                {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} />}
+                <BotFolderRow space={space} onChanged={p.onChanged} />
                 <button className="bd-row bd-row-btn" onClick={p.onCustomize} data-testid="bot-customize">
                   <span className="bd-row-text">Customize…</span>
                   <span className="bd-chev"><I.Chevron size={14} /></span>
                 </button>
+                {space.kind !== 'group' && (
+                  <Disclosure title="Advanced" sub={space.kind === 'bot' ? 'Vault, Swarm' : 'Vault'} testId="bot-advanced">
+                    <VaultBotRows spaceId={space.id} />
+                    {space.kind === 'bot' && <SwarmRows spaceId={space.id} />}
+                  </Disclosure>
+                )}
               </div>
               <BotShareRows space={space} />
             </div>
@@ -344,8 +360,13 @@ function folderOf(path: string): string {
   return parts.length > 1 ? parts[parts.length - 2] : ''
 }
 
-/** The autonomy level this bot's new chats start in (Settings keeps it; Bypass is never a default). */
-function AutonomyRow({ spaceId }: { spaceId: string }) {
+/**
+ * The autonomy level this bot's new chats start in (Settings keeps it; Bypass is never a default). A bot
+ * with its own job defaults to Autonomous, and changing it applies to its open conversation too.
+ */
+function AutonomyRow({ space }: { space: Space }) {
+  const spaceId = space.id
+  const bot = space.kind === 'bot' && !space.isMain
   const [s, setS] = useState<{ mine?: PermissionMode; app: PermissionMode; all: Record<string, PermissionMode> } | null>(null)
   useEffect(() => {
     let alive = true
@@ -359,17 +380,65 @@ function AutonomyRow({ spaceId }: { spaceId: string }) {
     if (v === '') delete all[spaceId]
     else all[spaceId] = v as PermissionMode
     setS({ ...s, mine: (v || undefined) as PermissionMode | undefined, all })
-    void api.settings.set({ botModes: all }).then(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
+    const saved = bot && v ? api.botAutonomy.setLevel(spaceId, v as PermissionMode) : api.settings.set({ botModes: all })
+    void Promise.resolve(saved).then(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
   }
+  const level = s.mine ?? (bot ? 'autonomous' : undefined)
   return (
     <label className="bd-row">
-      <span className="bd-row-text">Autonomy for new chats<span className="bd-row-sub">{s.mine === 'autonomous' ? 'Runs builds, tests, installs and file changes in your folders on its own. Deleting, sending and buying still ask.' : 'How much this bot does without asking. Each chat can change it in the composer.'}</span></span>
-      <select className="bd-select" value={s.mine ?? ''} onChange={(e) => pick(e.target.value)} data-testid="bot-autonomy" aria-label="Autonomy for new chats">
-        <option value="">Default ({names[s.app] ?? 'Auto'})</option>
+      <span className="bd-row-text">{bot ? 'Autonomy' : 'Autonomy for new chats'}<span className="bd-row-sub">{level === 'autonomous' ? (bot ? 'Works on its own; asks only for money, passwords, deleting, mass sends, public posts and your exceptions below.' : 'Builds, tests and file changes run on their own; deleting, sending and buying still ask.') : 'Each chat can change it in the composer.'}</span></span>
+      <select className="bd-select" value={bot ? level : s.mine ?? ''} onChange={(e) => pick(e.target.value)} data-testid="bot-autonomy" aria-label="Autonomy for new chats">
+        {!bot && <option value="">Default ({names[s.app] ?? 'Auto'})</option>}
         <option value="ask">Ask first</option>
         <option value="auto">Auto</option>
         <option value="autonomous">Autonomous</option>
       </select>
     </label>
+  )
+}
+
+/** Swarm: Off / Auto (the bot decides) / Always, Max helpers (1-50) and what a routine's swarm may spend. */
+export function SwarmRows({ spaceId }: { spaceId: string }) {
+  const [all, setAll] = useState<Record<string, Partial<BotSwarmSettings>> | null>(null)
+  useEffect(() => {
+    let alive = true
+    void api.settings.get().then((x) => { if (alive) setAll(x.botSwarm ?? {}) })
+    return () => { alive = false }
+  }, [spaceId])
+  if (!all) return null
+  const mine = all[spaceId] ?? {}
+  const mode = mine.mode ?? 'auto'
+  const max = mine.maxHelpers ?? 20
+  const routine = mine.routineUsd ?? 1
+  const save = (patch: Partial<BotSwarmSettings>): void => {
+    const next = { ...all, [spaceId]: { ...mine, ...patch } }
+    setAll(next)
+    void api.settings.set({ botSwarm: next }).then(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
+  }
+  return (
+    <>
+      <label className="bd-row">
+        <span className="bd-row-text">Swarm<span className="bd-row-sub">{mode === 'off' ? 'Never uses temporary helpers.' : mode === 'always' ? 'Every request goes to a swarm, then this bot compiles it.' : 'Decides on its own when many helpers would do better.'}</span></span>
+        <select className="bd-select" value={mode} onChange={(e) => save({ mode: e.target.value as BotSwarmSettings['mode'] })} data-testid="bot-swarm-mode" aria-label="Swarm">
+          <option value="off">Off</option>
+          <option value="auto">Auto</option>
+          <option value="always">Always</option>
+        </select>
+      </label>
+      {mode !== 'off' && (
+        <>
+          <label className="bd-row">
+            <span className="bd-row-text">Max helpers<span className="bd-row-sub">Up to 50, sized to each task.</span></span>
+            <input className="bd-select bd-num" type="number" min={1} max={50} value={max} data-testid="bot-swarm-max" aria-label="Max helpers"
+              onChange={(e) => { const n = Math.round(Number(e.target.value)); if (Number.isFinite(n)) save({ maxHelpers: Math.min(50, Math.max(1, n)) }) }} />
+          </label>
+          <label className="bd-row">
+            <span className="bd-row-text">Routine swarm budget<span className="bd-row-sub">Most one swarm may spend in a routine. $0 = none.</span></span>
+            <input className="bd-select bd-num" type="number" min={0} max={100} step={0.5} value={routine} data-testid="bot-swarm-routine" aria-label="Routine swarm budget"
+              onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) save({ routineUsd: Math.min(100, Math.max(0, n)) }) }} />
+          </label>
+        </>
+      )}
+    </>
   )
 }

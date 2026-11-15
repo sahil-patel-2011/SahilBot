@@ -4,6 +4,7 @@ description: Read or create engineering drawings with GD&T (ASME Y14.5).
 source: you
 uses: 0
 category: Mechanical Engineering
+triggers: gd&t, engineering drawing, datum, position tolerance, flatness, y14.5, drawing callout
 ---
 
 1. Identify datums (A, B, C) and how the part is located and inspected.

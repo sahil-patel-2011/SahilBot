@@ -1,11 +1,15 @@
 import { BrowserWindow } from 'electron'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, extname } from 'node:path'
-import { buildDocx, type Citation, type DocxOptions } from './docx'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, extname, join } from 'node:path'
+import { chartProblems } from './chart'
+import { buildDocx, type Citation, type DocxOptions, type Margins, type PageSize } from './docx'
 import { loadImage } from './image'
-import { blocksToHtml, escapeHtml, parseMarkdown, plainText, type DocBlock, type ParsedDoc } from './markdown'
+import type { DocBlock, ParsedDoc } from './markdown'
+import { bodyHtml, coverHtml, defaultLayout, finishPdf, preparePdf, readPrinted, tighter, tocPagesFrom, type PdfLayout, type PdfOptions } from './pdfdoc'
 import { buildPptx, type SlideSpec } from './pptx'
-import { applyTemplate, longDate, type TemplateFields, type TemplateKind } from './templates'
+import type { TemplateFields, TemplateKind } from './templates'
+import { themeOf, type ThemeName } from './theme'
 import { buildXlsx, type SheetSpec, type WorkbookOptions } from './xlsx'
 
 // Documents are rendered from a small, deterministic spec: Markdown (or blocks) for prose (docx, pdf),
@@ -36,12 +40,23 @@ export interface DocSpec {
   footer?: string | false
   page_numbers?: boolean
   orientation?: 'portrait' | 'landscape'
-  page_size?: 'letter' | 'a4'
+  page_size?: PageSize
+  /** Inches: one number, or {top, right, bottom, left}. */
+  margins?: Margins
+  /** Base text size in points (readable range 8.5-16). */
+  font_size?: number
+  /** Aim for at most this many pages (spacing, then type and margins tighten within readable limits). */
+  fit_pages?: number
   font?: string
   citations?: Array<string | Citation>
   footnotes?: Record<string, string>
+  lang?: string
+  keywords?: string[]
+  /** Look shared by every format: modern (default), classic, minimal. Decks also take light | dark (background). */
+  theme?: ThemeName | 'light' | 'dark'
+  /** Deck background (default light). */
+  background?: 'light' | 'dark'
   // Decks
-  theme?: 'light' | 'dark'
   slide_numbers?: boolean
   // Workbooks
   summary?: WorkbookOptions['summary']
@@ -55,114 +70,105 @@ export interface CreateResult {
   warnings?: string[]
   /** Slides actually written (long slides continue on extra slides). */
   slides?: number
+  /** Pages (PDF: exact; Word: as Word lays them out, estimated). */
+  pages?: number
+  /** Layout changes the engine made (fitting to pages, tightening). */
+  notes?: string[]
 }
-
-const DEFAULT_ACCENT = '#FF6A1A'
 
 // ------------------------------------------------------------------ pdf
 
-const css = (accent: string, o: { landscape?: boolean; size?: 'letter' | 'a4' }): string => `
-  @page { size: ${o.size === 'a4' ? 'A4' : 'Letter'}${o.landscape ? ' landscape' : ''}; margin: 0.9in 0.85in; }
-  @page wide { size: ${o.size === 'a4' ? 'A4' : 'Letter'} landscape; }
-  body { font: 11pt/1.55 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; }
-  h1 { font-size: 20pt; margin: 18pt 0 8pt; color: ${accent}; page-break-after: avoid; }
-  h2 { font-size: 15pt; margin: 16pt 0 6pt; color: #111; page-break-after: avoid; }
-  h3 { font-size: 12.5pt; margin: 14pt 0 4pt; color: ${accent}; page-break-after: avoid; }
-  h4 { font-size: 11pt; margin: 12pt 0 4pt; font-style: italic; }
-  p { margin: 0 0 8pt; } ul, ol { margin: 0 0 8pt; padding-left: 18pt; } li { margin: 2pt 0; }
-  p.title { font-size: 26pt; font-weight: 700; margin: 0 0 4pt; letter-spacing: -0.01em; }
-  p.title::after { content: ''; display: block; width: 48pt; height: 3pt; background: ${accent}; margin-top: 8pt; border-radius: 2pt; }
-  p.subtitle { font-size: 14pt; color: #5f6368; } p.lead { font-size: 13pt; color: #374151; } p.small { font-size: 9pt; color: #5f6368; }
-  .caption { font-size: 9pt; font-style: italic; color: #5f6368; margin: 4pt 0 6pt; }
-  table { border-collapse: collapse; width: 100%; margin: 4pt 0 12pt; font-size: 9.5pt; page-break-inside: auto; }
-  thead { display: table-header-group; } tr { page-break-inside: avoid; }
-  th { background: ${accent}; color: white; text-align: left; } th, td { padding: 4pt 7pt; border: 0.5pt solid #d0d5dd; }
-  table.banded tbody tr:nth-child(even) td { background: #f2f4f7; }
-  table.total tbody tr:last-child td { font-weight: 700; border-top: 1.5pt solid #1a1a1a; }
-  code { font: 9pt "SF Mono", Menlo, monospace; background: #f1f1f1; padding: 1pt 3pt; border-radius: 3pt; }
-  pre { background: #f4f4f4; padding: 8pt 10pt; border-radius: 6pt; white-space: pre-wrap; }
-  pre code { background: none; padding: 0; }
-  blockquote { border-left: 3pt solid ${accent}; margin: 8pt 0; padding: 2pt 12pt; color: #374151; font-style: italic; }
-  blockquote cite { display: block; text-align: right; font-style: normal; color: #5f6368; }
-  .callout { border-left: 4pt solid #2563eb; background: #eff6ff; padding: 6pt 10pt; margin: 8pt 0; border-radius: 3pt; }
-  .callout.warning { border-color: #d97706; background: #fffbeb; } .callout.caution { border-color: #dc2626; background: #fef2f2; }
-  .callout.tip { border-color: #16a34a; background: #f0fdf4; } .callout.important { border-color: #7c3aed; background: #f5f3ff; }
-  figure { margin: 10pt 0; text-align: center; page-break-inside: avoid; } img { max-width: 100%; max-height: 7.5in; }
-  hr { border: none; border-top: 0.75pt solid #d0d5dd; margin: 12pt 0; }
-  .pb { page-break-after: always; }
-  .sec.landscape { page: wide; }
-  .toc { margin: 0 0 18pt; } .toc-title { font-size: 16pt; font-weight: 700; margin-bottom: 6pt; }
-  .toc a { display: block; color: #1a1a1a; text-decoration: none; padding: 1.5pt 0; border-bottom: 0.5pt dotted #ccc; }
-  .toc a.l2 { padding-left: 14pt; } .toc a.l3 { padding-left: 28pt; font-size: 10pt; } .toc a.l4 { padding-left: 42pt; font-size: 10pt; }
-  .cover { height: 8.4in; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }
-  .cover .t { font-size: 34pt; font-weight: 700; line-height: 1.15; } .cover .s { font-size: 16pt; color: #5f6368; margin-top: 8pt; }
-  .cover .rule { width: 64pt; height: 4pt; background: ${accent}; margin: 18pt 0; border-radius: 2pt; } .cover .m { color: #5f6368; margin-top: 2pt; }
-  .footnotes { font-size: 9pt; color: #374151; } sup.fn a { color: ${accent}; text-decoration: none; }
-  a { color: #1d4ed8; }
-`
+export type { PdfOptions } from './pdfdoc'
 
-/** Same options as Word documents (fonts aside: the PDF uses the system font). */
-export type PdfOptions = DocxOptions
+export interface PdfBuild {
+  buffer: Buffer
+  pages: number
+  warnings: string[]
+  /** What the engine did to the layout (fitting, tightening). */
+  notes: string[]
+}
 
-/**
- * A PDF from Markdown or blocks through Chromium's print engine: real headings (with a PDF outline),
- * cover, table of contents, tables, images, footnotes, landscape sections, header and "Page X of Y" footer.
- */
-export async function renderPdf(input: string | DocBlock[] | ParsedDoc, o: PdfOptions = {}): Promise<Buffer> {
-  const parsed: ParsedDoc = typeof input === 'string' ? parseMarkdown(input) : Array.isArray(input) ? { blocks: input, footnotes: {} } : input
-  let blocks = parsed.blocks
-  let opts = { ...o }
-  if (o.template) {
-    const t = applyTemplate(o.template, parsed, o.fields, o.title)
-    blocks = t.blocks
-    opts = { ...opts, title: opts.title ?? t.title, cover: opts.cover ?? t.layout.cover, toc: opts.toc ?? t.layout.toc, header: opts.header ?? t.layout.header, pageNumbers: opts.pageNumbers ?? t.layout.pageNumbers, subtitle: opts.subtitle ?? t.layout.subtitle, author: opts.author ?? t.layout.author, date: opts.date ?? t.layout.date }
-  }
-  const accent = /^#[0-9a-f]{6}$/i.test(opts.accent ?? '') ? opts.accent! : DEFAULT_ACCENT
-  const first = blocks[0]
-  const h1s = blocks.filter((b) => b.type === 'heading' && b.level === 1).length
-  let title = opts.title
-  if (first?.type === 'heading' && first.level === 1 && h1s === 1) {
-    title ??= plainText(first.text)
-    blocks = opts.cover ? blocks.slice(1) : [{ type: 'paragraph', style: 'title', text: first.text }, ...blocks.slice(1)]
-  }
-  title ??= 'Document'
-  const heads = blocks.filter((b) => b.type === 'heading' && b.level <= 2).length
-  const roughWords = (blocksToHtml(blocks).replace(/<[^>]+>/g, ' ').match(/[A-Za-z0-9']+/g) ?? []).length
-  if (!blocks.some((b) => b.type === 'toc') && (opts.toc === true || ((opts.toc ?? 'auto') === 'auto' && ((heads >= 4 && roughWords >= 600) || (heads >= 2 && roughWords > 1800))))) {
-    let at = 0
-    while (at < blocks.length && blocks[at].type === 'paragraph' && ['title', 'subtitle'].includes((blocks[at] as { style?: string }).style ?? '')) at++
-    blocks = [...blocks.slice(0, at), { type: 'toc' }, ...blocks.slice(at)]
-  }
-  const image = (src: string): string | undefined => {
-    try {
-      const img = loadImage(src, opts.baseDir, opts.readImage)
-      return `data:image/${img.type === 'jpg' ? 'jpeg' : img.type};base64,${img.data.toString('base64')}`
-    } catch { return undefined }
-  }
-  const cover = opts.cover ? `<section class="cover"><div class="t">${escapeHtml(title)}</div>${opts.subtitle ? `<div class="s">${escapeHtml(opts.subtitle)}</div>` : ''}<div class="rule"></div>${opts.author ? `<div class="m">${escapeHtml(opts.author)}</div>` : ''}<div class="m">${escapeHtml(opts.date ?? longDate())}</div></section>` : ''
-  const body = blocksToHtml(blocks, { footnotes: { ...parsed.footnotes, ...(opts.footnotes ?? {}) }, image })
-  const refs = opts.citations?.length ? `<h2>References</h2><ol>${opts.citations.map((c) => { const x = typeof c === 'string' ? { text: c } : c; return `<li>${escapeHtml(x.text)}${x.url ? ` <a href="${escapeHtml(x.url)}">${escapeHtml(x.url)}</a>` : ''}</li>` }).join('')}</ol>` : ''
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${css(accent, { landscape: opts.orientation === 'landscape', size: opts.pageSize })}</style></head><body>${cover}${body}${refs}</body></html>`
-  const headerText = opts.header === false ? '' : opts.header ?? (opts.cover ? title : '')
-  const numbers = opts.pageNumbers ?? true
-  const small = 'font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:8pt;color:#6b7280;width:100%;padding:0 0.85in;'
-  const win = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true } })
+/** Prints HTML to PDF in a hidden, offline, script-free window. */
+async function printHtml(html: string): Promise<Buffer> {
+  const dir = mkdtempSync(join(tmpdir(), 'sb-pdf-'))
+  const file = join(dir, 'doc.html')
+  writeFileSync(file, html)
+  const win = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true, partition: 'sb-pdf-print' } })
   try {
-    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-    return await win.webContents.printToPDF({
-      printBackground: true,
-      // The CSS @page rules decide the size, so landscape sections come out landscape.
-      preferCSSPageSize: true,
-      pageSize: opts.pageSize === 'a4' ? 'A4' : 'Letter',
-      landscape: opts.orientation === 'landscape',
-      generateDocumentOutline: true,
-      displayHeaderFooter: !!headerText || numbers || !!opts.footer,
-      headerTemplate: `<div style="${small}text-align:right">${escapeHtml(headerText || '')}</div>`,
-      footerTemplate: `<div style="${small}display:flex;justify-content:space-between"><span>${escapeHtml(opts.footer || '')}</span><span>${numbers ? 'Page <span class="pageNumber"></span> of <span class="totalPages"></span>' : ''}</span></div>`
-    })
+    await win.loadFile(file)
+    return await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true, generateDocumentOutline: true, generateTaggedPDF: true })
   } finally {
     win.destroy()
+    rmSync(dir, { recursive: true, force: true })
   }
+}
+
+/**
+ * A PDF from Markdown or blocks through Chromium's print engine (see pdfdoc.ts for what it does): themed
+ * typography, cover, TOC with page numbers, bookmarks, running header and "Page X of Y", fitted to a page
+ * count when asked, finished with metadata.
+ */
+export async function buildPdf(input: string | DocBlock[] | ParsedDoc, o: PdfOptions = {}): Promise<PdfBuild> {
+  const p = preparePdf(input, o)
+  const warnings: string[] = []
+  const notes: string[] = []
+  const io = { baseDir: o.baseDir, readImage: o.readImage }
+  for (const b of p.blocks) {
+    if (b.type === 'image') { try { loadImage(b.src, o.baseDir, o.readImage) } catch (e) { warnings.push((e as Error).message) } }
+    if (b.type === 'chart') { const pr = chartProblems(b.chart); if (pr.length) warnings.push(`Chart${b.chart.title ? ` "${b.chart.title}"` : ''}: ${pr.join(' ')}`) }
+  }
+  let layout = defaultLayout(p)
+  const render = async (l: PdfLayout) => { const buf = await printHtml(bodyHtml(p, l, io)); return { l, buf, info: await readPrinted(buf, l.margins) } }
+  let r = await render(layout)
+  const want = p.opts.fitPages && p.opts.fitPages > 0 ? Math.round(p.opts.fitPages) - (p.cover ? 1 : 0) : undefined
+  if (want && r.info.pages > want) {
+    // Fit to N pages: tighten step by step; keep the first layout that fits.
+    let best = r
+    for (let step = 0, l: PdfLayout | undefined = tighter(layout, 0); l; l = tighter(best.l, ++step)) {
+      const t = await render(l)
+      best = t
+      if (t.info.pages <= want) break
+    }
+    if (best.info.pages <= want) notes.push(`Fitted to ${want + (p.cover ? 1 : 0)} page(s): ${describe(layout, best.l)}.`)
+    else notes.push(`Could not fit ${want + (p.cover ? 1 : 0)} page(s) within readable limits (smallest type ${best.l.fontSize} pt): ${best.info.pages + (p.cover ? 1 : 0)} pages. Shorten the content.`)
+    r = best
+  } else if (!want && r.info.pages > 1 && r.info.lastFill < 0.2) {
+    // A last page with a few lines on it: tighten the spacing a little to pull them back.
+    for (let step = 0; step < 2; step++) {
+      const t = await render(tighter(r.l, step)!)
+      if (t.info.pages < r.info.pages) { notes.push(`Tightened spacing slightly so the last page isn't nearly empty (${r.info.pages} → ${t.info.pages} pages).`); r = t; break }
+    }
+  }
+  layout = r.l
+  // One page: "Page 1 of 1" is noise, unless page numbers were asked for.
+  if (r.info.pages === 1 && o.pageNumbers === undefined && layout.pageNumbers) { layout = { ...layout, pageNumbers: false }; r = await render(layout) }
+  // TOC page numbers: a second pass with the pages the first one found (a third if that moved anything).
+  if (p.hasToc) {
+    for (let pass = 0; pass < 2; pass++) {
+      const pages = tocPagesFrom(p, r.info)
+      if (layout.tocPages && Object.entries(pages).every(([k, v]) => layout.tocPages![k] === v)) break
+      layout = { ...layout, tocPages: pages }
+      r = await render(layout)
+    }
+  }
+  const missing = r.info.outline.length === 0 && p.blocks.some((b) => b.type === 'heading')
+  if (missing) warnings.push('The PDF has no bookmarks (outline).')
+  const cover = p.cover ? await printHtml(coverHtml(p, layout)) : undefined
+  const author = p.opts.author?.replace(/^Prepared by /, '') ?? p.opts.fields?.author ?? p.opts.fields?.from
+  const buffer = await finishPdf(r.buf, cover, { title: p.title, author, subject: p.opts.subtitle, keywords: o.keywords, lang: o.lang })
+  return { buffer, pages: r.info.pages + (cover ? 1 : 0), warnings, notes }
+}
+
+function describe(a: PdfLayout, b: PdfLayout): string {
+  const out: string[] = []
+  if (b.density < a.density) out.push(`spacing ${Math.round(b.density * 100)}%`)
+  if (b.fontSize < a.fontSize) out.push(`text ${b.fontSize} pt (was ${a.fontSize})`)
+  if (b.margins.left < a.margins.left || b.margins.top < a.margins.top) out.push(`margins ${b.margins.top.toFixed(2)}"/${b.margins.left.toFixed(2)}"`)
+  return out.join(', ') || 'no changes'
+}
+
+export async function renderPdf(input: string | DocBlock[] | ParsedDoc, o: PdfOptions = {}): Promise<Buffer> {
+  return (await buildPdf(input, o)).buffer
 }
 
 /** The original entry point: a PDF from Markdown. */
@@ -194,7 +200,8 @@ export interface CreateOptions {
 export async function createDocument(fullPath: string, spec: DocSpec, co: CreateOptions = {}): Promise<CreateResult> {
   const ext = extname(fullPath).toLowerCase()
   const title = spec.title ?? spec.slides?.[0]?.title ?? fullPath.split('/').pop()!.replace(/\.\w+$/, '')
-  const accent = /^#[0-9a-f]{6}$/i.test(spec.accent ?? '') ? spec.accent! : DEFAULT_ACCENT
+  const accent = /^#[0-9a-f]{6}$/i.test(spec.accent ?? '') ? spec.accent! : undefined
+  const docTheme: ThemeName | undefined = spec.theme === 'light' || spec.theme === 'dark' ? undefined : spec.theme
   const prose = (): string | DocBlock[] => {
     if (spec.blocks?.length) return spec.blocks
     if (spec.markdown !== undefined) return spec.markdown
@@ -203,25 +210,37 @@ export async function createDocument(fullPath: string, spec: DocSpec, co: Create
   const docOpts = (): DocxOptions => ({
     title: spec.title, accent, template: spec.template, fields: spec.fields, subtitle: spec.subtitle, author: spec.author,
     toc: spec.toc, cover: spec.cover, header: (spec.header as unknown) === true ? undefined : spec.header, footer: (spec.footer as unknown) === true ? undefined : spec.footer, pageNumbers: spec.page_numbers,
-    orientation: spec.orientation, pageSize: spec.page_size, font: spec.font, citations: spec.citations, footnotes: spec.footnotes,
+    orientation: spec.orientation, pageSize: spec.page_size, margins: spec.margins, fontSize: spec.font_size, fitPages: spec.fit_pages, theme: docTheme,
+    font: spec.font, citations: spec.citations, footnotes: spec.footnotes, lang: spec.lang, keywords: spec.keywords,
     baseDir: dirname(fullPath), readImage: co.readImage
   })
   let buf: Buffer
   let warnings: string[] = []
+  let notes: string[] = []
   let slides: number | undefined
+  let pages: number | undefined
   switch (ext) {
-    case '.pdf':
-      buf = await renderPdf(prose(), { ...docOpts(), accent })
+    case '.pdf': {
+      const { font: _font, ...pdfOpts } = docOpts()
+      const r = await buildPdf(prose(), pdfOpts)
+      buf = r.buffer
+      warnings = r.warnings
+      notes = r.notes
+      pages = r.pages
       break
+    }
     case '.docx': {
       const r = await buildDocx(prose(), docOpts())
       buf = r.buffer
       warnings = r.warnings
+      notes = r.notes ?? []
+      pages = r.stats.pages
       break
     }
     case '.pptx': {
       if (!spec.slides?.length) throw new Error('A deck needs "slides".')
-      const r = await buildPptx(spec.slides, { title, accent, theme: spec.theme, font: spec.font, slideNumbers: spec.slide_numbers, footer: typeof spec.footer === 'string' ? spec.footer : undefined, author: spec.author, baseDir: dirname(fullPath), readImage: co.readImage })
+      const background = spec.background ?? (spec.theme === 'dark' ? 'dark' : 'light')
+      const r = await buildPptx(spec.slides, { title, accent, theme: background, style: docTheme, font: spec.font, slideNumbers: spec.slide_numbers, footer: typeof spec.footer === 'string' ? spec.footer : undefined, author: spec.author, baseDir: dirname(fullPath), readImage: co.readImage })
       buf = r.buffer
       warnings = r.warnings
       slides = r.slides
@@ -229,7 +248,7 @@ export async function createDocument(fullPath: string, spec: DocSpec, co: Create
     }
     case '.xlsx': {
       if (!spec.sheets?.length) throw new Error('A spreadsheet needs "sheets".')
-      const r = await buildXlsx(spec.sheets, { accent, summary: spec.summary, currency: spec.currency, title: spec.title, author: spec.author })
+      const r = await buildXlsx(spec.sheets, { accent: themeOf(docTheme, accent).accentText, summary: spec.summary, currency: spec.currency, title: spec.title, author: spec.author })
       buf = r.buffer
       warnings = r.warnings
       break
@@ -244,5 +263,5 @@ export async function createDocument(fullPath: string, spec: DocSpec, co: Create
   }
   mkdirSync(dirname(fullPath), { recursive: true })
   writeFileSync(fullPath, buf)
-  return { bytes: buf.length, kind: ext.slice(1).toUpperCase(), ...(warnings.length ? { warnings } : {}), ...(slides !== undefined ? { slides } : {}) }
+  return { bytes: buf.length, kind: ext.slice(1).toUpperCase(), ...(warnings.length ? { warnings } : {}), ...(slides !== undefined ? { slides } : {}), ...(pages !== undefined ? { pages } : {}), ...(notes.length ? { notes } : {}) }
 }

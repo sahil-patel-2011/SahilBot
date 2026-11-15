@@ -34,6 +34,19 @@ This link always gets the newest build. Every push to `main` builds and publishe
 
 After that it opens normally. Notarized builds open with a plain double-click.
 
+## Always-on server (Raspberry Pi, VM, Mac mini)
+
+SahilBot Server runs your bots 24/7: routines, goals and connectors keep working while your Mac is closed or you're traveling. You use it from your phone or any browser (the same app), or from the Mac app (Settings → Always-on server). On a **Raspberry Pi 5** (8 GB recommended, 4 GB minimum, 64-bit Raspberry Pi OS, an SSD and the active cooler), setup takes about five minutes:
+
+```sh
+curl -fsSLO https://github.com/sahil-patel-2011/SahilBot/releases/latest/download/SahilBot-server-linux-arm64.tar.gz
+tar -xzf SahilBot-server-linux-arm64.tar.gz
+./sahilbot-server/install.sh          # Node.js if needed, a service that starts at boot, a pairing code
+sudo tailscale serve --bg 8787        # HTTPS on your tailnet: open https://<pi>.<tailnet>.ts.net on your phone
+```
+
+It listens only on `127.0.0.1` by default. Every device pairs once with a one-time code and can be removed at any time, and remote approvals are logged. It runs cloud models, or your ChatGPT plan through Codex; local models aren't realistic on a Pi. The built-in browser, computer use, Mac apps and voice need the Mac app. See [docs/server.md](docs/server.md) for the design, security, Docker and launchd installs, and measured memory use.
+
 ## Local models (Ollama)
 
 SahilBot runs models on your Mac through [Ollama](https://ollama.com) (or [LM Studio](https://lmstudio.ai)).
@@ -67,6 +80,8 @@ npm start            # run the built app
 npm test             # tests (unit: npx vitest run tests/unit)
 npm run voice:setup  # once: builds whisper.cpp (Metal) and fetches the voice models
 npm run install:mac  # build and install into /Applications (or ~/Applications) on this Mac
+npm run build && npm run build:server && node out/server/index.js --data /tmp/x   # SahilBot Server (docs/server.md)
+npx vitest run --config vitest.server.config.mts   # server tests: in-process, load, web UI in headless Chromium
 ```
 
 SahilBot expects Ollama at `http://localhost:11434/v1`; change servers in Settings (⌘,).
@@ -77,6 +92,7 @@ SahilBot expects Ollama at `http://localhost:11434/v1`; change servers in Settin
 
 - `v<version>-<run number>`: a versioned release, marked **Latest**, with the versioned files and the stable names `SahilBot-mac-arm64.dmg` / `SahilBot-mac-arm64.zip` plus `SHA256SUMS.txt`. GitHub's `/releases/latest/download/<file>` always resolves to the newest non-prerelease release, so the download link above always gets the newest build.
 - `latest`: a rolling prerelease with only the stable names, moved to the newest commit.
+- SahilBot Server: a Linux job builds `SahilBot-server-linux-arm64.tar.gz` and `SahilBot-server-linux-x64.tar.gz` (`scripts/server/package.mjs`), smoke-tests the x64 one, and they're published next to the DMG with the same stable and versioned names.
 
 Signing: add the repository secrets `CSC_LINK` (Developer ID Application certificate, `.p12` as base64) and `CSC_KEY_PASSWORD` to sign with your Developer ID, plus `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` to notarize too. Without them builds are signed ad hoc (see *First launch* above). The version is `package.json`'s; the run number is the build number (`CFBundleVersion`).
 

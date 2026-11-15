@@ -30,6 +30,8 @@ export interface KnowledgeDeps {
   /** Tests: a fixed embedder (or null for keyword only) instead of detecting one in Ollama. */
   embedder?: Embedder | null
   maxFiles?: number
+  /** Local models are off: no Ollama embedding model is suggested (OpenAI embeddings only if turned on). */
+  localOff?: () => boolean
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -345,7 +347,8 @@ export class KnowledgeService {
       keyword: this.store.mode,
       lastScan: this.lastScan,
       suggestedModel: SUGGESTED_EMBED_MODEL,
-      attached: this.attachedCandidates()
+      attached: this.attachedCandidates(),
+      ...(this.d.localOff?.() ? { localOff: true } : {})
     }
   }
 

@@ -22,7 +22,9 @@ describe('anti-hallucination', () => {
     await expect.poll(() => llm.script.length, { timeout: 20_000 }).toBe(0)
     await expect.poll(() => page.locator('[data-testid="stop"]').count(), { timeout: 20_000 }).toBe(0)
     const prompt = String(llm.requests[0].messages[0].content)
-    expect(prompt).toContain('research first, never guess')
+    // A question runs on the chat path, whose prompt carries the same look-it-up-first rule.
+    expect(prompt).toContain('# Chatting')
+    expect(prompt).toContain('Anything specific or changeable')
     // The app sent the first answer back because its link wasn't retrieved by any tool.
     const second = JSON.stringify(llm.requests[1].messages)
     expect(second).toContain("cites links that don't appear in any source")

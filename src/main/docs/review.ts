@@ -1,11 +1,14 @@
-import { readFileSync } from 'node:fs'
-import { basename, extname } from 'node:path'
+import { createHash } from 'node:crypto'
+import { readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, extname, join } from 'node:path'
 import { functionsIn } from './formula'
 import { inspectDocx, inspectPptx, type DocxInfo, type DeckInfo } from './inspect'
 import { pdfFields } from './pdf'
 import { pdfText } from './read'
 import { computeWorkbook, isDateFmt, loadWorkbook, parseCsv, parseNumber, readSheets, sheetGrid, showValue } from './xlsx'
 import type { Value } from './formula'
+import { bodyFill, canRender, renderDocument, type RenderResult } from './render'
 
 // review_document: reads a finished .docx/.xlsx/.pptx/.pdf back and checks it against a rubric —
 // structure (heading order, a TOC when long, no empty sections or slides), formatting (consistent
@@ -15,13 +18,52 @@ import type { Value } from './formula'
 
 export type Area = 'structure' | 'formatting' | 'content' | 'spelling' | 'numbers'
 export interface ReviewCheck { area: Area; status: 'pass' | 'fail' | 'warn'; message: string; where?: string }
-export interface Review { file: string; kind: string; pass: boolean; checks: ReviewCheck[]; summary: string }
+export interface Review {
+  file: string
+  kind: string
+  pass: boolean
+  checks: ReviewCheck[]
+  summary: string
+  /** Rendered pages (render option): page count, a contact sheet and page images to look at. */
+  rendered?: { pages: number; method: string; sheet?: string; images: string[]; notes: string[] }
+}
 
 export interface ReviewOptions {
   /** A source table to check numbers against: rows (first row headers) or a CSV/XLSX file's bytes. */
   source?: { rows?: Array<Array<string | number | null>>; data?: Buffer; name?: string }
   /** Expect a table of contents regardless of length. */
   requireToc?: boolean
+  /** Render the pages (macOS) and check them visually: blank pages, cut-off content, overflowing slide text, low contrast, a nearly empty last page. */
+  render?: boolean | { outDir?: string; width?: number }
+  /** The most pages the document should have (e.g. 1 for a one-page résumé). */
+  expectPages?: number
+}
+
+/** Checks from the rendered pages. */
+export function renderChecks(r: RenderResult, kind: string, expectPages?: number): ReviewCheck[] {
+  const out: ReviewCheck[] = []
+  const unit = kind === 'pptx' ? 'slide' : 'page'
+  out.push({ area: 'formatting', status: 'pass', message: `Rendered ${r.pageCount} ${unit}${r.pageCount === 1 ? '' : 's'} (${r.method === 'pdfkit' ? 'exact' : r.method === 'quicklook' ? 'Quick Look layout, close to Office' : 'first page only'})` })
+  if (expectPages && r.method !== 'thumbnail' && r.pageCount > expectPages) out.push({ area: 'formatting', status: 'fail', message: `${r.pageCount} ${unit}s, expected at most ${expectPages}: rebuild with fit_pages: ${expectPages} (or shorten the content)` })
+  const blank = r.checks.filter((c) => c.blank).map((c) => c.page)
+  if (blank.length) out.push({ area: 'structure', status: 'fail', message: `Blank ${unit}${blank.length > 1 ? 's' : ''}: ${blank.join(', ')} (stray page breaks or an empty section)`, where: `${unit} ${blank[0]}` })
+  if (kind !== 'pptx' && kind !== 'xlsx') {
+    for (const c of r.checks) {
+      // Full-bleed designs (cover bands) are fine; text running into the right/bottom edge is not.
+      if (c.ink < 0.45 && (c.edge.right > 0.05 || c.edge.bottom > 0.04 || c.edge.left > 0.06)) out.push({ area: 'formatting', status: 'warn', message: `Content reaches the edge of page ${c.page} (${c.edge.right > 0.05 ? 'right' : c.edge.bottom > 0.04 ? 'bottom' : 'left'}): cut off in print? Check the page image`, where: `page ${c.page}` })
+    }
+    const last = r.checks.find((c) => c.page === r.pageCount)
+    if (last && r.pageCount > 1 && r.method !== 'thumbnail') {
+      const fill = bodyFill(last)
+      if (fill > 0 && fill < 0.2) out.push({ area: 'formatting', status: 'warn', message: `The last page is only about ${Math.max(1, Math.round(fill * 100))}% used: tighten to ${r.pageCount - 1} page${r.pageCount - 1 === 1 ? '' : 's'} (fit_pages: ${r.pageCount - 1}) or end on a full section`, where: `page ${r.pageCount}` })
+    }
+  }
+  for (const o of r.overflow.slice(0, 10)) out.push({ area: 'formatting', status: kind === 'pptx' ? 'fail' : 'warn', message: `Overflow: ${o}` })
+  // Quick Look draws Excel's conditional-format colors loosely: only clear failures count there.
+  const low = kind === 'xlsx' ? r.lowContrast.filter((x) => Number(/contrast ([\d.]+):1/.exec(x)?.[1] ?? 0) < 3) : r.lowContrast
+  if (low.length) out.push({ area: 'formatting', status: 'warn', message: `Low-contrast text (hard to read, fails WCAG): ${low.slice(0, 5).join('; ')}${low.length > 5 ? ` (+${low.length - 5} more)` : ''}` })
+  else if (r.method !== 'thumbnail') out.push({ area: 'formatting', status: 'pass', message: 'Text contrast is readable' })
+  return out
 }
 
 // ------------------------------------------------------------------ text checks
@@ -81,7 +123,8 @@ export function spellingChecks(items: TextItem[]): ReviewCheck[] {
       const fix = TYPOS[w]
       if (fix) out.push({ area: 'spelling', status: 'fail', message: `"${m[0]}" → "${fix}"`, where: it.where })
     }
-    for (const m of it.text.matchAll(/\b(\w{2,})\s+\1\b/gi)) {
+    // "PO PO-88213" is a label and a code, not a typo.
+    for (const m of it.text.matchAll(/\b(\w{2,})\s+\1\b(?![-–\d])/gi)) {
       if (/^(\d+|ha|bye|no|very|so|that|had)$/i.test(m[1])) continue
       out.push({ area: 'spelling', status: 'fail', message: `Repeated word "${m[0]}"`, where: it.where })
     }
@@ -215,7 +258,9 @@ function reviewDocx(d: DocxInfo): { checks: ReviewCheck[]; texts: TextItem[]; ta
   if (fonts.size <= 2 && sizes.size <= 3 && !fake.length) checks.push({ area: 'formatting', status: 'pass', message: 'Consistent styles' })
   d.tables.forEach((t, k) => {
     if (!t.rows.length) return
-    if (!t.headerRow && t.rows.length > 3 && t.rows[0].every((c) => c && !/^\s*[-$\d]/.test(c))) checks.push({ area: 'formatting', status: 'warn', message: `Table ${k + 1}'s first row isn't marked as a header row (it won't repeat across pages)`, where: `table ${k + 1}` })
+    // A two-column label/value block (memo To/From/Date) has no header row by design.
+    const keyValue = t.rows[0].length === 2 && t.rows.every((r) => r[0] && r[0].length <= 24 && !/[.!?]$/.test(r[0]))
+    if (!t.headerRow && !keyValue && t.rows.length > 3 && t.rows[0].every((c) => c && !/^\s*[-$\d]/.test(c))) checks.push({ area: 'formatting', status: 'warn', message: `Table ${k + 1}'s first row isn't marked as a header row (it won't repeat across pages)`, where: `table ${k + 1}` })
     const emptyCols = t.rows[0]?.map((_, c) => t.rows.slice(1).every((r) => !r[c]?.trim())).filter(Boolean).length ?? 0
     if (t.rows.length > 1 && emptyCols) checks.push({ area: 'content', status: 'fail', message: `Table ${k + 1} has ${emptyCols} empty column(s)`, where: `table ${k + 1}` })
   })
@@ -250,7 +295,8 @@ function reviewPptx(deck: DeckInfo): { checks: ReviewCheck[]; texts: TextItem[];
       const small = sh.paragraphs.filter((p) => p.size < 12)
       if (small.length && !sh.isTitle && !/caption|footer|source|label/i.test(sh.name)) checks.push({ area: 'formatting', status: 'warn', message: `Text at ${Math.min(...small.map((p) => p.size))} pt is hard to read when presented (use 14 pt or more)`, where: at })
     }
-    const body = s.shapes.filter((x) => !x.isTitle && !/slide number/i.test(x.name))
+    // Bullet budget: body text only (big-number cards, captions and column titles aren't bullets).
+    const body = s.shapes.filter((x) => !x.isTitle && !/slide number|^stat|caption|column title|subtitle|attribution/i.test(x.name))
     const bullets = body.reduce((n, x) => n + x.paragraphs.length, 0)
     const words = body.reduce((n, x) => n + x.paragraphs.reduce((m, p) => m + (p.text.match(/\S+/g) ?? []).length, 0), 0)
     if (bullets > 8) checks.push({ area: 'formatting', status: 'warn', message: `${bullets} bullet lines: aim for 6 or fewer; move detail to the notes`, where: at })
@@ -333,12 +379,20 @@ async function reviewPdf(data: Buffer, tmpPath?: string): Promise<{ checks: Revi
   const checks: ReviewCheck[] = []
   const { text, pages } = await pdfTextFrom(data, tmpPath)
   const perPage = text.split(/--- Page (\d+) ---/).slice(1)
+  // Running headers and footers repeat on every page by design: leave them out of the duplicate check.
+  const furniture = new Set<string>()
+  if (perPage.length >= 6) {
+    const counts = new Map<string, number>()
+    for (let k = 1; k < perPage.length; k += 2) for (const l of new Set(perPage[k].split('\n').map((x) => x.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim()).filter(Boolean))) counts.set(l, (counts.get(l) ?? 0) + 1)
+    for (const [l, c] of counts) if (c >= Math.max(2, (perPage.length / 2) * 0.6)) furniture.add(l)
+  }
   const texts: TextItem[] = []
   let emptyPages = 0
   for (let k = 0; k < perPage.length; k += 2) {
     const n = perPage[k], body = perPage[k + 1] ?? ''
     if (!body.trim()) { emptyPages++; continue }
-    for (const para of body.split(/\n\s*\n|\n(?=[A-Z•\-\d])/).map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean)) texts.push({ text: para, where: `page ${n}` })
+    const kept = furniture.size ? body.split('\n').filter((l) => !furniture.has(l.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim())).join('\n') : body
+    for (const para of kept.split(/\n\s*\n|\n(?=[A-Z•\-\d])/).map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean)) texts.push({ text: para, where: `page ${n}` })
   }
   if (pages && emptyPages === pages) checks.push({ area: 'content', status: 'fail', message: `No text on any of the ${pages} pages (scanned images? check it visually)` })
   else if (emptyPages) checks.push({ area: 'structure', status: 'warn', message: `${emptyPages} blank page(s)` })
@@ -395,8 +449,22 @@ export async function reviewDocument(input: string | { data: Buffer; name: strin
   const sp = spellingChecks(r.texts)
   checks.push(...(sp.length ? sp.slice(0, 20) : [{ area: 'spelling' as const, status: 'pass' as const, message: 'No common typos' }]))
   if (o.source) checks.push(...numberChecks(r.tables, r.texts.filter((t) => !/table/.test(t.where)), await loadSource(o.source)))
+  let rendered: Review['rendered']
+  if (o.render && canRender() && typeof input === 'string') {
+    try {
+      const ro = typeof o.render === 'object' ? o.render : {}
+      // One folder per file, reused, so repeated reviews don't pile up page images.
+      const outDir = ro.outDir ?? join(tmpdir(), 'sahilbot-review', `${basename(input).replace(/[^\w.-]+/g, '_').slice(0, 60)}-${createHash('sha1').update(input).digest('hex').slice(0, 8)}`)
+      rmSync(outDir, { recursive: true, force: true })
+      const rr = await renderDocument(input, { outDir, width: ro.width ?? 1100 })
+      checks.push(...renderChecks(rr, ext.slice(1), o.expectPages))
+      rendered = { pages: rr.pageCount, method: rr.method, sheet: rr.sheet, images: rr.images.map((i) => i.path), notes: rr.notes }
+    } catch (e) {
+      checks.push({ area: 'formatting', status: 'warn', message: `Couldn't render the pages to check them visually: ${(e as Error).message}` })
+    }
+  }
   const pass = !checks.some((c) => c.status === 'fail')
-  return { file: basename(name), kind: ext.slice(1), pass, checks, summary: r.summary }
+  return { file: basename(name), kind: ext.slice(1), pass, checks, summary: r.summary, ...(rendered ? { rendered } : {}) }
 }
 
 export function formatReview(r: Review): string {
@@ -407,6 +475,7 @@ export function formatReview(r: Review): string {
     ...fails.map(line),
     ...warns.map(line),
     passes.length ? `Passed: ${passes.map((c) => c.message).join('; ')}` : '',
+    r.rendered ? `Rendered pages: ${r.rendered.sheet ?? r.rendered.images[0] ?? '(none)'}${r.rendered.notes.length ? ` — ${r.rendered.notes.join(' ')}` : ''}` : '',
     fails.length ? 'Fix every FAIL (rebuild or edit the file), then run review_document again (at most 2 rounds). Fix warnings when they are real problems.' : warns.length ? 'No failures. Fix warnings that are real problems, then present the file.' : 'Ready to present.'
   ].filter(Boolean).join('\n')
 }

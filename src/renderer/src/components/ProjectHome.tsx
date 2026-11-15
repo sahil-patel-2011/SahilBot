@@ -30,7 +30,7 @@ export function ProjectHome({ project, onOpen, onEdit, composer }: { project: Sp
       {composer}
       <div className="outputs">
         <h2>Chats in this project</h2>
-        {chats.length === 0 && <div className="hint">Start one above. Every chat here can read and edit files in the project folder.</div>}
+        {chats.length === 0 && <div className="hint">Start one above. Every chat here works in the project folder: it reads, edits and searches files there and runs commands in it. Drop or paste files, folders and screenshots on the box to attach more.</div>}
         {chats.map((t) => (
           <button key={t.id} className="project-chat" onClick={() => onOpen(t)}>
             <span>{t.title}</span>

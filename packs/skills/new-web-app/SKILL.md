@@ -4,6 +4,7 @@ description: Create and run a new web app (React + Vite + TypeScript) from scrat
 source: you
 uses: 0
 category: Coding
+triggers: new web app, scaffold, create a website, vite app, starter app, new react app, landing page app
 ---
 
 1. Pick the folder: inside the workspace or an attached folder. `run_command`: `npm create vite@latest <name> -- --template react-ts` (needs approval: it downloads).

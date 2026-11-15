@@ -3,9 +3,12 @@ import { isPremiumClaude } from './claude-models'
 import { isPremiumOpenAI } from './openai-models'
 import { RECOMMENDED } from './catalog'
 
-// Auto mode: decide how hard a request is, then send it to the cheapest model that is strong enough.
+// Auto mode: decide how hard a request is (decide), then pick a model for that tier (pick).
 // Rules first (instant, free, predictable). When the rules don't clearly decide, it goes one tier UP:
 // a slightly slower answer beats a wrong one.
+// The agent routes through task-classifier.ts (category + difficulty, built on decide) and routing-table.ts
+// (evidence-based candidates across Claude and GPT per category, docs/model-routing.md); pick() is its
+// fallback for models the table doesn't name, the local-first path, and background jobs (titles, learning).
 
 export interface RouteInput {
   text: string
@@ -127,7 +130,7 @@ export function autoUnavailable(variant: AutoVariant, usable: ModelInfo[], cloud
   if (autoPool(variant, usable).length) return undefined
   if (variant === 'auto:local') return 'No local models downloaded — open Settings → Models'
   if (variant === 'auto:cloud') return !cloud.enabled ? 'Cloud models are switched off — turn them on in Settings → General' : !cloud.keyed ? 'No cloud API key saved — add an Anthropic or OpenAI key in Settings → Models' : 'No cloud model is on — switch one on in Settings → Models'
-  return 'No models are available — download one or add an API key in Settings → Models'
+  return 'No models are available — add a Claude, OpenAI or Grok key or your ChatGPT plan in Settings → Models'
 }
 
 export interface PickOptions {

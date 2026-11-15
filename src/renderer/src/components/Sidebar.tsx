@@ -7,6 +7,11 @@ import { ConnectedIcons } from './ConnectedIcons'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { duplicateBot, importBot, shareBot } from './BotShare'
 import { Target, useGoalsNeedingYou } from './TasksView'
+import { openUsageGlance } from './UsagePage'
+import { money, useSpend } from './SpendingLimit'
+
+/** The profile menu's usage line: "Usage · $3.20 of $200 this month". */
+const spendLabel = (b: ReturnType<typeof useSpend>): string => !b ? 'Usage' : b.mode === 'amount' ? `Usage · ${money(b.spent)} of ${money(b.cap)} this month` : `Usage · ${money(b.spent)} this month`
 
 export type MainView = 'home' | 'projects' | 'files' | 'tasks'
 
@@ -147,6 +152,7 @@ export function Sidebar(p: {
     })
   }
 
+  const spend = useSpend()
   const meMenu = (e: React.MouseEvent): void => {
     e.preventDefault()
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -154,6 +160,8 @@ export function Sidebar(p: {
       x: e.type === 'contextmenu' ? e.clientX : r.left, y: e.type === 'contextmenu' ? e.clientY : r.top - 8,
       items: [
         { label: 'Settings', icon: <I.Gear size={15} />, run: p.onSettings },
+        // This month's spend at a glance ("$X used of $Y this month"); opens the compact usage card.
+        { label: spendLabel(spend), icon: <I.Clock size={15} />, run: openUsageGlance },
         'sep',
         { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects') },
         { label: 'Files', icon: <I.File size={15} />, run: () => p.onView('files') },

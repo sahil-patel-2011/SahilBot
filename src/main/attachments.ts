@@ -1,9 +1,26 @@
-import { dialog, net, protocol, shell, type BrowserWindow } from 'electron'
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { basename, extname, resolve, sep } from 'node:path'
+import { dialog, nativeImage, net, protocol, shell, type BrowserWindow } from 'electron'
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { basename, extname, join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Attachment, FilePreview } from '@shared/types'
+import type { Attachment, AttachResult, FilePreview } from '@shared/types'
 import { docxHtml, IMAGE_EXT, mimeFor, pptxSlides, xlsxSheets } from './docs/read'
+import { MAX_ATTACH_BYTES, attachTmp, blobName, humanSize, processAttachment, takeScreenshot } from './attach-process'
+
+/** A data: URL of an image scaled to fit `maxEdge` (Electron's nativeImage); small images go as they are. */
+export async function imageDataUrl(p: string, maxEdge: number): Promise<string | null> {
+  const ext = extname(p).toLowerCase()
+  const size = statSync(p).size
+  const img = nativeImage.createFromPath(p)
+  if (img.isEmpty()) return null
+  const { width, height } = img.getSize()
+  const scale = Math.min(1, maxEdge / Math.max(width, height, 1))
+  // Already small enough: the original bytes (GIFs keep their animation).
+  if (scale === 1 && size <= 5_000_000 && ['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) return `data:${mimeFor(p)};base64,${readFileSync(p).toString('base64')}`
+  const out = scale < 1 ? img.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'good' }) : img
+  // PNGs (screenshots, diagrams) stay PNG when that's still small; photos become JPEG.
+  if (ext === '.png') { const png = out.toPNG(); if (png.length <= 4_000_000) return `data:image/png;base64,${png.toString('base64')}` }
+  return `data:image/jpeg;base64,${out.toJPEG(85).toString('base64')}`
+}
 
 // Files and folders reach the agent only through a user action: the open dialog or a
 // drag-and-drop the preload resolves. Main remembers those paths; the renderer can't invent them.
@@ -27,6 +44,62 @@ export class Attachments {
     return a
   }
 
+  /**
+   * Picked or dropped paths, processed (types, size cap, HEIC → JPEG, images scaled for vision). Each
+   * one that's accepted is remembered as user-picked; the rest come back with why.
+   */
+  async add(paths: string[]): Promise<AttachResult> {
+    const out: AttachResult = { added: [], rejected: [] }
+    for (const raw of paths.filter((p) => typeof p === 'string' && p)) {
+      if (!existsSync(raw)) { out.rejected.push({ name: basename(raw), reason: 'It no longer exists.' }); continue }
+      const r = await processAttachment(realpathSync(raw), { imageDataUrl })
+      if (!r.ok) { out.rejected.push({ name: r.name, reason: r.reason }); continue }
+      // A converted photo is a new file: both it and the original count as picked.
+      this.picked.add(realpathSync(raw))
+      this.picked.add(r.attachment.path)
+      out.added.push(r.attachment)
+    }
+    return out
+  }
+
+  /** Pasted or dragged-in data with no file behind it (a screenshot on the clipboard, an image from a web page): saved to a temp file, then added. */
+  async addBlob(name: string, mime: string, data: Uint8Array): Promise<AttachResult> {
+    const n = blobName(name, mime)
+    if (data.byteLength > MAX_ATTACH_BYTES) return { added: [], rejected: [{ name: n, reason: `${n} is ${humanSize(data.byteLength)}. Files up to ${humanSize(MAX_ATTACH_BYTES)} can be attached.` }] }
+    const p = join(attachTmp(), `${Date.now().toString(36)}-${n}`)
+    writeFileSync(p, Buffer.from(data))
+    return this.add([p])
+  }
+
+  /** The user's region screenshot (Take screenshot): the window steps aside while they select. */
+  async screenshot(): Promise<Attachment | null> {
+    const w = this.win()
+    const shown = !!w && w.isVisible()
+    if (shown) w!.hide()
+    try {
+      const p = await takeScreenshot()
+      return p ? (await this.add([p])).added[0] ?? null : null
+    } finally {
+      if (shown && w && !w.isDestroyed()) w.show()
+    }
+  }
+
+  /** The picker's choice, processed like a drop. */
+  async pickAll(kind: 'files' | 'folder'): Promise<AttachResult> {
+    const w = this.win()
+    const opts: Electron.OpenDialogOptions = kind === 'folder'
+      ? { title: 'Attach a folder SahilBot can work in', properties: ['openDirectory', 'createDirectory', 'multiSelections'] }
+      : { title: 'Attach files', properties: ['openFile', 'multiSelections'] }
+    const r = w ? await dialog.showOpenDialog(w, opts) : await dialog.showOpenDialog(opts)
+    return r.canceled ? { added: [], rejected: [] } : this.add(r.filePaths)
+  }
+
+  /** True when the user picked or dropped this path (or a folder holding it) in this session. */
+  wasPicked(p: string): boolean {
+    const real = existsSync(p) ? realpathSync(p) : resolve(p)
+    return [...this.picked].some((r) => real === r || real.startsWith(r.endsWith(sep) ? r : r + sep))
+  }
+
   register(paths: string[]): Attachment[] {
     return paths.filter((p) => p && existsSync(p)).map((p) => {
       const r = realpathSync(p)
@@ -36,12 +109,7 @@ export class Attachments {
   }
 
   async pick(kind: 'files' | 'folder'): Promise<Attachment[]> {
-    const w = this.win()
-    const opts: Electron.OpenDialogOptions = kind === 'folder'
-      ? { title: 'Attach a folder SahilBot can work in', properties: ['openDirectory', 'createDirectory'] }
-      : { title: 'Attach files', properties: ['openFile', 'multiSelections'] }
-    const r = w ? await dialog.showOpenDialog(w, opts) : await dialog.showOpenDialog(opts)
-    return r.canceled ? [] : this.register(r.filePaths)
+    return (await this.pickAll(kind)).added
   }
 
   /** Only paths the user picked or dropped are accepted. */

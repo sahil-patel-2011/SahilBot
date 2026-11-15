@@ -3,7 +3,7 @@
 .ll { margin: 26px 0 18px; }
 .ll-head { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 10px 4px; }
 .ll-title { display: flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 600; color: var(--text); }
-.ll-title svg { color: var(--accent); }
+.ll-title svg { color: var(--accent-text); }
 .ll-sub { font-size: 13px; color: var(--text-3); line-height: 1.45; margin-top: 3px; max-width: 640px; }
 
 /* Cloud cap */
@@ -47,7 +47,7 @@
 .ll-link { padding: 0; font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .ll-tag {
   display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 500; line-height: 18px;
-  background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger-text);
 }
 .ll-tag.soft { background: var(--hover); color: var(--text-2); }
 .mm-meta > span.ll-tag + span::before, .mm-meta > span + span.ll-tag::before { content: none; }

@@ -10,8 +10,9 @@ import { PendingCard } from './Agent'
 import { PageCard, pagesFromSteps } from './PageCard'
 import { StockCard, stocksFromSteps } from './StockCard'
 import { DocCard, docsFromSteps } from './doc/DocCard'
-import { HeavyCard, MemberRow, SpendCard } from './HeavyCard'
-import { groupMembers, heavyOf, money, teamTotals, tokenCount, unfinished } from '../lib/swarm-view'
+import { AskBotCard, CouncilCard, HeavyCard, MemberRow, SpendCard, SwarmCard } from './HeavyCard'
+import { CuaCard, cuaOf } from './CuaCard'
+import { askBotOf, councilOf, groupMembers, heavyOf, isCardNotice, money, swarmOf, teamTotals, tokenCount, unfinished } from '../lib/swarm-view'
 
 type Block =
   | { kind: 'user'; m: Message }
@@ -20,7 +21,7 @@ type Block =
   | { kind: 'compacted'; m: Message }
   | { kind: 'activity'; id: string; steps: Step[] }
   | { kind: 'qa'; id: string; question: string; answer?: string; at: number }
-  | { kind: 'plan'; id: string; items: PlanItem[]; at: number }
+  | { kind: 'plan'; id: string; items: PlanItem[]; at: number; title?: string }
   | { kind: 'team'; id: string; titles: string[]; final?: TeamMember[]; summary?: string; at: number }
   | { kind: 'heavy'; id: string; groupId: string; board: HeavyBoard; at: number }
 
@@ -118,6 +119,19 @@ export function blocks(messages: Message[]): Block[] {
           }
           continue
         }
+        // A tool that reports its own progress (cad_design: Design brief → Concepts → Plan → Build → Verify)
+        // drives the same checklist; its step still shows below as usual.
+        const own = results.get(call.id)?.meta
+        if (Array.isArray(own?.plan)) {
+          const items = (own!.plan as PlanItem[]).filter((x) => x && typeof x.text === 'string')
+          const title = typeof own!.planTitle === 'string' ? own!.planTitle : undefined
+          if (items.length && plan) { plan.items = items; plan.title = title }
+          else if (items.length) {
+            plan = { kind: 'plan', id: `${m.id}-${call.id}`, items, at: m.createdAt, title }
+            out.push(plan)
+            act = null
+          }
+        }
         if (!act) {
           act = { kind: 'activity', id: `${m.id}-${call.id}`, steps: [] }
           out.push(act)
@@ -179,7 +193,7 @@ function TeamCard({ id, titles, members, summary, live }: { id: string; titles: 
 }
 
 /** The agent's own step list, ticked off as it works. */
-function PlanCard({ items, live }: { items: PlanItem[]; live: boolean }) {
+function PlanCard({ items, live, title }: { items: PlanItem[]; live: boolean; title?: string }) {
   const [open, setOpen] = useState(true)
   const done = items.filter((t) => t.status === 'done').length
   const all = done === items.length
@@ -187,7 +201,7 @@ function PlanCard({ items, live }: { items: PlanItem[]; live: boolean }) {
     <div className={`plan-card${all ? ' complete' : ''}`} data-testid="plan-card">
       <button className="plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.ListIcon size={15} />
-        <span className="plan-title">{all ? 'Plan complete' : 'Plan'}</span>
+        <span className="plan-title">{all ? `${title ?? 'Plan'} complete` : title ?? 'Plan'}</span>
         <span className="plan-count">{done} of {items.length}</span>
         <span className="plan-bar"><i style={{ width: `${(done / items.length) * 100}%` }} /></span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined, transition: 'transform .15s' }} />
@@ -335,7 +349,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
             return (
               <BlockItem key={blockKey(b)} b={b} time={time} cont={cont} actions={stable} hasDocs={hasDocs}
                 // Live state goes only to the blocks it concerns, so the others keep their memoized render.
-                running={(b.kind === 'team' || b.kind === 'heavy') && running}
+                running={(b.kind === 'team' || b.kind === 'heavy' || (b.kind === 'notice' && isCardNotice(b.m))) && running}
                 live={running && b === lastActivity && tail === b}
                 waitingApproval={approvalWaiting && b === lastActivity}
                 planLive={running && b === lastPlan}
@@ -415,7 +429,7 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
       ) : b.kind === 'heavy' ? (
         <HeavyCard board={b.board} groupId={b.groupId} live={running} />
       ) : b.kind === 'plan' ? (
-        <PlanCard items={b.items} live={planLive} />
+        <PlanCard items={b.items} live={planLive} title={b.title} />
       ) : b.kind === 'activity' ? (
         <>
           <Activity steps={b.steps} live={live} waitingApproval={waitingApproval} onOpenFile={actions.onOpenFile} />
@@ -423,6 +437,12 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
           {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
           {hasDocs && docsFromSteps(b.steps).map((d) => <DocCard key={d.key} doc={d.doc} at={d.at} exported={d.exported} onOpen={actions.onOpenDoc!} />)}
         </>
+      ) : b.kind === 'notice' && swarmOf(b.m) ? (
+        <SwarmCard board={swarmOf(b.m)!.board} live={running} />
+      ) : b.kind === 'notice' && councilOf(b.m) ? (
+        <CouncilCard board={councilOf(b.m)!.board} live={running} />
+      ) : b.kind === 'notice' && askBotOf(b.m) ? (
+        <AskBotCard v={askBotOf(b.m)!} />
       ) : (
         <Row b={b} actions={actions} editable={editable} cont={cont} />
       )}
@@ -533,6 +553,8 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
         <button className="link-btn" onClick={() => void api.chat.resume(m.threadId).catch((e) => toast((e as Error).message, 'error'))} data-testid="resume-run">Continue</button>
       </div>
     )
+    // Planner ⇄ Executor computer use: its live timeline card rides on a notice (CuaCard.tsx).
+    if (cuaOf(m)) return <CuaCard m={m} />
     return <div className="notice sys-line" role="status">{m.content}</div>
   }
   const reactions = (m.meta?.reactions ?? {}) as { user?: string; bot?: string }

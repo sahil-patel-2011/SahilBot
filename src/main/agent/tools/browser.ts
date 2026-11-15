@@ -9,6 +9,8 @@ import type { SiteEvent } from '../../sites/learn'
 import { domainOf } from '../../sites/safe'
 import type { SiteStore } from '../../sites/store'
 import { originMatches, type Vault } from '../../vault'
+import { fillProblem, standingRuleAllows } from '../../secure/guards'
+import { isSecurePage } from '../../secure/origin'
 import { CONSEQUENTIAL, looksLikePayment, looksLikeSecurity, OTP_STOP, PURCHASE_STOP } from '../permissions'
 import type { ToolContext, ToolDef, ToolOutput } from '../types'
 import { resolvePath } from './files'
@@ -24,7 +26,7 @@ interface Args {
   text?: string
   submit?: boolean
   secret?: string
-  field?: 'username' | 'password'
+  field?: 'username' | 'password' | 'id_number'
   direction?: 'up' | 'down'
   amount?: number
   /** tabs: list|new|switch|close; recording: start|stop|status; downloads: list|save */
@@ -170,7 +172,11 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     if (a.action === 'fill_otp') return `${OTP_STOP}from ${a.source ?? 'authenticator'} on ${safeHost(url)}`
     // The agent starting a recording always asks (the user's own Teach button doesn't go through here).
     if (a.action === 'recording' && a.op === 'start') return `recording what you click and type in the browser for up to ${MAX_MS / 60_000} minutes`
-    if (a.action === 'fill_secret') return `typing the saved login "${a.secret}" (${a.field ?? 'password'}) into ${safeHost(url)}`
+    if (a.action === 'fill_secret') {
+      // A standing rule the user set for this login's own site ("sign in here without asking").
+      if (standingRule(a, url)) return null
+      return a.field === 'id_number' ? `typing the saved ID "${a.secret}" (document number) into ${safeHost(url)}` : `typing the saved login "${a.secret}" (${a.field ?? 'password'}) into ${safeHost(url)}`
+    }
     if (a.action === 'fill_address') return `typing your saved address "${a.address}" into ${safeHost(url)}`
     if (a.action === 'upload') return `uploading ${(a.paths ?? []).map((x) => `"${x.split(/[\\/]/).pop()}"`).join(', ')} to ${safeHost(url)}`
     if (a.action === 'downloads' && a.op === 'save') return `saving a download ("${b.offeredDownloads()[(a.index ?? 1) - 1]?.filename ?? '?'}") from ${b.offeredDownloads()[(a.index ?? 1) - 1]?.host ?? 'the web'} into your workspace`
@@ -184,6 +190,14 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     }
     return null
   }
+
+  /** The login's "sign in here without asking" rule covers this call (its own site, username or password). */
+  const standingRule = (a: Args, url = b.pageUrl()): boolean => {
+    const t = safeCall(() => vault.fillTarget(a.secret ?? '', a.field ?? 'password'), undefined)
+    return !!t && standingRuleAllows(t, t.type, a.field ?? 'password', url)
+  }
+  /** True only while an approved Purchase card's step runs (card numbers are filled nowhere else). */
+  let purchaseApproved = false
 
   const describe = (a: Args): string => {
     const r = a.ref ? b.refInfo(a.ref) : undefined
@@ -218,7 +232,9 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
   const redact = (text: string): string => {
     let t = redactCards(text, safeCall(() => vault.cardNumbers(), []))
     for (const c of b.hiddenValues()) if (c.length >= 4) t = t.replace(new RegExp(`(?<!\\d)${c}(?!\\d)`, 'g'), '••••')
-    return t
+    // Every other saved value (passwords, authenticator keys, ID numbers) the page might echo back.
+    const masked = t
+    return safeCall(() => vault.redact(masked), masked)
   }
 
   return {
@@ -235,6 +251,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
       if (a.action === 'click') return !r || !benignClickLabel(r.name)
       if (a.action === 'type' || a.action === 'enter') return a.action === 'enter' || !!a.submit
       if (a.action === 'recording') return a.op === 'start'
+      if (a.action === 'fill_secret') return !standingRule(a)
       if (a.action === 'dialog') return CONSEQUENTIAL.test(b.pendingDialog?.message ?? '')
       if (a.action === 'fill_form') { const s = a.submit_ref ? b.refInfo(a.submit_ref) : undefined; return !!a.submit_ref && (!s || !benignClickLabel(s.name)) }
       if (a.action === 'wait' || a.action === 'wallet' || (a.action === 'downloads' && a.op !== 'save') || ['find', 'extract', 'expand', 'next_page', 'snapshot', 'get_text', 'screenshot'].includes(a.action)) return false
@@ -252,7 +269,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
 - type {ref, text, submit?}: replace a field's text; submit presses Enter
 - select {ref, option}: choose an option in a dropdown (snapshot lists them)
 - dialog {accept, text?}: answer an alert/confirm/prompt the page opened
-- fill_secret {ref, secret, field}: type a saved login's username or password; you never see it
+- fill_secret {ref, secret, field}: type a saved login's username or password (or a saved ID's document number: field "id_number", secret = the ID's name); you never see it. If the vault is locked, the user is asked to unlock it
 - fill_otp {secret?, source}: type a one-time sign-in code: source "authenticator" (the saved login's authenticator key; secret = login name), "email" or "sms" (a code the site just sent). You never see the code. The user approves using codes on each site.
 - wallet: nicknames of the user's saved cards and addresses
 - fill_payment {card}: put a saved card (nickname, or "Visa ending 4242") into the page's card fields; you never see it. The user approves it on a Purchase card.
@@ -287,7 +304,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         text: { type: 'string' },
         submit: { type: 'boolean' },
         secret: { type: 'string', description: 'Name of a saved login' },
-        field: { type: 'string', enum: ['username', 'password'] },
+        field: { type: 'string', enum: ['username', 'password', 'id_number'] },
         card: { type: 'string', description: 'fill_payment: saved card nickname' },
         address: { type: 'string', description: 'fill_address: saved address nickname' },
         section: { type: 'string', enum: ['shipping', 'billing'] },
@@ -583,9 +600,10 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
     if (refuse) throw new Error(refuse)
     const target = a.action === 'click' || a.action === 'enter' || (a.action === 'type' && a.submit) ? a.ref : a.action === 'fill_form' ? a.submit_ref : undefined
     const tab = b.tabKey()
-    let card: ReturnType<Vault['findCard']>
+    let card: ReturnType<Vault['findCardMeta']>
     if (a.action === 'fill_payment') {
-      card = vault.findCard(a.card!)
+      // Metadata only: nothing is decrypted before the user approves (the vault may still be locked).
+      card = vault.findCardMeta(a.card!)
       if (!card) throw new Error(noCard(a.card!))
     }
     let page = page0 ?? (await b.purchaseContext(target))
@@ -614,9 +632,11 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
     // Card details may go to this merchant and payment processors only, for this step.
     b.openPurchaseWindow(expected.origin)
     let out: ToolOutput
+    purchaseApproved = true
     try {
       out = await act(a, ctx, expected)
     } finally {
+      purchaseApproved = false
       b.closePurchaseWindow()
     }
     // A submitted order consumes the card bookkeeping: the next order fills (and asks) again.
@@ -674,12 +694,14 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         if (answer === 'deny') return notAllowed()
       }
       const name = a.secret ?? vault.names().find((n) => originMatches(n.origin, url, { subdomains: !!n.subdomains }))?.name
-      if (!name) throw new Error(`No saved login for ${host} has an authenticator key. Ask the user to add one in Settings > Passwords, or use source "email" / "sms".`)
+      if (!name) throw new Error(`No saved login for ${host} has an authenticator key. Ask the user to add one in Settings > Vault, or use source "email" / "sms".`)
+      if (!vault.names().some((n) => n.name === name)) throw new Error(`No saved login named "${name}".`)
+      await vault.ensureUnlocked(`type a sign-in code for "${name}" on ${host}`, canAsk)
       const cred = vault.credential(name)
       if (!cred) throw new Error(`No saved login named "${name}".`)
       if (!originMatches(cred.origin, url, { subdomains: !!cred.subdomains })) throw new Error(`The login "${name}" is saved for ${cred.origin}, but this page is ${site}. Its codes are only typed on its own site.`)
       let t = vault.totpCode(name)
-      if (!t) throw new Error(`The login "${name}" has no authenticator key. Ask the user to add one in Settings > Passwords (Authenticator key), or use source "email" / "sms".`)
+      if (!t) throw new Error(`The login "${name}" has no authenticator key. Ask the user to add one in Settings > Vault (Authenticator key), or use source "email" / "sms".`)
       // A code about to expire: wait for the next one rather than race the clock.
       if (t.remaining < 5) { await new Promise((r) => setTimeout(r, t!.remaining * 1000 + 300)); t = vault.totpCode(name) ?? t }
       code = t.code
@@ -710,6 +732,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
       b.showToUser()
       return { text: `Couldn't find the code field on ${host}. The browser panel is open: call ask_user with "Please enter the sign-in code in the browser panel, then press Done." and options ["Done", "Skip"].`, display: 'code field not found' }
     }
+    safeCall(() => vault.recordFill('ok', { item: a.secret ?? source, site, detail: `one-time code from ${source}` }), undefined)
     return { text: `Filled a one-time code from ${from} into ${host}. (The code is hidden from you.) Now submit the form if the page didn't do it by itself.`, display: `code filled on ${host}` }
   }
 
@@ -771,21 +794,74 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         return { text: await b.pressEnter(a.ref!), display: `pressed Enter in "${(r?.name || a.ref!).slice(0, 30)}"` }
       }
       case 'fill_secret': {
-        const cred = vault.credential(a.secret!)
-        if (!cred) {
+        const field = a.field ?? 'password'
+        const what = field === 'id_number' ? 'document number' : field
+        const t = safeCall(() => vault.fillTarget(a.secret!, field), undefined)
+        if (!t) {
           const names = vault.names().map((n) => `${n.name} (${n.origin})`).join(', ')
-          throw new Error(`No saved login named "${a.secret}". Saved logins: ${names || 'none'}. Ask the user to add one in Settings > Passwords, or to sign in themselves in the browser panel.`)
+          throw new Error(field === 'id_number'
+            ? `No saved ID named "${a.secret}". Ask the user to add it in Settings > Vault > IDs (with this site allowed).`
+            : `No saved login named "${a.secret}". Saved logins: ${names || 'none'}. Ask the user to add one in Settings > Vault, or to sign in themselves in the browser panel.`)
         }
         const r = b.refInfo(a.ref!)
         if (!r) throw new Error(`Unknown ref "${a.ref}". Call snapshot again.`)
-        if (!originMatches(cred.origin, b.pageUrl(), { subdomains: !!cred.subdomains })) throw new Error(`The login "${a.secret}" is saved for ${cred.origin}, but this page is ${safeOrigin(b.pageUrl())}. It will only be typed on its own site.`)
-        if (expected && expected.origin !== safeOrigin(b.pageUrl())) throw new Error(`The page changed to ${safeOrigin(b.pageUrl())} since this step was approved for ${expected.origin}, so nothing was typed.`)
-        if (a.field === 'password' && !r.password) throw new Error(`Element ${a.ref} is not a password field. Passwords only go into password fields.`)
-        if (a.field === 'username' && (r.password || !['textbox', 'combobox', 'searchbox'].includes(r.role))) throw new Error(`Element ${a.ref} is not a text field for a username.`)
-        await b.fillSecretValue(a.ref!, a.field === 'password' ? cred.password : cred.username, expected)
-        return { text: `Filled the ${a.field} for "${a.secret}". (The value is hidden from you.)`, display: `filled ${a.field} for ${a.secret}` }
+        const url = b.pageUrl()
+        const host = safeHost(url)
+        // The tab and site this value may go to: fixed now, so a tab switch while unlocking types nothing.
+        const target: Expected = expected ?? { tab: b.tabKey(), origin: safeOrigin(url) }
+        const blocked = (msg: string): never => {
+          vault.recordFill('blocked', { item: t.name, site: safeOrigin(b.pageUrl()), detail: `${what}: ${msg}` })
+          throw new Error(msg)
+        }
+        // 1. Site, HTTPS and the page the step was approved for (src/main/secure/guards.ts).
+        const pre = fillProblem({ origins: t.origins, subdomains: t.subdomains, pageUrl: url, expectedOrigin: expected?.origin, approved: true }, t.name)
+        if (pre) blocked(pre.replace(`"${t.name}" is saved for`, `The ${t.type === 'identity' ? 'ID' : 'login'} "${t.name}" is saved for`))
+        // 2. The field kind, from the snapshot (checked again in the page right before typing).
+        if (field === 'password' && !r.password) blocked(`Element ${a.ref} is not a password field. Passwords only go into password fields.`)
+        if (field !== 'password' && (r.password || !['textbox', 'combobox', 'searchbox', 'spinbutton'].includes(r.role) || (field === 'username' && r.role === 'spinbutton'))) blocked(`Element ${a.ref} is not a text field for a ${field === 'username' ? 'username' : 'document number'}.`)
+        // 3. The user's approval: the approval card for this exact call, or their standing rule for this site.
+        //    Text on a web page can't approve anything: only the user's click or their own rule does.
+        const rule = standingRuleAllows(t, t.type, field, url)
+        let approved = !!ctx?.approved || rule
+        const attended = !!ctx && (deps.gate ? deps.gate.attended(ctx.threadId) : false)
+        if (!approved && ctx && attended) {
+          const answer = await ctx.askUser(`Type your saved ${what} for "${t.name}" into ${host}? SahilBot types it itself; the assistant never sees it.`, ['Allow once', "Don't allow"])
+          approved = /^allow/i.test(answer)
+        }
+        if (!approved) blocked(`You didn't approve typing the saved ${what} for "${t.name}", so nothing was typed. Ask the user, or let them sign in themselves in the browser panel.`)
+        // 4. Unlocked (Touch ID or the master password), and re-confirmed for IDs (and passwords, if set).
+        await vault.ensureUnlocked(`type your saved ${what} for "${t.name}" on ${host}`, attended)
+        if (t.type === 'identity' || (field === 'password' && vault.prefs().reauthPasswords)) {
+          await vault.reauth(t.type === 'identity' ? 'identity' : 'password', `type your ${t.type === 'identity' ? 'ID number' : 'password'} for "${t.name}" on ${host}`, attended)
+        }
+        const again = fillProblem({ origins: t.origins, subdomains: t.subdomains, pageUrl: b.pageUrl(), expectedOrigin: target.origin, approved: true }, t.name)
+        if (again) blocked(again)
+        // 5. Typed by the browser layer into the verified, focused field (manager.fillSecretValue).
+        let value: string | null = vault.fillValue(t.id, field)
+        try {
+          await b.fillSecretValue(a.ref!, value, target, field)
+        } catch (e) {
+          blocked((e as Error).message)
+        } finally {
+          value = null
+        }
+        vault.recordFill('ok', { item: t.name, site: safeOrigin(url), detail: `${what}${rule && !ctx?.approved ? ' (your standing rule for this site)' : ''}` })
+        return { text: `Filled the ${what} for "${t.name}". (The value is hidden from you.)`, display: `filled ${what} for ${t.name}` }
       }
       case 'fill_payment': {
+        const meta = vault.findCardMeta(a.card!)
+        if (!meta) throw new Error(noCard(a.card!))
+        const payUrl = b.pageUrl()
+        const payHost = safeHost(payUrl)
+        const refuse = (msg: string): never => { vault.recordFill('blocked', { item: meta.label, site: safeOrigin(payUrl), detail: `card: ${msg}` }); throw new Error(msg) }
+        // Only inside a step the user approved on the Purchase card, on a secure page of that merchant.
+        if (!purchaseApproved) refuse('Card details are only filled during a purchase step the user approved on a Purchase card.')
+        if (!isSecurePage(payUrl)) refuse(`This page (${safeOrigin(payUrl)}) isn't secure (not HTTPS), so the card wasn't filled.`)
+        const payAttended = !!ctx && (deps.gate ? deps.gate.attended(ctx.threadId) : false)
+        await vault.ensureUnlocked(`put ${meta.label} into the payment form on ${payHost}`, payAttended)
+        // Re-authentication right before a card goes into a page (Touch ID or the master password).
+        await vault.reauth('card', `put ${meta.label} into the payment form on ${payHost}`, payAttended)
+        if (expected && expected.origin !== safeOrigin(b.pageUrl())) refuse(`The page changed to ${safeOrigin(b.pageUrl())} since the purchase step was approved for ${expected.origin}, so the card wasn't filled.`)
         const card = vault.findCard(a.card!)
         if (!card) throw new Error(noCard(a.card!))
         const billing = card.billing ? vault.addresses().find((x) => x.id === card.billing) : undefined
@@ -798,15 +874,19 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         const host = safeHost(b.pageUrl())
         const prev = filled.get(b.tabKey())
         filled.set(b.tabKey(), { host, card: card.label, address: prev?.host === host ? prev.address : undefined })
+        vault.recordFill('ok', { item: card.label, site: safeOrigin(b.pageUrl()), detail: `card: ${r.filled.join(', ')}` })
         const cvcNote = r.found.includes('cvc') && !r.filled.includes('cvc') ? ' The security code (CVV) isn\'t saved: ask the user to type it in the browser panel before placing the order.' : ''
         const billNote = billing ? ` Its billing address is saved as "${billing.nickname}" (fill_address with section "billing" if the form asks).` : ''
         return { text: `Filled ${card.label}: ${r.filled.join(', ')}. (The card details are hidden from you.)${cvcNote}${billNote}`, display: `filled ${card.label}` }
       }
       case 'fill_address': {
+        const known = vault.addressNames().some((n) => n.toLowerCase() === String(a.address ?? '').trim().toLowerCase()) || vault.addresses().some((x) => x.id === a.address)
+        if (known) await vault.ensureUnlocked(`fill your saved address "${a.address}" on ${safeHost(b.pageUrl())}`, !!ctx && (deps.gate ? deps.gate.attended(ctx.threadId) : false))
         const addr = vault.findAddress(a.address!)
-        if (!addr) throw new Error(`No saved address named "${a.address}". Saved addresses: ${vault.addressNames().join(', ') || 'none'}. Ask the user to add one in Settings > Passwords > Addresses.`)
+        if (!addr) throw new Error(`No saved address named "${a.address}". Saved addresses: ${vault.addressNames().join(', ') || 'none'}. Ask the user to add one in Settings > Vault > Addresses.`)
         const section = a.section ?? 'shipping'
         const r = await b.fillAddress(addr, section, expected)
+        if (r.filled.length) safeCall(() => vault.recordFill('ok', { item: addr.nickname, site: safeOrigin(b.pageUrl()), detail: `${section} address` }), undefined)
         if (!r.filled.length) throw new Error(`Couldn't find ${section} address fields on this page. Snapshot and fill them with type or fill_form instead.`)
         const host = safeHost(b.pageUrl())
         if (section === 'shipping') {
@@ -872,7 +952,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
 
   function noCard(name: string): string {
     const names = safeCall(() => vault.cardNames().map((c) => c.label), [] as string[])
-    return `No saved card "${name}". Saved cards: ${names.join(', ') || 'none'}. Ask the user to add one in Settings > Passwords > Cards, or to enter it themselves in the browser panel.`
+    return `No saved card "${name}". Saved cards: ${names.join(', ') || 'none'}. Ask the user to add one in Settings > Vault > Cards, or to enter it themselves in the browser panel.`
   }
 
   function quietly(fn: () => void): void {

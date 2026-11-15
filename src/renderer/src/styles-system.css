@@ -1,0 +1,424 @@
+/* ================================================================ design system (cleanup pass)
+   Loaded last. The one set of tokens (spacing, radii, type, color, shadow, motion) and the shared primitives
+   (card, card header, pill, eyebrow label, segmented control, switch, settings row, disclosure, chips menu).
+   Feature stylesheets older than this pass are brought in line here with grouped selectors, so one rule
+   decides what a card, a pill or a segmented control looks like everywhere. New UI uses the `ui-*`
+   classes (and ui.tsx) directly. Tokens only: light and dark stay in step. */
+
+:root {
+  /* spacing: a 4px scale */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
+  /* radii */
+  --r-xs: 6px; --r-sm: 8px; --r-md: 10px; --r-lg: 12px; --r-card: 16px; --r-pill: 999px;
+  /* type scale (body 15, secondary 13, labels 12) */
+  --fs-2xs: 11px; --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-body: 15px; --fs-lg: 17px; --fs-xl: 22px;
+  --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600;
+  /* motion */
+  --dur: 140ms; --ease: cubic-bezier(.2, .7, .3, 1);
+  /* elevation: shadows are for floating things only (menus, popovers, modals, toasts) */
+  --shadow-none: none;
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, .12), 0 1px 3px rgba(0, 0, 0, .08);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, .18), 0 2px 8px rgba(0, 0, 0, .06);
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, .08);
+
+  /* text: secondary and tertiary text meet 4.5:1 on every surface (bg, panel, card, sidebar) */
+  --text-2: #52524f;
+  --text-3: #6c6c69;
+  /* status colors: fills stay bright; the *-text variants are for words and small glyphs (≥ 4.5:1) */
+  --accent-text: #c2410c;
+  --ok-text: #18794e;
+  --danger-text: #c62a2f;
+  --warn: #c47f00;
+  --warn-text: #8f5a00;
+  --link: var(--accent-text);
+  /* tints for quiet status backgrounds */
+  --tint: color-mix(in srgb, var(--text) 5%, transparent);
+  --tint-2: color-mix(in srgb, var(--text) 8%, transparent);
+  --tint-accent: color-mix(in srgb, var(--accent) 10%, transparent);
+  --tint-ok: color-mix(in srgb, var(--ok) 12%, transparent);
+  --tint-danger: color-mix(in srgb, var(--danger) 11%, transparent);
+  --tint-warn: color-mix(in srgb, var(--warn) 13%, transparent);
+  /* surfaces */
+  --surface: var(--card);
+  --surface-line: var(--card-line);
+  --surface-sunken: color-mix(in srgb, var(--text) 3.5%, var(--card));
+  --ring: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text-2: #b1b1ae;
+    --text-3: #8f8f8b;
+    --accent-text: #ff9356;
+    --ok-text: #4cc38a;
+    --danger-text: #ff6b6f;
+    --warn: #f0b341;
+    --warn-text: #f0b341;
+    --shadow-pop: 0 12px 34px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .4);
+    --shadow-modal: 0 24px 64px rgba(0, 0, 0, .55);
+    --shadow-raised: 0 1px 2px rgba(0, 0, 0, .4);
+    --surface-sunken: color-mix(in srgb, var(--text) 4%, var(--card));
+  }
+}
+
+/* ---------------------------------------------------------------- one accent: links and accent words */
+.set-sub a, .set-row-sub a, .hint a, .ca-lede a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--link) 40%, transparent); }
+.link-btn { color: var(--link); }
+.link-btn.danger { color: var(--danger-text); }
+.ui-text-ok { color: var(--ok-text); }
+.ui-text-danger { color: var(--danger-text); }
+.ui-text-warn { color: var(--warn-text); }
+.hint.ok { color: var(--ok-text); }
+.hint.error { color: var(--danger-text); }
+
+/* ---------------------------------------------------------------- card
+   Every card in the chat (plan, team, Heavy, Swarm, Council, Asked <bot>, Planner ⇄ Executor, approvals,
+   questions, plan approval, connect, cost) and the Settings groups: one radius, one hairline, no shadow. */
+.ui-card,
+.plan-card, .team-card, .heavy-card, .cua-card, .askbot-card,
+.pending, .question, .qcard, .plan-approval {
+  border: 1px solid var(--surface-line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: none;
+}
+.ui-card { overflow: hidden; }
+.pending, .qcard, .plan-approval { padding: var(--sp-4) 18px; gap: var(--sp-3); }
+.question { max-width: none; padding: var(--sp-4) 18px var(--sp-2); }
+.question-title { font-size: var(--fs-body); }
+.question-option { font-size: var(--fs-body); }
+/* A live card (still working): an accent hairline, nothing louder. */
+.heavy-card.live, .cua-card.live, .plan-card.live { border-color: color-mix(in srgb, var(--accent) 35%, var(--surface-line)); }
+/* Destructive or money-moving cards keep their stronger border on purpose (purchase-card in styles-purchase.css). */
+.pending.danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--surface-line)); }
+.askbot-card { max-width: none; }
+
+/* Card header: icon · title · quiet meta · (right) status · chevron. One size, one padding. */
+.ui-card-head,
+.plan-head, .cua-head, .ab-head {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: 42px;
+  padding: 10px 14px; font-size: var(--fs-sm); line-height: 1.35; color: var(--text-2); text-align: left;
+  transition: background var(--dur) var(--ease);
+}
+.ui-card-head:hover, .plan-head:hover, .cua-head:hover, .ab-head:hover { background: var(--tint); }
+.ui-card-head > svg, .plan-head > svg, .cua-head > svg { flex: none; color: var(--text-3); }
+.ui-card-title, .plan-title, .cua-title, .ab-title { font-weight: var(--fw-semibold); color: var(--text); white-space: nowrap; }
+.ui-card-meta, .plan-count, .cua-models, .ab-q { color: var(--text-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cua-models b { color: var(--text-2); font-weight: var(--fw-medium); }
+.ui-card-status, .cua-state { margin-left: auto; color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cua-head { flex-wrap: nowrap; }
+.cua-card.live .cua-state { color: var(--accent-text); }
+.ab-asking .ab-title { color: var(--accent-text); }
+.ab-failed .ab-title, .ab-stopped .ab-title { color: var(--danger-text); }
+.ab-head { display: flex; }
+.ab-head > :last-child { margin-left: auto; flex: none; color: var(--text-3); }
+.ui-card-body, .heavy-body, .cua-body, .ab-body { padding: 2px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.ab-body { font-size: var(--fs-sm); }
+.ab-answer { border-left: 2px solid var(--surface-line); padding-left: 12px; }
+/* Progress bar in a card header: thin and quiet (accent while working, ok when done). */
+.plan-bar { height: 3px; background: var(--tint-2); max-width: 160px; margin-left: auto; }
+.plan-bar i { background: var(--accent); }
+.plan-card.complete .plan-bar i, .heavy-card:not(.live) .plan-bar i { background: color-mix(in srgb, var(--ok) 80%, var(--text-3)); }
+/* Card header title row for approval-style cards (icon tile + title + meta). */
+.pending-title { font-size: var(--fs-body); font-weight: var(--fw-semibold); gap: 10px; }
+.pending-title > svg { color: var(--text-3); }
+.ap-icon, .pc-icon.otp { width: 28px; height: 28px; border-radius: var(--r-sm); background: var(--tint); color: var(--text-2); }
+.ap-summary { font-size: var(--fs-body); }
+.ap-meta, .ui-meta { font-size: var(--fs-xs); color: var(--text-3); }
+.ap-warnings li { background: var(--tint-warn); }
+.ap-warnings li::before { background: var(--warn); }
+.ap-warnings li.danger { background: var(--tint-danger); }
+.pending-args { border: 1px solid var(--surface-line); background: var(--surface-sunken); border-radius: var(--r-md); }
+.pending-actions { gap: var(--sp-2); align-items: center; }
+
+/* Compact Markdown inside cards: no page-sized headings in a transcript or an answer preview. */
+:is(.heavy-body, .cua-body, .ab-body, .sw-detail, .sw-transcript, .cc-member, .cc-plan, .heavy-answer, .pending) .md { font-size: var(--fs-sm); line-height: 1.5; }
+:is(.heavy-body, .cua-body, .ab-body, .sw-detail, .sw-transcript, .cc-member, .cc-plan, .heavy-answer, .pending) .md :is(h1, h2, h3, h4) {
+  font-size: var(--fs-sm); font-weight: var(--fw-semibold); margin: 10px 0 4px; letter-spacing: 0;
+}
+:is(.heavy-body, .cua-body, .ab-body, .sw-detail, .sw-transcript, .cc-member, .cc-plan, .heavy-answer, .pending) .md > :first-child { margin-top: 0; }
+:is(.heavy-body, .ab-body, .sw-detail, .cc-member) .md pre { font-size: var(--fs-xs); }
+/* Nested detail panes inside cards: one indent, one hairline. */
+.heavy-answer, .sw-detail, .cc-member > section { margin: 4px 0 8px 18px; padding: 8px 12px; border-left: 2px solid var(--surface-line); font-size: var(--fs-sm); }
+.heavy-angle { font-style: normal; color: var(--text-3); font-size: var(--fs-xs); }
+.heavy-angle b { font-weight: var(--fw-medium); color: var(--text-2); }
+/* Inner callouts (judge, compile, merged plan, reviews): a sunken panel instead of an accent wash. */
+.heavy-judge, .cc-plan, .cc-disagree, .cc-reviews { background: var(--surface-sunken); border-radius: var(--r-lg); padding: 10px 12px; }
+.hj-status { color: var(--text-3); }
+.hj-done .hj-status, .cc-step.cs-done .hj-status { color: var(--ok-text); }
+.cc-reviews li.ok b { color: var(--text); font-weight: var(--fw-medium); }
+.hj-failed .hj-status, .hj-stopped .hj-status, .cc-step.cs-failed .hj-status, .cc-step.cs-skipped .hj-status, .cc-reviews li.issue b, .heavy-note { color: var(--danger-text); }
+.hj-tags, .sw-credit { color: var(--accent-text); }
+.heavy-foot { font-size: var(--fs-xs); color: var(--text-3); }
+.team-actions .link-btn { color: var(--danger-text); font-size: var(--fs-xs); }
+.tg-working .team-group-head { color: var(--accent-text); }
+.tg-failed .team-group-head { color: var(--danger-text); }
+.tg-toggle { color: var(--link); }
+/* Swarm: credited helpers are marked by their credit line, not a recolored title; idea chips stay quiet. */
+.sw-helper.credited .tr-title { color: var(--text); }
+.sw-ideas { padding: 0 6px 6px 24px; gap: 4px; }
+.sw-idea { background: var(--tint); color: var(--text-2); border-radius: var(--r-pill); padding: 1px 8px; font-size: var(--fs-2xs); }
+.sw-ideas .sw-idea:nth-of-type(n + 3) { display: none; }
+.sw-meta { padding: 0 2px; }
+.swt-who { font-size: var(--fs-2xs); }
+
+/* Planner ⇄ Executor body */
+.cua-summary { font-size: var(--fs-sm); color: var(--text-2); }
+.cua-steps li { font-size: var(--fs-sm); }
+.cs-mark { color: var(--bg); }
+.cs-done .cs-mark { background: var(--ok); border-color: var(--ok); }
+.current .cs-mark { border-color: var(--accent); }
+.cua-timeline { border-top: 1px solid var(--surface-line); }
+.cua-timeline li { grid-template-columns: 88px minmax(0, 1fr); font-size: var(--fs-xs); }
+.ct-who { color: var(--text-3); font-weight: var(--fw-medium); }
+.ct-planner .ct-who { color: var(--text); }
+.ck-disagree .ct-text, .ck-stall .ct-text, .ck-error .ct-text { color: var(--danger-text); }
+.ck-finish .ct-text { color: var(--ok-text); }
+.cua-foot { font-size: var(--fs-xs); color: var(--text-3); }
+
+/* Cost card figures */
+.spend-figs { gap: var(--sp-6); padding: 2px 0 4px; }
+.sf-n { font-size: var(--fs-lg); }
+.sf-l { font-size: var(--fs-2xs); color: var(--text-3); }
+
+/* Plan-approval and question numbers: neutral tiles (the accent is for what's on). */
+.qcard-n, .pa-n { background: var(--tint); color: var(--text-2); border-radius: var(--r-xs); }
+.pa-meta.risk b { color: var(--danger-text); }
+.qcard-opt { border-color: var(--surface-line); background: var(--surface); border-radius: var(--r-md); }
+.qcard-opt.on { border-color: var(--accent); color: var(--accent-text); background: var(--tint-accent); }
+
+/* In-chat connect card: the API-key box sits flat in the card (no card in a card), label over field. */
+.connect-card .conn-form { margin-top: 0; padding: 0; background: none; border-radius: 0; }
+.connect-card .conn-form .field { grid-template-columns: 1fr; gap: 6px; margin: 0 0 var(--sp-3); }
+.connect-card .conn-form .field > label { font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--text-2); }
+.connect-card .conn-form .modal-actions { margin-top: 0; justify-content: flex-start; flex-direction: row-reverse; gap: var(--sp-2); }
+.connect-card .conn-form .ca-btn.ghost { height: 30px; }
+.conn-logo { border-radius: var(--r-sm); }
+
+/* ---------------------------------------------------------------- pills and badges
+   One shape: 11px, medium, full radius, a quiet tint. Status variants only where the status matters. */
+.ui-pill,
+.tier-badge, .sw-pill, .mm-badge, .tg-count, .vault-tag, .us-tag, .bs-chip, .sv-badge, .doc-badge, .rs-badge, .ll-badge {
+  display: inline-flex; align-items: center; gap: 4px; height: 19px; padding: 0 8px;
+  border: 0; border-radius: var(--r-pill); background: var(--tint); color: var(--text-2);
+  font-size: var(--fs-2xs); font-weight: var(--fw-medium); letter-spacing: 0; text-transform: none; line-height: 1;
+  white-space: nowrap; vertical-align: 1px;
+}
+.tier-badge { margin-left: 6px; }
+.sw-pill { margin-left: 6px; }
+.sw-meta .sw-pill { margin-left: 0; }
+.ui-pill.ok, .tier-badge.ok { background: var(--tint-ok); color: var(--ok-text); }
+.ui-pill.accent { background: var(--tint-accent); color: var(--accent-text); }
+.ui-pill.danger { background: var(--tint-danger); color: var(--danger-text); }
+.ui-pill.warn { background: var(--tint-warn); color: var(--warn-text); }
+.vault-tag.quoted { background: var(--tint-accent); color: var(--text); }
+
+/* ---------------------------------------------------------------- eyebrow labels
+   Small group headings inside cards, panels and lists: one style. */
+.ui-eyebrow,
+.team-group-head, .hj-verdict h5, .cc-member h5, .cc-plan h5, .cc-disagree h5, .cc-reviews h5,
+.bd-section-title, .vault-group, .vault-back h3, .mem-cat, .mm-group-head, .step-label, .tk-label, .imp-group-head, .bs-section, .doc-menu-label {
+  font-size: var(--fs-2xs); font-weight: var(--fw-semibold); letter-spacing: .05em; text-transform: uppercase; color: var(--text-3);
+}
+
+/* ---------------------------------------------------------------- segmented control
+   Every on/off group of 2–7 options: a tinted track, the chosen one raised on the surface. */
+.ui-seg,
+.seg, .seg-tabs, .pw-tabs, .us-metric, .spend-modes, .vault-tabs, .vault-seg, .bd-tabs, .tk-filter, .mcp-tabs {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 0;
+  border-radius: var(--r-md); background: var(--tint-2);
+}
+.bd-tabs { display: flex; }
+.ui-seg > button,
+.seg > button, .seg-tabs > button, .pw-tabs > button, .us-metric > button, .spend-modes > button, .vault-tabs > button, .vault-seg > button, .bd-tabs > button, .tk-filter > button, .mcp-tabs > button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 28px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: transparent;
+  font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--text-2); white-space: nowrap;
+  box-shadow: none; transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+:is(.ui-seg, .seg, .seg-tabs, .pw-tabs, .us-metric, .spend-modes, .vault-tabs, .vault-seg, .bd-tabs, .tk-filter, .mcp-tabs) > button:hover { color: var(--text); }
+:is(.ui-seg, .seg, .seg-tabs, .pw-tabs, .us-metric, .spend-modes, .vault-tabs, .vault-seg, .bd-tabs, .tk-filter, .mcp-tabs) > button:is(.on, [aria-selected="true"], [aria-checked="true"]) {
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow-raised); font-weight: var(--fw-semibold);
+}
+.bd-tabs > button { flex: 1; }
+.mcp-tab.on { background: var(--surface); color: var(--text); }
+.seg-tabs .tab-count { background: var(--tint-2); color: var(--text-2); }
+
+/* Filter chips (pick one of many: categories, areas, kinds): outline pills; the chosen one is filled. */
+.ui-chip, .lib-filters > button, .vault-chip, .mm-chips > button, .ca-chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 12px; border-radius: var(--r-pill);
+  border: 1px solid var(--surface-line); background: var(--surface); color: var(--text-2); font-size: var(--fs-sm);
+}
+.vault-chip { height: 24px; padding: 0 9px; font-size: var(--fs-xs); }
+:is(.ui-chip, .lib-filters > button, .vault-chip, .mm-chips > button, .ca-chip):hover { color: var(--text); background: var(--tint); }
+:is(.ui-chip, .lib-filters > button, .vault-chip, .mm-chips > button, .ca-chip):is(.on, [aria-selected="true"]) { background: var(--text); border-color: var(--text); color: var(--bg); }
+
+/* ---------------------------------------------------------------- switch
+   One switch everywhere (Settings, bot panel, Connect apps tools). On = the bot's color in a bot's panel,
+   the accent elsewhere. */
+.switch, .rt-switch, .ca-switch {
+  width: 38px; height: 22px; border-radius: var(--r-pill); border: 0; padding: 0; position: relative; flex: none;
+  background: color-mix(in srgb, var(--text) 20%, transparent); transition: background var(--dur) var(--ease);
+}
+:is(.switch, .rt-switch, .ca-switch) > i {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .3); transition: transform var(--dur) var(--ease);
+}
+:is(.switch, .rt-switch, .ca-switch).on, .settings-page .switch.on { background: var(--bot, var(--accent)); }
+:is(.switch, .rt-switch, .ca-switch).on > i { transform: translateX(16px); }
+:is(.switch, .rt-switch, .ca-switch):disabled { opacity: .45; cursor: default; }
+
+/* ---------------------------------------------------------------- settings
+   Sections: a short label and at most a short description; groups are one card of rows. Row descriptions
+   are clamped to two lines with a "More" link (ui.tsx ClampText); advanced options sit in a disclosure. */
+.settings-page .set-body h2 { font-size: var(--fs-xl); font-weight: 650; letter-spacing: -0.015em; margin: 0 0 4px; }
+.settings-page .set-body h2 + .set-sub { margin: 0 0 var(--sp-5) 2px; font-size: var(--fs-sm); color: var(--text-3); }
+.settings-page .set-section { margin: var(--sp-6) 0; }
+.settings-page .set-label, .ui-section-label { font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--text); margin: 0 0 4px 2px; letter-spacing: 0; text-transform: none; }
+.settings-page .set-sub { font-size: var(--fs-sm); color: var(--text-3); line-height: 1.45; margin: 0 0 10px 2px; }
+.settings-page .set-card, .ui-group { background: var(--surface); border: 1px solid var(--surface-line); border-radius: var(--r-card); padding: 0 var(--sp-4); box-shadow: none; }
+.settings-page .set-card + .set-card { margin-top: var(--sp-3); }
+.set-row { gap: var(--sp-4); padding: var(--sp-3) 0; min-height: 52px; border-top: 1px solid var(--surface-line); }
+.settings-page .set-row { min-height: 52px; }
+.set-row-title { font-size: var(--fs-md); font-weight: var(--fw-medium); color: var(--text); }
+.set-row-sub { font-size: var(--fs-sm); color: var(--text-3); line-height: 1.45; margin-top: 2px; }
+.set-row-ctl { gap: var(--sp-2); }
+.set-row > .switch, .set-row > .set-select, .set-row > select { flex: none; }
+/* Two-line clamp for long row descriptions (ClampText). */
+.ui-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.ui-clamp.open { display: block; -webkit-line-clamp: unset; }
+.ui-more { display: inline-block; padding: 0; margin-top: 2px; font-size: var(--fs-xs); color: var(--text-2); font-weight: var(--fw-medium); }
+.ui-more:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* Disclosure: rarely used options behind one quiet row ("Advanced", "Details"). */
+.ui-disclosure { margin: var(--sp-6) 0 0; max-width: 760px; }
+.ui-disclosure > summary {
+  list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px 6px 4px; margin-left: -4px;
+  border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--text-2);
+}
+.ui-disclosure > summary::-webkit-details-marker { display: none; }
+.ui-disclosure > summary:hover { color: var(--text); background: var(--tint); }
+.ui-disclosure > summary .ui-disclosure-chev { flex: none; transform: rotate(-90deg); transition: transform var(--dur) var(--ease); color: var(--text-3); }
+.ui-disclosure[open] > summary .ui-disclosure-chev { transform: none; }
+.ui-disclosure > summary .ui-disclosure-sub { font-weight: var(--fw-regular); color: var(--text-3); }
+.ui-disclosure > .ui-disclosure-body > .set-section:first-child { margin-top: var(--sp-3); }
+/* Inside a card (bot panel, a settings group): the disclosure is a row. */
+.set-card > .ui-disclosure, .bd-card > .ui-disclosure { margin: 0; border-top: 1px solid var(--surface-line); }
+.set-card > .ui-disclosure > summary, .bd-card > .ui-disclosure > summary { display: flex; width: 100%; margin: 0; padding: 12px 0; border-radius: 0; background: none; }
+
+/* Memory: one card of rows per group instead of a card per memory. */
+.mm .set-section { margin: var(--sp-4) 0; }
+.mm-group-head { margin: var(--sp-4) 0 6px 2px; padding: 0; }
+
+/* Settings → Vault and Usage: one accent; quiet meters. */
+.spend-meter.mid i, .us-meter.mid i { background: var(--warn); }
+.sv-lock-note, .sv-banner { border-radius: var(--r-lg); }
+
+/* ---------------------------------------------------------------- composer: the Modes menu
+   The less-used modes (Plan first, Deep Research, Team, Swarm, Council, Heavy) live in one menu; the modes
+   that are on show as removable chips next to it, so the row stays one line at 900px. */
+.modes-pop > button {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px 0 10px; border-radius: var(--r-pill);
+  border: 1px solid var(--card-line); color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.modes-pop > button:hover { background: var(--hover); color: var(--text); }
+.modes-pop.on > button { color: var(--text); }
+.modes-pop .modes-count { min-width: 17px; height: 17px; padding: 0 5px; border-radius: var(--r-pill); background: var(--bot, var(--accent)); color: var(--bot-text, #fff); font-size: var(--fs-2xs); font-weight: var(--fw-semibold); display: inline-grid; place-items: center; }
+.menu.modes-wrap { max-height: min(440px, calc(100vh - 120px)); overflow-y: auto; }
+.modes-menu { width: 300px; max-width: calc(100vw - 32px); }
+.modes-menu .menu-item .sub { margin-left: 0; padding-left: 0; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.modes-menu .menu-item { align-items: flex-start; padding: 6px 10px; }
+.modes-menu .menu-item .sub { line-height: 1.35; }
+.modes-menu .menu-item .mode-ico { flex: none; width: 18px; display: grid; place-items: center; color: var(--text-3); margin-top: 2px; }
+.modes-menu .menu-item.on .mode-ico { color: var(--bot, var(--accent-text)); }
+.modes-menu .menu-item .mode-text { flex: 1; min-width: 0; }
+.modes-menu .menu-item .mode-state { flex: none; align-self: center; color: var(--bot, var(--accent-text)); }
+.modes-menu .menu-item:disabled { opacity: .45; }
+.modes-menu .modes-note { padding: 6px 10px 4px; font-size: var(--fs-xs); color: var(--text-3); }
+.mode-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px 0 12px; border-radius: var(--r-pill); max-width: 220px; min-width: 0;
+  background: color-mix(in srgb, var(--bot, var(--accent)) 12%, transparent); color: var(--text); font-size: var(--fs-sm); font-weight: var(--fw-medium); white-space: nowrap;
+}
+.mode-chip > svg { flex: none; color: var(--bot, var(--accent-text)); }
+.mode-chip .mode-chip-label { overflow: hidden; text-overflow: ellipsis; }
+.mode-chip .mode-chip-x { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); flex: none; }
+.mode-chip .mode-chip-x:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+.mode-chip .council-pick > button { padding: 4px; color: var(--text-2); border-radius: 50%; }
+.composer-bar .mode-chips { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.composer-bar .mode-chips > * { flex: none; }
+@container (max-width: 440px) {
+  .modes-pop .modes-label { display: none; }
+  .modes-pop > button { padding: 0 10px; }
+  .mode-chip { max-width: 150px; }
+}
+@container (max-width: 560px) {
+  .mode-chip .mode-chip-label { display: none; }
+  .mode-chip { padding-left: 10px; }
+}
+
+/* The pickers under the box: icon + value, one quiet size. */
+.under-pick > button { font-size: var(--fs-sm); color: var(--text-2); }
+.under-pick > button .pick-k { color: var(--text-3); }
+
+/* ---------------------------------------------------------------- menus, popovers and modals: one elevation */
+.menu, .popover-menu, .ctx-menu { box-shadow: var(--shadow-pop); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.modal { border-radius: var(--r-card); }
+
+/* ---------------------------------------------------------------- reduced motion for the new pieces */
+@media (prefers-reduced-motion: reduce) {
+  .ui-disclosure > summary .ui-disclosure-chev, .switch > i, .rt-switch > i, .ca-switch > i { transition: none; }
+}
+
+/* ---------------------------------------------------------------- bot details panel */
+.bd-card { background: var(--surface); border-color: var(--surface-line); border-radius: var(--r-card); }
+.bd-card > .ui-disclosure > summary { padding: 12px 14px; font-size: var(--fs-md); font-weight: var(--fw-regular); color: var(--text); gap: 8px; }
+.bd-card > .ui-disclosure > summary:hover { background: var(--hover); }
+.bd-card > .ui-disclosure:last-child > summary { border-radius: 0 0 var(--r-card) var(--r-card); }
+.bd-card .ui-disclosure-body > .bd-row { border-top: 1px solid var(--surface-line); }
+.bd-row-btn { border-radius: 0; }
+.bd-row-sub { font-size: var(--fs-xs); color: var(--text-3); }
+.bd-select {
+  -webkit-appearance: none; appearance: none; min-height: 30px; padding: 5px 28px 5px 10px; border-radius: var(--r-sm);
+  border: 1px solid var(--surface-line); background: var(--surface) var(--select-chevron) no-repeat right 9px center / 11px; color: var(--text); font-size: var(--fs-sm);
+}
+.bd-select.bd-num { padding-right: 10px; background-image: none; }
+.bd-row-value { color: var(--text-2); }
+
+/* Connect apps: badges are neutral pills next to the name. */
+.ca-badge { margin-left: 8px; }
+
+/* Section headings that grew their own look (Memory → What I learned): the same label as every section. */
+.ll-head { margin: 0 0 6px 2px; }
+.ll-title { font-size: var(--fs-sm); font-weight: var(--fw-semibold); gap: 6px; }
+.ll-title svg { display: none; }
+.ll-head .set-sub, .ll-head + .set-sub { margin-left: 0; }
+/* An empty state under a group card is plain quiet text, not another card. */
+.set-card + .set-card > .ll-empty:only-child, .ll-empty { color: var(--text-3); font-size: var(--fs-sm); }
+
+/* Vault view: one accent for links; note actions stay on one line. */
+.vault-doc .md a[href^="#vault:"] { color: var(--accent-text); border-bottom-color: color-mix(in srgb, var(--accent-text) 40%, transparent); }
+.vault-back button { color: var(--link); }
+.vault-meta { row-gap: 6px; }
+.vault-meta .link-btn { color: var(--text-2); }
+.vault-meta .link-btn.danger { color: var(--danger-text); }
+.vault-bar { gap: var(--sp-2); }
+.ud-card { padding-top: 20px; }
+
+/* Context menus (right-click, profile menu) match the popover menus' type size. */
+.ctx-menu { border-radius: var(--r-lg); padding: 4px; }
+.ctx-menu .menu-item { font-size: var(--fs-md); padding: 8px 10px; gap: 10px; }
+.ctx-menu .menu-item > svg { color: var(--text-3); flex: none; }
+
+/* ---------------------------------------------------------------- buttons
+   One shape for text buttons (rounded rectangle, 10px); pills are for chips and filters only. */
+.btn, .mm-btn { border-radius: var(--r-md); }
+.mm-btn { min-height: 32px; }
+.pending .ca-btn, .connect-card .ca-btn { border-radius: var(--r-md); height: 32px; background: var(--hover); }
+.pending .ca-btn:hover, .connect-card .ca-btn:hover { background: var(--selected); }
+/* Short windows (the 600–720px tall minimum sizes): the Modes menu drops its one-line descriptions (each
+   item's tooltip keeps them) so all six fit above the composer. */
+@media (max-height: 720px) {
+  .modes-menu .menu-item .sub { display: none; }
+  .modes-menu .menu-item .mode-ico { margin-top: 0; }
+  .modes-menu .menu-item { align-items: center; }
+}

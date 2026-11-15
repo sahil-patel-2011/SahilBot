@@ -5,7 +5,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { SpaceAvatar } from '../brand'
 import { AppIcon, IconStack, connectedApps, useAppIcons } from './ConnectedIcons'
-import { CUSTOM_REDIRECT, MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, connectBadge, easiestFirst, keyProblem, matches, recommended, searchApps, type Badge } from '../lib/connect-catalog'
+import { APP_STATE_TEXT, CUSTOM_REDIRECT, MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, appState, checkSummary, connectBadge, easiestFirst, keyProblem, matches, recommended, searchApps, type AppState, type Badge } from '../lib/connect-catalog'
 import { importBot } from './BotShare'
 
 const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
@@ -13,7 +13,7 @@ const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
   needs_auth: 'Needs sign-in', connected: 'Connected', error: 'Error', reconnecting: 'Reconnecting…'
 }
 
-/** SahilBot's own saved-logins vault, listed under Password Managers (opens Settings → Passwords). */
+/** SahilBot's own saved-logins vault, listed under Password Managers (opens Settings → Vault). */
 const VAULT: ConnectorPreset = {
   id: 'sahilbot-vault', name: 'SahilBot Vault', url: 'app:vault', color: '#3A3A3C', category: 'Password Managers', auth: 'app',
   description: 'Saved logins SahilBot types into sites for you, encrypted in your Keychain.'
@@ -26,11 +26,11 @@ const prettySkill = (n: string): string => n.split('-').map((w) => (ACRONYMS.tes
 
 type View = 'browse' | 'manage' | 'templates' | 'form' | 'google' | 'setup' | 'key'
 
-/** Badge look: one click is green, a pasted key blue, a setup grey. */
-const BADGE_STYLE: Record<Badge, { cls: string; tint: string; color: string }> = {
-  'One click': { cls: 'one-click', tint: 'var(--ok, #2e9d5b)', color: 'var(--ok, #2e9d5b)' },
-  'API key': { cls: 'api-key', tint: 'var(--accent, #3b82f6)', color: 'var(--accent, #3b82f6)' },
-  'Needs setup': { cls: 'setup', tint: 'var(--text-3, #888)', color: 'var(--text-2, #666)' }
+/** Badge look (styles-system.css): quiet neutral pills; the words say how it connects. */
+const BADGE_STYLE: Record<Badge, { cls: string }> = {
+  'One click': { cls: 'one-click' },
+  'API key': { cls: 'api-key' },
+  'Needs setup': { cls: 'setup' }
 }
 const badgeTitle = (b: Badge, p: ConnectorPreset): string =>
   b === 'One click' ? 'Sign in on the app\'s own page; nothing to set up'
@@ -76,6 +76,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const [keys, setKeys] = useState<Set<string>>(new Set())
   /** Test connection results by connector id. */
   const [tests, setTests] = useState<Record<string, { ok: boolean; text: string }>>({})
+  /** "Check all": running, and its one-line result. */
+  const [checking, setChecking] = useState(false)
+  const [checked, setChecked] = useState('')
   const body = useRef<HTMLDivElement>(null)
   const icons = useAppIcons()
 
@@ -106,6 +109,12 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const status = (id: string): ConnectorStatus | undefined => statuses.find((s) => s.id === id)
   const configOf = (p: ConnectorPreset): ConnectorConfig | undefined => configs.find((c) => c.preset === p.id)
   const connected = useMemo(() => connectedApps(configs, statuses, presets), [configs, statuses, presets])
+  /** What's missing before an app can connect: its one-time setup, Google setup or API key. */
+  const setupMissing = (p: ConnectorPreset | undefined, cfg: ConnectorConfig | undefined): boolean =>
+    !!p && ((p.auth === 'oauth-static' && !cfg?.clientId) || (p.auth === 'google' && !google && !cfg?.clientId) || (p.auth === 'apikey' && !(cfg && keys.has(cfg.id))))
+  /** The one state an app is in (Connected, Needs sign-in again, Unavailable right now, Needs setup…). */
+  const stateOf = (p: ConnectorPreset | undefined, cfg: ConnectorConfig | undefined): AppState | undefined =>
+    cfg ? appState(p, status(cfg.id), { setupMissing: setupMissing(p, cfg) }) : p?.unavailable ? 'unavailable' : undefined
   const connectedPresetIds = useMemo(() => new Set(connected.map((a) => a.presetId).filter((x): x is string => !!x)), [connected])
   const catalog = useMemo(() => [VAULT, ...presets], [presets])
   const byCategory = (cat: string): ConnectorPreset[] => catalog.filter((p) => p.category === cat)
@@ -121,12 +130,14 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const start = async (p: ConnectorPreset): Promise<void> => {
     setErr('')
     if (p.id === VAULT.id) {
-      if (onOpenSettings) { onClose(); onOpenSettings('passwords') } else toast('Your saved logins are in Settings → Passwords.')
+      if (onOpenSettings) { onClose(); onOpenSettings('passwords') } else toast('Your saved logins are in Settings → Vault.')
       return
     }
     // No-setup apps: just open the site in SahilBot's browser and sign in once.
     if (p.auth === 'browser') { onBrowse(p.url); onClose(); return }
     // Built-in apps need nothing: just ask SahilBot to use them.
+    // Kept in the catalog, but its server can't be used right now: say why instead of trying.
+    if (p.unavailable) { setErr(`${p.name} is unavailable right now. ${p.unavailable}`); body.current?.scrollTo({ top: 0, behavior: 'smooth' }); return }
     if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : 'add a reminder for tomorrow at 9'}".`); return }
     const existing = configOf(p)
     // Google apps without the shared client (and without their own): set Google up first.
@@ -195,6 +206,29 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     try { await api.connectors.setToolEnabled(c.id, tool, on) } catch (e) { setErr(clean(e)); void load() }
   }
 
+  /** Re-tests every switched-on app at once and sums up how they are. */
+  const checkAll = async (): Promise<void> => {
+    setChecking(true)
+    setChecked('')
+    setErr('')
+    try {
+      const sts = await api.connectors.checkAll()
+      setStatuses(sts)
+      const states = configs.filter((c) => c.enabled).map((c) => appState(presets.find((p) => p.id === c.preset), sts.find((s) => s.id === c.id), { setupMissing: setupMissing(presets.find((p) => p.id === c.preset), c) }))
+      setChecked(checkSummary(states))
+      setTests({})
+    } catch (e) {
+      setErr(clean(e))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  /** The fix for an app that needs setup: its one-time OAuth app, Google setup, or API key. */
+  const openSetup = (p: ConnectorPreset): void => {
+    if (p.auth === 'apikey') { setKeyFor(p); go('key') } else if (p.auth === 'google') { setGoogleFor(p); go('google') } else if (p.setup) { setSetupFor(p); go('setup') }
+  }
+
   const testOne = async (c: ConnectorConfig): Promise<void> => {
     setTests((t) => ({ ...t, [c.id]: { ok: true, text: 'Testing…' } }))
     try {
@@ -246,27 +280,29 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     const cfg = configOf(p)
     const st = cfg ? status(cfg.id) : undefined
     const busy = st?.state === 'connecting' || st?.state === 'signing_in'
+    const as = p.id === VAULT.id || p.auth === 'app' || p.auth === 'browser' ? undefined : stateOf(p, cfg)
     const [label, tone] =
       p.id === VAULT.id ? ['Open', 'ghost'] :
       p.auth === 'app' ? ['Built in', 'ok'] :
       p.auth === 'browser' ? ['Open', 'ghost'] :
       st?.state === 'connected' ? ['Connected', 'done'] :
       busy ? ['Connecting…', 'ghost'] :
+      as === 'unavailable' && p.unavailable ? ['Unavailable', 'ghost'] :
+      as === 'reauth' ? ['Reconnect', 'solid'] :
       p.auth === 'oauth-static' && !cfg?.clientId ? ['Set up', 'ghost'] :
       p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? ['Add key', 'ghost'] :
       cfg ? ['Connect', 'solid'] : ['Add', 'ghost']
-    const badge = st?.state === 'connected' ? null : connectBadge(p)
+    const badge = st?.state === 'connected' || as === 'unavailable' ? null : connectBadge(p)
     const act = (): void => { if (!busy) void start(p) }
     return (
-      <div key={p.id} className="ca-item" role="button" tabIndex={0} data-testid={`preset-${p.id}`} data-state={st?.state}
+      <div key={p.id} className="ca-item" role="button" tabIndex={0} data-testid={`preset-${p.id}`} data-state={st?.state} data-app-state={as}
         onClick={act} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act() } }}>
         {p.id === VAULT.id
           ? <span className="ca-icon vault" style={{ width: 44, height: 44, borderRadius: 12 }}><I.Shield size={22} /></span>
           : <AppIcon src={icons[p.id]} name={p.name} color={p.color} />}
         <span className="ca-item-text">
-          <b>{p.name}{badge && <small className={`ca-badge ${BADGE_STYLE[badge].cls}`} data-testid={`badge-${p.id}`} title={badgeTitle(badge, p)}
-            style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 600, verticalAlign: 1, background: `color-mix(in srgb, ${BADGE_STYLE[badge].tint} ${badge === 'Needs setup' ? 18 : 16}%, transparent)`, color: BADGE_STYLE[badge].color }}>{badge}</small>}</b>
-          <span>{st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !cfg?.clientId ? `${p.description} One-time setup first.` : p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? `${p.description} Paste your API key once.` : p.description}</span>
+          <b>{p.name}{badge && <small className={`ca-badge ui-pill ${BADGE_STYLE[badge].cls}`} data-testid={`badge-${p.id}`} title={badgeTitle(badge, p)}>{badge}</small>}</b>
+          <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !cfg?.clientId ? `${p.description} One-time setup first.` : p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? `${p.description} Paste your API key once.` : p.description}</span>
         </span>
         <span className={`ca-btn ${tone}`} aria-disabled={busy || undefined}>
           {label}{tone === 'done' && <I.Check size={13} />}
@@ -353,6 +389,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           <button className="btn" onClick={() => go('browse')}>Browse apps</button>
         </div>
       )}
+      {checked && view === 'manage' && <div className="hint" data-testid="check-all-result" style={{ margin: '0 0 10px' }}>{checked}</div>}
       <div className="ca-manage">
         {configs.map((c) => {
           const st = status(c.id)
@@ -362,15 +399,18 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           const on = names.filter((n) => !off.has(n)).length
           const state = st?.state ?? (c.enabled ? 'disconnected' : 'off')
           const busy = state === 'connecting' || state === 'signing_in'
+          const as = appState(preset, st, { setupMissing: setupMissing(preset, c) })
+          // The four states people act on get their own words; the rest keep the connection's own text.
+          const shown = as === 'reauth' || as === 'unavailable' || as === 'setup' ? APP_STATE_TEXT[as] : STATE_TEXT[state]
           const expanded = open === c.id && state === 'connected' && names.length > 0
           return (
             <div className={`ca-app${expanded ? ' open' : ''}`} key={c.id}>
-              <div className="conn-row ca-app-row" data-testid="connector-row" data-state={st?.state}>
+              <div className="conn-row ca-app-row" data-testid="connector-row" data-state={st?.state} data-app-state={as}>
                 <AppIcon src={preset ? icons[preset.id] : undefined} name={c.name} color={preset?.color} size={40} />
                 <div className="conn-text">
                   <b>{c.name}</b>
-                  <span className={`ca-status ${state}`}>
-                    <i />{STATE_TEXT[state]}
+                  <span className={`ca-status ${state} app-${as}`} data-testid="connector-state">
+                    <i />{shown}
                     {state === 'connected' ? ` · ${off.size && names.length ? `${on} of ${names.length}` : st?.tools ?? 0} tools` : ''}
                     {state === 'reconnecting' && st?.retryAt ? ` · try ${st.attempt ?? 1} at ${new Date(st.retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}` : ''}
                     {st?.error ? ` · ${st.error}` : ''}
@@ -384,6 +424,12 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
                 <button className="btn" disabled={busy} title="Checks the connection by listing the app's tools" data-testid="connector-test" onClick={() => void testOne(c)}>Test</button>
                 {state === 'connected' ? (
                   <button className="btn" onClick={() => void guard(() => api.connectors.disconnect(c.id))}>Disconnect</button>
+                ) : as === 'reauth' ? (
+                  <button className="btn primary" disabled={busy} title={`Sign in to ${c.name} again`} data-testid="connector-reconnect" onClick={() => void guard(() => api.connectors.connect(c.id))}>Reconnect</button>
+                ) : as === 'unavailable' && preset?.unavailable ? (
+                  <button className="btn" disabled title={preset.unavailable}>Unavailable</button>
+                ) : as === 'setup' && preset && (preset.auth === 'apikey' || preset.auth === 'google' || preset.setup) ? (
+                  <button className="btn primary" data-testid="connector-finish-setup" onClick={() => openSetup(preset)}>{preset.auth === 'apikey' ? 'Add key' : 'Set up'}</button>
                 ) : (
                   <button className="btn primary" disabled={busy} onClick={() => void guard(() => api.connectors.connect(c.id))}>
                     {busy ? 'Connecting…' : state === 'needs_auth' ? 'Sign in' : 'Reconnect'}
@@ -398,7 +444,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
                 <button className="icon-btn" title="Remove" aria-label={`Remove ${c.name}`} onClick={() => { if (confirm(`Remove ${c.name}? You can add it again later.`)) void guard(() => api.connectors.remove(c.id)) }}><I.Trash size={15} /></button>
               </div>
               {tests[c.id] && (
-                <div className="hint" data-testid="connector-test-result" style={{ margin: '2px 0 8px 52px', color: tests[c.id].ok ? 'var(--ok, #2e9d5b)' : 'var(--danger)' }}>{tests[c.id].text}</div>
+                <div className={`hint ${tests[c.id].ok ? 'ok' : 'error'}`} data-testid="connector-test-result" style={{ margin: '2px 0 8px 52px' }}>{tests[c.id].text}</div>
               )}
               {expanded && (
                 <div className="ca-tools" data-testid="connector-tools">
@@ -513,6 +559,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
               {connected.length} connected<I.Chevron size={13} style={{ transform: 'rotate(-90deg)' }} />
             </button>
           )}
+          {view === 'manage' && configs.length > 0 && (
+            <button className="btn" disabled={checking} title="Re-tests every connected app" data-testid="connectors-check-all" onClick={() => void checkAll()}>{checking ? 'Checking…' : 'Check all'}</button>
+          )}
           {view === 'manage' && (
             <button className="btn ca-add-custom" onClick={() => { const c = presets.find((p) => p.id === 'custom'); if (c) void start(c) }}><I.Plus size={14} />Custom server</button>
           )}
@@ -589,7 +638,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
 /** "Working · 23 tools · 340 ms" for a Test connection result. */
 function healthText(st: ConnectorStatus): string {
   if (st.state === 'connected') return `Working · ${st.toolNames?.length ?? st.tools} tools${typeof st.latencyMs === 'number' ? ` · answered in ${st.latencyMs} ms` : ''}`
-  if (st.state === 'needs_auth') return 'Needs sign-in: press Sign in.'
+  if (st.state === 'needs_auth') return st.reason === 'expired' ? 'Needs sign-in again: press Reconnect.' : 'Needs sign-in: press Sign in.'
   if (st.state === 'reconnecting') return `Not reachable right now${st.error ? ` (${st.error})` : ''}. Reconnecting on its own.`
   return `${STATE_TEXT[st.state]}${st.error ? `: ${st.error}` : ''}`
 }
@@ -672,7 +721,7 @@ export function AppSetup({ preset, hasClient, onDone, onCancel }: {
       <div className="field"><label>Client secret{g.needsSecret ? '' : ' (optional)'}</label>
         <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={g.needsSecret ? 'Client secret' : 'Leave empty if the app uses PKCE only'} autoComplete="off" data-testid="setup-client-secret" />
       </div>
-      {(touched && problem) || err ? <div className="hint" style={{ color: 'var(--danger)' }} data-testid="setup-error">{err || problem}</div> : null}
+      {(touched && problem) || err ? <div className="hint error" data-testid="setup-error">{err || problem}</div> : null}
       <div className="hint">The secret is kept in your Mac's Keychain. {g.docs ? <a href={g.docs} target="_blank" rel="noreferrer">{preset.name}'s guide ↗</a> : null}</div>
       <div className="modal-actions">
         {onCancel && <button className="btn" onClick={onCancel}>Cancel</button>}
@@ -744,8 +793,8 @@ export function ApiKeyPanel({ preset, hasKey, onDone, onCancel, compact }: {
           onKeyDown={(e) => { if (e.key === 'Enter') void save() }}
           placeholder={spec.placeholder ?? 'API key'} spellCheck={false} autoComplete="off" autoFocus data-testid="api-key-input" />
       </div>
-      {(touched && problem) || err ? <div className="hint" style={{ color: 'var(--danger)' }} data-testid="api-key-error">{err || problem}</div> : null}
-      {ok && <div className="hint" style={{ color: 'var(--ok, #2e9d5b)' }} data-testid="api-key-ok">{ok}</div>}
+      {(touched && problem) || err ? <div className="hint error" data-testid="api-key-error">{err || problem}</div> : null}
+      {ok && <div className="hint ok" data-testid="api-key-ok">{ok}</div>}
       <div className="modal-actions">
         {onCancel && <button className="btn" onClick={onCancel}>Cancel</button>}
         <button className="btn primary" disabled={busy || (touched && !!problem)} onClick={() => void save()} data-testid="api-key-save">{busy ? 'Connecting…' : hasKey ? `Replace key and reconnect` : `Connect ${preset.name}`}</button>
@@ -773,8 +822,8 @@ const GOOGLE_STEPS: Array<{ title: string; text: string; links: Array<[string, s
   { title: 'Create a Google Cloud project', text: 'Any name works, e.g. "SahilBot". It\'s free; no billing needed.', links: [['Create project', `${CONSOLE}/projectcreate`]] },
   {
     title: 'Turn on the Gmail, Calendar and Drive APIs',
-    text: 'With the new project picked at the top of the page, press Enable on each. If the API Library also lists MCP versions of them, enable those too. Using Google Docs or BigQuery as well? Enable their APIs in the same project.',
-    links: [['Gmail API', `${CONSOLE}/apis/library/gmail.googleapis.com`], ['Calendar API', `${CONSOLE}/apis/library/calendar-json.googleapis.com`], ['Drive API', `${CONSOLE}/apis/library/drive.googleapis.com`], ['Docs API', `${CONSOLE}/apis/library/docs.googleapis.com`], ['BigQuery API', `${CONSOLE}/apis/library/bigquery.googleapis.com`], ['Search "MCP"', `${CONSOLE}/apis/library?q=mcp`]]
+    text: 'With the new project picked at the top of the page, press Enable on each. If the API Library also lists MCP versions of them, enable those too. Using Google Docs, Sheets, Slides or BigQuery as well? Enable their APIs in the same project.',
+    links: [['Gmail API', `${CONSOLE}/apis/library/gmail.googleapis.com`], ['Calendar API', `${CONSOLE}/apis/library/calendar-json.googleapis.com`], ['Drive API', `${CONSOLE}/apis/library/drive.googleapis.com`], ['Docs API', `${CONSOLE}/apis/library/docs.googleapis.com`], ['Sheets API', `${CONSOLE}/apis/library/sheets.googleapis.com`], ['Slides API', `${CONSOLE}/apis/library/slides.googleapis.com`], ['BigQuery API', `${CONSOLE}/apis/library/bigquery.googleapis.com`], ['Search "MCP"', `${CONSOLE}/apis/library?q=mcp`]]
   },
   {
     title: 'Set up the consent screen',
@@ -861,7 +910,7 @@ export function GoogleSetup({ forApp, onDone, onCancel, compact }: {
       <div className="field"><label>Client secret</label>
         <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="GOCSPX-…" autoComplete="off" data-testid="google-client-secret" />
       </div>
-      {(touched && problem) || err ? <div className="hint" style={{ color: 'var(--danger)' }} data-testid="google-setup-error">{err || problem}</div> : null}
+      {(touched && problem) || err ? <div className="hint error" data-testid="google-setup-error">{err || problem}</div> : null}
       <div className="hint">Google may ask you to sign in again about once a week while the app is in Testing. Publishing it (Audience → Publish app) stops that; Google may show an "unverified app" notice you can continue past, since it's your own app.</div>
       <div className="modal-actions">
         {onCancel && <button className="btn" onClick={onCancel}>Cancel</button>}

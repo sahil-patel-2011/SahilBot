@@ -7,20 +7,30 @@ import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
-import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, PendingRequest, SendInput, Settings, Space, UsageRow } from '@shared/types'
+import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionMode, SendInput, Settings, Space, UsageRow } from '@shared/types'
 import type { GoalPatch } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
+// Cloud first, local opt-in (shared/local-mode.ts); attached folders are counted and indexed (knowledge/folder-scan.ts).
+import { localOff, localOn } from '@shared/local-mode'
+import { hasLocalModels } from './local-detect'
+import { scanFolder } from './knowledge/folder-scan'
+import { OpenAITtsEngine } from './voice/tts'
+import { DEFAULT_TRANSCRIBE_MODEL, speechUsd, transcribe as openaiTranscribe, transcribeUsd } from './apis/openai'
+import { OpenAISttEngine } from './voice/stt'
+import { hookSpend } from './apis/spend'
 import { INTRO } from './agent/prompt'
 import { updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
-import { Budget } from './llm/budget'
+import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
+import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff } from './llm/fast-mode'
+import { isAuto } from './llm/router'
 import { automationStatus, fileProbe, permissionsStatus, settingsUrl } from './permissions-center'
-import { collectText, isLocal, spendHooks, streamChat } from './llm/client'
+import { collectText, isLocal, spendHooks, streamChat, usageDetails } from './llm/client'
 import { ConnectorIcons, Connectors, PRESETS } from './connectors'
 import { addTemplate, loadTemplates, type TemplateDeps } from './templates'
 import { BOT_FILE_EXT, BOT_FILE_MAX_BYTES, botFileFor, duplicateBot, importPreview, importTemplate, parseBotFile, PendingImports } from './bot-share'
 import { getCheckin, overviewTool, setCheckin } from './checkin'
-import { aggregateUsage, usageCsv, usageRows, usageScope, windowStart } from './usage'
+import { aggregateUsage, providerOf, usageDashboard, usageDetailCsv, usageGlance, usageRows, usageScope, windowStart } from './usage'
 import { VoiceService } from './voice/service'
 import { Scheduler } from './scheduler'
 import { buildMenu, setupApp, windowState } from './shell'
@@ -45,10 +55,13 @@ import { webTools } from './agent/tools/web'
 import { Db } from './db'
 import { machine, providerModels, root, teamCapacity, wiredLimitMB } from './llm/models'
 import { Endpoints } from './llm/endpoints'
+import { chatgptPlan, closeAll as closeCodexRuns, CODEX_INSTALL_URL } from './llm/codex'
 import { autoWindow, samplingFor } from './llm/catalog'
 import { Warmup, lastUsedModel, warmupAllowed } from './llm/warmup'
-import { MemoryStore } from './memory'
-import { appRoot, dataDir, sub } from './paths'
+import { MemoryStore, similar, type ImportItemIn } from './memory'
+import { IMPORT_MAX_CHARS, ruleName } from './memory-import'
+import { MEMORY_IMPORT_PROMPT } from '@shared/memory-import'
+import { appRoot, dataDir, isPackaged, sub } from './paths'
 import { SkillStore } from './skills'
 import { docxText, pdfText, pptxText } from './docs/read'
 import { RuleStore } from './rules'
@@ -62,21 +75,30 @@ import { runUsage } from './run-usage'
 import { isPermissionMode, modeChangeAllowed } from './agent/permissions'
 import { codeTool, gitTool } from './agent/tools/code'
 import { researchTool } from './agent/tools/research'
-import { agentsTool } from './agent/tools/agents'
+import { phiTool } from './agent/tools/phi'
+import { agentsTool, swarmTool } from './agent/tools/agents'
+import { askBotTool } from './agent/tools/ask-bot'
 import { handoffTool } from './agent/tools/handoff'
 import { computerTool } from './agent/tools/computer'
 import { createOverlay } from './computer/overlay-window'
 import { consultTool } from './agent/tools/consult'
+import { checkpointTool, createCua } from './agent/cua'
 import { frcCodeTool } from './agent/tools/frc_code'
 import { frcMechTool } from './agent/tools/frc_mech'
 import { onshapeTool, testOnshapeKeys } from './agent/tools/onshape'
 import { freecadTool } from './agent/tools/freecad'
 import { findFreecadCmd } from './cad/freecad'
+import { cadDesignTool } from './cad/design-tool'
 import { Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
-import { SpaceFiles } from './spaces'
+import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy } from './spaces'
+import { ATTENDED_GRACE_MS, Learner, QuestionQueue, QuestionStore, createQuestionHost, notifyDevices as notifyQuestionDevices, toNeedsYou } from './agent/questions'
+import { DigestRunner } from './goals/digest'
 import { BrowserManager } from './browser/manager'
 import { Vault } from './vault'
+import { VaultAuth } from './secure/auth'
+import { vaultHandlers } from './secure/ipc'
+import { electronTouchId, electronVaultFiles, protectSender, registerVaultIpc, startAutoLock } from './secure/electron'
 import { PurchaseGate } from './browser/checkout'
 import { recentEmail, recentTexts, setEmailCodeSource } from './otp'
 import { mailTool } from './agent/tools/mail'
@@ -94,6 +116,11 @@ import { stockTools } from './agent/tools/stocks'
 import { KnowledgeService } from './knowledge/service'
 import { LearningService } from './learning/service'
 import { knowledgeTools, resolveScope } from './agent/tools/knowledge'
+import { vaultTool } from './agent/tools/vault'
+import { VaultService } from './vault/service'
+import { ContextEngine } from './context-engine/service'
+import { aboutTool } from './agent/tools/about'
+import { activityLearningAllowed, activityTimelineForLearning } from './activity'
 import { GoalManager, withGoalsOverview } from './goals'
 import { opensDirectly } from './knowledge/ignore'
 import { followUpTool, goalTool } from './agent/tools/goals'
@@ -109,6 +136,10 @@ import { OPENAI_URL } from './llm/providers'
 import { fromWav } from './voice/audio'
 import { swarmSpend } from './agent/swarm/ledger'
 import { mark, TIMING } from './timing'
+// Channels and events go through a transport-agnostic registry (src/main/rpc.ts): Electron IPC here, a WebSocket on SahilBot Server.
+import { addAdapter, broadcast, registerHandler } from './rpc'
+import { electronAdapter } from './rpc-electron'
+import { setupRemoteServer } from './remote-server'
 
 // SAHILBOT_TIMING=1: launch phases in the log (src/main/timing.ts).
 mark('main module loaded')
@@ -149,8 +180,11 @@ let reopen: () => BrowserWindow | null = () => null
 
 /** Messages to the main window; dropped while it's closed. */
 function toWin(channel: string, ...args: unknown[]): void {
-  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, ...args)
+  broadcast(channel, ...args)
 }
+// In the Mac app, Electron IPC carries every channel and event to the main window. SahilBot Server runs this
+// same file under Node with its own transport attached instead (src/server/hub.ts).
+if (process.versions.electron) addAdapter(electronAdapter(ipcMain, () => (win && !win.isDestroyed() && !win.webContents.isDestroyed() ? [win.webContents] : [])))
 
 /** Shows a chat in the main window; a just-recreated window gets it once its page has loaded. */
 function openThread(threadId: string): void {
@@ -256,18 +290,35 @@ app.whenReady().then(() => {
   const secrets = new Secrets(db)
   const settings = new SettingsStore(db, secrets)
   /** The Onshape API key pair from the Keychain (main process only; never sent to the renderer or the model). */
+  /** Tests (dev builds only): a fake Onshape server stands in for cad.onshape.com. */
+  const onshapeTestOrigin = !isPackaged() && process.env.FOREMAN_ONSHAPE_URL ? process.env.FOREMAN_ONSHAPE_URL : undefined
   const onshapeKeys = (): { accessKey: string; secretKey: string } | undefined => {
     const accessKey = secrets.get('onshapeAccessKey'), secretKey = secrets.get('onshapeSecretKey')
     return accessKey && secretKey ? { accessKey, secretKey } : undefined
   }
   const spaces = new SpaceFiles()
   // Cloud spending cap: enforced inside the model client for every paid request (chat, agent, voice, summaries).
-  const budget = new Budget(db, () => settings.get().cloudBudgetUsd)
+  // The limit is monthly, in one of three modes (a specific amount, Unlimited, None: llm/budget.ts spendingMode).
+  const budget = new Budget(db, () => settings.get().cloudBudgetUsd, () => spendingMode(settings.get()))
   spendHooks.before = (_req, est, maxOutput, pricedAs) => budget.check(pricedAs, est, maxOutput)
   spendHooks.after = (req, input, output, served) => {
-    // Tagged with the bot whose run made it (Settings → Usage).
-    budget.record(new URL(req.baseUrl).host, served, input, output, usageScope.getStore()?.spaceId ?? null)
+    // Tagged with the bot whose run made it, with the providers' token detail (Settings → Usage).
+    let host = ''
+    try { host = new URL(req.baseUrl).host } catch { host = req.baseUrl }
+    const d = usageDetails.get(req) ?? {}
+    budget.record(host, served, input, output, usageScope.getStore()?.spaceId ?? null, { ...d, provider: providerOf(served, host) })
     toWin('budget:changed')
+  }
+  // Fast mode (llm/fast-mode.ts): what the request in progress runs at. Auto's own rule applies when the chat's
+  // model is Auto (the chat's, then its bot's, then the default); speed-sensitive = voice, small talk, quick code.
+  fastHooks.resolve = (model) => {
+    const s = settings.get()
+    const threadId = usageScope.getStore()?.threadId
+    if (!threadId) return fastTierFor(model, s)
+    const thread = db.getThread(threadId)
+    const chosen = thread?.model || (thread ? db.getSpace(thread.spaceId)?.model : undefined) || s.defaultModel
+    const state = db.getState(threadId)
+    return fastTierFor(model, s, { auto: isAuto(chosen), speedSensitive: !!state.voice || SPEED_SENSITIVE.has(state.lastCategory ?? '') })
   }
 
   const memory = new MemoryStore(db)
@@ -365,6 +416,8 @@ app.whenReady().then(() => {
     try { passwords = vault.passwords() } catch { /* vault locked */ }
     return needsYouBody(r, passwords)
   }
+  /** Chats with a bot's question or approval waiting in Needs you (set once the queue exists). */
+  const openQuestionThreads: { current: () => string[] } = { current: () => [] }
   /** Dock badge: chats waiting on you + unread chats (top-level, not hidden bots, not the one you're reading). */
   let badgeTimer: ReturnType<typeof setTimeout> | null = null
   const refreshBadge = (): void => {
@@ -377,6 +430,8 @@ app.whenReady().then(() => {
         const need = new Set([...waiting].filter(([, ids]) => ids.size).map(([t]) => t))
         const hidden = new Set(db.listSpaces().filter((x) => x.hidden).map((x) => x.id))
         for (const t of db.listThreads()) if (t.unread && t.id !== reading && !hidden.has(t.spaceId) && !quickSeen.has(t.id)) need.add(t.id)
+        // Bots' questions and approvals waiting in Needs you (agent/questions) count too.
+        for (const id of openQuestionThreads.current()) need.add(id)
         app.dock.setBadge(need.size ? String(need.size) : '')
       } catch { /* no Dock, or the database is closing */ }
     }, 200)
@@ -423,7 +478,22 @@ app.whenReady().then(() => {
     }
   }
 
+  // The secrets vault (src/main/secure): envelope encryption, locked until Touch ID / master password,
+  // auto-locks when idle, on sleep, on the lock screen and on quit. Old Keychain-only entries migrate on start.
   const vault = new Vault(db, secrets)
+  try { vault.start() } catch (e) { console.error('[vault]', (e as Error).message) }
+  vault.auth = new VaultAuth({
+    core: vault.core,
+    touch: electronTouchId(HIDDEN),
+    ui: {
+      available: () => !!win && !win.isDestroyed(),
+      show: (req) => { if (!HIDDEN) showMain(); toWin('vault:auth', req) },
+      done: (id) => toWin('vault:auth', { id, done: true })
+    }
+  })
+  vault.core.onChange = () => toWin('vault:changed')
+  const stopAutoLock = startAutoLock(vault)
+  app.on('before-quit', () => { stopAutoLock(); vault.auth?.cancelAll(); vault.lock('quit') })
   const browser = new BrowserManager(
     () => win,
     (state) => toWin('browser:state', state),
@@ -464,6 +534,8 @@ app.whenReady().then(() => {
   const skills = new SkillStore(sub('skills'), join(appRoot(), 'packs', 'skills'))
   const rules = new RuleStore(sub('rules'), join(appRoot(), 'packs', 'rules'))
   const registry = new ToolRegistry()
+  // The context engine (People & Places), set up with the knowledge vault below; the memory tool's "about" uses it.
+  const worldRef: { current?: ContextEngine } = {}
   registry.register(
     ...coreTools(results),
     ...fileTools(() => settings.get().workspaceDir, docsDir),
@@ -475,7 +547,7 @@ app.whenReady().then(() => {
       visionReceipt: (file, signal) => readReceipt({ access: apiAccess(settings), workspace: () => settings.get().workspaceDir }, file, signal) }),
     ...pageTools(pagesDir),
     ...webTools(() => ({ ...settings.get().search, braveKey: secrets.get('braveKey') })),
-    memoryTool(memory, db, skills, rules),
+    memoryTool(memory, db, skills, rules, () => worldRef.current),
     // Built in and always available (connector tools are found with find_tools).
     { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since), sites }), core: true },
     sitesTool(sites),
@@ -493,7 +565,11 @@ app.whenReady().then(() => {
     codeTool({ getWorkspace: () => settings.get().workspaceDir }),
     gitTool(),
     researchTool(),
+    // Patient data: find and redact the 18 HIPAA identifiers before text goes anywhere (local, read-only).
+    phiTool(),
     agentsTool(),
+    // Bot swarms: temporary read-only helpers, then the bot compiles (listed by the bot's Swarm setting).
+    swarmTool(),
     computerTool({
       enterMini: (id) => enterMini(id),
       overlay: cursorOverlay.overlay,
@@ -530,7 +606,11 @@ app.whenReady().then(() => {
     // FRC mechanical design math: motors, mechanisms, ratios, belt/chain centers, beams, weight (found with find_tools).
     frcMechTool(),
     // CAD: Onshape through the user's API keys (reads free; CAD changes ask, workspaces only), found with find_tools("onshape"/"cad").
-    onshapeTool({ keys: onshapeKeys, workspace: () => settings.get().workspaceDir }),
+    // cad_design: the design workflow (brief → concepts → plan → build → verify) on Onshape, else FreeCAD.
+    ...(() => {
+      const onshape = onshapeTool({ keys: onshapeKeys, workspace: () => settings.get().workspaceDir, testOrigin: onshapeTestOrigin })
+      return [onshape, cadDesignTool({ onshapeKeys, freecadBin: () => findFreecadCmd(), workspace: () => settings.get().workspaceDir, onshape, testOrigin: onshapeTestOrigin })]
+    })(),
     // Local CAD files through FreeCAD's command line, only when FreeCAD is installed.
     ...(findFreecadCmd() ? [freecadTool({ workspace: () => settings.get().workspaceDir })] : [])
   )
@@ -541,7 +621,8 @@ app.whenReady().then(() => {
   // Every model server that's on; the last list tells the agent how much context each model can hold.
   const endpoints = new Endpoints(settings)
   // Auto skips cloud models this month's remaining budget couldn't pay for.
-  endpoints.budgetLeft = () => { const b = budget.summary(); return b.cap - b.spent }
+  // Unlimited and None leave it undefined: no cap to skip models for (None keeps Auto off pay-per-use models in routing).
+  endpoints.budgetLeft = () => { const b = budget.summary(); return b.mode === 'amount' ? budgetLeftFor(b.mode, b.cap, b.spent) : undefined }
   const fitWindow =(model: string, window: number): number => {
     const m = endpoints.last?.models.find((x) => x.id === model)
     if (!m || m.note === 'remote') return window
@@ -557,18 +638,93 @@ app.whenReady().then(() => {
 
   /** Goals (set up further down): an unattended goal wake-up's call that needs approval is queued for the user. */
   const goalHooks: { ask?: (threadId: string, info: { tool: string; label: string; summary?: string; reason?: string }) => string | undefined } = {}
+  // The knowledge vault (set up with the knowledge base below): each run's context gets its most relevant
+  // notes, sized to the model's window (a cloud model's own window, else what fits on this Mac).
+  const notesVaultRef: { current?: VaultService } = {}
+  const notesVaultWindow = (model?: string): number => {
+    if (!model) return 32_768
+    const m = endpoints.last?.models.find((x) => x.id === model)
+    let remote = m?.note === 'remote'
+    try { remote ||= !isLocal(endpoints.for(model).baseUrl) } catch { /* unknown: local */ }
+    return remote ? m?.contextTokens ?? 200_000 : fitWindow(model, settings.get().contextWindow || 131072)
+  }
+  // Computer use as Planner + executor (agent/cua): the planner plans and checks, the run's model executes.
+  const cua = createCua({ db, emit, settings: () => settings.get(), endpoints })
+  registry.register(checkpointTool(() => cua))
+  // ---------------------------------------------------------------- always-on bots: the question queue (agent/questions)
+  // A bot's questions and approvals don't stop it: they wait in Needs you (persisted), the user hears on the
+  // Mac and paired devices, and a later answer resumes the bot. Deadlines go ahead with safe defaults only.
+  const questionStore = new QuestionStore(db)
+  const learner = new Learner(questionStore, memory)
+  const chatRef: { current: Agent | null } = { current: null }
+  let needsYouTimer: ReturnType<typeof setTimeout> | null = null
+  const questions = new QuestionQueue({
+    store: questionStore, learner,
+    botName: (id) => botName(id),
+    threadExists: (id) => !!db.getThread(id),
+    notify: (item, o) => {
+      const r: PendingRequest = item.kind === 'approval'
+        ? { id: item.id, threadId: item.threadId, kind: 'approval', tool: item.approval?.tool, label: item.approval?.label, summary: item.approval?.summary }
+        : { id: item.id, threadId: item.threadId, kind: item.questions.length > 1 ? 'questions' : 'question', question: item.questions[0]?.question, questions: item.questions }
+      const body = needsYouText(r)
+      notifyQuestionDevices({ kind: item.kind, title: o.title, body, botId: item.botId, threadId: item.threadId, itemId: item.id })
+      const space = db.getSpace(item.botId)
+      if (!space || space.notify === false || QUIET || !Notification.isSupported() || (mainFocused() && viewingThread === item.threadId)) return
+      showNote(new Notification({ title: o.title, body, silent: false }), item.threadId)
+    },
+    resume: async (item, msg) => {
+      const c = chatRef.current
+      if (!c) throw new Error('SahilBot is still starting')
+      const meta = { ...msg.meta, ...(msg.hidden ? { hidden: true } : {}) }
+      // The bot is working: the answer joins its run at the next step. Otherwise it starts a run to pick it up.
+      if (c.isRunning(item.threadId)) { await c.steer(item.threadId, msg.text, { ...meta, note: msg.note }); return }
+      if (msg.unattended) scheduledRuns.add(item.threadId)
+      try {
+        const { done } = await c.send({ threadId: item.threadId, text: msg.text, note: msg.note, meta }, { unattended: msg.unattended })
+        void done.finally(() => { if (msg.unattended) scheduledRuns.delete(item.threadId) })
+      } catch (e) { if (msg.unattended) scheduledRuns.delete(item.threadId); throw e }
+    },
+    // Over the monthly limit with nothing local to run on: the answer is kept and picked up later.
+    held: () => {
+      const b = budget.summary()
+      if (b.mode !== 'amount' || b.spent < b.cap) return null
+      return endpoints.usable().some((m) => { try { return isLocal(endpoints.for(m.id).baseUrl) } catch { return false } }) ? null : 'the monthly spending limit is used up'
+    },
+    notice: (threadId, text, meta) => {
+      const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', ...(meta ? { meta } : {}) })
+      emit({ threadId, type: 'message', message: m })
+    },
+    changed: () => {
+      refreshBadge()
+      if (needsYouTimer) return
+      needsYouTimer = setTimeout(() => { needsYouTimer = null; toWin('needsYou:changed') }, 150)
+    }
+  })
+  openQuestionThreads.current = () => questionStore.list({ status: ['open'] }).map((x) => x.threadId).filter((id) => !!db.getThread(id))
+  // The card shows for a while when you're looking at the bot's chat; otherwise it goes to Needs you at once.
+  const questionHost = createQuestionHost({ db, settings, queue: questions, learner, grace: (threadId) => (mainFocused() && viewingThread === threadId ? ATTENDED_GRACE_MS : 0) })
   const chat = new Agent({
+    questions: questionHost,
+    cua,
     connectors,
     db, settings, endpoints, spaces, memory, skills, rules, registry, results, docsDir, emit, fitWindow,
     // Saved passwords and cards, plus one-time codes typed in the last 10 minutes: no tool call may carry them.
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
-    onUnattendedAsk: (threadId, info) => goalHooks.ask?.(threadId, info)
+    // Any saved value that still shows up in a tool result or error is masked before the model reads it.
+    redact: (text) => vault.redact(text),
+    onUnattendedAsk: (threadId, info) => goalHooks.ask?.(threadId, info),
+    vaultContext: (o) => notesVaultRef.current?.context({ spaceId: o.spaceId, query: o.query, local: o.local, window: notesVaultWindow(o.model) }) ?? null,
+    // One "About the user and their world" section: memories + vault notes + people/places cards (src/main/context-engine).
+    worldContext: (o) => worldRef.current?.context({ threadId: o.threadId, spaceId: o.spaceId, query: o.query, window: notesVaultWindow(o.model), local: o.local, memories: o.memories, vault: o.vault, openerId: o.openerId }) ?? null
   })
+  chatRef.current = chat
   // Bot-to-bot handoffs need the agent itself (to start or steer the other bot's run).
   registry.register(handoffTool(() => chat.handoffHost()))
+  // Bots asking bots for information (read-only answers, loop-protected).
+  registry.register(askBotTool({ bots: () => db.listSpaces() }))
   // Local models: load the one we expect to use (and read its prompt prefix) in the background, so the
   // first reply after launch or a model switch doesn't wait for it.
-  const warmup = new Warmup({ endpoints, settings, fitWindow, recentModel: () => lastUsedModel(db), prefix: () => chat.warmPrefix(), busy: () => chat.busy() })
+  const warmup = new Warmup({ endpoints, settings, fitWindow, recentModel: () => lastUsedModel(db), prefix: (window) => chat.warmPrefix(window), busy: () => chat.busy() })
   if (warmupAllowed()) setTimeout(() => warmup.soon(), 4000)
   // Paid requests made during a run are recorded against that run's bot.
 
@@ -595,8 +751,8 @@ app.whenReady().then(() => {
   /** Calls that change what's unread refresh the Dock badge. */
   const BADGE_IPC = new Set(['threads:update', 'threads:remove', 'spaces:markUnread', 'spaces:update', 'spaces:remove'])
   const handle = <A extends unknown[], R>(ch: string, fn: (...args: A) => R | Promise<R>): void => {
-    if (BADGE_IPC.has(ch)) ipcMain.handle(ch, async (_e, ...args) => { try { return await fn(...(args as A)) } finally { refreshBadge() } })
-    else ipcMain.handle(ch, (_e, ...args) => fn(...(args as A)))
+    if (BADGE_IPC.has(ch)) registerHandler(ch, async (_ctx, ...args) => { try { return await fn(...(args as A)) } finally { refreshBadge() } })
+    else registerHandler(ch, (_ctx, ...args) => fn(...(args as A)))
   }
 
   handle('system:info', () => ({
@@ -609,7 +765,14 @@ app.whenReady().then(() => {
 
   handle('settings:get', () => settings.get())
   handle('settings:set', (patch: SettingsPatch) => {
+    const wasLocal = localOn(settings.get())
     const s = settings.set(patch)
+    // Local models switched on or off: the model list (and Auto) follow at once.
+    if (patch.local !== undefined && wasLocal !== localOn(s)) {
+      // Turned on: an Ollama that's already installed starts (nothing is downloaded or installed here).
+      if (localOn(s) && !process.env.FOREMAN_BASE_URL) void startOllama(settings.providers().ollama.baseUrl).catch(() => undefined)
+      void endpoints.list().catch(() => undefined)
+    }
     if (warmupAllowed() && (patch.defaultModel !== undefined || patch.contextWindow !== undefined || patch.localKeepAlive !== undefined)) warmup.soon()
     if (patch.quickKey !== undefined) registerQuickKeyRef.current()
     if (patch.theme) applyTheme(s.theme)
@@ -665,6 +828,37 @@ app.whenReady().then(() => {
     openThread(threadId)
   })
   handle('models:list', () => endpoints.list())
+
+  // ---------------------------------------------------------------- ChatGPT plan (via Codex)
+  // The user's own Codex (OpenAI's CLI) signs in with ChatGPT; SahilBot checks its status with Codex's
+  // documented commands and runs plan models through it (llm/codex, docs/chatgpt-plan.md).
+  chatgptPlan.configure({
+    dir: sub('chatgpt-plan'),
+    version: (() => { try { return (JSON.parse(readFileSync(join(appRoot(), 'package.json'), 'utf8')) as { version: string }).version } catch { return app.getVersion() } })(),
+    hooks: {
+      openExternal: (url) => { if (/^https:\/\//i.test(url)) void shell.openExternal(url) },
+      changed: () => toWin('chatgptPlan:changed')
+    }
+  })
+  const planChanged = async (): Promise<ReturnType<typeof chatgptPlan.status>> => { await endpoints.list().catch(() => undefined); return chatgptPlan.status() }
+  handle('chatgptPlan:status', async (refresh?: boolean) => (refresh ? chatgptPlan.refresh() : chatgptPlan.refreshIfStale()))
+  handle('chatgptPlan:connect', async (o?: { signIn?: boolean }) => { await chatgptPlan.connect({ signIn: o?.signIn === true }); return planChanged() })
+  handle('chatgptPlan:loginInTerminal', () => chatgptPlan.loginInTerminal())
+  handle('chatgptPlan:disconnect', async () => { chatgptPlan.disconnect(); return planChanged() })
+  handle('chatgptPlan:setPrefs', async (patch: { preferPlan?: boolean; codexPath?: string | null }) => {
+    const p = patch && typeof patch === 'object' ? patch : {}
+    chatgptPlan.setPrefs({
+      ...(typeof p.preferPlan === 'boolean' ? { preferPlan: p.preferPlan } : {}),
+      // Only an absolute path to something named codex.
+      ...(p.codexPath === null || (typeof p.codexPath === 'string' && /^\/.*\/codex$/.test(p.codexPath)) ? { codexPath: p.codexPath } : {})
+    })
+    if (p.codexPath !== undefined) await chatgptPlan.refresh()
+    return planChanged()
+  })
+  handle('chatgptPlan:openInstallGuide', () => { void shell.openExternal(CODEX_INSTALL_URL) })
+  app.on('before-quit', () => { void closeCodexRuns() })
+  // Check in the background at start when it's switched on (the model list waits for a stale check anyway).
+  if (chatgptPlan.prefs().enabled) void chatgptPlan.refresh().then(() => endpoints.list()).catch(() => undefined)
   handle('models:setupPicks', async () => { await endpoints.list().catch(() => undefined); return endpoints.setupPicks() })
   // Let the GPU use up to 90% of memory (macOS caps it at about 75%). macOS asks for an admin password;
   // it lasts until restart unless kept with a small LaunchDaemon (also only with the user's password).
@@ -688,7 +882,7 @@ app.whenReady().then(() => {
   })
 
   // Settings → Onshape → Test: the saved key pair against GET /users/sessioninfo (keys never leave main).
-  handle('onshape:test', () => testOnshapeKeys({ keys: onshapeKeys }))
+  handle('onshape:test', () => testOnshapeKeys({ keys: onshapeKeys, testOrigin: onshapeTestOrigin }))
 
   handle('models:test', async (baseUrl: string, apiKey?: string) => {
     const r = await providerModels('custom', 'Test', baseUrl, apiKey || settings.keyFor(baseUrl), settings.get().contextWindow || 32768)
@@ -698,10 +892,13 @@ app.whenReady().then(() => {
   // One-click downloads of recommended models through Ollama, with progress.
   const pulling = new Set<string>()
   // One click: install Ollama if needed (verified, no admin password) and run it in the background.
-  handle('ollama:setup', () => setupOllama(settings.providers().ollama.baseUrl, (e) => toWin('ollama:setup', e)))
+  // Local models are opt-in: nothing installs or downloads while they're off (Settings → Models → Turn on).
+  const needLocal = (): void => { if (localOff(settings.get())) throw new Error('Local models are off. Turn them on in Settings → Models first.') }
+  handle('ollama:setup', () => { needLocal(); return setupOllama(settings.providers().ollama.baseUrl, (e) => toWin('ollama:setup', e)) })
   handle('ollama:installed', () => !!findOllamaBinary())
 
   handle('models:pull', async (tag: string) => {
+    needLocal()
     if (!/^[\w.\-/]+(:[\w.\-]+)?$/.test(tag) || pulling.has(tag)) return
     pulling.add(tag)
     const send = (e: Record<string, unknown>): void => toWin('models:pull', { tag, ...e })
@@ -758,7 +955,8 @@ app.whenReady().then(() => {
       attachments.allow(input.folder)
     }
     const space = db.createSpace(name, input.color ?? pick(SPACE_COLORS.slice(2)), { kind, shape: input.shape ?? pick(SHAPES), members: input.members ?? [], folder: input.folder })
-    const thread = db.createThread(space.id, 'auto', null)
+    // A new bot works at Autonomous (its Bot details level); groups and projects keep the app default.
+    const thread = db.createThread(space.id, kind === 'bot' ? botLevel(settings.get(), space) : 'auto', null)
     db.updateThread(thread.id, { title: name })
     if (kind === 'bot' && input.intro !== false) {
       // The new bot greets the user and asks what to focus on; it can rename itself afterwards.
@@ -769,7 +967,7 @@ app.whenReady().then(() => {
     }
     return { space, threadId: thread.id }
   })
-  handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'label' | 'notify'>>) => {
+  handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'label' | 'notify' | 'effort'>>) => {
     const s = db.updateSpace(id, patch)
     // Keep a bot's one conversation titled after it.
     if (patch.name && s.kind === 'bot' && !s.isMain) for (const t of db.listThreads(id)) db.updateThread(t.id, { title: s.name })
@@ -798,7 +996,9 @@ app.whenReady().then(() => {
   // New chats start at the bot's autonomy level, else the app default (never Bypass).
   handle('threads:create', (spaceId: string) => {
     const s = settings.get()
-    const m = s.botModes?.[spaceId] ?? s.defaultMode
+    const space = db.getSpace(spaceId)
+    // An always-on bot without its own pick works at Autonomous; everything else keeps the app default.
+    const m = space && isAlwaysOnBot(space) ? botLevel(s, space) : s.botModes?.[spaceId] ?? s.defaultMode
     return db.createThread(spaceId, isPermissionMode(m) && m !== 'bypass' ? m : 'auto', null)
   })
   handle('threads:update', (id: string, patch: Parameters<Db['updateThread']>[1]) => {
@@ -825,6 +1025,13 @@ app.whenReady().then(() => {
   // Attachments must be ones the user picked or dropped in this session.
   handle('chat:send', async (input: SendInput) => {
     const ok = new Set(attachments.accept((input.attachments ?? []).map((a) => a.path)))
+    // A working folder chosen before the chat existed: only one the user picked this session.
+    if (typeof input.workingFolder === 'string' && !attachments.accept([input.workingFolder]).length) input = { ...input, workingFolder: undefined }
+    // Attached folders (and the working folder) become searchable in the knowledge base, for this chat's bot.
+    const sid = db.getThread(input.threadId)?.spaceId ?? null
+    for (const f of [...(input.attachments ?? []).filter((a) => a.kind === 'folder' && ok.has(a.path)).map((a) => a.path), ...(typeof input.workingFolder === 'string' ? [input.workingFolder] : [])]) {
+      try { if (!knowledge.sources().some((x) => !x.problem && (x.path === f || f.startsWith(`${x.path}/`)))) knowledge.addFolder(f, 'attached', sid) } catch { /* refused (home, ~/Library…): readable, not indexed */ }
+    }
     // The chat was cut off by SahilBot closing: "continue" picks the task up where it stopped.
     const resumed = !chat.isRunning(input.threadId) && work.isInterrupted(input.threadId)
     const note = resumed ? [input.note, RESUME_NEXT_NOTE].filter(Boolean).join('\n') : input.note
@@ -832,7 +1039,83 @@ app.whenReady().then(() => {
     if (resumed) { const m = work.clearNotice(input.threadId); if (m) emit({ threadId: input.threadId, type: 'message', message: m }) }
   })
   handle('files:pick', (kind: 'files' | 'folder') => attachments.pick(kind))
-  handle('files:register', (paths: string[]) => attachments.register(paths))
+  handle('files:register', async (paths: string[]) => (await attachments.add(paths)).added)
+  // ---- Attachments: drops, pastes, screenshots, folder scans and working folders (attachments.ts) ----
+  handle('attach:add', async (input: { paths?: string[]; blobs?: Array<{ name: string; type: string; data: Uint8Array }> }) => {
+    const r = await attachments.add(Array.isArray(input?.paths) ? input.paths.map(String) : [])
+    for (const b of (Array.isArray(input?.blobs) ? input.blobs : []).slice(0, 20)) {
+      const x = await attachments.addBlob(String(b.name ?? ''), String(b.type ?? ''), b.data instanceof Uint8Array ? b.data : new Uint8Array(b.data as ArrayLike<number>))
+      r.added.push(...x.added)
+      r.rejected.push(...x.rejected)
+    }
+    return r
+  })
+  handle('attach:pick', (kind: 'files' | 'folder') => attachments.pickAll(kind === 'folder' ? 'folder' : 'files'))
+  // Only from the user's click in the composer (never a tool): macOS's own region picker.
+  handle('attach:screenshot', () => (HIDDEN ? null : attachments.screenshot()))
+  handle('attach:scanFolder', async (path: string) => {
+    const p = String(path ?? '')
+    if (!attachments.wasPicked(p)) throw new Error('Attach that folder first.')
+    return scanFolder(p, { onProgress: (e) => toWin('attach:scan', e) })
+  })
+  /** The chat's working folder: its own choice, else its bot's or project's folder. */
+  const workingFolder = (threadId: string): import('@shared/types').WorkingFolder => {
+    const t = db.getThread(String(threadId ?? ''))
+    if (!t) return { path: null, source: null }
+    const st = db.getState(t.id)
+    if (st.workFolder && existsSync(st.workFolder)) return { path: st.workFolder, source: 'chat' }
+    const sp = db.getSpace(t.spaceId)
+    if (sp?.folder && existsSync(sp.folder)) return { path: sp.folder, source: sp.kind === 'project' ? 'project' : 'bot' }
+    return { path: null, source: null }
+  }
+  const setWorkingFolder = (threadId: string, path: string | null): import('@shared/types').WorkingFolder => {
+    const st = db.getState(threadId)
+    st.workFolder = path ?? undefined
+    if (path && !(st.roots ?? []).includes(path)) st.roots = [...(st.roots ?? []), path]
+    db.setState(threadId, st)
+    if (path) { try { if (!knowledge.sources().some((x) => !x.problem && (x.path === path || path.startsWith(`${x.path}/`)))) knowledge.addFolder(path, 'attached', db.getThread(threadId)?.spaceId ?? null) } catch { /* not indexable */ } }
+    return workingFolder(threadId)
+  }
+  handle('attach:folder', (threadId: string) => workingFolder(threadId))
+  handle('attach:pickFolder', async (threadId: string) => {
+    if (!db.getThread(String(threadId ?? ''))) throw new Error('That chat is gone.')
+    const r = await attachments.pickAll('folder')
+    const f = r.added.find((a) => a.kind === 'folder')
+    if (!f) return null
+    attachments.accept([f.path])
+    return setWorkingFolder(String(threadId), f.path)
+  })
+  handle('attach:clearFolder', (threadId: string) => { if (!db.getThread(String(threadId ?? ''))) throw new Error('That chat is gone.'); return setWorkingFolder(String(threadId), null) })
+  // A bot's "Works in folder": its chats work there unless a chat picks its own.
+  handle('attach:pickBotFolder', async (spaceId: string) => {
+    const sp = db.getSpace(String(spaceId ?? ''))
+    if (!sp || sp.kind === 'group') throw new Error('Only a bot can have a working folder.')
+    const r = await attachments.pickAll('folder')
+    const f = r.added.find((a) => a.kind === 'folder')
+    if (!f) return null
+    attachments.accept([f.path])
+    attachments.allow(f.path)
+    const updated = db.updateSpace(sp.id, { folder: f.path })
+    // Searchable right away (the bot's folder is one of the knowledge base's sources).
+    void knowledge.refresh(false).catch(() => undefined)
+    return updated
+  })
+  handle('attach:clearBotFolder', (spaceId: string) => {
+    const sp = db.getSpace(String(spaceId ?? ''))
+    if (!sp || sp.kind !== 'bot') throw new Error('Only a bot\'s working folder can be cleared here.')
+    const updated = db.updateSpace(sp.id, { folder: null })
+    void knowledge.refresh(false).catch(() => undefined)
+    return updated
+  })
+  // ---- Local models opt-in (Settings → Models, onboarding) ----
+  handle('local:status', () => ({ enabled: localOn(settings.get()), installed: !!findOllamaBinary() || hasLocalModels() }))
+  handle('local:set', async (enabled: boolean) => {
+    const s = settings.set({ local: { enabled: !!enabled } })
+    // Turned on: an Ollama that's already installed starts (nothing is downloaded here).
+    if (enabled && !process.env.FOREMAN_BASE_URL) void startOllama(settings.providers().ollama.baseUrl).catch(() => undefined)
+    void endpoints.list().catch(() => undefined)
+    return s
+  })
   handle('files:preview', (path: string) => attachments.preview(path))
   // Pages open in their own locked-down window, never in the default browser.
   handle('files:open', async (path: string) => { if (isPagePath(pagesDir(), path)) openPageWindow(pagesDir, path, { show: !HIDDEN }); else await attachments.open(path) })
@@ -927,6 +1210,7 @@ app.whenReady().then(() => {
   handle('connectors:clearGoogleClient', () => connectors.clearGoogleClient())
   // The key goes straight to the Keychain; only a status comes back (errors are redacted in connectors.ts).
   handle('connectors:setApiKey', (presetId: string, key: string) => connectors.setApiKey(presetId, key))
+  handle('connectors:checkAll', () => connectors.checkEvery())
   void connectors.connectAll()
   // Health: a tools/list check every few minutes; dropped connections reconnect with backoff.
   connectors.startHealth()
@@ -959,7 +1243,7 @@ app.whenReady().then(() => {
     // Bots get reminders in their one conversation; SahilBot and projects keep a thread per task.
     let threadId = space.isMain || space.kind === 'project' ? task.threadId : db.listThreads(space.id)[0]?.id ?? null
     if (!threadId || !db.getThread(threadId)) {
-      const t = db.createThread(space.id, 'auto', null)
+      const t = db.createThread(space.id, isAlwaysOnBot(space) ? botLevel(settings.get(), space) : 'auto', null)
       db.updateThread(t.id, { title: space.isMain || space.kind === 'project' ? `⏰ ${task.title}` : space.name })
       threadId = t.id
       scheduler.setThread(task.id, threadId)
@@ -1041,7 +1325,7 @@ app.whenReady().then(() => {
   const templateDeps: TemplateDeps = {
     createBot: (name, color, shape) => {
       const space = db.createSpace(name, color, { kind: 'bot', shape })
-      const thread = db.createThread(space.id, 'auto', null)
+      const thread = db.createThread(space.id, botLevel(settings.get(), space), null)
       db.updateThread(thread.id, { title: name })
       // Lets the bot rename itself or refine its job from its first reply.
       const state = db.getState(thread.id)
@@ -1070,7 +1354,8 @@ app.whenReady().then(() => {
   /** Every saved secret (API keys, passwords, connector tokens), so an exported bot never carries one. */
   const secretValues = (): string[] => {
     const keys = db.sql.prepare(`SELECT key FROM settings WHERE key LIKE 'secret:%'`).all() as Array<{ key: string }>
-    return keys.map((k) => secrets.get(k.key.slice('secret:'.length))).filter((v): v is string => !!v)
+    // Plus the vault's values (they live in the envelope vault now, not in secret:* rows).
+    return [...keys.map((k) => secrets.get(k.key.slice('secret:'.length))).filter((v): v is string => !!v), ...vault.secretValues()]
   }
   const skillNames = (): string[] => skills.list().map((sk) => sk.name)
   const pendingImports = new PendingImports()
@@ -1188,9 +1473,92 @@ app.whenReady().then(() => {
   handle('goals:list', () => goals.list())
   handle('goals:update', (id: string, patch: GoalPatch) => goals.patch(String(id), patch && typeof patch === 'object' ? patch : {}))
   handle('goals:runNow', (id: string) => goals.runNow(String(id)))
+
+  // ---------------------------------------------------------------- always-on bots: Needs you, autonomy levels, digest
+  // Bots' own chats still at the old default (Auto) move to Autonomous once; levels the user picked stay.
+  try { migrateBotAutonomy(db, settings.get()) } catch (e) { console.error('[autonomy]', (e as Error).message) }
+  /** Cards open in running chats right now, as inbox items (answered through chat:respond). */
+  const liveNeedsYou = (): NeedsYouItem[] => {
+    const out: NeedsYouItem[] = []
+    for (const [threadId, ids] of Object.entries(chat.allPending())) {
+      const t = db.getThread(threadId)
+      if (!t || quickRuns.has(threadId)) continue
+      for (const r of chat.pending(threadId)) {
+        if (!ids.includes(r.id)) continue
+        const base = { id: `live:${threadId}:${r.id}`, source: 'live' as const, botId: t.spaceId, botName: botName(t.spaceId), threadId, status: 'open' as const, createdAt: t.updatedAt ?? Date.now() }
+        if (r.kind === 'approval' && !r.spend) out.push({ ...base, kind: 'approval', approval: { tool: r.tool ?? '', label: r.label ?? r.tool ?? 'Action', ...(r.summary ? { summary: needsYouText(r) } : {}), ...(r.reason ? { reason: r.reason } : {}) } })
+        else if (r.kind === 'question') out.push({ ...base, kind: 'question', questions: [{ question: r.question ?? '', ...(r.options?.length ? { options: r.options } : {}) }] })
+        else if (r.kind === 'questions') out.push({ ...base, kind: 'question', questions: (r.questions ?? []).map((q) => ({ question: q.question, ...(q.options?.length ? { options: q.options } : {}) })) })
+        else out.push({ ...base, kind: 'other', approval: { tool: r.tool ?? r.kind, label: r.label ?? (r.kind === 'plan' ? 'Plan' : r.kind === 'connect' ? 'Connect an app' : 'Waiting for you'), summary: needsYouText(r) } })
+      }
+    }
+    return out
+  }
+  handle('needsYou:list', () => [...liveNeedsYou(), ...questions.inbox()])
+  handle('needsYou:answer', async (id: string, answer: string[] | 'approve' | 'deny') => {
+    const ref = String(id ?? '')
+    if (ref.startsWith('live:')) {
+      const [, threadId, reqId] = ref.split(':')
+      const r = chat.pending(threadId).find((x) => x.id === reqId)
+      if (!r) return null
+      const list = Array.isArray(answer) ? answer.map((a) => String(a ?? '')) : []
+      if (r.kind === 'approval' && !r.spend) chat.respond(threadId, reqId, answer === 'approve' ? 'once' : 'deny')
+      else if (r.kind === 'question') chat.respond(threadId, reqId, list[0] ?? (answer === 'approve' ? 'Yes' : 'No'))
+      else if (r.kind === 'questions') chat.respond(threadId, reqId, JSON.stringify(list))
+      else throw new Error('Open the chat to answer this one.')
+      return null
+    }
+    const item = await questions.answer(ref, Array.isArray(answer) ? answer.map((a) => String(a ?? '')) : answer === 'approve' ? 'approve' : 'deny')
+    return item ? toNeedsYou(item, botName(item.botId)) : null
+  })
+  handle('needsYou:reviewed', (id: string) => questions.reviewed(String(id)))
+  // Bot details → Autonomy: saved for the bot's new chats, and applied to its own conversations now.
+  handle('botAutonomy:setLevel', (spaceId: string, level: PermissionMode) => {
+    if (level !== 'ask' && level !== 'auto' && level !== 'autonomous') throw new Error(`Unknown autonomy level "${String(level)}".`)
+    const space = db.getSpace(spaceId)
+    if (!space) throw new Error('That bot no longer exists.')
+    settings.set({ botModes: { ...(settings.get().botModes ?? {}), [spaceId]: level } })
+    for (const t of db.listThreads(spaceId)) {
+      if (t.parentId || t.permissionMode === 'bypass' || t.permissionMode === level) continue
+      emit({ threadId: t.id, type: 'thread', thread: db.updateThread(t.id, { permissionMode: level }) })
+    }
+  })
+  const digests = new DigestRunner({
+    db,
+    bots: () => db.listSpaces().filter((x) => isAlwaysOnBot(x)),
+    config: (id) => botAutonomyConfig(settings.get(), id).digest,
+    goals: (id) => goals.list().filter((g) => g.botId === id),
+    routines: (id) => scheduler.list().filter((t) => t.spaceId === id),
+    runs: (taskId) => scheduler.runs(taskId),
+    pending: (id) => [...liveNeedsYou(), ...questions.inbox()].filter((x) => x.botId === id && x.status === 'open'),
+    review: (id) => questions.inbox().filter((x) => x.botId === id && x.review),
+    budget: () => { const b = budget.summary(); return { monthUsd: b.spent, capUsd: b.mode === 'amount' ? b.cap : null, over: b.mode === 'amount' && b.spent >= b.cap } },
+    busy: (id) => db.listThreads(id).some((t) => chat.isRunning(t.id)),
+    deliver: (bot, d) => {
+      const threadId = db.listThreads(bot.id).find((t) => !t.parentId)?.id
+      if (threadId) {
+        const m = db.insertMessage({ threadId, role: 'assistant', content: d.text, kind: 'normal', status: 'done', meta: { digest: true } })
+        emit({ threadId, type: 'message', message: m })
+        emit({ threadId, type: 'thread', thread: db.updateThread(threadId, { unread: true }) })
+      }
+      notifyQuestionDevices({ kind: 'digest', title: d.title, body: d.body, botId: bot.id, threadId })
+      if (threadId && bot.notify !== false && !QUIET && Notification.isSupported()) showNote(new Notification({ title: d.title, body: d.body }), threadId)
+    }
+  })
+  // Every scheduler check: goal wake-ups, question deadlines (and answers held back by the budget), digests.
+  const goalWakeups = scheduler.wakeups
+  scheduler.wakeups = async () => {
+    await Promise.all([
+      goalWakeups?.().catch(() => undefined),
+      questions.tick().catch((e) => console.error('[questions]', (e as Error).message)),
+      Promise.resolve().then(() => digests.tick()).catch((e) => console.error('[digest]', (e as Error).message))
+    ])
+  }
+  // Answers that arrived while SahilBot was closed (or couldn't be handed over) are picked up after launch.
+  setTimeout(() => void questions.resumeWaiting().catch(() => undefined), 3000)
   /** A model is cloud when the endpoint that serves it isn't on this Mac (Claude and GPT always are). */
   const isCloudModel = (model: string): boolean => {
-    if (/^(claude-|gpt-|chatgpt-)/i.test(model)) return true
+    if (/^(claude-|gpt-|chatgpt-|grok-)/i.test(model)) return true
     try { return !isLocal(endpoints.for(model).baseUrl) } catch { return /^o\d|\//i.test(model) }
   }
   const usageWindow = (): UsageRow[] => usageRows(db, windowStart(Date.now(), 30), isCloudModel)
@@ -1198,11 +1566,25 @@ app.whenReady().then(() => {
     const b = budget.summary()
     return aggregateUsage(usageWindow(), db.listSpaces(), { now: Date.now(), days: 30, month: b.month, spent: b.spent, cap: b.cap, monthRequests: b.requests })
   })
+  // The usage dashboard (Settings → Usage) and its compact card (profile menu, ⌘K "Usage").
+  const dashboard = () => {
+    const b = budget.summary()
+    return usageDashboard(db, { now: Date.now(), month: b.month, spent: b.spent, monthRequests: b.requests, cap: b.cap, mode: b.mode, spaces: db.listSpaces(), isCloud: isCloudModel })
+  }
+  handle('usage:dashboard', () => dashboard())
+  // Settings → Models → Fast mode: every supported model the user has (on or off), with its trade-off.
+  handle('fast:catalog', () => (endpoints.last?.models ?? []).filter((m) => m.installed && m.note === 'remote').flatMap((m) => {
+    const sup = fastSupport(m.id)
+    if (!sup || sup.id !== m.id.toLowerCase()) return []
+    return [{ id: m.id, label: m.label || m.id, provider: sup.provider, factor: sup.factor, ...(sup.ultrafast ? { ultrafast: sup.ultrafast } : {}), tradeoff: fastTradeoff(m.id) ?? '', ...(sup.note ? { note: sup.note } : {}) }]
+  }))
+  handle('usage:glance', () => usageGlance(dashboard()))
   // The end-of-run line under the last reply: tokens (and cloud cost) of one run, helpers included.
   handle('usage:forRun', (threadId: string, since: number, until?: number) => runUsage(db, String(threadId), Number(since) || 0, typeof until === 'number' ? until : undefined, isCloudModel))
   handle('usage:exportCsv', async () => {
     const names = new Map(db.listSpaces().map((sp) => [sp.id, sp.name]))
-    const csv = usageCsv(usageWindow(), (id) => (id ? names.get(id) ?? 'Deleted bot' : ''))
+    // Every cloud request ever recorded, with cached / cache-write / reasoning tokens and the tier.
+    const csv = usageDetailCsv(db, (id) => (id ? names.get(id) ?? 'Deleted bot' : ''))
     const r = win ? await dialog.showSaveDialog(win, { defaultPath: `SahilBot usage ${new Date().toISOString().slice(0, 10)}.csv`, filters: [{ name: 'CSV', extensions: ['csv'] }] }) : { canceled: true }
     if (r.canceled || !('filePath' in r) || !r.filePath) return null
     writeFileSync(r.filePath, csv)
@@ -1227,12 +1609,24 @@ app.whenReady().then(() => {
   const knowledge = new KnowledgeService({
     sql: db.sql,
     workspace: () => settings.get().workspaceDir,
-    projects: () => db.listSpaces().filter((x) => x.kind === 'project').map((x) => ({ id: x.id, name: x.name, folder: x.folder })),
-    ollamaUrl: () => (settings.providers().ollama.enabled ? settings.providers().ollama.baseUrl : settings.get().openaiEmbeddings && apiAccess(settings).openai() ? OPENAI_URL : null),
+    // Projects and bots with a working folder ("Works in folder"): their folders are searchable.
+    projects: () => db.listSpaces().filter((x) => x.kind === 'project' || (x.kind === 'bot' && !!x.folder)).map((x) => ({ id: x.id, name: x.name, folder: x.folder })),
+    // Local models off: no Ollama embeddings (OpenAI's only when the user turned that on), else keyword search.
+    ollamaUrl: () => (localOn(settings.get()) && settings.providers().ollama.enabled ? settings.providers().ollama.baseUrl : settings.get().openaiEmbeddings && apiAccess(settings).openai() ? OPENAI_URL : null),
+    localOff: () => localOff(settings.get()),
     busy: () => chat.busy(),
     onChange: () => { if (!knowledgeNotify) knowledgeNotify = setTimeout(() => { knowledgeNotify = null; toWin('knowledge:changed') }, 1000) }
   })
-  registry.register(...knowledgeTools({ kb: knowledge, spaceOf: (threadId) => db.getThread(threadId)?.spaceId }))
+  registry.register(...knowledgeTools({
+    kb: knowledge,
+    spaceOf: (threadId) => db.getThread(threadId)?.spaceId,
+    // Scope "chat": folders attached to the chat, its working folder, and its bot's or project's folder.
+    foldersOf: (threadId) => {
+      const st = db.getState(threadId)
+      const sp = db.getSpace(db.getThread(threadId)?.spaceId ?? '')
+      return [...new Set([...(st.roots ?? []), ...(st.folder ? [st.folder] : []), ...(sp?.folder ? [sp.folder] : [])])].filter((p) => { try { return statSync(p).isDirectory() } catch { return false } })
+    }
+  }))
   if (process.env.SAHILBOT_KNOWLEDGE !== '0' && (!HIDDEN || process.env.SAHILBOT_KNOWLEDGE === '1')) knowledge.start(HIDDEN ? 500 : 8000)
   app.on('before-quit', () => knowledge.dispose())
 
@@ -1241,9 +1635,116 @@ app.whenReady().then(() => {
   // the moment a run starts or the user does something, and never after quit. Not in hidden test runs
   // unless SAHILBOT_LEARNING=1. Everything it learns is in Settings → Memory → What I learned, with Undo.
   const appThreadRef: { current?: (id: string) => boolean } = {}
+
+  // ---------------------------------------------------------------- the knowledge vault (src/main/vault, docs/vault.md)
+  // Obsidian-compatible notes in "<workspace>/SahilBot Vault" (configurable). Compiled by the learning pass
+  // below (same idle rules and model budget), searched through the knowledge index plus its own ranking.
+  let vaultNotify: ReturnType<typeof setTimeout> | null = null
+  const notesVault = new VaultService({
+    db,
+    workspace: () => settings.get().workspaceDir,
+    keyword: (q, root, limit) => {
+      const ids = knowledge.store.keyword(q, [root], limit).map((x) => x.id)
+      return [...new Set(knowledge.store.hits(ids).map((h) => h.path))]
+    },
+    docs: { enabled: () => true, recent: (o) => knowledge.store.recentDocs(o), text: (p, n) => knowledge.store.docText(p, n) },
+    activity: { enabled: () => activityLearningAllowed(), timeline: () => activityTimelineForLearning() },
+    isRunning: (id) => chat.isRunning(id),
+    isAppThread: (id) => appThreadRef.current?.(id) ?? false,
+    secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+    // A vault outside every knowledge folder gets indexed too.
+    onRootChange: (root) => {
+      const covered = knowledge.sources().some((x) => !x.problem && (root === x.path || root.startsWith(`${x.path}/`)))
+      if (!covered) { try { knowledge.addFolder(root, 'folder') } catch { /* refused (e.g. inside ~/Library): own ranking only */ } }
+    },
+    onChange: () => { if (!vaultNotify) vaultNotify = setTimeout(() => { vaultNotify = null; toWin('notesVault:changed') }, 400) }
+  })
+  notesVaultRef.current = notesVault
+  registry.register(vaultTool({ vault: notesVault, db, secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()] }))
+
+  // ---------------------------------------------------------------- the context engine (src/main/context-engine, docs/context.md)
+  // An entity graph of the user's world (people, places, organizations, events, dates, things…) built by
+  // the idle learning pass from chats, files, connector results and (opt-in) connector metadata and
+  // activity; each run gets the cards its request is about, merged with memories and vault notes.
+  let worldNotify: ReturnType<typeof setTimeout> | null = null
+  const world = new ContextEngine({
+    db, memory, vault: () => notesVault,
+    userName: () => settings.get().userName,
+    workspace: () => settings.get().workspaceDir,
+    docs: { recent: (o) => knowledge.store.recentDocs(o), text: (p, n) => knowledge.store.docText(p, n) },
+    activity: { allowed: () => activityLearningAllowed(), timeline: () => activityTimelineForLearning() },
+    connectors: { connected: (id) => connectors.presetConnected(id), call: (id, tool, args, signal) => connectors.callPresetTool(id, tool, args, signal) },
+    isRunning: (id) => chat.isRunning(id),
+    isAppThread: (id) => appThreadRef.current?.(id) ?? false,
+    secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+    onChange: () => { if (!worldNotify) worldNotify = setTimeout(() => { worldNotify = null; toWin('people:changed') }, 400) }
+  })
+  worldRef.current = world
+  registry.register(aboutTool({ engine: world, db }))
+  handle('people:status', () => world.status())
+  handle('people:setSettings', (patch: Record<string, unknown>) => { world.setSettings((patch ?? {}) as never); return world.status() })
+  handle('people:list', (o?: { query?: string; type?: string }) => world.list({ query: typeof o?.query === 'string' ? o.query.slice(0, 200) : undefined, type: typeof o?.type === 'string' ? o.type as never : undefined }))
+  handle('people:card', (id: string) => world.card(String(id ?? '')))
+  handle('people:update', (id: string, patch: Record<string, unknown>) => world.update(String(id ?? ''), (patch ?? {}) as never))
+  handle('people:merge', (into: string, from: string) => world.merge(String(into ?? ''), String(from ?? '')))
+  handle('people:forget', (id: string) => world.forget(String(id ?? '')))
+  handle('people:undo', (trashId: string) => world.undo(String(trashId ?? '')))
+  handle('people:exportData', () => {
+    const out = world.exportData(join(settings.get().workspaceDir, 'exports'))
+    if (!HIDDEN) shell.showItemInFolder(out)
+    return out
+  })
+  handle('notesVault:status', () => notesVault.status())
+  handle('notesVault:setSettings', (patch: Record<string, unknown>) => { notesVault.setSettings((patch ?? {}) as never); return notesVault.status() })
+  handle('notesVault:setBot', (spaceId: string, patch: { enabled?: boolean | null; level?: 'normal' | 'aggressive' | null }) => {
+    if (!db.getSpace(String(spaceId ?? ''))) throw new Error('That bot is gone.')
+    notesVault.setBot(String(spaceId), patch ?? {})
+    return notesVault.status()
+  })
+  handle('notesVault:list', () => notesVault.list())
+  handle('notesVault:read', (path: string) => notesVault.read(String(path ?? '')))
+  handle('notesVault:resolve', (ref: string, from?: string) => notesVault.resolve(String(ref ?? ''), typeof from === 'string' ? from : undefined))
+  handle('notesVault:search', (q: string) => notesVault.search(String(q ?? '').slice(0, 500)))
+  handle('notesVault:save', (path: string, text: string) => notesVault.save(String(path ?? ''), String(text ?? '')))
+  handle('notesVault:create', (o: { title: string; type?: string; section?: string }) => notesVault.create({ title: String(o?.title ?? '').slice(0, 120), type: o?.type, section: o?.section }))
+  handle('notesVault:trash', (path: string) => notesVault.trash(String(path ?? '')))
+  handle('notesVault:graph', () => notesVault.store.graph())
+  handle('notesVault:changes', (limit?: number) => notesVault.changes(Math.min(1000, Number(limit) || 200)))
+  handle('notesVault:undo', (id: string) => notesVault.undo(String(id ?? '')))
+  handle('notesVault:openInObsidian', async (path?: string) => {
+    notesVault.store.ensure()
+    const rel = typeof path === 'string' && path ? path : undefined
+    if (notesVault.obsidianInstalled()) {
+      if (!HIDDEN) await shell.openExternal(notesVault.obsidianUrl(rel))
+      return 'obsidian'
+    }
+    if (!HIDDEN) shell.showItemInFolder(rel ? notesVault.store.abs(rel) : notesVault.store.root)
+    return 'finder'
+  })
+  handle('notesVault:reveal', (path?: string) => {
+    notesVault.store.ensure()
+    if (!HIDDEN) shell.showItemInFolder(typeof path === 'string' && path ? notesVault.store.abs(path) : notesVault.store.root)
+  })
+  handle('notesVault:exportZip', () => {
+    const out = notesVault.exportZip(join(settings.get().workspaceDir, 'exports'))
+    if (!HIDDEN) shell.showItemInFolder(out)
+    return out
+  })
+
   let learningNotify: ReturnType<typeof setTimeout> | null = null
   const learning = new LearningService({
     db, memory, skills, settings, endpoints, fitWindow,
+    vault: {
+      wants: (now) => notesVault.compiler.wants(now) || world.wants(now),
+      // The vault's compile, then People & Places (the context engine) in the same pass, model and budget.
+      run: async (h) => {
+        let n = 0
+        try { n = await notesVault.compiler.run(h) } finally { notesVault.changed() }
+        const c = learning.choose()
+        return n + await world.learn({ ...h, cloud: 'cloud' in c && c.cloud })
+      },
+      passEvery: () => notesVault.passEvery()
+    },
     busy: () => chat.busy(),
     isRunning: (id) => chat.isRunning(id),
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
@@ -1268,6 +1769,9 @@ app.whenReady().then(() => {
   handle('learning:approve', (id: string) => learning.approve(String(id ?? '')))
   handle('learning:dismiss', (id: string) => learning.dismiss(String(id ?? '')))
   handle('learning:runNow', () => learning.runNow())
+  handle('notesVault:compileNow', async () => { await learning.runNow({ vaultOnly: true }); return notesVault.status() })
+  // People & Places → "Learn now": the same pass (its vault job runs the context engine too).
+  handle('people:learnNow', async () => { await learning.runNow({ vaultOnly: true }); return world.status() })
   handle('learning:openChat', (threadId: string) => { if (db.getThread(String(threadId ?? ''))) openThread(String(threadId)) })
   handle('knowledge:status', () => knowledge.status())
   // Folders are added only through the picker here, or from folders already attached to a chat.
@@ -1308,7 +1812,29 @@ app.whenReady().then(() => {
 
   // ---------------------------------------------------------------- voice
   let voiceThread: string | null = null
+  // Spoken replies: Kokoro only with local models on; OpenAI's voice when allowed (Settings → Voice) with a key; else the Mac's voice.
+  const openaiVoice = new OpenAITtsEngine({
+    baseUrl: OPENAI_URL,
+    apiKey: () => apiAccess(settings).openai()?.apiKey,
+    guard: (chars) => hookSpend.beforeUsd(OPENAI_URL, 'gpt-4o-mini-tts', speechUsd('gpt-4o-mini-tts', chars)),
+    charged: (chars) => hookSpend.afterUsd(OPENAI_URL, 'gpt-4o-mini-tts', speechUsd('gpt-4o-mini-tts', chars))
+  })
+  // Voice input with local models off: OpenAI transcription (same switch, same monthly limit); never a Whisper download.
+  const openaiEars = new OpenAISttEngine({
+    transcribe: (file, prompt, signal) => {
+      const c = apiAccess(settings).openai()
+      if (!c) throw new Error('No OpenAI key is saved for voice input.')
+      return openaiTranscribe(c, { model: DEFAULT_TRANSCRIBE_MODEL, file, prompt }, signal)
+    },
+    guard: (seconds) => hookSpend.beforeUsd(OPENAI_URL, DEFAULT_TRANSCRIBE_MODEL, transcribeUsd(DEFAULT_TRANSCRIBE_MODEL, undefined, seconds) * 1.5),
+    charged: (seconds, t) => hookSpend.afterUsd(OPENAI_URL, DEFAULT_TRANSCRIBE_MODEL, transcribeUsd(DEFAULT_TRANSCRIBE_MODEL, t as never, seconds))
+  })
   const voice = new VoiceService({
+    output: () => {
+      const s = settings.get()
+      const openaiOk = !!s.voiceOutput?.openai && !!apiAccess(settings).openai()
+      return { localOn: localOn(s), openai: openaiOk ? openaiVoice : null, openaiStt: openaiOk ? openaiEars : null, spendingNone: spendingMode(s) === 'none' }
+    },
     emit: (e) => toWin('voice:event', e),
     respond: (text, signal, onText) => new Promise<void>((resolve, reject) => {
       const tid = voiceThread
@@ -1397,7 +1923,8 @@ app.whenReady().then(() => {
   // Runs still going at quit were cut off: their rows stay so the next launch offers Continue.
   app.on('before-quit', () => { work.quitting(); menuBar?.dispose(); voice.dispose(); scheduler.stop(); browser.dispose(); stopOllama() })
   // Local models just work after a restart: start Ollama in the background if it's installed and not running.
-  if (!process.env.FOREMAN_BASE_URL) void startOllama(settings.providers().ollama.baseUrl).catch(() => undefined)
+  // (Only when local models are on: a cloud-only setup never starts or installs anything local.)
+  if (!process.env.FOREMAN_BASE_URL && localOn(settings.get())) void startOllama(settings.providers().ollama.baseUrl).catch(() => undefined)
 
   // The app's own window may use the microphone (voice); websites in the browser panel may not.
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc === win?.webContents))
@@ -1440,18 +1967,14 @@ app.whenReady().then(() => {
     return r.filePath
   })
 
-  handle('vault:list', () => vault.list())
-  handle('vault:set', (e: Parameters<Vault['set']>[0]) => { vault.set(e); return vault.list() })
-  handle('vault:remove', (name: string) => { vault.remove(name); return vault.list() })
-  handle('vault:totpCode', (name: string) => { const c = vault.totpCode(name); return c ? { code: c.code, remaining: c.remaining } : null })
-  handle('vault:otpGrants', () => purchases.permanent())
-  handle('vault:revokeOtpGrant', (site: string) => purchases.revokeOtp(site))
-  handle('vault:cards', () => vault.cards())
-  handle('vault:setCard', (c: Parameters<Vault['setCard']>[0]) => vault.setCard(c))
-  handle('vault:removeCard', (id: string) => vault.removeCard(id))
-  handle('vault:addresses', () => vault.addresses())
-  handle('vault:setAddress', (a: Parameters<Vault['setAddress']>[0]) => vault.setAddress(a))
-  handle('vault:removeAddress', (id: string) => vault.removeAddress(id))
+  // Settings → Vault: metadata-only replies (src/main/secure/ipc.ts), from the main window only.
+  registerVaultIpc(vaultHandlers({
+    vault, auth: vault.auth!, purchases,
+    touchIdAvailable: () => electronTouchId(HIDDEN).available(),
+    keychainAvailable: () => secrets.available(),
+    files: electronVaultFiles(() => win),
+    protect: protectSender
+  }), (wc) => !!win && !win.isDestroyed() && wc.id === win.webContents.id)
   // Only a click in the main window's own page approves a purchase or a one-time code (not the Quick
   // bar, not a Page, not a bot or a message relayed from anywhere else).
   ipcMain.handle('purchase:respond', (ev, threadId: string, id: string, nonce: string, answer: string) => {
@@ -1483,8 +2006,21 @@ app.whenReady().then(() => {
   handle('memory:remove', (id: string) => void memory.remove(id))
   handle('memory:add', (content: string, spaceId: string | null, category?: string) => memory.add(content, spaceId ?? null, category))
   handle('memory:update', (id: string, content: string, patch?: { category?: string; spaceId?: string | null }) => void memory.update(id, content, patch ?? {}))
-  handle('memory:importPreview', (text: string) => memory.importPreview(String(text ?? '').slice(0, 200_000)))
-  handle('memory:importCommit', (items: Array<{ content: string; category?: string }>) => memory.importCommit(Array.isArray(items) ? items : []))
+  // Import memory to SahilBot (src/main/memory-import.ts): Instructions become rules (Settings → Rules).
+  const importRule = (text: string): boolean => {
+    const all = rules.list()
+    if (all.some((r) => similar(r.text, text))) return false
+    rules.save({ name: ruleName(text, (n) => all.some((r) => r.name === n)), text, scope: 'everywhere', category: 'Imported' })
+    return true
+  }
+  const importItems = (items: unknown): ImportItemIn[] => (Array.isArray(items) ? items : []).filter((x): x is ImportItemIn => !!x && typeof x === 'object' && typeof (x as ImportItemIn).content === 'string').map((x) => ({
+    content: String(x.content).slice(0, 1000), category: typeof x.category === 'string' ? x.category : undefined,
+    date: typeof x.date === 'string' ? x.date.slice(0, 10) : null, asRule: x.asRule === true
+  }))
+  handle('memory:importPreview', (text: string) => memory.importPreview(String(text ?? '').slice(0, IMPORT_MAX_CHARS + 1), rules.list().map((r) => r.text)))
+  handle('memory:importCommit', (items: unknown) => memory.importCommit(importItems(items), importRule))
+  handle('memory:importSave', (items: unknown) => memory.importSave(importItems(items), importRule))
+  handle('memory:copyImportPrompt', () => { clipboard.writeText(MEMORY_IMPORT_PROMPT); return true })
   handle('memory:getEnabled', () => memory.enabled)
   handle('memory:setEnabled', (on: boolean) => memory.setEnabled(!!on))
   handle('rules:list', () => rules.list())
@@ -1630,6 +2166,8 @@ app.whenReady().then(() => {
   handle('jobs:remove', (id: string) => jobs.remove(String(id)))
   installQuitGuard(app, { jobs, silent: HIDDEN, window: () => win, showMessageBox: (w, opts) => (w ? dialog.showMessageBox(w, opts) : dialog.showMessageBox(opts)) })
   registerProtocolClient(HIDDEN)
+  // Settings → Always-on server: this Mac's link to a SahilBot Server (src/main/remote-server.ts).
+  setupRemoteServer({ db, secrets, openExternal: (u) => { if (/^https?:\/\//.test(u)) void shell.openExternal(u) } })
   openUrls.attach(urlHandler({ db, emit, openThread, newChat: () => sendMenu('new-chat'), mainWindow: () => showMain(), isAppThread: (id) => mcp.isAppThread(id) }))
 
   // ---------------------------------------------------------------- swarms and Heavy runs

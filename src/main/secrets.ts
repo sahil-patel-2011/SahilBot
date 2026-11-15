@@ -1,8 +1,10 @@
 import { safeStorage } from 'electron'
 import type { Db } from './db'
 
-// Secrets (API keys now, vault entries later) are encrypted with the macOS
-// Keychain-backed safeStorage key and never sent to the renderer or the model.
+// Secrets (API keys, connector tokens, and the vault's Keychain key K1: see src/main/secure/core.ts) are
+// encrypted with the macOS Keychain-backed safeStorage key and never sent to the renderer or the model.
+// Vault items themselves are no longer stored here one by one: they live in the envelope vault, and the
+// old per-item entries are only read to migrate them (src/main/secure/legacy.ts).
 export class Secrets {
   constructor(private db: Db) {}
 
@@ -28,6 +30,11 @@ export class Secrets {
       this.unreadable.add(name)
       return undefined
     }
+  }
+
+  /** Whether the Keychain-backed encryption key can be used (the vault refuses to start without it). */
+  available(): boolean {
+    try { return safeStorage.isEncryptionAvailable() } catch { return false }
   }
 
   /** Saved but readable (an unreadable one counts as not saved). */

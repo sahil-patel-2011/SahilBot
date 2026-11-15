@@ -140,11 +140,19 @@ RESULT.update({"output": out, "bytes": os.path.getsize(out) if os.path.exists(ou
 /** The Python that FreeCAD runs for one operation. `args` reaches it as JSON only. */
 export function freecadScript(op: FreecadOp, args: { input: string; output?: string; tolerance_mm?: number }, resultPath: string): string {
   const body = op === 'inspect' ? PY_INSPECT : op === 'measure' ? PY_MEASURE : PY_CONVERT
+  return wrapScript(PY_LOAD, body, args, resultPath)
+}
+
+/**
+ * A complete script: ARGS (from JSON), a header of helper definitions, the body inside try/except, and the
+ * RESULT dict written to `resultPath` as JSON. Paths and values only ever arrive through ARGS_JSON.
+ */
+export function wrapScript(header: string, body: string, args: Record<string, unknown>, resultPath: string): string {
   // json.dumps of the JSON text gives a valid Python string literal (both are double-quoted with the same escapes).
   return [
     `ARGS_JSON = ${JSON.stringify(JSON.stringify(args))}`,
     `RESULT_PATH = ${JSON.stringify(resultPath)}`,
-    PY_LOAD,
+    header.includes('import FreeCAD') ? header : `import json, os, sys, traceback\nimport FreeCAD\nARGS = json.loads(ARGS_JSON)\nRESULT = {"ok": True}\n${header}`,
     'try:',
     ...body.trim().split('\n').map((l) => `    ${l}`),
     'except Exception as e:',
@@ -172,18 +180,24 @@ export function uniqueOutput(p: string, exists: (p: string) => boolean = existsS
 export async function runFreecad(bin: string, op: FreecadOp, args: { input: string; output?: string; tolerance_mm?: number }, o: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<FreecadRun> {
   // convert writes a new file next to any existing one (the script refuses to overwrite as well).
   if (op === 'convert' && args.output) args = { ...args, output: uniqueOutput(args.output) }
+  const r = await runFreecadScript(bin, (resultPath) => freecadScript(op, args, resultPath), { ...o, name: op })
+  if (r.ok && op === 'convert' && args.output && r.result) r.result.output = args.output
+  return r
+}
+
+/** Runs a script made by `make(resultPath)` with freecadcmd in its own temp folder and reads its JSON result. */
+export async function runFreecadScript(bin: string, make: (resultPath: string) => string, o: { timeoutMs?: number; signal?: AbortSignal; name?: string } = {}): Promise<FreecadRun> {
   const dir = mkdtempSync(join(tmpdir(), 'sahilbot-freecad-'))
   try {
     const resultPath = join(dir, 'result.json')
-    const script = join(dir, `${op}.py`)
-    writeFileSync(script, freecadScript(op, args, resultPath))
+    const script = join(dir, `${(o.name ?? 'script').replace(/[^\w-]/g, '')}.py`)
+    writeFileSync(script, make(resultPath))
     const r = await runProcess(bin, [script], { cwd: dir, timeoutMs: o.timeoutMs ?? 120_000, signal: o.signal, env: toolEnv({ HOME: process.env.HOME ?? homedir() }), maxChars: 50_000 })
     if (r.timedOut) return { ok: false, error: `FreeCAD took longer than ${Math.round((o.timeoutMs ?? 120_000) / 1000)} s (a very large or complex file?).`, ms: r.ms }
     if (r.stopped) return { ok: false, error: 'Stopped.', ms: r.ms }
     if (!existsSync(resultPath)) return { ok: false, error: `FreeCAD exited (code ${r.code}) without a result.${r.output.trim() ? ` Output: ${r.output.trim().slice(-800)}` : ''}`, ms: r.ms }
     const res = JSON.parse(readFileSync(resultPath, 'utf8')) as Record<string, any>
     if (res.ok === false) return { ok: false, error: String(res.error ?? 'FreeCAD failed'), ms: r.ms }
-    if (op === 'convert' && args.output) res.output = args.output
     return { ok: true, result: res, ms: r.ms }
   } finally {
     rmSync(dir, { recursive: true, force: true })

@@ -73,7 +73,8 @@ const text = (m: any): string => (typeof m.content === 'string' ? m.content : JS
 describe('prompt prefix stability', () => {
   test('consecutive steps and turns send the same system prompt and tools, and only append messages', async () => {
     const h = harness()
-    llm.script.push({ toolCalls: [call('clock')], delay: 0 }, { content: 'Paris.', delay: 0 }, { content: 'Berlin.', delay: 0 })
+    // A chat with a lookup (web_search is a chat tool): the chat path's prompt and tools on every step and turn.
+    llm.script.push({ toolCalls: [call('web_search')], delay: 0 }, { content: 'Paris.', delay: 0 }, { content: 'Berlin.', delay: 0 })
     const t = h.thread()
     expect(await h.run(t, 'What is the capital of France?')).toBe('finished')
     expect(await h.run(t, 'And what about Germany?')).toBe('finished')
@@ -237,23 +238,29 @@ describe('quick-chat fast path', () => {
     expect(chooseToolMode(s2, true)).toBe('full')
   })
 
-  test('the quick list is a prefix of the full list; find_tools or a built-in tool escalates', () => {
+  test('the chat list is a prefix of the full list; a work tool (loaded or called) escalates, a lookup does not', () => {
     const r = new ToolRegistry()
-    r.register(tool('todo', true), tool('browser', true), ...QUICK_TOOLS.map((n) => tool(n, true)), tool('gmail_send'))
+    r.register(tool('todo', true), tool('browser', true), ...QUICK_TOOLS.map((n) => tool(n, true)), tool('gmail_send'), { ...tool('code'), effect: 'write_local' })
     const st = emptyState()
     const full = r.listFor(st).map((t) => t.name)
     expect(full.slice(0, QUICK_TOOLS.length)).toEqual([...QUICK_TOOLS])
-    st.toolMode = 'quick'
+    st.toolMode = 'chat'
     expect(r.listFor(st).map((t) => t.name)).toEqual([...QUICK_TOOLS])
-    // A built-in tool can be found and loaded from quick mode, which switches to every tool.
+    // A read-only lookup loads and the chat stays a chat.
+    expect(r.load(st, ['gmail_send'])).toEqual(['gmail_send'])
+    expect(st.toolMode).toBe('chat')
+    // A built-in tool can be found and loaded from a chat, which turns it into agent work.
     expect(r.search('browser', st)[0].name).toBe('browser')
-    expect(r.load(st, ['browser', 'todo'])).toEqual(['browser', 'todo'])
+    // (todo is then listed with every other built-in tool, so it isn't added on its own.)
+    expect(r.load(st, ['browser', 'todo'])).toEqual(['browser'])
     expect(st.toolMode).toBe('full')
-    expect(r.listFor(st).map((t) => t.name)).toEqual(full)
-    const st2 = { ...emptyState(), toolMode: 'quick' as const }
-    expect(r.escalate(st2, ['web_search'])).toBe(false)
-    expect(r.escalate(st2, ['todo'])).toBe(true)
+    expect(r.listFor(st).map((t) => t.name)).toEqual([...full, 'gmail_send'].filter((n, i, xs) => xs.indexOf(n) === i))
+    const st2 = { ...emptyState(), toolMode: 'chat' as const }
+    expect(r.escalate(st2, ['web_search', 'find_tools'])).toBe(false)
+    expect(r.escalate(st2, ['code'])).toBe(true)
     expect(st2.toolMode).toBe('full')
+    const st3 = { ...emptyState(), toolMode: 'quick' as const }
+    expect(r.escalate(st3, ['todo'])).toBe(true)
   })
 
   test('small talk gets the small tool set and no thinking; a task gets every tool from then on', async () => {

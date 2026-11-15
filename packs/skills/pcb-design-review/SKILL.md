@@ -4,6 +4,7 @@ description: Review a schematic or PCB layout for common mistakes before orderin
 source: you
 uses: 0
 category: Electrical Engineering
+triggers: pcb, schematic review, kicad, layout review, gerber, decoupling capacitors
 ---
 
 1. Read the files (PDF schematic, Gerbers, KiCad/Altium exports) and the key datasheet sections for every IC.

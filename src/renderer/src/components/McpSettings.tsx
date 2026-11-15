@@ -4,6 +4,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import '../styles-mcp.css'
+import { ClampText } from './ui'
 
 // Settings → Privacy & Permissions → Connected apps (MCP): let Cursor, Claude Code, Claude Desktop and
 // Shortcuts use your bots through a local server. Off by default; one revocable token per app.
@@ -37,7 +38,7 @@ function Block({ title, sub, children }: { title?: string; sub?: ReactNode; chil
 function Line({ title, sub, children, testId }: { title: ReactNode; sub?: ReactNode; children?: ReactNode; testId?: string }) {
   return (
     <div className="set-row" data-testid={testId}>
-      <div className="set-row-text"><div className="set-row-title">{title}</div>{sub && <div className="set-row-sub">{sub}</div>}</div>
+      <div className="set-row-text"><div className="set-row-title">{title}</div>{sub && <ClampText>{sub}</ClampText>}</div>
       {children && <div className="set-row-ctl">{children}</div>}
     </div>
   )

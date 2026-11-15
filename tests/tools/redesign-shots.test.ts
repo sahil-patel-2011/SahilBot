@@ -44,6 +44,7 @@ test('redesign screenshots', async () => {
         return { toolCalls: [{ name: 'agents', arguments: JSON.stringify({ tasks: ['Google ranking factors', 'Local pack', 'Reviews', 'Site speed', 'Schema markup', 'Backlinks', 'Content', 'Competitors', 'Paid vs organic', 'AI search'].map((t) => ({ title: t, task: `Research ${t} for clinic SEO.` })) }) }] }
       }
       for (let i = 0; i < 40; i++) llm.script.push(reply)
+      await page.click('[data-testid="modes-menu"]')
       await page.click('[data-testid="team-toggle"]')
       await page.fill('[data-testid="composer-input"]', 'Research what works for clinic SEO in 2026')
       await page.keyboard.press('Enter')
