@@ -1,33 +1,72 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { UsageReport } from '@shared/types'
+import type { UsageDashboard, UsageGlance } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
+import { SpendBar, money } from './SpendingLimit'
+import '../styles-usage-dash.css'
 
-// Settings → Usage: this month's cloud spend against the cap, and the last 30 days by day, model and bot.
-// Cloud = paid requests (priced when they're made). Local = replies from models on this Mac.
-
-type Metric = 'spend' | 'requests'
+// Settings → Usage: this month's spend against the monthly limit, this week and lifetime, tokens per day (30
+// days) and per week (12 weeks), and this month per model, provider and bot. Cloud = pay-per-use requests
+// (priced when made, with the providers' own token detail); local = replies from models on this Mac. Plain SVG
+// charts. The compact card (profile menu, ⌘K "Usage") is UsageGlanceHost below.
 
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
-const usd = (n: number): string => (n > 0 && n < 0.01 ? '<$0.01' : `$${n.toFixed(2)}`)
-const num = (n: number): string => n.toLocaleString()
-const tokens = (n: number): string => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n))
+const num = (n: number): string => Math.round(n).toLocaleString()
+export const tokens = (n: number): string => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}K` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(Math.round(n)))
+const pct = (x: number): string => (x <= 0 ? '—' : x < 0.001 ? '<0.1%' : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`)
 const shortDay = (day: string): string => new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+const since = (t: number | null): string => (t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '')
+
+interface Bar { key: string; label: string; local: number; cloud: number; tip: string }
+
+/** A clean stacked bar chart (cloud over local), in SVG: gridlines, a max label, hover / focus details. */
+function BarChart({ bars, title, axis, testId }: { bars: Bar[]; title: string; axis: [string, string]; testId: string }) {
+  const [hot, setHot] = useState<number | null>(null)
+  const W = 600
+  const H = 132
+  const max = Math.max(1, ...bars.map((b) => b.local + b.cloud))
+  // A round top for the scale: 1, 2, 5 x 10^n.
+  const step = 10 ** Math.floor(Math.log10(max))
+  const top = [1, 2, 5, 10].map((m) => m * step).find((v) => v >= max) ?? max
+  const slot = W / bars.length
+  const bw = Math.max(2, Math.min(28, slot * 0.64))
+  const y = (v: number): number => H - (v / top) * H
+  const tip = hot !== null ? bars[hot] : null
+  return (
+    <div className="ud-chart" onMouseLeave={() => setHot(null)} data-testid={testId}>
+      <svg viewBox={`0 0 ${W} ${H + 1}`} preserveAspectRatio="none" role="img" aria-label={title} className="ud-svg">
+        {[0.5, 1].map((f) => <line key={f} x1={0} x2={W} y1={y(top * f)} y2={y(top * f)} className="ud-grid" />)}
+        <line x1={0} x2={W} y1={H} y2={H} className="ud-base" />
+        {bars.map((b, i) => {
+          const x = i * slot + (slot - bw) / 2
+          const hl = y(b.local)
+          const hc = y(b.local + b.cloud)
+          return (
+            <g key={b.key} className={hot === i ? 'hot' : ''} onMouseEnter={() => setHot(i)} onFocus={() => setHot(i)} tabIndex={0} aria-label={b.tip}>
+              <rect x={i * slot} y={0} width={slot} height={H} className="ud-hit" />
+              {b.local > 0 && <rect x={x} y={hl} width={bw} height={Math.max(1, H - hl)} rx={Math.min(3, bw / 3)} className="ud-local" />}
+              {b.cloud > 0 && <rect x={x} y={hc} width={bw} height={Math.max(1, hl - hc)} rx={Math.min(3, bw / 3)} className="ud-cloud" />}
+            </g>
+          )
+        })}
+      </svg>
+      <div className="ud-scale"><span>{tokens(top)}</span><span>{tokens(top / 2)}</span></div>
+      <div className="ud-axis"><span>{axis[0]}</span><span>{axis[1]}</span></div>
+      <div className="ud-tip" aria-live="polite">{tip ? <><b>{tip.label}</b> · {tip.tip}</> : <span>Point at a bar for details</span>}</div>
+    </div>
+  )
+}
+
+type Group = 'model' | 'provider'
 
 export function UsagePage() {
-  const [r, setR] = useState<UsageReport | null>(null)
+  const [d, setD] = useState<UsageDashboard | null>(null)
   const [err, setErr] = useState('')
-  const [metric, setMetric] = useState<Metric>('requests')
-  const [tip, setTip] = useState<number | null>(null)
+  const [group, setGroup] = useState<Group>('model')
 
   useEffect(() => {
-    let first = true
-    const load = (): void => void api.usage.report().then((x) => {
-      setR(x); setErr('')
-      // Opens on spend when there is any; otherwise on requests.
-      if (first) { first = false; setMetric(x.totals.usd > 0 ? 'spend' : 'requests') }
-    }).catch((e) => setErr(clean(e)))
+    const load = (): void => void api.usage.dashboard().then((x) => { setD(x); setErr('') }).catch((e) => setErr(clean(e)))
     load()
     return api.onBudgetChanged(load)
   }, [])
@@ -39,132 +78,152 @@ export function UsagePage() {
     } catch (e) { toast(clean(e), 'error') }
   }
 
-  const dayMax = useMemo(() => Math.max(1e-9, ...(r?.byDay ?? []).map((d) => (metric === 'spend' ? d.usd : d.cloudRequests + d.localRequests))), [r, metric])
+  const dayBars = useMemo<Bar[]>(() => (d?.days ?? []).map((x) => ({ key: x.day, label: shortDay(x.day), local: x.localTokens, cloud: x.cloudTokens, tip: `${tokens(x.tokens)} tokens · ${num(x.requests)} requests · ${money(x.usd)}` })), [d])
+  const weekBars = useMemo<Bar[]>(() => (d?.weeks ?? []).map((x) => ({ key: x.start, label: `Week of ${shortDay(x.start)}`, local: x.localTokens, cloud: x.cloudTokens, tip: `${tokens(x.tokens)} tokens · ${num(x.requests)} requests · ${money(x.usd)}` })), [d])
 
-  if (!r) return <><h2>Usage</h2>{err ? <div className="us-err" role="alert">{err}</div> : <div className="us-empty">Loading…</div>}</>
+  if (!d) return <><h2>Usage</h2>{err ? <div className="us-err" role="alert">{err}</div> : <div className="us-empty">Loading…</div>}</>
 
-  const pct = r.cap > 0 ? Math.min(100, (r.spent / r.cap) * 100) : r.spent > 0 ? 100 : 0
-  const level = pct >= 90 ? ' high' : pct >= 70 ? ' mid' : ''
-  const modelMax = Math.max(1e-9, ...r.byModel.map((m) => (metric === 'spend' ? m.usd : m.requests)))
-  const botMax = Math.max(1e-9, ...r.byBot.map((b) => (metric === 'spend' ? b.usd : b.cloudRequests + b.localRequests)))
-  const empty = !r.totals.cloudRequests && !r.totals.localRequests
-  const tipDay = tip !== null ? r.byDay[tip] : null
+  const life = d.lifetime
+  const lifeTokens = life.input + life.cached + life.cacheWrite + life.output + life.local.input + life.local.output
+  const rows = group === 'model' ? d.byModel.map((m) => ({ ...m, key: `${m.where}:${m.model}`, name: m.model, sub: m.where === 'local' ? 'Local' : providerName(m.provider), fast: m.fastRequests })) : d.byProvider.map((p) => ({ ...p, key: p.provider, sub: p.where === 'local' ? 'On this Mac' : 'Cloud', fast: 0 }))
+  const empty = !life.requests && !life.local.requests
 
   return (
-    <div className="us" data-testid="usage-page">
+    <div className="us ud" data-testid="usage-page">
       <div className="us-title">
         <h2>Usage</h2>
-        <button className="btn us-csv" onClick={() => void exportCsv()} disabled={empty} data-testid="usage-export"><I.Share size={14} /> Export CSV</button>
+        <button className="btn us-csv" onClick={() => void exportCsv()} disabled={!life.requests} data-testid="usage-export"><I.Share size={14} /> Export CSV</button>
       </div>
 
       <section className="set-section">
-        <div className="set-label">Cloud spend this month</div>
-        <div className="set-card us-cap">
-          <div className="us-cap-line">
-            <span className="us-big">{usd(r.spent)}</span>
-            <span className="us-of">of {usd(r.cap)} cap · {num(r.monthRequests)} cloud request{r.monthRequests === 1 ? '' : 's'}</span>
-          </div>
-          <div className={`us-meter${level}`} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)} aria-label="Share of the monthly cap used"><i style={{ width: `${pct}%` }} /></div>
-          <div className="us-note">{r.cap > 0 ? `${Math.round(pct)}% used. Requests that could go past the cap are refused before anything is sent.` : 'The cap is $0: cloud requests are refused. Change it in General.'}</div>
+        <div className="set-label">This month</div>
+        <div className="set-card ud-month">
+          <SpendBar spent={d.limit.spent} cap={d.limit.cap} mode={d.limit.mode} testId="usage-spend" />
+          <div className="ud-note">{d.limit.mode === 'amount' ? 'Requests that could go past the monthly limit are refused before anything is sent.' : d.limit.mode === 'unlimited' ? 'No monthly limit is set.' : 'Pay-per-use API spending is off: only your ChatGPT plan and local models run.'} Change it in General.</div>
         </div>
       </section>
 
-      <section className="set-section">
-        <div className="set-label">Last {r.days} days</div>
-        <div className="us-tiles">
-          <div className="us-tile"><span>Cloud requests</span><b>{num(r.totals.cloudRequests)}</b></div>
-          <div className="us-tile"><span>Local requests</span><b>{num(r.totals.localRequests)}</b></div>
-          <div className="us-tile"><span>Tokens in</span><b>{tokens(r.totals.input)}</b></div>
-          <div className="us-tile"><span>Tokens out</span><b>{tokens(r.totals.output)}</b></div>
-          <div className="us-tile"><span>Cloud spend</span><b>{usd(r.totals.usd)}</b></div>
-        </div>
-      </section>
+      <div className="ud-tiles" data-testid="usage-tiles">
+        <div className="us-tile"><span>This week</span><b>{money(d.week.usd)}</b><em>{tokens(d.week.tokens)} tokens</em></div>
+        <div className="us-tile"><span>This month</span><b>{money(d.monthTotals.usd)}</b><em>{num(d.monthTotals.requests)} requests</em></div>
+        <div className="us-tile"><span>Lifetime spend</span><b>{money(life.usd)}</b><em>{life.since ? `since ${since(life.since)}` : 'nothing yet'}</em></div>
+        <div className="us-tile"><span>Lifetime tokens</span><b>{tokens(lifeTokens)}</b><em>{num(life.requests + life.local.requests)} requests</em></div>
+      </div>
 
-      {empty ? <div className="us-empty">No model requests in the last {r.days} days yet.</div> : (
+      {empty ? <div className="us-empty">No model requests yet.</div> : (
         <>
-          <div className="us-metric" role="radiogroup" aria-label="Show">
-            {(['requests', 'spend'] as const).map((m) => (
-              <button key={m} role="radio" aria-checked={metric === m} className={metric === m ? 'on' : ''} onClick={() => setMetric(m)} data-testid={`usage-metric-${m}`}>{m === 'spend' ? 'Cloud spend' : 'Requests'}</button>
-            ))}
-          </div>
+          <section className="set-section">
+            <div className="us-label-row">
+              <div className="set-label">Tokens per day · last 30 days</div>
+              <div className="us-legend"><span><i className="us-sw cloud" />Cloud</span><span><i className="us-sw local" />Local</span></div>
+            </div>
+            <div className="set-card ud-card"><BarChart bars={dayBars} title="Tokens per day for the last 30 days" axis={[dayBars[0] ? dayBars[0].label : '', 'Today']} testId="usage-days" /></div>
+          </section>
+
+          <section className="set-section">
+            <div className="set-label">Tokens per week · last 12 weeks</div>
+            <div className="set-card ud-card"><BarChart bars={weekBars} title="Tokens per week for the last 12 weeks" axis={[weekBars[0] ? shortDay(d.weeks[0].start) : '', 'This week']} testId="usage-weeks" /></div>
+          </section>
 
           <section className="set-section">
             <div className="us-label-row">
-              <div className="set-label">By day</div>
-              {metric === 'requests' && <div className="us-legend"><span><i className="us-sw local" />Local</span><span><i className="us-sw cloud" />Cloud</span></div>}
-            </div>
-            <div className="set-card us-days" onMouseLeave={() => setTip(null)}>
-              <div className="us-bars" role="img" aria-label={`${metric === 'spend' ? 'Cloud spend' : 'Requests'} per day for the last ${r.days} days`}>
-                {r.byDay.map((d, i) => {
-                  const local = metric === 'spend' ? 0 : d.localRequests
-                  const cloud = metric === 'spend' ? d.usd : d.cloudRequests
-                  return (
-                    <div key={d.day} className={`us-col${tip === i ? ' hot' : ''}`} onMouseEnter={() => setTip(i)} onFocus={() => setTip(i)} tabIndex={0}
-                      aria-label={`${shortDay(d.day)}: ${d.localRequests} local, ${d.cloudRequests} cloud, ${usd(d.usd)}`}>
-                      <div className="us-stack">
-                        {cloud > 0 && <i className="cloud" style={{ height: `${(cloud / dayMax) * 100}%` }} />}
-                        {local > 0 && <i className="local" style={{ height: `${(local / dayMax) * 100}%` }} />}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-              <div className="us-axis"><span>{shortDay(r.byDay[0].day)}</span><span>Today</span></div>
-              <div className="us-tip" aria-live="polite">
-                {tipDay ? <><b>{shortDay(tipDay.day)}</b> · {num(tipDay.localRequests)} local · {num(tipDay.cloudRequests)} cloud · {usd(tipDay.usd)}</> : <span>Point at a day for details</span>}
+              <div className="set-label">This month by {group}</div>
+              <div className="us-metric" role="radiogroup" aria-label="Group by">
+                {(['model', 'provider'] as const).map((g) => <button key={g} role="radio" aria-checked={group === g} className={group === g ? 'on' : ''} onClick={() => setGroup(g)} data-testid={`usage-group-${g}`}>{g === 'model' ? 'Model' : 'Provider'}</button>)}
               </div>
             </div>
+            <div className="set-card ud-table-card">
+              {rows.length ? (
+                <div className="ud-scroll">
+                  <table className="ud-table" data-testid="usage-table">
+                    <thead><tr><th className="l">{group === 'model' ? 'Model' : 'Provider'}</th><th>Requests</th><th>Input</th><th>Cached</th><th>Output</th><th>Reasoning</th><th>Cost</th><th>Share</th></tr></thead>
+                    <tbody>
+                      {rows.map((r) => (
+                        <tr key={r.key}>
+                          <td className="l"><div className="ud-name" title={r.name}>{r.name}</div><div className="ud-sub">{r.sub}{r.fast ? ` · ${num(r.fast)} fast` : ''}</div></td>
+                          <td>{num(r.requests)}</td>
+                          <td>{tokens(r.input)}</td>
+                          <td>{r.cached ? tokens(r.cached) : '—'}</td>
+                          <td>{tokens(r.output)}</td>
+                          <td>{r.reasoning ? tokens(r.reasoning) : '—'}</td>
+                          <td>{r.where === 'local' ? 'Free' : money(r.usd)}</td>
+                          <td><div className="ud-share"><i style={{ width: `${Math.min(100, r.share * 100)}%` }} /></div><span className="ud-sharev">{pct(r.share)}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <div className="us-empty">Nothing this month yet.</div>}
+            </div>
+            <div className="us-foot">Input counts uncached prompt tokens; cached tokens were read from the provider’s prompt cache at a fraction of the price. Output includes reasoning, which is billed as output. Share is of this month’s spend (of tokens when nothing was spent).</div>
           </section>
 
           <section className="set-section">
-            <div className="set-label">By model</div>
-            <div className="set-card us-list">
-              {r.byModel.map((m) => {
-                const v = metric === 'spend' ? m.usd : m.requests
-                return (
-                  <div key={`${m.where}:${m.model}`} className="us-item" title={`${m.model}: ${num(m.requests)} requests · ${tokens(m.input)} in · ${tokens(m.output)} out${m.where === 'cloud' ? ` · ${usd(m.usd)}` : ''}`}>
-                    <div className="us-item-top">
-                      <span className="us-name">{m.model}</span>
-                      <span className={`us-tag ${m.where}`}>{m.where === 'local' ? 'Local' : 'Cloud'}</span>
-                      <span className="us-val">{metric === 'spend' ? (m.where === 'local' ? 'Free' : usd(m.usd)) : `${num(m.requests)} req`}</span>
-                    </div>
-                    <div className="us-track"><i className={m.where} style={{ width: `${(v / modelMax) * 100}%` }} /></div>
-                    <div className="us-sub">{tokens(m.input)} in · {tokens(m.output)} out{metric === 'spend' ? ` · ${num(m.requests)} req` : m.where === 'cloud' ? ` · ${usd(m.usd)}` : ''}</div>
+            <div className="set-label">This month by bot</div>
+            <div className="set-card us-list" data-testid="usage-bots">
+              {d.byBot.length ? d.byBot.map((b) => (
+                <div key={b.spaceId ?? b.name} className="us-item">
+                  <div className="us-item-top">
+                    <span className="us-dot" style={{ background: b.color ?? 'var(--text-3)' }} aria-hidden="true" />
+                    <span className="us-name">{b.name}</span>
+                    <span className="us-val">{money(b.usd)}</span>
                   </div>
-                )
-              })}
+                  <div className="us-track"><i className="cloud" style={{ width: `${Math.min(100, b.share * 100)}%` }} /></div>
+                  <div className="us-sub">{num(b.requests)} requests · {tokens(b.tokens)} tokens · {pct(b.share)}</div>
+                </div>
+              )) : <div className="us-empty">Nothing this month yet.</div>}
             </div>
-          </section>
-
-          <section className="set-section">
-            <div className="set-label">By bot</div>
-            <div className="set-card us-list">
-              {r.byBot.map((b) => {
-                const req = b.cloudRequests + b.localRequests
-                return (
-                  <div key={b.spaceId ?? b.name} className="us-item">
-                    <div className="us-item-top">
-                      <span className="us-dot" style={{ background: b.color ?? 'var(--text-3)' }} aria-hidden="true" />
-                      <span className="us-name">{b.name}</span>
-                      <span className="us-val">{metric === 'spend' ? usd(b.usd) : `${num(req)} req`}</span>
-                    </div>
-                    {metric === 'spend' ? (
-                      <div className="us-track"><i className="cloud" style={{ width: `${(b.usd / botMax) * 100}%` }} /></div>
-                    ) : (
-                      <div className="us-track split">
-                        {b.localRequests > 0 && <i className="local" style={{ width: `${(b.localRequests / botMax) * 100}%` }} />}
-                        {b.cloudRequests > 0 && <i className="cloud" style={{ width: `${(b.cloudRequests / botMax) * 100}%` }} />}
-                      </div>
-                    )}
-                    <div className="us-sub">{num(b.localRequests)} local · {num(b.cloudRequests)} cloud · {tokens(b.input)} in · {tokens(b.output)} out{metric === 'requests' ? ` · ${usd(b.usd)}` : ''}</div>
-                  </div>
-                )
-              })}
-            </div>
-            <div className="us-foot">Local requests are counted from model replies saved in your chats, with the token counts your model server reported. Cloud requests made before this update aren’t tied to a bot.</div>
+            <div className="us-foot">Local requests are counted from model replies saved in your chats, with the token counts your model server reported. Lifetime totals keep every month; requests made before token detail was recorded show their input without the cached split.</div>
           </section>
         </>
       )}
+    </div>
+  )
+}
+
+const providerName = (id: string): string => ({ anthropic: 'Anthropic', openai: 'OpenAI', xai: 'xAI', openrouter: 'OpenRouter', chatgpt: 'ChatGPT plan' } as Record<string, string>)[id] ?? 'Cloud'
+
+// ------------------------------------------------------------------ the compact card
+
+/** Opens the compact usage card (profile menu "Usage", ⌘K "Usage"). */
+export const openUsageGlance = (): void => { window.dispatchEvent(new CustomEvent('sahilbot:usage-glance')) }
+
+/** The compact card: spend against the monthly limit, this week, lifetime and the last 7 days. Mounted once (main.tsx). */
+export function UsageGlanceHost() {
+  const [open, setOpen] = useState(false)
+  const [g, setG] = useState<UsageGlance | null>(null)
+  useEffect(() => {
+    const show = (): void => { setOpen(true); void api.usage.glance().then(setG).catch(() => undefined) }
+    window.addEventListener('sahilbot:usage-glance', show)
+    return () => window.removeEventListener('sahilbot:usage-glance', show)
+  }, [])
+  useEffect(() => {
+    if (!open) return
+    const off = api.onBudgetChanged(() => void api.usage.glance().then(setG).catch(() => undefined))
+    const esc = (e: KeyboardEvent): void => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('keydown', esc)
+    return () => { off(); window.removeEventListener('keydown', esc) }
+  }, [open])
+  if (!open) return null
+  const max = Math.max(1, ...(g?.days ?? []))
+  return (
+    <div className="ug-scrim" onClick={() => setOpen(false)} data-testid="usage-glance">
+      <div className="ug-card" role="dialog" aria-label="Usage" onClick={(e) => e.stopPropagation()}>
+        <div className="ug-head"><b>Usage</b><button className="icon-btn" aria-label="Close" onClick={() => setOpen(false)}><I.Close size={14} /></button></div>
+        {!g ? <div className="us-empty">Loading…</div> : (
+          <>
+            <SpendBar spent={g.spent} cap={g.cap} mode={g.mode} compact testId="usage-glance-spend" />
+            <div className="ug-stats">
+              <div><span>This week</span><b>{money(g.weekUsd)}</b></div>
+              <div><span>Lifetime</span><b>{money(g.lifetimeUsd)}</b></div>
+            </div>
+            <div className="ug-spark" aria-label="Tokens per day, last 7 days">
+              {g.days.map((v, i) => <i key={i} style={{ height: `${Math.max(3, (v / max) * 100)}%` }} title={`${tokens(v)} tokens`} />)}
+            </div>
+            <div className="ug-foot"><span>Last 7 days of tokens</span><button className="link-btn" onClick={() => { setOpen(false); window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: 'usage' })) }} data-testid="usage-glance-more">Details</button></div>
+          </>
+        )}
+      </div>
     </div>
   )
 }

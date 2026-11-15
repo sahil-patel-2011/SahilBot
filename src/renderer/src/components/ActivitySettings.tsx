@@ -4,6 +4,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import '../styles-activity.css'
+import { ClampText } from './ui'
 
 // Settings → Privacy & Permissions → Know what I'm working on. Off by default. Shows exactly what is
 // collected, what never is, how long it's kept, and a live preview of what a bot would see right now.
@@ -26,7 +27,7 @@ function Block({ title, sub, children }: { title?: string; sub?: ReactNode; chil
 function Line({ title, sub, children, testId }: { title: ReactNode; sub?: ReactNode; children?: ReactNode; testId?: string }) {
   return (
     <div className="set-row" data-testid={testId}>
-      <div className="set-row-text"><div className="set-row-title">{title}</div>{sub && <div className="set-row-sub">{sub}</div>}</div>
+      <div className="set-row-text"><div className="set-row-title">{title}</div>{sub && <ClampText>{sub}</ClampText>}</div>
       {children && <div className="set-row-ctl">{children}</div>}
     </div>
   )

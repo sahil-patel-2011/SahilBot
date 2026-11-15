@@ -42,14 +42,15 @@ export function fitImage(rect: Rect, scaleFactor: number, o: { maxEdge: number; 
 }
 
 /**
- * Screenshot limits for the model that will look at the image. Documented high-resolution Claude
- * models (Opus 4.7, 4.8, 5, 5.5; Sonnet 5; Fable/Mythos) take up to 2576 px on the long edge, and the
- * reference recommends ~1080p screenshots for computer use as the balance of accuracy and cost. Every
- * other model (older Claude, Sonnet 5.5 and Haiku 5.5 until documented, local models): 1568 px on the
- * long edge, so the API never shrinks the image behind our back and click coordinates stay exact.
+ * Screenshot limits for the model that will look at the image. The computer use page (read 2026-11-15): "Opus
+ * 4.7 and later, including all computer_toolset_20260801 models" take up to 2,576 px on the long edge and 4,784
+ * visual tokens (⌈w/28⌉ × ⌈h/28⌉); the toolset doesn't downscale, and the page recommends staying at or below
+ * 1920×1080. So those models (Opus 4.7, 4.8, 5, 5.5; Sonnet 5 and 5.5; Haiku 5.5; Fable/Mythos) get up to
+ * 1920×1080 (69 × 39 = 2,691 visual tokens). Every other model (older Claude, GPT, local models): 1568 px on the
+ * long edge, so no API shrinks the image behind our back and click coordinates stay exact.
  */
 export function imageLimits(model?: string): { maxEdge: number; maxPixels: number } {
-  const hiRes = !!model && /^claude-(opus-(4-[78]|5)|sonnet-5(?!-5)|fable|mythos)/i.test(model)
+  const hiRes = !!model && /^claude-(opus-(4-[78]|5)|sonnet-5|haiku-5-5|fable|mythos)/i.test(model)
   return hiRes ? { maxEdge: 1920, maxPixels: 1920 * 1080 } : { maxEdge: 1568, maxPixels: 1568 * 1568 }
 }
 

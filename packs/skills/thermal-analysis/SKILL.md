@@ -4,6 +4,7 @@ description: Estimate temperatures and heat flow (conduction, convection, heat s
 source: you
 uses: 0
 category: Mechanical Engineering
+triggers: heat sink, temperature rise, thermal resistance, overheating, convection, conduction, cooling
 ---
 
 1. Model the heat path as thermal resistances: R = L/(k*A) for conduction, 1/(h*A) for convection, datasheet theta values for packages and heat sinks.

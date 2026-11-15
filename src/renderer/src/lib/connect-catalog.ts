@@ -1,4 +1,4 @@
-import type { ConnectorPreset } from '@shared/types'
+import type { ConnectorPreset, ConnectorStatus } from '@shared/types'
 
 // Connect Apps catalog: how presets group into chips and sections (pure; shared with unit tests).
 
@@ -6,7 +6,7 @@ import type { ConnectorPreset } from '@shared/types'
 export const MAIN_CHIPS = ['Password Managers', 'Productivity', 'Communication', 'Design', 'Code'] as const
 
 /** Section order in the All view (after "Recommended for you"). */
-export const SECTION_ORDER = ['Built in', 'Password Managers', 'Productivity', 'Communication', 'Support', 'Design', 'Media & AI', 'Code', 'Data & analytics', 'Sales & marketing', 'Social', 'Finance & commerce', 'Research', 'Other'] as const
+export const SECTION_ORDER = ['Built in', 'On this Mac', 'Password Managers', 'Productivity', 'Communication', 'Support', 'Design', 'Media & AI', 'Code', 'Data & analytics', 'Sales & marketing', 'Social', 'Finance & commerce', 'HR & recruiting', 'Legal', 'Travel & real estate', 'Education & science', 'Health & fitness', 'Research', 'Other'] as const
 
 /** Categories under the More ▾ chip. */
 export const MORE_CATEGORIES: string[] = SECTION_ORDER.filter((c) => !(MAIN_CHIPS as readonly string[]).includes(c))
@@ -21,7 +21,7 @@ export function chipOf(category: string): string {
  * A spread on purpose: notes, tasks, design, files, search, money and code, so the first screen shows
  * something for most people rather than six dev tools.
  */
-const RECOMMENDED = ['notion', 'gmail', 'gcal', 'figma', 'linear', 'canva', 'dropbox', 'exa', 'granola', 'trello', 'gitlab', 'stripe', 'tavily', 'heygen', 'vercel', 'cloudflare', 'slack', 'github', 'gdrive', 'asana']
+const RECOMMENDED = ['notion', 'gmail', 'gcal', 'figma', 'linear', 'fathom', 'canva', 'dropbox', 'exa', 'kiwi', 'granola', 'trello', 'zillow', 'gitlab', 'stripe', 'tavily', 'strava', 'heygen', 'vercel', 'cloudflare', 'slack', 'github', 'gdrive', 'gsheets', 'asana']
 
 /** Signs in with one click: the app registers SahilBot itself, or needs no sign-in. */
 export function isOneClick(p: Pick<ConnectorPreset, 'auth'>): boolean {
@@ -84,7 +84,13 @@ const CATEGORY_WORDS: Record<string, string> = {
   'Code': 'developer dev deploy hosting database ci devops monitoring logs incidents',
   'Productivity': 'tasks notes docs files projects',
   'Research': 'web search scrape crawl news',
-  'Communication': 'chat messages meetings email calls'
+  'Communication': 'chat messages meetings email calls',
+  'On this Mac': 'local desktop mac app xcode ios swift figma offline',
+  'HR & recruiting': 'hr hiring recruiting jobs candidates ats payroll employees people',
+  'Legal': 'law legal contracts signature esign e-sign cases court documents',
+  'Travel & real estate': 'travel flights hotels trips homes houses rentals real estate property mortgage',
+  'Education & science': 'learning courses education school study science papers research math',
+  'Health & fitness': 'health fitness running workouts training medical clinical biomedical'
 }
 
 /**
@@ -133,4 +139,49 @@ export function keyProblem(key: string, p: Pick<ConnectorPreset, 'name'>): strin
   if (/\s/.test(k)) return 'The key has spaces or line breaks in it; copy it again.'
   if (k.length < 8 || k.length > 512) return `That doesn't look like a ${p.name} API key; copy it again.`
   return null
+}
+
+/**
+ * One clear state per app in Connect apps: connected; needs sign-in again (a sign-in that worked
+ * before was refused or revoked, one click on Reconnect); unavailable right now (the server isn't
+ * answering, or the catalog marks it unavailable); needs setup (a one-time OAuth app, Google setup or
+ * API key is missing); plus the in-between states.
+ */
+export type AppState = 'connected' | 'busy' | 'reauth' | 'signin' | 'unavailable' | 'setup' | 'error' | 'idle'
+
+export const APP_STATE_TEXT: Record<AppState, string> = {
+  connected: 'Connected', busy: 'Connecting…', reauth: 'Needs sign-in again', signin: 'Needs sign-in',
+  unavailable: 'Unavailable right now', setup: 'Needs setup', error: 'Error', idle: 'Not connected'
+}
+
+export function appState(
+  p: Pick<ConnectorPreset, 'auth' | 'unavailable'> | undefined,
+  st: Pick<ConnectorStatus, 'state' | 'reason'> | undefined,
+  o: { setupMissing?: boolean } = {}
+): AppState {
+  if (p?.unavailable && st?.state !== 'connected') return 'unavailable'
+  switch (st?.state) {
+    case 'connected': return 'connected'
+    case 'connecting': case 'signing_in': return 'busy'
+    case 'needs_auth': return st.reason === 'expired' ? 'reauth' : 'signin'
+    case 'reconnecting': return 'unavailable'
+    case 'error': return st.reason === 'unavailable' ? 'unavailable' : st.reason === 'expired' ? 'reauth' : st.reason === 'setup' || o.setupMissing ? 'setup' : 'error'
+    default: return o.setupMissing ? 'setup' : 'idle'
+  }
+}
+
+/** Short summary of a "Check all" run: "3 working · 1 needs sign-in again · 1 unavailable right now". */
+export function checkSummary(states: AppState[]): string {
+  if (!states.length) return 'No apps to check.'
+  const n = (s: AppState): number => states.filter((x) => x === s).length
+  const parts = [
+    n('connected') && `${n('connected')} working`,
+    n('reauth') + n('signin') && `${n('reauth') + n('signin')} need${n('reauth') + n('signin') === 1 ? 's' : ''} sign-in again`,
+    n('unavailable') && `${n('unavailable')} unavailable right now`,
+    n('setup') && `${n('setup')} need${n('setup') === 1 ? 's' : ''} setup`,
+    n('error') && `${n('error')} with errors`,
+    n('busy') && `${n('busy')} still connecting`,
+    n('idle') && `${n('idle')} not connected`
+  ].filter(Boolean)
+  return parts.join(' · ')
 }

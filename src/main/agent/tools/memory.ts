@@ -5,7 +5,7 @@ import type { RuleStore } from '../../rules'
 import type { ToolDef } from '../types'
 
 type Args = {
-  action: 'save' | 'list' | 'search' | 'forget' | 'read_skill' | 'save_skill' | 'save_rule'
+  action: 'save' | 'list' | 'search' | 'forget' | 'read_skill' | 'save_skill' | 'save_rule' | 'about'
   fact?: string; category?: string; scope?: 'me' | 'bot'; query?: string; id?: string; all?: boolean
   /** Older name for scope: 'user' = me, 'project' = bot. */
   about?: 'user' | 'project'
@@ -21,32 +21,36 @@ const KIND_TITLE: Record<MemoryKind, string> = {
 
 const quote = (s: string): string => `"${s.length > 140 ? `${s.slice(0, 137)}…` : s}"`
 
-export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rules?: RuleStore): ToolDef<Args> {
+/** People & Places (src/main/context-engine): full cards for a name or topic. */
+export interface WorldLookup { about(query: string, spaceId: string | null): string }
+
+export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rules?: RuleStore, world?: () => WorldLookup | undefined): ToolDef<Args> {
   return {
     name: 'memory',
     label: 'Memory',
     core: true,
-    effect: (a) => (a.action === 'search' || a.action === 'list' || a.action === 'read_skill' ? 'read' : 'write_local'),
+    effect: (a) => (a.action === 'search' || a.action === 'list' || a.action === 'read_skill' || a.action === 'about' ? 'read' : 'write_local'),
     // A standing rule changes what every future chat does: always the user's call, in every mode.
     // (Memories and skills ask only when their text came from a web page or email: see memoryRisk.)
     hardStop: (a) => (a.action === 'save_rule' ? `saving a standing rule every chat will follow: "${String(a.rule ?? '').replace(/\s+/g, ' ').slice(0, 160)}"` : null),
     describe: (a) => a.action === 'save_rule' ? `Save the rule "${a.name}": ${String(a.rule ?? '').slice(0, 200)}`
       : a.action === 'save_skill' ? `Save the skill "${a.name}": ${String(a.description ?? '').slice(0, 160)}`
       : a.action === 'save' ? `Remember: ${String(a.fact ?? '').slice(0, 200)}`
-      : a.action === 'forget' ? `Forget ${a.id ?? `"${a.query ?? ''}"`}` : `${a.action} memory`,
+      : a.action === 'forget' ? `Forget ${a.id ?? `"${a.query ?? ''}"`}` : a.action === 'about' ? `Look up ${a.query ?? ''}` : `${a.action} memory`,
     description: 'Long-term memory across chats. Each memory is shared ("me": about the user, every bot sees it) or belongs to this bot ("bot": its job rules, decisions, work log). ' +
       'save: one short self-contained sentence with a category; scope defaults to "me" for facts about the user and "bot" for rule and worklog. After meaningful work, save a worklog entry: what was done and where the output is. ' +
       'list: everything remembered (for "what do you remember about me?"). search: saved memories and past conversations. ' +
       'forget: by id, or by query describing it ("lives in Boston"); it removes the clear match and says what was removed, or lists candidates when unsure (all=true removes every strong match). ' +
+      (world ? 'about: what is known about a person, place or thing (query). ' : '') +
       'read_skill / save_skill: procedures that worked before (name, description, numbered steps). save_rule: an app-wide standing instruction every chat follows. Never save passwords or other secrets.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['save', 'list', 'search', 'forget', 'read_skill', 'save_skill', 'save_rule'] },
+        action: { type: 'string', enum: ['save', 'list', 'search', 'forget', 'read_skill', 'save_skill', 'save_rule', ...(world ? ['about'] : [])] },
         fact: { type: 'string', description: 'For save: one self-contained sentence with the specifics, e.g. "Alex Chen is the user\'s sister; lives in Austin." For worklog: what was done and where the output is, e.g. "Drafted the Q4 board memo → ~/Documents/Q4 memo.docx".' },
         category: { type: 'string', enum: MEMORY_KINDS, description: 'profile: who the user is; preference: how they like things; rule: an instruction to follow ("Always ask before sending email"); person; location (places, addresses, time zone); work; project; trip; date (birthdays, deadlines); link; fact; worklog: a dated entry of work done' },
         scope: { type: 'string', enum: ['me', 'bot'], description: 'For save: "me" = about the user, shared with every bot; "bot" = only this bot. Default: bot for rule and worklog (and project inside a project), otherwise me. For list/search/forget: limit to one scope.' },
-        query: { type: 'string', description: 'For search, or for forget: words describing the memory to remove' },
+        query: { type: 'string', description: world ? 'For search and about, or for forget: words describing the memory to remove' : 'For search, or for forget: words describing the memory to remove' },
         id: { type: 'string', description: 'For forget: a memory id (or several, comma-separated). For save: replace this memory with the new wording.' },
         all: { type: 'boolean', description: 'For forget with query: remove every strong match, not just the best one' },
         name: { type: 'string', description: 'For read_skill, save_skill and save_rule, e.g. "export-gmail-invoices"' },
@@ -60,6 +64,7 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
       allOf: [
         { if: { properties: { action: { const: 'save' } } }, then: { required: ['fact'] } },
         { if: { properties: { action: { const: 'search' } } }, then: { required: ['query'] } },
+        ...(world ? [{ if: { properties: { action: { const: 'about' } } }, then: { required: ['query'] } }] : []),
         { if: { properties: { action: { const: 'read_skill' } } }, then: { required: ['name'] } },
         { if: { properties: { action: { const: 'save_skill' } } }, then: { required: ['name', 'description', 'steps'] } },
         { if: { properties: { action: { const: 'save_rule' } } }, then: { required: ['name', 'rule'] } }
@@ -102,6 +107,12 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         if (existing?.source === 'you') throw new Error(`"${existing.name}" was written by the user; save an improved version under a new name instead.`)
         const sk = skills.save({ name: a.name!, description: a.description!, body: a.steps!, source: 'learned' })
         return { text: `${existing ? 'Updated' : 'Saved'} skill "${sk.name}".${from}`, display: `${existing ? 'updated' : 'saved'} skill "${sk.name}"` }
+      }
+
+      if (a.action === 'about') {
+        const w = world?.()
+        if (!w) return { text: 'People & Places isn\'t available; try memory(action="search").', display: 'not available' }
+        return { text: w.about(a.query ?? '', botId), display: `looked up ${(a.query ?? '').slice(0, 40)}` }
       }
 
       const off = !memory.enabled
@@ -198,7 +209,9 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         return { text: `No saved memory matches "${a.query}". Nothing was removed. (If it was something said earlier in this chat, it was never saved.)`, display: 'no match' }
       }
 
-      // search
+      // search: an empty query would search for nothing (and waste a step); the relevant memories are
+      // already in the <context> block, so say so instead.
+      if (!a.query?.trim()) return { text: 'Nothing searched: give a query (words describing what to find). What you remember that is relevant is already in the <context> block of the user\'s message; for everything, use action="list".', display: 'empty search skipped' }
       const facts = off ? [] : memory.search(a.query!, a.scope === 'me' ? null : botId, 10).filter((m) => a.scope !== 'bot' || m.spaceId)
       const all = db.searchThreads(a.query!).filter((t) => t.id !== ctx.threadId)
       // This bot's (or project's) own chats come first.

@@ -106,6 +106,7 @@ test('finishing-pass screenshots', async () => {
     // Gates may send the first proposal back (e.g. research first); offer it until the card shows.
     const plan = call('propose_plan', { goal: 'A one-page purchase request for the Team plan, ready to send.', steps: ['Collect the pricing', 'Write the request', 'Save it as a Word document'], assumptions: ['Addressed to your manager'], risks: ['Prices may change before approval'] })
     llm.script.push(plan, plan, plan)
+    await page.click('[data-testid="modes-menu"]')
     await page.click('[data-testid="plan-toggle"]')
     await send(page, 'Write the request as a document')
     await page.locator('[data-testid="plan-approval"]').waitFor({ timeout: 15_000 })
@@ -117,8 +118,10 @@ test('finishing-pass screenshots', async () => {
   })
 
   await step(page, 'heavy-chip', async () => {
+    await page.click('[data-testid="modes-menu"]')
     await page.click('[data-testid="heavy-toggle"]')
     await shoot(page, 'composer-heavy-on')
+    await page.click('[data-testid="modes-menu"]')
     await page.click('[data-testid="heavy-toggle"]')
   })
 

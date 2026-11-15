@@ -4,6 +4,7 @@ description: Turn a red test run or type-check into green with root-cause fixes,
 source: you
 uses: 0
 category: Coding
+triggers: failing test, tests are failing, test failure, red tests, typecheck errors, tsc errors, make the tests pass, fix the build, broken build
 ---
 
 1. Run code(action="run_tests") (or typecheck/lint). The result lists failures as file:line - test - message and suggests the first step.

@@ -902,11 +902,15 @@ export function isProjectCommand(cmd: string, cwd: string, allowed: string[], o:
   return steps > 0
 }
 
-/** Commands run in the workspace, the project folder or a folder attached to this chat. */
+/**
+ * Commands run in the chat's working folder (when it has one), else the first folder attached to it (the
+ * project folder), else the workspace. A relative cwd starts in that same folder.
+ */
 export function cwdFor(p: string | undefined, ctx: Pick<ToolContext, 'state' | 'workspaceDir'>): string {
-  const base = ctx.state.roots?.find((r) => existsSync(r) && statSync(r).isDirectory()) ?? ctx.workspaceDir
+  const folder = ctx.state.folder && existsSync(ctx.state.folder) && statSync(ctx.state.folder).isDirectory() ? ctx.state.folder : undefined
+  const base = folder ?? ctx.state.roots?.find((r) => existsSync(r) && statSync(r).isDirectory()) ?? ctx.workspaceDir
   if (!p) return base
-  const abs = isAbsolute(p) ? p : resolve(ctx.workspaceDir, p)
+  const abs = isAbsolute(p) ? p : resolve(folder ?? ctx.workspaceDir, p)
   const real = existsSync(abs) ? realpathSync(abs) : abs
   const roots = [ctx.workspaceDir, ...(ctx.state.roots ?? [])].map((r) => (existsSync(r) ? realpathSync(r) : r))
   if (!roots.some((r) => real === r || real.startsWith(r + sep))) throw new Error(`${p} is outside the workspace and the folders attached to this chat. Attach the folder first.`)
@@ -947,16 +951,16 @@ const DEFAULT_URL_WAIT: WaitFor = { regex: 'https?://(localhost|127\\.0\\.0\\.1|
 
 export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
   const jobs = deps.jobs ?? defaultJobs
-  const where = (a: Args, roots: string[]): { cwd?: string; allowed: string[] } | null => {
+  const where = (a: Args, roots: string[], folder?: string): { cwd?: string; allowed: string[] } | null => {
     if (!deps.workspace) return null
     const ws = deps.workspace()
     let cwd: string | undefined
-    try { cwd = cwdFor(a.cwd, { state: { roots } as ToolContext['state'], workspaceDir: ws }) } catch { cwd = undefined }
+    try { cwd = cwdFor(a.cwd, { state: { roots, folder } as ToolContext['state'], workspaceDir: ws }) } catch { cwd = undefined }
     return { cwd, allowed: [ws, ...roots] }
   }
   /** The effect, with writes outside your folders counted as acting outside. */
-  const effectOf = (a: Args, roots: string[]): { effect: ToolEffect; why: string } => {
-    const w = where(a, roots)
+  const effectOf = (a: Args, roots: string[], folder?: string): { effect: ToolEffect; why: string } => {
+    const w = where(a, roots, folder)
     if (!w) return classify(a.command)
     if (!w.cwd) return { effect: 'write_external', why: `runs in ${a.cwd}, outside your folders` }
     return commandEffect(a.command, w)
@@ -971,7 +975,7 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
     label: 'Terminal',
     core: true,
     untrusted: true,
-    effect: (a, c) => effectOf(a, c.roots).effect,
+    effect: (a, c) => effectOf(a, c.roots, c.folder).effect,
     // Installs, pushes and network commands are never routine: Auto asks. Setting up the project from its
     // own lockfile (or git fetch / pull) is a project command: Autonomous runs it (never unattended).
     consequential: (a, call) => {
@@ -979,7 +983,7 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       try {
         const roots = deps.rootsOf?.(call.threadId) ?? call.state?.roots ?? []
         const ws = deps.workspace()
-        const cwd = cwdFor(a.cwd, { state: { roots } as ToolContext['state'], workspaceDir: ws })
+        const cwd = cwdFor(a.cwd, { state: { roots, folder: call.state?.folder } as ToolContext['state'], workspaceDir: ws })
         return isProjectCommand(a.command, cwd, [ws, ...roots], { state: call.state }) ? 'project' : true
       } catch {
         return true

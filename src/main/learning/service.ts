@@ -1,7 +1,8 @@
 import type { LearnedItem, LearningSettings, LearningStatus, ModelInfo, Settings } from '@shared/types'
 import type { Db } from '../db'
 import { activityTexts, isRelayed } from '../agent/loop'
-import { cost } from '../llm/budget'
+import { cost, priceFor } from '../llm/budget'
+import { localOff } from '@shared/local-mode'
 import { samplingFor } from '../llm/catalog'
 import { isLocal, streamChat, type ChatRequest, type StreamPart } from '../llm/client'
 import { def as providerDef } from '../llm/providers'
@@ -63,10 +64,30 @@ export interface LearningDeps {
   onBattery?: () => boolean
   /** The model call (tests use a fake). */
   chat?: Chat
+  /**
+   * The knowledge vault's compile job (src/main/vault/compile.ts): it runs in the same idle passes, with
+   * the same model choice and cloud budget. With work waiting it makes a pass happen even while learning
+   * itself is off (then only the vault job runs), and may ask for passes more often (passEvery).
+   */
+  vault?: { wants(now?: number): boolean; run(h: { ask(system: string, user: string, maxTokens: number): Promise<string>; check(): void; now(): number }): Promise<number>; passEvery?(): number }
   now?: () => number
 }
 
 class Halt extends Error {}
+
+/**
+ * The cloud model for a learning pass: the ChatGPT plan first when it's connected (no per-request cost;
+ * its own limits apply), else the cheapest capable model that's at least "light", else Auto's light pick.
+ */
+export function cheapestFor(remote: ModelInfo[]): ModelInfo | undefined {
+  const capable = remote.filter((m) => m.tools !== false)
+  const plan = capable.filter((m) => m.provider === 'chatgpt')
+  if (plan.length) return pick(plan, 1)
+  const price = (m: ModelInfo): number => { const p = priceFor(m.id); return p.known ? p.input + p.output * 0.25 : Infinity }
+  const fit = capable.filter((m) => m.tier >= 1 && Number.isFinite(price(m)))
+  if (fit.length) return [...fit].sort((a, b) => price(a) - price(b) || a.tier - b.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]
+  return pick(remote, 1)
+}
 
 const isRemote = (m: ModelInfo): boolean => m.note === 'remote' || !(providerDef(m.provider)?.local ?? true)
 const KIND_NAME: Record<string, string> = { profile: 'About you', preference: 'Preference', rule: 'Rule', person: 'Person', location: 'Place', work: 'Work', project: 'Project', trip: 'Trip', date: 'Date', link: 'Link', fact: 'Fact' }
@@ -138,17 +159,23 @@ export class LearningService {
     const bg = s.taskModels?.background
     let bgLocal = true
     if (bg) { try { bgLocal = isLocal(this.d.endpoints.for(bg).baseUrl) } catch { /* unknown: treated as local */ } }
-    if (bg && bgLocal) return { model: bg, cloud: false }
+    // Local models switched off (cloud-first setup): never a local model, and nothing to download.
+    const off = localOff(s)
+    if (bg && bgLocal && !off) return { model: bg, cloud: false }
     // Local first: a cloud background model is used only when no local model is available.
-    const local = this.localModels()
+    const local = off ? [] : this.localModels()
     const best = pick(local, 2)
     if (best) return { model: best.id, cloud: false }
-    if (!ls.cloudAllowed) return { blocked: 'No local model is available. Start Ollama or LM Studio, or turn on “Use cloud models for learning”.' }
+    if (!ls.cloudAllowed) {
+      return { blocked: off
+        ? 'Local models are off and cloud models aren’t allowed for learning, so it’s skipped. Turn on “Use cloud models for learning” (it stays within the daily cap).'
+        : 'No local model is available. Start Ollama or LM Studio, or turn on “Use cloud models for learning”.' }
+    }
     if (!s.cloud?.enabled) return { blocked: 'Cloud models are off (Settings → Models).' }
-    if (bg) return { model: bg, cloud: true }
+    if (bg && !bgLocal) return { model: bg, cloud: true }
     let remote: ModelInfo[] = []
     try { remote = this.d.endpoints.usable().filter(isRemote) } catch { remote = [] }
-    const cheap = pick(remote, 1)
+    const cheap = cheapestFor(remote)
     return cheap ? { model: cheap.id, cloud: true } : { blocked: 'No model is available for learning.' }
   }
 
@@ -173,7 +200,7 @@ export class LearningService {
       job: this.current?.job,
       lastRunAt: st.lastRunAt,
       lastSummary: st.lastSummary,
-      nextRunAt: enabled && !blocked ? Math.max((st.lastRunAt ?? 0) + PASS_EVERY_MS, this.lastActivity + IDLE_MS, this.now()) : undefined,
+      nextRunAt: (enabled || this.vaultWants()) && !blocked ? Math.max((st.lastRunAt ?? 0) + this.passEvery(), this.lastActivity + IDLE_MS, this.now()) : undefined,
       model: 'model' in c ? c.model : undefined,
       cloud: 'model' in c ? c.cloud : false,
       localAvailable: this.localModels().length > 0,
@@ -182,30 +209,43 @@ export class LearningService {
     }
   }
 
-  /** Every 30 s: a pass when enabled, idle for 2 minutes, due, and on wall power. */
+  private vaultWants(): boolean {
+    try { return !!this.d.vault?.wants(this.now()) } catch { return false }
+  }
+
+  private passEvery(): number {
+    try { return Math.min(PASS_EVERY_MS, this.d.vault?.passEvery?.() ?? PASS_EVERY_MS) } catch { return PASS_EVERY_MS }
+  }
+
+  /** Every 30 s: a pass when enabled (or the vault has work), idle for 2 minutes, due, and on wall power. */
   async tick(): Promise<void> {
     if (this.stopped || this.current) return
     if (this.d.busy()) { this.lastActivity = this.now(); return }
-    if (!this.enabled()) return
+    if (!this.enabled()) {
+      // Only the vault has work: quietly wait while no model is usable (or today's cloud budget is spent).
+      if (!this.vaultWants()) return
+      const c = this.choose()
+      if ('blocked' in c || (c.cloud && this.store.spentToday(this.now()) >= this.settings().dailyUsd)) return
+    }
     const now = this.now()
     if (now - this.lastActivity < IDLE_MS) return
-    if (now < (this.store.state().lastRunAt ?? 0) + PASS_EVERY_MS) return
+    if (now < (this.store.state().lastRunAt ?? 0) + this.passEvery()) return
     if (this.d.onBattery?.()) return
     await this.pass(false)
   }
 
-  /** "Learn now": starts a pass unless one is running or a chat is working. */
-  async runNow(): Promise<LearningStatus> {
+  /** "Learn now": starts a pass unless one is running or a chat is working. `vaultOnly`: the vault's "Compile now". */
+  async runNow(o: { vaultOnly?: boolean } = {}): Promise<LearningStatus> {
     if (this.stopped || this.current) return this.status()
     if (this.d.busy()) throw new Error('A chat is working right now. Learning waits until it finishes.')
     const why = this.blocked()
     if (why && why !== 'Learning is off.') throw new Error(why)
-    void this.pass(true)
+    void this.pass(true, o.vaultOnly)
     return this.status()
   }
 
   /** One pass. Returns what it did, in a short line. */
-  async pass(manual: boolean): Promise<string> {
+  async pass(manual: boolean, vaultOnly = false): Promise<string> {
     if (this.current || this.stopped) return ''
     const c = this.choose()
     if ('blocked' in c) { this.store.patch({ lastSummary: c.blocked }); this.d.onChange?.(); return c.blocked }
@@ -213,18 +253,26 @@ export class LearningService {
     const ctrl = new AbortController()
     this.current = { ctrl, manual, job: 'Starting', model: c.model, cloud: c.cloud }
     this.d.onChange?.()
-    const done = { memories: 0, tidied: 0, skills: 0, lessons: 0 }
+    const done = { memories: 0, tidied: 0, skills: 0, lessons: 0, notes: 0 }
     this.queued = 0
     let stoppedWhy = ''
+    // An automatic pass with learning off ran for the vault alone.
+    const learn = !vaultOnly && (manual || this.enabled())
     try {
-      this.job('Reading recent chats')
-      done.memories = await this.extractMemories()
-      this.job('Looking for lessons and skills')
-      const r = await this.fromRuns()
-      done.lessons = r.lessons
-      done.skills = r.skills
-      this.job('Tidying memories')
-      done.tidied = await this.consolidate()
+      if (learn) {
+        this.job('Reading recent chats')
+        done.memories = await this.extractMemories()
+        this.job('Looking for lessons and skills')
+        const r = await this.fromRuns()
+        done.lessons = r.lessons
+        done.skills = r.skills
+        this.job('Tidying memories')
+        done.tidied = await this.consolidate()
+      }
+      if (this.d.vault && (manual || this.vaultWants())) {
+        this.job('Compiling the knowledge vault')
+        done.notes = await this.d.vault.run({ ask: (sys, user, max) => this.ask(sys, user, max), check: () => this.check(), now: () => this.now() })
+      }
     } catch (e) {
       stoppedWhy = e instanceof Halt ? (e.message || 'Paused: you started using SahilBot.') : `Stopped: ${(e as Error).message.slice(0, 160)}`
     } finally {
@@ -234,7 +282,8 @@ export class LearningService {
       done.memories && `${done.memories} ${done.memories === 1 ? 'memory' : 'memories'}`,
       done.lessons && `${done.lessons} ${done.lessons === 1 ? 'lesson' : 'lessons'}`,
       done.skills && `${done.skills} ${done.skills === 1 ? 'skill' : 'skills'}`,
-      done.tidied && `${done.tidied} tidied`
+      done.tidied && `${done.tidied} tidied`,
+      done.notes && `${done.notes} vault ${done.notes === 1 ? 'note' : 'notes'}`
     ].filter(Boolean)
     const waiting = this.queued ? `${this.queued} waiting for your OK.` : ''
     const summary = [parts.length ? `Learned ${parts.join(', ')}.` : stoppedWhy || waiting ? '' : 'Nothing new to learn.', waiting, stoppedWhy].filter(Boolean).join(' ')

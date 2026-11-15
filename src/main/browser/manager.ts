@@ -4,6 +4,7 @@ import { BrowserWindow, WebContentsView, session as electronSession, systemPrefe
 import type { BrowserState, TeachStep } from '@shared/types'
 import { readable } from '../agent/tools/web'
 import { TeachRecorder } from './teach'
+import { FIELD_FACTS, FillGuardError, IS_FOCUSED, fieldProblem, type FieldFacts, type FieldKind } from '../secure/guards'
 import { moveDuration, pageCursorCss, type Point } from '../computer/overlay'
 import { COMMERCE_FN, COOKIE_SCRIPT, PAGE_LIB, SHOT_MASK_CSS, cardValuesFor, countryNames, fillAddressScript, fillCardScript, isProcessorHost, locateCardScript, maskScript, pickTotal, regionNames, splitItem, type CardValues, type Money } from './checkout'
 
@@ -1530,12 +1531,31 @@ export class BrowserManager {
     })
   }
 
-  /** Types a vault value. The caller has already checked the field and origin; the value never leaves this method. */
-  async fillSecretValue(ref: string, value: string, expected?: Expected): Promise<void> {
+  /**
+   * Types a vault value. The caller has checked the item's site and the user's approval; here the field
+   * itself is checked in the isolated world (a real, visible, enabled input of the right kind, on a
+   * secure page, whose form doesn't send to another site), focused, and checked again to be the focused
+   * element before CDP Input.insertText types the value. Nothing is returned; the value never leaves.
+   */
+  async fillSecretValue(ref: string, value: string, expected?: Expected, kind?: FieldKind): Promise<void> {
     await this.control(async (wc) => {
       this.checkExpected(wc, expected)
       const r = this.node(ref)
-      await this.setText(wc, r.backendNodeId, value, false)
+      const id = r.backendNodeId
+      await this.cdp(wc, 'DOM.scrollIntoViewIfNeeded', { backendNodeId: id }).catch(() => undefined)
+      if (kind) {
+        const facts = await this.isoCall<FieldFacts>(wc, id, FIELD_FACTS).catch(() => null)
+        if (!facts) throw new FillGuardError('Could not check that field, so nothing was typed. Snapshot and try again.')
+        const problem = fieldProblem(facts, kind, wc.getURL())
+        if (problem) throw new FillGuardError(problem)
+      }
+      await this.cdp(wc, 'DOM.focus', { backendNodeId: id })
+      if (kind && !(await this.isoCall<boolean>(wc, id, IS_FOCUSED).catch(() => false))) throw new FillGuardError('The field lost focus (the page moved it), so nothing was typed. Snapshot and try again.')
+      await this.isoCall(wc, id, `function () { if ('value' in this) { this.value = ''; this.dispatchEvent(new Event('input', { bubbles: true })) } }`)
+      // The page could have navigated or swapped tabs while we checked: same tab, same site, same field.
+      this.checkExpected(wc, expected)
+      if (kind && !(await this.isoCall<boolean>(wc, id, IS_FOCUSED).catch(() => false))) throw new FillGuardError('The field lost focus, so nothing was typed.')
+      await this.cdp(wc, 'Input.insertText', { text: value })
     })
   }
 

@@ -65,6 +65,17 @@ export async function startTestSite(): Promise<TestSite> {
         html(401, 'Sign in failed', '<h1>Wrong email or password</h1><a href="/login">Try again</a>')
       })
     }
+    // The contact form without signing in (computer-use planner + executor test, tests/accept/cua.test.ts).
+    if (url.pathname === '/quote' && req.method === 'GET') {
+      return html(200, 'Contact · Acme Portal', `<h1>Contact us</h1><form method="post" action="/quote">
+        <label for="name">Your name</label><input id="name" name="name">
+        <label for="msg">Message</label><textarea id="msg" name="message"></textarea>
+        <label for="topic">Topic</label><select id="topic" name="topic"><option>Sales</option><option>Support</option></select>
+        <button type="submit">Send message</button></form>`)
+    }
+    if (url.pathname === '/quote' && req.method === 'POST') {
+      return form((f) => { submissions.push(f); html(200, 'Sent · Acme Portal', '<h1>Thanks</h1>') })
+    }
     if (!authed && ['/dashboard', '/form', '/result'].includes(url.pathname)) {
       res.writeHead(302, { location: '/login' })
       return res.end()

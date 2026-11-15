@@ -59,5 +59,5 @@ export function autoUnavailableReason(id: AutoEntry['id'], list: Pick<ModelList,
     if (!o) return 'No cloud model available — add an API key (and turn cloud models on) in Settings → Models'
     return !o.cloudOn ? 'Cloud models are switched off — turn them on in Settings → General' : !o.keyed ? 'No cloud API key saved — add one in Settings → Models' : 'No cloud model is switched on — open Settings → Models'
   }
-  return usable.length ? undefined : 'No models yet — download one or add an API key in Settings → Models'
+  return usable.length ? undefined : 'No models yet — add an API key or your ChatGPT plan in Settings → Models'
 }

@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Space, Thread } from '@shared/types'
 import { Mascot, SpaceAvatar } from '../brand'
 import * as I from '../icons'
+import { openUsageGlance } from './UsagePage'
 
 export type PaletteAction =
   | { kind: 'new-chat' } | { kind: 'new-bot' } | { kind: 'new-group' } | { kind: 'new-project' }
   | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'tasks' } | { kind: 'connect' } | { kind: 'settings' }
-  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' }
+  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'vault' } | { kind: 'import-memory' } | { kind: 'usage' }
   | { kind: 'open'; id: string } | { kind: 'chat'; id: string }
 
 /** keys: the command's own shortcut, shown on the row so the palette teaches it. */
@@ -14,6 +15,8 @@ type Item = { a: PaletteAction; label: string; sub?: string; icon: React.ReactNo
 
 /** ⌘K: jump to any bot or chat, or run a command (new bot, Projects, Files, Scheduled…). ⌘1…⌘9 picks. */
 export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces: Space[]; chats?: Thread[]; onPick: (a: PaletteAction) => void; onClose: () => void }) {
+  // "Usage" opens the compact usage card itself (UsagePage.tsx); everything else goes to the app.
+  const pick = (a: PaletteAction): void => { if (a.kind === 'usage') { onClose(); openUsageGlance(); return } onPick(a) }
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const items = useMemo(() => {
@@ -28,7 +31,10 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       { a: { kind: 'tasks' }, label: 'Tasks', sub: 'Goals your bots are working on', icon: ico(<I.Check size={15} />), group: 'Go to' },
       { a: { kind: 'scheduled' }, label: 'Scheduled', sub: 'Routines and scheduled tasks', icon: ico(<I.Clock size={15} />), group: 'Go to' },
       { a: { kind: 'connect' }, label: 'Connect apps', icon: ico(<I.Plug size={15} />), group: 'Go to' },
+      { a: { kind: 'vault' }, label: 'Vault', sub: 'Notes your bots keep: people, projects, decisions', icon: ico(<I.ListIcon size={15} />), group: 'Go to' },
+      { a: { kind: 'import-memory' }, label: 'Import memory from another AI', sub: 'ChatGPT, Claude, Gemini…', icon: ico(<I.Down size={15} />), group: 'Go to' },
       { a: { kind: 'settings' }, label: 'Settings', icon: ico(<I.Gear size={15} />), group: 'Go to', keys: ['⌘', ','] },
+      { a: { kind: 'usage' }, label: 'Usage', sub: 'Spend this month, tokens and lifetime totals', icon: ico(<I.Clock size={15} />), group: 'Go to' },
       // Shortcuts worth knowing: last in the default list, and found by searching.
       { a: { kind: 'panel' }, label: 'Toggle side panel', sub: 'Progress, browser, files and documents', icon: ico(<I.Panel size={15} />), group: 'Shortcuts', keys: ['⌘', '\\'] },
       { a: { kind: 'voice' }, label: 'Voice chat', sub: 'Talk with SahilBot', icon: ico(<I.Wave size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'V'] },
@@ -54,10 +60,10 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       if (e.key === 'Escape') { if (!e.defaultPrevented) { e.preventDefault(); onClose() } }
       else if (e.key === 'ArrowDown') { e.preventDefault(); setSel((s) => Math.min(items.length - 1, s + 1)) }
       else if (e.key === 'ArrowUp') { e.preventDefault(); setSel((s) => Math.max(0, s - 1)) }
-      else if (e.key === 'Enter' && items[sel]) { e.preventDefault(); onPick(items[sel].a) }
+      else if (e.key === 'Enter' && items[sel]) { e.preventDefault(); pick(items[sel].a) }
       else if (e.metaKey && /^[1-9]$/.test(e.key)) {
         const it = items[Number(e.key) - 1]
-        if (it) { e.preventDefault(); onPick(it.a) }
+        if (it) { e.preventDefault(); pick(it.a) }
       }
     }
     window.addEventListener('keydown', k)
@@ -75,7 +81,7 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
         {items.map((it, i) => (
           <div key={i} className="pal-entry">
             {(i === 0 || items[i - 1].group !== it.group) && <div className="pal-group">{it.group}</div>}
-            <button className={`pal-item${i === sel ? ' on' : ''}`} onMouseEnter={() => setSel(i)} onClick={() => onPick(it.a)}>
+            <button className={`pal-item${i === sel ? ' on' : ''}`} onMouseEnter={() => setSel(i)} onClick={() => pick(it.a)}>
               {it.icon}
               <span className="pal-label">{it.label}{it.sub && <span className="pal-sub">{it.sub}</span>}</span>
               {it.keys ? <span className="kbd keys" aria-label={`Shortcut ${it.keys.join(' ')}`}>{it.keys.map((k, j) => <kbd key={j}>{k}</kbd>)}</span>

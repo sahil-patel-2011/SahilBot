@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 // @ts-expect-error plain ESM script without types
-import { STABLE, findArtifacts, parseArgs, plan, prepare, releaseNotes, tagFor } from '../../scripts/release.mjs'
+import { SERVER_STABLE, STABLE, findArtifacts, parseArgs, plan, prepare, releaseNotes, tagFor } from '../../scripts/release.mjs'
 
 // The release workflow's publish step (scripts/release.mjs), run without gh.
 describe('release script', () => {
@@ -23,6 +23,25 @@ describe('release script', () => {
     const sums = readFileSync(join(f.out, 'SHA256SUMS.txt'), 'utf8')
     expect(sums).toContain(`  ${STABLE.zip}`)
     expect(sums).toContain('  SahilBot-0.1.0-7-mac-arm64.dmg')
+  })
+
+  test('SahilBot Server tarballs in dist/server go along with versioned and stable names', () => {
+    const dist = mkdtempSync(join(tmpdir(), 'sb-release-'))
+    writeFileSync(join(dist, 'SahilBot-0.1.0-7-arm64.dmg'), 'dmg')
+    writeFileSync(join(dist, 'SahilBot-0.1.0-7-arm64.zip'), 'zip')
+    mkdirSync(join(dist, 'server'))
+    writeFileSync(join(dist, 'server', SERVER_STABLE.arm64), 'pi')
+    writeFileSync(join(dist, 'server', SERVER_STABLE.x64), 'vm')
+    const f = prepare({ dist, version: '0.1.0', build: '7' })
+    for (const n of [SERVER_STABLE.arm64, SERVER_STABLE.x64, 'SahilBot-server-0.1.0-7-linux-arm64.tar.gz']) expect(f.all).toContain(join(f.out, n))
+    expect(f.stable).toContain(join(f.out, SERVER_STABLE.arm64))
+    expect(readFileSync(join(f.out, SERVER_STABLE.x64), 'utf8')).toBe('vm')
+    expect(readFileSync(join(f.out, 'SHA256SUMS.txt'), 'utf8')).toContain(`  ${SERVER_STABLE.arm64}`)
+    const notes = releaseNotes({ version: '0.1.0', build: '7', sha: 'abcdef1', signing: 'adhoc', repo: 'o/r', server: f.server })
+    expect(notes).toContain(`https://github.com/o/r/releases/latest/download/${SERVER_STABLE.arm64}`)
+    expect(notes).toContain('install.sh')
+    // Without server tarballs the Mac release is unchanged.
+    expect(releaseNotes({ version: '0.1.0', build: '7', sha: 'abcdef1', signing: 'adhoc', repo: 'o/r' })).not.toContain('SahilBot Server')
   })
 
   test('the versioned release is Latest; the rolling one is a prerelease moved to the new commit', () => {

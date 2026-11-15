@@ -1,13 +1,20 @@
 import type { Sampling, ToolCall } from '@shared/types'
 import { lookup } from './catalog'
-import { isAnthropic } from './providers'
+import { isAnthropic, isXai } from './providers'
 import { claudeMaxTokens, fallbacks, listAnthropicModels, streamAnthropic } from './anthropic'
 import { streamResponses } from './openai-responses'
 import { openaiEffort, openaiInfo, openaiMaxTokens, usesResponses } from './openai-models'
-import { tierTokens } from './budget'
+import { priceFor, tierTokens } from './budget'
+// xAI (Grok) over its Responses API, and Fast mode (each provider's faster, pricier service tier).
+import { streamXai } from './xai-client'
+import { xaiMaxTokens } from './xai-models'
+import { currentFastTier, fastFactor, fastSupport } from './fast-mode'
 import { httpError, retryInfo, withRetries } from './retry'
 import { timer } from './timing'
 import { toolTurnSampling, withToolPrimer } from './local-tools'
+// ChatGPT plan (via Codex): chatgpt-plan/… models run through the user's own Codex (llm/codex).
+import { isCodexUrl } from './codex/ids'
+import { streamCodex } from './codex/session'
 
 export { backoffMs, httpError, parseRetryAfter, retryAfterFrom, retryInfo, retryPolicy, withRetries } from './retry'
 
@@ -55,7 +62,19 @@ export interface ChatRequest {
   compactAt?: number
   /** OpenAI: prompt_cache_key (the chat), so its requests share a cache and are accounted together. */
   cacheKey?: string
+  /**
+   * Fast mode for this request (llm/fast-mode.ts): 'fast' / 'ultrafast', or null for standard speed. Undefined:
+   * the app's Fast mode settings decide (fastHooks.resolve). Ignored by models without a fast tier.
+   */
+  fast?: import('@shared/types').FastTier | null
 }
+
+/**
+ * The providers' own token detail for the last request recorded through spendHooks.after (keyed by the request
+ * object passed to it), for the usage table: cache reads and writes, reasoning, the tier that ran, web calls.
+ */
+export interface UsageDetail { prompt?: number; cached?: number; cacheWrite?: number; reasoning?: number; output?: number; tier?: 'fast' | 'ultrafast' | 'standard'; webCalls?: number }
+export const usageDetails = new WeakMap<object, UsageDetail>()
 
 /** Defaults for local servers. keepAlive follows the localKeepAlive setting (the agent passes it per request). */
 export const localDefaults = { keepAlive: '30m' }
@@ -110,7 +129,7 @@ export type StreamPart =
    * prompt: the real prompt size, which picks the price tier (long-context rates); extraUsd: tool fees.
    * paidAttempt turns these into the tokens the budget records (budget.tierTokens).
    */
-  | { type: 'usage'; promptTokens: number; completionTokens: number; prompt?: number; extraUsd?: number; cachedTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }
+  | { type: 'usage'; promptTokens: number; completionTokens: number; prompt?: number; extraUsd?: number; cachedTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; serviceTier?: 'fast' | 'ultrafast' | 'standard'; webCalls?: number }
   | { type: 'finish'; reason: string }
   /** Provider-native output to replay unchanged (Claude's content blocks, OpenAI's Responses output items). */
   | { type: 'raw'; provider: 'anthropic' | 'openai'; model: string; content: unknown; compacted?: boolean }
@@ -146,6 +165,7 @@ function headers(apiKey: string | undefined, baseUrl: string): Record<string, st
 const trim = (u: string): string => u.replace(/\/+$/, '')
 
 export async function listModels(baseUrl: string, apiKey?: string, signal?: AbortSignal): Promise<string[]> {
+  if (isCodexUrl(baseUrl)) return []
   if (isAnthropic(baseUrl)) {
     if (!apiKey) throw new Error('Add your Anthropic API key in Settings to list Claude models.')
     return listAnthropicModels(apiKey)
@@ -202,6 +222,8 @@ export function buildBody(req: ChatRequest): Record<string, unknown> {
   // the table doesn't describe keep the coarse scale.
   if (req.effort && !isLocal(req.baseUrl) && openaiInfo(req.model)?.efforts) body.reasoning_effort = openaiEffort(req.model, req.effort)
   else if (req.effort && /^(gpt-5|o\d)/i.test(req.model) && !isLocal(req.baseUrl)) body.reasoning_effort = req.effort === 'xhigh' || req.effort === 'max' ? 'high' : req.effort
+  // Fast mode on an OpenAI model over Chat Completions (older GPTs): service_tier "fast" (Ultrafast is Responses-only).
+  if (req.fast && !isLocal(req.baseUrl) && fastSupport(req.model)?.provider === 'openai') body.service_tier = 'fast'
   return body
 }
 
@@ -428,6 +450,11 @@ export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> 
 }
 
 async function* route(req: ChatRequest, stats: ServerStats): AsyncGenerator<StreamPart> {
+  // The user's ChatGPT plan through Codex: no per-token charge, so no budget check; usage is recorded at $0.
+  if (isCodexUrl(req.baseUrl)) {
+    yield* planAttempt(req)
+    return
+  }
   if (await isOllama(req.baseUrl)) {
     yield* withRetries(() => streamOllama(req, stats), req.signal)
     return
@@ -440,25 +467,57 @@ async function* route(req: ChatRequest, stats: ServerStats): AsyncGenerator<Stre
   yield* withRetries(() => paidAttempt(req), req.signal)
 }
 
-async function* paidAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
+/** A ChatGPT-plan step: recorded (as plan usage, $0: budget.priceFor) but never priced against the cap. */
+async function* planAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
+  let input = 0
+  let output = 0
+  try {
+    for await (const part of streamCodex(req)) {
+      if (part.type === 'usage') { input += part.promptTokens; output += part.completionTokens }
+      yield part
+    }
+  } finally {
+    if (input || output) spendHooks.after?.(req, input, output, req.model)
+  }
+}
+
+async function* paidAttempt(original: ChatRequest): AsyncGenerator<StreamPart> {
+  // Fast mode: the request's own choice, else the app's settings (only for models that have a fast tier).
+  const asked = original.fast === undefined ? currentFastTier(original.model) : original.fast ?? undefined
+  const fast = asked && fastSupport(original.model) ? asked : undefined
+  const req: ChatRequest = fast === (original.fast ?? undefined) ? original : { ...original, fast: fast ?? null }
   const chars = JSON.stringify(req.messages).length + JSON.stringify(req.tools ?? []).length
   const estimatedInput = Math.ceil((chars / 3) * 1.1)
   const claude = isAnthropic(req.baseUrl)
+  const xai = !claude && isXai(req.baseUrl)
   // OpenAI models on api.openai.com go over the Responses API (openai-responses.ts); other servers keep Chat Completions.
-  const responses = !claude && usesResponses(req.baseUrl, req.model)
-  const maxOutput = claude ? claudeMaxTokens(req.maxTokens, req.effort, req.model) : responses ? openaiMaxTokens(req.maxTokens, req.effort, req.model) : req.maxTokens
+  const responses = !claude && !xai && usesResponses(req.baseUrl, req.model)
+  const maxOutput = claude ? claudeMaxTokens(req.maxTokens, req.effort, req.model) : responses ? openaiMaxTokens(req.maxTokens, req.effort, req.model) : xai ? xaiMaxTokens(req.maxTokens, req.model) : req.maxTokens
+  // A fast request's worst case at its multiplier (in billing-equivalent tokens, so every cap downstream prices it).
+  const f = fastFactor(req.model, fast)
   // If a refusal fallback could answer instead, price the worst case at the most expensive tier.
-  spendHooks.before?.(req, estimatedInput, maxOutput, claude && fallbacks(req.model) ? 'claude-fable-5-1' : req.model)
+  spendHooks.before?.(req, Math.ceil(estimatedInput * f), Math.ceil(maxOutput * f), claude && fallbacks(req.model) ? 'claude-fable-5-1' : req.model)
   let input = 0
   let output = 0
   let produced = 0
   let served = req.model
   let rejected = false
+  const detail: UsageDetail = fast ? { tier: fast } : {}
   try {
-    for await (let part of claude ? streamAnthropic(req) : responses ? streamResponses(req) : streamOpenAI(req)) {
+    for await (let part of claude ? streamAnthropic(req) : xai ? streamXai(req) : responses ? streamResponses(req) : streamOpenAI(req)) {
       if (part.type === 'usage') {
+        // The tier that really ran (a fast request can be downgraded to standard, at standard price).
+        const ran = part.serviceTier ?? fast ?? 'standard'
+        const premium = fastFactor(req.model, ran) - 1
+        Object.assign(detail, { prompt: part.prompt ?? part.promptTokens, cached: part.cachedTokens, cacheWrite: part.cacheWriteTokens, reasoning: part.reasoningTokens, output: part.completionTokens, tier: ran, webCalls: part.webCalls })
+        // Fast mode's premium on the token cost (not on tool fees), folded in like any fee.
+        let extra = part.extraUsd ?? 0
+        if (premium > 0) {
+          const p = priceFor(req.model, part.prompt ?? part.promptTokens)
+          extra += premium * (part.promptTokens * p.input + part.completionTokens * p.output) / 1e6
+        }
         // Recorded at the price tier the real prompt size pays (a 300K mostly-cached prompt is long context).
-        if (part.prompt !== undefined || part.extraUsd) part = { ...part, ...tierTokens(req.model, part.prompt ?? part.promptTokens, part.promptTokens, part.completionTokens, part.extraUsd) }
+        if (part.prompt !== undefined || extra) part = { ...part, ...tierTokens(req.model, part.prompt ?? part.promptTokens, part.promptTokens, part.completionTokens, extra) }
         if (part.type === 'usage') { input = part.promptTokens; output = part.completionTokens }
       }
       if (part.type === 'reset') produced = 0
@@ -474,17 +533,20 @@ async function* paidAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
     rejected = (e as { billed?: boolean }).billed === false || (!input && !produced && (typeof status === 'number' || /\b(4\d\d|5\d\d)\b/.test((e as Error).message) || (status === undefined && retryInfo(e).retry)))
     throw e
   } finally {
-    if (!rejected)
-    // If the server didn't report usage (or the stream was stopped), record a conservative estimate.
-      spendHooks.after?.(req, input || estimatedInput, output || Math.ceil(produced / 3), served)
+    if (!rejected) {
+      usageDetails.set(req, detail)
+      // If the server didn't report usage (or the stream was stopped), record a conservative estimate (at the fast rate when asked).
+      spendHooks.after?.(req, input || Math.ceil(estimatedInput * f), output || Math.ceil((produced / 3) * f), served)
+    }
   }
 }
 
 async function* streamOpenAI(req: ChatRequest, stats: ServerStats = {}): AsyncGenerator<StreamPart> {
+  const body = buildBody(req)
   const res = await fetch(`${trim(req.baseUrl)}/chat/completions`, {
     method: 'POST',
     headers: headers(req.apiKey, req.baseUrl),
-    body: JSON.stringify(buildBody(req)),
+    body: JSON.stringify(body),
     signal: req.signal
   })
   if (!res.ok || !res.body) {
@@ -547,7 +609,17 @@ async function* streamOpenAI(req: ChatRequest, stats: ServerStats = {}): AsyncGe
       if (json.timings.prompt_n !== undefined) stats.promptEvalCount = json.timings.prompt_n
       if (json.timings.cache_n !== undefined) stats.cachedTokens = json.timings.cache_n
     }
-    if (json.usage) yield { type: 'usage', promptTokens: json.usage.prompt_tokens, completionTokens: json.usage.completion_tokens }
+    if (json.usage) {
+      const u = json.usage as { prompt_tokens: number; completion_tokens: number; prompt_tokens_details?: { cached_tokens?: number }; completion_tokens_details?: { reasoning_tokens?: number } }
+      const tier = (json as { service_tier?: string }).service_tier
+      yield {
+        type: 'usage', promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens,
+        ...(u.prompt_tokens_details?.cached_tokens ? { cachedTokens: u.prompt_tokens_details.cached_tokens } : {}),
+        ...(u.completion_tokens_details?.reasoning_tokens ? { reasoningTokens: u.completion_tokens_details.reasoning_tokens } : {}),
+        // Fast mode asked: "priority" / "fast" ran fast, anything else was standard.
+        ...(req.fast && body.service_tier ? { serviceTier: tier === 'priority' || tier === 'fast' ? 'fast' as const : 'standard' as const } : {})
+      }
+    }
   }
 
   const reader = res.body.getReader()

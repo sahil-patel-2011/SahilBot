@@ -1,4 +1,4 @@
-import type { PermissionMode } from '@shared/types'
+import type { PermissionMode, ToolEffect } from '@shared/types'
 import type { Decision, PermissionInput } from './types'
 
 const STRICTNESS: Record<PermissionMode, number> = { ask: 3, auto: 2, autonomous: 1, bypass: 0 }
@@ -45,8 +45,9 @@ export function decide(p: PermissionInput): Decision {
     return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}` }
   }
 
-  // Nobody is there to watch an unattended run (routines, wake-ups): Autonomous works like Auto there.
-  const mode: PermissionMode = p.unattended && p.mode === 'autonomous' ? 'auto' : p.mode
+  // Nobody is there to watch an unattended run (routines, wake-ups): Autonomous works like Auto there. An
+  // always-on bot keeps Autonomous (its hard stops, taint and the purchase / code gates still apply).
+  const mode: PermissionMode = p.unattended && p.mode === 'autonomous' && !p.alwaysOn ? 'auto' : p.mode
   // Taint is checked before the local-write shortcut: a terminal command steered by fetched content asks
   // whatever it does (checkTaint flags run_command at every effect; other tools' local writes never are).
   if (p.tainted && (mode === 'auto' || mode === 'autonomous')) return { verdict: 'ask', reason: 'Uses details taken from a web page or email' }
@@ -456,4 +457,76 @@ export function goalChangeRisk(tool: string, args: unknown, o: { tainted: boolea
   }
   if (o.wake || !o.tainted) return null
   return { verdict: 'ask', reason: 'Changes a long-running goal after reading a web page, email, or a message from another bot or app' }
+}
+
+// ---------- always-on bots: hard stops that ask whatever the level, rule or "Always" ----------
+
+/** What kind of hard stop an action is, for a bot working on its own. */
+export type BotStopKind = 'money' | 'credentials' | 'mass_send' | 'delete' | 'public_post' | 'always_ask'
+
+/** Recipients in one call at or above this count make it a mass send. */
+export const MASS_SEND_MIN = 5
+
+const MONEY_WORDS = /\b(buy|purchase|pay|payment|checkout|check out|place (an |your )?order|transfer|wire|send money|refund|charge|invoice payment|donate|tip|subscribe|upgrade plan|billing)\b/i
+const CREDENTIAL_WORDS = /\b(password|passcode|passkey|credential|login details|one-time code|otp|2fa|two-factor|mfa|verification code|security code|api key|access token|secret key|recovery (code|email|phone))\b/i
+const DELETE_WORDS = /\b(delete|deletes|deleting|remove|erase|wipe|purge|trash|destroy|drop table|unsubscribe|archive all|empty (the )?trash)\b/i
+const POST_WORDS = /\b(post|posts|publish|publishes|tweet|retweet|share publicly|go live|announce|comment on|reply publicly)\b/i
+const PUBLIC_PLACES = /\b(twitter|x\.com|tweet|linkedin|reddit|facebook|instagram|threads|tiktok|youtube|mastodon|bluesky|medium|substack|wordpress|ghost|blog|forum|discord|slack|public|website|github__create_(issue|comment|release)|producthunt|hacker ?news)\b/i
+const MASS_WORDS = /\b(bulk|mass|broadcast|newsletter|blast|campaign|everyone|all (contacts|subscribers|customers|users|members))\b/i
+const SEND_WORDS = /\b(send|sends|email|e-mail|message|sms|text|invite|forward|notify)\b/i
+const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/g
+
+/** Recipients named in a call's arguments (to / cc / bcc / recipients / emails, arrays or comma lists). */
+export function recipientCount(args: unknown): number {
+  const seen = new Set<string>()
+  const walk = (v: unknown, key: string, depth: number): void => {
+    if (depth > 4) return
+    if (Array.isArray(v)) { for (const x of v) walk(x, key, depth + 1); return }
+    if (v && typeof v === 'object') { for (const [k, x] of Object.entries(v)) walk(x, k, depth + 1); return }
+    if (typeof v !== 'string' || !/^(to|cc|bcc|recipients?|emails?|addresses|phones?|numbers?|users?|members?|attendees|invitees|contacts?)$/i.test(key)) return
+    const emails = v.match(EMAIL)
+    if (emails?.length) emails.forEach((e) => seen.add(e.toLowerCase()))
+    else v.split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean).forEach((x) => seen.add(x.toLowerCase()))
+  }
+  walk(args, '', 0)
+  return seen.size
+}
+
+/**
+ * A hard stop for an always-on bot: an action that always asks the user, even in Autonomous, with an
+ * Allow rule or "Always allow", and that a question's deadline never decides on its own. Money moves and
+ * purchases, credentials and one-time codes, deleting the user's data, mass sends, public posting, and
+ * whatever the user listed under "Always ask for…" for this bot. Reads are never stopped here (decide()
+ * already asks for reads with a hard stop or taint). Purchases and one-time codes keep their own cards.
+ */
+export function botHardStop(a: { tool: string; effect: ToolEffect; args: unknown; label?: string; summary?: string; hardStop?: string | null; alwaysAsk?: string[]; argsText?: string }): { kind: BotStopKind; reason: string } | null {
+  if (isSelfGated(a.hardStop)) return null
+  const argsText = a.argsText ?? (() => { try { return JSON.stringify(a.args ?? {}) } catch { return '' } })()
+  const rules = (a.alwaysAsk ?? []).filter((w) => typeof w === 'string' && w.trim()).slice(0, RULE_LIMIT)
+  const hit = rules.find((w) => ruleMatches(w, { tool: a.tool, label: a.label, summary: a.summary, args: argsText }))
+  if (hit) return { kind: 'always_ask', reason: `You asked this bot to always ask for "${hit}"` }
+  if (a.effect === 'read') return null
+  const head = [a.tool.replace(/[_-]+/g, ' '), a.label, a.summary].filter(Boolean).join(' \n')
+  const declared = a.hardStop ?? ''
+  const outside = a.effect === 'write_external' || a.effect === 'destructive'
+  if (outside && (MONEY_WORDS.test(head) || PAYMENT.test(declared))) return { kind: 'money', reason: 'Moves money or buys something' }
+  if (CREDENTIAL_WORDS.test(head) || CREDENTIAL_WORDS.test(declared) || /(^|[_\W])(vault|secrets?|passwords?)([_\W]|$)/i.test(a.tool)) return { kind: 'credentials', reason: 'Uses a password, code or other credential' }
+  if ((a.effect === 'destructive' && !BACKED_UP_OVERWRITES.has(a.tool)) || (outside && DELETE_WORDS.test(head)) || /\b(delet|trash|history)/i.test(declared)) {
+    return { kind: 'delete', reason: 'Deletes or replaces your data' }
+  }
+  if (outside && (recipientCount(a.args) >= MASS_SEND_MIN || (MASS_WORDS.test(head) && SEND_WORDS.test(head)))) return { kind: 'mass_send', reason: `Sends to many people at once` }
+  if (outside && POST_WORDS.test(head) && PUBLIC_PLACES.test(`${head} ${a.tool}`)) return { kind: 'public_post', reason: 'Posts publicly' }
+  return null
+}
+
+/** Question or default text that touches a hard stop: a deadline never answers it on its own. */
+export function hardStopText(...texts: Array<string | undefined>): string | null {
+  const t = texts.filter(Boolean).join('\n')
+  if (!t) return null
+  if (MONEY_WORDS.test(t) || PAYMENT.test(t)) return 'it involves money or a purchase'
+  if (CREDENTIAL_WORDS.test(t) || /\b(log ?in|sign ?in|sign-in)\b/i.test(t)) return 'it involves a password, code or credential'
+  if (DELETE_WORDS.test(t)) return 'it deletes something'
+  if (MASS_WORDS.test(t) && SEND_WORDS.test(t)) return 'it sends to many people'
+  if (POST_WORDS.test(t) && PUBLIC_PLACES.test(t)) return 'it posts publicly'
+  return null
 }

@@ -4,6 +4,7 @@ description: Write, build and debug microcontroller firmware (Arduino, ESP32, ST
 source: you
 uses: 0
 category: Electrical Engineering
+triggers: arduino, esp32, stm32, raspberry pi pico, microcontroller, firmware, platformio, i2c, spi, uart
 ---
 
 1. Identify the board, toolchain and framework (Arduino CLI, PlatformIO, ESP-IDF, STM32Cube, Pico SDK); check what's installed with run_command.

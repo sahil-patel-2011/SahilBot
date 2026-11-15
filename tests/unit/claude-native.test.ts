@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { ModelInfo, ToolCall } from '@shared/types'
 vi.mock('electron', () => ({ shell: { trashItem: async () => undefined } }))
+const { SERVER_COMPACTION_INSTRUCTIONS } = await import('../../src/main/llm/summary-format')
 const { buildClaudeRequest, billedInput, billedUsage, droppedWhenCut, markPreviousTail, toAnthropic, BETA } = await import('../../src/main/llm/anthropic')
 const { CLAUDE, claudeInfo, claudeOptions, claudeSpec, claudeWindow, compactionTrigger, REPLY_HEADROOM } = await import('../../src/main/llm/claude-models')
 const { nativePlan, HALT_TEXT, serverFindings, serverToolUsd } = await import('../../src/main/llm/claude-native')
@@ -101,13 +102,15 @@ describe('model table (shared/models.md, model-migration.md)', () => {
     expect(claudeSpec('claude-haiku-5-5')!.fallback).toBeUndefined()
     expect(claudeSpec('claude-opus-5-5')!.fallback).toBe(true)
   })
-  test('Fable 5.2 is not in the reference: family-inferred, highest family prices, marked estimated', () => {
+  test('Fable 5.2 is known at its published price; a newer id is family-inferred, highest family prices, marked estimated', () => {
+    expect(priceFor('claude-fable-5-2')).toMatchObject({ input: 8, output: 40, cacheRead: 0.8, known: true })
+    expect(claudeSpec('claude-fable-5-2')).toMatchObject({ computer: 'toolset', thinking: 'adaptive', contextTokens: 1_000_000 })
     // A version suffix is a different model, not a dated snapshot of Fable 5.
-    expect(claudeSpec('claude-fable-5-2')).toBeUndefined()
+    expect(claudeSpec('claude-fable-5-3')).toBeUndefined()
     expect(claudeSpec('claude-opus-5-20260101')?.id).toBe('claude-opus-5')
-    const f = claudeInfo('claude-fable-5-2')!
+    const f = claudeInfo('claude-fable-5-3')!
     expect(f).toMatchObject({ family: 'fable', estimated: true, contextTokens: 1_000_000, maxOutput: 128_000, computer: 'toolset', thinking: 'adaptive' })
-    expect(priceFor('claude-fable-5-2')).toMatchObject({ input: 10, output: 50, cacheRead: 1, known: false, estimated: true })
+    expect(priceFor('claude-fable-5-3')).toMatchObject({ input: 10, output: 50, cacheRead: 1, known: false, estimated: true })
     expect(priceFor('claude-opus-6')).toMatchObject({ input: 5, output: 25, estimated: true })
     expect(claudeInfo('gpt-5')).toBeUndefined()
     // Every entry the table has is well-formed.
@@ -154,7 +157,8 @@ describe('long context: strategies and compaction thresholds', () => {
     // 200K of context on Opus 5.5: 196K cached reads at $0.20, 4K written at $5, 2K out at $20.
     expect(stepCost('claude-opus-5-5', 200_000).usd).toBeCloseTo((196_000 * 0.2 + 4000 * 5 + 2000 * 20) / 1e6, 6)
     expect(stepCost('claude-opus-5-5', 200_000).estimated).toBe(false)
-    expect(stepCost('claude-fable-5-2', 10_000).estimated).toBe(true)
+    expect(stepCost('claude-fable-5-3', 10_000).estimated).toBe(true)
+    expect(stepCost('claude-fable-5-2', 10_000).estimated).toBe(false)
   })
 })
 
@@ -174,7 +178,7 @@ describe('request bodies per model', () => {
     // Anthropic-defined tools carry no input_schema and no eager_input_streaming; custom tools stream eagerly.
     for (const t of tools.filter((x) => x.type)) { expect(t.input_schema).toBeUndefined(); expect(t.eager_input_streaming).toBeUndefined() }
     for (const t of tools.filter((x) => !x.type)) expect(t.eager_input_streaming).toBe(true)
-    expect(tools.find((t) => t.type === 'computer_toolset_20260801')).toEqual({ type: 'computer_toolset_20260801', configs: { zoom: { enabled: false }, middle_click: { enabled: false }, left_mouse_down: { enabled: false }, left_mouse_up: { enabled: false }, cursor_position: { enabled: false }, hold_key: { enabled: false } } })
+    expect(tools.find((t) => t.type === 'computer_toolset_20260801')).toEqual({ type: 'computer_toolset_20260801', configs: { middle_click: { enabled: false }, left_mouse_down: { enabled: false }, left_mouse_up: { enabled: false }, cursor_position: { enabled: false }, hold_key: { enabled: false } } })
     expect(tools.find((t) => t.type === 'computer_toolset_20260801')!.name).toBeUndefined()
     // Never a forced tool choice (400 on Opus 5.5); parallel tool use stays on.
     expect(params.tool_choice).toEqual({ type: 'auto' })
@@ -192,7 +196,8 @@ describe('request bodies per model', () => {
     // Adaptive thinking, explicit effort, preserved-thinking drop_block; no disabled/budget thinking.
     expect(params.thinking).toEqual({ type: 'adaptive', display: 'summarized', block_binding: { prefix_mismatch_behavior: 'drop_block' } })
     expect(params.output_config).toEqual({ effort: 'high' })
-    expect(params.context_management).toEqual({ edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 320_000 } }] })
+    // The compaction prompt asks for the same fixed checkpoint sections as the client summarizer.
+    expect(params.context_management).toEqual({ edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 320_000 }, instructions: SERVER_COMPACTION_INSTRUCTIONS }] })
     expect(params.fallbacks).toBe('default')
     expect(params.betas).toEqual([BETA.binding, BETA.compaction, BETA.fallback])
     expect(params.max_tokens).toBe(32_000)
@@ -289,10 +294,13 @@ describe('computer toolset ↔ SahilBot\'s computer tool', () => {
     expect(translateComputer('type', { text: 'héllo 👋' })).toEqual({ args: { action: 'type', text: 'héllo 👋' } })
     expect(translateComputer('key', { text: 'Return' })).toEqual({ args: { action: 'key', keys: 'return' } })
     expect(translateComputer('key', { text: 'super+s', repeat: 1 })).toEqual({ args: { action: 'key', keys: 'cmd+s' } })
+    // Repeats and zoom map onto the computer tool's own key repeat and zoom (which keeps the coordinate frame).
+    expect(translateComputer('key', { text: 'Tab', repeat: 4 })).toEqual({ args: { action: 'key', keys: 'tab', repeat: 4 } })
+    expect(translateComputer('zoom', { region: [100, 200, 400, 350.4] })).toEqual({ args: { action: 'zoom', region: [100, 200, 400, 350] } })
     expect(translateComputer('wait', { duration: 30 })).toEqual({ args: { action: 'wait', seconds: 10 } })
   })
   test('what SahilBot can\'t do exactly is answered, never half-done', () => {
-    for (const [m, input] of [['left_click', {}], ['key', { text: 'Tab', repeat: 4 }], ['scroll', { scroll_direction: 'sideways' }], ['left_click_drag', { coordinate: [1, 1] }], ['type', {}], ['zoom', { region: [0, 0, 10, 10] }], ['hold_key', { text: 'a', duration: 1 }], ['nope', {}]] as const) {
+    for (const [m, input] of [['left_click', {}], ['key', { text: 'Tab', repeat: 51 }], ['scroll', { scroll_direction: 'sideways' }], ['left_click_drag', { coordinate: [1, 1] }], ['type', {}], ['zoom', { region: [10, 10, 5, 20] }], ['zoom', { region: [0, 0, 10] }], ['hold_key', { text: 'a', duration: 1 }], ['nope', {}]] as const) {
       expect('error' in translateComputer(m, input as Record<string, unknown>), m).toBe(true)
     }
     expect(modifiers('hyper')).toMatchObject({ error: expect.stringMatching(/Unknown modifier/) })
@@ -345,7 +353,7 @@ describe('computer toolset ↔ SahilBot\'s computer tool', () => {
     const plan = nativePlan('claude-opus-5-5', TOOLS, { enabled: true, web: true })
     expect(plan.fromNative({ id: 'toolu_1', name: 'left_click', toolset_name: 'computer', input: { coordinate: [5, 6] } }))
       .toEqual({ id: 'toolu_1', name: 'computer', arguments: '{"action":"click","x":5,"y":6}', native: { kind: 'computer', member: 'left_click' } })
-    const bad = plan.fromNative({ id: 'toolu_2', name: 'key', toolset_name: 'computer', input: { text: 'Tab', repeat: 3 } })
+    const bad = plan.fromNative({ id: 'toolu_2', name: 'key', toolset_name: 'computer', input: { text: 'Tab', repeat: 300 } })
     expect(bad).toMatchObject({ name: 'computer', native: { kind: 'computer', member: 'key', error: expect.any(String) } })
     expect(plan.fromNative({ id: 'toolu_3', name: 'mac_ui', input: { action: 'ui' } })).toEqual({ id: 'toolu_3', name: 'computer', arguments: '{"action":"ui"}', native: { kind: 'alias', member: 'mac_ui' } })
     expect(plan.fromNative({ id: 'toolu_4', name: 'file_read', input: { path: 'a' } })).toEqual({ id: 'toolu_4', name: 'file_read', arguments: '{"path":"a"}' })

@@ -5,6 +5,7 @@ import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { when } from '../routines'
+import { NeedsYouInbox } from './NeedsYou'
 
 // The Tasks board: every bot's long-running goals, grouped Active / Needs you / Scheduled / Done, with
 // progress, the next check-in, spend against the cap and the latest journal line. Pause, resume, open
@@ -105,6 +106,7 @@ export function TasksView(p: { spaces: Space[]; onOpenChat: (threadId: string, b
         )}
       </div>
       <div className="set-sub">Goals your bots pursue over hours or days. They check in on their own, stay inside each goal’s budget, and leave anything risky for you.</div>
+      <NeedsYouInbox spaces={p.spaces} onOpenChat={(threadId, botId) => p.onOpenChat(threadId, botId)} />
       {paused && (
         <div className="tk-banner" role="status">
           <I.Clock size={15} /><span>All routines are paused, so goals won’t check in until you resume them.</span>
@@ -309,10 +311,16 @@ export function BotGoals({ spaceId }: { spaceId: string }) {
 /** Goals waiting on the user (for the sidebar's Tasks button dot). */
 export function useGoalsNeedingYou(): number {
   const [n, setN] = useState(0)
+  // Bots' questions and approvals waiting in the Needs-you inbox count too.
+  const [q, setQ] = useState(0)
   useEffect(() => {
     const load = (): void => { void api.goals.list().then((gs) => setN(gs.filter((g) => goalColumn(g) === 'needs').length)).catch(() => undefined) }
+    const loadQ = (): void => { void api.needsYou?.list().then((xs) => setQ(xs.filter((x) => x.source === 'queue' && x.status === 'open').length)).catch(() => undefined) }
     load()
-    return api.goals.onChange(load)
+    loadQ()
+    const off = api.goals.onChange(load)
+    const offQ = api.needsYou?.onChange(loadQ)
+    return () => { off(); offQ?.() }
   }, [])
-  return n
+  return n + q
 }

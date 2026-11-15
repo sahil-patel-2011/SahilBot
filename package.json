@@ -9,6 +9,8 @@
     "predev": "node scripts/brand-dev.mjs",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:server": "node scripts/build-server.mjs",
+    "server": "node out/server/index.js",
     "prestart": "node scripts/brand-dev.mjs",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",

@@ -1,0 +1,119 @@
+/* Settings → Vault (VaultSettings) and the vault's unlock dialog (VaultAuthDialog). Light and dark via the app tokens. */
+
+:root {
+  --sv-ok: #2f9e66;
+  --sv-ok-soft: rgba(47, 158, 102, 0.12);
+  --sv-lock: #6b6b70;
+  --sv-lock-soft: rgba(107, 107, 112, 0.12);
+  --sv-warn: #b7791f;
+  --sv-warn-soft: rgba(214, 158, 46, 0.14);
+  --sv-danger-soft: rgba(229, 72, 77, 0.1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sv-ok: #4cc38a;
+    --sv-ok-soft: rgba(76, 195, 138, 0.14);
+    --sv-lock: #a1a1a6;
+    --sv-lock-soft: rgba(161, 161, 166, 0.14);
+    --sv-warn: #f0b429;
+    --sv-warn-soft: rgba(240, 180, 41, 0.14);
+    --sv-danger-soft: rgba(229, 72, 77, 0.16);
+  }
+}
+:root[data-theme="dark"] {
+  --sv-ok: #4cc38a;
+  --sv-ok-soft: rgba(76, 195, 138, 0.14);
+  --sv-lock: #a1a1a6;
+  --sv-lock-soft: rgba(161, 161, 166, 0.14);
+  --sv-warn: #f0b429;
+  --sv-warn-soft: rgba(240, 180, 41, 0.14);
+  --sv-danger-soft: rgba(229, 72, 77, 0.16);
+}
+
+/* ---------------------------------------------------------------- status card */
+.sv-status { display: flex; align-items: center; gap: 14px; margin: 14px 0 12px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); }
+.sv-status-icon { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; flex: none; transition: background 0.2s, color 0.2s; }
+.sv-status.locked .sv-status-icon { background: var(--sv-lock-soft); color: var(--sv-lock); }
+.sv-status.open .sv-status-icon { background: var(--sv-ok-soft); color: var(--sv-ok); }
+.sv-status-text { flex: 1; min-width: 0; }
+.sv-status-title { font-weight: 600; font-size: 15px; }
+.sv-status-sub { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
+.sv-status-btn { display: inline-flex; align-items: center; gap: 6px; }
+
+.sv-banner { margin: 0 0 10px; padding: 9px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.45; background: var(--hover); color: var(--text-2); }
+.sv-banner .link-btn { margin-left: 6px; }
+.sv-banner.danger { background: var(--sv-danger-soft); color: var(--danger-text); }
+.sv-banner.warn { background: var(--sv-warn-soft); color: var(--sv-warn); margin-top: 8px; }
+
+.sv-tabs { flex-wrap: wrap; }
+.sv-count { margin-left: 6px; font-size: 11px; font-weight: 500; color: var(--text-3); }
+.pw-tab.on .sv-count { color: var(--text-2); }
+
+.sv-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sv-add { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; font-size: 12.5px; }
+
+/* ---------------------------------------------------------------- items */
+.sv-item + .sv-item { border-top: 1px solid var(--line); }
+.sv-item > .set-row { border-top: 0; }
+.sv-icon { font-weight: 600; }
+.sv-icon.t-card { background: linear-gradient(135deg, #3b6fd8, #6a4bd6); color: #fff; }
+.sv-icon.t-identity { background: linear-gradient(135deg, #2f9e66, #1f7a8c); color: #fff; }
+.sv-icon.t-note { background: linear-gradient(135deg, #d69e2e, #c05621); color: #fff; }
+.sv-confirm { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--text-2); }
+
+.sv-reveal { margin: 0 0 12px 44px; padding: 10px 12px; border-radius: 10px; background: var(--hover); animation: sv-in 0.16s ease-out; user-select: none; -webkit-user-select: none; }
+.sv-reveal-row { display: grid; grid-template-columns: 140px 1fr; gap: 10px; padding: 4px 0; font-size: 13px; }
+.sv-reveal-label { color: var(--text-3); }
+.sv-reveal-value { word-break: break-all; }
+.sv-reveal-value.secret { font-family: var(--mono); font-size: 13px; letter-spacing: 0.02em; }
+.sv-reveal-value.body { white-space: pre-wrap; font-family: var(--font); word-break: normal; }
+.sv-reveal-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 11.5px; color: var(--text-3); }
+@keyframes sv-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
+.sv-form { padding: 12px 0; }
+.sv-form .pw-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.sv-notes { font-family: var(--font); font-size: 13px; min-height: 38px; }
+.sv-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); }
+.sv-check input { margin: 0; }
+.sv-hint { font-size: 12px; color: var(--text-3); }
+.sv-secret { font-family: var(--mono); letter-spacing: 0.04em; }
+
+/* ---------------------------------------------------------------- security summary */
+.sv-summary { padding: 10px 2px; font-size: 13px; line-height: 1.55; color: var(--text-2); }
+.sv-summary p { margin: 0 0 8px; }
+.sv-summary b { color: var(--text); font-weight: 600; }
+.sv-summary .sv-limits { padding: 8px 10px; border-radius: 8px; background: var(--sv-warn-soft); color: var(--text-2); margin-top: 4px; }
+
+/* ---------------------------------------------------------------- activity */
+.sv-audit { display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; }
+.sv-audit-row { display: grid; grid-template-columns: 118px 120px 1fr auto; gap: 10px; align-items: baseline; padding: 7px 2px; font-size: 12.5px; border-bottom: 1px solid var(--line); }
+.sv-audit-row:last-child { border-bottom: 0; }
+.sv-audit-time { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.sv-audit-event { font-weight: 500; }
+.sv-audit-what { color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sv-audit-detail { color: var(--text-3); }
+.sv-badge { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 999px; }
+.sv-badge.o-ok { background: var(--sv-ok-soft); color: var(--sv-ok); }
+.sv-badge.o-denied, .sv-badge.o-blocked { background: var(--sv-warn-soft); color: var(--sv-warn); }
+.sv-badge.o-failed { background: var(--sv-danger-soft); color: var(--danger-text); }
+
+/* ---------------------------------------------------------------- unlock dialog */
+.scrim.sv-scrim { z-index: 1000; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.sv-auth { width: min(400px, 92vw); background: var(--panel); border-radius: 18px; box-shadow: var(--shadow), 0 20px 60px rgba(0, 0, 0, 0.25); padding: 26px 24px 16px; text-align: center; animation: sv-pop 0.18s ease-out; }
+.sv-auth-icon { width: 56px; height: 56px; margin: 0 auto 12px; border-radius: 16px; display: grid; place-items: center; background: var(--sv-lock-soft); color: var(--text); }
+.sv-auth h2 { margin: 0 0 6px; font-size: 18px; }
+.sv-auth-reason { margin: 0 0 14px; font-size: 13.5px; color: var(--text-2); line-height: 1.45; overflow-wrap: anywhere; }
+.sv-auth-input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 14px; outline: none; }
+.sv-auth-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.sv-auth-note { margin: 0 0 4px; font-size: 12px; color: var(--text-3); line-height: 1.45; }
+.sv-auth-err { margin-top: 10px; font-size: 12.5px; color: var(--danger-text); }
+.sv-auth-actions { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
+.sv-grow { flex: 1; }
+.sv-touch { display: inline-flex; align-items: center; gap: 6px; }
+.sv-auth-foot { margin-top: 14px; font-size: 11px; color: var(--text-3); }
+@keyframes sv-pop { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .sv-reveal, .sv-auth { animation: none; }
+  .sv-status-icon { transition: none; }
+}

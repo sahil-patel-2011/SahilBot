@@ -14,7 +14,7 @@ Building one
 3. Formulas, not pasted results: "=SUM(...)", "=AVERAGE(...)", "=IF(...)", "=SUMIF(...)", "=INDEX(range, MATCH(key, keys, 0))". XLOOKUP is rewritten to INDEX/MATCH automatically so it works in every Excel, Numbers and Sheets. Guard divisions: "=IF(B2=0,0,C2/B2)".
 4. totals: true adds a Total row with SUBTOTAL (works with filters). Freeze and filter are on by default with a header row. Add conditional: [{column: "Margin", type: "negative"}, {column: "Status", type: "text_contains", value: "Late", color: "red"}, {column: "Revenue", type: "data_bar"}].
 5. Assumptions (rates, prices, growth) go in their own labeled cells or sheet and formulas reference them, never typed into formulas.
-6. The result includes a review: every formula is computed; fix any #DIV/0!, #REF!, #NAME?, totals that skip rows and numbers stored as text, then review_document again.
+6. The result includes a review: every formula is computed; fix any #DIV/0!, #REF!, #NAME?, totals that skip rows and numbers stored as text, then review_document again (it also renders each sheet so you can see column widths and formatting; Excel isn't needed).
 
 Reading and editing
 - office sheet_read(path, sheet?, range?) shows values and formulas. sheet_summarize gives per-column stats (use before analysis).

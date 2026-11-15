@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { autoLabel } from '@shared/model-picker'
-import type { BrowserState, ChatEvent, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
+import type { BrowserState, ChatEvent, EffortChoice, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
 import { api } from './api'
 import { readableOn, SpaceAvatar } from './brand'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
@@ -15,11 +15,25 @@ import { ProjectHome } from './components/ProjectHome'
 import * as I from './icons'
 import { Popover } from './components/Popover'
 import { toast, Toasts } from './lib/toast'
+import { VaultAuthDialog } from './components/VaultAuthDialog'
 import { Speaker } from './lib/audio'
 // Split chunks (src/renderer/src/lazy.tsx): loaded on idle after the first paint, opened from there.
 import { BotDetails, BotEditor, ConnectApps, Lazy, Onboarding, preloadSurfaces, Scheduled, SettingsModal, VoiceMode } from './lazy'
 
 type Editor = { space: Space | null; mode: 'bot' | 'group' | 'project' } | null
+
+// The knowledge vault view and the "Import memory" dialog (their own chunks; opened by events, see below).
+const VaultView = lazy(async () => ({ default: (await import('./components/VaultView')).VaultView }))
+const ImportMemoryDialog = lazy(async () => ({ default: (await import('./components/ImportMemoryDialog')).ImportMemoryDialog }))
+
+/** Models a council can sit with (the Council chip shows with two or more). */
+function councilChoices(models: ModelList | null): Array<{ id: string; label: string }> | null {
+  // Cloud models first (Auto picks among those); a user may also seat local models by name.
+  const all = (models?.models ?? []).filter((m) => m.enabled !== false && m.installed !== false && m.tools !== false)
+  const cloud = (m: (typeof all)[number]): boolean => m.note === 'remote' || m.note === 'added by you' || ['anthropic', 'openai', 'openrouter', 'xai'].includes(m.provider as string)
+  const ok = [...all.filter(cloud), ...all.filter((m) => !cloud(m))]
+  return ok.length >= 2 ? ok.map((m) => ({ id: m.id, label: m.label || m.id })) : null
+}
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -47,15 +61,34 @@ export function App() {
   const [browser, setBrowser] = useState<BrowserState | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [view, setView] = useState<MainView>('home')
-  const [settingsPage, setSettingsPage] = useState<'general' | 'models' | 'keys' | 'passwords' | 'rules' | 'memory' | undefined>(undefined)
+  const [settingsPage, setSettingsPage] = useState<'general' | 'models' | 'keys' | 'passwords' | 'rules' | 'memory' | 'usage' | undefined>(undefined)
+  // The compact usage card's "Details" opens Settings → Usage.
+  useEffect(() => {
+    const open = (e: Event): void => { setSettingsPage(((e as CustomEvent).detail as 'usage' | undefined) ?? undefined); setShowSettings(true) }
+    window.addEventListener('sahilbot:open-settings', open)
+    return () => window.removeEventListener('sahilbot:open-settings', open)
+  }, [])
   const [showConnect, setShowConnect] = useState(false)
   const [editor, setEditor] = useState<Editor>(null)
   const [palette, setPalette] = useState(false)
+  // The Vault view (in the main area) and the memory import dialog: opened from the palette, Settings
+  // or a bot's details through window events, so those surfaces don't need props from here.
+  const [vaultOpen, setVaultOpen] = useState<{ path: string | null } | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  useEffect(() => {
+    const openVault = (e: Event): void => { setVaultOpen({ path: ((e as CustomEvent).detail as { path?: string | null } | undefined)?.path ?? null }); setShowSettings(false) }
+    const openImport = (): void => setImportOpen(true)
+    window.addEventListener('sahilbot:open-vault', openVault)
+    window.addEventListener('sahilbot:import-memory', openImport)
+    return () => { window.removeEventListener('sahilbot:open-vault', openVault); window.removeEventListener('sahilbot:import-memory', openImport) }
+  }, [])
+  // Opening a chat, a bot or another view leaves the vault.
+  useEffect(() => { setVaultOpen(null) }, [thread?.id, spaceId, view])
   const [voiceOn, setVoiceOn] = useState(false)
   const [showScheduled, setShowScheduled] = useState(false)
   // Model and mode picked on the home screen before a chat exists.
   // mode null: the bot's own autonomy level (BotDetails), else the app default (Settings → Advanced).
-  const [draft, setDraft] = useState<{ model: string | null; mode: PermissionMode | null }>({ model: null, mode: null })
+  const [draft, setDraft] = useState<{ model: string | null; mode: PermissionMode | null; effort?: EffortChoice | null }>({ model: null, mode: null })
   const [drafting, setDrafting] = useState<Record<string, string | null>>({})
   // Settings changed outside the Settings window (a bot's autonomy level in its details panel).
   useEffect(() => {
@@ -366,7 +399,7 @@ export function App() {
     return () => window.removeEventListener('keydown', k)
   }, [])
 
-  const openMain = (): void => { setSpaceId(main?.id ?? null); setThread(null); setView('home') }
+  const openMain = (): void => { setVaultOpen(null); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
   newChatRef.current = openMain
   const openChat = async (id: string): Promise<void> => {
     const t = chats.find((x) => x.id === id) ?? (await api.threads.list(main?.id)).find((x) => x.id === id)
@@ -413,7 +446,10 @@ export function App() {
     else if (a.kind === 'panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
     else if (a.kind === 'voice') setVoiceOn(true)
     else if (a.kind === 'dictate') requestAnimationFrame(() => composer.current?.toggleDictation())
+    else if (a.kind === 'vault') setVaultOpen({ path: null })
+    else if (a.kind === 'import-memory') setImportOpen(true)
     else if (a.kind === 'chat') void openAnyChat(a.id)
+    else if (a.kind === 'usage') { setSettingsPage('usage'); setShowSettings(true) }
     else void openBot(a.id)
   }
 
@@ -425,7 +461,7 @@ export function App() {
       sendingRef.current.add(tid)
       setQueue((q) => ({ ...q, [tid]: (q[tid] ?? []).filter((x) => x !== first) }))
       // On failure it goes back to the front and is retried after this thread's next run event (no hot retry loop).
-      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst, ...(first.heavy ? { heavy: true } : {}), ...(first.fromLink ? { meta: { fromLink: true } } : {}) }).catch((e: Error) => {
+      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst, ...(first.heavy ? { heavy: true } : {}), ...(first.swarm ? { swarm: true } : {}), ...(first.council ? { council: first.council } : {}), ...(first.fromLink ? { meta: { fromLink: true } } : {}), ...(first.workingFolder ? { workingFolder: first.workingFolder } : {}) }).catch((e: Error) => {
         setQueue((q) => ({ ...q, [tid]: [first, ...(q[tid] ?? [])] }))
         toast(e.message, 'error')
       })
@@ -520,13 +556,13 @@ export function App() {
       if (!sid) return
       const created = await api.threads.create(sid)
       // Without a pick here, main already started it at the bot's (or the app's) autonomy level.
-      t = await api.threads.update(created.id, { model: draft.model, ...(draft.mode ? { permissionMode: draft.mode } : {}) })
+      t = await api.threads.update(created.id, { model: draft.model, ...(draft.mode ? { permissionMode: draft.mode } : {}), ...(draft.effort ? { effort: draft.effort } : {}) })
       threadRef.current = t.id
       setMessages([])
       setThread(t)
     }
     try {
-      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst, ...(o.heavy ? { heavy: true } : {}), ...(o.fromLink ? { meta: { fromLink: true } } : {}) })
+      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst, ...(o.heavy ? { heavy: true } : {}), ...(o.swarm ? { swarm: true } : {}), ...(o.council ? { council: o.council } : {}), ...(o.fromLink ? { meta: { fromLink: true } } : {}), ...(o.workingFolder ? { workingFolder: o.workingFolder } : {}) })
       void refreshSpaces()
     } catch (e) {
       toast((e as Error).message, 'error')
@@ -554,6 +590,8 @@ export function App() {
     <Composer
       key={thread?.id ?? 'new'}
       ref={composer}
+      threadId={thread?.id}
+      inheritedFolder={space?.kind === 'group' ? null : space?.folder ?? null}
       running={isRunning}
       answering={!!question}
       onSend={(o) => void send(o)}
@@ -565,8 +603,10 @@ export function App() {
       onManageModels={() => { setSettingsPage('models'); setShowSettings(true) }}
       team={teamCap ? { on: teamOn, ...teamCap } : null}
       onTeam={setTeamOn}
-      thinking={settings.thinking}
-      onThinking={(e) => void api.settings.set({ thinking: e }).then(setSettings)}
+      swarm={space?.kind === 'bot' ? { mode: settings.botSwarm?.[space.id]?.mode ?? 'auto' } : null}
+      council={councilChoices(models)}
+      thinking={thread?.effort ?? space?.effort ?? draft.effort ?? settings.thinking}
+      onThinking={(e) => (thread ? void patchThread({ effort: e }) : setDraft((d) => ({ ...d, effort: e })))}
       mode={mode}
       allowBypass={!!settings.advanced.allowBypass}
       onMode={(m) => (thread ? void patchThread({ permissionMode: m }) : setDraft((d) => ({ ...d, mode: m })))}
@@ -628,6 +668,8 @@ export function App() {
   return (
     <div className="app">
       <Toasts />
+      {/* The secrets vault's unlock / confirm dialog: main asks, this only shows it. */}
+      <VaultAuthDialog />
       <Sidebar
         spaces={spaces}
         chats={chats}
@@ -642,7 +684,7 @@ export function App() {
         onSearch={() => setPalette(true)}
         view={view}
         onView={(v) => { setView(v); setThread(null) }}
-        modelLabel={`${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}`}
+        modelLabel={`${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}`}
         onCustomize={(s) => setEditor({ space: s, mode: s.kind })}
         onChanged={() => void refreshSpaces().then((sp) => {
           if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain()
@@ -737,7 +779,9 @@ export function App() {
           </div>
         )}
 
-        {view === 'tasks' && !thread ? (
+        {vaultOpen ? (
+          <Lazy><VaultView initialPath={vaultOpen.path} onClose={() => setVaultOpen(null)} /></Lazy>
+        ) : view === 'tasks' && !thread ? (
           <TasksView spaces={spaces} onOpenChat={(threadId) => void openAnyChat(threadId)} />
         ) : view === 'files' && !thread ? (
           <FilesView onOpenFile={openFile} onOpenChat={(id) => void openAnyChat(id)} />
@@ -799,6 +843,7 @@ export function App() {
         </Lazy>
       )}
       {palette && <CommandPalette spaces={spaces} chats={chats} onPick={onPalette} onClose={() => setPalette(false)} />}
+      {importOpen && <Lazy><ImportMemoryDialog onClose={() => setImportOpen(false)} onDone={() => setImportOpen(false)} /></Lazy>}
       {showSettings && (
         <Lazy>
           <SettingsModal settings={settings} models={models} sys={sys} spaces={spaces} initialPage={settingsPage}

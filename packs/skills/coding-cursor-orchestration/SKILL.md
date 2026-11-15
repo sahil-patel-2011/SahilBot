@@ -1,41 +1,48 @@
 ---
 name: coding-cursor-orchestration
-description: Decide when to hand coding work to Cursor agents (local or cloud), write the brief, watch them, and review what comes back.
+description: Decide when to hand coding work to Cursor agents (local or cloud), run them, review what comes back against the brief, and iterate.
 source: you
 uses: 0
 category: Coding
+triggers: cursor, cursor agent, cursor-agent, cursor cloud, cursor background agent, use cursor, in cursor, let cursor, delegate to cursor, review cursor, cursor pr, cursor result
 ---
 
-## Delegate or do it yourself?
+## Delegate or do it locally?
 Do it yourself (code tool) when:
-- the change is small or touches 1-3 files you've already read;
+- the change is small, or touches 1-3 files you've already read (writing the brief costs more than the edit);
 - it needs back-and-forth with the user, or judgement you can't write down yet;
-- the repo isn't in git (you can't review a Cursor diff cleanly).
-
-Delegate to Cursor when:
-- the user asks for Cursor, or the work is big but well specified (a feature across many files, a migration, a refactor with clear rules, a test suite to write);
+- the repo isn't in git (no clean diff to review), or the task needs this Mac's apps, secrets or hardware;
+- Cursor already failed twice on the same point.
+Delegate when:
+- the user asks for Cursor, or the work is big but well specified (a feature across many files, a migration with clear rules, a test suite);
 - there are several independent pieces: one cloud agent per piece, in parallel;
-- the repo is on GitHub and a PR is the natural output (cloud agent).
-Local agent (cursor action="agent"): the folder is on this Mac and you want the changes uncommitted to review. Cloud agent (cloud_launch): GitHub repo, long work, you want a PR. Check cursor(action="status") first.
+- the repo is on GitHub and a PR is the natural output (cloud).
+Local (cursor action="agent"): folder on this Mac, changes stay uncommitted for review. Cloud (cloud_launch): GitHub repo, long work, a PR. Check cursor(action="status") first.
 
-## Write the brief (Cursor sees none of this chat)
-1. Explore first: code(action="project"), search/symbols/read the area, run the failing test. Put what you learned in `context` (where things live, how they connect, the root cause if known).
-2. Call cursor with structured fields; it builds the prompt and shows it in the approval:
-   - goal: the outcome, concrete ("Add a --json flag to `export` that prints the rows as JSON lines").
-   - files: the files to start with.
-   - errors: the exact failing output, if fixing something.
-   - constraints: style rules, no new deps, keep the public API, performance limits.
-   - dont_change: files/behaviour that must not change ("the database schema", "tests/fixtures/").
-   - acceptance: checkable criteria ("`export --json` prints one JSON object per row", "existing CSV output unchanged").
-   - tests: commands that must pass (default: the project's type check and tests).
-   Use cursor(action="prompt", …) to preview the prompt when the user wants to see it first.
+## Steps
+1. Explore first: code(action="project"), search/symbols/read the area, reproduce the bug. You must understand the change well enough to review it.
+2. Record the plan and decisions: todo for the steps, notes(action="add") for decisions, constraints, files and the Cursor agent id once you have it, so a long run survives summarization.
+3. Write the brief with the cursor-task-brief skill; preview with cursor(action="prompt", …) and fix the gaps it lists.
+4. Run it.
+   - Local: cursor(action="agent", folder, goal, …). Progress streams live.
+   - Cloud: cursor(action="cloud_launch", repo, goal, …, wait: true, minutes: 10), or launch and later cursor(action="cloud_wait", id). Waits back off (10s to 60s) and stop at the limit. Don't poll in a loop; schedule a check for long runs.
+5. Review. Every result ends with an "Automatic review" section. It flags:
+   - scope outside the brief's files;
+   - protected paths that changed;
+   - removed or skipped tests, and suppressed type or lint checks;
+   - debug output, TODOs and dependency changes;
+   - failing checks.
+   It also gives the acceptance checklist and a ready follow-up. Then:
+   - Read every hunk of the diff. The summary is a claim; the diff is the truth.
+   - Tick each acceptance item with evidence: a passing test, command output, or the line in the diff.
+   - If the checks weren't run (cloud, or verify off), run them yourself: code(action="typecheck"), code(action="run_tests").
+   - Cloud: cursor(action="cloud_review", id) shows the PR, its checks, the diff and the review.
+6. Iterate precisely: send the suggested follow-up, edited to name file:line and the exact failure. Local: agent with resume: true and errors. Cloud: cloud_followup. Small fixes: do them yourself with code(action="edit").
+7. Report: what changed (files), how you verified it (commands and results), the PR link, and anything left for the user. Restate the original goal and say whether each criterion is met.
 
-## Run and watch
-- Local: cursor(action="agent", folder, goal…). Progress streams live; the result has Cursor's summary, the exact diff against a restore point, and the test/type-check results.
-- Cloud: cursor(action="cloud_launch", repo, goal…, wait: true, minutes: 10), or launch and later cursor(action="cloud_wait", id). Waits back off (10s → 60s) and stop at the limit; don't poll in a loop. For long runs, schedule a check instead.
-
-## Review before reporting (never just trust the summary)
-1. Read the diff: does it do exactly the goal? Any unrelated edits, deleted tests, weakened assertions, TODOs, hard-coded secrets, debug prints?
-2. Run the checks yourself if the result didn't (code run_tests/typecheck). Cloud: cursor(action="cloud_review", id) shows the PR, its checks and diff; or git pr_diff.
-3. Problems? Send a precise follow-up: local cursor(action="agent", resume: true, goal: "Fix: …", errors: "<failures>"); cloud cursor(action="cloud_followup", id, goal…). Small fixes: do them yourself with code edit.
-4. Report: what changed (files), how you verified it (commands + results), the PR link, and anything left for the user.
+## Pitfalls
+- Trusting "all tests pass" in Cursor's summary without seeing a run.
+- Briefs that say "see above" or "as discussed": Cursor has no above.
+- Sending a follow-up that only says "still broken". Paste the output.
+- Several agents editing the same files in parallel. That makes merge conflicts; sequence them instead.
+- Committing or pushing Cursor's local changes without the user asking (see coding-commit-and-pr).

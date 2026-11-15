@@ -1,0 +1,27 @@
+/* Planner ⇄ Executor card (CuaCard.tsx) */
+.cua-card { border: 1px solid var(--card-line, var(--line)); border-radius: 14px; background: var(--card, var(--panel)); overflow: hidden; margin: 4px 0; }
+.cua-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 14px; font-size: 13.5px; color: var(--text-2); text-align: left; flex-wrap: wrap; }
+.cua-head:hover { background: var(--hover); }
+.cua-title { font-weight: 600; color: var(--text); }
+.cua-models { color: var(--text-2); }
+.cua-models b { font-weight: 500; color: var(--text); }
+.cua-state { margin-left: auto; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.cua-card.live .cua-state { color: var(--accent-text); }
+.cua-body { padding: 0 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+.cua-summary { font-size: 13.5px; color: var(--text-2); }
+.cua-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.cua-steps li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; line-height: 1.4; color: var(--text-2); }
+.cs-mark { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--text-3); flex: none; margin-top: 1px; display: grid; place-items: center; color: white; }
+.cs-done .cs-mark { background: var(--ok); border-color: var(--ok); }
+.cs-done .cs-text { color: var(--text-3); }
+.current .cs-mark { border-color: var(--accent); }
+.current .cs-text { color: var(--text); font-weight: 500; }
+.cs-success { display: block; font-size: 12px; color: var(--text-3); font-weight: 400; }
+.cua-timeline { list-style: none; margin: 0; padding: 8px 0 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 5px; max-height: 280px; overflow-y: auto; }
+.cua-timeline li { display: grid; grid-template-columns: 92px 1fr; gap: 8px; font-size: 12.5px; line-height: 1.4; color: var(--text-2); }
+.ct-who { color: var(--text-3); font-weight: 500; }
+.ct-planner .ct-who { color: var(--accent-text); }
+.ct-user .ct-who { color: var(--text); }
+.ck-disagree .ct-text, .ck-stall .ct-text, .ck-error .ct-text { color: var(--danger-text); }
+.ck-finish .ct-text { color: var(--ok-text); }
+.cua-foot { font-size: 12px; color: var(--text-3); }

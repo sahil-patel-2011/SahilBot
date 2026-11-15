@@ -1,5 +1,6 @@
 import { bestSize, shorten, textHeightPt, wrapLines, type FitPara } from './fit'
 import { fitBox, loadImage } from './image'
+import { onColor, readable, seriesColors, themeOf, type ThemeName } from './theme'
 
 // PowerPoint decks (16:9) with a consistent theme (light or dark, accent color, one font pair) and real
 // layouts: title, section, bullets, two-column, image + text, image, native charts (bar, column, line,
@@ -50,7 +51,10 @@ export interface DeckOptions {
   author?: string
   company?: string
   accent?: string
+  /** Background: light (default) or dark. */
   theme?: 'light' | 'dark'
+  /** The look shared with the documents: modern (default), classic, minimal (fonts, accent, table style). */
+  style?: ThemeName
   font?: string
   headingFont?: string
   /** Slide numbers on every slide but the title slide (default true). */
@@ -194,15 +198,15 @@ const bodyTop = (s: SlideSpec): number => {
 
 function colWidths(rows: Array<Array<string | number>>, total: number): number[] {
   const n = Math.max(...rows.map((r) => r.length))
-  const weights = Array.from({ length: n }, (_, c) => Math.min(36, Math.max(6, ...rows.map((r) => String(r[c] ?? '').length))))
+  const weights = Array.from({ length: n }, (_, c) => Math.min(36, Math.max(6, Math.max(...String(rows[0]?.[c] ?? '').split(/\s+/).map((w) => w.length)) * 1.15 + 2, ...rows.slice(1).map((r) => String(r[c] ?? '').length + 1))))
   const sum = weights.reduce((a, b) => a + b, 0)
   return weights.map((w) => (w / sum) * total)
 }
 
 function tableRowPages(head: Array<string | number>, rows: Array<Array<string | number>>, bodyH: number): Array<{ rows: Array<Array<string | number>>; size: number }> {
   const widths = colWidths([head, ...rows], CW)
-  const rowH = (r: Array<string | number>, size: number) => Math.max(...widths.map((w, c) => wrapLines(String(r[c] ?? ''), size, w * 72 - 10))) * size * 1.2 / 72 + 0.14
-  for (const size of [16, 14, 13, 12]) {
+  const rowH = (r: Array<string | number>, size: number) => Math.max(...widths.map((w, c) => wrapLines(String(r[c] ?? ''), size, w * 72 - 16))) * size * 1.2 / 72 + (size * 0.9) / 72 + 0.04
+  for (const size of [20, 18, 16, 14, 13, 12]) {
     const total = [head, ...rows].reduce((h, r) => h + rowH(r, size), 0)
     if (total <= bodyH) return [{ rows, size }]
   }
@@ -237,24 +241,32 @@ export async function buildPptx(input: SlideSpec[], o: DeckOptions = {}): Promis
   p.title = o.title ?? input[0]?.title ?? 'Presentation'
   p.author = o.author ?? 'SahilBot'
   if (o.company) p.company = o.company
-  const A = hex(o.accent, 'FF6A1A')
+  const style = themeOf(o.style, o.accent)
+  const A = hex(style.accent, '1F5FAD')
   const T = THEMES[o.theme === 'dark' ? 'dark' : 'light']
-  const FONT = o.font?.trim() || 'Arial'
-  const HFONT = o.headingFont?.trim() || FONT
+  // Accent as text: darkened (or lightened on dark slides) until it reads; fills keep the accent itself.
+  const AT = hex(readable(style.accent, `#${T.bg}`, 4.5), A)
+  const ASOFT = hex(readable(style.accent, `#${T.soft}`, 3.2), A)
+  const onA = hex(onColor(style.accent), 'FFFFFF')
+  const FONT = o.font?.trim() || style.office.body
+  const HFONT = o.headingFont?.trim() || (o.font?.trim() ? FONT : style.office.heading)
   p.theme = { headFontFace: HFONT, bodyFontFace: FONT }
-  const palette = [A, ...PALETTE.filter((c) => c !== A)]
+  const palette = seriesColors(style, 12).map((c) => c.replace('#', ''))
+  void PALETTE
   const numbers = o.slideNumbers !== false
+  // Slide masters, so slides added later in PowerPoint get the same design.
+  const num = (color: string) => ({ x: W - 1.0, y: H - 0.5, w: 0.6, h: 0.3, fontSize: 10, color, align: 'right' as const, fontFace: FONT })
+  p.defineSlideMaster({ title: 'SB_CONTENT', background: { color: T.bg }, objects: [{ rect: { x: 0, y: 0, w: 0.12, h: H, fill: { color: A } } }], ...(numbers ? { slideNumber: num(T.muted) } : {}) } as never)
+  p.defineSlideMaster({ title: 'SB_TITLE', background: { color: T.titleBg }, objects: [] } as never)
+  p.defineSlideMaster({ title: 'SB_SECTION', background: { color: A }, objects: [], ...(numbers ? { slideNumber: num(onA) } : {}) } as never)
 
   planned.forEach((s, i) => {
-    const sl = p.addSlide()
     const layout = s.layout!
-    sl.background = { color: T.bg }
+    const sl = p.addSlide({ masterName: layout === 'title' || layout === 'closing' ? 'SB_TITLE' : layout === 'section' ? 'SB_SECTION' : 'SB_CONTENT' })
     const chrome = (): void => {
-      if (numbers) sl.slideNumber = { x: W - 1.0, y: H - 0.5, w: 0.6, h: 0.3, fontSize: 10, color: T.muted, align: 'right', fontFace: FONT }
       if (o.footer) sl.addText(o.footer, { x: X, y: H - 0.5, w: 8, h: 0.3, fontSize: 10, color: T.muted, fontFace: FONT })
     }
     const heading = (): number => {
-      sl.addShape(p.ShapeType.rect, { x: 0, y: 0, w: 0.16, h: H, fill: { color: A }, line: { color: A } })
       const t = titleSize(s.title)
       const th = 0.85 + (t.lines - 1) * 0.45
       sl.addText(s.title, { x: X, y: 0.4, w: CW, h: th, fontSize: t.size, bold: true, color: T.ink, fontFace: HFONT, valign: 'bottom', objectName: 'Title', margin: 6 })
@@ -271,18 +283,18 @@ export async function buildPptx(input: SlideSpec[], o: DeckOptions = {}): Promis
       case 'title':
       case 'section':
       case 'closing': {
-        sl.background = { color: layout === 'section' ? A : T.titleBg }
         const big = layout === 'closing' ? 44 : 40
         const fitted = bestSize((z) => [{ text: s.title, size: z, bold: true }], 11.5, 1.9, [big, 36, 32, 28]) ?? 26
-        sl.addShape(p.ShapeType.rect, { x: X + 0.18, y: 3.55, w: 1.2, h: 0.08, fill: { color: layout === 'section' ? 'FFFFFF' : A }, line: { color: layout === 'section' ? 'FFFFFF' : A } })
-        sl.addText(s.title, { x: X + 0.1, y: 1.55, w: 11.5, h: 1.9, fontSize: fitted, bold: true, color: T.titleInk, fontFace: HFONT, valign: 'bottom', objectName: 'Title', margin: 6 })
-        if (s.subtitle) sl.addText(s.subtitle, { x: X + 0.1, y: 3.8, w: 11.5, h: 1.0, fontSize: 20, color: layout === 'section' ? 'FFFFFF' : T.titleMuted, fontFace: FONT, valign: 'top', objectName: 'Subtitle', margin: 6 })
+        const ink = layout === 'section' ? onA : T.titleInk
+        sl.addShape(p.ShapeType.rect, { x: X + 0.18, y: 3.55, w: 1.2, h: 0.08, fill: { color: layout === 'section' ? onA : A }, line: { color: layout === 'section' ? onA : A } })
+        sl.addText(s.title, { x: X + 0.1, y: 1.55, w: 11.5, h: 1.9, fontSize: fitted, bold: true, color: ink, fontFace: HFONT, valign: 'bottom', objectName: 'Title', margin: 6 })
+        if (s.subtitle) sl.addText(s.subtitle, { x: X + 0.1, y: 3.8, w: 11.5, h: 1.0, fontSize: 20, color: layout === 'section' ? onA : T.titleMuted, fontFace: FONT, valign: 'top', objectName: 'Subtitle', margin: 6 })
         if (s.bullets?.length && layout !== 'title') {
           const bs = bulletsOf(s.bullets)
           const z = bestSize((q) => paras(bs, q), 11.5, 1.9, [18, 16, 14]) ?? 14
           sl.addText(bs.map((b) => ({ text: b.text, options: { bullet: { indent: 16 }, breakLine: true } })), { x: X + 0.1, y: 4.85, w: 11.5, h: 1.9, fontSize: z, color: T.titleMuted, fontFace: FONT, valign: 'top', objectName: 'Body', margin: 6 })
         }
-        if (layout !== 'title' && numbers) sl.slideNumber = { x: W - 1.0, y: H - 0.5, w: 0.6, h: 0.3, fontSize: 10, color: layout === 'section' ? 'FFFFFF' : T.titleMuted, align: 'right', fontFace: FONT }
+        if (layout === 'closing' && numbers) sl.slideNumber = num(T.titleMuted)
         break
       }
       case 'quote': {
@@ -299,8 +311,8 @@ export async function buildPptx(input: SlideSpec[], o: DeckOptions = {}): Promis
         let y = top
         const size = s.size ?? 20
         if (s.left_title || s.right_title) {
-          if (s.left_title) sl.addText(s.left_title, { x: X, y: top, w: 5.8, h: 0.5, fontSize: 18, bold: true, color: A, fontFace: HFONT, objectName: 'Column title', margin: 6 })
-          if (s.right_title) sl.addText(s.right_title, { x: X + 6.13, y: top, w: 5.8, h: 0.5, fontSize: 18, bold: true, color: A, fontFace: HFONT, objectName: 'Column title', margin: 6 })
+          if (s.left_title) sl.addText(s.left_title, { x: X, y: top, w: 5.8, h: 0.5, fontSize: 18, bold: true, color: AT, fontFace: HFONT, objectName: 'Column title', margin: 6 })
+          if (s.right_title) sl.addText(s.right_title, { x: X + 6.13, y: top, w: 5.8, h: 0.5, fontSize: 18, bold: true, color: AT, fontFace: HFONT, objectName: 'Column title', margin: 6 })
           y += 0.6
         }
         bullets(s.bullets ?? [], X, y, 5.8, BODY_BOTTOM - y, size)
@@ -393,9 +405,9 @@ export async function buildPptx(input: SlideSpec[], o: DeckOptions = {}): Promis
         const size = s.size ?? 14
         const fmt = (v: string | number | undefined) => (typeof v === 'number' ? v.toLocaleString('en-US', { maximumFractionDigits: 2 }) : String(v ?? ''))
         sl.addTable([
-          Array.from({ length: n }, (_, c) => ({ text: fmt(head[c]), options: { bold: true, color: 'FFFFFF', fill: { color: A }, align: numeric[c] ? 'right' : 'left' } })),
-          ...rows.map((r, k) => Array.from({ length: n }, (_, c) => ({ text: fmt(r[c]), options: { color: T.ink, fill: { color: k % 2 ? T.soft : T.bg }, align: numeric[c] ? 'right' : 'left' } })))
-        ] as never, { x: X, y: top, w: CW, colW: widths, fontSize: size, fontFace: FONT, border: { type: 'solid', color: T.line, pt: 0.75 }, valign: 'middle', margin: [3, 5, 3, 5], objectName: 'Table' } as never)
+          Array.from({ length: n }, (_, c) => ({ text: fmt(head[c]), options: { bold: true, color: o.theme === 'dark' ? T.ink : hex(style.ink, '1A1A1A'), fill: { color: o.theme === 'dark' ? T.soft : hex(style.accentTint, 'EEF3FB') }, align: numeric[c] ? 'right' : 'left', border: [{ type: 'none' }, { type: 'none' }, { type: 'solid', color: A, pt: 1.5 }, { type: 'none' }] } })),
+          ...rows.map((r, k) => Array.from({ length: n }, (_, c) => ({ text: fmt(r[c]), options: { color: T.ink, bold: /^(sub)?total\b/i.test(String(r[0] ?? '')), fill: { color: k % 2 ? T.soft : T.bg }, align: numeric[c] ? 'right' : 'left', border: [{ type: 'none' }, { type: 'none' }, { type: 'solid', color: T.line, pt: 0.75 }, { type: 'none' }] } })))
+        ] as never, { x: X, y: top, w: CW, colW: widths, fontSize: size, fontFace: FONT, valign: 'middle', margin: [Math.round(size * 0.45), 8, Math.round(size * 0.45), 8], objectName: 'Table' } as never)
         chrome()
         break
       }
@@ -410,8 +422,8 @@ export async function buildPptx(input: SlideSpec[], o: DeckOptions = {}): Promis
           const cx = X + k * (w + gap)
           sl.addShape(p.ShapeType.roundRect, { x: cx, y: top + 0.2, w, h: cardH, fill: { color: T.soft }, line: { color: T.line, width: 0.75 }, rectRadius: 0.12 })
           const vz = bestSize((z) => [{ text: x.value, size: z, bold: true }], w - 0.3, 1.2, [54, 48, 42, 36, 30, 24]) ?? 22
-          sl.addText(x.value, { x: cx + 0.15, y: top + 0.45, w: w - 0.3, h: 1.3, fontSize: vz, bold: true, color: A, fontFace: HFONT, align: 'center', valign: 'middle', objectName: 'Stat' })
-          const lz = bestSize((z) => [{ text: x.label, size: z }], w - 0.3, cardH - 1.65, [18, 16, 14, 12]) ?? 11
+          sl.addText(x.value, { x: cx + 0.15, y: top + 0.45, w: w - 0.3, h: 1.3, fontSize: vz, bold: true, color: ASOFT, fontFace: HFONT, align: 'center', valign: 'middle', objectName: 'Stat' })
+          const lz = bestSize((z) => [{ text: x.label, size: z }], w - 0.5, cardH - 1.75, [16, 14, 12]) ?? 11
           sl.addText(x.label, { x: cx + 0.15, y: top + 1.8, w: w - 0.3, h: cardH - 1.65, fontSize: lz, color: T.muted, fontFace: FONT, align: 'center', valign: 'top', objectName: 'Stat label' })
         })
         if (s.bullets?.length) bullets(s.bullets, X, top + cardH + 0.45, CW, BODY_BOTTOM - top - cardH - 0.45, 18)

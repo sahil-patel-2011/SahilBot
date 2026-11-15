@@ -30,6 +30,8 @@ The project folder is the first folder attached to the chat (or the project's fo
 - `prompt(goal, context?, files?, errors?, constraints?, dont_change?, acceptance?, tests?, folder?)` drafts the complete brief: goal, repo facts, files, current errors, constraints (minimal diff, no new deps, don't-change list, never commit/push for local runs), acceptance criteria, commands to verify, definition of done.
 - `agent(folder, goal… | task, resume?, verify?, minutes?)` runs `cursor-agent` headless on this Mac with live progress, takes a restore point first (`git stash create`), and returns Cursor's summary, the exact diff it made, new files, commands it ran, a secret scan, and the type-check/test results. `resume: true` continues its last chat in that folder.
 - Cloud: `cloud_launch(repo, goal… | task, ref?, model?, wait?)`, `cloud_status(id)`, `cloud_wait(id, minutes?)` (polls with backoff 10s → 60s, bounded at 30 min), `cloud_followup(id, goal… | task)`, `cloud_stop(id)`, `cloud_review(id)` (result, PR, checks and diff via `gh`), `cloud_list`. Needs a Cursor API key (Settings → API Keys & Servers).
+- `prompt` also lists what the brief is missing (vague goal, several tasks in one, no acceptance criteria, no files/context, no verify commands, no error output) and shows the chat's working notes to copy in. Follow-ups and resumed runs restate the first brief's goal and criteria.
+- Every finished run (`agent`, `cloud_review`) ends with an automatic review of the diff against the brief: scope, protected paths, removed/skipped tests, suppressed checks, debug output, TODOs, dependency changes, size, check results, the acceptance checklist, and a ready follow-up.
 - The approval card shows the full prompt. Local runs change files on this Mac (runs in Auto); cloud launches/follow-ups/stops always ask in Auto.
 
 ## Working well
@@ -40,4 +42,4 @@ The project folder is the first folder attached to the chat (or the project's fo
 5. Report what changed, the commands you ran and their results, and anything unverified.
 
 ## Skills to read
-coding-agent-loop, coding-fix-failing-tests, coding-commit-and-pr, coding-cursor-orchestration, plus code-review, debug-systematically, refactor-safely, git-workflow, new-web-app, python-script, playwright-testing, api-integration (memory(action="read_skill", name)).
+The <context> block suggests the ones that fit each request (and inlines the best one's steps on big windows); read any with memory(action="read_skill", name). Start with coding-agent-loop; for a new repo codebase-orientation; bugs debug-systematically and read-stack-traces; the stack playbook (typescript-project, python-project, react-frontend, swift-ios-app, java-kotlin-wpilib, rust-project, go-project, sql-queries, shell-scripting); Cursor hand-offs cursor-task-brief and coding-cursor-orchestration; long work long-task-working-notes. The full list and how selection works: docs/skills.md.

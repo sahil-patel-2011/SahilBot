@@ -5,6 +5,8 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { createDocument, type DocSpec } from '../../docs/create'
 import { IMAGE_EXT, mimeFor, RICH_EXT, richText } from '../../docs/read'
 import type { ToolContext, ToolDef } from '../types'
+import { inForbidden, isSecretName } from '../../knowledge/ignore'
+import { heicToJpeg } from '../../attach-process'
 
 const MAX_READ_BYTES = 2_000_000
 const MAX_IMAGE_BYTES = 8_000_000
@@ -27,23 +29,59 @@ export function insideRoot(root: string, p: string): string {
   return full
 }
 
-/**
- * Where a path may point: relative paths live in the workspace; absolute (or ~/) paths
- * must be inside a file or folder the user attached to this thread.
- */
-export function resolvePath(p: string, workspace: string, roots: string[] = []): string {
-  const expanded = p.startsWith('~/') ? join(homedir(), p.slice(2)) : p
-  if (!isAbsolute(expanded)) return insideRoot(workspace, expanded)
-  const full = resolve(expanded)
+export interface ResolveOptions {
+  /** Where relative paths start: the chat's working folder (default: the workspace). */
+  base?: string
+  /** The user approved this exact call: a path outside your folders is allowed (never system or secret places). */
+  allowOutside?: boolean
+}
+
+/** The real path of `full`, including a not-yet-created tail (macOS: /var -> /private/var, /tmp -> /private/tmp). */
+function realTail(full: string): string {
   let probe = full
   while (!existsSync(probe)) probe = dirname(probe)
-  // Compare real paths (macOS: /var -> /private/var, /tmp -> /private/tmp), including not-yet-created tails.
-  const fullReal = join(realpathSync(probe), relative(probe, full))
-  const allowed = [workspace, ...roots].map(real)
+  return join(realpathSync(probe), relative(probe, full))
+}
+
+/** Why SahilBot never touches a path outside your folders, even when asked ('' when it may, with your OK). */
+export function neverOutside(full: string): string {
+  const r = realTail(full)
+  if (inForbidden(r) || inForbidden(full)) return 'in a system or private folder SahilBot never reads'
+  if (isSecretName(basename(r))) return 'a file that holds secrets'
+  return ''
+}
+
+/**
+ * Where a path may point: relative paths live in the chat's working folder (else the workspace);
+ * absolute (or ~/) paths must be inside the workspace or a file or folder the user attached (or the
+ * working folder). Outside them only with the user's OK for this call (o.allowOutside).
+ */
+export function resolvePath(p: string, workspace: string, roots: string[] = [], o: ResolveOptions = {}): string {
+  const expanded = p.startsWith('~/') ? join(homedir(), p.slice(2)) : p
+  const base = o.base && existsSync(o.base) ? o.base : workspace
+  if (!isAbsolute(expanded)) return insideRoot(base, expanded)
+  const full = resolve(expanded)
+  const fullReal = realTail(full)
+  const allowed = [workspace, ...roots, ...(o.base ? [o.base] : [])].map(real)
   if (!allowed.some((r) => within(r, fullReal))) {
-    throw new Error(`"${p}" is outside the workspace and the folders the user attached. Ask the user to attach it with the + button.`)
+    const never = neverOutside(full)
+    if (o.allowOutside && !never) return full
+    throw new Error(`"${p}" is outside the workspace and the folders the user attached${never ? `: it's ${never}` : ''}. Ask the user to attach it with the + button${never ? '' : ' (or approve this one step)'}.`)
   }
   return full
+}
+
+/**
+ * The resolved path when `p` points outside the workspace, the attached folders and the working folder
+ * (and isn't a place SahilBot never goes): such a call asks first. null when it's inside, or refused anyway.
+ */
+export function outsidePath(p: string | undefined, workspace: string, roots: string[] = [], folder?: string): string | null {
+  if (!p || /^docs([\\/]|$)/.test(p) || /^(r|msg)-[\w-]+$/.test(p)) return null
+  try { resolvePath(p, workspace, roots, { base: folder }); return null } catch { /* outside, or refused */ }
+  try {
+    const full = resolvePath(p, workspace, roots, { base: folder, allowOutside: true })
+    return full
+  } catch { return null }
 }
 
 function listing(dir: string, base: string): string {
@@ -69,6 +107,15 @@ export function backup(workspace: string, full: string): void {
 }
 
 const roots = (ctx: ToolContext): string[] => ctx.state.roots ?? []
+/** The chat's working folder (relative paths start there). */
+const folderOf = (ctx: ToolContext): string | undefined => ctx.state.folder
+/** Resolves a tool's path: relative ones in the working folder; outside your folders only once the user approved this call. */
+const at = (p: string, workspace: string, ctx: ToolContext): string => resolvePath(p, workspace, roots(ctx), { base: folderOf(ctx), allowOutside: !!ctx.approved })
+/** The hard stop for a path outside your folders: it asks first. */
+const outsideStop = (verb: string, getWorkspace: () => string) => (p: string | undefined, call?: { roots: string[]; folder?: string }): string | null => {
+  const o = outsidePath(p, getWorkspace(), call?.roots ?? [], call?.folder)
+  return o ? `${verb} ${o}, outside your folders` : null
+}
 
 export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[] {
   const fileRead: ToolDef<{ path: string; start?: number; end?: number }> = {
@@ -76,7 +123,9 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     label: 'Read file',
     core: true,
     effect: 'read',
-    description: 'Read a file or list a folder. Works for text, code, PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx) and images (you see the image). Relative paths are in the workspace; absolute paths work inside files and folders the user attached. "docs/<page>.md" is your manual.',
+    // Reading outside the workspace and the attached folders asks the user first.
+    hardStop: (a, call) => outsideStop('reading', getWorkspace)(a.path, call),
+    description: 'Read a file or list a folder. Works for text, code, PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx) and images (you see the image). Relative paths start in the working folder (else the workspace); absolute paths: attached files and folders (others ask first). "docs/<page>.md" is your manual.',
     parameters: {
       type: 'object',
       properties: {
@@ -97,15 +146,17 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
         return { text: lines.length > 20_000 ? `${lines.slice(0, 20_000)}\n[… more: read_result id="${path}" with a later line range]` : lines, display: `read ${path}` }
       }
       const isDoc = /^docs([\\/]|$)/.test(path)
-      const full = isDoc ? insideRoot(docsDir, path.replace(/^docs[\\/]?/, '') || '.') : resolvePath(path, workspace, roots(ctx))
+      const full = isDoc ? insideRoot(docsDir, path.replace(/^docs[\\/]?/, '') || '.') : at(path, workspace, ctx)
       if (!existsSync(full)) throw new Error(`No such file or folder: ${path}`)
-      const base = isAbsolute(path) ? dirname(full) : isDoc ? docsDir : workspace
+      const base = isAbsolute(path) ? dirname(full) : isDoc ? docsDir : folderOf(ctx) && existsSync(folderOf(ctx)!) ? folderOf(ctx)! : workspace
       if (lstatSync(full).isDirectory()) return { text: listing(full, base), display: `listed ${basename(full)}` }
       const size = statSync(full).size
       const ext = extname(full).toLowerCase()
       if (IMAGE_EXT.has(ext)) {
         if (size > MAX_IMAGE_BYTES) throw new Error(`${basename(full)} is too large to view (${humanSize(size)}).`)
-        return { text: `Image ${basename(full)} (${humanSize(size)}) is attached below.`, images: [`data:${mimeFor(full)};base64,${readFileSync(full).toString('base64')}`], display: basename(full) }
+        // HEIC photos: converted to JPEG (macOS sips) so vision models can see them.
+        const shown = ext === '.heic' || ext === '.heif' ? await heicToJpeg(full).catch(() => full) : full
+        return { text: `Image ${basename(full)} (${humanSize(size)}) is attached below.`, images: [`data:${shown === full ? mimeFor(full) : 'image/jpeg'};base64,${readFileSync(shown).toString('base64')}`], display: basename(full) }
       }
       let text: string
       if (RICH_EXT.has(ext)) {
@@ -129,7 +180,9 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     label: 'Write file',
     core: true,
     effect: 'write_local',
-    description: 'Write a text file (Markdown, code, CSV, HTML…). Relative paths go in the workspace; absolute paths work inside attached folders. mode: "create" fails if it exists, "overwrite" replaces it (a backup is kept), "append" adds to the end. For .docx/.pptx/.xlsx/.pdf use create_document.',
+    // Writes stay inside the workspace, the attached folders and the working folder unless the user approves.
+    hardStop: (a, call) => outsideStop('writing', getWorkspace)(a.path, call),
+    description: 'Write a text file (Markdown, code, CSV, HTML…). Relative paths: the working folder (else the workspace); absolute: attached folders (others ask first). mode: "create" fails if it exists, "overwrite" replaces it (a backup is kept), "append" adds to the end. For .docx/.pptx/.xlsx/.pdf use create_document.',
     parameters: {
       type: 'object',
       properties: {
@@ -145,7 +198,7 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
       mkdirSync(workspace, { recursive: true })
       if (/^docs[\\/]/.test(path)) throw new Error('The docs folder is read-only.')
       if (/\.(docx|pptx|xlsx|pdf)$/i.test(path)) throw new Error('Use create_document for .docx, .pptx, .xlsx and .pdf files.')
-      const full = resolvePath(path, workspace, roots(ctx))
+      const full = at(path, workspace, ctx)
       const exists = existsSync(full)
       if (exists && lstatSync(full).isDirectory()) throw new Error(`${path} is a folder.`)
       if (mode === 'create' && exists) throw new Error(`${path} already exists. Use mode "overwrite" or "append".`)
@@ -160,9 +213,9 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
 
   type Manage = { op: 'delete' | 'move' | 'copy' | 'mkdir'; path: string; to?: string }
   // A path outside the workspace and attached folders counts as an existing target (ask).
-  const targetExists = (a: Manage, roots: string[]): boolean => {
+  const targetExists = (a: Manage, roots: string[], folder?: string): boolean => {
     try {
-      return !!a.to && existsSync(resolvePath(a.to, getWorkspace(), roots))
+      return !!a.to && existsSync(resolvePath(a.to, getWorkspace(), roots, { base: folder }))
     } catch {
       return true
     }
@@ -171,9 +224,9 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     name: 'file_manage',
     label: 'Files',
     core: true,
-    effect: (a, c) => (a.op === 'delete' || ((a.op === 'move' || a.op === 'copy') && targetExists(a, c.roots)) ? 'destructive' : 'write_local'),
+    effect: (a, c) => (a.op === 'delete' || ((a.op === 'move' || a.op === 'copy') && targetExists(a, c.roots, c.folder)) ? 'destructive' : 'write_local'),
     // The user asked that deleting always needs their OK, even in Bypass.
-    hardStop: (a) => (a.op === 'delete' ? `deleting ${a.path} (it goes to the Trash)` : null),
+    hardStop: (a, call) => (a.op === 'delete' ? `deleting ${a.path} (it goes to the Trash)` : outsideStop(a.op === 'copy' ? 'copying' : a.op === 'mkdir' ? 'creating a folder at' : 'moving', getWorkspace)(a.path, call) ?? outsideStop(a.op === 'copy' ? 'copying to' : 'moving to', getWorkspace)(a.to, call)),
     describe: (a) => (a.op === 'delete' ? `Move ${a.path} to the Trash` : a.op === 'mkdir' ? `Create folder ${a.path}` : `${a.op === 'move' ? 'Move' : 'Copy'} ${a.path} to ${a.to}`),
     description: 'Manage files and folders: delete (moves to the Trash; always asks the user), move/rename, copy, mkdir. Same path rules as file_write.',
     parameters: {
@@ -189,7 +242,7 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     },
     async run(a, ctx) {
       const workspace = getWorkspace()
-      const full = resolvePath(a.path, workspace, roots(ctx))
+      const full = at(a.path, workspace, ctx)
       if ([workspace, ...roots(ctx)].map(real).includes(real(full))) throw new Error('That is a whole attached folder or the workspace itself; work on items inside it.')
       if (a.op === 'mkdir') {
         mkdirSync(full, { recursive: true })
@@ -200,7 +253,7 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
         await shell.trashItem(full)
         return { text: `Moved ${full} to the Trash. The user can restore it from there.`, display: `trashed ${basename(full)}` }
       }
-      const dest = resolvePath(a.to!, workspace, roots(ctx))
+      const dest = at(a.to!, workspace, ctx)
       const finalDest = existsSync(dest) && lstatSync(dest).isDirectory() ? join(dest, basename(full)) : dest
       if (existsSync(finalDest)) backup(workspace, finalDest)
       mkdirSync(dirname(finalDest), { recursive: true })
@@ -215,12 +268,13 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     name: 'create_document',
     label: 'Document',
     core: true,
-    effect: (a, c) => { const p = safe(() => resolvePath(a.path, getWorkspace(), c.roots)); return p === undefined || existsSync(p) ? 'destructive' : 'write_local' },
+    effect: (a, c) => { const p = safe(() => resolvePath(a.path, getWorkspace(), c.roots, { base: c.folder })); return p === undefined || existsSync(p) ? 'destructive' : 'write_local' },
+    hardStop: (a, call) => outsideStop('writing', getWorkspace)(a.path, call),
     description: `Create (or rebuild) a polished document from data; it is reviewed automatically (fix every FAIL in the review, then present it).
-- .docx / .pdf: "markdown" (headings, lists, tables, bold, links, images ![alt](path "Caption"), [TOC], <!-- pagebreak -->, <!-- landscape --> / <!-- portrait -->, footnotes text[^1] + [^1]: note, "Table: caption" under a table, > [!NOTE] callouts). Real Word styles (Title, Heading 1-3, Caption, Quote), table header rows with banding, page numbers. Options: template (memo | report | letter | meeting_notes | proposal) with fields {to, from, cc, date, subject, recipient, recipient_address, sender, sender_address, salutation, closing, signature, subtitle, author, organization, prepared_for, prepared_by, attendees, facilitator, location, time}, cover, toc (auto for long docs), subtitle, author, header, footer, page_numbers, orientation, page_size (letter|a4), font, citations [text | {text, url}].
+- .docx / .pdf: "markdown" (headings, lists, tables, bold, links, images ![alt](path "Caption"), charts as a \`\`\`chart fenced block of JSON {type: column|bar|line|area|pie|doughnut, title, categories, series: [{name, values}], number_format: "$#,##0"}, [TOC], <!-- pagebreak -->, <!-- landscape --> / <!-- portrait -->, footnotes text[^1] + [^1]: note, "Table: caption" under a table, > [!NOTE] / [!WARNING] callouts). Real Word styles, TOC with page numbers, bookmarks, numbered captions, numbers right-aligned, header rows repeat across pages, "Page X of Y". Options: theme (modern | classic | minimal; same look in PDF, Word, PowerPoint), template (memo | report | letter | meeting_notes | proposal | resume | invoice) with fields {to, from, cc, date, subject, recipient, recipient_address, sender, sender_address, salutation, closing, signature, subtitle, author, organization, prepared_for, prepared_by, attendees, facilitator, location, time, invoice_number, due_date, po_number, terms}, cover, toc (auto for long docs), subtitle, author, header, footer, page_numbers, orientation, page_size (letter|a4|legal), margins (inches: 1 or {top, right, bottom, left}), font_size (pt), fit_pages (e.g. 1: tightens spacing, then type and margins, within readable limits), font, citations [text | {text, url}]. The result reports the page count. Never unzip or hand-edit document XML: rebuild with these options instead.
 - .pptx: "slides": [{title, subtitle?, bullets? (indent sub-points with 2 spaces), notes?, layout?}]. Layouts: title, section, bullets, two_column (bullets + right, left_title/right_title), image_text (image path + bullets, image_side), image (+caption), chart (chart: {type: bar|column|line|area|pie|doughnut, categories, series: [{name, values}], number_format: "$#,##0", stacked?} + optional bullets as the takeaway), table (table: [[header…], [row…]]), stats (stats: [{value: "$4.2M", label: "ARR"}]), quote (title = quote, subtitle = who), closing. theme light|dark, slide_numbers (default on), 16:9. Headline titles that state the point; detail in notes. Overlong slides are split/shortened for you.
 - .xlsx: "sheets": [{name, rows: [[header…], [row…]], columns?: [{header, type: text|number|integer|currency|percent|date|datetime|boolean, format?, width?, total?: sum|average|count|min|max|none, options?: [dropdown values], min?, max?, formula?: "=C{r}*D{r}"}], totals?: true, freeze?: {rows, cols}, autofilter?, conditional?: [{column, type: greater_than|less_than|between|equal|not_equal|negative|text_contains|duplicates|blank|top|bottom|data_bar|color_scale|formula, value?, value2?, color?: red|green|yellow|blue|#hex, formula?}], banded?}]. Strings starting with "=" are formulas (XLOOKUP is rewritten to INDEX/MATCH so it works everywhere). summary: true adds a Summary sheet with live totals; currency: "$".
-Optional "accent" color like "#2563EB". To change an existing file: rebuild it at the same path (a backup is kept), or edit cells in place with the office tool (sheet_write).`,
+Optional "accent" color like "#2563EB" (too-light accents are darkened for text automatically). Decks: background light|dark. To change an existing file: rebuild it at the same path (a backup is kept), or edit cells in place with the office tool (sheet_write).`,
     parameters: {
       type: 'object',
       properties: {
@@ -228,7 +282,7 @@ Optional "accent" color like "#2563EB". To change an existing file: rebuild it a
         title: { type: 'string' },
         markdown: { type: 'string' },
         blocks: { type: 'array', items: { type: 'object', properties: { type: { type: 'string' } }, required: ['type'] }, description: 'Structured content instead of markdown' },
-        template: { type: 'string', enum: ['memo', 'report', 'letter', 'meeting_notes', 'proposal'] },
+        template: { type: 'string', enum: ['memo', 'report', 'letter', 'meeting_notes', 'proposal', 'resume', 'invoice'] },
         fields: { type: 'object', additionalProperties: { type: ['string', 'array', 'boolean'] } },
         subtitle: { type: 'string' },
         author: { type: 'string' },
@@ -238,11 +292,17 @@ Optional "accent" color like "#2563EB". To change an existing file: rebuild it a
         footer: { type: ['string', 'boolean'] },
         page_numbers: { type: 'boolean' },
         orientation: { type: 'string', enum: ['portrait', 'landscape'] },
-        page_size: { type: 'string', enum: ['letter', 'a4'] },
+        page_size: { type: 'string', enum: ['letter', 'a4', 'legal'] },
+        margins: { anyOf: [{ type: 'number', minimum: 0.4, maximum: 2 }, { type: 'object', properties: { top: { type: 'number' }, right: { type: 'number' }, bottom: { type: 'number' }, left: { type: 'number' } }, additionalProperties: false }] },
+        font_size: { type: 'number', minimum: 8, maximum: 16 },
+        fit_pages: { type: 'integer', minimum: 1, maximum: 200 },
+        lang: { type: 'string' },
+        keywords: { type: 'array', items: { type: 'string' } },
+        background: { type: 'string', enum: ['light', 'dark'] },
         font: { type: 'string' },
         citations: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { text: { type: 'string' }, url: { type: 'string' } }, required: ['text'] }] } },
         footnotes: { type: 'object', additionalProperties: { type: 'string' } },
-        theme: { type: 'string', enum: ['light', 'dark'] },
+        theme: { type: 'string', enum: ['modern', 'classic', 'minimal', 'light', 'dark'] },
         slide_numbers: { type: 'boolean' },
         slides: {
           type: 'array', minItems: 1, maxItems: 80,
@@ -329,27 +389,28 @@ Optional "accent" color like "#2563EB". To change an existing file: rebuild it a
     },
     async run(spec, ctx) {
       const workspace = getWorkspace()
-      const full = resolvePath(spec.path, workspace, roots(ctx))
+      const full = at(spec.path, workspace, ctx)
       const existed = existsSync(full)
       if (existed) backup(workspace, full)
       // Images in documents come from the workspace and the folders the user attached, like every file tool.
       const readImage = (src: string): Buffer => {
-        const p = resolvePath(src, workspace, roots(ctx))
+        const p = resolvePath(src, workspace, roots(ctx), { base: folderOf(ctx) })
         if (!existsSync(p) || !statSync(p).isFile()) throw new Error(`Image not found: ${src}`)
         if (statSync(p).size > 25_000_000) throw new Error(`Image ${src} is larger than 25 MB.`)
         return readFileSync(p)
       }
       const r = await createDocument(full, spec, { readImage })
-      const what = spec.slides ? `${r.slides ?? spec.slides.length} slides` : spec.sheets ? `${spec.sheets.length} sheet${spec.sheets.length > 1 ? 's' : ''}` : humanSize(r.bytes)
+      const what = spec.slides ? `${r.slides ?? spec.slides.length} slides` : spec.sheets ? `${spec.sheets.length} sheet${spec.sheets.length > 1 ? 's' : ''}` : `${r.pages ? `${r.pages} page${r.pages === 1 ? '' : 's'}${/\.docx$/i.test(full) ? ' as Word lays it out' : ''}, ` : ''}${humanSize(r.bytes)}`
       let review = ''
       try {
         const { formatReview, reviewDocument } = await import('../../docs/review')
-        review = `\n\n${formatReview(await reviewDocument(full))}`
+        // Rendered too (page count, blank pages, overflow, cut-off content); review_document shows the pictures.
+        review = `\n\n${formatReview(await reviewDocument(full, { render: true, expectPages: spec.fit_pages }))}\nTo see the pages yourself: review_document(path, pages: "1").`
       } catch (e) {
         review = `\n\n(Automatic review skipped: ${(e as Error).message}. Run review_document.)`
       }
       return {
-        text: `${existed ? 'Rebuilt' : 'Created'} ${r.kind} ${full} (${what}). The user can open it from the chat.${r.warnings?.length ? `\nGenerator notes:\n${r.warnings.slice(0, 25).map((w) => `- ${w}`).join('\n')}` : ''}${review}`,
+        text: `${existed ? 'Rebuilt' : 'Created'} ${r.kind} ${full} (${what}). The user can open it from the chat.${r.notes?.length ? `\nLayout: ${r.notes.join(' ')}` : ''}${r.warnings?.length ? `\nGenerator notes:\n${r.warnings.slice(0, 25).map((w) => `- ${w}`).join('\n')}` : ''}${review}`,
         display: `${existed ? 'rebuilt' : 'created'} ${basename(full)}`,
         path: full
       }

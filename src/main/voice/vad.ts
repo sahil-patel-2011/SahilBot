@@ -81,3 +81,64 @@ export class SileroVad {
     return p
   }
 }
+
+/** What the voice pipeline needs from a voice detector (Silero, or the energy fallback below). */
+export interface Vad {
+  start: number
+  stop: number
+  endMs: number
+  minSpeechMs: number
+  readonly silence: number
+  readonly isSpeaking: boolean
+  reset(): void
+  feed(frame: Float32Array, ev: VadEvents): Promise<number>
+}
+
+/**
+ * A voice detector with nothing to download: loudness against an adaptive noise floor, mapped to a 0–1
+ * "speech" score with the same thresholds and timing as Silero. Used when the Silero model isn't on this
+ * Mac (local models off: nothing is downloaded for voice).
+ */
+export class EnergyVad implements Vad {
+  start = 0.5
+  stop = 0.35
+  endMs = 500
+  minSpeechMs = 96
+  private speaking = false
+  private silentMs = 0
+  private voicedMs = 0
+  private floor = 0.004
+
+  get silence(): number { return this.silentMs }
+  get isSpeaking(): boolean { return this.speaking }
+
+  reset(): void {
+    this.speaking = false
+    this.silentMs = 0
+    this.voicedMs = 0
+  }
+
+  /** 0–1: how far above the noise floor this frame is (about 4x the floor counts as speech). */
+  prob(frame: Float32Array): number {
+    let sum = 0
+    for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i]
+    const rms = Math.sqrt(sum / Math.max(1, frame.length))
+    const ratio = rms / Math.max(this.floor, 1e-4)
+    // The floor follows quiet frames quickly and loud ones slowly (a room's hum, not the voice).
+    this.floor = ratio < 2 ? this.floor * 0.95 + rms * 0.05 : this.floor * 0.999 + rms * 0.001
+    return Math.max(0, Math.min(1, (ratio - 1) / 6))
+  }
+
+  async feed(frame: Float32Array, ev: VadEvents): Promise<number> {
+    const p = this.prob(frame)
+    const ms = (FRAME / SAMPLE_RATE) * 1000
+    if (!this.speaking) {
+      this.voicedMs = p >= this.start ? this.voicedMs + ms : 0
+      if (this.voicedMs >= this.minSpeechMs) { this.speaking = true; this.silentMs = 0; ev.onStart() }
+    } else {
+      this.silentMs = p < this.stop ? this.silentMs + ms : 0
+      if (this.silentMs >= this.endMs) { this.speaking = false; this.voicedMs = 0; ev.onEnd() }
+    }
+    return p
+  }
+}

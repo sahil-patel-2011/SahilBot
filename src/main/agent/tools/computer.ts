@@ -10,6 +10,7 @@ import { parseCombo, riskyCombo, type KeyCombo } from '../../computer/keys'
 import { noOverlay, type Overlay, type OverlayAction } from '../../computer/overlay'
 import { ACTIVATE, APPS, ELEMENT, KEY, MENU, MOUSE, QUIT, SNAPSHOT, STATE, TYPE, VALUE, WINDOWS, wrap } from '../../computer/scripts'
 import { waitForSettle } from '../../computer/settle'
+import { type ActionRecord, detectStall, recordOf, stallNote } from '../cua/stall'
 
 // Computer use: SahilBot sees the screen and drives the Mac like a person would, for apps that have no
 // other tool. Accessibility first: `ui` reads the app's windows through the macOS Accessibility API and
@@ -28,7 +29,7 @@ import { waitForSettle } from '../../computer/settle'
 // status line per step; it is hidden when the run stops or computer use goes idle.
 
 type Action =
-  | 'screenshot' | 'ui' | 'apps' | 'windows' | 'wait' | 'clipboard_read'
+  | 'screenshot' | 'zoom' | 'ui' | 'apps' | 'windows' | 'wait' | 'wait_for' | 'clipboard_read'
   | 'click' | 'double_click' | 'triple_click' | 'right_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key'
   | 'click_ref' | 'type_ref' | 'set_value' | 'press' | 'click_element'
   | 'open_app' | 'activate_app' | 'quit_app' | 'focus_window' | 'menu' | 'clipboard_write'
@@ -47,6 +48,10 @@ type Args = {
   /** copy: put the user's clipboard back after reading what was copied. */
   restore?: boolean
   keys?: string
+  /** key: press the combination this many times (Tab ×4, Down ×3). */
+  repeat?: number
+  /** wait_for: wait until the query's text is gone instead of shown. */
+  gone?: boolean
   /** Held during a click: "cmd", "shift", "cmd+shift"… */
   modifiers?: string
   app?: string
@@ -102,7 +107,7 @@ let current: ComputerControl | undefined
 /** The computer tool registered in this app, for tools built on top of it. */
 export const computerControl = (): ComputerControl | undefined => current
 
-const READ = new Set<Action>(['screenshot', 'ui', 'apps', 'windows', 'wait', 'clipboard_read'])
+const READ = new Set<Action>(['screenshot', 'zoom', 'ui', 'apps', 'windows', 'wait', 'wait_for', 'clipboard_read'])
 /** Acting actions that can't change a setting by themselves (no System Settings hard stop). */
 const NAVIGATE = new Set<Action>(['open_app', 'activate_app', 'focus_window', 'move', 'scroll', 'copy', 'select_all', 'clipboard_write'])
 /** How long computer use stays idle before the cursor is put away. */
@@ -217,6 +222,8 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
     const el = a.ref ? elLabel(a.ref) : ''
     switch (a.action) {
       case 'screenshot': return 'Looking at the screen'
+      case 'zoom': return 'Zooming in'
+      case 'wait_for': return a.query ? `Waiting for "${a.query.slice(0, 40)}"` : 'Waiting for the screen to settle'
       case 'ui': return `Reading ${a.app ?? 'the app in front'}`
       case 'apps': return 'Checking which apps are open'
       case 'windows': return 'Listing windows'
@@ -299,6 +306,25 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
     if (!before) return { text: `Now: ${settled.state.app}${settled.state.window ? ` › "${settled.state.window}"` : ''}.`, changed: true, after: settled.state }
     const c = describeChange(before, settled.state)
     return { text: `${c.text}${settled.stable ? '' : ' (The screen was still changing when SahilBot stopped waiting; look again before the next step.)'}`, changed: c.changed, after: settled.state }
+  }
+
+  /** Recent actions per chat, for stall detection (agent/cua/stall.ts). */
+  const recent = new Map<string, ActionRecord[]>()
+
+  /**
+   * Notes the action and, when the last few got nowhere (the same action again, nothing changing, errors, back
+   * and forth), adds recovery steps to the result. In a Planner + executor run the planner's session does this.
+   */
+  function stallCheck(tid: string, input: Args, ctx: ToolContext, out: ToolOutput | undefined, error?: string): ToolOutput {
+    const list = [...(recent.get(tid) ?? []), recordOf('computer', JSON.stringify(input), { status: error ? 'error' : 'ok', text: out?.text ?? error, display: out?.display })].slice(-10)
+    recent.set(tid, list)
+    if (!out) return out as unknown as ToolOutput
+    if (ctx.state?.cua?.active) return out
+    const st = detectStall(list, { computer: true })
+    if (!st) return out
+    // One hint per stall: the count starts over.
+    recent.set(tid, [])
+    return { ...out, text: `${out.text}\n\n${stallNote(st)}` }
   }
 
   /** Hands a step to the user: asks them to do it and waits (nobody there: the agent is told to stop that part). */
@@ -516,6 +542,84 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
     }
   }
 
+  /**
+   * A closer look at a small target without moving the coordinate frame: the region (corners [x0, y0, x1, y1]
+   * in the last screenshot's pixels, as Claude's toolset sends them) or an element (ref), captured at the
+   * display's full pixel density. Clicks stay in the last full screenshot's pixels.
+   */
+  async function zoom(a: Args, ctx: ToolContext): Promise<ToolOutput> {
+    const tid = ctx.threadId
+    const ds = displays()
+    const f = frames.get(tid)
+    let rect: Rect
+    let what: string
+    if (a.ref) {
+      const el = byRef(snapshots.get(tid), a.ref)
+      if (!el?.rect) throw new Error(`No element ${a.ref} with a position in the last ui snapshot.`)
+      rect = pad(el.rect, 24); what = `${short(el.role)} "${el.label}"`
+    } else if (a.region) {
+      const [x0, y0, x1, y1] = a.region
+      if ([x0, y0, x1, y1].some((n) => typeof n !== 'number' || !Number.isFinite(n))) throw new Error('zoom region is [x0, y0, x1, y1]: the top-left and bottom-right corners.')
+      if (!f && a.coords !== 'screen') throw new Error('Take a screenshot first: zoom regions are pixels of the last screenshot.')
+      const p1 = f && a.coords !== 'screen' ? toScreen(f, Math.min(x0, x1), Math.min(y0, y1)) : { x: Math.min(x0, x1), y: Math.min(y0, y1) }
+      const p2 = f && a.coords !== 'screen' ? toScreen(f, Math.max(x0, x1), Math.max(y0, y1)) : { x: Math.max(x0, x1), y: Math.max(y0, y1) }
+      rect = { x: p1.x, y: p1.y, width: Math.max(4, p2.x - p1.x), height: Math.max(4, p2.y - p1.y) }; what = 'the region'
+    } else throw new Error('zoom needs region [x0, y0, x1, y1] (pixels of the last screenshot) or a ref from ui.')
+    if (ds.length) {
+      const clipped = clipToDisplays(rect, ds)
+      if (!clipped) throw new Error('That area is off screen.')
+      rect = clipped
+    }
+    const scale = displayAt(ds, center(rect).x, center(rect).y)?.scaleFactor ?? 2
+    const size = fitImage(rect, scale, { ...imageLimits(ctx.model), zoom: true })
+    const dir = mkdtempSync(join(tmpdir(), 'sb-zoom-'))
+    try {
+      d.enterMini(ctx.state.rootId ?? tid)
+      const shot = await d.capture(join(dir, 'zoom.png'), { rect, ...size })
+      const back = f ? ` Coordinates for click, move, drag and scroll stay in the LAST FULL screenshot's pixels (${f.width}×${f.height}), not this zoomed image.` : ''
+      return {
+        text: `Zoomed in on ${what}: ${shot.width}×${shot.height} pixels showing ${Math.round(rect.width)}×${Math.round(rect.height)} screen points (${(shot.width / rect.width).toFixed(1)}× the points).${back}`,
+        display: `Zoomed in on ${what.length > 40 ? 'a region' : what}`,
+        images: [shot.dataUrl]
+      }
+    } catch (e) {
+      throw new Error(/could not create image|not permitted|denied|cannot|screencapture/i.test((e as Error).message) ? 'SahilBot needs Screen Recording permission to see the screen: System Settings → Privacy & Security → Screen Recording. Meanwhile use the ui action instead.' : (e as Error).message)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  /**
+   * Waits for the UI instead of a fixed sleep: until the app in front settles (two identical reads), or until an
+   * element whose name or value contains `query` appears (or, with gone, disappears) in the app's elements.
+   */
+  async function waitFor(a: Args, ctx: ToolContext): Promise<ToolOutput> {
+    const limit = Math.min(20, Math.max(0.5, a.seconds ?? 8)) * 1000
+    const start = Date.now()
+    if (!a.query) {
+      const r = await waitForSettle(() => probe(), sameState, { timeoutMs: limit, intervalMs: 300, initialDelayMs: 150, signal: ctx.signal })
+      const secs = (r.waitedMs / 1000).toFixed(1)
+      return { text: r.stable ? `The screen settled after ${secs}s. Now: ${r.state.app}${r.state.window ? ` › "${r.state.window}"` : ''}.` : `Still changing after ${secs}s (loading or animating): look with ui or a screenshot before acting.`, display: r.stable ? `settled in ${secs}s` : 'still changing' }
+    }
+    needAx()
+    const want = a.query.toLowerCase()
+    const seen = (snap: AxSnapshot): AxElement | undefined => snap.elements.find((e) => `${e.label} ${e.value ?? ''}`.toLowerCase().includes(want))
+    let last: AxElement | undefined
+    let app = a.app
+    while (Date.now() - start < limit) {
+      alive(ctx)
+      const snap = await snapshot(ctx.threadId, { app, activate: false }).catch(() => undefined)
+      app ??= snap?.app
+      last = snap ? seen(snap) : undefined
+      if (snap && (a.gone ? !last : !!last)) {
+        const secs = ((Date.now() - start) / 1000).toFixed(1)
+        return { text: a.gone ? `"${a.query}" is gone from ${snap.app} after ${secs}s.` : `"${a.query}" is showing in ${snap.app} after ${secs}s: ${last!.ref} (${short(last!.role)} "${last!.label}").`, display: a.gone ? `"${a.query.slice(0, 30)}" gone` : `found "${a.query.slice(0, 30)}"` }
+      }
+      await sleep(400)
+    }
+    return { text: a.gone ? `"${a.query}" is still showing after ${limit / 1000}s.` : `"${a.query}" didn't appear within ${limit / 1000}s${app ? ` in ${app}` : ''}. Take a screenshot: it may be drawn without Accessibility text, worded differently, or in another window.`, display: 'not seen yet' }
+  }
+
   const needAx = (): void => {
     if (!d.trusted(true)) throw new Error('SahilBot needs Accessibility permission to read and use other apps. macOS just showed the prompt: the user should turn SahilBot on in System Settings → Privacy & Security → Accessibility, then you can try again.')
   }
@@ -573,17 +677,17 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
 Accessibility first:
 - ui {app?, window?, query?}: the app's windows and elements (buttons, fields, checkboxes, menus, text) with refs like e12, values, focus and disabled state. app brings that app to the front first. query filters.
 - click_ref {ref, modifiers?}: press/click an element. type_ref {ref, text, clear?, submit?, method?}: focus a field and enter text (clear replaces its text; submit presses Return). set_value {ref, value}: set a field/slider/checkbox value directly. press {ref, ax_action}: an Accessibility action (AXPress, AXShowMenu, AXIncrement, AXDecrement, AXConfirm, AXCancel, AXRaise).
-Screen: screenshot {display?, window?, ref?, region?}: the main display, another display, one window (window: ref from windows or part of its title), around an element, or a region [x,y,w,h] of the last screenshot (zoom in for small text; smaller images cost less).
+Screen: screenshot {display?, window?, ref?, region?}: the main display, another display, one window (window: ref from windows or part of its title), around an element, or a region [x,y,w,h] of the last screenshot (this becomes the new coordinate frame). zoom {region: [x0,y0,x1,y1] corners in the last screenshot's pixels, or ref}: a sharp close-up of a small target or text that does NOT change the coordinate frame (clicks stay in the full screenshot's pixels).
 Coordinates (fallback): click/double_click/triple_click/right_click/move {x,y, modifiers?}, drag {x,y,x2,y2 or ref,ref2}, scroll {x,y or ref, amount: lines, negative = down, dx?: sideways}. x,y are pixels of the LAST screenshot (coords:"screen" for global screen points).
 Text: type {text, method?} into whatever is focused. Short plain text is typed key by key; long, multi-line or non-ASCII text (emoji, accents, CJK) is pasted automatically (method "type" or "paste" forces one). paste_text {text, ref?}: paste exactly (fast for long text); the user's clipboard is put back afterwards. Every entry reports whether the field now shows the text. select_all {ref?}: cmd+a (in that field). copy {ref?, restore?}: cmd+c and returns what was copied (secrets hidden; ref copies that whole field; restore puts the user's clipboard back).
-Keyboard: key {keys: "cmd+s", "return", "cmd+shift+t", "ctrl+option+left", "cmd+plus"}.
+Keyboard: key {keys: "cmd+s", "return", "cmd+shift+t", "ctrl+option+left", "cmd+plus", repeat?: times (e.g. tab ×4)}.
 Apps: apps (running apps), windows {app?} (every window with refs w1…), open_app {app}, activate_app {app}, focus_window {window, app?}, quit_app {app} (asks first), menu {path: "File > Export > PDF…", app?} (a path ending at a menu lists its items).
-Clipboard: clipboard_read, clipboard_write {text}. wait {seconds}.
+Clipboard: clipboard_read, clipboard_write {text}. Waiting: wait_for {query?, app?, gone?, seconds?} waits until the screen settles, or until an element with that text appears (gone: disappears), up to 20 s; wait {seconds} only when nothing on screen tells you it's ready.
 Every action reports what changed afterwards (app, window, dialog, focus, values) or that nothing did: if nothing changed, look before retrying. SahilBot never types passwords, never confirms payments or purchases, and never answers system password/Touch ID prompts: those steps go to the user automatically. Changes on System Settings security/privacy panes always ask. Stop and ask the user for CAPTCHAs and 2-factor codes.`,
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['screenshot', 'ui', 'apps', 'windows', 'wait', 'clipboard_read', 'click', 'double_click', 'triple_click', 'right_click', 'move', 'drag', 'scroll', 'type', 'key', 'click_ref', 'type_ref', 'set_value', 'press', 'click_element', 'open_app', 'activate_app', 'quit_app', 'focus_window', 'menu', 'clipboard_write', 'paste_text', 'copy', 'select_all'] },
+        action: { type: 'string', enum: ['screenshot', 'zoom', 'ui', 'apps', 'windows', 'wait', 'wait_for', 'clipboard_read', 'click', 'double_click', 'triple_click', 'right_click', 'move', 'drag', 'scroll', 'type', 'key', 'click_ref', 'type_ref', 'set_value', 'press', 'click_element', 'open_app', 'activate_app', 'quit_app', 'focus_window', 'menu', 'clipboard_write', 'paste_text', 'copy', 'select_all'] },
         ref: { type: 'string', description: 'Element ref from ui, e.g. "e12"' },
         ref2: { type: 'string', description: 'For drag: the element to drop on' },
         x: { type: 'number' }, y: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' },
@@ -596,18 +700,20 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
         method: { type: 'string', enum: ['auto', 'type', 'paste'], description: 'For type/type_ref: auto (default) types short plain text and pastes the rest' },
         restore: { type: 'boolean', description: 'For copy: put the user\'s clipboard back after reading the copy' },
         keys: { type: 'string', description: 'For key, e.g. "cmd+v", "return", "escape", "cmd+shift+t"' },
+        repeat: { type: 'integer', minimum: 1, maximum: 50, description: 'For key: press it this many times' },
+        gone: { type: 'boolean', description: 'For wait_for: wait until the query text disappears' },
         modifiers: { type: 'string', description: 'For clicks: keys held, e.g. "cmd" or "shift"' },
         app: { type: 'string', description: 'App name, e.g. "Finder", "Numbers"' },
         window: { type: 'string', description: 'A window ref from windows (w3) or part of its title' },
         display: { type: 'integer', minimum: 1, maximum: 8, description: 'For screenshot: display number (1 = main)' },
-        region: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: 'For screenshot: [x, y, width, height] in the last screenshot\'s pixels' },
+        region: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: 'For screenshot: [x, y, width, height]; for zoom: [x0, y0, x1, y1] corners; both in the last screenshot\'s pixels' },
         value: { type: 'string', description: 'For set_value' },
         ax_action: { type: 'string', description: 'For press, e.g. AXPress, AXShowMenu, AXIncrement' },
-        query: { type: 'string', description: 'For ui: only elements whose name or value contains this' },
+        query: { type: 'string', description: 'For ui: only elements whose name or value contains this. For wait_for: the text to wait for' },
         name: { type: 'string', description: 'For click_element: an element name shown by ui' },
         role: { type: 'string', description: 'For click_element: optional role, e.g. Button' },
         path: { type: 'string', description: 'For menu: e.g. "File > Export > Export as PDF…"' },
-        seconds: { type: 'number', minimum: 0.2, maximum: 10 }
+        seconds: { type: 'number', minimum: 0.2, maximum: 20, description: 'For wait (max 10) and wait_for (max 20)' }
       },
       required: ['action'],
       additionalProperties: false,
@@ -621,7 +727,8 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
         { if: { properties: { action: { const: 'click_element' } } }, then: { required: ['name'] } },
         { if: { properties: { action: { const: 'focus_window' } } }, then: { required: ['window'] } },
         { if: { properties: { action: { const: 'menu' } } }, then: { required: ['path'] } },
-        { if: { properties: { action: { const: 'clipboard_write' } } }, then: { required: ['text'] } }
+        { if: { properties: { action: { const: 'clipboard_write' } } }, then: { required: ['text'] } },
+        { if: { properties: { action: { const: 'zoom' } } }, then: { anyOf: [{ required: ['region'] }, { required: ['ref'] }] } }
       ]
     },
     async run(input, ctx) {
@@ -638,9 +745,10 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
       alive(ctx)
       await show(ctx, { kind: 'status', label: statusLabel(input) })
       try {
-        return await step(a, ctx)
+        return stallCheck(tid, input, ctx, await step(a, ctx))
       } catch (e) {
         if ((e as Error).name === 'AbortError') finish()
+        else stallCheck(tid, input, ctx, undefined, (e as Error).message)
         throw e
       }
     }
@@ -651,6 +759,12 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
     switch (a.action) {
       case 'screenshot':
         return screenshot(a, ctx)
+
+      case 'zoom':
+        return zoom(a, ctx)
+
+      case 'wait_for':
+        return waitFor(a, ctx)
 
       case 'ui': {
         needAx()
@@ -689,7 +803,7 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
       case 'wait': {
         const ms = Math.min(10, a.seconds ?? 1) * 1000
         for (let t = 0; t < ms; t += 200) { alive(ctx); await sleep(Math.min(200, ms - t)) }
-        return { text: `Waited ${a.seconds ?? 1}s.`, display: 'waited' }
+        return { text: `Waited ${ms / 1000}s.${(a.seconds ?? 0) > 10 ? " (10 s at most: use wait_for to wait for something specific.)" : ""}`, display: "waited" }
       }
 
       case 'clipboard_read': {
@@ -905,8 +1019,15 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
         const typesText = !!k.char && (!k.using.some((m) => m !== 'shift down') || (k.char === 'v' && k.using.includes('command down')))
         const g = guardAction({ action: 'key', app: before?.app ?? '', window: before?.window, focused: before?.focused, typing: typesText })
         if (g) return handOff(g, ctx)
-        const v = await verified(ctx, () => pressKey(ctx, k, k.label), { before })
-        return { text: `Pressed ${k.label}. ${v.text}`, display: `pressed ${k.label}${v.changed ? '' : ' (no change)'}` }
+        const times = Math.max(1, Math.min(50, Math.round(a.repeat ?? 1)))
+        const v = await verified(ctx, async () => {
+          for (let n = 0; n < times; n++) {
+            alive(ctx)
+            await pressKey(ctx, k, times > 1 ? `${k.label} ×${times}` : k.label)
+            if (n < times - 1) await sleep(60)
+          }
+        }, { before })
+        return { text: `Pressed ${k.label}${times > 1 ? ` ${times} times` : ''}. ${v.text}`, display: `pressed ${k.label}${times > 1 ? ` ×${times}` : ''}${v.changed ? '' : ' (no change)'}` }
       }
 
       case 'open_app': case 'activate_app': {

@@ -131,7 +131,8 @@ describe('model fallback', () => {
     expect(await h.run(t, 'hi')).toBe('finished')
     expect(llm.requests.map((r) => r.model)).toEqual(['model-a', 'model-b'])
     const ms = h.db.listMessages(t.id)
-    expect(ms.find((m) => m.kind === 'notice')?.content).toMatch(/^Switched to MODEL-B for the rest of this task: MODEL-A failed/)
+    // The chat says which model answered instead and why (agent/choices.ts fallbackNotice).
+    expect(ms.find((m) => m.kind === 'notice')?.content).toMatch(/^MODEL-A failed: .*; used MODEL-B for the rest of this task\.$/)
     expect(ms.filter((m) => m.role === 'assistant' && m.kind === 'normal').at(-1)?.content).toBe('Hello from B.')
   })
 
@@ -145,11 +146,13 @@ describe('model fallback', () => {
     expect(h.db.listMessages(t.id).some((m) => m.kind === 'notice')).toBe(false)
   })
 
-  test('three invalid tool calls in a row from a local model hand the run to a stronger model', async () => {
-    const h = harness([model('model-a', 1), model('model-b', 2)])
+  test('three invalid tool calls in a row from a local model Auto picked hand the run to a stronger model', async () => {
+    const h = harness([model('model-a', 2), model('model-b', 3)])
     const bad = { toolCalls: [call('zzqqxx_nothing', {})], delay: 0 }
     llm.script.push(bad, bad, bad, { content: 'Done properly.', delay: 0 })
-    const t = h.thread()
+    // Auto's own pick (a model picked by name is never swapped for this: tests/unit/manual-choices.test.ts).
+    h.settings.defaultModel = 'auto'
+    const t = h.thread(undefined, null)
     expect(await h.run(t, 'do it')).toBe('finished')
     expect(llm.requests.map((r) => r.model)).toEqual(['model-a', 'model-a', 'model-a', 'model-b'])
     expect(h.db.listMessages(t.id).find((m) => m.kind === 'notice')?.content).toMatch(/MODEL-A kept making invalid tool calls/)
@@ -184,7 +187,8 @@ describe('plan reminder on long runs', () => {
       { content: 'Finished.', delay: 0 }
     )
     const t = h.thread()
-    expect(await h.run(t, 'big job')).toBe('finished')
+    // Agent work (a chat that only looks things up gets no plan reminders: see the chat path tests).
+    expect(await h.run(t, 'Audit every file in my workspace and write a report')).toBe('finished')
     const reminders = h.db.listMessages(t.id).filter((m) => m.meta?.hidden && /tool calls without a plan/.test(m.content))
     expect(reminders).toHaveLength(1)
     expect(JSON.stringify(llm.requests[1].messages)).toContain('tool calls without a plan')

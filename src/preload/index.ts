@@ -21,6 +21,20 @@ const api: SahilBotApi = {
       return () => { ipcRenderer.removeListener('models:pull', h) }
     }
   },
+  // ChatGPT plan (via Codex): Settings → Models (src/main/llm/codex).
+  chatgptPlan: {
+    status: call('chatgptPlan:status') as never,
+    connect: call('chatgptPlan:connect') as never,
+    loginInTerminal: call('chatgptPlan:loginInTerminal') as never,
+    disconnect: call('chatgptPlan:disconnect') as never,
+    setPrefs: call('chatgptPlan:setPrefs') as never,
+    openInstallGuide: call('chatgptPlan:openInstallGuide') as never,
+    onChanged: (cb) => {
+      const h = (): void => cb()
+      ipcRenderer.on('chatgptPlan:changed', h)
+      return () => { ipcRenderer.removeListener('chatgptPlan:changed', h) }
+    }
+  },
   spaces: {
     list: call('spaces:list') as never,
     create: call('spaces:create') as never,
@@ -51,6 +65,38 @@ const api: SahilBotApi = {
     recent: call('files:recent') as never,
     snippet: call('files:snippet') as never
   },
+  // Attachments (main: attachments.ts): dropped or pasted File objects resolve to paths here; ones with no
+  // file behind them (a pasted screenshot, an image dragged from a web page) are sent as bytes and saved
+  // to a temp file by main.
+  attach: {
+    fromFiles: async (files: File[]) => {
+      const paths: string[] = []
+      const blobs: Array<{ name: string; type: string; data: Uint8Array }> = []
+      const rejected: Array<{ name: string; reason: string }> = []
+      for (const f of files) {
+        const p = webUtils.getPathForFile(f)
+        if (p) { paths.push(p); continue }
+        if (f.size > 100 * 1024 * 1024) { rejected.push({ name: f.name || 'Pasted item', reason: 'Files up to 100 MB can be attached.' }); continue }
+        blobs.push({ name: f.name, type: f.type, data: new Uint8Array(await f.arrayBuffer()) })
+      }
+      const r = await ipcRenderer.invoke('attach:add', { paths, blobs }) as { added: unknown[]; rejected: Array<{ name: string; reason: string }> }
+      return { added: r.added, rejected: [...rejected, ...r.rejected] }
+    },
+    screenshot: call('attach:screenshot') as never,
+    scanFolder: call('attach:scanFolder') as never,
+    onScan: (cb: (e: unknown) => void) => {
+      const h = (_: unknown, e: unknown): void => cb(e)
+      ipcRenderer.on('attach:scan', h)
+      return () => { ipcRenderer.removeListener('attach:scan', h) }
+    },
+    folder: call('attach:folder') as never,
+    pickFolder: call('attach:pickFolder') as never,
+    clearFolder: call('attach:clearFolder') as never,
+    pickBotFolder: call('attach:pickBotFolder') as never,
+    clearBotFolder: call('attach:clearBotFolder') as never,
+    pick: call('attach:pick') as never
+  } as never,
+  local: { status: call('local:status') as never, set: call('local:set') as never },
   pages: { info: call('pages:info') as never, openWindow: call('pages:openWindow') as never, exportPdf: call('pages:exportPdf') as never, show: call('pages:show') as never, thumbnail: call('pages:thumbnail') as never },
   // Docs: live documents beside the chat (src/main/docspace).
   docs: {
@@ -178,6 +224,7 @@ const api: SahilBotApi = {
     setGoogleClient: call('connectors:setGoogleClient') as never,
     clearGoogleClient: call('connectors:clearGoogleClient') as never,
     setApiKey: call('connectors:setApiKey') as never,
+    checkAll: call('connectors:checkAll') as never,
     onIcons(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('connectors:icons', fn)
@@ -193,7 +240,23 @@ const api: SahilBotApi = {
     list: call('vault:list') as never, set: call('vault:set') as never, remove: call('vault:remove') as never,
     totpCode: call('vault:totpCode') as never, otpGrants: call('vault:otpGrants') as never, revokeOtpGrant: call('vault:revokeOtpGrant') as never,
     cards: call('vault:cards') as never, setCard: call('vault:setCard') as never, removeCard: call('vault:removeCard') as never,
-    addresses: call('vault:addresses') as never, setAddress: call('vault:setAddress') as never, removeAddress: call('vault:removeAddress') as never
+    addresses: call('vault:addresses') as never, setAddress: call('vault:setAddress') as never, removeAddress: call('vault:removeAddress') as never,
+    status: call('vault:status') as never, items: call('vault:items') as never, saveItem: call('vault:saveItem') as never, removeItem: call('vault:removeItem') as never,
+    unlock: call('vault:unlock') as never, lock: call('vault:lock') as never, reveal: call('vault:reveal') as never, setPrefs: call('vault:setPrefs') as never,
+    setMasterPassword: call('vault:setMasterPassword') as never, removeMasterPassword: call('vault:removeMasterPassword') as never, setTouchIdUnlock: call('vault:setTouchIdUnlock') as never,
+    audit: call('vault:audit') as never, exportBackup: call('vault:exportBackup') as never, importBackup: call('vault:importBackup') as never, importCsv: call('vault:importCsv') as never,
+    purgeLegacy: call('vault:purgeLegacy') as never, rollback: call('vault:rollback') as never, resign: call('vault:resign') as never,
+    authPending: call('vault:authPending') as never, authRespond: call('vault:authRespond') as never,
+    onAuth(cb) {
+      const fn = (_e: unknown, ev: Parameters<typeof cb>[0]): void => cb(ev)
+      ipcRenderer.on('vault:auth', fn)
+      return () => { ipcRenderer.removeListener('vault:auth', fn) }
+    },
+    onChanged(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('vault:changed', fn)
+      return () => { ipcRenderer.removeListener('vault:changed', fn) }
+    }
   },
   purchase: { respond: call('purchase:respond') as never },
   browser: {
@@ -226,9 +289,36 @@ const api: SahilBotApi = {
   memory: {
     list: call('memory:list') as never, remove: call('memory:remove') as never, add: call('memory:add') as never, update: call('memory:update') as never,
     importPreview: call('memory:importPreview') as never, importCommit: call('memory:importCommit') as never,
+    importSave: call('memory:importSave') as never, copyImportPrompt: call('memory:copyImportPrompt') as never,
     getEnabled: call('memory:getEnabled') as never, setEnabled: call('memory:setEnabled') as never
   },
   rules: { list: call('rules:list') as never, save: call('rules:save') as never, setEnabled: call('rules:setEnabled') as never, remove: call('rules:remove') as never },
+  // The knowledge vault (src/main/vault): notes your bots keep, Obsidian-compatible.
+  notesVault: {
+    status: call('notesVault:status') as never, setSettings: call('notesVault:setSettings') as never, setBot: call('notesVault:setBot') as never,
+    list: call('notesVault:list') as never, read: call('notesVault:read') as never, resolve: call('notesVault:resolve') as never,
+    search: call('notesVault:search') as never, save: call('notesVault:save') as never, create: call('notesVault:create') as never,
+    trash: call('notesVault:trash') as never, graph: call('notesVault:graph') as never, changes: call('notesVault:changes') as never,
+    undo: call('notesVault:undo') as never, openInObsidian: call('notesVault:openInObsidian') as never, reveal: call('notesVault:reveal') as never,
+    exportZip: call('notesVault:exportZip') as never, compileNow: call('notesVault:compileNow') as never,
+    onChanged(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('notesVault:changed', fn)
+      return () => ipcRenderer.removeListener('notesVault:changed', fn)
+    }
+  },
+  // Vault → People & Places (src/main/context-engine).
+  people: {
+    status: call('people:status') as never, setSettings: call('people:setSettings') as never, list: call('people:list') as never,
+    card: call('people:card') as never, update: call('people:update') as never, merge: call('people:merge') as never,
+    forget: call('people:forget') as never, undo: call('people:undo') as never, exportData: call('people:exportData') as never,
+    learnNow: call('people:learnNow') as never,
+    onChanged(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('people:changed', fn)
+      return () => { ipcRenderer.removeListener('people:changed', fn) }
+    }
+  },
   // Settings → Memory → What I learned.
   learning: {
     status: call('learning:status') as never, list: call('learning:list') as never, undo: call('learning:undo') as never,
@@ -242,11 +332,24 @@ const api: SahilBotApi = {
   },
   templates: { list: call('templates:list') as never, add: call('templates:add') as never },
   bots: { exportFile: call('bots:export') as never, importPick: call('bots:importPick') as never, importConfirm: call('bots:importConfirm') as never, duplicate: call('bots:duplicate') as never },
+  // Always-on bots: the Needs-you inbox (questions and approvals across all bots) and each bot's autonomy level.
+  needsYou: {
+    list: call('needsYou:list') as never,
+    answer: call('needsYou:answer') as never,
+    reviewed: call('needsYou:reviewed') as never,
+    onChange(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('needsYou:changed', fn)
+      return () => ipcRenderer.removeListener('needsYou:changed', fn)
+    }
+  },
+  botAutonomy: { setLevel: call('botAutonomy:setLevel') as never },
   checkin: { get: call('checkin:get') as never, set: call('checkin:set') as never },
   watchlist: { get: call('watchlist:get') as never, set: call('watchlist:set') as never },
   markets: { quotes: call('markets:quotes') as never, card: call('markets:card') as never, search: call('markets:search') as never },
   cad: { onshapeTest: call('onshape:test') as never },
-  usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never, forRun: call('usage:forRun') as never },
+  fast: { catalog: call('fast:catalog') as never },
+  usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never, forRun: call('usage:forRun') as never, dashboard: call('usage:dashboard') as never, glance: call('usage:glance') as never },
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
   alwaysOn: { status: call('alwaysOn:status') as never, pauseRoutines: call('alwaysOn:pauseRoutines') as never },
   permissions: { status: call('permissions:status') as never, open: call('permissions:open') as never, automation: call('permissions:automation') as never },
@@ -317,6 +420,14 @@ const api: SahilBotApi = {
   swarm: {
     cancel: call('agents:cancelHelper') as never,
     stopRemaining: call('agents:stopRemaining') as never
+  },
+  // The Mac app (the browser build of this file reports 'server'). Settings → Always-on server.
+  runtime: 'electron',
+  remoteServer: {
+    status: call('remoteServer:status') as never,
+    connect: call('remoteServer:connect') as never,
+    disconnect: call('remoteServer:disconnect') as never,
+    openUi: call('remoteServer:openUi') as never
   }
 }
 

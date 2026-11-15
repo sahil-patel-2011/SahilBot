@@ -54,3 +54,52 @@ export class SayEngine implements TtsEngine {
     })
   }
 }
+
+/**
+ * OpenAI text-to-speech (gpt-4o-mini-tts, WAV), for speaking replies when local voices are off and the
+ * user allowed it with an OpenAI key saved. `guard` runs before each request (the monthly limit can
+ * refuse it) and `charged` after, with the characters sent.
+ */
+export class OpenAITtsEngine implements TtsEngine {
+  readonly name = 'OpenAI voice'
+  constructor(private o: {
+    baseUrl: string
+    apiKey: () => string | undefined
+    voice?: string
+    model?: string
+    guard?: (chars: number) => void
+    charged?: (chars: number) => void
+    fetch?: typeof fetch
+  }) {}
+
+  async warm(): Promise<void> {}
+
+  async synth(text: string): Promise<{ audio: Float32Array; rate: number }> {
+    const key = this.o.apiKey()
+    if (!key) throw new Error('No OpenAI key is saved for OpenAI voices.')
+    this.o.guard?.(text.length)
+    const res = await (this.o.fetch ?? fetch)(`${this.o.baseUrl.replace(/\/+$/, '')}/audio/speech`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: this.o.model ?? 'gpt-4o-mini-tts', voice: this.o.voice ?? 'alloy', input: text.slice(0, 4000), response_format: 'wav' }),
+      signal: AbortSignal.timeout(30_000)
+    })
+    if (!res.ok) throw new Error(`OpenAI voice answered ${res.status}`)
+    this.o.charged?.(text.length)
+    const w = fromWav(Buffer.from(await res.arrayBuffer()))
+    return { audio: w.samples, rate: w.rate }
+  }
+}
+
+export type TtsChoice = 'kokoro' | 'openai' | 'say'
+
+/**
+ * Which voice speaks replies. Local on with Kokoro downloaded: Kokoro. Otherwise OpenAI's voice when an
+ * OpenAI key is saved, cloud models are on and the user allowed it; else the Mac's own voice (free,
+ * nothing to download). With local models off Kokoro is never used or downloaded.
+ */
+export function chooseTts(o: { localOn: boolean; kokoroInstalled: boolean; openaiKey: boolean; openaiAllowed: boolean; cloudOn?: boolean; spendingNone?: boolean }): TtsChoice {
+  if (o.localOn && o.kokoroInstalled) return 'kokoro'
+  if (o.openaiKey && o.openaiAllowed && o.cloudOn !== false && !o.spendingNone) return 'openai'
+  return 'say'
+}

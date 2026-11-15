@@ -1,4 +1,5 @@
 import { marked, type Token, type Tokens } from 'marked'
+import type { ChartSpec } from './chart'
 
 // The document model every generator shares: a flat list of blocks with inline spans. Markdown is parsed
 // into it (with a few extensions: [TOC], page breaks, landscape sections, footnotes, captions, callouts),
@@ -12,6 +13,7 @@ import { marked, type Token, type Tokens } from 'marked'
 //   ![alt](path/to/image.png "Caption")               image (alone in its paragraph) with a caption
 //   Table: Caption  or  Figure 2: Caption             caption paragraph
 //   > [!NOTE] text   (NOTE, TIP, IMPORTANT, WARNING, CAUTION)   callout box
+//   ```chart  {"type": "column", "categories": [...], "series": [{"name", "values"}]}  ```   a chart (JSON)
 
 export interface Span {
   text: string
@@ -47,6 +49,7 @@ export type DocBlock =
   | { type: 'quote'; text: RichText; cite?: string }
   | { type: 'callout'; text: RichText; tone?: 'note' | 'tip' | 'important' | 'warning' | 'caution' }
   | { type: 'code'; text: string; lang?: string }
+  | { type: 'chart'; chart: ChartSpec; caption?: string }
   | { type: 'page_break' }
   | { type: 'toc'; title?: string; levels?: number }
   | { type: 'section'; orientation?: 'portrait' | 'landscape' }
@@ -150,6 +153,18 @@ const BREAK_LINE = /^\s*(<!--\s*page-?break\s*-->|\\pagebreak|\\newpage|---\s*pa
 const ORIENT_LINE = /^\s*<!--\s*(landscape|portrait)\s*-->\s*$/i
 const CAPTION = /^(table|figure|fig\.|chart|exhibit)\s*\d*[a-z]?\s*[:.–—-]\s+\S/i
 
+/** A chart spec from a ```chart fence (JSON; a trailing comma or single quotes are forgiven). */
+export function parseChart(text: string): ChartSpec | undefined {
+  const tries = [text, text.replace(/,\s*([}\]])/g, '$1').replace(/'/g, '"')]
+  for (const t of tries) {
+    try {
+      const c = JSON.parse(t) as ChartSpec
+      if (c && typeof c === 'object' && Array.isArray(c.categories) && Array.isArray(c.series)) return { ...c, type: (c.type ?? 'column') as ChartSpec['type'] }
+    } catch { /* next */ }
+  }
+  return undefined
+}
+
 /** Parses Markdown (with the extensions above) into blocks and footnotes. */
 export function parseMarkdown(md: string): ParsedDoc {
   const footnotes: Record<string, string> = {}
@@ -222,7 +237,9 @@ export function parseMarkdown(md: string): ParsedDoc {
         }
         case 'code': {
           const c = t as Tokens.Code
-          blocks.push({ type: 'code', text: c.text, ...(c.lang ? { lang: c.lang } : {}) })
+          const chart = /^(chart|graph)$/i.test(c.lang ?? '') ? parseChart(c.text) : undefined
+          if (chart) blocks.push({ type: 'chart', chart, ...(chart.caption ? { caption: chart.caption } : {}) })
+          else blocks.push({ type: 'code', text: c.text, ...(c.lang ? { lang: c.lang } : {}) })
           break
         }
         case 'hr': blocks.push({ type: 'hr' }); break
@@ -247,6 +264,14 @@ export function parseMarkdown(md: string): ParsedDoc {
     }
   }
   walk(marked.lexer(src))
+  // A "Figure: …" caption right after a chart belongs to it.
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i], next = blocks[i + 1]
+    if (b.type === 'chart' && !b.caption && next?.type === 'paragraph' && next.style === 'caption' && /^(figure|fig\.|chart|exhibit)/i.test(plainText(next.text))) {
+      b.caption = plainText(next.text).replace(/^(figure|fig\.|chart|exhibit)\s*[:.–—-]\s*/i, '')
+      blocks.splice(i + 1, 1)
+    }
+  }
   // A caption paragraph right before or after a table belongs to it.
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]
@@ -309,6 +334,7 @@ export function blocksToMarkdown(blocks: DocBlock[], footnotes: Record<string, s
       case 'quote': out.push(spansToMd(b.text).split('\n').map((l) => `> ${l}`).join('\n') + (b.cite ? `\n>\n> — ${b.cite}` : '')); break
       case 'callout': out.push(`> [!${(b.tone ?? 'note').toUpperCase()}] ${spansToMd(b.text)}`); break
       case 'code': out.push(`\`\`\`${b.lang ?? ''}\n${b.text}\n\`\`\``); break
+      case 'chart': out.push(`\`\`\`chart\n${JSON.stringify({ ...b.chart, ...(b.caption ? { caption: b.caption } : {}) })}\n\`\`\``); break
       case 'page_break': out.push('<!-- pagebreak -->'); break
       case 'toc': out.push('[TOC]'); break
       case 'section': out.push(`<!-- ${b.orientation ?? 'portrait'} -->`); break
@@ -319,13 +345,65 @@ export function blocksToMarkdown(blocks: DocBlock[], footnotes: Record<string, s
   return [...out, ...(notes.length ? [notes.join('\n')] : [])].join('\n\n') + '\n'
 }
 
+// ------------------------------------------------------------------ typography
+
+/**
+ * Typographer's quotes and dashes for prose: "x" → “x”, it's → it’s, -- → –, --- → —, ... → …. `prev` is the
+ * character before the text (spans are converted in sequence so quotes after bold text open or close right).
+ */
+export function smartQuotes(text: string, prev = ' '): string {
+  let out = ''
+  const t = text.replace(/---/g, '—').replace(/(^|\s)--(?=\s|$)/g, '$1–').replace(/(\d)--(\d)/g, '$1–$2').replace(/\.\.\.(?!\.)/g, '…')
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]
+    const before = i ? t[i - 1] : prev
+    const opening = /[\s([{—–/-]/.test(before) || before === ''
+    if (c === '"') out += opening ? '“' : '”'
+    else if (c === "'") out += opening && !/^\d\ds\b/.test(t.slice(i + 1, i + 4)) ? '‘' : '’'
+    else out += c
+  }
+  return out
+}
+
+/** Spans with typographer's quotes (code and links' URLs untouched). */
+export function smartSpans(spans: Span[]): Span[] {
+  let prev = ' '
+  return spans.map((s) => {
+    if (s.footnote || s.code) { prev = s.code ? 'x' : prev; return s }
+    const text = smartQuotes(s.text, s.break ? ' ' : prev)
+    if (text) prev = text[text.length - 1]
+    return text === s.text ? s : { ...s, text }
+  })
+}
+
+const NUMERIC_CELL = /^\s*[-+−(]?\s*[$€£¥]?\s*[-+−]?\d[\d,]*(\.\d+)?\s*(%|pp|pts?|x|×|[kmb]|bn|mm)?\s*[)]?\s*$/i
+
+/** Columns whose body cells are all numbers (or blank / dashes): they're right-aligned with tabular figures. */
+export function numericColumns(header: Cell[] | undefined, rows: Cell[][]): boolean[] {
+  const n = Math.max(header?.length ?? 0, ...rows.map((r) => r.length))
+  return Array.from({ length: n }, (_, c) => {
+    const vals = rows.map((r) => r[c]).filter((v) => v !== null && v !== undefined && plainText(v).trim() !== '' && !/^[-–—−]$|^n\/?a$/i.test(plainText(v).trim()))
+    return vals.length > 0 && vals.every((v) => typeof v === 'number' || NUMERIC_CELL.test(plainText(v)))
+  })
+}
+
+/** Row kinds for table styling: a "Total"/"Subtotal" row (by its first cell, or the table's total_row flag). */
+export function rowKind(b: Extract<DocBlock, { type: 'table' }>, i: number): 'total' | 'subtotal' | 'body' {
+  const first = plainText(b.rows[i]?.[0] ?? '').trim()
+  if (/^(grand\s+)?total\b|^total due\b|^net\b/i.test(first)) return 'total'
+  if (/^sub-?total\b/i.test(first)) return 'subtotal'
+  if (b.total_row && i === b.rows.length - 1) return 'total'
+  return 'body'
+}
+
 // ------------------------------------------------------------------ HTML (PDF export, previews)
 
-function spansToHtml(text: RichText, notes: Map<string, number>): string {
-  return spansOf(text).map((s) => {
+function spansToHtml(text: RichText, notes: Map<string, number>, smart = false): string {
+  const spans = spansOf(text)
+  return (smart ? smartSpans(spans) : spans).map((s) => {
     if (s.footnote) {
       const n = notes.get(s.footnote) ?? (notes.set(s.footnote, notes.size + 1), notes.size)
-      return `<sup class="fn"><a href="#fn-${n}">${n}</a></sup>`
+      return `<sup class="fn"><a href="#fn-${n}" id="fnref-${n}">${n}</a></sup>`
     }
     let t = escapeHtml(s.text)
     if (s.code) t = `<code>${t}</code>`
@@ -346,42 +424,109 @@ export const slugId = (s: string, used: Set<string>): string => {
   return id
 }
 
+export interface HtmlOptions {
+  footnotes?: Record<string, string>
+  /** Resolves an image src to a data: URI (or undefined to drop it). */
+  image?: (src: string) => string | undefined
+  /** Draws a chart block (SVG); without it charts are left out. */
+  chart?: (c: ChartSpec) => string
+  /** Typographer's quotes and dashes in prose. */
+  smart?: boolean
+  /** "Table 1.", "Figure 2." numbering on captions. */
+  numbering?: boolean
+  /** Page numbers for TOC entries by heading id (the PDF's second pass fills them in). */
+  tocPages?: Record<string, string>
+  /** Heading for the footnotes list (default none: a rule above the notes). */
+  notesTitle?: string
+  /** "Role — Org | 2021 – Present" headings (level 3+) get the part after " | " set at the right margin. */
+  sideHeads?: boolean
+}
+
+/** The headings a TOC lists, with their ids, in order. */
+export function headingIds(blocks: DocBlock[]): Array<{ level: number; text: string; id: string; index: number }> {
+  const used = new Set<string>()
+  const out: Array<{ level: number; text: string; id: string; index: number }> = []
+  blocks.forEach((b, i) => { if (b.type === 'heading') out.push({ level: b.level, text: plainText(b.text), id: slugId(plainText(b.text), used), index: i }) })
+  return out
+}
+
 /**
  * Body HTML for blocks: headings get ids, [TOC] lists them, footnotes collect at the end, landscape
- * sections use the named page "landscape". `image` resolves an image src to a data: URI (or undefined to drop it).
+ * sections use the named page "landscape", numeric table columns are marked "num".
  */
-export function blocksToHtml(blocks: DocBlock[], o: { footnotes?: Record<string, string>; image?: (src: string) => string | undefined } = {}): string {
+export function blocksToHtml(blocks: DocBlock[], o: HtmlOptions = {}): string {
   const notes = new Map<string, number>()
-  const used = new Set<string>()
-  const ids = blocks.map((b) => (b.type === 'heading' ? slugId(plainText(b.text), used) : ''))
-  const heads = blocks.map((b, i) => (b.type === 'heading' ? { level: b.level, text: plainText(b.text), id: ids[i] } : null)).filter(Boolean) as Array<{ level: number; text: string; id: string }>
+  const heads = headingIds(blocks)
+  const idAt = new Map(heads.map((h) => [h.index, h.id]))
+  const sp = (t: RichText) => spansToHtml(t, notes, o.smart)
   const listHtml = (items: Array<string | ListItem>, ordered: boolean): string =>
-    `<${ordered ? 'ol' : 'ul'}>${items.map((raw) => { const it = listItem(raw); return `<li>${it.checked === undefined ? '' : it.checked ? '☑ ' : '☐ '}${spansToHtml(it.text, notes)}${it.items ? listHtml(it.items, false) : ''}</li>` }).join('')}</${ordered ? 'ol' : 'ul'}>`
+    `<${ordered ? 'ol' : 'ul'}${items.some((x) => listItem(x).checked !== undefined) ? ' class="tasks"' : ''}>${items.map((raw) => { const it = listItem(raw); return `<li${it.checked === undefined ? '' : ` class="${it.checked ? 'done' : 'todo'}"`}>${it.checked === undefined ? '' : it.checked ? '<span class="box">☑</span> ' : '<span class="box">☐</span> '}${sp(it.text)}${it.items ? listHtml(it.items, false) : ''}</li>` }).join('')}</${ordered ? 'ol' : 'ul'}>`
   const parts: string[] = []
-  let landscape = false
+  let landscape = false, tableNo = 0, figureNo = 0
+  const cap = (kind: 'Table' | 'Figure', text: string, n: number): string => {
+    const clean = text.replace(new RegExp(`^${kind === 'Table' ? 'table' : '(figure|fig\\.|chart|exhibit)'}\\s*\\d*[a-z]?\\s*[:.–—-]\\s*`, 'i'), '')
+    const has = new RegExp(`^${kind === 'Table' ? 'table' : '(figure|fig\\.|exhibit)'}\\s*\\d+`, 'i').test(text)
+    return o.numbering && !has ? `<span class="cap-n">${kind} ${n}.</span> ${escapeHtml(o.smart ? smartQuotes(clean) : clean)}` : escapeHtml(o.smart ? smartQuotes(text) : text)
+  }
   parts.push('<div class="sec">')
   blocks.forEach((b, i) => {
     switch (b.type) {
-      case 'heading': parts.push(`<h${b.level} id="${ids[i]}">${spansToHtml(b.text, notes)}</h${b.level}>`); break
-      case 'paragraph': parts.push(`<p class="${b.style ?? 'normal'}"${b.align ? ` style="text-align:${b.align}"` : ''}>${spansToHtml(b.text, notes)}</p>`); break
+      case 'heading': {
+        const side = o.sideHeads && b.level >= 3 ? /^(.*\S)\s+\|\s+(.+)$/.exec(plainText(b.text)) : null
+        if (side) {
+          const role = /^(.*?)\s+([—–]|-{1,2})\s+(.+)$/.exec(side[1])
+          const main = role ? `<span class="h-role">${escapeHtml(smartQuotes(role[1]))}</span><span class="h-org"> — ${escapeHtml(smartQuotes(role[3]))}</span>` : `<span class="h-role">${escapeHtml(smartQuotes(side[1]))}</span>`
+          parts.push(`<h${b.level} id="${idAt.get(i)}" class="side"><span class="h-main">${main}</span><span class="h-side">${escapeHtml(smartQuotes(side[2]))}</span></h${b.level}>`)
+        } else parts.push(`<h${b.level} id="${idAt.get(i)}">${sp(b.text)}</h${b.level}>`)
+        break
+      }
+      case 'paragraph': parts.push(`<p class="${b.style ?? 'normal'}"${b.align ? ` style="text-align:${b.align}"` : ''}>${sp(b.text)}</p>`); break
       case 'list': parts.push(listHtml(b.items, !!b.ordered)); break
       case 'table': {
+        const hasHeader = !!b.header && b.header.some((c) => plainText(c).trim() !== '')
         const n = Math.max(b.header?.length ?? 0, ...b.rows.map((r) => r.length))
-        const al = (c: number) => (b.align?.[c] ? ` style="text-align:${b.align[c]}"` : '')
-        const row = (r: Cell[], tag: 'th' | 'td') => `<tr>${Array.from({ length: n }, (_, c) => `<${tag}${al(c)}>${spansToHtml(r[c] === null || r[c] === undefined ? '' : String(r[c]), notes)}</${tag}>`).join('')}</tr>`
-        parts.push(`${b.caption ? `<p class="caption">${escapeHtml(b.caption)}</p>` : ''}<table class="${b.banded === false ? '' : 'banded'}${b.total_row ? ' total' : ''}">${b.widths ? `<colgroup>${b.widths.map((w) => `<col style="width:${w}%">`).join('')}</colgroup>` : ''}${b.header ? `<thead>${row(b.header, 'th')}</thead>` : ''}<tbody>${b.rows.map((r) => row(r, 'td')).join('')}</tbody></table>`)
+        const num = numericColumns(b.header, b.rows)
+        const al = (c: number) => b.align?.[c] ?? (num[c] ? 'right' : null)
+        const cls = (c: number) => { const a = al(c); return a === 'right' ? ' class="r"' : a === 'center' ? ' class="c"' : '' }
+        const row = (r: Cell[], tag: 'th' | 'td', kind = 'body') => `<tr${kind !== 'body' ? ` class="${kind}"` : ''}>${Array.from({ length: n }, (_, c) => `<${tag}${cls(c)}>${sp(r[c] === null || r[c] === undefined ? '' : String(r[c]))}</${tag}>`).join('')}</tr>`
+        if (b.caption) tableNo++
+        const variant = b.variant === 'plain' ? ' plain' : ''
+        const wide = n >= 7 ? ' wide' : ''
+        const keep = b.rows.length <= 12 ? ' keep' : ''
+        parts.push(`<div class="tbl${variant}${keep}">${b.caption ? `<p class="caption tcap">${cap('Table', b.caption, tableNo)}</p>` : ''}<table class="${b.banded === false || b.variant === 'plain' ? '' : 'banded'}${variant}${wide}">${b.widths ? `<colgroup>${b.widths.map((w) => `<col style="width:${w}%">`).join('')}</colgroup>` : ''}${hasHeader ? `<thead>${row(b.header!, 'th')}</thead>` : ''}<tbody>${b.rows.map((r, k) => row(r, 'td', rowKind(b, k))).join('')}</tbody></table></div>`)
         break
       }
       case 'image': {
         const src = o.image?.(b.src)
-        if (src) parts.push(`<figure><img src="${src}" alt="${escapeHtml(b.alt ?? '')}"${b.width ? ` style="width:${b.width}px"` : ''}>${b.caption ? `<figcaption class="caption">${escapeHtml(b.caption)}</figcaption>` : ''}</figure>`)
+        if (!src) break
+        if (b.caption) figureNo++
+        parts.push(`<figure><img src="${src}" alt="${escapeHtml(b.alt ?? b.caption ?? '')}"${b.width ? ` style="width:${b.width}px"` : ''}>${b.caption ? `<figcaption class="caption">${cap('Figure', b.caption, figureNo)}</figcaption>` : ''}</figure>`)
         break
       }
-      case 'quote': parts.push(`<blockquote>${spansToHtml(b.text, notes)}${b.cite && !plainText(b.text).includes(b.cite) ? `<cite>— ${escapeHtml(b.cite)}</cite>` : ''}</blockquote>`); break
-      case 'callout': parts.push(`<div class="callout ${b.tone ?? 'note'}">${spansToHtml(b.text, notes)}</div>`); break
-      case 'code': parts.push(`<pre><code>${escapeHtml(b.text)}</code></pre>`); break
+      case 'chart': {
+        if (!o.chart) break
+        const caption = b.caption ?? b.chart.caption
+        if (caption) figureNo++
+        parts.push(`<figure class="chart-fig">${o.chart(b.chart)}${caption ? `<figcaption class="caption">${cap('Figure', caption, figureNo)}</figcaption>` : ''}</figure>`)
+        break
+      }
+      case 'quote': parts.push(`<blockquote>${sp(b.text)}${b.cite && !plainText(b.text).includes(b.cite) ? `<cite>— ${escapeHtml(b.cite)}</cite>` : ''}</blockquote>`); break
+      case 'callout': {
+        const tone = b.tone ?? 'note'
+        const label = { note: 'Note', tip: 'Tip', important: 'Important', warning: 'Warning', caution: 'Caution' }[tone] ?? 'Note'
+        parts.push(`<div class="callout ${tone}"><span class="callout-label">${label}</span>${sp(b.text)}</div>`)
+        break
+      }
+      case 'code': parts.push(`<pre class="${b.text.split('\n').length <= 30 ? 'keep' : ''}"><code${b.lang ? ` class="lang-${escapeHtml(b.lang)}"` : ''}>${escapeHtml(b.text.replace(/\n$/, ''))}</code></pre>`); break
       case 'page_break': parts.push('<div class="pb"></div>'); break
-      case 'toc': parts.push(`<nav class="toc"><p class="toc-title">${escapeHtml(b.title ?? 'Contents')}</p>${heads.filter((h) => h.level <= (b.levels ?? 3)).map((h) => `<a class="l${h.level}" href="#${h.id}">${escapeHtml(h.text)}</a>`).join('')}</nav>`); break
+      case 'toc': {
+        const levels = b.levels ?? 3
+        const entries = heads.filter((h) => h.level <= levels && h.index > i)
+        const list = entries.length ? entries : heads.filter((h) => h.level <= levels)
+        const top = Math.min(...list.map((h) => h.level))
+        parts.push(`<nav class="toc"><p class="toc-title">${escapeHtml(b.title ?? 'Contents')}</p>${list.map((h) => `<a class="l${h.level} d${h.level - top}" href="#${h.id}"><span class="tt">${escapeHtml(o.smart ? smartQuotes(h.text) : h.text)}</span><span class="dots"></span><span class="pg">${o.tocPages ? escapeHtml(o.tocPages[h.id] ?? '') : ''}</span></a>`).join('')}</nav>`)
+        break
+      }
       case 'section': {
         const want = b.orientation === 'landscape'
         if (want !== landscape) { landscape = want; parts.push(`</div><div class="sec${want ? ' landscape' : ''}">`) }
@@ -393,7 +538,7 @@ export function blocksToHtml(blocks: DocBlock[], o: { footnotes?: Record<string,
   parts.push('</div>')
   if (notes.size) {
     const fn = o.footnotes ?? {}
-    parts.push(`<section class="footnotes"><hr><ol>${[...notes.entries()].map(([id, n]) => `<li id="fn-${n}">${spansToHtml(fn[id] ?? `(missing footnote "${id}")`, new Map())}</li>`).join('')}</ol></section>`)
+    parts.push(`<section class="footnotes">${o.notesTitle ? `<h2 class="notes-title">${escapeHtml(o.notesTitle)}</h2>` : '<hr>'}<ol>${[...notes.entries()].map(([id, n]) => `<li id="fn-${n}">${spansToHtml(fn[id] ?? `(missing footnote "${id}")`, new Map(), o.smart)} <a class="back" href="#fnref-${n}">↑</a></li>`).join('')}</ol></section>`)
   }
   return parts.join('\n')
 }

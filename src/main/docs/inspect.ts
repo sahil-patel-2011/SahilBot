@@ -294,7 +294,11 @@ export async function inspectPptx(data: Buffer): Promise<DeckInfo> {
     const notes = notesXml
       ? all(parseXml(notesXml), 'p:sp').filter((s) => first(s, 'p:ph')?.attrs.type === 'body').map((s) => all(s, 'a:p').map((p) => textOf(p, 'a:t')).filter(Boolean).join('\n')).join('\n').trim()
       : ''
-    const bg = first(first(root, 'p:bg') ?? { name: '', attrs: {}, children: [], text: '' }, 'a:srgbClr')?.attrs.val
+    const bgOf = (r: ReturnType<typeof parseXml>) => first(first(r, 'p:bg') ?? { name: '', attrs: {}, children: [], text: '' }, 'a:srgbClr')?.attrs.val
+    let bg = bgOf(root)
+    // A slide without its own background shows its layout's (slide masters).
+    const layoutTarget = Object.values(rels).find((t) => /slideLayout/.test(t))
+    if (!bg && layoutTarget) { const lx = await part(zip, `ppt/${layoutTarget.replace(/^\.\.\//, '')}`); if (lx) bg = bgOf(parseXml(lx)) }
     const texts = shapes.flatMap((s) => s.paragraphs.map((p) => p.text)).concat(tables.flatMap((t) => t.rows.flat()))
     slides.push({
       n,

@@ -1,0 +1,10 @@
+node_modules
+out
+dist
+vendor
+test-results
+research
+design
+.git
+.github
+**/*.log

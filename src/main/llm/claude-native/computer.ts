@@ -17,9 +17,11 @@ import type { WireTool } from '../client'
 // x,y. The loop runs it through the same validation, permissions, hard stops, overlay and approvals as
 // any computer call: only the name and arguments are rewritten here.
 //
-// Members SahilBot's tool can't do exactly (zoom, middle_click, left_mouse_down/up, cursor_position,
-// hold_key) are switched off with configs, so Claude never plans around them. Zoom especially: its
-// coordinates stay in the full screenshot's space, while SahilBot's region screenshot re-bases them.
+// Members SahilBot's tool can't do exactly (middle_click, left_mouse_down/up, cursor_position, hold_key) are
+// switched off with configs, so Claude never plans around them. zoom is on: it maps to the computer tool's zoom
+// action, which captures the region ([x0, y0, x1, y1] corners in the full screenshot's pixels, per the computer
+// use page) at full pixel density and leaves the coordinate frame alone, so Claude's later coordinates stay in
+// the full screenshot's space as the toolset expects. key's repeat maps to the tool's own repeat.
 
 export const TOOLSET_TYPE = 'computer_toolset_20260801'
 export const TOOLSET_NAME = 'computer'
@@ -31,7 +33,7 @@ export const TOOLSET_MEMBERS = [
 ] as const
 
 /** Members turned off: SahilBot's computer tool has no exact equivalent. */
-export const DISABLED_MEMBERS = ['zoom', 'middle_click', 'left_mouse_down', 'left_mouse_up', 'cursor_position', 'hold_key'] as const
+export const DISABLED_MEMBERS = ['middle_click', 'left_mouse_down', 'left_mouse_up', 'cursor_position', 'hold_key'] as const
 
 /** The exact text the toolset expects for actions skipped after an earlier failure in the same turn. */
 export const HALT_TEXT = 'Not executed: an earlier computer action in this turn failed.'
@@ -55,7 +57,7 @@ export const isToolsetMember = (name: string): boolean => (TOOLSET_MEMBERS as re
 export const ALIAS_NAME = 'mac_ui'
 export const ALIAS_ACTIONS = [
   'ui', 'apps', 'windows', 'clipboard_read', 'clipboard_write', 'click_ref', 'type_ref', 'set_value', 'press', 'click_element',
-  'open_app', 'activate_app', 'quit_app', 'focus_window', 'menu', 'paste_text', 'copy', 'select_all'
+  'open_app', 'activate_app', 'quit_app', 'focus_window', 'menu', 'paste_text', 'copy', 'select_all', 'wait_for'
 ] as const
 
 const COORDINATE_PROPS = ['x', 'y', 'x2', 'y2', 'coords', 'amount', 'dx', 'display', 'region', 'seconds']
@@ -79,6 +81,7 @@ export function aliasTool(computer: WireTool): WireTool {
 - click_ref {ref, modifiers?}, type_ref {ref, text, clear?, submit?}, set_value {ref, value}, press {ref, ax_action}: act on an element by ref.
 - apps, windows {app?}, open_app {app}, activate_app {app}, focus_window {window}, quit_app {app} (asks first), menu {path: "File > Export > PDF…"}.
 - paste_text {text, ref?} (fast for long or non-ASCII text; the clipboard is put back), copy {ref?}, select_all {ref?}, clipboard_read, clipboard_write {text}.
+- wait_for {query?, app?, gone?}: wait until the screen settles, or until an element with that text appears (gone: disappears), instead of a fixed wait.
 Prefer refs over coordinates when ui lists the element. SahilBot never types passwords or confirms payments: those steps go to the user.`,
       parameters: { ...p, properties, allOf }
     }
@@ -136,6 +139,13 @@ export function translateComputer(member: string, input: Record<string, unknown>
   switch (member) {
     case 'screenshot':
       return { args: { action: 'screenshot' } }
+    case 'zoom': {
+      const r = input.region
+      if (!Array.isArray(r) || r.length !== 4 || !r.every((n) => typeof n === 'number' && Number.isFinite(n))) return { error: 'zoom needs region [x0, y0, x1, y1]: the top-left and bottom-right corners, in the pixels of the latest screenshot.' }
+      const [x0, y0, x1, y1] = (r as number[]).map((n) => Math.round(n))
+      if (x1 <= x0 || y1 <= y0) return { error: 'zoom region is [x0, y0, x1, y1] with x1 > x0 and y1 > y0.' }
+      return { args: { action: 'zoom', region: [x0, y0, x1, y1] } }
+    }
     case 'left_click': case 'right_click': case 'double_click': case 'triple_click': {
       if (!coordinate) return needPoint(member)
       const mods = modifiers(input.text)
@@ -170,9 +180,9 @@ export function translateComputer(member: string, input: Record<string, unknown>
       if (typeof input.text !== 'string' || !input.text.trim()) return { error: 'key needs text, e.g. "Return" or "super+s".' }
       const repeat = input.repeat === undefined ? 1 : Number(input.repeat)
       if (!Number.isInteger(repeat) || repeat < 1 || repeat > 100) return { error: 'repeat is a whole number from 1 to 100.' }
-      // SahilBot presses a combination once per call: a repeat over 1 is answered, not half-done.
-      if (repeat > 1) return { error: `Pressing a key several times in one call isn't available here: send key "${input.text}" once per call (${repeat} calls), or type the text.` }
-      return { args: { action: 'key', keys: normalizeKey(input.text) } }
+      // SahilBot's key action presses the combination `repeat` times (at most 50, the tool's own limit).
+      if (repeat > 50) return { error: 'repeat is at most 50 here: send key again for more, or type the text.' }
+      return { args: { action: 'key', keys: normalizeKey(input.text), ...(repeat > 1 ? { repeat } : {}) } }
     }
     case 'wait': {
       const d = typeof input.duration === 'number' && Number.isFinite(input.duration) ? input.duration : 1

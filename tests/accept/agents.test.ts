@@ -27,6 +27,8 @@ describe('agent platform', () => {
       return { toolCalls: [{ name: 'agents', arguments: JSON.stringify({ tasks: CITIES.map((c) => ({ title: `${c} facts`, task: `Find the population of ${c}.` })) }) }] }
     }
     for (let i = 0; i < 40; i++) llm.script.push(reply)
+    // The modes live under the composer's Modes menu.
+    await page.click('[data-testid="modes-menu"]')
     await page.click('[data-testid="team-toggle"]')
     await page.fill('[data-testid="composer-input"]', 'Compare the populations of Paris and Tokyo')
     await page.keyboard.press('Enter')
@@ -82,8 +84,16 @@ describe('agent platform', () => {
     const prompt = sys(llm.requests.at(-1)!)
     expect(prompt).toContain('Finish the whole job')
     expect(prompt).not.toContain('cite the sources inline as [1]')
-    // Built-in skills are listed by name for the agent to read on demand.
-    expect(prompt).toContain('deep-web-research')
+    // Built-in skills are listed by name for the agent to read on demand (agent work; a chat doesn't list them).
+    await page.click('[data-testid="new-chat"]')
+    llm.script.push({ content: 'ok' })
+    const before = llm.requests.length
+    await page.fill('[data-testid="composer-input"]', 'Draft a memo about the new schedule')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => llm.requests.length > before).toBe(true)
+    const agentPrompt = sys(llm.requests.at(-1)!)
+    expect(agentPrompt).toContain('deep-web-research')
+    expect(agentPrompt).toContain('Captain Sahil')
     await app.close()
   })
 
@@ -198,6 +208,8 @@ describe('quick ask and deep research', () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
     llm.script.push({ content: 'ok' })
     const before = llm.requests.length
+    // The modes live under the composer's Modes menu.
+    await page.click('[data-testid="modes-menu"]')
     await page.click('[data-testid="deep-toggle"]')
     await page.fill('[data-testid="composer-input"]', 'the market for at-home urology tests')
     await page.keyboard.press('Enter')
@@ -228,6 +240,8 @@ describe('plan, then execute', () => {
         : { content: 'answers did not arrive' },
       (req) => toolOut(req).includes('approved the plan') ? { content: 'Plan approved; here is the newsletter draft.' } : { content: 'plan was not approved' }
     )
+    // The modes live under the composer's Modes menu.
+    await page.click('[data-testid="modes-menu"]')
     await page.click('[data-testid="plan-toggle"]')
     await page.fill('[data-testid="composer-input"]', 'Write our monthly newsletter')
     await page.keyboard.press('Enter')

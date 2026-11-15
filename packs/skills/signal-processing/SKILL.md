@@ -4,6 +4,7 @@ description: Filter, analyze or transform signals (FFT, filtering, sampling) wit
 source: you
 uses: 0
 category: Electrical Engineering
+triggers: fft, filter design, low pass filter, sampling rate, aliasing, spectrum, signal noise
 ---
 
 1. Load the data (CSV, WAV); note sample rate, units and length.

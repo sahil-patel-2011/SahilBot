@@ -179,7 +179,7 @@ textarea.set-input { min-height: 0; }
 .vault-add { padding: 14px 0 16px; }
 .vault-add .btn { grid-column: 1 / -1; justify-self: end; }
 .set-row .icon-btn { color: var(--text-3); }
-.set-row .icon-btn:hover { color: var(--danger); }
+.set-row .icon-btn:hover { color: var(--danger-text); }
 
 /* ---------------------------------------------------------------- onboarding: one centred header on every step */
 .onboard-card { padding: 26px 30px 24px; }

@@ -25,7 +25,7 @@
 .mm-btn.on { background: var(--selected); }
 .mm-btn.primary { background: var(--text); color: var(--bg); }
 .mm-btn.primary:hover { background: color-mix(in srgb, var(--text) 85%, var(--bg)); }
-.mm-btn.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.mm-btn.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger-text); }
 .mm-btn.danger:hover { background: color-mix(in srgb, var(--danger) 22%, transparent); }
 .mm-btn:disabled { opacity: .45; cursor: default; }
 .mm-btn:focus-visible, .mm-chip:focus-visible, .mm-text:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }

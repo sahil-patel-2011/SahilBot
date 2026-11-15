@@ -4,6 +4,7 @@ description: Write and run end-to-end browser tests with Microsoft Playwright.
 source: you
 uses: 0
 category: Coding
+triggers: playwright, e2e test, end-to-end test, browser test, ui test, test the page
 ---
 
 1. In the project: `npm i -D @playwright/test && npx playwright install chromium` (asks: it downloads).

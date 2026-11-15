@@ -4,7 +4,8 @@
 //
 // 1. Finds the DMG and ZIP electron-builder wrote to dist/ (SahilBot-<version>-<build>-arm64.*).
 // 2. Copies them to dist/release/ twice: the versioned names (kept for history) and the stable names
-//    SahilBot-mac-arm64.dmg / SahilBot-mac-arm64.zip, plus SHA256SUMS.txt.
+//    SahilBot-mac-arm64.dmg / SahilBot-mac-arm64.zip, plus SHA256SUMS.txt. SahilBot Server tarballs in
+//    dist/server (SahilBot-server-linux-arm64.tar.gz, -x64) go along the same way when present.
 // 3. Creates the versioned release v<version>-<build> with every file, marked Latest. GitHub's
 //    /releases/latest/download/<name> always resolves to the newest non-prerelease release, and every
 //    versioned release carries the stable names, so
@@ -19,6 +20,15 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export const STABLE = { dmg: 'SahilBot-mac-arm64.dmg', zip: 'SahilBot-mac-arm64.zip' }
+/** SahilBot Server tarballs (docs/server.md), built by the workflow's server job into <dist>/server. Optional. */
+export const SERVER_STABLE = { arm64: 'SahilBot-server-linux-arm64.tar.gz', x64: 'SahilBot-server-linux-x64.tar.gz' }
+
+/** The server tarballs present in <dist>/server (any of them may be missing; the Mac release goes out anyway). */
+export function findServerArtifacts(serverDir) {
+  if (!existsSync(serverDir)) return {}
+  const files = readdirSync(serverDir)
+  return Object.fromEntries(Object.entries(SERVER_STABLE).filter(([, n]) => files.includes(n)).map(([arch, n]) => [arch, join(serverDir, n)]))
+}
 export const ROLLING_TAG = 'latest'
 
 export function parseArgs(argv) {
@@ -53,7 +63,7 @@ export function findArtifacts(files, version, build) {
   return { dmg: pick('dmg'), zip: pick('zip') }
 }
 
-export function releaseNotes({ version, build, sha, signing, repo }) {
+export function releaseNotes({ version, build, sha, signing, repo, server }) {
   const base = repo ? `https://github.com/${repo}` : ''
   const link = repo ? `${base}/releases/latest/download/${STABLE.dmg}` : STABLE.dmg
   const lines = [
@@ -78,6 +88,16 @@ export function releaseNotes({ version, build, sha, signing, repo }) {
       'After the first launch it opens normally.')
   }
   lines.push('', `Files: \`${STABLE.dmg}\` and \`${STABLE.zip}\` (always the newest build), the versioned copies of this build, and \`SHA256SUMS.txt\`.`)
+  if (server?.length) {
+    const url = (n) => (repo ? `https://github.com/${repo}/releases/latest/download/${n}` : n)
+    lines.push('', '### SahilBot Server (always-on bots on a Raspberry Pi, a VM or a Mac mini)',
+      `Linux ${server.map((n) => `[${n.includes('arm64') ? 'arm64 (Raspberry Pi 4/5, 64-bit OS)' : 'x64'}](${url(n)})`).join(' · ')}. On a Raspberry Pi 5 (8 GB recommended, 4 GB minimum):`,
+      '```sh',
+      `curl -fsSLO ${url(SERVER_STABLE.arm64)}`,
+      `tar -xzf ${SERVER_STABLE.arm64} && ./sahilbot-server/install.sh`,
+      '```',
+      'The installer sets up Node.js if needed, a service that starts at boot, and prints a pairing code. See docs/server.md.')
+  }
   return lines.join('\n')
 }
 
@@ -105,11 +125,20 @@ export function prepare({ dist, version, build }) {
     copyFileSync(src, join(out, STABLE[ext]))
   }
   const names = [versioned.dmg, versioned.zip, STABLE.dmg, STABLE.zip]
+  const stableNames = [STABLE.dmg, STABLE.zip]
+  for (const [arch, src] of Object.entries(findServerArtifacts(join(dist, 'server')))) {
+    const v = `SahilBot-server-${version}-${build}-linux-${arch}.tar.gz`
+    copyFileSync(src, join(out, v))
+    copyFileSync(src, join(out, SERVER_STABLE[arch]))
+    names.push(v, SERVER_STABLE[arch])
+    stableNames.push(SERVER_STABLE[arch])
+  }
   writeFileSync(join(out, 'SHA256SUMS.txt'), names.map((n) => `${sha256(join(out, n))}  ${n}`).join('\n') + '\n')
   return {
     out,
     all: [...names, 'SHA256SUMS.txt'].map((n) => join(out, n)),
-    stable: [STABLE.dmg, STABLE.zip, 'SHA256SUMS.txt'].map((n) => join(out, n))
+    stable: [...stableNames, 'SHA256SUMS.txt'].map((n) => join(out, n)),
+    server: stableNames.filter((n) => n.startsWith('SahilBot-server-'))
   }
 }
 
@@ -131,7 +160,7 @@ function main() {
   const files = prepare(o)
   const notesFile = join(files.out, 'NOTES.md')
   const rollingNotesFile = join(files.out, 'ROLLING.md')
-  writeFileSync(notesFile, releaseNotes({ ...o, repo }))
+  writeFileSync(notesFile, releaseNotes({ ...o, repo, server: files.server }))
   writeFileSync(rollingNotesFile, rollingNotes({ ...o, repo }))
   const gh = (args, quiet = false) => execFileSync('gh', [...args, ...(repo ? ['--repo', repo] : [])], { stdio: quiet ? 'ignore' : 'inherit' })
   const exists = (tag) => {

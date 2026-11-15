@@ -4,6 +4,7 @@ description: FRC robot design process from kickoff to competition: requirements,
 source: you
 uses: 0
 category: FRC Design
+triggers: frc robot design, robot design process, kickoff, robot archetype, prototype, frc mechanism design, design season
 ---
 
 ## When to use

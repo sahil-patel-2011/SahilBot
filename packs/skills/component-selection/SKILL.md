@@ -4,6 +4,7 @@ description: Choose real components (ICs, passives, connectors) that are in stoc
 source: you
 uses: 0
 category: Electrical Engineering
+triggers: part number, digikey, mouser, choose a component, in stock, datasheet
 ---
 
 1. Write requirements with margin (voltage at least 1.5x, current at least 1.25x, temperature range), package, cost, quantity.

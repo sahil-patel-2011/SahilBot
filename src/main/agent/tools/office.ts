@@ -491,25 +491,28 @@ export function officeTool(o: OfficeDeps): ToolDef<OfficeArgs> {
 }
 
 /** review_document: the self-review every generated document gets before it's presented. */
-export function reviewDocumentTool(o: { getWorkspace: () => string }): ToolDef<{ path: string; source?: string; require_toc?: boolean }> {
+export function reviewDocumentTool(o: { getWorkspace: () => string }): ToolDef<{ path: string; source?: string; require_toc?: boolean; render?: boolean; pages?: string; expect_pages?: number }> {
   return {
     name: 'review_document',
     label: 'Review document',
     core: true,
     group: 'Office',
     effect: 'read',
-    description: 'Check a finished .docx, .xlsx, .pptx or .pdf before presenting it: structure (heading order, a TOC when long, no empty sections/slides), formatting (consistent styles, slide text that overflows, #REF!/#DIV/0!, formulas that compute, totals that miss rows), content (placeholders like TBD/Lorem/[insert…], duplicated paragraphs, numbers that differ from source: a CSV/XLSX of the true figures) and common typos. Returns PASS/FAIL items with locations. Fix every FAIL and review again (at most 2 rounds).',
+    description: 'Check a finished .docx, .xlsx, .pptx or .pdf before presenting it: structure (heading order, a TOC when long, no empty sections/slides), formatting (consistent styles, slide text that overflows, #REF!/#DIV/0!, formulas that compute, totals that miss rows), content (placeholders like TBD/Lorem/[insert…], duplicated paragraphs, numbers that differ from source: a CSV/XLSX of the true figures) and common typos. It also renders the pages (no Office needed: PDF exactly, Word/PowerPoint/Excel through macOS Quick Look), reports the real page count, and checks them: blank pages, content cut off at the page edge, slide text overflowing its box, low-contrast text, a nearly empty last page, more pages than expect_pages. You get a picture of all pages (and the pages you name in "pages", e.g. "1" or "2-3") to look at yourself. Fix every FAIL by rebuilding with create_document options (fit_pages, margins, font_size, theme…), never by editing the file\'s XML, and review again (at most 2 rounds).',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', pattern: '\\.(docx|xlsx|xlsm|pptx|pdf)$' },
         source: { type: 'string', description: 'CSV or XLSX whose numbers the document must match (first column labels, first row headers)' },
-        require_toc: { type: 'boolean' }
+        require_toc: { type: 'boolean' },
+        render: { type: 'boolean', description: 'Render and check the pages (default true)' },
+        pages: { type: 'string', description: 'Pages to see full size, e.g. "1" or "1-2" (max 4); all pages always come as one overview picture' },
+        expect_pages: { type: 'integer', minimum: 1, description: 'Most pages it should have (FAIL if more)' }
       },
       required: ['path'],
       additionalProperties: false
     },
-    async run({ path, source, require_toc }, ctx) {
+    async run({ path, source, require_toc, render, pages, expect_pages }, ctx) {
       const ws = ctx.workspaceDir || o.getWorkspace()
       const full = resolvePath(path, ws, ctx.state.roots ?? [])
       if (!existsSync(full)) throw new Error(`No such file: ${path}`)
@@ -519,8 +522,23 @@ export function reviewDocumentTool(o: { getWorkspace: () => string }): ToolDef<{
         if (!existsSync(s)) throw new Error(`No such source file: ${source}`)
         src = { data: readFileSync(s), name: s }
       }
-      const r = await reviewDocument(full, { source: src, requireToc: require_toc })
-      return { text: formatReview(r), display: `${r.pass ? 'passed' : 'failed'} review: ${basename(full)}` }
+      const r = await reviewDocument(full, { source: src, requireToc: require_toc, render: render !== false, expectPages: expect_pages })
+      // The overview picture of every page, plus any pages asked for full size.
+      const images: string[] = []
+      const dataUrl = (p: string) => `data:${/\.jpe?g$/i.test(p) ? 'image/jpeg' : 'image/png'};base64,${readFileSync(p).toString('base64')}`
+      if (r.rendered) {
+        try {
+          if (r.rendered.sheet && existsSync(r.rendered.sheet)) images.push(dataUrl(r.rendered.sheet))
+          else if (r.rendered.images[0]) images.push(dataUrl(r.rendered.images[0]))
+          if (pages) {
+            const { parsePages } = await import('../../docs/pdf')
+            const want = new Set(parsePages(pages, r.rendered.pages).slice(0, 4).map((i) => i + 1))
+            r.rendered.images.forEach((p, i) => { if (want.has(i + 1) && existsSync(p)) images.push(dataUrl(p)) })
+          }
+        } catch { /* text review still stands */ }
+      }
+      const look = images.length ? `\nAttached: ${pages ? `an overview of all pages and page ${pages} full size` : 'an overview of all pages (ask for pages: "2" to see one full size)'}. Look at them: alignment, spacing, anything cut off or awkward.` : ''
+      return { text: formatReview(r) + look, display: `${r.pass ? 'passed' : 'failed'} review: ${basename(full)}`, ...(images.length ? { images } : {}) }
     }
   }
 }

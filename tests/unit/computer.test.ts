@@ -27,7 +27,11 @@ describe('geometry: Retina and several displays', () => {
   test('image limits per model', () => {
     expect(imageLimits('claude-opus-4-7').maxEdge).toBe(1920)
     expect(imageLimits('claude-sonnet-5').maxEdge).toBe(1920)
-    expect(imageLimits('claude-sonnet-5-5').maxEdge).toBe(1568)
+    // Every computer_toolset_20260801 model takes high-resolution screenshots (computer use page, 2026-11-15).
+    expect(imageLimits('claude-sonnet-5-5').maxEdge).toBe(1920)
+    expect(imageLimits('claude-haiku-5-5').maxEdge).toBe(1920)
+    expect(imageLimits('claude-haiku-4-5').maxEdge).toBe(1568)
+    expect(imageLimits('gpt-6.1-terra').maxEdge).toBe(1568)
     expect(imageLimits('claude-opus-4-6').maxEdge).toBe(1568)
     expect(imageLimits('qwen3.5:9b').maxEdge).toBe(1568)
   })

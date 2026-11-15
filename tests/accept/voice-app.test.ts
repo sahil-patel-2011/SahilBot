@@ -17,6 +17,8 @@ describe.skipIf(!ready)('voice inside the app', () => {
 
   test('voice mode hears speech, answers through the agent with the voice prompt and a 16k window, and speaks', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
+    // Whisper on this Mac: local models are opt-in (a fresh profile starts cloud-only).
+    await page.evaluate(() => window.foreman.settings.set({ local: { enabled: true } }))
     const dir = mkdtempSync(join(tmpdir(), 'v-'))
     execFileSync('say', ['-o', join(dir, 'a.aiff'), 'Remind me what Foreman can do.'])
     execFileSync('afconvert', ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', join(dir, 'a.aiff'), join(dir, 'a.wav')])

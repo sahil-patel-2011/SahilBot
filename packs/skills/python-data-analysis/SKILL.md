@@ -4,6 +4,7 @@ description: Analyze data with Python (pandas): clean, summarize, chart and expl
 source: you
 uses: 0
 category: Coding
+triggers: pandas, dataframe, csv analysis, analyze this data, plot the data, matplotlib, jupyter, data cleaning
 ---
 
 1. Load the file; print shape, columns, types, missing values and a sample.

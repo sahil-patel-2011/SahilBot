@@ -70,7 +70,7 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
         Connect {p.name} to continue?
       </div>
       <div className="hint">{p.description} {p.auth === 'none' ? 'No sign-in needed.' : 'You sign in on their site; your login is stored in your Mac\'s Keychain.'}</div>
-      {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}
+      {err && <div className="hint error">{err}</div>}
       <div className="pending-actions">
         <button className="btn primary" disabled={busy} onClick={() => void go()} data-testid="connect-card-go">{busy ? (p.auth === 'none' ? 'Connecting…' : 'Waiting for sign-in…') : `Connect ${p.name}`}</button>
         <button className="btn" onClick={() => onRespond(req.id, 'skip')}>Not now</button>
@@ -238,7 +238,7 @@ function PurchaseCard({ req }: { req: PendingRequest }) {
         </dl>
       )}
       <div className="hint pc-note">Approves this one step only. Assistants and web pages can't approve purchases; only this button can.</div>
-      {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}
+      {err && <div className="hint error">{err}</div>}
       <div className="pending-actions">
         <button className="btn primary" disabled={!ready || busy} onClick={() => void answer('approve')} data-testid="purchase-approve">{fill ? 'Use this card' : p.total ? `Buy for ${p.total.display}` : 'Approve purchase'}</button>
         <button className="btn danger" disabled={busy} onClick={() => void answer('deny')} data-testid="purchase-deny">{fill ? "Don't use it" : "Don't buy"}</button>
@@ -274,7 +274,7 @@ function OtpCard({ req }: { req: PendingRequest }) {
       )}
       {o.unverifiedSender && <div className="pc-changed" data-testid="otp-unverified">This message isn't from {o.site}'s own domain. Only allow it if you know this sender is {o.site}.</div>}
       <div className="hint">SahilBot types the code straight into the page; the assistant never sees it.{o.source === 'sms' ? ' Reads only messages from the last 10 minutes.' : ''}</div>
-      {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}
+      {err && <div className="hint error">{err}</div>}
       <div className="pending-actions">
         <button className="btn primary" disabled={!ready} onClick={() => answer('approve')} data-testid="otp-approve">Allow in this chat</button>
         <button className="btn" disabled={!ready} onClick={() => answer('always')} data-testid="otp-always">Always for {o.site}</button>

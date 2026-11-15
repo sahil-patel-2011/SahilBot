@@ -4,6 +4,7 @@ description: Analyze a DC/AC circuit: node voltages, currents and power, with th
 source: you
 uses: 0
 category: Electrical Engineering
+triggers: circuit, node voltage, ohms law, kirchhoff, voltage divider, rc circuit, op amp
 ---
 
 1. Write the circuit as a netlist in your notes: nodes, components with values and units, sources.

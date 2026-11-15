@@ -29,7 +29,7 @@
 .ca-icon img { display: block; object-fit: contain; }
 .ca-icon.letter { box-shadow: none; }
 .ca-icon.vault { background: var(--text); color: var(--bg); box-shadow: none; }
-.ca-icon.skill { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent); box-shadow: none; }
+.ca-icon.skill { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent-text); box-shadow: none; }
 
 .connected-icons { display: inline-flex; align-items: center; }
 .connected-icons:empty { display: none; }
@@ -74,7 +74,7 @@
 
 /* ---------------------------------------------------------------- body + sections */
 .ca-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 24px 24px; }
-.ca-err { margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; font-size: 13px; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.ca-err { margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; font-size: 13px; color: var(--danger-text); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 .ca-section { margin-top: 18px; }
 .ca-section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
 .ca-section-head h3 { margin: 0; font-size: 15px; font-weight: 650; color: var(--text); text-transform: none; letter-spacing: 0; }
@@ -95,7 +95,7 @@
 .ca-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ca-item-text b { font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ca-item-text span { font-size: 13px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ca-item[data-state='needs_auth'] .ca-item-text span, .ca-item[data-state='error'] .ca-item-text span { color: var(--danger); }
+.ca-item[data-state='needs_auth'] .ca-item-text span, .ca-item[data-state='error'] .ca-item-text span { color: var(--danger-text); }
 
 /* Add / Connect / Connected ✓ / Built in */
 .ca-btn {
@@ -107,7 +107,7 @@
 .ca-item:hover .ca-btn.ghost { background: var(--panel); }
 .ca-btn.solid { background: var(--text); color: var(--bg); }
 .ca-btn.solid:disabled { opacity: 0.5; cursor: default; }
-.ca-btn.done { color: var(--ok); padding: 0 6px 0 10px; }
+.ca-btn.done { color: var(--ok-text); padding: 0 6px 0 10px; }
 .ca-btn.ok { color: var(--text-3); padding: 0 6px; font-weight: 500; }
 .ca-btn[aria-disabled] { opacity: 0.6; }
 
@@ -125,8 +125,15 @@
 .ca-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; }
 .ca-status.connected i { background: var(--ok); }
 .ca-status.connecting i, .ca-status.signing_in i { background: var(--accent); animation: pulse 1s infinite; }
-.ca-status.needs_auth, .ca-status.error { color: var(--danger); }
+.ca-status.needs_auth, .ca-status.error { color: var(--danger-text); }
 .ca-status.needs_auth i, .ca-status.error i { background: var(--danger); }
+.ca-status.app-reauth { color: var(--warn-text); }
+.ca-status.app-reauth i { background: var(--warn); }
+.ca-status.app-unavailable, .ca-status.app-setup { color: var(--text-2); }
+.ca-status.app-unavailable i { background: var(--text-3); }
+.ca-status.app-setup i { background: var(--accent); }
+.ca-item[data-app-state='reauth'] .ca-item-text span { color: var(--warn-text); }
+.ca-item[data-app-state='unavailable'] .ca-item-text span { color: var(--text-3); }
 .ca-tools-btn { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 10px; border-radius: 10px; font-size: 13px; color: var(--text-2); }
 .ca-tools-btn:hover, .ca-tools-btn[aria-expanded='true'] { background: var(--hover); color: var(--text); }
 

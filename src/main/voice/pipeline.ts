@@ -1,7 +1,7 @@
 import { concat, FRAME, SAMPLE_RATE, SentenceSplitter } from './audio'
 import type { TtsEngine } from './tts'
-import type { SileroVad } from './vad'
-import type { WhisperServer } from './whisper'
+import type { Vad } from './vad'
+import type { SpeechToText } from './stt'
 
 export type VoiceEvent =
   | { type: 'state'; state: 'idle' | 'listening' | 'hearing' | 'thinking' | 'speaking' }
@@ -14,8 +14,9 @@ export type VoiceEvent =
   | { type: 'error'; message: string }
 
 export interface PipelineDeps {
-  vad: SileroVad
-  whisper: WhisperServer
+  vad: Vad
+  /** Speech recognition: whisper-server on this Mac, or OpenAI's (cloud: no speculative or partial requests, each costs). */
+  whisper: SpeechToText
   tts: TtsEngine
   /** Sends the user's words to the model; calls onText with streamed reply text. */
   respond(text: string, signal: AbortSignal, onText: (t: string) => void): Promise<void>
@@ -86,11 +87,11 @@ export class VoicePipeline {
     this.speech.push(frame)
     if (vad.silence === 0) this.speculative = null
     // Start transcribing during the pause; if the user keeps talking the guess is dropped.
-    if (this.mode === 'voice' && !this.speculative && vad.silence >= SPECULATE_AT_MS) {
+    if (this.mode === 'voice' && !this.d.whisper.cloud && !this.speculative && vad.silence >= SPECULATE_AT_MS) {
       const audio = concat(this.speech)
       this.speculative = { frames: this.speech.length, text: this.d.whisper.transcribe(audio) }
     }
-    if (this.mode === 'dictation' && !this.partialBusy && this.now() - this.lastPartialAt > 700) {
+    if (this.mode === 'dictation' && !this.d.whisper.cloud && !this.partialBusy && this.now() - this.lastPartialAt > 700) {
       this.partialBusy = true
       this.lastPartialAt = this.now()
       void this.d.whisper.transcribe(concat(this.dictation)).then((t) => { if (t) this.d.emit({ type: 'partial', text: t }) }).finally(() => { this.partialBusy = false })

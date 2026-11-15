@@ -1,37 +1,49 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { AddressEntry, CardEntry, ModelInfo, ModelList, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, VaultEntry, VoiceStatus } from '@shared/types'
-import { BRAND_NAME, cardProblem, digitsOnly, formatCardNumber, normalizeExpiry, type CardBrand } from '@shared/cards'
-import { api } from '../api'
+import { ComputerUseSetting } from './ComputerUseSetting'
+import type { ModelInfo, ModelList, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, VoiceStatus } from '@shared/types'
+import { api, isServerRuntime } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { Toggle } from './Toggle'
+import { ModelContextSelect } from './ModelContextSelect'
 import { recommendedRows } from '@shared/model-picker'
 import { MemoryManager } from './MemoryManager'
+import { VaultSettings } from './VaultView'
+import { SecretVaultSettings } from './VaultSettings'
 import { KnowledgeSettings } from './KnowledgeSettings'
 import { UsagePage } from './UsagePage'
+import { SpendingLimitSection } from './SpendingLimit'
+import { FastModeSection, XaiSection } from './FastModeSettings'
 import { McpSettings } from './McpSettings'
+import { ChatgptPlanSettings } from './ChatgptPlanSettings'
+// Local models are opt-in: one quiet row when they're off, no download prompts (components/LocalModels.tsx).
+import { LocalModelsRow, VoiceInputNote, VoiceOutputRow, localIsOn } from './LocalModels'
 import { ActivitySettings } from './ActivitySettings'
+import { AlwaysOnServerPage, ServerPage } from './ServerSettings'
+import { ClampText, Disclosure } from './ui'
 import { addRule, loadRules, removeRule, RULE_LIMIT, RULE_MAX_CHARS } from '../lib/approvalRules'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
 
 // Settings: one page per topic. Every change saves right away (keys go to the Keychain).
 
-type Page = 'general' | 'usage' | 'models' | 'keys' | 'appearance' | 'voice' | 'memory' | 'knowledge' | 'rules' | 'approvals' | 'passwords' | 'privacy' | 'advanced'
+type Page = 'general' | 'usage' | 'models' | 'keys' | 'appearance' | 'voice' | 'memory' | 'knowledge' | 'rules' | 'approvals' | 'passwords' | 'privacy' | 'advanced' | 'server'
 const PAGES: Array<{ id: Page; label: string; icon: ReactNode; color: string; words: string }> = [
   { id: 'general', label: 'General', icon: <I.Gear size={14} />, color: '#8e8e93', words: 'name workspace folder quick ask shortcut search cloud budget spending limit hybrid' },
   { id: 'usage', label: 'Usage', icon: <I.Clock size={14} />, color: '#ff6a1a', words: 'usage spend spending cost cap budget tokens requests local cloud model bot csv export' },
-  { id: 'models', label: 'Models', icon: <I.Cpu size={14} />, color: '#5856d6', words: 'model auto download recommended voice background ollama lm studio' },
+  { id: 'models', label: 'Models', icon: <I.Cpu size={14} />, color: '#5856d6', words: 'model auto download recommended voice background ollama lm studio chatgpt plan subscription codex sign in' },
   { id: 'keys', label: 'API Keys & Servers', icon: <I.Plug size={14} />, color: '#007aff', words: 'anthropic claude openai openrouter cursor key base url ollama lm studio custom server onshape cad' },
   { id: 'appearance', label: 'Appearance', icon: <I.Sparkle size={14} />, color: '#ff9500', words: 'theme dark light width font tint density code wrap' },
   { id: 'voice', label: 'Voice', icon: <I.Mic size={14} />, color: '#ff2d55', words: 'speak read aloud dictation whisper kokoro' },
-  { id: 'memory', label: 'Memory', icon: <I.ListIcon size={14} />, color: '#34c759', words: 'remember people places projects facts import chatgpt claude forget work log' },
+  { id: 'memory', label: 'Memory', icon: <I.ListIcon size={14} />, color: '#34c759', words: 'remember people places projects facts import chatgpt claude gemini another ai forget work log vault obsidian notes knowledge' },
   { id: 'knowledge', label: 'Knowledge', icon: <I.Search size={14} />, color: '#0a84ff', words: 'knowledge search files folders documents index pdf notes embeddings rebuild' },
   { id: 'rules', label: 'Rules & Skills', icon: <I.Check size={14} />, color: '#30b0c7', words: 'rules skills procedures engineering medical business coding' },
   { id: 'approvals', label: 'Approval rules', icon: <I.Shield size={14} />, color: '#34aadc', words: 'approval approve allow ask first permission always automatically confirm' },
-  { id: 'passwords', label: 'Passwords', icon: <I.Key size={14} />, color: '#636366', words: 'vault login password' },
+  { id: 'passwords', label: 'Vault', icon: <I.Key size={14} />, color: '#636366', words: 'vault passwords login card credit id passport license secure note master password touch id lock backup export import csv' },
   { id: 'privacy', label: 'Privacy & Permissions', icon: <I.Shield size={14} />, color: '#5ac8fa', words: 'privacy permissions accessibility screen recording microphone full disk access automation notifications macos system settings mcp connected apps cursor claude code desktop token server' },
-  { id: 'advanced', label: 'Advanced', icon: <I.Edit size={14} />, color: '#af52de', words: 'context window gpu memory sampling hard stops' }
+  { id: 'advanced', label: 'Advanced', icon: <I.Edit size={14} />, color: '#af52de', words: 'context window gpu memory sampling hard stops' },
+  // SahilBot Server: devices, pairing, notifications, audit (web UI); in the Mac app, the link to a server.
+  { id: 'server', label: isServerRuntime ? 'Server' : 'Always-on server', icon: <I.Plug size={14} />, color: '#1f8a5b', words: 'server raspberry pi always on remote phone devices pairing tailscale notifications audit' }
 ]
 
 const WINDOWS: Settings['contextWindow'][] = [0, 16384, 32768, 65536, 131072]
@@ -56,7 +68,7 @@ function Section({ title, sub, children }: { title?: string; sub?: ReactNode; ch
 function Row({ title, sub, children, testId }: { title: ReactNode; sub?: ReactNode; children?: ReactNode; testId?: string }) {
   return (
     <div className="set-row" data-testid={testId}>
-      <div className="set-row-text"><div className="set-row-title">{title}</div>{sub && <div className="set-row-sub">{sub}</div>}</div>
+      <div className="set-row-text"><div className="set-row-title">{title}</div>{sub && <ClampText>{sub}</ClampText>}</div>
       {children && <div className="set-row-ctl">{children}</div>}
     </div>
   )
@@ -138,7 +150,7 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
 }) {
   const [page, setPage] = useState<Page>(initialPage ?? 'general')
   const [find, setFind] = useState('')
-  const pages = PAGES.filter((x) => !find.trim() || `${x.label} ${x.words}`.toLowerCase().includes(find.trim().toLowerCase()))
+  const pages = PAGES.filter((x) => !isServerRuntime || (x.id !== 'voice' && x.id !== 'privacy')).filter((x) => !find.trim() || `${x.label} ${x.words}`.toLowerCase().includes(find.trim().toLowerCase()))
   const [s, setS] = useState(settings)
   const patch = async (p: SettingsPatchUi): Promise<Settings> => {
     const n = await api.settings.set(p)
@@ -178,9 +190,10 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
           {page === 'knowledge' && <KnowledgeSettings />}
           {page === 'rules' && <RulesPage spaces={spaces ?? []} />}
           {page === 'approvals' && <ApprovalRulesPage patch={patch} />}
-          {page === 'passwords' && <Passwords />}
+          {page === 'passwords' && <SecretVaultSettings />}
           {page === 'privacy' && <PrivacyPage />}
           {page === 'advanced' && <Advanced s={s} models={models} patch={patch} />}
+          {page === 'server' && (isServerRuntime ? <ServerPage /> : <AlwaysOnServerPage />)}
         </div>
       </div>
     </div>
@@ -257,11 +270,6 @@ function PrivacyPage() {
 
 function General({ s, patch }: P) {
   const [braveKey, setBraveKey] = useState('')
-  const [spend, setSpend] = useState<{ spent: number; cap: number; requests: number } | null>(null)
-  useEffect(() => {
-    void api.budget().then(setSpend)
-    return api.onBudgetChanged(() => void api.budget().then(setSpend))
-  }, [])
   return (
     <>
       <h2>General</h2>
@@ -308,11 +316,7 @@ function General({ s, patch }: P) {
         )}
       </Section>
       <AlwaysOn s={s} patch={patch} />
-      <Section title="Cloud spending limit" sub="SahilBot prices every cloud request before sending it and refuses anything that would go past this monthly cap. Requests the provider rejects aren't counted.">
-        <Row title="Monthly cap" sub={spend ? `This month: $${spend.spent.toFixed(2)} of $${spend.cap.toFixed(2)} · ${spend.requests} cloud requests` : undefined}>
-          <div className="key-edit"><span className="hint">$</span><Field value={String(s.cloudBudgetUsd)} width={90} type="number" testId="budget-cap" onSave={(v) => void patch({ cloudBudgetUsd: Math.max(0, Number(v) || 0) }).then(() => void api.budget().then(setSpend))} /></div>
-        </Row>
-      </Section>
+      <SpendingLimitSection s={s} patch={patch} />
     </>
   )
 }
@@ -338,7 +342,7 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
   const [deleting, setDeleting] = useState<string | null>(null)
   // The three picks first-run setup offers for this Mac (best agent model, fast one, alternative).
   const [picks, setPicks] = useState<Record<string, string>>({})
-  useEffect(() => { void api.models.setupPicks().then((ps) => setPicks(Object.fromEntries(ps.map((p) => [p.pull, p.role])))).catch(() => undefined) }, [models])
+  useEffect(() => { if (localIsOn(s)) void api.models.setupPicks().then((ps) => setPicks(Object.fromEntries(ps.map((p) => [p.pull, p.role])))).catch(() => undefined) }, [models, s.local?.enabled])
   useEffect(() => api.models.onPull((e) => {
     setPull((p) => ({ ...p, [e.tag]: { pct: e.total ? Math.round(((e.completed ?? 0) / e.total) * 100) : p[e.tag]?.pct ?? 0, status: e.status, error: e.error } }))
     if (e.done && !e.error) { toast(`${e.tag} is ready`, 'ok'); onRefresh() }
@@ -380,19 +384,38 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
   return (
     <>
       <h2>Models</h2>
-      <div className="set-sub" style={{ marginTop: -6 }}>The model picker lists the models you can use now: downloaded ones and cloud models whose API key you saved. Auto uses the ones that are on.</div>
+      <div className="set-sub">Downloaded models and cloud models with a saved key. Auto uses the ones that are on.</div>
       <Section title="Default">
-        <Row title="Model for new chats" sub="Auto picks the right model for each message: a fast one for quick chats, a stronger one for real tasks. When it isn't sure, it uses the stronger one.">
+        <Row title="Model for new chats" sub="Auto picks a fast model for quick chats and a stronger one for real tasks.">
           <select className="set-select" value={s.defaultModel} onChange={(e) => void patch({ defaultModel: e.target.value })} data-testid="default-model">
             <option value="auto">Auto (recommended)</option>
-            <option value="auto:local">Auto (local only)</option>
+            {localIsOn(s) && <option value="auto:local">Auto (local only)</option>}
             <option value="auto:cloud">Auto (cloud only)</option>
             {usable.map((m) => <option key={m.id} value={m.id}>{modelName(m)}</option>)}
           </select>
         </Row>
+        <Row title="Thinking for new chats" sub="Auto leans high for real tasks and low for quick chats. Chats and bots can choose their own.">
+          <select className="set-select" value={s.thinking} onChange={(e) => void patch({ thinking: e.target.value as Settings['thinking'] })} data-testid="default-thinking">
+            <option value="auto">Auto (recommended)</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">Extra</option>
+            <option value="max">Max</option>
+          </select>
+        </Row>
+        <Row title="Auto prefers" sub="Best result: the strongest model for each kind of task. Balanced: the cheapest one that's strong enough. Cheapest: free local models first.">
+          <select className="set-select" value={s.cloud.autoPrefers ?? 'best'} onChange={(e) => void patch({ cloud: { ...s.cloud, autoPrefers: e.target.value as 'best' | 'balanced' | 'cheapest' } })} data-testid="auto-prefers">
+            <option value="best">Best result</option>
+            <option value="balanced">Balanced</option>
+            <option value="cheapest">Cheapest</option>
+          </select>
+        </Row>
       </Section>
 
-      {s.providers.ollama.enabled && (recommended.length > 0 || (ollama && !ollama.ok)) && (
+      <Section title="Local models"><LocalModelsRow s={s} patch={patch} onChanged={onRefresh} /></Section>
+
+      {localIsOn(s) && s.providers.ollama.enabled && (recommended.length > 0 || (ollama && !ollama.ok)) && (
         <Section title="Recommended for this Mac" sub={`Free models picked for agent work and tool use, sized for this Mac${models ? ` (${models.totalGB} GB of memory, ${models.budgetGB} GB for models)` : ''}. Download the ones that fit; Auto starts using them right away.`}>
           {ollama && !ollama.ok && <OllamaSetup onReady={onRefresh} />}
           {recommended.map((m) => {
@@ -419,58 +442,12 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
         </Section>
       )}
 
-      {s.cloud.enabled && installed.some((m) => m.note === 'remote') && (
-        <Section title="Cloud models" sub="How Auto and hybrid mode use cloud models. Every cloud request is still priced against your monthly cap first.">
-          <Row title="Auto prefers" sub="Cloud first (the default once a Claude key is saved): Haiku for quick questions, Sonnet for everyday tasks, Opus for the hardest ones. Local first: free, private local models whenever one is strong enough.">
-            <select className="set-select" value={s.cloud.prefer ?? (s.keys.anthropic ? 'cloud' : 'local')} onChange={(e) => void patch({ cloud: { ...s.cloud, prefer: e.target.value as 'local' | 'cloud' } })} data-testid="cloud-prefer">
-              <option value="local">Local first</option>
-              <option value="cloud">Cloud first</option>
-            </select>
-          </Row>
-          {s.keys.anthropic && (
-            <>
-              <Row title="Claude context" sub="How much of Claude's 1M-token window a chat uses before older turns are summarized (by Claude, on Anthropic's servers). More context remembers more but costs more per step; cached history is billed at a fraction of the input price.">
-                <select className="set-select" value={s.cloud.contextStrategy ?? 'balanced'} onChange={(e) => void patch({ cloud: { ...s.cloud, contextStrategy: e.target.value as 'max' | 'balanced' | 'economy' } })} data-testid="claude-context-strategy">
-                  <option value="max">Maximum (the full 1M window)</option>
-                  <option value="balanced">Balanced (up to 400K, recommended)</option>
-                  <option value="economy">Economy (up to 128K)</option>
-                </select>
-              </Row>
-              <Row title="Claude's native tools" sub="Claude uses its own computer-use, text-editor, terminal and web search tools, which it handles best. They run through SahilBot's same approvals and safety checks; web search then runs on Anthropic's servers ($10 per 1,000 searches).">
-                <Toggle on={s.cloud.nativeTools !== false} onChange={(v) => void patch({ cloud: { ...s.cloud, nativeTools: v } })} label="Claude's native tools" testId="claude-native-tools" />
-              </Row>
-              <Row title="Use Fable for the hardest tasks" sub="Auto sends the hardest requests to Claude Fable (priced well above Opus). Off: Fable only when you pick it.">
-                <Toggle on={!!s.cloud.fableForHardest} onChange={(v) => void patch({ cloud: { ...s.cloud, fableForHardest: v } })} label="Use Fable for the hardest tasks" testId="claude-fable-hardest" />
-              </Row>
-            </>
-          )}
-          {s.cloud.hybrid && (
-            <Row title="Hybrid advisor" sub="The cloud model your local model asks for plans and help.">
-              <select className="set-select" value={s.cloud.advisorModel} onChange={(e) => void patch({ cloud: { ...s.cloud, advisorModel: e.target.value } })} data-testid="advisor-model">
-                <option value="">Best Opus (recommended)</option>
-                <option value="sonnet">Best Sonnet (cheaper)</option>
-                {installed.filter((m) => m.note === 'remote' && m.enabled).map((m) => <option key={m.id} value={m.id}>{modelName(m)}</option>)}
-              </select>
-            </Row>
-          )}
-        </Section>
-      )}
-      <Section title="Task models">
-        <Row title="Voice conversations" sub="A light, fast model so spoken replies start right away.">
-          <select className="set-select" value={s.taskModels.voice} onChange={(e) => void patch({ taskModels: { ...s.taskModels, voice: e.target.value } })} data-testid="voice-model">
-            <option value="">Same as chat (Auto)</option>
-            {usable.map((m) => <option key={m.id} value={m.id}>{modelName(m)} · {TIER[m.tier]}</option>)}
-          </select>
-        </Row>
-        <Row title="Background jobs" sub="Chat titles and other tiny jobs. Always a local model.">
-          <select className="set-select" value={s.taskModels.background} onChange={(e) => void patch({ taskModels: { ...s.taskModels, background: e.target.value } })}>
-            <option value="">Smallest local model</option>
-            {usable.filter((m) => m.note !== 'remote').map((m) => <option key={m.id} value={m.id}>{modelName(m)}</option>)}
-          </select>
-        </Row>
-      </Section>
+      {/* ChatGPT plan (via Codex): the user's subscription through their own Codex (ChatgptPlanSettings.tsx). */}
+      <ChatgptPlanSettings onRefresh={onRefresh} />
 
-      <Section title="Installed and available" sub="Downloaded models and cloud models with a key. Switch one off to keep it out of the picker and Auto.">
+      {/* xAI (Grok) and Fast mode (FastModeSettings.tsx). */}
+      <XaiSection s={s} models={models} keyField={<KeyField saved={!!s.keys.xai} placeholder="xai-…" testId="key-xai" onSave={async (k) => { await patch({ setKeys: { xai: k } }); onRefresh() }} onTest={async (k) => { const r = await api.models.test('https://api.x.ai/v1', k); return r.ok ? 'ok' : keyError(clean({ message: r.error ?? '' })) }} />} />
+      <Section title="Installed and available" sub="Switch one off to keep it out of the picker and Auto.">
         <div className="set-search">
           <input className="set-input" placeholder="Add or search model" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addModel()} data-testid="model-search" />
           {q.trim() && !installed.some((m) => m.id === q.trim()) && <button className="btn" onClick={addModel}>Add “{q.trim()}”</button>}
@@ -484,6 +461,7 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
               <div className="set-row-title">{modelName(m)}</div>
               <div className="set-row-sub">{m.providerName} · {TIER[m.tier]}{m.vision ? ' · sees images' : ''}{m.note === 'remote' ? ` · cloud${cloudFacts(m)}` : m.sizeBytes ? ` · ${diskGB(m.sizeBytes)} on disk` : m.requiredGB ? ` · ${m.requiredGB} GB` : ''}{!m.fits && m.note && m.note !== 'remote' ? ` · ${m.note}` : ''}</div>
             </div>
+            <ModelContextSelect model={m} s={s} patch={patch} />
             {m.provider === 'ollama' && m.note !== 'remote' && deleteBtn(m)}
             <Toggle on={m.enabled} onChange={(v) => setOn(m.id, v)} label={`Show ${m.id}`} testId={`model-toggle-${m.id}`} />
           </div>
@@ -501,6 +479,63 @@ function Models({ s, models, patch, onRefresh }: P & { models: ModelList | null;
           })}</div>
         )}
       </Section>
+      <Disclosure title="Advanced" sub="Cloud routing, fast mode, computer use and task models" testId="models-advanced">
+        {s.cloud.enabled && installed.some((m) => m.note === 'remote') && (
+          <Section title="Cloud models" sub="How Auto and hybrid mode use cloud models. Every cloud request is still priced against your monthly cap first.">
+            <Row title="Local or cloud first" sub="Cloud first (the default once a cloud key is saved): Auto picks among Claude and GPT models by the kind of task. Local first: free, private local models for quick chats and light work whenever one is strong enough; agent work (coding, research, tasks) still goes to the strongest cloud model.">
+              <select className="set-select" value={s.cloud.prefer ?? (s.keys.anthropic ? 'cloud' : 'local')} onChange={(e) => void patch({ cloud: { ...s.cloud, prefer: e.target.value as 'local' | 'cloud' } })} data-testid="cloud-prefer">
+                <option value="local">Local first</option>
+                <option value="cloud">Cloud first</option>
+              </select>
+            </Row>
+            {s.keys.anthropic && (
+              <>
+                <Row title="Claude context" sub="How much of Claude's 1M-token window a chat uses before older turns are summarized (by Claude, on Anthropic's servers). More context remembers more but costs more per step; cached history is billed at a fraction of the input price.">
+                  <select className="set-select" value={s.cloud.contextStrategy ?? 'balanced'} onChange={(e) => void patch({ cloud: { ...s.cloud, contextStrategy: e.target.value as 'max' | 'balanced' | 'economy' } })} data-testid="claude-context-strategy">
+                    <option value="max">Maximum (the full 1M window)</option>
+                    <option value="balanced">Balanced (up to 400K, recommended)</option>
+                    <option value="economy">Economy (up to 128K)</option>
+                  </select>
+                </Row>
+                <Row title="Claude's native tools" sub="Claude uses its own computer-use, text-editor, terminal and web search tools, which it handles best. They run through SahilBot's same approvals and safety checks; web search then runs on Anthropic's servers ($10 per 1,000 searches).">
+                  <Toggle on={s.cloud.nativeTools !== false} onChange={(v) => void patch({ cloud: { ...s.cloud, nativeTools: v } })} label="Claude's native tools" testId="claude-native-tools" />
+                </Row>
+                <Row title="Use Fable for the hardest tasks" sub="Auto sends the hardest requests to Claude Fable (priced well above Opus). Off: Fable only when you pick it.">
+                  <Toggle on={!!s.cloud.fableForHardest} onChange={(v) => void patch({ cloud: { ...s.cloud, fableForHardest: v } })} label="Use Fable for the hardest tasks" testId="claude-fable-hardest" />
+                </Row>
+              </>
+            )}
+            {s.cloud.hybrid && (
+              <Row title="Hybrid advisor" sub="The cloud model your local model asks for plans and help.">
+                <select className="set-select" value={s.cloud.advisorModel} onChange={(e) => void patch({ cloud: { ...s.cloud, advisorModel: e.target.value } })} data-testid="advisor-model">
+                  <option value="">Best Opus (recommended)</option>
+                  <option value="sonnet">Best Sonnet (cheaper)</option>
+                  {installed.filter((m) => m.note === 'remote' && m.enabled).map((m) => <option key={m.id} value={m.id}>{modelName(m)}</option>)}
+                </select>
+              </Row>
+            )}
+          </Section>
+        )}
+        <FastModeSection s={s} patch={patch} models={models} />
+        <Section title="Task models">
+          <Row title="Voice conversations" sub="A light, fast model so spoken replies start right away.">
+            <select className="set-select" value={s.taskModels.voice} onChange={(e) => void patch({ taskModels: { ...s.taskModels, voice: e.target.value } })} data-testid="voice-model">
+              <option value="">Same as chat (Auto)</option>
+              {usable.map((m) => <option key={m.id} value={m.id}>{modelName(m)} · {TIER[m.tier]}</option>)}
+            </select>
+          </Row>
+          <Row title="Background jobs" sub="Chat titles and other tiny jobs. Always a local model.">
+            <select className="set-select" value={s.taskModels.background} onChange={(e) => void patch({ taskModels: { ...s.taskModels, background: e.target.value } })}>
+              <option value="">Smallest local model</option>
+              {usable.filter((m) => m.note !== 'remote').map((m) => <option key={m.id} value={m.id}>{modelName(m)}</option>)}
+            </select>
+          </Row>
+        </Section>
+
+        <Section title="Computer use">
+          <ComputerUseSetting s={s} usable={usable} patch={patch} />
+        </Section>
+      </Disclosure>
     </>
   )
 }
@@ -566,7 +601,7 @@ function Keys({ s, patch, onChanged, models }: P & { onChanged: () => void; mode
   const local = (id: 'ollama' | 'lmstudio', name: string, sub: string) => (
     <>
       <Row title={<>{name}{status(id) && <span className={`tier-badge${status(id)!.startsWith('Running') ? ' ok' : ''}`}>{status(id)}</span>}</>} sub={sub}><Toggle on={s.providers[id].enabled} onChange={(v) => void patch({ providers: { ...s.providers, [id]: { ...s.providers[id], enabled: v } } }).then(onChanged)} label={name} testId={`provider-${id}`} /></Row>
-      {id === 'ollama' && s.providers.ollama.enabled && status('ollama') === 'Not running' && <OllamaSetup onReady={onChanged} />}
+      {id === 'ollama' && localIsOn(s) && s.providers.ollama.enabled && status('ollama') === 'Not running' && <OllamaSetup onReady={onChanged} />}
       {s.providers[id].enabled && <Row title="Address"><Field value={s.providers[id].baseUrl} width={260} testId={`${id}-url`} onSave={(v) => void patch({ providers: { ...s.providers, [id]: { ...s.providers[id], baseUrl: v } } }).then(onChanged)} /></Row>}
     </>
   )
@@ -585,6 +620,9 @@ function Keys({ s, patch, onChanged, models }: P & { onChanged: () => void; mode
       </Section>
       <Section title="OpenRouter API Key" sub={<>Put in <a href={link('openrouter')} target="_blank" rel="noreferrer">your OpenRouter key</a>, then add models by name (like "qwen/qwen3.8-27b") on the Models page.</>}>
         <Row title="API Key"><KeyField saved={s.keys.openrouter} placeholder="sk-or-…" testId="key-openrouter" onSave={saveKey('openrouter')} onTest={test('https://openrouter.ai/api/v1')} /></Row>
+      </Section>
+      <Section title="xAI API Key" sub={<>Put in <a href={link('xai')} target="_blank" rel="noreferrer">your xAI key</a> to use Grok models. It is used for every model whose name starts with "grok-". Spending counts toward your monthly limit.</>}>
+        <Row title="API Key"><KeyField saved={!!s.keys.xai} placeholder="xai-…" testId="key-xai-keys" onSave={saveKey('xai')} onTest={test('https://api.x.ai/v1')} /></Row>
       </Section>
       <Section title="Market data" sub="Stock prices for the stock tools, cards and alerts. SEC filings and financials need no key. A free Tiingo key gives full daily history; the others add live or delayed quotes.">
         {([['tiingo', 'Tiingo', 'https://www.tiingo.com/account/api/token', 'Free: full daily price history (recommended)'], ['polygon', 'Polygon', 'https://polygon.io/dashboard/api-keys', 'Daily history and delayed quotes'], ['alphavantage', 'Alpha Vantage', 'https://www.alphavantage.co/support/#api-key', 'Quotes and history (small free limit)'], ['finnhub', 'Finnhub', 'https://finnhub.io/dashboard', 'Live quotes and company news']] as const).map(([id, name, url, sub]) => (
@@ -682,7 +720,7 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
       setDl((d) => ({ ...d, [e.kind]: { progress: e.progress, error: e.error } }))
       if (e.done) void api.voice.status().then(setVoice)
     })
-  }, [])
+  }, [s.voiceOutput?.openai, s.local?.enabled])
   const usable = (models?.models ?? []).filter((m) => m.installed && m.enabled)
   return (
     <>
@@ -690,6 +728,7 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
       <div className="set-sub" style={{ marginTop: -6 }}>Dictation, read-aloud and voice conversations run on this Mac (Whisper listens, Kokoro speaks).</div>
       <Section title="Speaking">
         <Row title="Read replies aloud" sub="Speak every reply as it arrives. You can also press the speaker button on any message."><Toggle on={s.speakReplies} onChange={(v) => void patch({ speakReplies: v })} label="Read replies aloud" testId="speak-replies" /></Row>
+        <VoiceOutputRow s={s} patch={patch} output={voice?.output} />
         {voice && (
           <Row title="Voice">
             <div className="key-edit">
@@ -712,14 +751,16 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
           ['whisper', 'Speech recognition (Whisper large-v3-turbo)', voice.whisper, voice.sizes.whisper],
           ['vad', 'Voice detection (Silero)', voice.vad, voice.sizes.vad],
           ['kokoro', 'Natural voice (Kokoro-82M)', voice.kokoro, voice.sizes.kokoro]
-        ] as const).map(([k, label, ok, mb]) => (
+        ] as const).filter(() => localIsOn(s)).map(([k, label, ok, mb]) => (
           <Row key={k} title={label} sub={`${mb} MB${dl[k]?.error ? ` · ${dl[k].error}` : ''}`}>
             {ok ? <span className="conn ok"><I.Check size={13} /> Ready</span> : dl[k] && !dl[k].error && dl[k].progress < 1
               ? <span className="hint">{Math.round(dl[k].progress * 100)}%</span>
               : <button className="btn" onClick={() => { setDl((d) => ({ ...d, [k]: { progress: 0.01 } })); void api.voice.download(k) }}>Download</button>}
           </Row>
         ))}
-        {voice && !voice.binary && <Row title="Speech recognition isn't built" sub="Run scripts/voice-setup.sh once." />}
+        {voice && !voice.binary && localIsOn(s) && <Row title="Speech recognition isn't built" sub="Run scripts/voice-setup.sh once." />}
+        {/* Local models off: no voice model downloads; voice input uses OpenAI's transcription or says what it needs. */}
+        {voice && !localIsOn(s) && <VoiceInputNote input={voice.input} note={voice.inputNote} />}
       </Section>
       <div className="set-sub">Shortcuts: ⌘⇧D dictates into the message box; ⌘⇧V starts a voice conversation; Esc stops speaking.</div>
     </>
@@ -734,6 +775,7 @@ function MemoryPage({ spaces }: { spaces: Space[] }) {
       <h2>Memory</h2>
       <div className="set-sub" style={{ marginTop: -6 }}>What your bots remember: facts about you that every bot shares, and each bot's own rules and work log. Everything stays on this Mac. Click a memory to edit it.</div>
       <MemoryManager spaces={spaces} />
+      <VaultSettings />
     </>
   )
 }
@@ -814,8 +856,6 @@ function RulesPage({ spaces }: { spaces: Space[] }) {
     </>
   )
 }
-
-// ------------------------------------------------------------------ passwords
 
 // ------------------------------------------------------------------ approval rules
 
@@ -899,213 +939,6 @@ function ApprovalRulesPage({ patch }: { patch: (p: SettingsPatchUi) => Promise<S
         </>
       )}
       <div className="set-sub">Tip: <code>tool:run_command</code> matches one tool by name (<code>*</code> is a wildcard), and “quoted words” must appear exactly as written.</div>
-    </>
-  )
-}
-
-function Passwords() {
-  const [tab, setTab] = useState<'logins' | 'cards' | 'addresses'>('logins')
-  return (
-    <>
-      <h2>Passwords</h2>
-      <div className="set-sub">Logins, cards and addresses SahilBot can type into a site without ever showing them to the assistant. Stored encrypted in your Keychain. Every purchase still waits for your click on a Purchase card.</div>
-      <div className="pw-tabs" role="tablist">
-        {(['logins', 'cards', 'addresses'] as const).map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} className={`pw-tab${tab === t ? ' on' : ''}`} onClick={() => setTab(t)} data-testid={`pw-tab-${t}`}>{t[0].toUpperCase() + t.slice(1)}</button>
-        ))}
-      </div>
-      {tab === 'logins' && <Logins />}
-      {tab === 'cards' && <Cards />}
-      {tab === 'addresses' && <Addresses />}
-    </>
-  )
-}
-
-/** The live authenticator code, shown only after an explicit click, hidden again after 30 seconds. */
-function RevealCode({ name }: { name: string }) {
-  const [code, setCode] = useState<{ code: string; remaining: number } | null>(null)
-  useEffect(() => {
-    if (!code) return
-    const hide = setTimeout(() => setCode(null), 30_000)
-    const tick = setTimeout(() => void api.vault.totpCode(name).then((c) => setCode((cur) => (cur ? c : cur))), Math.max(1, code.remaining) * 1000)
-    return () => { clearTimeout(hide); clearTimeout(tick) }
-  }, [code, name])
-  return code
-    ? <span className="pw-code" title={`Changes in ${code.remaining}s`} data-testid="totp-code">{code.code}</span>
-    : <button className="link-btn" onClick={() => void api.vault.totpCode(name).then(setCode)} data-testid="totp-reveal">Show code</button>
-}
-
-function Logins() {
-  const [vault, setVault] = useState<VaultEntry[]>([])
-  const [draft, setDraft] = useState({ name: '', origin: '', username: '', password: '', totp: '' })
-  const [keyFor, setKeyFor] = useState<string | null>(null)
-  const [key, setKey] = useState('')
-  const [grants, setGrants] = useState<string[]>([])
-  const [err, setErr] = useState('')
-  useEffect(() => { void api.vault.list().then(setVault); void api.vault.otpGrants().then(setGrants) }, [])
-  const saveKey = (v: VaultEntry, clear = false): void => {
-    setErr('')
-    void api.vault.set({ name: v.name, origin: v.origin, username: v.username, ...(clear ? { clearTotp: true } : { totp: key }) })
-      .then((x) => { setVault(x); setKeyFor(null); setKey('') }).catch((e) => setErr(clean(e)))
-  }
-  return (
-    <>
-      <Section title="Saved logins">
-        {vault.length === 0 && <div className="set-empty">No saved logins yet. Add one below.</div>}
-        {vault.map((v) => (
-          <div key={v.name}>
-            <div className="set-row" data-testid="vault-row">
-              <span className="vault-row-icon" aria-hidden="true">{v.name.slice(0, 1)}</span>
-              <div className="set-row-text"><div className="set-row-title">{v.name}</div><div className="set-row-sub" title={`${v.username} · ${v.origin}`}>{v.username} · {v.origin}{v.hasTotp ? ` · authenticator${v.totpIssuer ? ` (${v.totpIssuer})` : ''}` : ''}</div></div>
-              {v.hasTotp && <RevealCode name={v.name} />}
-              <button className="link-btn" onClick={() => { setKeyFor(keyFor === v.name ? null : v.name); setKey('') }} data-testid="totp-edit">{v.hasTotp ? 'Authenticator…' : 'Add authenticator'}</button>
-              <button className="icon-btn" title="Remove" aria-label={`Remove ${v.name}`} onClick={() => void api.vault.remove(v.name).then(setVault)}><I.Trash size={14} /></button>
-            </div>
-            {keyFor === v.name && (
-              <div className="pw-form">
-                <input className="set-input wide" type="password" placeholder="Authenticator key: paste the setup key or otpauth:// link" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" spellCheck={false} data-testid="totp-input" />
-                <div className="pw-form-actions">
-                  {v.hasTotp && <button className="btn danger" onClick={() => saveKey(v, true)}>Remove key</button>}
-                  <button className="btn" onClick={() => setKeyFor(null)}>Cancel</button>
-                  <button className="btn primary" disabled={!key.trim()} onClick={() => saveKey(v)} data-testid="totp-save">Save key</button>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-      </Section>
-      <Section title="Add a login">
-        <div className="vault-add">
-          <input className="set-input" placeholder="Name (e.g. github)" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-          <input className="set-input" placeholder="Site (github.com)" value={draft.origin} onChange={(e) => setDraft({ ...draft, origin: e.target.value })} />
-          <input className="set-input" placeholder="Username" value={draft.username} onChange={(e) => setDraft({ ...draft, username: e.target.value })} autoComplete="off" />
-          <input className="set-input" placeholder="Password" type="password" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} autoComplete="new-password" />
-          <input className="set-input" placeholder="Authenticator key (optional)" type="password" value={draft.totp} onChange={(e) => setDraft({ ...draft, totp: e.target.value })} autoComplete="off" spellCheck={false} />
-          <button className="btn primary" disabled={!draft.name.trim() || !draft.origin.trim()} onClick={() => { setErr(''); void api.vault.set({ name: draft.name, origin: draft.origin, username: draft.username, password: draft.password, ...(draft.totp.trim() ? { totp: draft.totp } : {}) }).then((v) => { setVault(v); setDraft({ name: '', origin: '', username: '', password: '', totp: '' }) }).catch((e) => setErr(clean(e))) }}>Save login</button>
-        </div>
-        {err && <div className="set-empty" style={{ color: 'var(--danger)' }}>{err}</div>}
-      </Section>
-      {grants.length > 0 && (
-        <Section title="One-time codes allowed without asking" sub="Sites where you chose “Always” for sign-in codes. Removing one makes SahilBot ask again.">
-          {grants.map((g) => (
-            <div className="set-row" key={g}>
-              <div className="set-row-text"><div className="set-row-title">{g}</div></div>
-              <button className="icon-btn" title="Remove" aria-label={`Stop allowing ${g}`} onClick={() => void api.vault.revokeOtpGrant(g).then(setGrants)}><I.Trash size={14} /></button>
-            </div>
-          ))}
-        </Section>
-      )}
-    </>
-  )
-}
-
-const EMPTY_CARD = { id: '', nickname: '', number: '', month: '', year: '', cvc: '', holder: '', billing: '' }
-
-function Cards() {
-  const [cards, setCards] = useState<CardEntry[]>([])
-  const [addrs, setAddrs] = useState<AddressEntry[]>([])
-  const [d, setD] = useState<typeof EMPTY_CARD | null>(null)
-  const [numFocus, setNumFocus] = useState(false)
-  const [err, setErr] = useState('')
-  useEffect(() => { void api.vault.cards().then(setCards); void api.vault.addresses().then(setAddrs) }, [])
-  const editing = cards.find((c) => c.id === d?.id)
-  const digits = digitsOnly(d?.number ?? '')
-  // Typed digits show while you type; afterwards only the last four.
-  const shownNumber = numFocus ? formatCardNumber(digits) : digits ? `•••• •••• •••• ${digits.slice(-4)}` : ''
-  const problem = d ? (digits || !editing ? cardProblem({ number: digits, month: d.month, year: d.year, cvc: d.cvc }) : normalizeExpiry(d.month, d.year) ? null : 'The expiry date is not valid or has passed.') : null
-  const save = (): void => {
-    if (!d) return
-    setErr('')
-    void api.vault.setCard({ id: d.id || undefined, nickname: d.nickname, number: digits || undefined, cvc: d.cvc || undefined, expMonth: d.month, expYear: d.year, holder: d.holder, billing: d.billing || undefined })
-      .then((c) => { setCards(c); setD(null) }).catch((e) => setErr(clean(e)))
-  }
-  return (
-    <>
-      <Section title="Saved cards" sub="The assistant only ever sees a card's nickname and last four digits. Card details are typed into the payment form by SahilBot itself, after you approve.">
-        {cards.length === 0 && <div className="set-empty">No saved cards yet.</div>}
-        {cards.map((c) => (
-          <div className="set-row" key={c.id} data-testid="card-row">
-            <span className="vault-row-icon" aria-hidden="true">{(BRAND_NAME[c.brand as CardBrand] ?? 'Card').slice(0, 1)}</span>
-            <div className="set-row-text"><div className="set-row-title">{c.nickname}</div><div className="set-row-sub">{BRAND_NAME[c.brand as CardBrand] ?? 'Card'} •••• {c.last4} · expires {String(c.expMonth).padStart(2, '0')}/{String(c.expYear).slice(-2)} · {c.holder}{c.hasCvc ? '' : ' · no CVV saved'}</div></div>
-            <button className="link-btn" onClick={() => { setErr(''); setD({ id: c.id, nickname: c.nickname, number: '', month: String(c.expMonth).padStart(2, '0'), year: String(c.expYear), cvc: '', holder: c.holder, billing: c.billing ?? '' }) }}>Edit</button>
-            <button className="icon-btn" title="Remove" aria-label={`Remove ${c.nickname}`} onClick={() => void api.vault.removeCard(c.id).then(setCards)}><I.Trash size={14} /></button>
-          </div>
-        ))}
-        {!d && <div className="pw-form-actions" style={{ padding: '10px 0' }}><button className="btn primary" onClick={() => { setErr(''); setD({ ...EMPTY_CARD }) }} data-testid="card-add">Add a card</button></div>}
-      </Section>
-      {d && (
-        <Section title={editing ? `Edit ${editing.nickname}` : 'Add a card'}>
-          <div className="pw-form">
-            <input className="set-input wide" placeholder="Nickname (e.g. Personal Visa)" value={d.nickname} onChange={(e) => setD({ ...d, nickname: e.target.value })} data-testid="card-nickname" />
-            <input className="set-input wide" inputMode="numeric" autoComplete="off" spellCheck={false} placeholder={editing ? `•••• ${editing.last4} (leave empty to keep)` : 'Card number'}
-              value={shownNumber} onFocus={() => setNumFocus(true)} onBlur={() => setNumFocus(false)} onChange={(e) => setD({ ...d, number: digitsOnly(e.target.value).slice(0, 19) })} data-testid="card-number" />
-            <div className="row">
-              <input className="set-input" inputMode="numeric" placeholder="MM" maxLength={2} value={d.month} onChange={(e) => setD({ ...d, month: digitsOnly(e.target.value) })} data-testid="card-month" />
-              <input className="set-input" inputMode="numeric" placeholder="YYYY" maxLength={4} value={d.year} onChange={(e) => setD({ ...d, year: digitsOnly(e.target.value) })} data-testid="card-year" />
-            </div>
-            <input className="set-input" type="password" inputMode="numeric" autoComplete="off" maxLength={4} placeholder={editing?.hasCvc ? 'CVV saved (type to replace)' : 'CVV (optional)'} value={d.cvc} onChange={(e) => setD({ ...d, cvc: digitsOnly(e.target.value) })} data-testid="card-cvc" />
-            <input className="set-input" placeholder="Name on card" value={d.holder} onChange={(e) => setD({ ...d, holder: e.target.value })} data-testid="card-holder" />
-            <select className="set-select" value={d.billing} onChange={(e) => setD({ ...d, billing: e.target.value })}>
-              <option value="">No billing address</option>
-              {addrs.map((a) => <option key={a.id} value={a.id}>Billing: {a.nickname}</option>)}
-            </select>
-            {(err || (problem && (digits || d.month || d.year))) && <div className="pw-err">{err || problem}</div>}
-            <div className="pw-form-actions">
-              <button className="btn" onClick={() => setD(null)}>Cancel</button>
-              <button className="btn primary" disabled={!!problem || !d.holder.trim()} onClick={save} data-testid="card-save">Save card</button>
-            </div>
-          </div>
-        </Section>
-      )}
-    </>
-  )
-}
-
-const EMPTY_ADDR: Omit<AddressEntry, 'id'> & { id?: string } = { nickname: '', name: '', line1: '', line2: '', city: '', region: '', postal: '', country: '', phone: '', email: '' }
-
-function Addresses() {
-  const [addrs, setAddrs] = useState<AddressEntry[]>([])
-  const [d, setD] = useState<typeof EMPTY_ADDR | null>(null)
-  const [err, setErr] = useState('')
-  useEffect(() => void api.vault.addresses().then(setAddrs), [])
-  const f = (k: keyof typeof EMPTY_ADDR, placeholder: string, wide = false) => (
-    <input className={`set-input${wide ? ' wide' : ''}`} placeholder={placeholder} value={String(d?.[k] ?? '')} onChange={(e) => d && setD({ ...d, [k]: e.target.value })} data-testid={`addr-${k}`} />
-  )
-  return (
-    <>
-      <Section title="Saved addresses" sub="For shipping and billing forms. The assistant refers to them by nickname.">
-        {addrs.length === 0 && <div className="set-empty">No saved addresses yet.</div>}
-        {addrs.map((a) => (
-          <div className="set-row" key={a.id} data-testid="address-row">
-            <span className="vault-row-icon" aria-hidden="true">{a.nickname.slice(0, 1)}</span>
-            <div className="set-row-text"><div className="set-row-title">{a.nickname}</div><div className="set-row-sub">{[a.name, a.line1, a.city, a.region, a.postal, a.country].filter(Boolean).join(', ')}</div></div>
-            <button className="link-btn" onClick={() => { setErr(''); setD({ ...EMPTY_ADDR, ...a }) }}>Edit</button>
-            <button className="icon-btn" title="Remove" aria-label={`Remove ${a.nickname}`} onClick={() => void api.vault.removeAddress(a.id).then(setAddrs)}><I.Trash size={14} /></button>
-          </div>
-        ))}
-        {!d && <div className="pw-form-actions" style={{ padding: '10px 0' }}><button className="btn primary" onClick={() => { setErr(''); setD({ ...EMPTY_ADDR }) }} data-testid="address-add">Add an address</button></div>}
-      </Section>
-      {d && (
-        <Section title={d.id ? `Edit ${d.nickname}` : 'Add an address'}>
-          <div className="pw-form">
-            {f('nickname', 'Nickname (e.g. Home)', true)}
-            {f('name', 'Full name', true)}
-            {f('line1', 'Street address', true)}
-            {f('line2', 'Apartment, suite (optional)', true)}
-            {f('city', 'City')}
-            {f('region', 'State / region')}
-            {f('postal', 'ZIP / postal code')}
-            {f('country', 'Country')}
-            {f('phone', 'Phone (optional)')}
-            {f('email', 'Email (optional)')}
-            {err && <div className="pw-err">{err}</div>}
-            <div className="pw-form-actions">
-              <button className="btn" onClick={() => setD(null)}>Cancel</button>
-              <button className="btn primary" onClick={() => { setErr(''); void api.vault.setAddress(d).then((x) => { setAddrs(x); setD(null) }).catch((e) => setErr(clean(e))) }} data-testid="address-save">Save address</button>
-            </div>
-          </div>
-        </Section>
-      )}
     </>
   )
 }

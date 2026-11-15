@@ -30,7 +30,8 @@ export function fromWav(buf: Buffer): { samples: Float32Array; rate: number } {
     const size = buf.readUInt32LE(off + 4)
     if (id === 'fmt ') rate = buf.readUInt32LE(off + 12)
     if (id === 'data') {
-      const n = size / 2
+      // Streamed WAVs (OpenAI's voice) may say 0xFFFFFFFF here: read what's actually there.
+      const n = Math.floor(Math.min(size, buf.length - off - 8) / 2)
       const out = new Float32Array(n)
       for (let i = 0; i < n; i++) out[i] = buf.readInt16LE(off + 8 + i * 2) / 32768
       return { samples: out, rate }

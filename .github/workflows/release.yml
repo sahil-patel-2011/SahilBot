@@ -8,9 +8,11 @@
 #   v<package.json version>-<run number>  versioned release, marked Latest, with versioned + stable names
 #   latest                                rolling prerelease (stable names only), moved to this commit
 #
-# Two jobs, so the code under test never sees a secret or a write token:
+# Three jobs, so the code under test never sees a secret or a write token:
 #   build    contents: read, no secrets. Installs, typechecks, runs the unit tests, builds the app and
 #            whisper-server, and uploads them as an artifact.
+#   server   contents: read, no secrets (Linux). Builds SahilBot Server and packs
+#            SahilBot-server-linux-arm64.tar.gz and -x64.tar.gz (docs/server.md), smoke-tests the x64 one.
 #   publish  runs only for refs/heads/main, in the `release` environment (add required reviewers there to
 #            gate it). contents: write; the signing / notarization secrets exist only in its Package step.
 #
@@ -105,8 +107,60 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      # Build tools only: no install scripts (Electron's binary is never downloaded here).
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci --ignore-scripts
+
+      - name: Build the web UI and the server
+        run: |
+          npx electron-vite build
+          node scripts/build-server.mjs
+
+      - name: Server tests (in-process, mock model)
+        run: npx vitest run --config vitest.server.config.mts tests/server/integration.test.ts tests/server/load.test.ts
+
+      - name: Pack (linux arm64 + x64)
+        run: |
+          node scripts/server/package.mjs --os linux --arch arm64 --out dist/server
+          node scripts/server/package.mjs --os linux --arch x64 --out dist/server
+
+      - name: Smoke-test the x64 tarball
+        run: |
+          mkdir -p /tmp/sb && tar -xzf dist/server/SahilBot-server-linux-x64.tar.gz -C /tmp/sb
+          /tmp/sb/sahilbot-server/bin/sahilbot-server --version
+          /tmp/sb/sahilbot-server/bin/sahilbot-server serve --data /tmp/sb/data --port 8787 &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/healthz && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8787/healthz | grep -q '"ready":true'
+          curl -fsS http://127.0.0.1:8787/pair | grep -q 'Pair this device'
+          kill %1
+
+      - name: Upload the server tarballs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: server-build
+          path: dist/server/*.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
   publish:
-    needs: build
+    needs: [build, server]
     if: github.ref == 'refs/heads/main'
     runs-on: macos-15
     timeout-minutes: 60
@@ -132,6 +186,13 @@ jobs:
         with:
           name: app-build
           path: .
+
+      # SahilBot Server tarballs: published next to the DMG by scripts/release.mjs (from dist/server).
+      - name: Download the server tarballs
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: server-build
+          path: dist/server
 
       - name: Check version
         id: version

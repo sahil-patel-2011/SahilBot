@@ -57,7 +57,7 @@
 .bd-card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: visible; }
 .bd-card > * + * { border-top: 1px solid var(--line); }
 .bd-empty { padding: 18px 16px; text-align: center; font-size: 13px; color: var(--text-2); }
-.bd-err { margin: 10px 4px 0; font-size: 13px; color: var(--danger); }
+.bd-err { margin: 10px 4px 0; font-size: 13px; color: var(--danger-text); }
 
 /* Routine rows. */
 .rt-row { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 6px; flex-wrap: wrap; }
@@ -103,7 +103,7 @@
 }
 .rt-menu button:hover:not(:disabled) { background: var(--hover); }
 .rt-menu button:disabled { color: var(--text-3); cursor: default; }
-.rt-menu button.danger { color: var(--danger); }
+.rt-menu button.danger { color: var(--danger-text); }
 
 /* Delete confirmation (inline). */
 .rt-confirm {
@@ -121,7 +121,7 @@
 }
 .bd-btn:hover:not(:disabled) { background: var(--hover); }
 .bd-btn:disabled { opacity: 0.6; cursor: default; }
-.bd-btn.danger { color: var(--danger); }
+.bd-btn.danger { color: var(--danger-text); }
 .rt-confirm .bd-btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 
 /* Settings rows. */
@@ -137,7 +137,7 @@
 .rt-head { display: flex; align-items: center; gap: 12px; margin: 8px 2px 14px; }
 .rt-head h3 { margin: 0 0 2px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .rt-state { font-size: 12px; font-weight: 600; color: var(--text-3); }
-.rt-state.on { color: var(--ok); }
+.rt-state.on { color: var(--ok-text); }
 .rt-state.running { color: var(--bot, var(--accent)); }
 .rt-facts .rt-fact { padding: 12px 14px; }
 .rt-fact label { display: block; font-size: 12px; font-weight: 600; color: var(--text-3); margin-bottom: 3px; }
@@ -158,7 +158,7 @@
 .rt-run-text b em { font-style: normal; font-weight: 500; color: var(--text-3); }
 .rt-run-text span { font-size: 13px; color: var(--text-2); }
 .rt-run-text .rt-reason { color: var(--text-2); overflow-wrap: anywhere; }
-.rt-run.failed .rt-reason { color: var(--danger); }
+.rt-run.failed .rt-reason { color: var(--danger-text); }
 
 /* Library. */
 .lib-filters { display: flex; gap: 6px; margin: 12px 0 0; }

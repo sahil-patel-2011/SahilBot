@@ -1,3 +1,6 @@
+import { CAD_RE } from '../cad/cad-intent'
+import { classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
+
 /**
  * Which on-demand tools a request needs, read from the request itself. Heavy tools (computer use, code,
  * pages…) aren't sent with every request: that keeps the prompt small and fast on local models. A
@@ -29,7 +32,9 @@ const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
   {
     tools: ['mail'],
     when: /\b(e-?mails?|inbox|gmail|mail app|apple mail|unread|reply to|draft (a|an|the)? ?(reply|email)|newsletter|unsubscribe)\b/i
-  }
+  },
+  // CAD (src/main/cad/cad-intent.ts owns the words): the design workflow, Onshape, and FreeCAD when installed.
+  { tools: ['cad_design', 'onshape', 'freecad'], when: CAD_RE }
 ]
 
 /** Tools to load for a request (only names that exist in `known`). */
@@ -47,6 +52,71 @@ export function intentTools(text: string, known: Set<string>, extra: { codeProje
  * tool list stays the same for the whole chat. Only names that exist in `known`.
  */
 export function likelyTools(known: Set<string>): string[] {
-  const out = GROUPS.filter((g) => !g.tools.includes('computer')).flatMap((g) => g.tools)
+  // The CAD tools stay on demand too (big schemas most chats never use).
+  const out = GROUPS.filter((g) => !g.tools.includes('computer') && !g.tools.includes('cad_design')).flatMap((g) => g.tools)
   return ['read_result', ...out].filter((t) => known.has(t))
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Chat or agent: does this request need the full agent (plan, work tools, self-check), or is it a chat
+// (conversation, a question, advice, a short piece of writing) that answers right away with a lean prompt?
+// A chat can still search the web, read a page, use memory and connected apps, and call find_tools, which
+// turns it into agent work from the next step on (loop.ts). Instant and local: no model call.
+// This is the same decision as the router's (llm/task-classifier.ts classifyTask: category, difficulty, kind
+// and effort come out of one function), so "coding" never runs as a chat and a chat is never routed as agent
+// work. loop.ts passes the routed decision in (`route`); called alone, it decides the same way.
+// ---------------------------------------------------------------------------------------------------
+
+export type TaskKind = 'chat' | 'agent'
+
+export interface TaskContext {
+  /** The user message's flags: Plan first, Team of Experts, Deep Research, Heavy, Council. */
+  flags?: Record<string, unknown>
+  /** Attached files that aren't images (read with file tools), and attached folders. */
+  files?: number
+  folders?: number
+  /** The chat has an unfinished plan (a task in progress). */
+  openPlan?: boolean
+  /** How the previous request in this chat ran (a follow-up like "yes, do it" keeps it). */
+  previous?: TaskKind
+  /** The previous request's category (follow-ups keep it), when known. */
+  previousCategory?: RouteCategory
+  /** A helper agent, a routine, a goal wake-up or a group chat: always the full agent. */
+  helper?: boolean
+  unattended?: boolean
+  group?: boolean
+  /** The chat's folder is a code project; the bot's role (instructions). */
+  codeProject?: boolean
+  role?: string
+  /** The decision the router already made for this request (loop.ts chooseModel): its kind is used as is. */
+  route?: Pick<RouteClass, 'kind' | 'kindWhy'>
+}
+
+export interface TaskClass {
+  kind: TaskKind
+  why: string
+}
+
+/**
+ * Chat or agent for one request. Agent when a mode toggle is on, files or folders are attached, a plan is in
+ * progress, it runs as a helper, a routine or in a group, or the request is agent work (code, the screen, the
+ * user's files, mail and calendar, documents, CAD, deep research). Everything else (conversation, questions,
+ * advice, explanations, short writing, live facts) is a chat. Follow-ups keep the previous request's kind.
+ */
+export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
+  const f = ctx.flags ?? {}
+  if (ctx.helper || ctx.unattended || ctx.group) return { kind: 'agent', why: ctx.helper ? 'helper agent' : ctx.unattended ? 'runs unattended' : 'group chat' }
+  if (f.planFirst || f.team || f.deepResearch || f.heavy || f.council) return { kind: 'agent', why: f.planFirst ? 'Plan first is on' : f.team ? 'Team of Experts is on' : f.deepResearch ? 'Deep Research is on' : f.heavy ? 'Heavy is on' : 'Council is on' }
+  if (ctx.folders) return { kind: 'agent', why: 'works with an attached folder' }
+  if (ctx.files) return { kind: 'agent', why: 'reads attached files' }
+  if (ctx.openPlan) return { kind: 'agent', why: 'a task is in progress' }
+  if (!text.trim()) return { kind: ctx.previous ?? 'chat', why: 'no text' }
+  if (ctx.route) return { kind: ctx.route.kind, why: ctx.route.kindWhy }
+  const d = classifyRequest(text, {
+    previousKind: ctx.previous,
+    // Only the kind of the last request is known here: a follow-up keeps it (the category stands in for it).
+    previousCategory: ctx.previousCategory ?? (ctx.previous === 'agent' ? 'agent-tools' : ctx.previous === 'chat' ? 'chat' : undefined),
+    codeProject: ctx.codeProject, role: ctx.role
+  })
+  return { kind: d.kind, why: d.kindWhy }
 }

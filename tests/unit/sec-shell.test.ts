@@ -368,7 +368,7 @@ describe('MEDIUM 8: the release workflow', () => {
     expect(build).not.toMatch(/secrets\./)
     expect(build).toMatch(/contents:\s*read/)
     expect(build).toMatch(/upload-artifact@/)
-    expect(publish).toMatch(/needs:\s*build/)
+    expect(publish).toMatch(/needs:\s*(build\b|\[build,)/)
     expect(publish).toMatch(/if:\s*github\.ref == 'refs\/heads\/main'/)
     expect(publish).toMatch(/environment:\s*release/)
     expect(publish).toMatch(/contents:\s*write/)

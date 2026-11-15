@@ -150,7 +150,7 @@
   background: var(--bubble-ai); padding: 14px 18px; border-radius: 22px; max-width: 100%;
   font-size: 15px; line-height: 1.6;
 }
-.chat-root .bubble.ai.err { background: color-mix(in srgb, var(--danger) 10%, var(--bubble-ai)); color: var(--danger); }
+.chat-root .bubble.ai.err { background: color-mix(in srgb, var(--danger) 10%, var(--bubble-ai)); color: var(--danger-text); }
 .chat-root .bubble.ai > .hint { margin-top: 6px; }
 /* markdown inside a bubble */
 .chat-root .bubble.ai .md p { margin: 0 0 10px; }

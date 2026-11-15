@@ -55,6 +55,8 @@ export interface ClaudeRecord {
   compacted: boolean
   /** The compaction trigger the request asked for (undefined: none). */
   trigger?: number
+  /** The compaction edit's custom summarization prompt (compact_20260112 `instructions`), if any. */
+  instructions?: string
   /** The previous request's prompt is a prefix of this one's (append-only). */
   appendOnly: boolean
   /** Where the previous prompt diverged: 'tools' | 'system' | 'messages' (undefined when append-only). */
@@ -84,7 +86,7 @@ export interface FakeAnthropic {
   /** Builds the model's reply. ctx.n counts non-summary requests. */
   respond: (body: Record<string, any>, ctx: { n: number; record: ClaudeRecord }) => ClaudeReply
   /** The compaction summary the server writes (default: a lossy one that keeps only a step count). */
-  summarize: (effectiveText: string, n: number) => string
+  summarize: (effectiveText: string, n: number, instructions?: string) => string
   /** Called with every request before it is answered (e.g. to stop the run mid-task). */
   onRequest?: (body: Record<string, any>, n: number) => void
   /** Forget the step count, the previous prompt and the records (the cache stays, like the real one). */
@@ -232,11 +234,13 @@ export async function startFakeAnthropic(): Promise<FakeAnthropic> {
     const input = tokens - cacheRead - cacheWrite
     for (const bp of uniq) cache.add(segs[bp].hash)
 
-    const trigger = (json.context_management?.edits ?? []).find((e: Block) => e.type === 'compact_20260112')?.trigger?.value as number | undefined
+    const edit = (json.context_management?.edits ?? []).find((e: Block) => e.type === 'compact_20260112')
+    const trigger = edit?.trigger?.value as number | undefined
+    const instructions = typeof edit?.instructions === 'string' ? edit.instructions : undefined
     const compacted = !isSummary && trigger !== undefined && tokens > trigger
     const ttl = (json.cache_control?.ttl as string | undefined) ?? (system[0]?.cache_control?.ttl as string | undefined)
     const record: ClaudeRecord = {
-      n: requests, tokens, ignored, cacheRead, cacheWrite, input, output: 0, compacted, trigger, appendOnly, diverged,
+      n: requests, tokens, ignored, cacheRead, cacheWrite, input, output: 0, compacted, trigger, instructions, appendOnly, diverged,
       toolsHash, systemHash, droppedThinking, thinkingSent, orphans, breakpoints, ttl, maxTokens: json.max_tokens, isSummary
     }
     if (!isSummary) {
@@ -252,7 +256,7 @@ export async function startFakeAnthropic(): Promise<FakeAnthropic> {
     if (compacted) {
       compactions++
       const text = segs.filter((s) => s.block).map((s) => (s.block!.type === 'text' ? s.block!.text : s.block!.type === 'tool_result' ? (typeof s.block!.content === 'string' ? s.block!.content : '') : '')).join('\n')
-      const summary = state.summarize(text, compactions)
+      const summary = state.summarize(text, compactions, instructions)
       summaryTokens = fakeTokens(summary.length)
       content.push({ type: 'compaction', content: summary })
     }

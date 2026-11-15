@@ -2,6 +2,7 @@ import type { Page } from 'playwright'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { launch, tempProfile } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
+import { startFakeServer } from '../fixtures/fake-oauth-mcp'
 
 let llm: MockLlm
 const idle = async (page: Page): Promise<void> => {
@@ -41,5 +42,39 @@ describe('in-chat connect card', () => {
     expect(bubbles.join('\n')).toContain('OK, without PagerDuty.')
     expect(await page.evaluate(() => window.foreman.connectors.list().then((l: any) => (Array.isArray(l) ? l : l.connectors ?? []).length))).toBe(0)
     await app.close()
+  })
+
+  test('Connect apps: one-click OAuth sign-in (DCR + PKCE) to a local fake app, then revoked → Needs sign-in again → Reconnect; Check all', async () => {
+    const fake = await startFakeServer({ name: 'tasks' })
+    // SAHILBOT_TEST_OAUTH_FETCH: the sign-in page (on loopback only) is loaded headlessly instead of in the user's browser.
+    const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_TEST_OAUTH_FETCH: '1' })
+    try {
+      await page.click('[data-testid="connect-apps"]')
+      await page.click('[data-testid="preset-custom"]')
+      await page.fill('.conn-form input >> nth=0', 'Tasks')
+      await page.fill('[data-testid="conn-url"]', fake.url)
+      await page.click('[data-testid="conn-save"]')
+      const row = page.locator('[data-testid="connector-row"]')
+      await expect.poll(() => row.getAttribute('data-state'), { timeout: 30_000 }).toBe('connected')
+      expect(await row.locator('[data-testid="connector-state"]').innerText()).toContain('Connected')
+      expect(fake.log.registrations).toHaveLength(1)
+      expect(fake.log.authorizes[0].get('code_challenge_method')).toBe('S256')
+      // The provider revokes SahilBot's access; Check all finds it without opening a browser.
+      fake.revokeAll()
+      await page.click('[data-testid="connectors-check-all"]')
+      await expect.poll(() => row.getAttribute('data-app-state'), { timeout: 20_000 }).toBe('reauth')
+      expect(await row.locator('[data-testid="connector-state"]').innerText()).toContain('Needs sign-in again')
+      await expect.poll(() => page.locator('[data-testid="check-all-result"]').innerText()).toContain('1 needs sign-in again')
+      expect(fake.log.authorizes).toHaveLength(1)
+      // One click on Reconnect signs in again.
+      await row.locator('[data-testid="connector-reconnect"]').click()
+      await expect.poll(() => row.getAttribute('data-state'), { timeout: 30_000 }).toBe('connected')
+      expect(fake.log.authorizes).toHaveLength(2)
+      await page.click('[data-testid="connectors-check-all"]')
+      await expect.poll(() => page.locator('[data-testid="check-all-result"]').innerText()).toBe('1 working')
+    } finally {
+      await app.close()
+      await fake.close()
+    }
   })
 })

@@ -10,7 +10,7 @@ category: FRC Design
 Setting up a season's CAD, reviewing a student's model, or when CAD is slow, breaks on changes, or can't be manufactured from. If the user wants code-generated CAD, use cad-workflow instead.
 
 ## Working in the team's real documents
-With an Onshape link (or the document name), load the onshape tool with find_tools("onshape") and follow the cad-onshape-api skill: read the feature tree, parts and materials, mass properties for weight and CG, change key dimensions through the Variable Studio (preview, then the user approves), and export STEP/STL/DXF from a version. Use it to check the steps below against the actual model instead of guessing.
+To design and build a new part or mechanism, use the cad_design tool (cad-design-workflow): brief with the game and robot constraints, 2-4 concepts, a parametric plan, build, verify. With an Onshape link (or the document name), use the onshape tool (loaded for CAD requests; otherwise find_tools("onshape")) and follow the cad-onshape-api skill: read the feature tree, parts and materials, mass properties for weight and CG, change key dimensions through the Variable Studio (preview, then the user approves), and export STEP/STL/DXF from a version. Use it to check the steps below against the actual model instead of guessing.
 
 ## Steps
 1. Documents: one "Concept" document (main layout sketch + crayon CAD), one document per subsystem (part studios, sub-assemblies, a subsystem top-level assembly), and one "Main Robot" document that assembles the subsystem top-levels. Version each document separately; release versions when they go to manufacturing.

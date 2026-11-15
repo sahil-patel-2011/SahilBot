@@ -47,3 +47,66 @@ export function agentsTool(): ToolDef<Args> {
     }
   }
 }
+
+const item = {
+  anyOf: [
+    { type: 'string' },
+    {
+      type: 'object',
+      properties: {
+        text: { type: 'string' },
+        role: { type: 'string', enum: ['breadth', 'solid', 'hard', 'review'], description: 'Sets the model: breadth = cheap and fast (Haiku, GPT-6 Luna/Terra), solid (Sonnet, GPT-6.1 Sol), hard = the most important or hardest (Opus, GPT-6 Astra), review = a critic, from another provider when one is connected' },
+        model: { type: 'string', description: 'A specific model id, only when it truly matters' }
+      },
+      required: ['text'],
+      additionalProperties: false
+    }
+  ]
+}
+
+/** The swarm tool's arguments (swarm/bot-swarm.ts SwarmArgs). */
+export type SwarmToolArgs = import('../swarm/bot-swarm').SwarmArgs
+
+/**
+ * Bot swarm: up to 50 temporary, read-only helpers on one job, then the lead compiles. Listed in bot chats
+ * whose Swarm setting is Auto or Always (state.swarm); never in helpers.
+ */
+export function swarmTool(): ToolDef<SwarmToolArgs> {
+  return {
+    name: 'swarm',
+    label: 'Swarm',
+    core: true,
+    // Helpers are read-only (they can't change, send, buy or run anything); the cost OK is the tool's own card.
+    effect: 'read',
+    available: (state) => !!state.swarm && !state.depth,
+    description: 'Run a swarm: up to 50 temporary helper agents work in parallel on one job, then you compile their results into one answer. Use it when the task clearly benefits: brainstorming (many independent ideas), broad research, many independent items, comparing many options, or a large set of documents. Two patterns: "ideate" (divergent ideation: every helper gets the same brief plus its own distinct angle and works alone, so ideas are independent; give your own angles or let the swarm pick distinct personas and constraints) and "divide" (divide and conquer: pass items and each helper takes a slice). You choose how many helpers by the task (number of items, how broad it is); the swarm caps it by the bot\'s max, what can run at once, and the budget. Helpers are read-only and can\'t see this chat: put everything they need in goal and context. Each helper\'s model follows its role (breadth / solid / hard / review). A big swarm may first need the user\'s OK for its cost and stops at its cap. Then compile: dedupe, cluster, rank, resolve conflicts, and credit helpers with [H3] tags. Optional round two: action "refine" sends up to 5 helpers back to deepen or critique, once.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['run', 'refine'], description: 'run (default) or refine (round two of a swarm from this request)' },
+        goal: { type: 'string', description: 'The shared brief: what every helper works on, self-contained' },
+        pattern: { type: 'string', enum: ['ideate', 'divide'] },
+        helpers: { type: 'integer', minimum: 1, maximum: 50, description: 'How many helpers you want (sized by the task; capped by the swarm)' },
+        breadth: { type: 'string', enum: ['focused', 'normal', 'wide', 'exhaustive'], description: 'ideate without a count: 5 / 10 / 25 / 50 helpers' },
+        angles: { type: 'array', maxItems: 50, items: item, description: 'ideate: distinct angles, personas or constraints, one per helper (the rest are filled in)' },
+        items: { type: 'array', maxItems: 500, items: item, description: 'divide: the independent items (grouped into slices when there are more than helpers)' },
+        role: { type: 'string', enum: ['breadth', 'solid', 'hard', 'review'], description: 'Default role (model) for helpers; default breadth' },
+        provider: { type: 'string', enum: ['anthropic', 'openai', 'xai'], description: 'Bots only: prefer this provider for helpers (models still follow the routing table for their role)' },
+        ideas_each: { type: 'integer', minimum: 2, maximum: 8 },
+        criteria: { type: 'string', description: 'What makes a result good (for helpers and for ranking)' },
+        deliverable: { type: 'string', description: 'What the compiled answer should be' },
+        tools: { type: 'string', enum: ['think', 'research'], description: 'think (no web; default for ideate) or research (web, files, documents; default for divide)' },
+        context: { type: 'string', description: 'Background helpers need (they can\'t see this chat)' },
+        swarm_id: { type: 'string', description: 'refine: the swarm to refine' },
+        helper_numbers: { type: 'array', items: { type: 'integer', minimum: 1, maximum: 50 }, maxItems: 5, description: 'refine: helpers to send back (H numbers)' },
+        instruction: { type: 'string', description: 'refine: what to do (deepen, critique, test against a constraint)' }
+      },
+      additionalProperties: false
+    },
+    describe: (a) => a.action === 'refine' ? `Swarm round two: ${(a.helper_numbers ?? []).map((n) => `H${n}`).join(', ')}` : `Swarm (${a.pattern ?? (a.items?.length ? 'divide' : 'ideate')}): ${String(a.goal ?? '').slice(0, 160)}`,
+    async run(a, ctx) {
+      if (!ctx.runSwarm) throw new Error('Swarms are not available here.')
+      return ctx.runSwarm(a)
+    }
+  }
+}
