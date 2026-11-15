@@ -120,7 +120,7 @@ export class QuestionStore {
     if (o.status?.length) { where.push(`status IN (${o.status.map(() => '?').join(',')})`); args.push(...o.status) }
     if (o.botId) { where.push('space_id = ?'); args.push(o.botId) }
     if (o.threadId) { where.push('thread_id = ?'); args.push(o.threadId) }
-    const sql = `SELECT * FROM bot_questions${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT ${Math.max(1, Math.min(1000, o.limit ?? 500))}`
+    const sql = `SELECT * FROM bot_questions${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC, rowid DESC LIMIT ${Math.max(1, Math.min(1000, o.limit ?? 500))}`
     return (this.db.sql.prepare(sql).all(...args) as Row[]).map(toItem)
   }
 

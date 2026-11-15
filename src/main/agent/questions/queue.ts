@@ -287,7 +287,8 @@ export class QuestionQueue {
 
   /** Open items of one chat (the next run is told what is still waiting). */
   openFor(threadId: string): StoredItem[] {
-    return this.d.store.list({ status: ['open'], threadId })
+    // In the order they were asked (the store lists newest first, ties broken by insertion order).
+    return this.d.store.list({ status: ['open'], threadId }).reverse()
   }
 
   /** The inbox: everything open, plus assumptions waiting for review (newest first). */

@@ -47,7 +47,7 @@ describe('configuration matrix', () => {
     }
     sim.resetPrefs()
     ms = Date.now() - t0
-  })
+  }, 180_000) // ~500K routing decisions: a few seconds here, longer on CI runners
   afterAll(() => sim.resetPrefs())
 
   test('every setup × every eval item keeps every invariant', () => {
