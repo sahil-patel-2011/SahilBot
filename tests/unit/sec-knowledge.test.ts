@@ -115,7 +115,8 @@ describe('M3: documents are parsed in a worker with limits', () => {
     const buf = await zipOf(210 * 1024 * 1024)
     writeFileSync(path, buf)
     expect(await extractFile(path, { data: buf })).toEqual({ skip: expect.stringMatching(/unpacks to more than 200 MB/) })
-  })
+    // Compressing 210 MB takes a few seconds on CI runners.
+  }, 60_000)
 
   test('a parse that runs too long is stopped (the worker is terminated)', async () => {
     const JSZip = (await import('jszip')).default
