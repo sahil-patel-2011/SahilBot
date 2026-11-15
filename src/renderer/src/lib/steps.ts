@@ -78,7 +78,7 @@ export function describe(step: Step): [Category, string, string] {
     case 'file_write': return ['write', display ? cap(display) : `Wrote ${q(a.path, 40)}`, `Writing ${q(a.path, 40)}`]
     case 'file_manage': return [a.op === 'delete' ? 'delete' : 'write', display ? cap(display) : `${cap(a.op ?? 'changed')} ${q(a.path, 40)}`, `${cap(a.op ?? 'changing')} ${q(a.path, 40)}`]
     case 'create_document': return ['doc', display ? cap(display) : `Created ${q(a.path, 40)}`, `Creating ${q(a.path, 40)}`]
-    case 'memory': return ['memory', a.action === 'save' ? `Remembered “${q(a.fact, 40)}”` : a.action === 'forget' ? 'Forgot a fact' : `Searched memory for “${q(a.query, 30)}”`, 'Checking memory']
+    case 'memory': return ['memory', a.action === 'save' ? `Remembered “${q(a.fact, 40)}”` : a.action === 'forget' ? 'Forgot a fact' : a.action === 'list' || !String(a.query ?? '').trim() ? 'Looked at saved memories' : `Searched memory for “${q(a.query, 30)}”`, 'Checking memory']
     case 'todo': return ['plan', display ? `Updated the plan (${display})` : 'Updated the plan', 'Planning']
     case 'find_tools': return ['other', display ? cap(display) : `Looked for ${q(a.query, 30)} tools`, 'Finding tools']
     case 'read_result': return ['read', 'Read more of a long result', 'Reading more']

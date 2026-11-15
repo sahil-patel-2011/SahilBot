@@ -147,6 +147,8 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         }
       }
 
+      // A search with no words is a request to see what's saved (models do this): list instead of wasting the step.
+      if (a.action === 'search' && !a.query?.trim()) a = { ...a, action: 'list' }
       if (a.action === 'list') {
         if (off) return { text: offText, display: 'memory is off' }
         let items = memory.list(botId)

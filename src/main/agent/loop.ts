@@ -1532,8 +1532,11 @@ export class Agent {
   private async chooseModel(requested: string, thread: Thread, state: import('./types').ThreadState): Promise<{ model: string; routed?: Routed }> {
     const s = this.d.settings.get()
     if (!this.d.endpoints.last) await this.d.endpoints.list().catch(() => undefined)
-    // Nothing fits comfortably: still use what's installed (the server can run it, just slower).
     let usable = this.d.endpoints.usable()
+    // Nothing usable in the last listing (e.g. a key saved a moment ago, before the models were listed again):
+    // list once more before giving up, so the first message after adding a key just works.
+    if (!usable.length) { await this.d.endpoints.list().catch(() => undefined); usable = this.d.endpoints.usable() }
+    // Nothing fits comfortably: still use what's installed (the server can run it, just slower).
     // (Local models off: never a local one, even here.)
     // (Only local models: a cloud model missing from usable() is off, unaffordable or over the spending limit.)
     if (!usable.length) usable = (this.d.endpoints.last?.models ?? []).filter((m) => m.installed && !s.hiddenModels.includes(m.id) && (!isRemoteModel(m) || !!process.env.FOREMAN_BASE_URL) && (!localOff(s) || process.env.FOREMAN_BASE_URL || !providerDef(m.provider).local))

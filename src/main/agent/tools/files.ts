@@ -13,6 +13,20 @@ const MAX_IMAGE_BYTES = 8_000_000
 
 const real = (p: string): string => (existsSync(p) ? realpathSync(p) : resolve(p))
 
+/** `p` with its nearest existing ancestor replaced by that folder's real path (the rest kept as written). */
+function canonical(p: string): string {
+  let probe = p
+  while (!existsSync(probe) && dirname(probe) !== probe) probe = dirname(probe)
+  try { return join(realpathSync(probe), relative(probe, p)) } catch { return p }
+}
+
+/**
+ * Documents SahilBot created during this session: rebuilding one of its own files (a backup is kept) is local
+ * work, not replacing something of the user's, so Auto doesn't stop to ask (found live: every rebuild of a
+ * just-made report asked "Can delete or overwrite · Uses details taken from a web page").
+ */
+const madeHere = new Set<string>()
+
 /** True when `p` is `root` or inside it (a root may also be a single attached file). */
 function within(root: string, p: string): boolean {
   return p === root || p.startsWith(root.endsWith(sep) ? root : root + sep)
@@ -21,8 +35,14 @@ function within(root: string, p: string): boolean {
 /** Resolves `p` inside `root`, refusing `..` escapes and symlinks that point outside. */
 export function insideRoot(root: string, p: string): string {
   const rootReal = real(root)
-  const full = resolve(rootReal, p.replace(/^~[\\/]/, ''))
-  if (!within(rootReal, full)) throw new Error(`"${p}" is outside the workspace folder.`)
+  let full = resolve(rootReal, p.replace(/^~[\\/]/, ''))
+  // An absolute path through a symlinked prefix (macOS /var → /private/var, /tmp → /private/tmp) names the
+  // same place as the real root: compare by the real location of its nearest existing folder.
+  if (!within(rootReal, full)) {
+    const canon = canonical(full)
+    if (!within(rootReal, canon)) throw new Error(`"${p}" is outside the workspace folder.`)
+    full = canon
+  }
   let probe = full
   while (!existsSync(probe)) probe = dirname(probe)
   if (!within(rootReal, realpathSync(probe))) throw new Error(`"${p}" resolves outside the workspace folder.`)
@@ -268,7 +288,7 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     name: 'create_document',
     label: 'Document',
     core: true,
-    effect: (a, c) => { const p = safe(() => resolvePath(a.path, getWorkspace(), c.roots, { base: c.folder })); return p === undefined || existsSync(p) ? 'destructive' : 'write_local' },
+    effect: (a, c) => { const p = safe(() => resolvePath(a.path, getWorkspace(), c.roots, { base: c.folder })); return p === undefined || (existsSync(p) && !madeHere.has(real(p))) ? 'destructive' : 'write_local' },
     hardStop: (a, call) => outsideStop('writing', getWorkspace)(a.path, call),
     description: `Create (or rebuild) a polished document from data; it is reviewed automatically (fix every FAIL in the review, then present it).
 - .docx / .pdf: "markdown" (headings, lists, tables, bold, links, images ![alt](path "Caption"), charts as a \`\`\`chart fenced block of JSON {type: column|bar|line|area|pie|doughnut, title, categories, series: [{name, values}], number_format: "$#,##0"}, [TOC], <!-- pagebreak -->, <!-- landscape --> / <!-- portrait -->, footnotes text[^1] + [^1]: note, "Table: caption" under a table, > [!NOTE] / [!WARNING] callouts). Real Word styles, TOC with page numbers, bookmarks, numbered captions, numbers right-aligned, header rows repeat across pages, "Page X of Y". Options: theme (modern | classic | minimal; same look in PDF, Word, PowerPoint), template (memo | report | letter | meeting_notes | proposal | resume | invoice) with fields {to, from, cc, date, subject, recipient, recipient_address, sender, sender_address, salutation, closing, signature, subtitle, author, organization, prepared_for, prepared_by, attendees, facilitator, location, time, invoice_number, due_date, po_number, terms}, cover, toc (auto for long docs), subtitle, author, header, footer, page_numbers, orientation, page_size (letter|a4|legal), margins (inches: 1 or {top, right, bottom, left}), font_size (pt), fit_pages (e.g. 1: tightens spacing, then type and margins, within readable limits), font, citations [text | {text, url}]. The result reports the page count. Never unzip or hand-edit document XML: rebuild with these options instead.
@@ -400,6 +420,7 @@ Optional "accent" color like "#2563EB" (too-light accents are darkened for text 
         return readFileSync(p)
       }
       const r = await createDocument(full, spec, { readImage })
+      if (!existed) madeHere.add(real(full))
       const what = spec.slides ? `${r.slides ?? spec.slides.length} slides` : spec.sheets ? `${spec.sheets.length} sheet${spec.sheets.length > 1 ? 's' : ''}` : `${r.pages ? `${r.pages} page${r.pages === 1 ? '' : 's'}${/\.docx$/i.test(full) ? ' as Word lays it out' : ''}, ` : ''}${humanSize(r.bytes)}`
       let review = ''
       try {

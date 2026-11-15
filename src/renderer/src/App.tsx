@@ -828,7 +828,7 @@ export function App() {
         </header>
         {models && !models.ok && (
           <div className="banner">
-            No model is available yet. Start Ollama or LM Studio, or add an API key, then
+            No model is available yet. Add a Claude, OpenAI or Grok key or your ChatGPT plan{models.localOff ? '' : ', or start a local model server'}, then
             <button onClick={() => void refreshModels()}>retry</button>or<button onClick={() => { setSettingsPage('keys'); setShowSettings(true) }}>open Settings</button>.
           </div>
         )}
