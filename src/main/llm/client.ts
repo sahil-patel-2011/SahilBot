@@ -1,7 +1,7 @@
 import type { Sampling, ToolCall } from '@shared/types'
 import { lookup } from './catalog'
 import { isAnthropic, isXai } from './providers'
-import { claudeMaxTokens, fallbacks, listAnthropicModels, streamAnthropic } from './anthropic'
+import { claudeMaxTokens, listAnthropicModels, streamAnthropic } from './anthropic'
 import { streamResponses } from './openai-responses'
 import { openaiEffort, openaiInfo, openaiMaxTokens, usesResponses } from './openai-models'
 import { priceFor, tierTokens } from './budget'
@@ -495,8 +495,10 @@ async function* paidAttempt(original: ChatRequest): AsyncGenerator<StreamPart> {
   const maxOutput = claude ? claudeMaxTokens(req.maxTokens, req.effort, req.model) : responses ? openaiMaxTokens(req.maxTokens, req.effort, req.model) : xai ? xaiMaxTokens(req.maxTokens, req.model) : req.maxTokens
   // A fast request's worst case at its multiplier (in billing-equivalent tokens, so every cap downstream prices it).
   const f = fastFactor(req.model, fast)
-  // If a refusal fallback could answer instead, price the worst case at the most expensive tier.
-  spendHooks.before?.(req, Math.ceil(estimatedInput * f), Math.ceil(maxOutput * f), claude && fallbacks(req.model) ? 'claude-fable-5-1' : req.model)
+  // The worst case at the requested model's own prices. (Pricing every request as if a refusal fallback answered
+  // it at the costliest tier made a $0.03 Sonnet step read as "up to $3.56" and refused it under a $3 limit; a
+  // fallback is rare, and what it really cost is recorded after the reply.)
+  spendHooks.before?.(req, Math.ceil(estimatedInput * f), Math.ceil(maxOutput * f), req.model)
   let input = 0
   let output = 0
   let produced = 0
