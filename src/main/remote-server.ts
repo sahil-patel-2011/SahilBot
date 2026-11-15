@@ -107,7 +107,8 @@ export function setupRemoteServer(d: { db: Db; secrets: Secrets; openExternal: (
     const url = normalizeServerUrl(String(rawUrl ?? ''))
     const code = String(rawCode ?? '').trim()
     if (!code) throw new Error('Enter the pairing code from the server (sahilbot-server pair).')
-    const deviceName = `${hostname().replace(/\.local$/, '')} (Mac app)`.slice(0, 60)
+    // The label survives a long hostname: the name part is cut, never "(Mac app)".
+    const deviceName = `${hostname().replace(/\.local$/, '').slice(0, 49)} (Mac app)`
     const pair = (tofu: boolean): Promise<Reply> => call(url, '/api/pair', { method: 'POST', body: { code, name: deviceName, mode: 'token' }, trustOnFirstUse: tofu })
     let r: Reply
     let pinned: string | undefined
