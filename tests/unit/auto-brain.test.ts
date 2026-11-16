@@ -54,6 +54,16 @@ describe('the brain\'s decision', () => {
     expect(code.kind).toBe('agent')
   })
 
+  test('the rules\' school signal, stakes and coding floor survive the brain\'s read', () => {
+    const school = classifyTask('Help me study for my chem quiz on stoichiometry')
+    expect(applyBrain(school, answer({ category: 'chat', kind: 'chat', difficulty: 1, study: false }), 'Luna').signals.study).toBe(true)
+    const health = classifyTask('I found a new mole on my arm, should I be worried?')
+    expect(applyBrain(health, answer({ category: 'chat', kind: 'chat', difficulty: 1, study: true }), 'Luna').signals.stakes).toBe(true)
+    const code = classifyTask('Fix the failing test in src/app.ts')
+    expect(code.category).toBe('coding')
+    expect(applyBrain(code, answer({ category: 'chat', kind: 'chat', difficulty: 0 }), 'Luna').difficulty).toBe(2)
+  })
+
   test('its model is used only within the hard limits', () => {
     const l = { allowed: ALL, tablePick: SONNET, preference: 'balanced' as const, difficulty: 2 as const, fableOn: false }
     expect(acceptBrainModel(OPUS.id, l)?.id).toBe(OPUS.id)
