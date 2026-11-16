@@ -1,0 +1,125 @@
+/* The chat, last: a conversation like a messaging app. Your messages are bubbles in the bot's colour, replies
+   are soft grey bubbles, back-to-back replies stack, and the work in between stays out of sight (Developer
+   mode shows it). Loaded after the design system (main.tsx), scoped to the chat so it wins over older layers. */
+
+:root { --chat-ai: #f0f0ee; --chat-gap: 12px; }
+@media (prefers-color-scheme: dark) { :root { --chat-ai: #262625; } }
+
+.chat-root .thread { gap: var(--chat-gap); padding-top: 24px; padding-bottom: 32px; }
+.chat-root .thread .block { gap: 6px; }
+.chat-root .thread .block.cont { margin-top: calc(4px - var(--chat-gap)); }
+
+/* Bubbles */
+.chat-root .row.ai { display: flex; flex-direction: column; align-items: flex-start; }
+.chat-root .row.ai .bubble-wrap { width: auto; max-width: min(78%, 640px); }
+.chat-root .row.ai .bubble.ai:not(.err) {
+  background: var(--chat-ai); padding: 10px 15px; border-radius: 20px; max-width: 100%;
+  font-size: 15px; line-height: 1.55; box-shadow: none; border: 0;
+}
+.chat-root .row.ai .bubble.ai.err { border-radius: 20px; padding: 10px 15px; }
+.chat-root .row.me .bubble-wrap { max-width: min(78%, 600px); }
+.chat-root .row.me .bubble.me {
+  background: var(--bot, var(--accent)); color: var(--bot-text, #fff); padding: 10px 15px; border-radius: 20px;
+  font-size: 15px; line-height: 1.5;
+}
+.chat-root .block.cont .row.ai .bubble.ai { border-top-left-radius: 8px; }
+
+/* Text inside a bubble: tighter than a document. */
+.chat-root .bubble.ai .md p { margin: 0 0 8px; }
+.chat-root .bubble.ai .md > :last-child { margin-bottom: 0 !important; }
+.chat-root .bubble.ai .md h1, .chat-root .bubble.ai .md h2 { font-size: 16px; margin: 12px 0 6px; }
+.chat-root .bubble.ai .md h3 { font-size: 15px; margin: 10px 0 4px; }
+.chat-root .bubble.ai .md ul, .chat-root .bubble.ai .md ol { margin: 2px 0 8px; padding-left: 20px; }
+.chat-root .bubble.ai .md li { margin: 3px 0; }
+.chat-root .bubble.ai .md pre { margin: 8px 0; }
+
+/* Hover tools: beside the bubble (never over the next message), shown on hover; Developer mode keeps them. */
+.chat-root .row.ai { flex-direction: row; align-items: flex-end; gap: 6px; }
+.chat-root .row.ai .ai-foot { min-height: 0; margin: 0 0 2px; gap: 4px; opacity: 0; transition: opacity .15s; }
+.chat-root .row.ai:hover .ai-foot, .chat-root .row.ai .ai-foot:focus-within, .chat-root .row.ai .ai-foot:has(.pinned), .app.dev .chat-root .row.ai .ai-foot { opacity: 1; }.chat-root .row.ai .msg-actions { opacity: 1; }
+
+/* Dates and lines from the app, centred and quiet. */
+.chat-root .stamp { font-size: 12px; padding: 4px 0; color: var(--text-3); }
+.chat-root .notice.sys-line { font-size: 12px; color: var(--text-3); text-align: center; max-width: 80%; }
+.chat-root .notice.sys-line::before, .chat-root .notice.sys-line::after { display: none; }
+.quiet-action { align-self: center; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); max-width: 80%; text-align: center; }
+.quiet-action svg { color: var(--ok, #1f9d55); flex: none; }
+.quiet-action.failed { color: var(--warn-text, #b45309); }
+.quiet-action.failed > span { font-weight: 700; }
+
+/* The picker's flyouts: descriptions wrap instead of being cut off. */
+.cpick-fly-thinking .cpick-text .sub, .cpick-model .cpick-text .sub { white-space: normal; overflow: visible; text-overflow: clip; }
+
+/* Working: one small bubble with dots, what it's doing, and how long this turn has taken. */
+.chat-root .status-line {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 9px; padding: 9px 14px;
+  background: var(--chat-ai); border-radius: 20px; font-size: 13.5px; color: var(--text-2); max-width: min(78%, 560px);
+}
+.chat-root .status-line .activity-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-root .status-line .activity-meta { color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; }
+
+/* Pictures SahilBot made. */
+.gallery { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-start; }
+.gallery-item { padding: 0; border: 0; background: var(--chat-ai); border-radius: 16px; overflow: hidden; cursor: zoom-in; }
+.gallery-item img { display: block; max-width: 320px; max-height: 320px; object-fit: cover; }
+.gallery-wait { display: block; width: 240px; height: 240px; }
+
+/* Costs, tokens and model names: Developer mode only. */
+.app:not(.dev) .dev-only, .app:not(.dev) .tr-num, .app:not(.dev) .tr-model, .app:not(.dev) .heavy-cost { display: none !important; }
+
+/* The composer: one rounded box. */
+.chat-root .composer { border-radius: 24px; }
+
+/* Sidebar: the update button above you + Connect apps. */
+.sb-update {
+  display: flex; align-items: center; gap: 8px; margin: 0 12px 4px; padding: 9px 12px; border-radius: 12px; border: 0;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.sb-update:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.sb-update svg { color: var(--accent); }
+.sb-update-v { margin-left: auto; font-weight: 400; font-size: 11.5px; color: var(--text-3); }
+
+/* Settings → Permissions */
+.perm-levels { display: grid; gap: 8px; }
+.perm-level {
+  display: flex; align-items: flex-start; gap: 12px; width: 100%; text-align: left; padding: 14px 16px; border-radius: 14px;
+  border: 1px solid var(--surface-line, var(--line)); background: var(--surface, var(--bg)); color: var(--text); cursor: pointer;
+}
+.perm-level:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.perm-level.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.perm-radio { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; border: 2px solid var(--text-3); }
+.perm-level.on .perm-radio { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 0 4px, transparent 5px); }
+.perm-level-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 14px; }
+.perm-level-text .sub { flex-basis: 100%; font-size: 12.5px; line-height: 1.45; color: var(--text-2); }
+.perm-rec { font-size: 11px; font-weight: 600; color: var(--accent-text, var(--accent)); }
+.perm-note { display: flex; align-items: center; gap: 7px; margin: 10px 2px 0; font-size: 12px; color: var(--text-3); }
+.perm-on { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--ok, #1f9d55); }
+
+/* Needs you: answers as rows that wrap (never off the card), your own answer with Send beside it, plain approvals. */
+.ny-card .tk-title { margin: 10px 0 8px; line-height: 1.4; }
+.ny-options { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px; }
+.ny-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left;
+  padding: 10px 14px; border-radius: 12px; border: 1px solid var(--surface-line, var(--line)); background: var(--surface, var(--bg));
+  color: var(--text); font-size: 13.5px; line-height: 1.4; white-space: normal; cursor: pointer;
+}
+.ny-option:hover { border-color: color-mix(in srgb, var(--bot, var(--accent)) 45%, var(--line)); }
+.ny-option.on { border-color: var(--bot, var(--accent)); box-shadow: 0 0 0 1px var(--bot, var(--accent)) inset; }
+.ny-rec { flex: none; font-size: 11px; font-weight: 600; color: var(--accent-text, var(--accent)); }
+.ny-own { display: flex; gap: 8px; align-items: center; }
+.ny-own input {
+  flex: 1; min-width: 0; height: 38px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--surface-line, var(--line));
+  background: var(--surface, var(--bg)); color: var(--text); font-size: 13.5px;
+}
+.ny-own input:focus { outline: none; border-color: var(--bot, var(--accent)); }
+.ny-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.ny-deadline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); margin-right: auto; }
+.ny-where { display: flex; align-items: center; gap: 6px; margin: -2px 0 4px; font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }
+.ny-where svg { flex: none; color: var(--text-3); }
+.ny-why { margin: 0 0 8px; }
+.ny-actions { flex-wrap: wrap; align-items: center; }
+.ny-open { margin-left: auto; font-size: 12.5px; }
+
+/* New bot: 30 templates, searchable, in a scrolling grid. */
+.be-template-search { width: 100%; margin: 6px 0 8px; }
+.be-template-grid { max-height: 340px; overflow-y: auto; padding-right: 2px; }

@@ -9,7 +9,7 @@ import { xaiInfo } from '../../../main/llm/xai-models'
 // first, and the thinking levels a model offers.
 
 export const THINKING_LABEL: Record<EffortChoice, string> = { auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' }
-export const MODE_LABEL: Record<PermissionMode, string> = { ask: 'Ask first', auto: 'Auto', autonomous: 'Autonomous', bypass: 'Bypass' }
+export const MODE_LABEL: Record<PermissionMode, string> = { ask: 'Ask', auto: 'Auto', autonomous: 'Auto', bypass: 'Bypass' }
 
 const LEVELS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 export const ALL_THINKING: EffortChoice[] = ['auto', ...LEVELS]
@@ -25,14 +25,12 @@ export function shortModelName(id: string, m?: Pick<ModelInfo, 'label'>): string
 }
 
 /**
- * The picker button: "Auto" when the model, thinking and permissions are all Auto; otherwise the
- * overrides ("Opus 5.5 · High", "Auto · Autonomous"). In a bot or group chat the model and thinking are
- * chosen for each request, so only the permissions can differ.
+ * The picker button: "Auto" when the model, thinking and permissions are all Auto (the default); otherwise the
+ * overrides ("Opus 5.5 · High", "Auto · Low", "Auto · Ask", "Auto · Bypass").
  */
-export function pickerLabel(o: { model: string; models?: Array<Pick<ModelInfo, 'id' | 'label'>> | null; thinking?: EffortChoice; mode: PermissionMode; autoBot?: boolean }): string {
-  const perm = o.mode !== 'auto' ? MODE_LABEL[o.mode] : undefined
-  if (o.autoBot) return ['Auto', perm].filter(Boolean).join(' · ')
-  const modelPart = !o.model || o.model === 'auto' ? undefined : shortModelName(o.model, o.models?.find((m) => m.id === o.model))
+export function pickerLabel(o: { model: string; models?: Array<Pick<ModelInfo, 'id' | 'label'>> | null; thinking?: EffortChoice; mode: PermissionMode }): string {
+  const perm = o.mode !== 'auto' && o.mode !== 'autonomous' ? MODE_LABEL[o.mode] : undefined
+  const modelPart = isAutoModel(o.model) ? (o.model && o.model !== 'auto' ? shortModelName(o.model) : undefined) : shortModelName(o.model, o.models?.find((m) => m.id === o.model))
   const think = o.thinking && o.thinking !== 'auto' ? THINKING_LABEL[o.thinking] : undefined
   if (!modelPart && !think && !perm) return 'Auto'
   return [modelPart ?? 'Auto', think, perm].filter(Boolean).join(' · ')

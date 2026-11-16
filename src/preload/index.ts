@@ -66,6 +66,7 @@ const api: SahilBotApi = {
     open: call('files:open') as never,
     reveal: call('files:reveal') as never,
     recent: call('files:recent') as never,
+    ideas: call('ideas:home') as never,
     snippet: call('files:snippet') as never
   },
   // Attachments (main: attachments.ts): dropped or pasted File objects resolve to paths here; ones with no
@@ -95,6 +96,7 @@ const api: SahilBotApi = {
     folder: call('attach:folder') as never,
     pickFolder: call('attach:pickFolder') as never,
     clearFolder: call('attach:clearFolder') as never,
+    useFolder: call('attach:useFolder') as never,
     pickBotFolder: call('attach:pickBotFolder') as never,
     clearBotFolder: call('attach:clearBotFolder') as never,
     pick: call('attach:pick') as never
@@ -360,7 +362,15 @@ const api: SahilBotApi = {
   usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never, forRun: call('usage:forRun') as never, dashboard: call('usage:dashboard') as never, glance: call('usage:glance') as never },
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
   alwaysOn: { status: call('alwaysOn:status') as never, pauseRoutines: call('alwaysOn:pauseRoutines') as never },
-  permissions: { status: call('permissions:status') as never, open: call('permissions:open') as never, automation: call('permissions:automation') as never },
+  update: {
+    status: call('update:status') as never, check: call('update:check') as never, install: call('update:install') as never,
+    onStatus: (cb) => {
+      const h = (_e: unknown, st: Parameters<typeof cb>[0]): void => cb(st)
+      ipcRenderer.on('update:status', h)
+      return () => { ipcRenderer.removeListener('update:status', h) }
+    }
+  },
+  permissions: { status: call('permissions:status') as never, open: call('permissions:open') as never, request: call('permissions:request') as never, automation: call('permissions:automation') as never },
   activity: {
     status: call('activity:status') as never, set: call('activity:set') as never, pause: call('activity:pause') as never,
     clear: call('activity:clear') as never, checkPermissions: call('activity:checkPermissions') as never,

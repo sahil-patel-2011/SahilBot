@@ -134,3 +134,28 @@ export function SetTabs<T extends string>({ value, tabs, onChange, label, extra 
     </div>
   )
 }
+
+/** A small yes / no dialog (focus starts on Cancel; Esc cancels, Enter on a button presses it). */
+export function ConfirmDialog({ title, children, confirm, danger, onConfirm, onCancel, testId }: {
+  title: ReactNode; children?: ReactNode; confirm: string; danger?: boolean; onConfirm: () => void; onCancel: () => void; testId?: string
+}) {
+  const cancel = useRef<HTMLButtonElement>(null)
+  useLayoutEffect(() => { cancel.current?.focus() }, [])
+  useLayoutEffect(() => {
+    const k = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onCancel() } }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
+  }, [onCancel])
+  return (
+    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <div className="modal ui-confirm" role="alertdialog" aria-modal="true" aria-labelledby="ui-confirm-title" data-testid={testId}>
+        <h2 id="ui-confirm-title">{title}</h2>
+        {children && <div className="ui-confirm-body">{children}</div>}
+        <div className="modal-actions">
+          <button ref={cancel} className="btn" onClick={onCancel} data-testid={testId ? `${testId}-cancel` : undefined}>Cancel</button>
+          <button className={`btn ${danger ? 'danger-solid' : 'primary'}`} onClick={onConfirm} data-testid={testId ? `${testId}-ok` : undefined}>{confirm}</button>
+        </div>
+      </div>
+    </div>
+  )
+}

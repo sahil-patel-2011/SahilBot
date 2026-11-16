@@ -99,7 +99,8 @@ describe('context engine eval', () => {
       const text = engine.assembleFor({ query: q.q, window: 1_000_000, spaceId: q.bot === 'writer' ? writer.id : main.id, local: true }).section?.lines.join('\n') ?? ''
       for (const n of ALWAYS_NEVER) if (text.includes(n)) leaks.push(`${q.q} → ${n}`)
     }
-    const all = JSON.stringify(engine.store.exportAll())
+    // A random UUID may contain a short sentinel such as 4111; it is not a stored fact.
+    const all = JSON.stringify(engine.store.exportAll()).replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '[record-id]')
     for (const n of ALWAYS_NEVER) if (all.includes(n)) leaks.push(`stored → ${n}`)
     expect(leaks).toEqual([])
   })

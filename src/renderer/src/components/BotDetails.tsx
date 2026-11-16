@@ -7,7 +7,6 @@ import { describeSchedule, groupLibrary, host, when } from '../routines'
 import { BotShareRows } from './BotShare'
 import { BotGoals } from './TasksView'
 import { VaultBotRows } from './VaultView'
-import { Disclosure } from './ui'
 import { BotFolderRow } from './Attachments'
 import { AlwaysOnRows } from './NeedsYou'
 
@@ -184,33 +183,41 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
               </div>
               {err && <div className="bd-err" role="alert">{err}</div>}
 
-              <div className="bd-section-title">Settings</div>
-              <div className="bd-card">
-                <div className="bd-row">
-                  <span className="bd-row-text">Notify me when this bot finishes or needs me</span>
-                  <Toggle on={notify} onChange={(v) => { setNotify(v); void saveSpace({ notify: v }) }} label="Notifications" testId="bot-notify" />
-                </div>
+              {/* Settings, grouped: how it works, how it tells you, Max and the Vault. */}
+              <div className="bd-section-title">Behaviour</div>
+              <div className="bd-card" data-testid="bot-behaviour">
+                <AutonomyRow space={space} />
                 {/* A bot chooses its own model and thinking for each request (never set per bot). */}
                 {(space.kind === 'group' || (space.kind === 'bot' && !space.isMain)) && (
-                  <div className="bd-row bd-row-readonly" data-testid="bot-auto-line">
-                    <span className="bd-row-text">Model and thinking: chosen automatically for each request</span>
+                  <div className="bd-row bd-row-readonly bd-row-compact" data-testid="bot-auto-line" title="This bot picks its model and how hard to think for each request, for the best result">
+                    <span className="bd-row-text">Model and thinking: automatic</span>
                     <span className="bd-row-value">Auto</span>
                   </div>
                 )}
-                <AutonomyRow space={space} />
-                {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} />}
+                {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} part="behaviour" />}
                 <BotFolderRow space={space} onChanged={p.onChanged} />
                 <button className="bd-row bd-row-btn" onClick={p.onCustomize} data-testid="bot-customize">
-                  <span className="bd-row-text">Customize…</span>
+                  <span className="bd-row-text">Customize look and instructions…</span>
                   <span className="bd-chev"><I.Chevron size={14} /></span>
                 </button>
-                {space.kind !== 'group' && (
-                  <Disclosure title="Advanced" sub={space.kind === 'bot' ? 'Vault, Max' : 'Vault'} testId="bot-advanced">
-                    <VaultBotRows spaceId={space.id} />
-                    {space.kind === 'bot' && <MaxRows spaceId={space.id} />}
-                  </Disclosure>
-                )}
               </div>
+
+              <div className="bd-section-title">Notifications</div>
+              <div className="bd-card" data-testid="bot-notifications">
+                <div className="bd-row">
+                  <span className="bd-row-text">Notify me when it finishes or needs me</span>
+                  <Toggle on={notify} onChange={(v) => { setNotify(v); void saveSpace({ notify: v }) }} label="Notifications" testId="bot-notify" />
+                </div>
+                {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} part="notifications" />}
+              </div>
+
+              <p className="bd-agent-note"><I.Sparkle size={13} /> Chooses its tools, models and specialist agents automatically. Ask it to plan first or use an agent swarm whenever you need.</p>
+              {space.kind !== 'group' && (
+                <>
+                  <div className="bd-section-title">Vault</div>
+                  <div className="bd-card" data-testid="bot-vault"><VaultBotRows spaceId={space.id} /></div>
+                </>
+              )}
               <BotShareRows space={space} />
             </div>
           ) : (
@@ -360,8 +367,8 @@ function folderOf(path: string): string {
 }
 
 /**
- * The autonomy level this bot's new chats start in (Settings keeps it; Bypass is never a default). A bot
- * with its own job defaults to Autonomous, and changing it applies to its open conversation too.
+ * The permission level this bot's new chats start in (Settings keeps it; Bypass is only ever per chat). A bot
+ * with its own job defaults to Auto, and changing it applies to its open conversation too.
  */
 function AutonomyRow({ space }: { space: Space }) {
   const spaceId = space.id
@@ -373,7 +380,7 @@ function AutonomyRow({ space }: { space: Space }) {
     return () => { alive = false }
   }, [spaceId])
   if (!s) return null
-  const names: Record<string, string> = { ask: 'Ask first', auto: 'Auto', autonomous: 'Autonomous' }
+  const names: Record<string, string> = { ask: 'Ask', auto: 'Auto', autonomous: 'Auto' }
   const pick = (v: string): void => {
     const all = { ...s.all }
     if (v === '') delete all[spaceId]
@@ -382,22 +389,23 @@ function AutonomyRow({ space }: { space: Space }) {
     const saved = bot && v ? api.botAutonomy.setLevel(spaceId, v as PermissionMode) : api.settings.set({ botModes: all })
     void Promise.resolve(saved).then(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
   }
-  const level = s.mine ?? (bot ? 'autonomous' : undefined)
+  const mine = s.mine === 'autonomous' ? 'auto' : s.mine
+  const level = mine ?? (bot ? 'auto' : undefined)
+  const sub = level === 'ask' ? 'Asks before every change.' : level === 'auto' ? 'Works on its own; asks before money, passwords, deleting and posting.' : 'Each chat can change it in the composer.'
   return (
     <label className="bd-row">
-      <span className="bd-row-text">{bot ? 'Autonomy' : 'Autonomy for new chats'}<span className="bd-row-sub">{level === 'autonomous' ? (bot ? 'Works on its own; asks only for money, passwords, deleting, mass sends, public posts and your exceptions below.' : 'Builds, tests and file changes run on their own; deleting, sending and buying still ask.') : 'Each chat can change it in the composer.'}</span></span>
-      <select className="bd-select" value={bot ? level : s.mine ?? ''} onChange={(e) => pick(e.target.value)} data-testid="bot-autonomy" aria-label="Autonomy for new chats">
+      <span className="bd-row-text">{bot ? 'Permissions' : 'Permissions for new chats'}<span className="bd-row-sub">{sub}</span></span>
+      <select className="bd-select" value={bot ? level : mine ?? ''} onChange={(e) => pick(e.target.value)} data-testid="bot-autonomy" aria-label="Permissions for new chats">
         {!bot && <option value="">Default ({names[s.app] ?? 'Auto'})</option>}
-        <option value="ask">Ask first</option>
+        <option value="ask">Ask</option>
         <option value="auto">Auto</option>
-        <option value="autonomous">Autonomous</option>
       </select>
     </label>
   )
 }
 
 /**
- * Max: Off (only when you turn it on in the composer) / Auto (the bot decides; default) / Always, Max helpers (1-50)
+ * Max: Off (only when you turn it on in the composer) / Auto (teams up only for big tasks; default) / Always, Max helpers (1-50)
  * and what one Max run may spend in a routine. Older installs kept these as the Swarm setting (read as the fallback).
  */
 export function MaxRows({ spaceId }: { spaceId: string }) {
@@ -421,7 +429,7 @@ export function MaxRows({ spaceId }: { spaceId: string }) {
   return (
     <>
       <label className="bd-row">
-        <span className="bd-row-text">Max<span className="bd-row-sub">{mode === 'off' ? 'Only when you turn Max on in the composer.' : mode === 'always' ? 'Every request runs many agents: a team, a swarm, judged attempts or a mix.' : 'Turns Max on by itself when many agents would do better.'}</span></span>
+        <span className="bd-row-text">Max<span className="bd-row-sub">{mode === 'off' ? 'Only when you turn Max on in the composer.' : mode === 'always' ? 'Every request runs many agents: a team, a swarm, judged attempts or a mix.' : 'Teams up only for big tasks (reports, big comparisons, many files); small ones stay with one agent.'}</span></span>
         <select className="bd-select" value={mode} onChange={(e) => save({ mode: e.target.value as BotMaxSettings['mode'] })} data-testid="bot-max-mode" aria-label="Max">
           <option value="off">Off</option>
           <option value="auto">Auto</option>

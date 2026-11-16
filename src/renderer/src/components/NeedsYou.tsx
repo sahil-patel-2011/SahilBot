@@ -4,6 +4,7 @@ import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
+import { folderName, plainApproval } from '../lib/plain-approval'
 
 // The "Needs you" inbox: every bot's pending questions and approvals in one place, with one-tap answers.
 // Questions a bot posted while it kept working (main: agent/questions) and cards open in running chats
@@ -22,8 +23,9 @@ function deadlineLine(x: NeedsYouItem): string {
   if (!x.deadline) return 'Waiting for you'
   const ms = x.deadline - Date.now()
   if (ms <= 0) return 'Going ahead with the default now'
-  const h = Math.floor(ms / 3_600_000), m = Math.round((ms % 3_600_000) / 60_000)
-  return x.hardStop ? `Waits for you (${x.hardStop.replace(/^Question \d+: /, '')})` : `Goes with the default in ${h ? `${h} h ` : ''}${m} min`
+  // Whole minutes, rounded up: "3 h 60 min" never shows (it's "4 h").
+  const total = Math.ceil(ms / 60_000), h = Math.floor(total / 60), m = total % 60
+  return x.hardStop ? `Waits for you (${x.hardStop.replace(/^Question \d+: /, '')})` : `Goes with the default in ${h ? `${h} h` : ''}${h && m ? ' ' : ''}${m || !h ? `${m} min` : ''}`
 }
 
 /** The inbox items, live: reloads when a bot posts, answers arrive, or a chat's cards change. */
@@ -75,9 +77,9 @@ function NeedsYouCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bo
   // Questions already answered by a reply in the chat start filled in.
   const [answers, setAnswers] = useState<string[]>(() => qs.map((_q, i) => x.answers?.[i] ?? ''))
   const [busy, setBusy] = useState(false)
-  const send = (a: string[] | 'approve' | 'deny'): void => {
+  const send = (a: string[] | 'approve' | 'always' | 'deny'): void => {
     setBusy(true)
-    void api.needsYou.answer(x.id, a).then(() => { toast(a === 'deny' ? 'Declined' : 'Sent to the bot') }).catch((e: Error) => toast(e.message)).finally(() => { setBusy(false); onDone() })
+    void api.needsYou.answer(x.id, a).then(() => { toast(a === 'deny' ? 'Declined' : a === 'always' && x.approval?.folder ? `${folderName(x.approval.folder)} is open to this bot now` : 'Sent to the bot') }).catch((e: Error) => toast(e.message)).finally(() => { setBusy(false); onDone() })
   }
   const pickOne = (i: number, v: string): void => {
     const next = answers.slice()
@@ -88,15 +90,19 @@ function NeedsYouCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bo
   }
   const style = { '--bot': bot?.color ?? 'var(--accent)' } as React.CSSProperties
   if (x.kind === 'approval' || x.kind === 'other') {
+    const plain = plainApproval(x.approval)
+    const folder = x.approval?.folder
     return (
       <article className="tk-card ny-card" data-testid="needs-you-item" data-kind={x.kind} data-id={x.id} style={style}>
         <Head item={x} bot={bot} chip={x.kind === 'approval' ? 'Needs your OK' : 'Waiting'} />
-        <p className="tk-title"><b>{x.approval?.summary ?? x.approval?.label ?? 'An action'}</b></p>
-        {x.approval?.reason && <p className="tk-reason">{x.approval.reason}</p>}
-        <div className="tk-actions">
-          {x.kind === 'approval' && <button className="bd-btn primary" disabled={busy} onClick={() => send('approve')} data-testid="needs-you-approve">Approve</button>}
-          {x.kind === 'approval' && <button className="bd-btn" disabled={busy} onClick={() => send('deny')} data-testid="needs-you-deny">Deny</button>}
-          <button className="bd-btn" onClick={onOpen}>Open chat</button>
+        <p className="tk-title"><b>{plain.title}</b></p>
+        {plain.where && <p className="ny-where"><I.Folder size={13} />{plain.where}</p>}
+        {plain.why && <p className="tk-reason ny-why">{plain.why}</p>}
+        <div className="tk-actions ny-actions">
+          {x.kind === 'approval' && <button className="bd-btn primary" disabled={busy} onClick={() => send('approve')} data-testid="needs-you-approve">Allow</button>}
+          {x.kind === 'approval' && folder && <button className="bd-btn" disabled={busy} onClick={() => send('always')} title={folder} data-testid="needs-you-always">Always allow in “{folderName(folder)}”</button>}
+          {x.kind === 'approval' && <button className="bd-btn" disabled={busy} onClick={() => send('deny')} data-testid="needs-you-deny">Don't allow</button>}
+          <button className="link-btn ny-open" onClick={onOpen}>Open chat</button>
         </div>
       </article>
     )
@@ -106,27 +112,33 @@ function NeedsYouCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bo
       <Head item={x} bot={bot} chip={qs.length > 1 ? `${qs.length} questions` : 'Question'} />
       {qs.map((q, i) => {
         const rec = recommended(q)
+        // The recommended answer first, then the rest in the bot's order.
+        const opts = (q.options ?? []).map(plain).filter((o, k, all) => all.indexOf(o) === k)
+        const ordered = rec && opts.includes(plain(rec)) ? [plain(rec), ...opts.filter((o) => o !== plain(rec))] : opts
         return (
           <div className="ny-question" key={i}>
             <p className="tk-title"><b>{q.question}</b></p>
-            {q.options?.length ? (
-              <div className="tk-actions">
-                {q.options.map((o) => (
-                  <button key={o} className={`bd-btn${answers[i] === plain(o) ? ' primary' : ''}`} disabled={busy} onClick={() => pickOne(i, plain(o))} data-testid="needs-you-option">
-                    {plain(o)}{rec && plain(rec) === plain(o) ? ' (recommended)' : ''}
+            {ordered.length > 0 && (
+              <div className="ny-options" role="group" aria-label={q.question}>
+                {ordered.map((o) => (
+                  <button key={o} className={`ny-option${answers[i] === o ? ' on' : ''}`} disabled={busy} onClick={() => pickOne(i, o)} data-testid="needs-you-option">
+                    <span>{o}</span>{rec && plain(rec) === o && <span className="ny-rec">Recommended</span>}
                   </button>
                 ))}
               </div>
-            ) : null}
-            <span className="tk-input"><input value={answers[i]} placeholder={q.options?.length ? 'Or type your own answer' : 'Type your answer'} disabled={busy} onChange={(e) => { const n = answers.slice(); n[i] = e.target.value; setAnswers(n) }}
-              onKeyDown={(e) => { if (e.key === 'Enter' && qs.length === 1 && answers[i].trim()) send(answers) }} aria-label={`Answer: ${q.question}`} data-testid="needs-you-input" /></span>
+            )}
+            <div className="ny-own">
+              <input value={answers[i]} placeholder={ordered.length ? 'Or type your own answer' : 'Type your answer'} disabled={busy} onChange={(e) => { const n = answers.slice(); n[i] = e.target.value; setAnswers(n) }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && qs.length === 1 && answers[i].trim()) send(answers) }} aria-label={`Answer: ${q.question}`} data-testid="needs-you-input" />
+              {qs.length === 1 && <button className="bd-btn primary" disabled={busy || !answers[i].trim()} onClick={() => send(answers)} data-testid="needs-you-send">Send</button>}
+            </div>
           </div>
         )
       })}
-      <p className="tk-reason">{x.source === 'live' ? 'The bot is waiting on this right now' : deadlineLine(x)}</p>
-      <div className="tk-actions">
-        {(qs.length > 1 || answers.some((a) => a.trim())) && <button className="bd-btn primary" disabled={busy || !answers.some((a) => a.trim())} onClick={() => send(answers)} data-testid="needs-you-send">Send</button>}
-        <button className="bd-btn" onClick={onOpen}>Open chat</button>
+      <div className="ny-foot">
+        <span className="ny-deadline"><I.Clock size={12} />{x.source === 'live' ? 'The bot is waiting on this right now' : deadlineLine(x)}</span>
+        {qs.length > 1 && <button className="bd-btn primary" disabled={busy || !answers.some((a) => a.trim())} onClick={() => send(answers)} data-testid="needs-you-send">Send answers</button>}
+        <button className="link-btn ny-open" onClick={onOpen}>Open chat</button>
       </div>
     </article>
   )
@@ -159,7 +171,7 @@ function ReviewCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bot?
 }
 
 /** Bot details rows for an always-on bot: "Always ask for…" exceptions, question deadline, daily digest. */
-export function AlwaysOnRows({ spaceId }: { spaceId: string }) {
+export function AlwaysOnRows({ spaceId, part = 'all' }: { spaceId: string; part?: 'behaviour' | 'notifications' | 'all' }) {
   const [all, setAll] = useState<Record<string, Partial<BotAutonomySettings>> | null>(null)
   const [draft, setDraft] = useState('')
   useEffect(() => {
@@ -180,10 +192,18 @@ export function AlwaysOnRows({ spaceId }: { spaceId: string }) {
     save({ alwaysAsk: [...mine.alwaysAsk, t].slice(0, 20) })
     setDraft('')
   }
+  const digest = (
+    <div className="bd-row">
+      <span className="bd-row-text">Daily digest<span className="bd-row-sub">A short summary in this chat on days it worked.</span></span>
+      {mine.digest.enabled && <input className="bd-select bd-num" type="time" value={mine.digest.time} onChange={(e) => { if (/^\d{2}:\d{2}$/.test(e.target.value)) save({ digest: { ...mine.digest, time: e.target.value } }) }} aria-label="Digest time" data-testid="bot-digest-time" />}
+      <button role="switch" aria-checked={mine.digest.enabled} aria-label="Daily digest" className={`switch${mine.digest.enabled ? ' on' : ''}`} onClick={() => save({ digest: { ...mine.digest, enabled: !mine.digest.enabled } })} data-testid="bot-digest"><i /></button>
+    </div>
+  )
+  if (part === 'notifications') return digest
   return (
     <>
       <div className="bd-row" data-testid="bot-always-ask">
-        <span className="bd-row-text">Always ask for…<span className="bd-row-sub">Things this bot asks about first, whatever its autonomy: “send email”, “calendar”, “tool:github__*”.</span></span>
+        <span className="bd-row-text">Always ask for…<span className="bd-row-sub">Even in Auto, e.g. “send email”, “calendar”.</span></span>
       </div>
       {mine.alwaysAsk.map((w) => (
         <div className="bd-row" key={w}>
@@ -196,18 +216,14 @@ export function AlwaysOnRows({ spaceId }: { spaceId: string }) {
         <button className="bd-btn" onClick={add} disabled={!draft.trim()}>Add</button>
       </div>
       <label className="bd-row">
-        <span className="bd-row-text">Question deadline<span className="bd-row-sub">If you haven’t answered by then, it goes ahead with its recommended default when that’s safe and says so. Money, passwords, deleting and posting always wait.</span></span>
+        <span className="bd-row-text">Question deadline<span className="bd-row-sub">Then it goes with its recommended answer, when that's safe. Money, passwords, deleting and posting always wait.</span></span>
         <select className="bd-select" value={String(mine.deadlineHours)} onChange={(e) => save({ deadlineHours: Number(e.target.value) })} data-testid="bot-question-deadline" aria-label="Question deadline">
           {[0.5, 1, 2, 4, 8, 12, 24, 48, 168].concat([0.5, 1, 2, 4, 8, 12, 24, 48, 168].includes(mine.deadlineHours) ? [] : [mine.deadlineHours]).sort((a, b) => a - b).map((h) => (
             <option key={h} value={String(h)}>{h < 1 ? `${h * 60} minutes` : h === 168 ? '1 week' : h === 1 ? '1 hour' : `${h} hours`}</option>
           ))}
         </select>
       </label>
-      <div className="bd-row">
-        <span className="bd-row-text">Daily digest<span className="bd-row-sub">What it did, what’s pending and what needs you, in this chat and as a notification. Skipped on quiet days.</span></span>
-        {mine.digest.enabled && <input className="bd-select bd-num" type="time" value={mine.digest.time} onChange={(e) => { if (/^\d{2}:\d{2}$/.test(e.target.value)) save({ digest: { ...mine.digest, time: e.target.value } }) }} aria-label="Digest time" data-testid="bot-digest-time" />}
-        <button role="switch" aria-checked={mine.digest.enabled} aria-label="Daily digest" className={`switch${mine.digest.enabled ? ' on' : ''}`} onClick={() => save({ digest: { ...mine.digest, enabled: !mine.digest.enabled } })} data-testid="bot-digest"><i /></button>
-      </div>
+      {part === 'all' && digest}
     </>
   )
 }

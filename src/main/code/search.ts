@@ -247,11 +247,13 @@ async function nodeSearch(root: string, o: SearchOptions): Promise<SearchResult>
 async function rgSearch(rg: string, root: string, o: SearchOptions): Promise<SearchResult> {
   const max = o.maxResults ?? 200
   const ctxN = Math.max(0, Math.min(o.context ?? 0, 10))
-  const args = ['--json', '--hidden', '-g', '!.git', '--max-filesize', '2M', '--max-columns', '1000']
+  // Attached folders need not be Git repositories; still honor their .gitignore files.
+  const args = ['--json', '--hidden', '--no-require-git', '-g', '!.git', '--max-filesize', '2M', '--max-columns', '1000']
   if (o.literal) args.push('-F')
   if (o.ignoreCase) args.push('-i')
   if (ctxN) args.push('-C', String(ctxN))
   for (const g of o.globs ?? []) args.push('-g', g)
+  for (const dir of SKIP_DIRS) args.push('-g', `!${dir}`)
   args.push('-e', o.pattern, '--', o.sub ? o.sub : '.')
   const r = await runProcess(rg, args, { cwd: root, timeoutMs: 60_000, signal: o.signal, maxChars: 20_000_000 })
   if (r.code !== 0 && r.code !== 1) throw new Error(`ripgrep: ${r.stderr.trim().slice(0, 500) || `exit ${r.code}`}`)

@@ -1,12 +1,10 @@
 import { toast } from '../lib/toast'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { BotTemplate, ConnectorConfig, ConnectorPreset, ConnectorStatus, Skill } from '@shared/types'
+import type { ConnectorConfig, ConnectorPreset, ConnectorStatus, Skill } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
-import { SpaceAvatar } from '../brand'
 import { AppIcon, IconStack, connectedApps, useAppIcons } from './ConnectedIcons'
 import { APP_STATE_TEXT, CUSTOM_REDIRECT, MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, SETUP_GROUP, appState, checkSummary, connectBadge, keyProblem, matches, recommended, searchApps, splitSection, type AppState, type Badge } from '../lib/connect-catalog'
-import { importBot } from './BotShare'
 
 const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
   off: 'Off', disconnected: 'Disconnected', connecting: 'Connecting…', signing_in: 'Finish signing in in your browser…',
@@ -24,7 +22,7 @@ const prettyTool = (n: string): string => n.replace(/[_\-.]+/g, ' ').replace(/^\
 const ACRONYMS = /^(pdf|pcb|sql|seo|ci|api|ios|gdt|dfm)$/i
 const prettySkill = (n: string): string => n.split('-').map((w) => (ACRONYMS.test(w) ? w.toUpperCase() : w)).join(' ').replace(/^\w/, (c) => c.toUpperCase())
 
-type View = 'browse' | 'manage' | 'templates' | 'form' | 'google' | 'setup' | 'key'
+type View = 'browse' | 'manage' | 'form' | 'google' | 'setup' | 'key'
 
 /** Badge look (styles-system.css): quiet neutral pills; the words say how it connects. */
 const BADGE_STYLE: Record<Badge, { cls: string }> = {
@@ -46,19 +44,20 @@ type Form = { preset: ConnectorPreset; name: string; kind: 'remote' | 'stdio'; u
  * servers, or no-setup browser sign-in), manage connected apps and their tools, and add bot templates.
  * Spec: design/bot-ui.md → Connect Apps.
  */
-export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
+export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSettings, onTry }: {
   onClose: () => void
   onBrowse: (url: string) => void
-  /** Open a bot's chat after adding a template (falls back to a toast). */
+  /** Open a bot's chat (older callers; bot templates moved to the New bot dialog). */
   onOpenBot?: (spaceId: string, threadId?: string) => void
+  /** "Try it" on a connected app: a new chat with this first message in the box. */
+  onTry?: (text: string) => void
   /** Open Settings at a page (falls back to a toast). */
-  onOpenSettings?: (page: 'passwords' | 'rules') => void
+  onOpenSettings?: (page: 'passwords' | 'rules' | 'connected') => void
 }) {
   const [presets, setPresets] = useState<ConnectorPreset[]>([])
   const [configs, setConfigs] = useState<ConnectorConfig[]>([])
   const [statuses, setStatuses] = useState<ConnectorStatus[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
-  const [templates, setTemplates] = useState<BotTemplate[]>([])
   const [form, setForm] = useState<Form | null>(null)
   const [err, setErr] = useState('')
   const [q, setQ] = useState('')
@@ -66,7 +65,6 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const [chip, setChip] = useState<string>('All')
   const [moreOpen, setMoreOpen] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
-  const [adding, setAdding] = useState<string | null>(null)
   /** The Google app waiting for "Set up Google once" to finish (connects right after). */
   const [googleFor, setGoogleFor] = useState<ConnectorPreset | null>(null)
   const [google, setGoogle] = useState<{ clientId: string; hasSecret: boolean } | null>(null)
@@ -76,6 +74,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const [keyFor, setKeyFor] = useState<ConnectorPreset | null>(null)
   /** Connector ids with an API key saved (main never sends the keys themselves). */
   const [keys, setKeys] = useState<Set<string>>(new Set())
+  /** Cursor is connected by its API key (kept with the other settings keys, not a connector's). */
+  const [cursorOn, setCursorOn] = useState(false)
   /** Test connection results by connector id. */
   const [tests, setTests] = useState<Record<string, { ok: boolean; text: string }>>({})
   /** "Check all": running, and its one-line result. */
@@ -89,6 +89,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     setConfigs(r.configs)
     setStatuses(r.statuses)
     setKeys(new Set(r.keys ?? []))
+    setCursorOn(!!(await api.settings.get().catch(() => null))?.hasCursorKey)
     setGoogle(await api.connectors.googleClient().catch(() => null))
   }
   useEffect(() => {
@@ -97,9 +98,6 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     void load()
     return api.connectors.onChange(() => void load())
   }, [])
-  useEffect(() => {
-    if (view === 'templates' && !templates.length) void api.templates.list().then(setTemplates).catch((e) => setErr(clean(e)))
-  }, [view, templates.length])
   useEffect(() => {
     // preventDefault: this Esc is spent closing this (the chat's run and the details panel leave it alone).
     const k = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose() } }
@@ -110,7 +108,11 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
 
   const status = (id: string): ConnectorStatus | undefined => statuses.find((s) => s.id === id)
   const configOf = (p: ConnectorPreset): ConnectorConfig | undefined => configs.find((c) => c.preset === p.id)
-  const connected = useMemo(() => connectedApps(configs, statuses, presets), [configs, statuses, presets])
+  const connected = useMemo(() => {
+    const apps = connectedApps(configs, statuses, presets)
+    if (cursorOn) apps.push({ id: 'cursor-cloud-key', presetId: 'cursor-app', name: 'Cursor', color: '#111111' })
+    return apps
+  }, [configs, statuses, presets, cursorOn])
   /** What's missing before an app can connect: its one-time setup, Google setup or API key. */
   const setupMissing = (p: ConnectorPreset | undefined, cfg: ConnectorConfig | undefined): boolean =>
     !!p && ((p.auth === 'oauth-static' && !cfg?.clientId && !p.builtinClient) || (p.auth === 'google' && !google && !cfg?.clientId && !p.builtinClient) || (p.auth === 'apikey' && !(cfg && keys.has(cfg.id))))
@@ -142,6 +144,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     // Built-in apps need nothing: just ask SahilBot to use them.
     // Kept in the catalog, but its server can't be used right now: say why instead of trying.
     if (p.unavailable) { setErr(`${p.name} is unavailable right now. ${p.unavailable}`); body.current?.scrollTo({ top: 0, behavior: 'smooth' }); return }
+    // Cursor: its API key lives in Settings → Connected apps (Cloud Agents).
+    if (p.id === 'cursor-app') { if (onOpenSettings) { onClose(); onOpenSettings('connected') } else toast('Add your Cursor API key in Settings → Connected apps.'); return }
     if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : 'add a reminder for tomorrow at 9'}".`); return }
     const existing = configOf(p)
     // Google apps with no client at all (no built-in one, none of the user's own): set Google up first.
@@ -186,21 +190,6 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
       await api.connectors.connect(saved.id)
     } catch (e) {
       setErr(clean(e))
-    }
-  }
-
-  const addTemplate = async (t: BotTemplate): Promise<void> => {
-    setErr('')
-    setAdding(t.id)
-    try {
-      const r = await api.templates.add(t.id)
-      onClose()
-      if (onOpenBot) onOpenBot(r.spaceId, r.threadId)
-      else toast('Added — find it in your sidebar')
-    } catch (e) {
-      setErr(clean(e))
-    } finally {
-      setAdding(null)
     }
   }
 
@@ -287,6 +276,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     const as = p.id === VAULT.id || p.auth === 'app' || p.auth === 'browser' ? undefined : stateOf(p, cfg)
     const [label, tone] =
       p.id === VAULT.id ? ['Open', 'ghost'] :
+      p.id === 'cursor-app' ? (cursorOn ? ['Connected', 'done'] : ['Add key', 'add']) :
       p.auth === 'app' ? ['Built in', 'ok'] :
       p.auth === 'browser' ? ['Sign in', 'ghost'] :
       st?.state === 'connected' ? ['Connected', 'done'] :
@@ -294,8 +284,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
       as === 'unavailable' && p.unavailable ? ['Unavailable', 'ghost'] :
       as === 'reauth' ? ['Reconnect', 'solid'] :
       p.auth === 'oauth-static' && !cfg?.clientId && !p.builtinClient ? ['Set up', 'ghost'] :
-      p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? ['Add key', 'ghost'] :
-      cfg ? ['Connect', 'solid'] : ['Add', 'ghost']
+      p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? ['Add key', 'add'] :
+      cfg ? ['Connect', 'solid'] : ['Add', 'add']
     const badge = st?.state === 'connected' || as === 'unavailable' ? null : connectBadge(p)
     const act = (): void => { if (!busy) void start(p) }
     return (
@@ -308,8 +298,11 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           <b>{p.name}{badge && <small className={`ca-badge ui-pill ${BADGE_STYLE[badge].cls}`} data-testid={`badge-${p.id}`} title={badgeTitle(badge, p)}>{badge}</small>}</b>
           <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !p.builtinClient && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !p.builtinClient && !cfg?.clientId ? `${p.description} One-time setup first.` : p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? `${p.description} Paste your API key once.` : p.description}</span>
         </span>
+        {tone === 'done' && onTry && (
+          <button className="ca-try" onClick={(e) => { e.stopPropagation(); onClose(); onTry(`What's new in ${p.name}?`) }} data-testid={`try-app-${p.id}`} title={`Start a chat that uses ${p.name}`}>Try it</button>
+        )}
         <span className={`ca-btn ${tone}`} aria-disabled={busy || undefined}>
-          {label}{tone === 'done' && <I.Check size={13} />}
+          {tone === 'add' && <I.Plus size={13} />}{tone === 'done' && <I.Check size={13} />}{label}
         </span>
       </div>
     )
@@ -406,7 +399,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
 
   const manage = (): ReactNode => (
     <>
-      {configs.length === 0 && (
+      {configs.length === 0 && !cursorOn && (
         <div className="ca-empty">
           <b>No apps connected yet.</b>
           <span>Connect an app and SahilBot can use it in any chat.</span>
@@ -415,6 +408,11 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
       )}
       {checked && view === 'manage' && <div className="hint" data-testid="check-all-result" style={{ margin: '0 0 10px' }}>{checked}</div>}
       <div className="ca-manage">
+        {cursorOn && <div className="ca-app" data-testid="cursor-cloud-connection">
+          <AppIcon src={icons['cursor-app']} name="Cursor" color="#111111" />
+          <div><b>Cursor</b><div className="hint">Cloud Agents · API key saved</div></div>
+          <button className="btn" onClick={() => { if (onOpenSettings) { onClose(); onOpenSettings('connected') } }}>Manage key</button>
+        </div>}
         {configs.map((c) => {
           const st = status(c.id)
           const preset = presets.find((p) => p.id === c.preset)
@@ -509,28 +507,6 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     </>
   )
 
-  const gallery = (): ReactNode => (
-    <>
-      <p className="ca-lede">Ready-made bots with a job, the right skills and suggested routines. Routines start paused until you turn them on.</p>
-      <button className="ca-btn bs-import-btn" onClick={() => void importBot(onClose)} data-testid="template-import"><I.Share size={14} />Import from file…</button>
-      {!templates.length && !err && <div className="ca-empty"><span>Loading templates…</span></div>}
-      <div className="ca-templates">
-        {templates.map((t) => (
-          <div className="ca-template" key={t.id} data-testid={`template-${t.id}`}>
-            <SpaceAvatar color={t.color} shape={t.shape} size={48} />
-            <div className="ca-template-text">
-              <b>{t.name}</b>
-              <span className="ca-by">by SahilBot</span>
-              <span className="ca-template-desc">{t.description}</span>
-              {t.routines.length > 0 && <span className="ca-template-meta"><I.Clock size={12} />{t.routines.length} suggested routine{t.routines.length === 1 ? '' : 's'} · paused</span>}
-            </div>
-            <button className="ca-btn solid" disabled={!!adding} onClick={() => void addTemplate(t)}>{adding === t.id ? 'Adding…' : 'Add'}</button>
-          </div>
-        ))}
-      </div>
-    </>
-  )
-
   const formView = (): ReactNode => form && (
     <div className="conn-form">
       <h3>{form.preset.id === 'custom' ? 'Custom MCP server' : form.preset.name}</h3>
@@ -573,7 +549,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   // ---------------------------------------------------------------- frame
 
   const moreLabel = MORE_CATEGORIES.includes(chip) ? chip : 'More'
-  const title = view === 'manage' ? 'Connected apps' : view === 'templates' ? 'Bot templates' : view === 'form' ? 'Add an app'
+  const title = view === 'manage' ? 'Your apps' : view === 'form' ? 'Add an app'
     : view === 'google' ? (googleBuiltin ? 'Use your own Google app' : 'Set up Google once')
     : view === 'setup' && setupFor ? (setupFor.builtinClient ? `Use your own ${setupFor.name} app` : `Set up ${setupFor.name} once`)
     : view === 'key' && keyFor ? (keyFor.auth === 'oauth' ? `Use a ${keyFor.name} API key instead` : `Connect ${keyFor.name}`) : 'Connect Apps'
@@ -591,7 +567,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           {view === 'browse' && (
             <button className="ca-count" onClick={() => go('manage')} data-testid="connected-count">
               <IconStack apps={connected} icons={icons} max={3} />
-              {connected.length} connected<I.Chevron size={13} style={{ transform: 'rotate(-90deg)' }} />
+              Your apps ({connected.length})<I.Chevron size={13} style={{ transform: 'rotate(-90deg)' }} />
             </button>
           )}
           {view === 'manage' && configs.length > 0 && (
@@ -610,7 +586,6 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
               <input placeholder="Search apps and skills" value={q} onChange={(e) => setQ(e.target.value)} data-testid="conn-search" autoFocus />
               {q && <button className="ca-clear" aria-label="Clear search" onClick={() => setQ('')}><I.Close size={12} /></button>}
             </div>
-            <button className="ca-templates-btn" onClick={() => go('templates')} data-testid="bot-templates"><I.Users size={15} />Bot templates</button>
           </div>
         )}
         {view === 'browse' && !q.trim() && (
@@ -642,7 +617,6 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           {err && <div className="ca-err">{err}</div>}
           {view === 'browse' && browse()}
           {view === 'manage' && manage()}
-          {view === 'templates' && gallery()}
           {view === 'form' && formView()}
           {view === 'setup' && setupFor && (
             <AppSetup

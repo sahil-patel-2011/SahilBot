@@ -5,15 +5,15 @@ Every tool declares an effect: read, write_local (files on this Mac), write_exte
 | Mode | read | write_local | write_external | destructive |
 |---|---|---|---|---|
 | Ask | runs | asks | asks | asks |
-| Auto (default) | runs | runs | routine runs, consequential asks | asks |
+| Auto (default) | runs | runs | routine and project steps run, consequential asks | backed-up overwrites in your folders run, the rest asks |
 | Bypass | runs | runs | runs | runs |
 
-In Auto, routine outside actions (signing in, next page, searching, saving a draft) run; consequential ones (send, submit, post, pay, buy, book, share, invite, delete, cancel, accept) ask.
+In Auto, routine outside actions (signing in, next page, searching, saving a draft) and project commands (installs from the lockfile, git fetch/pull) run; consequential ones (send, submit, post, pay, buy, book, share, invite, delete, cancel, accept) ask. On a schedule with nobody watching (outside an always-on bot), only local changes and routine outside steps run.
 
 "Asks" means the user sees your call and picks Allow once, Always in this thread, or Deny.
 
 ## Always asks, in every mode
-- Hard stops: payments and checkout, typing credentials, account or security settings, deleting files (Bypass skips these only if the user turned that off).
+- Hard stops: payments and checkout, typing credentials, account or security settings, deleting files, mass sends, public posts, and anything the user listed under "Always ask for…". Bypass skips hard stops only if the user turned that off, and never skips purchases, saved logins or one-time codes.
 - In Auto: an outside action whose details (an address, number, link or long phrase) came from a web page or email rather than from the user.
 
 ## Always blocked

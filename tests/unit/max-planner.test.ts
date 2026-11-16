@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
-import { maxFit, planMax, strategyTitle } from '../../src/main/agent/max/planner'
+import { planMax, strategyTitle } from '../../src/main/agent/max/planner'
+import { maxFit } from '../../src/main/agent/max/auto-teamwork'
 import { classifyTask } from '../../src/main/llm/task-classifier'
 
 // Max's strategy planner: which orchestration fits each request (local rules + the task classifier).
@@ -89,12 +90,14 @@ describe('Max strategy planner', () => {
     expect(planMax('tell me about tides', { category: 'research' }).strategy).toBe('team')
   })
 
-  test('Auto (a bot\'s Max setting) needs a strong signal', () => {
+  test('Auto (bots and every chat) needs a strong signal: big work only (auto-teamwork.ts)', () => {
     expect(maxFit('thanks!').fit).toBe(false)
     expect(maxFit('what time is it in Tokyo').fit).toBe(false)
     expect(maxFit('fix the typo in my email').fit).toBe(false)
     expect(maxFit('Brainstorm 20 names for my bakery').fit).toBe(true)
-    expect(maxFit('Brainstorm names for my podcast, then pick the best one').plan?.strategy).toBe('hybrid')
-    expect(maxFit('Compare the pricing of all the CRM tools on the market', { swarmFit: { fit: true, pattern: 'divide', why: 'many independent items' } }).plan?.strategy).toBe('team')
+    // A small brainstorm with a pick is one agent's work now; a big one is still a hybrid.
+    expect(maxFit('Brainstorm names for my podcast, then pick the best one').fit).toBe(false)
+    expect(maxFit('Brainstorm 40 names for my podcast, then pick the best one').plan?.strategy).toBe('hybrid')
+    expect(maxFit('Compare the pricing of all the CRM tools on the market').plan?.strategy).toBe('team')
   })
 })

@@ -165,3 +165,19 @@ export function secondOpinionFor(members: string[], usable: ModelInfo[]): string
   const have = new Set(members.map((m) => providerOf(usable.find((x) => x.id === m) ?? m)))
   return usable.filter((m) => cloudOk(m) && !have.has(providerOf(m)) && !isPremiumClaude(m.id) && !pro(m)).sort(strongest)[0]?.id
 }
+
+/**
+ * A team's helper models (Team of Experts, Max's research team). One provider: every helper on the helper model.
+ * Across providers (bots; a team Auto started on an Auto model): every other helper on the other main provider's
+ * model of the same tier (Haiku beside Luna/Terra, Sonnet beside Sol): two trainings, two sets of blind spots,
+ * and two rate limits to spread the load. The lead keeps compiling. Grok and others only by name.
+ */
+export function teamModels(base: string, usable: ModelInfo[], n: number, crossProvider: boolean): string[] {
+  const info = usable.find((m) => m.id === base)
+  const mine = providerOf(info ?? base)
+  const other = mine === 'anthropic' ? 'openai' : mine === 'openai' ? 'anthropic' : undefined
+  const pair = crossProvider && info && other && cloudOk(info)
+    ? usable.filter((m) => cloudOk(m) && providerOf(m) === other && m.tier === info.tier && !isPremiumClaude(m.id) && !pro(m)).sort(strongest)[0]?.id
+    : undefined
+  return Array.from({ length: n }, (_, i) => (pair && i % 2 === 1 ? pair : base))
+}

@@ -4,17 +4,15 @@ import { api } from '../api'
 import { Mascot } from '../brand'
 import * as I from '../icons'
 import { ChatgptPlanSettings } from './ChatgptPlanSettings'
-import { ImportMemoryDialog } from './ImportMemoryDialog'
 import '../styles-attachments.css'
 
 type Pick = Awaited<ReturnType<typeof api.models.setupPicks>>[number]
 
 /**
- * First run, cloud first: your name; connect Claude, OpenAI or Grok with an API key, or your ChatGPT plan
- * (Codex); then one question, "Also use free local models on this Mac?", with Not now as the default.
- * Only a yes runs the local setup (Ollama, model downloads); a Not now never downloads anything or asks
- * again (Settings → Models → Local models: Turn on). Then the workspace folder and (skippable) what
- * another AI already knows about you.
+ * First run, cloud first, two short steps: your name; then connect Claude, OpenAI or Grok with an API key,
+ * or your ChatGPT plan (Codex), with one question, "Also use free local models on this Mac?" (Not now is
+ * the default), and where files go (one line, changeable). Only a yes runs the local setup (Ollama, model
+ * downloads) as one extra step. Importing what another AI knows is an optional link that opens after setup.
  */
 const SETUP_TEXT: Record<string, string> = {
   download: 'Downloading Ollama…',
@@ -160,22 +158,26 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
   const [wantLocal, setWantLocal] = useState(false)
   const refreshKeys = (): void => { void api.settings.get().then((s) => setKeys(s.keys)).catch(() => undefined) }
 
+  /** After setup: open "Import memory" (the optional link on the connect step). */
+  const [importAfter, setImportAfter] = useState(false)
+  const finish = async (importNow = importAfter): Promise<void> => {
+    const s = await api.settings.set({ userName: name.trim(), workspaceDir: workspace, onboarded: true, defaultModel: 'auto', local: { enabled: wantLocal } })
+    onDone(s)
+    if (importNow) window.dispatchEvent(new Event('sahilbot:import-memory'))
+  }
   const next = async (): Promise<void> => {
     // Saved right away, so a yes can run the local setup (downloads need local models on).
     await api.local.set(wantLocal)
-    setStep(wantLocal ? 1.5 : 2)
+    if (wantLocal) setStep(1.5)
+    else await finish()
   }
-
-  const finish = async (): Promise<void> => {
-    const s = await api.settings.set({ userName: name.trim(), workspaceDir: workspace, onboarded: true, defaultModel: 'auto', local: { enabled: wantLocal } })
-    onDone(s)
-  }
+  const pickWorkspace = async (): Promise<void> => { const f = await api.pickFolder().catch(() => null); if (f) setWorkspace(f) }
   const connected = CLOUD.filter((c) => keys[c.id]).length
 
   return (
     <div className="scrim onboarding">
       <div className="modal onboard-card" data-testid="onboarding">
-        <div className="onboard-steps">{[0, 1, 2, 3].map((i) => <i key={i} className={i <= step ? 'on' : ''} />)}</div>
+        <div className="onboard-steps" aria-hidden>{(wantLocal ? [0, 1, 1.5] : [0, 1]).map((i) => <i key={i} className={i <= step ? 'on' : ''} />)}</div>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Mascot size={64} /></div>
         {step === 0 && (
           <>
@@ -183,12 +185,13 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             <p className="hint" style={{ textAlign: 'center' }}>An assistant that works on your Mac: it chats, researches, uses your apps and gets real work done. Your chats, files, memory and passwords stay here.</p>
             <div className="field"><label>What should I call you?</label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Your first name" onKeyDown={(e) => e.key === 'Enter' && setStep(1)} data-testid="onboarding-name" /></div>
             <div className="modal-actions"><button className="btn primary" onClick={() => setStep(1)} data-testid="onboarding-name-next">Continue</button></div>
+            <div className="hint onboard-time">Two steps, about a minute.</div>
           </>
         )}
         {step === 1 && (
           <>
             <h2>Connect your AI</h2>
-            <p className="hint">Connect at least one. Keys stay in your Mac's Keychain; spending is capped (default $200 a month) and you can change it anytime.</p>
+            <p className="hint">Paste one key (press Enter to check it). Keys stay in your Mac's Keychain; spending is capped at $200 a month until you change it.</p>
             <div className="onboard-connect" data-testid="onboarding-cloud">
               {CLOUD.map((c) => <CloudKey key={c.id} c={c} saved={!!keys[c.id]} onSaved={refreshKeys} />)}
               <div className="connect-row" data-testid="onboarding-connect-chatgpt">
@@ -205,10 +208,15 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
                 <button className={`btn${wantLocal ? ' primary' : ''}`} role="radio" aria-checked={wantLocal} onClick={() => setWantLocal(true)} data-testid="onboarding-local-yes">Yes, set them up</button>
               </div>
             </div>
-            {connected === 0 && !plan && !wantLocal && <div className="hint" style={{ marginTop: 8 }}>No model connected yet: you can add a key later in Settings → Models.</div>}
+            <div className="onboard-workspace" data-testid="onboarding-workspace">
+              <I.Folder size={14} /><span>Files SahilBot makes go to <b title={workspace}>{workspace.replace(/^\/Users\/[^/]+/, '~')}</b></span>
+              <button className="link-btn" onClick={() => void pickWorkspace()} data-testid="onboarding-workspace-change">Change…</button>
+            </div>
+            {connected === 0 && !plan && !wantLocal && <div className="hint onboard-nokey" data-testid="onboarding-no-key">No AI connected yet. You can start anyway and add a key later: SahilBot shows where when you send your first message.</div>}
+            <label className="onboard-import"><input type="checkbox" checked={importAfter} onChange={(e) => setImportAfter(e.target.checked)} data-testid="onboarding-import" /> Afterwards, bring in what ChatGPT, Claude or Gemini already knows about me (you review it first)</label>
             <div className="modal-actions">
               <button className="btn" onClick={() => setStep(0)}>Back</button>
-              <button className="btn primary" onClick={() => void next()} data-testid="onboarding-next">Continue</button>
+              <button className="btn primary" onClick={() => void next()} data-testid="onboarding-next">{wantLocal ? 'Continue' : 'Start using SahilBot'}</button>
             </div>
           </>
         )}
@@ -218,26 +226,8 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             <LocalSetup />
             <div className="modal-actions">
               <button className="btn" onClick={() => setStep(1)}>Back</button>
-              <button className="btn primary" onClick={() => setStep(2)} data-testid="onboarding-local-next">Continue</button>
+              <button className="btn primary" onClick={() => void finish()} data-testid="onboarding-local-next">Start using SahilBot</button>
             </div>
-          </>
-        )}
-        {step === 2 && (
-          <>
-            <h2>Your workspace</h2>
-            <p className="hint">SahilBot saves the files it makes here. You can also attach any folder to a chat with the + button, give a bot or a chat a working folder, or make a Project for one.</p>
-            <div className="field"><label>Folder</label><input value={workspace} onChange={(e) => setWorkspace(e.target.value)} /></div>
-            <div className="modal-actions">
-              <button className="btn" onClick={() => setStep(wantLocal ? 1.5 : 1)}>Back</button>
-              <button className="btn primary" onClick={() => setStep(3)} data-testid="onboarding-workspace-next">Continue</button>
-            </div>
-          </>
-        )}
-        {step === 3 && (
-          <>
-            <h2>Bring what your other AI knows about you</h2>
-            <p className="hint">Used ChatGPT, Claude or Gemini? Copy one prompt there, paste the answer here, and SahilBot starts out knowing your work, projects and preferences. You'll review everything first. Optional: skip it and do it later from Settings → Memory.</p>
-            <ImportMemoryDialog embedded cancelTestId="onboarding-finish" onClose={() => void finish()} onDone={() => void finish()} />
           </>
         )}
       </div>

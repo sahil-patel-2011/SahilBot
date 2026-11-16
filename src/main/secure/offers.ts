@@ -249,7 +249,7 @@ export class SaveOffers {
         const base = slug(edits.name || o.name) || slug(hostOf(origin)) || 'login'
         name = this.freeName(base, origin)
         const username = o.source === 'browser' ? h.username ?? '' : clip(edits.username ?? h.username ?? '', 200)
-        vault.set({ name, origin, username, password: h.value, ...(o.kind === 'api_key' ? { notes: o.label } : {}) })
+        vault.set({ name, origin, username, password: h.value, ...(o.kind === 'api_key' ? { kind: 'api_key', notes: o.label } : {}) })
       }
     } else if (o.kind === 'card') {
       const month = edits.expMonth ?? o.expMonth ?? ''

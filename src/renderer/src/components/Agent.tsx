@@ -4,10 +4,13 @@ import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { addRule, RULE_MAX_CHARS } from '../lib/approvalRules'
+import { approvalView, type ApprovalPreview } from '../lib/approval-view'
+import { Markdown } from './Markdown'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
 // Lazy: Connect Apps is its own chunk; only a card for an app that still needs its setup (or a key) uses it.
 import { ApiKeyPanel, AppSetup, GoogleSetup, Lazy } from '../lazy'
+import { folderName } from '../lib/plain-approval'
 
 const EFFECT_TEXT: Record<string, string> = {
   read: 'Reads only',
@@ -108,11 +111,12 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
         <span className="conn-logo" style={{ background: p.color }}>{p.name[0]}</span>
         Connect {p.name} to continue?
       </div>
-      <div className="hint">{p.description} {p.auth === 'none' ? 'No sign-in needed.' : `${p.name}'s own sign-in page opens in your browser; the sign-in is kept in your Mac's Keychain.`}</div>
+      {req.question && <p className="connect-reason">{req.question}</p>}
+      <div className="hint">{p.description} {p.auth === 'none' ? 'No sign-in needed.' : `Sign in or create an account on ${p.name}'s page. Your password stays with ${p.name}.`}</div>
       {busy && p.auth !== 'none' && <div className="hint" data-testid="connect-card-waiting">Finish signing in to {p.name} in your browser; this chat goes on by itself once you're back.</div>}
       {err && <div className="hint error" data-testid="connect-card-error">{err}</div>}
       <div className="pending-actions">
-        <button className="btn primary" disabled={busy} onClick={() => void go()} data-testid="connect-card-go">{busy ? (p.auth === 'none' ? 'Connecting…' : 'Waiting for sign-in…') : err ? 'Try again' : `Connect ${p.name}`}</button>
+        <button className="btn primary" disabled={busy} onClick={() => void go()} data-testid="connect-card-go">{busy ? (p.auth === 'none' ? 'Connecting…' : 'Waiting for sign-in…') : err ? 'Try again' : p.auth === 'none' ? `Connect ${p.name}` : 'Connect / Sign in'}</button>
         <button className="btn" onClick={() => respond('skip')} data-testid="connect-card-skip">Not now</button>
       </div>
     </div>
@@ -324,14 +328,14 @@ function OtpCard({ req }: { req: PendingRequest }) {
   )
 }
 
-export function PendingCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+export function PendingCard({ req, onRespond, thumb }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown>; thumb?: string }) {
   if (req.kind === 'purchase' && req.purchase) return <PurchaseCard req={req} />
   if (req.kind === 'otp' && req.otp) return <OtpCard req={req} />
   if (req.kind === 'connect' && req.preset) return <ConnectCard req={req} onRespond={onRespond} />
   if (req.kind === 'questions' && req.questions) return <QuestionsCard req={req} onRespond={onRespond} />
   if (req.kind === 'plan' && req.plan) return <PlanApprovalCard req={req} onRespond={onRespond} />
   if (req.kind === 'question') return <QuestionCard req={req} onRespond={onRespond} />
-  return <ApprovalCard req={req} onRespond={onRespond} />
+  return <ApprovalCard req={req} onRespond={onRespond} thumb={thumb} />
 }
 
 // ---------------------------------------------------------------- approvals
@@ -360,7 +364,7 @@ const reasonText = (r?: string): string => {
 }
 
 /** A tool call waiting for your OK: what it will do in words, what kind of action it is, and the details on demand. */
-function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown>; thumb?: string }) {
   const hardStop = !!req.reason?.startsWith('Hard stop')
   const danger = req.effect === 'destructive' || hardStop
   const warnings = approvalWarnings(req)
@@ -373,7 +377,10 @@ function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
   const savingRef = useRef(false)
   const ruleId = useId()
   const reason = reasonText(req.reason)
-  const meta = [name, EFFECT_TEXT[req.effect ?? 'read'], reason && !warnings.some((w) => w.toLowerCase().includes(reason.toLowerCase())) ? reason : ''].filter(Boolean)
+  const view = approvalView(req)
+  // Which app or tool, unless the headline already says it plainly (saving a file, a command, a click).
+  const who = view.preview && ['file', 'command', 'click'].includes(view.preview.kind) ? '' : name
+  const meta = [who, EFFECT_TEXT[req.effect ?? 'read'], reason && !warnings.some((w) => w.toLowerCase().includes(reason.toLowerCase())) ? reason : ''].filter(Boolean)
 
   const saveRule = async (): Promise<void> => {
     if (savingRef.current) return
@@ -399,9 +406,7 @@ function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
       <div className="ap-head">
         <span className={`ap-icon${danger ? ' danger' : ''}`}><I.Shield size={15} /></span>
         <div className="ap-head-text">
-          {req.summary
-            ? <div className="ap-summary" data-testid="approval-summary">{req.summary}</div>
-            : <div className="ap-summary">Allow {name}?</div>}
+          <div className="ap-summary" data-testid="approval-summary">{view.title[0]}{view.title[1] && <b>{view.title[1]}</b>}{view.title[2]}</div>
           <div className="ap-meta" data-testid="approval-meta">{meta.join(' · ')}</div>
         </div>
       </div>
@@ -410,21 +415,22 @@ function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
           {warnings.map((w) => <li key={w} className={danger ? 'danger' : undefined}>{w}</li>)}
         </ul>
       )}
+      {view.preview && <ApprovalPreviewBox p={view.preview} thumb={thumb} />}
       {!!req.args && (
-        <details className="pending-details ap-details" open={!req.summary}>
-          <summary className="hint">{req.summary ? 'Show details' : 'Details'}</summary>
+        <details className="pending-details ap-details" data-testid="approval-details">
+          <summary className="hint">Technical details</summary>
           <pre className="pending-args">{req.args}</pre>
         </details>
       )}
       <div className="pending-actions">
         <button className="btn primary" onClick={() => onRespond(req.id, 'once')} data-testid="approve-once">Allow once</button>
-        <button className="btn" title={`Don't ask again for ${name} in this chat`}
+        <button className="btn" title={req.folder ? `Files in ${req.folder} won't ask again in this chat` : `Don't ask again for ${name} in this chat`}
           onClick={() => {
             // Say so only once SahilBot has taken it.
             void Promise.resolve(onRespond(req.id, 'always')).then(
-              () => toast(`${name} is allowed for the rest of this chat`, 'ok'),
+              () => toast(req.folder ? `${folderName(req.folder)} is open to this chat now` : `${name} is allowed for the rest of this chat`, 'ok'),
               (e: unknown) => toast((e as Error)?.message ?? String(e), 'error'))
-          }} data-testid="approve-always">Always allow</button>
+          }} data-testid="approve-always">{req.folder ? `Always allow in “${folderName(req.folder)}”` : 'Always allow'}</button>
         <button className="btn danger" onClick={() => onRespond(req.id, 'deny')} data-testid="approve-deny">Deny</button>
         {!danger && !ruleOpen && <button className="link-btn ap-rule-link" onClick={() => setRuleOpen(true)} data-testid="approve-make-rule">Make it a rule…</button>}
       </div>
@@ -442,9 +448,47 @@ function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
             <button className="btn primary" disabled={saving || !ruleText.trim()} onClick={() => void saveRule()} data-testid="approval-rule-save">{saving ? 'Saving…' : 'Save rule'}</button>
             <button className="btn" onClick={() => setRuleOpen(false)}>Cancel</button>
           </div>
-          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”. Manage rules in Settings → Privacy & Security → Approvals.</div>
+          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”. Manage rules in Settings → Permissions.</div>
         </div>
       )}
+    </div>
+  )
+}
+
+/** The approval's preview: the file it will save, the command it will run, the button, the message. */
+function ApprovalPreviewBox({ p, thumb }: { p: ApprovalPreview; thumb?: string }) {
+  if (p.kind === 'file') return (
+    <div className="ap-preview ap-file" data-testid="approval-preview" data-kind="file">
+      <div className="ap-file-head"><I.File size={13} /><span className="ap-file-name">{p.name}</span><span className="ap-file-meta">{p.lines} line{p.lines === 1 ? '' : 's'}{p.append ? ' · added at the end' : ''}</span></div>
+      <div className={`ap-file-body${p.markdown ? ' md' : ''}`}>{p.markdown ? <Markdown text={p.text} /> : <pre>{p.text}</pre>}</div>
+      {p.more > 0 && <div className="ap-file-more">+{p.more} more line{p.more === 1 ? '' : 's'}</div>}
+    </div>
+  )
+  if (p.kind === 'command') return (
+    <div className="ap-preview ap-command" data-testid="approval-preview" data-kind="command">
+      <pre className="ap-cmd"><code>{p.command}</code></pre>
+      {(p.why || p.cwd) && <div className="ap-cmd-why">{p.why}{p.why && p.cwd ? ' · ' : ''}{p.cwd ? `in ${p.cwd.replace(/^\/Users\/[^/]+/, '~')}` : ''}</div>}
+    </div>
+  )
+  if (p.kind === 'click') return (
+    <div className="ap-preview ap-click" data-testid="approval-preview" data-kind="click">
+      {thumb && <img className="ap-thumb" src={thumb} alt={`The page on ${p.site ?? 'the site'}`} />}
+      <dl className="ap-fields"><dt>{p.role ? p.role[0].toUpperCase() + p.role.slice(1) : 'Button'}</dt><dd>{p.target}</dd>{p.site && <><dt>Site</dt><dd>{p.site}</dd></>}</dl>
+    </div>
+  )
+  if (p.kind === 'message') return (
+    <div className="ap-preview ap-message" data-testid="approval-preview" data-kind="message">
+      <dl className="ap-fields">
+        {p.to && <><dt>To</dt><dd>{p.to}</dd></>}
+        {p.channel && <><dt>Channel</dt><dd>{p.channel}</dd></>}
+        {p.subject && <><dt>Subject</dt><dd>{p.subject}</dd></>}
+      </dl>
+      {p.body && <div className="ap-msg-body">{p.body}</div>}
+    </div>
+  )
+  return (
+    <div className="ap-preview" data-testid="approval-preview" data-kind="fields">
+      <dl className="ap-fields">{p.rows.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}</dl>
     </div>
   )
 }

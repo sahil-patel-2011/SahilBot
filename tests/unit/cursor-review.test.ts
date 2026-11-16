@@ -123,7 +123,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 `)
     chmodSync(fake, 0o755)
     process.env.CURSOR_AGENT_PATH = fake
-    const t = cursorTool(() => undefined, () => root)
+    const t = cursorTool(() => undefined, () => root, () => true)
     const ctx = { state: { roots: [root], loaded: [], alwaysAllow: [], todos: [] }, workspaceDir: root, signal: new AbortController().signal } as never
     const r = await t.run({ action: 'agent', folder: root, goal: 'Make a.txt say two', files: ['a.txt'], acceptance: ['a.txt contains "two"'] }, ctx)
     expect(r.text).toMatch(/## Automatic review/)

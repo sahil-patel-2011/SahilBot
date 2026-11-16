@@ -256,7 +256,8 @@ export class ContextEngine {
 
   private pendingMemories(): Array<{ id: string; updatedAt: number }> {
     const st = this.state()
-    return this.d.memory.list().filter((m) => m.category !== 'worklog' && m.category !== 'rule' && st.memories[m.id] !== m.updatedAt).map((m) => ({ id: m.id, updatedAt: m.updatedAt }))
+    // (Decisions are choices, not facts about people or places: they stay in the memory block only.)
+    return this.d.memory.list().filter((m) => m.category !== 'worklog' && m.category !== 'rule' && m.category !== 'decision' && st.memories[m.id] !== m.updatedAt).map((m) => ({ id: m.id, updatedAt: m.updatedAt }))
   }
 
   private dueConnectors(now: number): string[] {

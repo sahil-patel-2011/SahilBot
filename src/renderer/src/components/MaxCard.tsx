@@ -12,7 +12,7 @@ import { Markdown } from './Markdown'
 // and Heavy boards are the same components their own cards use (HeavyCard.tsx), embedded.
 
 const PHASE_STATUS: Record<MaxPhase['status'], string> = { waiting: 'Waiting', running: 'Working', done: 'Done', failed: 'Didn\'t finish', stopped: 'Stopped', skipped: 'Skipped' }
-const SOURCE: Record<MaxBoard['source'], string> = { composer: 'you turned Max on', bot: 'this bot\'s Max setting', tool: 'the bot chose Max' }
+const SOURCE: Record<MaxBoard['source'], string> = { composer: 'you turned Max on', bot: 'this bot\'s Max setting', auto: 'Auto teams up only for big tasks', tool: 'the bot chose Max' }
 const PHASE_ICON = { team: <I.Users size={13} />, swarm: <I.Layers size={13} />, heavy: <I.Sparkle size={13} /> }
 
 function TeamPhase({ callId, members, live }: { callId: string; members: TeamMember[]; live: boolean }) {
@@ -25,7 +25,7 @@ function TeamPhase({ callId, members, live }: { callId: string; members: TeamMem
     <div className="max-team team-card embedded" data-testid="team-card">
       <div className="max-sec-head">
         <I.Users size={14} /><span className="plan-title">Research team</span>
-        <span className="plan-count">{done} of {members.length} done{t.usd ? ` · ${money(t.usd)}` : ''}{t.tokens ? ` · ${tokenCount(t.tokens)}` : ''}</span>
+        <span className="plan-count">{done} of {members.length} done{t.usd ? <span className="dev-only">{` · ${money(t.usd)}`}</span> : null}{t.tokens ? <span className="dev-only">{` · ${tokenCount(t.tokens)}`}</span> : null}</span>
         {live && left > 0 && <button className="link-btn max-stop" onClick={() => void api.swarm.stopRemaining(callId)} data-testid="team-stop-remaining">Stop remaining ({left})</button>}
       </div>
       <div className="team-board">
@@ -74,9 +74,9 @@ export function MaxCard({ board, live }: { board: MaxBoard; live: boolean }) {
     <div className={`heavy-card max-card${active ? ' live' : ''}`} data-testid="max-card" data-strategy={board.strategy} data-status={board.status}>
       <button className="plan-head max-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <span className="max-badge" aria-hidden><I.Bolt size={13} /></span>
-        <span className="plan-title">Max</span>
+        <span className="plan-title">Agent swarm</span>
         <span className="max-title" data-testid="max-title">{board.title}</span>
-        <span className="plan-count max-status">{statusLine(board, live)}{tot.usd ? ` · ${money(tot.usd)}` : ''}</span>
+        <span className="plan-count max-status">{statusLine(board, live)}{tot.usd ? <span className="dev-only">{` · ${money(tot.usd)}`}</span> : null}</span>
         <span className="plan-bar"><i style={{ width: `${Math.min(1, progress) * 100}%` }} /></span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>
@@ -84,7 +84,7 @@ export function MaxCard({ board, live }: { board: MaxBoard; live: boolean }) {
         <div className="heavy-body max-body">
           <div className="max-why" data-testid="max-why">
             <span className="max-why-k">Why</span>
-            <span className="max-why-v">{board.why || 'picked for this request'}</span>
+            <span className="max-why-v">{board.source === 'auto' ? `Auto: ${board.why}` : board.why || 'picked for this request'}</span>
             <span className="sw-pill">{SOURCE[board.source]}</span>
             {board.unattended && <span className="sw-pill">routine budget{board.budgetUsd !== undefined ? ` ${money(board.budgetUsd) || '$0.00'}` : ''}</span>}
           </div>

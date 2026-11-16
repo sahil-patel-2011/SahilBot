@@ -10,6 +10,7 @@ vi.mock('electron', () => ({ shell: { trashItem: async () => undefined }, Browse
 
 // Every API here is a local fake server: no paid calls.
 const oa = await import('../../src/main/apis/openai')
+const { xaiImageOptions } = await import('../../src/main/apis/xai-images')
 const an = await import('../../src/main/apis/anthropic')
 const { ApiError, openaiError, anthropicError } = await import('../../src/main/apis/errors')
 const { hookSpend, usdAsTokens } = await import('../../src/main/apis/spend')
@@ -234,6 +235,38 @@ describe('prices and estimates', () => {
 // ---------------------------------------------------------------- tools against fake servers
 
 describe('image tool', () => {
+  test('xAI-only accounts generate JPEGs with a priced capability route and no OpenAI-only parameters', async () => {
+    const img = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0xff, 0xd9])
+    const srv = await fake(() => ({ body: JSON.stringify({ data: [{ b64_json: img.toString('base64') }] }) }))
+    const ws = tmp(), s = spy()
+    const acc = { ...access({}), xai: () => ({ baseUrl: `${srv.url}/v1`, apiKey: 'xai-test' }) }
+    const tool = imageTool({ access: acc, workspace: () => ws, vision: () => true })
+    expect(tool.available!({} as never)).toBe(true)
+    const out = await tool.run({ action: 'generate', prompt: 'A lighthouse', size: '1536x1024', quality: 'high' }, ctxFor(ws))
+    expect(JSON.parse(srv.calls[0].body.toString())).toEqual({ model: 'grok-imagine-image-2.0', prompt: 'A lighthouse', n: 1, response_format: 'b64_json', aspect_ratio: '3:2', resolution: '1k', quality: 'medium' })
+    expect(srv.calls[0].headers.authorization).toBe('Bearer xai-test')
+    expect(out.path).toMatch(/\.jpg$/)
+    expect(readFileSync(out.path!)).toEqual(img)
+    expect(out.images?.[0]).toMatch(/^data:image\/jpeg;base64,/)
+    expect(s.usd()).toBeCloseTo(0.06, 5)
+    expect(readFileSync(`${out.path}.json`, 'utf8')).toContain('A lighthouse')
+    await expect(tool.run({ action: 'generate', prompt: 'A logo', background: 'transparent' }, ctxFor(ws))).rejects.toThrow(/OpenAI/)
+    await expect(tool.run({ action: 'edit', prompt: 'A logo', path: 'logo.png' }, ctxFor(ws))).rejects.toThrow(/OpenAI/)
+    expect(srv.calls).toHaveLength(1)
+    expect(imageTool({ access: { ...acc, cloudOn: () => false }, workspace: tmp }).available!({} as never)).toBe(false)
+  })
+  test('Grok pins Auto quality and estimates each resolution; rejects invalid images and respects budget before network', async () => {
+    expect(xaiImageOptions()).toMatchObject({ quality: 'low', unitUsd: 0.04 })
+    expect(xaiImageOptions('2048x2048', 'medium')).toMatchObject({ resolution: '2k', unitUsd: 0.08 })
+    expect(() => xaiImageOptions('nope')).toThrow(/size/)
+    const srv = await fake(() => ({ body: JSON.stringify({ data: [{ b64_json: Buffer.from('not an image').toString('base64') }] }) }))
+    const acc = { ...access({}), xai: () => ({ baseUrl: srv.url, apiKey: 'test' }) }
+    const tool = imageTool({ access: acc, workspace: tmp })
+    await expect(tool.run({ action: 'generate', prompt: 'A fox' }, ctxFor(tmp()))).rejects.toThrow(/unsupported image format/)
+    spendHooks.before = () => { throw new Error('budget reached') }
+    await expect(tool.run({ action: 'generate', prompt: 'A fox' }, ctxFor(tmp()))).rejects.toThrow(/budget reached/)
+    expect(srv.calls).toHaveLength(1)
+  })
   test('generates, saves PNGs with the prompt in metadata, shows them to a vision model, and goes through the spend hooks', async () => {
     const img = png(8, 8)
     const srv = await fake(() => ({ body: JSON.stringify({ created: 1, data: [{ b64_json: img.toString('base64') }, { b64_json: img.toString('base64') }], size: '1024x1024', quality: 'low', usage: { input_tokens: 20, output_tokens: 400, input_tokens_details: { text_tokens: 20, image_tokens: 0 } } }) }))

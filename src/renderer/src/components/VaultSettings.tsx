@@ -15,9 +15,10 @@ import { ClampText } from './ui'
 
 const clean = (e: unknown): string => String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
 
-type Tab = 'logins' | 'cards' | 'ids' | 'notes' | 'addresses' | 'security' | 'activity'
+type Tab = 'apiKeys' | 'logins' | 'cards' | 'ids' | 'notes' | 'addresses' | 'security' | 'activity'
 const TABS: Array<{ id: Tab; label: string; type?: VaultItemType }> = [
   { id: 'logins', label: 'Logins', type: 'login' },
+  { id: 'apiKeys', label: 'API Keys', type: 'login' },
   { id: 'cards', label: 'Cards', type: 'card' },
   { id: 'ids', label: 'IDs', type: 'identity' },
   { id: 'notes', label: 'Notes', type: 'note' },
@@ -110,12 +111,12 @@ export function SecretVaultSettings({ embedded }: { embedded?: boolean } = {}) {
       <div className="pw-tabs sv-tabs" role="tablist">
         {TABS.map((x) => (
           <button key={x.id} role="tab" aria-selected={tab === x.id} className={`pw-tab${tab === x.id ? ' on' : ''}`} onClick={() => setTab(x.id)} data-testid={`vault-tab-${x.id}`}>
-            {x.label}{x.type && st.counts[x.type] ? <span className="sv-count">{st.counts[x.type]}</span> : null}
+            {x.label}{x.type && items.filter((i) => i.type === x.type && (x.type !== 'login' || (x.id === 'apiKeys' ? i.kind === 'api_key' : i.kind !== 'api_key'))).length > 0 ? <span className="sv-count">{items.filter((i) => i.type === x.type && (x.type !== 'login' || (x.id === 'apiKeys' ? i.kind === 'api_key' : i.kind !== 'api_key'))).length}</span> : null}
           </button>
         ))}
       </div>
 
-      {t.type && <ItemsTab key={t.type} type={t.type} items={items.filter((i) => i.type === t.type)} addresses={items.filter((i) => i.type === 'address')} st={st} onChange={refresh} />}
+      {t.type && <ItemsTab key={tab} type={t.type} apiKey={tab === 'apiKeys'} items={items.filter((i) => i.type === t.type && (t.type !== 'login' || (tab === 'apiKeys' ? i.kind === 'api_key' : i.kind !== 'api_key')))} addresses={items.filter((i) => i.type === 'address')} st={st} onChange={refresh} />}
       {tab === 'logins' && <OtpGrants />}
       {tab === 'logins' && <NeverSave />}
       {tab === 'security' && <SecurityTab st={st} act={act} busy={busy} />}
@@ -130,7 +131,7 @@ function subline(i: VaultItemSummary): string {
   const host = (s?: string): string => { try { return s ? new URL(s).host : '' } catch { return s ?? '' } }
   const exp = i.expMonth ? `expires ${String(i.expMonth).padStart(2, '0')}/${String(i.expYear).slice(-2)}` : ''
   switch (i.type) {
-    case 'login': return [i.usernameHint, host(i.sites?.[0]), i.subdomains ? '+ subdomains' : '', i.hasTotp ? `authenticator${i.totpIssuer ? ` (${i.totpIssuer})` : ''}` : '', i.autoFill ? 'signs in without asking' : ''].filter(Boolean).join(' · ')
+    case 'login': if (i.kind === 'api_key') return `${host(i.sites?.[0])} · ${i.apiHeader ?? 'Authorization'} · approval required`; return [i.usernameHint, host(i.sites?.[0]), i.subdomains ? '+ subdomains' : '', i.hasTotp ? `authenticator${i.totpIssuer ? ` (${i.totpIssuer})` : ''}` : '', i.autoFill ? 'signs in without asking' : ''].filter(Boolean).join(' · ')
     case 'card': return [`${BRAND_NAME[(i.brand ?? 'card') as CardBrand] ?? 'Card'} •••• ${i.last4}`, exp, i.hasCvc ? 'security code saved' : 'asks for the security code'].filter(Boolean).join(' · ')
     case 'identity': return [ID_KINDS.find((k) => k[0] === i.kind)?.[1] ?? 'ID', i.last4 ? `•••• ${i.last4}` : '', exp, i.sites?.length ? `fills on ${i.sites.map(host).join(', ')}` : 'reveal only'].filter(Boolean).join(' · ')
     case 'note': return `Updated ${new Date(i.updated).toLocaleDateString()}`
@@ -143,7 +144,7 @@ function initial(i: VaultItemSummary): string {
   return (i.name || '?').slice(0, 1).toUpperCase()
 }
 
-function ItemsTab({ type, items, addresses, st, onChange }: { type: VaultItemType; items: VaultItemSummary[]; addresses: VaultItemSummary[]; st: VaultStatus; onChange: () => Promise<void> }) {
+function ItemsTab({ type, apiKey = false, items, addresses, st, onChange }: { type: VaultItemType; apiKey?: boolean; items: VaultItemSummary[]; addresses: VaultItemSummary[]; st: VaultStatus; onChange: () => Promise<void> }) {
   const [editing, setEditing] = useState<{ item?: VaultItemSummary; prefill?: Record<string, string> } | null>(null)
   const [reveal, setReveal] = useState<VaultReveal | null>(null)
   const [confirm, setConfirm] = useState<string | null>(null)
@@ -167,11 +168,11 @@ function ItemsTab({ type, items, addresses, st, onChange }: { type: VaultItemTyp
   const remove = async (id: string): Promise<void> => {
     try { await api.vault.removeItem(id); setConfirm(null); if (reveal?.id === id) setReveal(null); await onChange() } catch (e) { toast(clean(e), 'error') }
   }
-  const noun = NOUN[type]
+  const noun = apiKey ? 'API key' : NOUN[type]
   return (
     <>
-      <Section title={`Saved ${noun === 'ID' ? 'IDs' : `${noun}s`}`} sub={type === 'identity' ? 'Passports, licenses and other IDs. Typed into a form only on the sites you list, after you approve and confirm with Touch ID or your master password.' : type === 'note' ? 'Encrypted notes for you only: never typed anywhere and never shown to the assistant.' : type === 'card' ? 'The assistant sees a card\'s nickname and last four digits only. The full number goes into the merchant\'s checkout after you approve the Purchase card and confirm it\'s you.' : undefined}
-        right={!editing ? <button className="btn primary sv-add" onClick={() => setEditing({})} data-testid={`vault-add-${type}`}><I.Plus size={13} /> Add {noun}</button> : undefined}>
+      <Section title={`Saved ${noun === 'ID' ? 'IDs' : `${noun}s`}`} sub={apiKey ? 'Encrypted service keys. SahilBot uses a key only for its saved HTTPS service after you approve the request; the key stays hidden from the model.' : type === 'identity' ? 'Passports, licenses and other IDs. Typed into a form only on the sites you list, after you approve and confirm with Touch ID or your master password.' : type === 'note' ? 'Encrypted notes for you only: never typed anywhere and never shown to the assistant.' : type === 'card' ? 'The assistant sees a card\'s nickname and last four digits only. The full number goes into the merchant\'s checkout after you approve the Purchase card and confirm it\'s you.' : undefined}
+        right={!editing ? <button className="btn primary sv-add" onClick={() => setEditing({})} data-testid={`vault-add-${apiKey ? 'api_key' : type}`}><I.Plus size={13} /> Add {noun}</button> : undefined}>
         {items.length === 0 && <div className="set-empty">No saved {noun === 'ID' ? 'IDs' : `${noun}s`} yet.</div>}
         {items.map((i) => (
           <div key={i.id} className="sv-item" data-testid="vault-item" data-type={i.type}>
@@ -196,7 +197,7 @@ function ItemsTab({ type, items, addresses, st, onChange }: { type: VaultItemTyp
         ))}
       </Section>
       {editing && (
-        <ItemForm key={editing.item?.id ?? 'new'} type={type} item={editing.item} prefill={editing.prefill} addresses={addresses} locked={st.locked}
+        <ItemForm key={editing.item?.id ?? 'new'} type={type} apiKey={apiKey} item={editing.item} prefill={editing.prefill} addresses={addresses} locked={st.locked}
           onCancel={() => setEditing(null)} onSaved={async () => { setEditing(null); await onChange() }} />
       )}
     </>
@@ -234,10 +235,10 @@ function SecretInput({ value, onChange, placeholder, testId, numeric, wide = tru
     placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value)} data-testid={testId} />
 }
 
-function ItemForm({ type, item, prefill, addresses, locked, onCancel, onSaved }: { type: VaultItemType; item?: VaultItemSummary; prefill?: Record<string, string>; addresses: VaultItemSummary[]; locked: boolean; onCancel: () => void; onSaved: () => Promise<void> }) {
+function ItemForm({ type, apiKey = false, item, prefill, addresses, locked, onCancel, onSaved }: { type: VaultItemType; apiKey?: boolean; item?: VaultItemSummary; prefill?: Record<string, string>; addresses: VaultItemSummary[]; locked: boolean; onCancel: () => void; onSaved: () => Promise<void> }) {
   const editing = !!item
   const [f, setF] = useState<Record<string, string>>(() => ({
-    name: item?.name ?? '', site: item?.sites?.[0] ?? '', sites: item?.sites?.join(', ') ?? '', kind: item?.kind ?? 'passport',
+    apiHeader: item?.apiHeader ?? 'Authorization', apiScheme: item?.apiScheme ?? 'bearer', name: item?.name ?? '', site: item?.sites?.[0] ?? '', sites: item?.sites?.join(', ') ?? '', kind: item?.kind ?? 'passport',
     month: item?.expMonth ? String(item.expMonth).padStart(2, '0') : '', year: item?.expYear ? String(item.expYear) : '', billing: item?.billing ?? '',
     ...(prefill ?? {})
   }))
@@ -254,7 +255,7 @@ function ItemForm({ type, item, prefill, addresses, locked, onCancel, onSaved }:
     setBusy(true)
     const v = (k: string): string | undefined => (f[k] ? f[k] : undefined)
     const input: VaultItemInput = { id: item?.id, type, name: f.name ?? '' }
-    if (type === 'login') Object.assign(input, { site: f.site, username: v('username'), password: v('password'), totp: v('totp'), clearTotp: flags.clearTotp || undefined, notes: f.notes !== undefined && f.notes !== '' ? f.notes : undefined, subdomains: flags.subdomains, autoFill: flags.autoFill })
+    if (type === 'login') Object.assign(input, { ...(apiKey ? { kind: 'api_key', apiHeader: f.apiHeader, apiScheme: f.apiScheme } : {}), site: f.site, username: v('username'), password: v('password'), totp: v('totp'), clearTotp: flags.clearTotp || undefined, notes: f.notes !== undefined && f.notes !== '' ? f.notes : undefined, subdomains: flags.subdomains, autoFill: flags.autoFill })
     if (type === 'card') Object.assign(input, { number: v('number'), cvc: flags.keepCvc ? v('cvc') : undefined, clearCvc: !flags.keepCvc || undefined, expMonth: f.month, expYear: f.year, holder: f.holder, billing: f.billing || undefined })
     if (type === 'identity') Object.assign(input, { kind: f.kind, number: v('number'), fullName: v('fullName'), issuer: v('issuer'), country: v('country'), expMonth: v('month'), expYear: v('year'), sites: f.sites ?? '', notes: v('notes') })
     if (type === 'note') Object.assign(input, { body: f.body !== undefined && (f.body !== '' || !editing) ? f.body : undefined })
@@ -272,9 +273,17 @@ function ItemForm({ type, item, prefill, addresses, locked, onCancel, onSaved }:
     }
   }
   return (
-    <Section title={editing ? `Edit ${item!.name}` : `Add ${NOUN[type] === 'ID' ? 'an ID' : NOUN[type] === 'address' ? 'an address' : `a ${NOUN[type]}`}`}>
+    <Section title={editing ? `Edit ${item!.name}` : apiKey ? 'Add an API key' : `Add ${NOUN[type] === 'ID' ? 'an ID' : NOUN[type] === 'address' ? 'an address' : `a ${NOUN[type]}`}`}>
       <div className="pw-form sv-form" data-testid="vault-form">
-        {type === 'login' && <>
+        {apiKey && <>
+          {text('name', 'Name (e.g. my-project-service)')}
+          {text('site', 'Service origin (https://api.example.com)')}
+          <SecretInput value={f.password ?? ''} onChange={set('password')} placeholder={`API key${keep}`} testId="vault-f-api-key" />
+          {text('apiHeader', 'Header (Authorization or X-API-Key)')}
+          <label className="wide">Authentication format <select className="set-select" aria-label="API key format" value={f.apiScheme} onChange={(e) => set('apiScheme')(e.target.value)}><option value="bearer">Bearer token</option><option value="raw">Key only</option></select></label>
+          <div className="hint wide">The exact HTTPS origin is the only place this key can be sent. Use the service’s API documentation to choose its authentication format.</div>
+        </>}
+        {type === 'login' && !apiKey && <>
           {text('name', 'Name (e.g. github)')}
           {text('site', 'Site (github.com)')}
           <input className="set-input" placeholder={`Username${keep}`} value={f.username ?? ''} onChange={(e) => set('username')(e.target.value)} autoComplete="off" spellCheck={false} data-testid="vault-f-username" />
@@ -333,7 +342,7 @@ function ItemForm({ type, item, prefill, addresses, locked, onCancel, onSaved }:
         {err && <div className="pw-err wide" role="alert">{err}</div>}
         <div className="pw-form-actions wide">
           <button className="btn" onClick={onCancel}>Cancel</button>
-          <button className="btn primary" disabled={busy || !(f.name ?? '').trim()} onClick={() => void save()} data-testid="vault-save">{editing ? 'Save changes' : `Save ${NOUN[type]}`}</button>
+          <button className="btn primary" disabled={busy || !(f.name ?? '').trim()} onClick={() => void save()} data-testid="vault-save">{editing ? 'Save changes' : apiKey ? 'Save API key' : `Save ${NOUN[type]}`}</button>
         </div>
       </div>
     </Section>

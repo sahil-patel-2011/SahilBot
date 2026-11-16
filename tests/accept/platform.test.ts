@@ -25,11 +25,10 @@ describe('platform: templates, handoffs, pages, rules, routines, memory', () => 
   afterAll(async () => { await llm.close() })
   beforeEach(() => { llm.script.length = 0 })
 
-  test('adding a bot template creates the bot with its intro and paused routines', async () => {
+  test('adding a bot template (New bot → Or start from a template) creates the bot with its intro and paused routines', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
-    await page.click('[data-testid="connect-apps"]')
-    await page.click('[data-testid="bot-templates"]')
-    await page.locator('[data-testid="template-school-studying"] button').filter({ hasText: 'Add' }).click()
+    await page.click('[data-testid="new-bot"]')
+    await page.click('[data-testid="template-school-studying"]')
     // The new bot opens with its starter message.
     await expect.poll(() => page.locator('[data-testid="space-item"]').filter({ hasText: 'Study Buddy' }).count(), { timeout: 10_000 }).toBe(1)
     await expect.poll(async () => (await page.locator('.bubble.ai').allInnerTexts()).join('\n').length, { timeout: 10_000 }).toBeGreaterThan(20)

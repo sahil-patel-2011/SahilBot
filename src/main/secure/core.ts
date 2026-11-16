@@ -25,6 +25,8 @@ export const ITEM_TYPES: ItemType[] = ['login', 'card', 'identity', 'note', 'add
  * Stored unencrypted but bound into the item's AAD, so editing it breaks decryption.
  */
 export interface ItemMeta {
+  apiHeader?: string
+  apiScheme?: 'bearer' | 'raw'
   name: string
   /** Sites the item may be filled on (logins: one; IDs: optional allow-list). */
   origins?: string[]

@@ -1,4 +1,5 @@
-import { priceFor } from '../llm/budget'
+import { priceFor, cost } from '../llm/budget'
+import { taskScope } from '../agent/runtime/policy'
 import { spendHooks, type ChatRequest } from '../llm/client'
 
 // Paid API calls made by tools (images, speech, transcription, embeddings, Claude vision, batches) go
@@ -37,16 +38,20 @@ export interface Spend {
 export const hookSpend: Spend = {
   beforeUsd(baseUrl, label, worstUsd) {
     spendHooks.before?.(fakeReq(baseUrl, label), usdAsTokens(label, worstUsd, 'up'), 0, label)
+    taskScope.getStore()?.reserveApi(`${baseUrl}/${label}`, worstUsd)
   },
   afterUsd(baseUrl, label, usd) {
+    taskScope.getStore()?.settleApi(`${baseUrl}/${label}`, usd)
     // Recorded to the nearest token of the label's rate (about $0.00001 at the default rate).
     const t = usdAsTokens(label, usd)
     if (t > 0) spendHooks.after?.(fakeReq(baseUrl, label), t, 0, label)
   },
   beforeTokens(baseUrl, model, input, maxOutput) {
     spendHooks.before?.(fakeReq(baseUrl, model), input, maxOutput, model)
+    taskScope.getStore()?.reserveApi(`${baseUrl}/${model}`, cost(model, input, maxOutput))
   },
   afterTokens(baseUrl, model, input, output) {
+    taskScope.getStore()?.settleApi(`${baseUrl}/${model}`, cost(model, input, output))
     if (input || output) spendHooks.after?.(fakeReq(baseUrl, model), input, output, model)
   }
 }

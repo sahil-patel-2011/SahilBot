@@ -12,12 +12,13 @@ import { KIND_WORDS, failureKind } from '../llm/model-health'
 //   effort       a level picked for the chat, the bot or the app is sent exactly (auto-effort.ts resolveEffort);
 //                Auto's mid-run bump (escalateEffort) never touches a picked level.
 //   context      a model's "Context window" is used exactly, clamped only to the provider's maximum.
-//   bots         a bot chooses by itself, for the best result on each request: its chats always route as Auto
-//                (model) and Auto (thinking). Stored Space.model / Space.effort (older installs) and a pick made
-//                in a bot's chat are ignored. The app default's Auto variant is kept (Auto (local) / Auto (cloud)
-//                stay local-only / cloud-only); a concrete default model doesn't apply to bots. Helper threads
-//                keep the model their orchestrator assigned. Regular chats (SahilBot's own, projects) keep the
-//                composer's pick exactly.
+//   bots         a bot chooses by itself (Auto model, Auto thinking) until the user picks something in its chat;
+//                then that pick is used exactly, like any chat, until the user goes back to Auto. Stored
+//                Space.model / Space.effort (older installs) are ignored. With nothing picked, the app default's
+//                Auto variant is kept (Auto (local) / Auto (cloud) stay local-only / cloud-only); a concrete
+//                default model doesn't apply to bots. Helper threads keep the model their orchestrator assigned.
+//   thinking     independent of the model: a level picked while the model is Auto is sent exactly with
+//                whatever model Auto routes to.
 
 /** Why a model couldn't be used, in a few words, from the error the provider gave. */
 export function unavailableReason(err?: Error | string): string {
@@ -66,18 +67,28 @@ export const isBotSpace = (space: Pick<Space, 'kind' | 'isMain'> | null | undefi
 export const botModel = (defaultModel: string | null | undefined): string => (defaultModel && isAutoModel(defaultModel) ? defaultModel : 'auto')
 
 /**
- * The model a run asks for (llm/router.ts resolves Auto). Bots: always Auto. Helpers: the model they were given.
- * Regular chats: the chat's pick, else the app default.
+ * The model a run asks for (llm/router.ts resolves Auto). Helpers: the model they were given. A model picked in
+ * the chat (bots included): that model. Otherwise bots route as Auto and regular chats use the app default.
+ * A bot speaking in a group (speaker) chooses for itself.
  */
 export function requestedModel(o: { thread?: Pick<Thread, 'model' | 'parentId'> | null; space?: Pick<Space, 'kind' | 'isMain'> | null; speaker?: Pick<Space, 'kind' | 'isMain'> | null; settings: Pick<Settings, 'defaultModel'> }): string {
   if (o.thread?.parentId && o.thread.model) return o.thread.model
-  if (o.speaker || isBotSpace(o.space)) return botModel(o.settings.defaultModel)
-  return o.thread?.model || o.settings.defaultModel
+  if (o.thread?.model) return o.thread.model
+  if (o.speaker) return botModel(o.settings.defaultModel)
+  return isBotSpace(o.space) ? botModel(o.settings.defaultModel) : o.settings.defaultModel
 }
 
-/** The thinking a run asks for: bots always Auto; regular chats the chat's pick, else the app's. */
-export function requestedEffort(o: { thread?: Pick<Thread, 'effort'> | null; space?: Pick<Space, 'kind' | 'isMain'> | null; speaker?: Pick<Space, 'kind' | 'isMain'> | null; settings: Pick<Settings, 'thinking'> }): EffortChoice {
-  if (o.speaker || isBotSpace(o.space)) return 'auto'
-  const pick = o.thread?.effort ?? o.settings.thinking
-  return pick && ['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(pick) ? pick : 'auto'
+const EFFORTS: EffortChoice[] = ['auto', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * The thinking a run asks for: the chat's pick (bots included, with any model, Auto too), else for regular
+ * chats the app default, else Auto. A bot speaking in a group chooses for itself.
+ */
+export function requestedEffort(o: { thread?: Pick<Thread, 'effort'> & Partial<Pick<Thread, 'model' | 'parentId'>> | null; space?: Pick<Space, 'kind' | 'isMain'> | null; speaker?: Pick<Space, 'kind' | 'isMain'> | null; settings: Pick<Settings, 'thinking'> & Partial<Pick<Settings, 'defaultModel'>> }): EffortChoice {
+  const pick = o.thread?.effort ?? (o.speaker || isBotSpace(o.space) ? 'auto' : o.settings.thinking)
+  return pick && EFFORTS.includes(pick) ? pick : 'auto'
 }
+
+/** Auto is an explicit choice too: null alone inherits an app default. */
+export const effortFor = (_model: string | null | undefined, effort: EffortChoice | null | undefined): EffortChoice | null =>
+  effort ?? null

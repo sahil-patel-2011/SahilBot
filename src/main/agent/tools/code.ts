@@ -188,7 +188,7 @@ export function codeTool(o: { getWorkspace: () => string; trash?: (path: string)
             if (r.stopped) break
           }
           const label = kind === 'test' ? 'tests' : kind
-          return { text: parts.join('\n\n'), display: ok ? `${label} passed` : `${label} failed${problems ? ` · ${problems} problem${problems > 1 ? 's' : ''}` : ''}` }
+          return { text: parts.join('\n\n'), data: { passed: ok, problems, kind, directory: base }, verification: { passed: ok, criterion: `${label} in ${base}`, detail: parts.join('\n\n').slice(-4000) }, display: ok ? `${label} passed` : `${label} failed${problems ? ` · ${problems} problem${problems > 1 ? 's' : ''}` : ''}` }
         }
       }
     }

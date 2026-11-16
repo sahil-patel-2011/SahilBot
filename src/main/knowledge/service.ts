@@ -44,6 +44,8 @@ const RESCAN_MS = 3 * 60 * 60 * 1000
 const DETECT_MS = 10 * 60 * 1000
 
 export class KnowledgeService {
+  /** Chat-history embedding is local only; document-embedding opt-in does not grant cloud memory access. */
+  recallEmbedder(): Embedder | null { return this.embedder && !this.embedder.model.startsWith('openai:') ? this.embedder : null }
   readonly store: KnowledgeStore
   readonly indexer: Indexer
   private watcher: FolderWatcher

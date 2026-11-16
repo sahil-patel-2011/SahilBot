@@ -280,7 +280,7 @@ test('cleanup-pass screenshots', async () => {
       const server = `node -e "require('http').createServer((q,s)=>s.end('hi')).listen(${port},()=>{console.log('  ready in 212 ms');console.log('  Local:   http://localhost:${port}/');setInterval(()=>console.log('[hmr] page reload src/App.tsx'),700)})"`
       await page.click('[data-testid="model-picker"]')
       await page.click('[data-testid="mode-picker"]')
-      await page.click('[data-testid="mode-autonomous"]')
+      await page.click('[data-testid="mode-auto"]')
       llm.script.push(call('run_command', { command: server, background: true, wait_for: { text: 'Local:', timeout: 20 } }))
       llm.script.push({ content: `The dev server is up at http://localhost:${port}/.` })
       await send(page, 'start the dev server for my site')

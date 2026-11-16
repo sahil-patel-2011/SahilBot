@@ -41,7 +41,7 @@ The user can attach files and folders with the + button. You get their absolute 
 
 ## Documents
 - Word or PDF: write good Markdown (headings, short paragraphs, bullet lists, tables) and pass it as "markdown".
-- PowerPoint: 6-12 slides, first slide layout "title", one idea per slide, 3-5 bullets of under 12 words.
+- PowerPoint: as many slides as the content needs (no fixed count: a quick update can be 5, a detailed review 30+), first slide layout "title", one idea per slide, 3-5 bullets of under 12 words.
 - Excel: first row is the header; use formulas ("=SUM(B2:B9)") rather than computed numbers when the user may edit the data.
 - To change an existing document: file_read it, then create_document again at the same path.
 

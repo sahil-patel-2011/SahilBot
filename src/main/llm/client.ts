@@ -4,7 +4,8 @@ import { isAnthropic, isXai } from './providers'
 import { claudeMaxTokens, listAnthropicModels, streamAnthropic } from './anthropic'
 import { streamResponses } from './openai-responses'
 import { openaiEffort, openaiInfo, openaiMaxTokens, usesResponses } from './openai-models'
-import { priceFor, tierTokens } from './budget'
+import { priceFor, tierTokens, cost } from './budget'
+import { taskScope } from '../agent/runtime/policy'
 // xAI (Grok) over its Responses API, and Fast mode (each provider's faster, pricier service tier).
 import { streamXai } from './xai-client'
 import { xaiMaxTokens } from './xai-models'
@@ -432,6 +433,7 @@ async function* streamOllama(req: ChatRequest, stats: ServerStats = {}): AsyncGe
 }
 
 export async function* streamChat(req: ChatRequest): AsyncGenerator<StreamPart> {
+  taskScope.getStore()?.check()
   // Time to first token (anything the UI can show) and the server's own numbers, at debug level.
   const t = timer('llm')
   const stats: ServerStats = {}
@@ -499,6 +501,8 @@ async function* paidAttempt(original: ChatRequest): AsyncGenerator<StreamPart> {
   // it at the costliest tier made a $0.03 Sonnet step read as "up to $3.56" and refused it under a $3 limit; a
   // fallback is rare, and what it really cost is recorded after the reply.)
   spendHooks.before?.(req, Math.ceil(estimatedInput * f), Math.ceil(maxOutput * f), req.model)
+  const meter = taskScope.getStore()
+  const releaseTask = meter?.reserve(cost(req.model, Math.ceil(estimatedInput * f), Math.ceil(maxOutput * f)))
   let input = 0
   let output = 0
   let produced = 0
@@ -535,7 +539,9 @@ async function* paidAttempt(original: ChatRequest): AsyncGenerator<StreamPart> {
     rejected = (e as { billed?: boolean }).billed === false || (!input && !produced && (typeof status === 'number' || /\b(4\d\d|5\d\d)\b/.test((e as Error).message) || (status === undefined && retryInfo(e).retry)))
     throw e
   } finally {
+    releaseTask?.()
     if (!rejected) {
+      if (meter) meter.spentUsd += cost(served, input || Math.ceil(estimatedInput * f), output || Math.ceil((produced / 3) * f))
       usageDetails.set(req, detail)
       // If the server didn't report usage (or the stream was stopped), record a conservative estimate (at the fast rate when asked).
       spendHooks.after?.(req, input || Math.ceil(estimatedInput * f), output || Math.ceil((produced / 3) * f), served)

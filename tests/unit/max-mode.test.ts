@@ -12,7 +12,8 @@ import { fitHeavy, heavyCap, heavyPlan } from '../../src/main/agent/heavy'
 import { heavyConfig, swarmConfig } from '../../src/main/agent/swarm/config'
 import { heavyMix, judgeModelFor } from '../../src/main/agent/swarm/capacity'
 import { botMaxConfig, migrateBotMax } from '../../src/main/agent/swarm/bot-config'
-import { applySwarmState } from '../../src/main/agent/swarm/hosts'
+import { applySwarmState, crossProviderFor } from '../../src/main/agent/swarm/hosts'
+import { teamModels } from '../../src/main/agent/swarm/models'
 import { maxBudget } from '../../src/main/agent/max/host'
 import { maxDecision, maxNote } from '../../src/main/agent/max/decide'
 import { planMax } from '../../src/main/agent/max/planner'
@@ -31,6 +32,8 @@ import { startMockLlm, type MockLlm, type ScriptedReply } from '../fixtures/mock
 
 process.env.FOREMAN_NO_VERIFY = '1'
 process.env.FOREMAN_NO_AUTOTITLE = '1'
+// These runs script every model reply; Auto's brain (llm/auto-brain.ts) has its own tests.
+process.env.FOREMAN_NO_BRAIN = '1'
 
 const local = (id: string, tier: 0 | 1 | 2 | 3, extra: Partial<ModelInfo> = {}): ModelInfo =>
   ({ id, provider: 'ollama', providerName: 'Ollama', enabled: true, installed: true, label: id.toUpperCase(), vision: false, tier, requiredGB: 1, maxFittingWindow: 131072, fits: true, ...extra }) as ModelInfo
@@ -172,6 +175,50 @@ describe('Max through the agent', () => {
     expect(card.swarm?.compiled?.credits).toEqual([{ n: 1, count: 1 }, { n: 3, count: 1 }])
   })
 
+  test('Auto teams up by itself for a big report in a regular chat: sized, mixed providers, the card says why', async () => {
+    const TERRA = cloud('gpt-6.1-terra', 2, { provider: 'openai', providerName: 'OpenAI', rank: 6 })
+    const LUNA = cloud('gpt-6-luna', 1, { provider: 'openai', providerName: 'OpenAI', rank: 4 })
+    const h = harness([SONNET, OPUS, HAIKU, GPT, TERRA, LUNA], { swarm: { askAboveUsd: 100 } } as never)
+    const project = h.db.createSpace('Lab market', '#000000', { kind: 'project' })
+    let lead = 0
+    route((r) => {
+      if (isHelper(r)) return { content: `REPORT ${lastUser(r).slice(-12)}`, delay: 0 }
+      lead++
+      return lead === 1 ? { toolCalls: [call('max', { strategy: 'team', tasks: Array.from({ length: 6 }, (_, i) => ({ title: `Part ${i}`, task: `Research part ${i} with sources` })) })], delay: 0 } : { content: 'The report, compiled.', delay: 0 }
+    })
+    const t = h.thread(project.id, 'auto')
+    const big = 'Write a comprehensive market research report on the US at-home lab testing market with competitors and pricing'
+    expect(await (await h.agent.send({ threadId: t.id, text: big })).done).toBe('finished')
+    const opener = h.db.listMessages(t.id).find((m) => m.role === 'user')!
+    expect(opener.meta?.max).toMatchObject({ strategy: 'team', source: 'auto', helpers: 6 })
+    expect(String(opener.meta?.note)).toMatch(/Auto teamed up: market research → research team of 6[^]*at least 6/)
+    const card = h.card(t)!
+    expect(card).toMatchObject({ source: 'auto', why: 'market research → research team of 6', status: 'done' })
+    const members = card.teams?.[0].members ?? []
+    expect(members.filter((m) => m.status === 'done')).toHaveLength(6)
+    // Claude and GPT side by side (the chat's model is Auto, and Auto started the team).
+    expect(new Set(members.map((m) => (m.model ?? '').startsWith('gpt') ? 'openai' : 'anthropic')).size).toBe(2)
+    // A small request in the same chat: no card, no hint.
+    llm.script.length = 0
+    route(() => ({ content: 'Sure.', delay: 0 }))
+    const t2 = h.thread(project.id, 'auto')
+    expect(await (await h.agent.send({ threadId: t2.id, text: 'write a quick email to Bob saying I\'ll be late' })).done).toBe('finished')
+    const o2 = h.db.listMessages(t2.id).find((m) => m.role === 'user')!
+    expect(o2.meta?.max).toBeUndefined()
+    expect(o2.meta?.maxHint).toBeUndefined()
+  })
+
+  test('team helpers stay on one provider unless the run may mix', () => {
+    const LUNA = cloud('gpt-6-luna', 1, { provider: 'openai', providerName: 'OpenAI', rank: 4 })
+    const usable = [SONNET, HAIKU, GPT, LUNA]
+    expect(teamModels('claude-haiku-5-5', usable, 4, false)).toEqual(Array(4).fill('claude-haiku-5-5'))
+    expect(teamModels('claude-haiku-5-5', usable, 4, true)).toEqual(['claude-haiku-5-5', 'gpt-6-luna', 'claude-haiku-5-5', 'gpt-6-luna'])
+    // No peer at the same tier: everyone on the helper model.
+    expect(teamModels('claude-sonnet-5-5', usable, 3, true)).toEqual(Array(3).fill('claude-sonnet-5-5'))
+    expect(crossProviderFor({ kind: 'project', isMain: false } as Space)).toBe(false)
+    expect(crossProviderFor({ kind: 'project', isMain: false } as Space, { autoMax: true })).toBe(true)
+  })
+
   test('old tool names still work: a team through agents, and swarm, land on the Max card', async () => {
     const h = harness([local('qwen-test', 2)])
     let lead = 0
@@ -305,7 +352,7 @@ describe('Max caps, budgets and provider rules', () => {
 })
 
 describe('bots choose their own model and thinking', () => {
-  test('requestedModel / requestedEffort: bots and groups Auto; regular chats the pick; helpers their assigned model', () => {
+  test('requestedModel / requestedEffort: bots and groups Auto until you pick; regular chats the pick; helpers their assigned model', () => {
     const s = { defaultModel: 'claude-opus-5-5', thinking: 'high' } as Settings
     const bot = { kind: 'bot', isMain: false } as Space
     const main = { kind: 'bot', isMain: true } as Space
@@ -313,7 +360,8 @@ describe('bots choose their own model and thinking', () => {
     expect(isBotSpace(bot)).toBe(true)
     expect(isBotSpace(group)).toBe(true)
     expect(isBotSpace(main)).toBe(false)
-    expect(requestedModel({ thread: { model: 'gpt-6' }, space: bot, settings: s })).toBe('auto')
+    expect(requestedModel({ thread: { model: 'gpt-6' }, space: bot, settings: s })).toBe('gpt-6')
+    expect(requestedModel({ thread: { model: null }, space: bot, settings: s })).toBe('auto')
     expect(requestedModel({ thread: { model: 'gpt-6' }, space: main, settings: s })).toBe('gpt-6')
     expect(requestedModel({ thread: { model: null }, space: main, settings: s })).toBe('claude-opus-5-5')
     expect(requestedModel({ thread: { model: null }, space: group, speaker: bot, settings: s })).toBe('auto')
@@ -321,7 +369,8 @@ describe('bots choose their own model and thinking', () => {
     // The app default's Auto variant is kept for bots (local-only stays local-only).
     expect(botModel('auto:local')).toBe('auto:local')
     expect(botModel('claude-opus-5-5')).toBe('auto')
-    expect(requestedEffort({ thread: { effort: 'low' }, space: bot, settings: s })).toBe('auto')
+    expect(requestedEffort({ thread: { effort: 'low' }, space: bot, settings: s })).toBe('low')
+    expect(requestedEffort({ thread: { effort: null }, space: bot, settings: s })).toBe('auto')
     expect(requestedEffort({ thread: { effort: 'low' }, space: main, settings: s })).toBe('low')
     expect(requestedEffort({ thread: { effort: null }, space: main, settings: s })).toBe('high')
   })

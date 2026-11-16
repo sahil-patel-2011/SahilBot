@@ -3,10 +3,11 @@ import type { ConnectorPreset, ConnectorStatus } from '@shared/types'
 // Connect Apps catalog: how presets group into chips and sections (pure; shared with unit tests).
 
 /** Chips shown in the row; everything else lives under "More". */
-export const MAIN_CHIPS = ['Password Managers', 'Productivity', 'Communication', 'Design', 'Code'] as const
+/** Chips beside All, most common first; everything else (Password Managers included) is under More. */
+export const MAIN_CHIPS = ['Productivity', 'Communication', 'Code', 'Design'] as const
 
 /** Section order in the All view (after "Recommended for you"). */
-export const SECTION_ORDER = ['Built in', 'On this Mac', 'Password Managers', 'Productivity', 'Communication', 'Support', 'Design', 'Media & AI', 'Code', 'Data & analytics', 'Sales & marketing', 'Social', 'Finance & commerce', 'HR & recruiting', 'Legal', 'Travel & real estate', 'Education & science', 'Health & fitness', 'Research', 'Other'] as const
+export const SECTION_ORDER = ['Built in', 'On this Mac', 'Productivity', 'Communication', 'Code', 'Design', 'Support', 'Media & AI', 'Password Managers', 'Data & analytics', 'Sales & marketing', 'Social', 'Finance & commerce', 'HR & recruiting', 'Legal', 'Travel & real estate', 'Education & science', 'Health & fitness', 'Research', 'Other'] as const
 
 /** Categories under the More ▾ chip. */
 export const MORE_CATEGORIES: string[] = SECTION_ORDER.filter((c) => !(MAIN_CHIPS as readonly string[]).includes(c))

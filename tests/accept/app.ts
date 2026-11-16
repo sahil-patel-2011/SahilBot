@@ -9,11 +9,17 @@ export function tempProfile(): string {
 
 export async function launch(dataDir: string, baseUrl: string, extraEnv: Record<string, string> = {}): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
-    args: [resolve('out/main/index.js')],
+    args: [resolve(process.env.LIVE_MAIN ?? 'out/main/index.js')],
     env: { ...process.env, FOREMAN_DATA_DIR: dataDir, FOREMAN_BASE_URL: baseUrl, FOREMAN_SKIP_ONBOARDING: '1', FOREMAN_NO_AUTOTITLE: '1', FOREMAN_NO_VERIFY: '1', SAHILBOT_HIDDEN: '1', ...extraEnv } as Record<string, string>
   })
   const page = await app.firstWindow()
   await page.waitForSelector('[data-testid="composer-input"]')
+  // The tests read every step, the model and the cost: Developer mode shows them (quiet: SAHILBOT_QUIET=1).
+  if (!extraEnv.SAHILBOT_QUIET) {
+    await page.evaluate(() => window.foreman.settings.set({ advanced: { devMode: true } } as never))
+    await page.reload()
+    await page.waitForSelector('[data-testid="composer-input"]')
+  }
   return { app, page }
 }
 

@@ -1,6 +1,20 @@
 # How Auto picks a model
 
-Auto picks a model in two steps for each message, and neither step calls a model:
+**Auto's brain** (`src/main/llm/auto-brain.ts`). Before each request, the fastest cheap model you have (GPT-6 Luna, then GPT-6.1 Terra, then Claude Haiku 5.5) reads the whole request, the conversation so far, the attachments, the bot's role, your Auto preference and how each model did on this Mac lately. It answers in strict JSON: the kind of task, its difficulty, how hard to think, the model that should do it, and whether models should work together:
+It also names what the request **needs** (reasoning, coding, seeing images, making images, ideas, writing, research, computer use, apps, quick) and matches the model to the needs and the difficulty: Astra or Sol for reasoning and research (Fable 5.2 only for the very hardest), Opus or Sonnet for coding, computer use, apps, ideas and creative writing, Opus or Sol for images, Luna, Haiku or Terra for quick things. Seeing images is a hard rule (only models that see them); making images or using the screen makes it agent work.
+
+How models work together:
+- **solo**: one model does it well;
+- **pair**: two models at the request's own level (GPT-6 Luna with Claude Haiku 5.5 for light work, Claude Opus 5.5 with GPT-6 Astra for hard work, from different providers when both are on): the partner gives its own take first, and the main model builds on the best of both;
+- **debate**: for reasoning-heavy problems (a decision with trade-offs, a strategy, a proof, a tricky root cause), a Council: several models reason in parallel and challenge each other;
+- **fan-out**: a big job that splits (a game's systems, an app's screens) goes to 2-8 parallel helpers on a fast model while the main model builds the shared parts and integrates;
+- **plan**: for the hardest multi-step work, a stronger model (Fable 5.2, Opus 5.5, GPT-6 Astra) writes the plan first, and the run's model carries it out with the whole conversation and the plan;
+- **review**: a second model, from another provider when there is one, reviews the draft before you see it, and the run's model fixes what holds up;
+- **plan+review**: both, for the hardest high-stakes work.
+
+The brain's read replaces the rules' within their hard floors (agent work never becomes a chat, coding and computer use are never light, attached folders and modes keep their tier). Its model is used only when it passes every hard rule below (keys, budget, images, window, Grok, cooldowns), is never a premium model without the Fable setting, never costs over 4x the table's pick for a light request, and on Cheapest never costs more than it. Teams only form for agent work at difficulty 2 or more (planning at 3), never on a tight budget. The brain has 3.5 s; a timeout, an error or an answer outside the schema leaves the rules' decision (below), and a few words of small talk or voice skip it. One answer is kept per message.
+
+When the brain doesn't decide, Auto picks a model in two steps for each message, and neither step calls a model:
 
 1. **Classify.** Local rules in `src/main/llm/task-classifier.ts` read the request and decide, in one function, its category, a difficulty from 0 to 3, whether it runs as a chat or as the full agent, and the effort Auto thinks at (see [Rubrics](#rubrics) and [The classifier](#the-classifier)). The rules look at:
    - the text of the request;
@@ -15,8 +29,8 @@ The "routed" label on each reply names the model and the reason, for example "Cl
 
 | Option | What it does |
 |---|---|
-| **Best result** (default) | Routes one tier above the request's difficulty, so each kind of task gets the strongest model. Chat stops at tier 2 and voice at tier 1, so both stay quick. |
-| **Balanced** | Routes at the request's own difficulty: the cheapest model that is strong enough. Where GPT-6 Astra would lead the hardest row, its near-equal GPT-6.1 Sol leads instead, at a fifth of the price. On a [close call](#balanced-close-calls) it takes Best result's pick when that costs at most 2x and isn't much slower. |
+| **Best result** | Routes one tier above the request's difficulty, so each kind of task gets the strongest model. Chat stops at tier 2 and voice at tier 1, so both stay quick. |
+| **Balanced** (default) | Routes at the request's own difficulty: the cheapest model that is strong enough. Where GPT-6 Astra would lead the hardest row, its near-equal GPT-6.1 Sol leads instead, at a fifth of the price. On a [close call](#balanced-close-calls) it takes Best result's pick when that costs at most 2x and isn't much slower. |
 | **Cheapest** | Routes one tier lower. Within a row, the cheapest model comes first. A free local model is used first whenever one is strong enough. |
 
 These settings and conditions still apply on top of the preference:
@@ -36,7 +50,9 @@ These settings and conditions still apply on top of the preference:
 | Computer use and voice | Never Grok (no computer-use result on any board; about 10 s to its first token). With only Grok on, Auto says so and suggests a fix; Grok picked by name still works. |
 | Computer use on the ChatGPT plan | Codex passes the screenshots tools return back to the model as text only ([chatgpt-plan.md](chatgpt-plan.md)), so the plan's models are used for computer use only when no other model can see the screen, and the label says they work from page text. The planner + executor pair never uses them. |
 | Premium models | Fable only with "Use Fable for the hardest tasks"; GPT Pro models never (picked by name only). |
-| A follow-up in the same chat | Keeps the chat's previous model when it is still as good a choice ([Stability](#stability-across-a-conversation)). |
+| A follow-up in the same chat | Keeps the chat's previous model when it is still as good a choice ([Stability](#stability-across-a-conversation)); a light turn never stays on a model costing over 2x the fresh pick. |
+| School work (homework, studying, a quiz or test, a school subject such as chemistry or algebra) | On Balanced and Cheapest: the cheapest strong-enough model (Haiku 5.5, GPT-6 Luna or Terra), and for the biggest assignments (a long paper) a mid-tier one (Sonnet 5.5, GPT-6.1 Sol), never Opus, Astra or Fable. A "Best result" chosen in Settings is kept. "Mole" in school work is chemistry, not a medical stake. Code, computer use and CAD are never school work. |
+| A request for a picture ("draw…", "make a logo…", "an image of…") | Runs as agent work with the image tool (GPT image models, on an OpenAI key) loaded, and the picture shows in the chat. |
 | A model that failed recently | Skipped until its cooldown ends ([Failures](#failures-and-fallbacks)). |
 
 **Fallbacks:**
@@ -220,7 +236,9 @@ The final row is on items the rules were tuned on. The blind rows are the honest
 - folded in with the same upward bias: the higher difficulty, agent if either side says so;
 - tested with fakes only.
 
-**Decision: built, not wired in.**
+**Superseded by Auto's brain** (top of this page), which reads every request rather than only unsure ones, with a 3.5 s budget. The notes below are kept as the original measurements.
+
+**Decision then: built, not wired in.**
 - **The gain isn't clear.** On the eval set it would ask on 79 of 554 requests (14.3%). An oracle answerer gains nothing there, because the rules already get those right, and an 80%-accurate model costs 2.7 points (100% → 97.3%). On blind batch 2, the unsure decisions were wrong 11 times in 21, so a good model could help on new wording. That can't be measured without paid calls.
 - **Latency doesn't fit.** The repo's own first-token data at low effort (Haiku 5.5 6.26 s, Luna 1.57 s) says neither model reliably answers within 1.5 s. Most asks would add up to 1.5 s and then time out.
 
@@ -259,7 +277,9 @@ What the app does with each manual choice in a regular chat (SahilBot's own chat
 | Council | Exclusive in the composer: turning it on turns Max off (and the other way round), and the main process enforces the same if a message arrives with both. |
 | Permission mode | The chat's mode is left as chosen. It is only ever made stricter, for a handoff from a stricter bot or untrusted relayed content (security). |
 | Fast mode | A per-model "on" / "off" / "ultrafast" is honored exactly. Auto's "only where speed matters" rule applies only to models Auto picked. |
-| Bots: model and effort | Never set per bot. A bot's chats (and a group's) always route as Auto (model) and Auto (thinking): the bot chooses for the best result on each request. Stored `Space.model` / `Space.effort` from older installs and picks made in a bot's chat are ignored, and cleared once on start (`spaces.ts` `migrateBotModelEffort`; the columns stay). The app default's Auto variant still applies (Auto (local) stays local, Auto (cloud) stays cloud); a concrete default model doesn't. In a bot's chat the composer's picker shows "Auto (bot)" read-only for model and thinking (permissions stay editable). Helpers keep the model their orchestrator assigned. |
+| Bots: model and effort | A bot chooses by itself (Auto model, Auto thinking) until you pick a model or a thinking level in its chat; then that pick is used exactly, and you can go back to Auto any time. Stored `Space.model` / `Space.effort` from older installs are ignored. The app default's Auto variant still applies to a bot chat with nothing picked (Auto (local) stays local, Auto (cloud) stays cloud); a concrete default model doesn't. Helpers keep the model their orchestrator assigned. |
+| Thinking with Auto | Thinking is picked independently of the model: a level picked while the model is Auto is sent exactly with whatever model Auto routes to. |
+| A model switch (Auto, a pick, a fallback) | The new model gets the whole conversation, every reply, tool call and result, and a hidden note that it is taking over from the previous model, once per switch (`loop.ts` `modelSwitchNote`). |
 
 ## Simulated guarantees
 

@@ -7,7 +7,7 @@ import { launch, tempProfile } from './app'
 import { lastToolOutput, refFor, startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 import { startTestSite, STORE, type TestSite } from '../fixtures/test-site'
 
-// Always-on bots against the mock model: a bot in Autonomous mode runs a multi-step task with one
+// Always-on bots against the mock model: a bot in Auto mode runs a multi-step task with one
 // question, keeps working while the question waits in Needs you, the answer arrives (one tap in the
 // inbox) and the bot finishes. A purchase still stops at the Purchase card.
 
@@ -24,15 +24,15 @@ const write = (path: string, content: string) => ({ toolCalls: [{ name: 'file_wr
 const browser = (args: Record<string, unknown>) => ({ toolCalls: [{ name: 'browser', arguments: JSON.stringify(args) }] })
 
 describe('always-on bots', () => {
-  test('an Autonomous bot keeps working while its question waits, then finishes when the answer arrives; a purchase still stops', async () => {
+  test('an Auto bot keeps working while its question waits, then finishes when the answer arrives; a purchase still stops', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'foreman-ws-'))
     // FOREMAN_ASK_GRACE_MS=0: the question goes straight to Needs you (as when the user is away).
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_ASK_GRACE_MS: '0' })
     await page.evaluate((dir) => window.foreman.settings.set({ workspaceDir: dir }), ws)
     const { space, threadId } = await page.evaluate(() => window.foreman.spaces.create({ name: 'Trip Planner', intro: false }))
-    // New bots work at Autonomous; the main chat keeps the app default.
+    // New bots work at Auto (what Autonomous used to be); the main chat keeps the app default.
     const threads = await page.evaluate(() => window.foreman.threads.list())
-    expect(threads.find((t) => t.id === threadId)!.permissionMode).toBe('autonomous')
+    expect(threads.find((t) => t.id === threadId)!.permissionMode).toBe('auto')
     await page.reload()
     await page.locator('[data-testid="space-item"]', { hasText: 'Trip Planner' }).click()
     await page.waitForSelector('[data-testid="composer-input"]')

@@ -63,6 +63,8 @@ export interface TaskContext {
   previousCategory?: TaskCategory
   previousKind?: TaskKind
   previousEffort?: Effort
+  /** The previous request was school work (a follow-up stays school work). */
+  previousStudy?: boolean
   /** A real-time voice conversation. */
   voice?: boolean
   /** The chat has an unfinished plan. */
@@ -97,6 +99,8 @@ export interface TaskSignals {
   /** A level asked for in words. */
   explicit?: Effort
   followUp: boolean
+  /** School work: homework, studying, a class or a school subject. Routed to fast, low-cost models. */
+  study?: boolean
 }
 
 export interface TaskClass {
@@ -287,6 +291,14 @@ const WRITING_SHORT = /\b(haiku|poem|taglines?|tweet|rewrite this|edit this|make
 // Difficulty and effort signals
 const HARD = /\b(architecture|design (a|the) system|from scratch|end[- ]to[- ]end|entire|whole (app|codebase|project|thing|system)|complex|complicated|in[- ]depth|thorough(ly)?|comprehensive|exhaustive|detailed (analysis|report|plan)|production[- ](ready|quality|grade)|production|perfect(ly)?|carefully|best possible|multi-?step|literature review|deep dive|competitive analysis|market analysis|financial model|forecast|dcf|3-statement|pitch deck|business plan|launch plan|go-to-market|memory leak|every (form|page|file|module|endpoint|screen|place)|all the (forms|pages|modules|endpoints)|security|vulnerab\w*|full assembly|interferences?|for investors|whatever breaks|find out why|figure out (what|why)|feedforward)\b/
 const BIG_CODE = /\b(stripe|payments?|subscriptions|billing|webhooks|refactor|migrat\w*|profile it|unbeatable|game|port|bump|upgrade|optimi[sz]e|oauth|sso|design the|scaffold|extension|investigate|tune)\b/
+/** A request to make or edit a picture. */
+export const IMAGE_RE = /\b(draw|paint|sketch|illustrate|generate|create|make|design|render|edit|turn)\b[^.?!\n]{0,60}\b(images?|pictures?|pics?|photos?|drawings?|illustrations?|logos?|icons?|posters?|art(work)?|wallpapers?|stickers?|avatars?|banners?|thumbnails?|portraits?|cartoons?|memes?)\b|\b(an? |the )?(image|picture|drawing|illustration) of\b|\b(draw|paint|sketch|illustrate) (me |us )?(an?|the|my|some)\b/i
+
+/** School work: words that mean it on their own. */
+const STUDY = /\b(home ?work|hw|worksheets?|quiz(zes)?|exams?|midterms?|finals week|study(ing)? (guide|for)|studying|flash ?cards?|practice (problems?|questions?|test)|textbooks?|teacher|in class|for (my )?class\b(?! names?| selector| component)|my class(es)? at school|schoolwork|school (project|assignment|essay|paper|work)|for school|at school|semester|gpa|syllabus|lab report|ap (bio|chem|physics|calc|csp?|lang|lit|euro|world|us history|gov|psych|stats)|apush|chemistry|chem (class|test|quiz|homework|hw|lab|exam)|chemical (equations?|reactions?|formulas?)|balance (this|the|these) (chemical )?equations?|biology|bio (class|test|quiz|homework|hw|lab|exam)|physics (class|test|quiz|homework|hw|problems?|exam)|algebra|geometry|pre-?calc(ulus)?|calculus|trig(onometry)?|stoichiometry|molar mass|moles? (of|ratio|to|per)\b|mole ratio|\d+(\.\d+)? ?mol\b|periodic table|isotopes?|hydrate lab|ionic (bonds?|compounds?)|covalent|photosynthesis|mitosis|meiosis|cell biology|newton's laws|vocab(ulary)? (list|words|quiz)|book report|reading log|essay for|duolingo)\b/
+/** A bot whose role is school: vague requests there are school work too. */
+const STUDY_ROLE = /\b(school|study|studying|student|homework|tutor|class(es)?|teacher)\b/
+
 const STAKES = /\b(legal|lawsuit|sue|lease|contract|landlord|security deposit|court|custody|immigration|visa|medical|diagnos\w*|symptoms?|side effects?|dosage|medication|worried|mole|rash|lump|tax(es)?|deduct\w*|w-2|1099|isos?|rsus?|investments?|invest|retirement|mortgage|emergency fund|t-bills|savings|production|customers|outage|security|bank|med school|investors|go(ing)?-concern|risks?)\b/
 const DECISION = /\b(is it legal|am i allowed|is it (safe|ok) to|can i be (sued|fired)|should i|should we|is it worth|walk me through|which is better|or stay|can my)\b/
 const LONG_OUTPUT = /\b(\d{1,2},?\d{3}[- ]words?|\d+k[- ]words?|novel|book|whole manual|comprehensive|full report|literature review|10\+? slides|\d{2} slides)\b/
@@ -429,7 +441,10 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
   const { category } = pick
 
   // ---- difficulty (the difficulty rubric)
-  const stakes = has(STAKES, t) && (category !== 'coding' || has(/\b(production|customers|outage|security)\b/, t))
+  const schoolSubject = category !== 'coding' && category !== 'code-quick' && category !== 'computer-use' && category !== 'cad' && category !== 'long-context'
+  const study = schoolSubject && (has(STUDY, t) || (pick.rule === 'follow-up' && !!ctx.previousStudy) || (!!ctx.role && has(STUDY_ROLE, ctx.role.toLowerCase()) && (question || words <= 12)))
+  // In school work a "mole" is chemistry, not a medical worry.
+  const stakes = has(STAKES, study ? t.replace(/\bmoles?\b/g, ' ') : t) && (category !== 'coding' || has(/\b(production|customers|outage|security)\b/, t))
   const longOutput = has(LONG_OUTPUT, t)
   const multi = has(MULTI, t) && words > 6
   const hard = has(HARD, t)
@@ -497,6 +512,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (ctx.helper || ctx.unattended || ctx.group) return { kind: 'agent', why: ctx.helper ? 'helper agent' : ctx.unattended ? 'runs unattended' : 'group chat' }
     if (ctx.planFirst || ctx.team || ctx.deepResearch || ctx.heavy || ctx.council) return { kind: 'agent', why: ctx.planFirst ? 'Plan first is on' : ctx.team ? 'Team of Experts is on' : ctx.deepResearch ? 'Deep Research is on' : ctx.heavy ? 'Heavy is on' : 'Council is on' }
     if (folders) return { kind: 'agent', why: 'works with an attached folder' }
+    if (has(IMAGE_RE, t) && !question) return { kind: 'agent', why: 'makes a picture' }
     if (files) return { kind: 'agent', why: 'reads attached files' }
     if (ctx.openPlan && words <= 20) return { kind: 'agent', why: 'a task is in progress' }
     if (pick.rule === 'follow-up') return { kind: ctx.previousKind ?? (AGENT_WORK.has(category) ? 'agent' : 'chat'), why: 'follow-up' }
@@ -516,7 +532,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
   const explicit: Effort | undefined = has(EXPLICIT_MAX, t) ? 'max' : has(EXPLICIT_HIGH, t) ? 'high' : undefined
   const deliverable = kind.kind === 'agent' && (category === 'coding' || category === 'office' || category === 'cad' || officeDeliverable)
   const toolDepth = kind.kind === 'chat' ? (has(LIVE, t) || category === 'research' ? 1 : 0) : multi || folders || difficulty >= 3 ? 3 : 2
-  const signals: TaskSignals = { stakes, deliverable, longOutput, toolDepth, ...(explicit ? { explicit } : {}), followUp: pick.rule === 'follow-up' }
+  const signals: TaskSignals = { stakes, deliverable, longOutput, toolDepth, ...(explicit ? { explicit } : {}), followUp: pick.rule === 'follow-up', ...(study ? { study } : {}) }
   let effort = pick.rule === 'follow-up' && ctx.previousEffort && !ctx.voice
     ? ctx.previousEffort
     : autoEffort({ category, difficulty, voice: !!ctx.voice, heavy: !!ctx.heavy, council: !!ctx.council, task: kind.kind === 'agent' && difficulty >= 2, stakes: stakes && category !== 'chat' ? true : stakes && difficulty >= 3, deliverable, longOutput, toolDepth: category === 'chat' ? 0 : toolDepth, explicit })

@@ -48,8 +48,6 @@ describe('cloud-first onboarding', () => {
     for (const sel of ['[data-testid="ollama-setup"]', '[data-testid="setup-picks"]', '[data-testid="local-setup"]', '[data-testid^="setup-get-"]']) expect(await page.locator(sel).count()).toBe(0)
 
     await page.click('[data-testid="onboarding-next"]')
-    await page.click('[data-testid="onboarding-workspace-next"]')
-    await page.click('[data-testid="onboarding-finish"]')
     await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
 
     const s = await page.evaluate(() => window.foreman.settings.get())
@@ -109,8 +107,6 @@ describe('cloud-first onboarding', () => {
     await expect.poll(() => localCalls(app)).toEqual(expect.arrayContaining(['detectProviders', 'models:setupPicks']))
     expect((await page.evaluate(() => window.foreman.settings.get())).local?.enabled).toBe(true)
     await page.click('[data-testid="onboarding-local-next"]')
-    await page.click('[data-testid="onboarding-workspace-next"]')
-    await page.click('[data-testid="onboarding-finish"]')
     await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
     expect((await page.evaluate(() => window.foreman.settings.get())).local?.enabled).toBe(true)
     // Nothing was downloaded without a click.

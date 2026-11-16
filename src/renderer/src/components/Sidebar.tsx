@@ -10,6 +10,9 @@ import { Target, useGoalsNeedingYou } from './TasksView'
 import { openUsageGlance } from './UsagePage'
 import { money, useSpend } from './SpendingLimit'
 import { countLabel } from '@shared/read-state'
+import { rowSubtitle } from '../lib/ux'
+import { useDevMode } from '../lib/dev-mode'
+import { UpdateButton } from './UpdateButton'
 
 /** The profile menu's usage line: "Usage · $3.20 of $200 this month". */
 const spendLabel = (b: ReturnType<typeof useSpend>): string => !b ? 'Usage' : b.mode === 'amount' ? `Usage · ${money(b.spent)} of ${money(b.cap)} this month` : `Usage · ${money(b.spent)} this month`
@@ -55,6 +58,7 @@ export function Sidebar(p: {
   needThreads?: Set<string>
   needSpaces?: Set<string>
 }) {
+  const dev = useDevMode()
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [dragging, setDragging] = useState<{ kind: 'space' | 'chat'; id: string } | null>(null)
@@ -249,11 +253,11 @@ export function Sidebar(p: {
           {renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v }))}
         </div>
       ) : (
-        <button className="br-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.name}>
+        <button className="br-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.lastPreview ? `${s.name}: ${s.lastPreview.replace(/\s+/g, ' ').slice(0, 160)}` : s.name}>
           <span className="br-avatar">{avatar(s, 40)}</span>
           <span className="br-text">
             <span className={`br-name${runName(working(s), needs(s))}`}>{s.name}</span>
-            <span className="br-preview">{s.lastPreview?.replace(/\s+/g, ' ').trim() || (s.kind === 'group' ? `${s.members.length} bots` : 'Say hi')}</span>
+            <span className="br-preview">{rowSubtitle(s)}</span>
           </span>
           {status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}
         </button>
@@ -307,9 +311,13 @@ export function Sidebar(p: {
   return (
     <aside className={`sidebar sb2${dragging ? ' is-dragging' : ''}`} onDragOver={(e) => { if (dragging) e.preventDefault() }}>
       <div className="sb-top drag">
-        <button className="sb-circle" onClick={p.onSearch} title="Search (⌘K)" aria-label="Search" data-testid="nav-search"><I.Search size={17} /></button>
-        <button className={`sb-circle tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')} title={goalsNeedYou ? `Tasks: ${goalsNeedYou} need${goalsNeedYou === 1 ? 's' : ''} you` : 'Tasks (long-running goals)'} aria-label="Tasks" data-testid="nav-tasks"><Target size={17} />{goalsNeedYou > 0 && <span className="tk-nav-dot" aria-hidden="true" />}</button>
-        <button className="sb-circle" onClick={p.onNewBot} title="New bot" aria-label="New bot" data-testid="new-bot"><I.Plus size={18} /></button>
+        <button className="sb-circle" onClick={p.onSearch} title="Search bots, chats, commands and settings (⌘K)" aria-label="Search (⌘K)" data-testid="nav-search"><I.Search size={17} /></button>
+        <button className={`sb-circle tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
+          title={goalsNeedYou ? `Needs you (${goalsNeedYou}): your bots' questions and approvals, and their long-running tasks` : 'Needs you & tasks: your bots\' questions, approvals and long-running goals'}
+          aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
+          <I.Inbox size={17} />{goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
+        </button>
+        <button className="sb-circle" onClick={p.onNewBot} title="New bot: a teammate with its own job and chat" aria-label="New bot" data-testid="new-bot"><I.Plus size={18} /></button>
       </div>
 
       <div className="side-scroll">
@@ -333,7 +341,7 @@ export function Sidebar(p: {
               <button className="bot-row ghost" onClick={p.onNewBot}>
                 <span className="br-btn">
                   <span className="br-avatar ghost-avatar"><I.Plus size={18} /></span>
-                  <span className="br-text"><span className="br-name">Make a bot</span><span className="br-preview">A teammate with its own job and chat</span></span>
+                  <span className="br-text"><span className="br-name">Make a bot</span><span className="br-preview">A teammate with its own job, e.g. “track my competitors weekly”</span></span>
                 </span>
               </button>
             )}
@@ -342,12 +350,11 @@ export function Sidebar(p: {
           {section('projects', 'Projects', (
             <>
               {projects.map((s) => smallRow(s, 'project-item'))}
-              {!projects.length && <div className="nav-empty">A folder, instructions and chats</div>}
             </>
           ), (
             <>
-              <button className="nav-add" onClick={() => p.onView('projects')} title="All projects" data-testid="nav-projects"><I.Folder size={14} /></button>
-              <button className="nav-add" onClick={p.onNewProject} title="New project" data-testid="new-project"><I.Plus size={14} /></button>
+              <button className="nav-add" onClick={() => p.onView('projects')} title="All projects" aria-label="All projects" data-testid="nav-projects"><I.Folder size={14} /></button>
+              <button className="nav-add" onClick={p.onNewProject} title="New project: a folder with its own instructions and chats" aria-label="New project" data-testid="new-project"><I.Plus size={14} /></button>
             </>
           ))}
 
@@ -355,13 +362,12 @@ export function Sidebar(p: {
             <>
               {pinnedChats.map(chatRow)}
               {recents.map(chatRow)}
-              {!pinnedChats.length && !recents.length && <div className="nav-empty">Your chats with {main?.name ?? 'SahilBot'} show up here</div>}
             </>
           ), (
             <>
-              <button className={`nav-add${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Files" data-testid="nav-files"><I.File size={14} /></button>
-              <button className="nav-add" onClick={p.onScheduled} title="Scheduled" data-testid="nav-scheduled"><I.Clock size={14} /></button>
-              <button className="nav-add" onClick={p.onNew} title={`New chat (⌘N)`} data-testid="new-chat"><I.Edit size={14} /></button>
+              <button className={`nav-add${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Files SahilBot made" aria-label="Files SahilBot made" data-testid="nav-files"><I.File size={14} /></button>
+              <button className="nav-add" onClick={p.onScheduled} title="Scheduled: routines and reminders" aria-label="Scheduled routines" data-testid="nav-scheduled"><I.Clock size={14} /></button>
+              <button className="nav-add" onClick={p.onNew} title="New chat (⌘N)" aria-label="New chat (⌘N)" data-testid="new-chat"><I.Edit size={14} /></button>
             </>
           ))}
 
@@ -377,8 +383,9 @@ export function Sidebar(p: {
         </div>
       </div>
 
+      <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
-        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} title={`${p.userName || 'You'}${p.modelLabel ? ` · ${p.modelLabel}` : ''}\nSettings (⌘,) · right-click for more`} data-testid="profile">{initials}</button>
+        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} title={`${p.userName || 'You'}${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}\nSettings (⌘,) · right-click for more`} data-testid="profile">{initials}</button>
         <button className="sb-connect" onClick={p.onConnect} data-testid="connect-apps">
           <ConnectedIcons max={3} />
           <I.Plug size={16} className="sb-plug" />

@@ -137,7 +137,8 @@ export const ROUTING_TABLE: Record<TaskCategory, CategoryRoute> = {
   // Grok 4.7: ARC-AGI-2 61.4 (Haiku 61.3, Sol 94.2), ARC-AGI-3 1.8, FrontierMath Tier 4 17% (Epoch), Vals ProofBench
   // 26% (#39/53), GPQA Diamond 93 (Epoch) → last fallback.
   math: {
-    tiers: [['terra', 'haiku', 'luna'], ['sol', 'terra', 'sonnet', 'haiku', 'grok'], ['sol', 'astra', 'opus', 'sonnet', 'grok'], ['astra', 'sol', 'opus', 'sonnet', 'grok']],
+    // Standard math (worked steps) needs Sol or Sonnet, not the most expensive models: those lead the hardest row.
+    tiers: [['terra', 'haiku', 'luna'], ['sol', 'terra', 'sonnet', 'haiku', 'grok'], ['sol', 'sonnet', 'astra', 'opus', 'grok'], ['astra', 'sol', 'opus', 'sonnet', 'grok']],
     // ARC-AGI-2: Sol 94.2 vs Astra 95.0, at a fifth of the price.
     balancedHardest: ['sol', 'astra', 'opus', 'sonnet', 'grok'],
     fable: true,
@@ -374,7 +375,9 @@ export function keepPrevious(prev: ModelInfo, fresh: ModelInfo, task: TaskClass,
   if (preference === 'cheapest' && slotPrice(prev) > slotPrice(fresh)) return false
   if (!remote(prev)) return prev.tier >= tier && (lightChat || !remote(fresh))
   if (!remote(fresh)) return lightChat && !payPerUse(prev)
-  if (lightChat) return prev.tier >= fresh.tier
+  // A light turn never stays on a model that costs much more than the fresh pick (one hard turn on Opus
+  // shouldn't keep "thanks!" there).
+  if (lightChat) return prev.tier >= fresh.tier && slotPrice(prev) <= CLOSE_CALL_PRICE * slotPrice(fresh) + 1e-9
   const ps = slotOf(prev), fs = slotOf(fresh)
   if (!ps || !fs) return prev.tier >= fresh.tier && (prev.rank ?? 0) >= (fresh.rank ?? 0)
   const hardest = slotsFor(task.category, 3, 'best', fableOn)
@@ -398,7 +401,12 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
   if (!pool.length) return undefined
   // Little budget left routes as Cheapest, to make it last: only while something pay-per-use could be picked.
   const tight = !!o.budgetTight && pool.some(payPerUse)
-  const preference: AutoPreference = tight ? 'cheapest' : o.preference ?? 'best'
+  // School work (homework, studying, a school subject) needs a fast, low-cost model, not the strongest one:
+  // the cheapest strong-enough model, and only a mid-tier one for the biggest assignments (a paper, a project).
+  // (A "Best result" the user chose is kept as chosen.)
+  const asked: AutoPreference = o.preference ?? 'best'
+  const study = asked !== 'best' && isStudy(task)
+  const preference: AutoPreference = tight || (study && asked === 'cheapest') ? 'cheapest' : study ? (task.difficulty >= 3 ? 'balanced' : 'cheapest') : asked
   const cloudFirst = variant === 'auto:cloud' || (variant === 'auto' && (o.preferCloud ?? routingPrefs.preferCloud))
   const fableOn = o.fableForHardest ?? routingPrefs.fableForHardest
   const notes: string[] = []
@@ -429,12 +437,12 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
     }
   }
 
-  const tier = routeTier(task.category, task.difficulty, preference)
+  const tier = study && task.difficulty >= 3 && !tight ? 2 : routeTier(task.category, task.difficulty, preference)
   const cat = CATEGORY_LABEL[task.category]
   const result = (model: ModelInfo, source: RoutePick['source'], note?: string): RoutePick => ({
     model, category: task.category, difficulty: task.difficulty, tier, preference, source,
     label: `${name(model)} · ${cat}`,
-    why: [task.why, note, ...notes, preference !== 'best' ? PREFERENCE_LABEL[preference].toLowerCase() : undefined, tight ? 'little of the monthly limit left' : undefined].filter(Boolean).join(' · ')
+    why: [task.why, note, ...notes, study ? 'school work' : preference !== 'best' ? PREFERENCE_LABEL[preference].toLowerCase() : undefined, tight ? 'little of the monthly limit left' : undefined].filter(Boolean).join(' · ')
   })
 
   const cloud = pool.filter(remote)
@@ -459,6 +467,7 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
     for (const t of order) {
       // Premium Claude (Fable) is only in a row when the setting puts it there (the hardest tier).
       for (const slot of slotsFor(task.category, t, preference, fableOn)) {
+        if (study && STUDY_SKIPS.has(slot)) continue
         const m = bySlot(slot)
         if (m) return result(m, 'table')
       }
@@ -483,7 +492,7 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
   }
 
   // Balanced, close call: Best result's pick when it costs at most 2x and isn't much slower (closeCall).
-  if (preference === 'balanced' && !o.noCloseCall && closeCall(task) && remote(fresh.model)) {
+  if (preference === 'balanced' && !study && !o.noCloseCall && closeCall(task) && remote(fresh.model)) {
     const best = routeTask(pool, task, { ...o, preference: 'best', budgetTight: false, previous: undefined, noCloseCall: true })
     const bs = best && remote(best.model) ? slotOf(best.model) : undefined
     const fs = slotOf(fresh.model)
@@ -498,8 +507,15 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
 /** Whether a model is one Auto treats as premium (priced well above the rest). */
 export const premiumModel = (id: string): boolean => isPremiumClaude(bareId(id)) || isPremiumOpenAI(bareId(id))
 
-/** The Auto prefers setting (Settings → Models), Best result by default. */
+/** The Auto prefers setting (Settings → Models), Balanced by default: the cheapest model strong enough for the request. */
 export function autoPreference(s: { cloud?: { autoPrefers?: string } }): AutoPreference {
   const v = s.cloud?.autoPrefers
-  return v === 'balanced' || v === 'cheapest' ? v : 'best'
+  return v === 'best' || v === 'cheapest' ? v : 'balanced'
 }
+
+/** The most expensive models, never needed for school work (the table falls through to the next slot). */
+const STUDY_SKIPS: ReadonlySet<Slot> = new Set<Slot>(['fable', 'opus', 'astra'])
+
+/** School work routed as such: not code, the screen or CAD, and nothing at stake. */
+export const isStudy = (task: Pick<TaskClass, 'category' | 'signals'>): boolean =>
+  !!task.signals?.study && !task.signals.stakes && task.category !== 'coding' && task.category !== 'code-quick' && task.category !== 'computer-use' && task.category !== 'cad' && task.category !== 'voice'

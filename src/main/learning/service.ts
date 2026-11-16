@@ -18,6 +18,8 @@ import {
   skillRisk, skillWorthy, userTextOf, vetCandidate, wasRejected, type Origin, type RunInfo
 } from './extract'
 import { LearningStore, isPending, type LogEntry, type UndoPlan } from './store'
+import { RuntimeStore } from '../agent/runtime/store'
+import { completionReport } from '../agent/runtime/verification'
 
 // Learning while SahilBot is open. A pass runs only while the app is running and idle (no chat or
 // routine for 2 minutes, and nobody using the window); it stops the moment a run starts or the user
@@ -92,7 +94,7 @@ export function cheapestFor(remote: ModelInfo[]): ModelInfo | undefined {
 }
 
 const isRemote = (m: ModelInfo): boolean => m.note === 'remote' || !(providerDef(m.provider)?.local ?? true)
-const KIND_NAME: Record<string, string> = { profile: 'About you', preference: 'Preference', rule: 'Rule', person: 'Person', location: 'Place', work: 'Work', project: 'Project', trip: 'Trip', date: 'Date', link: 'Link', fact: 'Fact' }
+const KIND_NAME: Record<string, string> = { profile: 'About you', preference: 'Preference', decision: 'Decision', rule: 'Rule', person: 'Person', location: 'Place', work: 'Work', project: 'Project', trip: 'Trip', date: 'Date', link: 'Link', fact: 'Fact' }
 
 export class LearningService {
   readonly store: LearningStore
@@ -488,6 +490,12 @@ export class LearningService {
 
   private async skill(r: RunInfo, t: { id: string; title: string; spaceId: string }): Promise<boolean> {
     const { db, skills } = this.d
+    // Once the execution ledger is present, a final response and silence never certify a skill.
+    // Legacy imported traces without this schema retain their existing review path.
+    if (db.sql.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_runs'").get()) {
+      const recorded = db.sql.prepare("SELECT id FROM agent_runs WHERE thread_id=? AND opener_id=? AND status='finished' ORDER BY at DESC LIMIT 1").get(t.id, r.opener.id) as { id: string } | undefined
+      if (!recorded || completionReport(new RuntimeStore(db), recorded.id).status !== 'verified') return false
+    }
     const msgs = db.listMessages(t.id)
     const origin = this.originOf(t.id, msgs)
     // A skill is followed by every later run: none from a run that read outside content, a chat the

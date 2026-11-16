@@ -15,7 +15,7 @@ test('jobs and autonomy shots', async () => {
   await page.click('[data-testid="mode-picker"]')
   await page.waitForTimeout(250)
   await page.screenshot({ path: `${out}/jobs-picker.png` })
-  await page.click('[data-testid="mode-autonomous"]')
+  await page.click('[data-testid="mode-auto"]')
   const port = 5300 + Math.floor(Math.random() * 400)
   const server = `node -e "require('http').createServer((q,s)=>s.end('hi')).listen(${port},()=>{console.log('  VITE v6.0.0  ready in 212 ms');console.log('  ➜  Local:   http://localhost:${port}/');setInterval(()=>console.log('[hmr] page reload src/App.tsx'),700)})"`
   llm.script.push({ toolCalls: [{ name: 'run_command', arguments: JSON.stringify({ command: 'sleep 2; echo "built 42 modules"' }) }] })

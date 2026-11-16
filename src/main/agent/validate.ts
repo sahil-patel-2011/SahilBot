@@ -16,6 +16,13 @@ function coerceJsonStrings(args: Record<string, unknown>, schema: Record<string,
   }
 }
 const cache = new WeakMap<object, ValidateFunction>()
+const outputAjv = new Ajv({ allErrors: true, strict: false })
+const outputCache = new WeakMap<object, ValidateFunction>()
+export function validateOutput(schema: Record<string, unknown>, data: unknown): void {
+  let validator = outputCache.get(schema)
+  if (!validator) { validator = outputAjv.compile(schema); outputCache.set(schema, validator) }
+  if (!validator(data)) throw new Error(`Tool output failed its schema: ${outputAjv.errorsText(validator.errors)}`)
+}
 
 export type Checked =
   | { ok: true; args: Record<string, unknown> }

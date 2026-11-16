@@ -39,9 +39,7 @@ describe('bot swarms, council and ask_bot', () => {
         ? { toolCalls: [{ name: 'swarm', arguments: JSON.stringify({ goal: 'Ways to grow a neighborhood bakery', pattern: 'ideate', helpers: 10 }) }], delay: 0 }
         : { content: 'SWARM COMPILED: the best ideas are the club [H2, H5] and the stall [H9].', delay: 0 }
     })
-    await page.click('[data-testid="modes-menu"]') // the modes live under the composer's Modes menu
-    await page.click('[data-testid="max-toggle"]')
-    await send(page, 'Brainstorm ways to grow my bakery')
+    await send(page, 'Use an agent swarm to brainstorm ways to grow my bakery')
     await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 60_000 }).toContain('SWARM COMPILED')
     // The swarm is a phase of the one Max card.
     const max = page.locator('[data-testid="max-card"]')
@@ -81,13 +79,14 @@ describe('bot swarms, council and ask_bot', () => {
       if (s.includes('# You are a council member')) return { content: '### Step 1\nDone.\n### Step 2\nDone.', delay: 0 }
       return { content: 'unexpected', delay: 0 }
     })
-    await page.click('[data-testid="modes-menu"]') // the modes live under the composer's Modes menu
-    await page.click('[data-testid="council-toggle"]')
-    await page.click('[data-testid="council-pick"]')
-    const picks = page.locator('[data-testid="council-member-pick"]')
-    await picks.filter({ hasText: /qwen/i }).first().click()
-    await picks.filter({ hasText: /gemma/i }).first().click()
-    await send(page, 'Write our launch post')
+    // The simplified composer infers swarm intent. Preserve coverage for legacy saved council requests too.
+    const tid = await page.evaluate(async () => {
+      const main = (await window.foreman.spaces.list()).find((s) => s.isMain)!
+      return (await window.foreman.threads.create(main.id)).id
+    })
+    await page.reload()
+    await page.locator('[data-testid="thread-item"]').first().click()
+    await page.evaluate((threadId) => window.foreman.chat.send({ threadId, text: 'Write our launch post', council: ['qwen3.8:27b', 'gemma4:12b'] }), tid)
     await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 60_000 }).toContain('COUNCIL FINAL')
     const card = page.locator('[data-testid="council-card"]')
     await expect.poll(() => card.getAttribute('data-phase'), { timeout: 15_000 }).toBe('done')

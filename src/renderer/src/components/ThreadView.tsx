@@ -10,6 +10,7 @@ import { describe, duration, stepStatus, summarize, type Step } from '../lib/ste
 import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
 import { PageCard, pagesFromSteps } from './PageCard'
+import { MadeFiles, filesFromSteps } from './MadeFiles'
 import { StockCard, stocksFromSteps } from './StockCard'
 import { VideoCard, videoOf, videosFromSteps } from './VideoCard'
 import { DocCard, docsFromSteps } from './doc/DocCard'
@@ -17,6 +18,8 @@ import { AskBotCard, CouncilCard, HeavyCard, MemberRow, SpendCard, SwarmCard } f
 import { CuaCard, cuaOf } from './CuaCard'
 import { askBotOf, councilOf, groupMembers, heavyOf, isCardNotice, maxOf, maxTeamCalls, money, swarmOf, teamTotals, tokenCount, unfinished } from '../lib/swarm-view'
 import { MaxCard } from './MaxCard'
+import { useDevMode } from '../lib/dev-mode'
+import { elapsed, galleryFromSteps, hasQuietContent, internalNotice, quietActions, turnStart } from '../lib/quiet'
 
 type Block =
   | { kind: 'user'; m: Message }
@@ -171,7 +174,7 @@ function TeamCard({ id, titles, members, summary, live }: { id: string; titles: 
       <button className="plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.Users size={15} />
         <span className="plan-title">Team of Experts</span>
-        <span className="plan-count">{live || working ? `${working} working · ${done} of ${list.length} done` : summary ?? `${done} of ${list.length} done`}{cost ? ` · ${cost}` : ''}</span>
+        <span className="plan-count">{live || working ? `${working} working · ${done} of ${list.length} done` : summary ?? `${done} of ${list.length} done`}{cost ? <span className="dev-only">{` · ${cost}`}</span> : null}</span>
         <span className="plan-bar"><i style={{ width: `${(done / Math.max(1, list.length)) * 100}%` }} /></span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>
@@ -235,20 +238,22 @@ const PREPARING: Record<string, string> = {
   research: 'Searching trusted sources', run_command: 'Preparing a command', agents: 'Putting together a team', consult: 'Asking an expert', computer: 'Getting ready to use your Mac', cursor: 'Preparing a Cursor task', mac_apps: 'Opening a Mac app'
 }
 
-/** "Thinking… 12s" / "Preparing to write a file… 3s" while the model works. */
-function StatusLine({ drafting, since, progress }: { drafting: string | null; since: number; progress?: string | null }) {
+/**
+ * "Thinking… 12s" / "Checking your calendar… 1:05" while SahilBot works. The time counts from when you sent
+ * the message (turnStart), so it is how long this turn has taken so far.
+ */
+function StatusLine({ drafting, since, progress, doing }: { drafting: string | null; since: number; progress?: string | null; doing?: string | null }) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 500)
     return () => clearInterval(t)
   }, [])
-  const secs = Math.max(0, Math.round((now - since) / 1000))
-  const label = progress ? progress.replace(/\s+/g, ' ').slice(0, 120) : drafting ? (PREPARING[drafting] ?? `Preparing ${drafting.replace(/__/g, ' · ').replace(/_/g, ' ')}`) : 'Thinking'
+  const label = progress ? progress.replace(/\s+/g, ' ').slice(0, 120) : drafting ? (PREPARING[drafting] ?? `Preparing ${drafting.replace(/__/g, ' · ').replace(/_/g, ' ')}`) : doing ?? 'Thinking'
   return (
     <div className="status-line" data-testid="status-line">
       <span className="activity-dots live"><i /><i /><i /><i /></span>
-      <span className="activity-title shimmer">{label}…</span>
-      {secs >= 2 && <span className="activity-meta">{secs}s</span>}
+      <span className="activity-title shimmer" role="status" aria-live="polite">{label}…</span>
+      <span className="activity-meta" data-testid="turn-timer" aria-live="off" title="Time since you sent your message">{elapsed(now - since)}</span>
     </div>
   )
 }
@@ -316,7 +321,12 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     const f = unreadAfter == null ? undefined : firstUnread(messages, unreadAfter)
     divider.current = f && unreadAfter != null ? { id: f.id, createdAt: f.createdAt, after: unreadAfter } : null
   }
-  const bs = useMemo(() => blocks(messages), [messages])
+  const dev = useDevMode()
+  const hasDocs = !!actions.onOpenDoc
+  const all = useMemo(() => blocks(messages), [messages])
+  // The quiet chat leaves out the plan, compaction markers, notes about models, and runs that left nothing to
+  // show; Developer mode shows everything.
+  const bs = useMemo(() => (dev ? all : all.filter((b) => quietVisible(b, hasDocs))), [all, dev, hasDocs])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
   // Long chats mount their latest WINDOW blocks; an older first unread grows the window to include it.
   const limit = windowLimit(win.threadId === threadId ? win.limit : WINDOW, bs.length, dividerAt)
@@ -333,7 +343,6 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     onOpenFile: (path) => live.current.onOpenFile(path),
     onOpenDoc: (id) => live.current.onOpenDoc?.(id)
   }), [])
-  const hasDocs = !!actions.onOpenDoc
 
   useLayoutEffect(() => {
     const el = scroller.current
@@ -383,6 +392,12 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const tail = bs[bs.length - 1]
   const last = messages[messages.length - 1]
   const waiting = running && !pending.length && tail?.kind !== 'activity' && (!last || last.role !== 'assistant' || (last.status === 'streaming' && !last.content && !last.reasoning && !last.toolCalls))
+  // Quiet chat: one status line the whole time SahilBot works, except while a reply is being written.
+  const allTail = all[all.length - 1]
+  const liveStep = running && allTail?.kind === 'activity' ? allTail.steps[allTail.steps.length - 1] : undefined
+  const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
+  const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writing)
+  const started = turnStart(messages, since)
   const approvalWaiting = pending.some((p) => p.kind === 'approval')
   let tailText: Block | undefined
   for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind !== 'notice' && bs[i].kind !== 'compacted') { tailText = bs[i]; break }
@@ -430,13 +445,14 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                 waitingApproval={approvalWaiting && b === lastActivity}
                 planLive={running && b === lastPlan}
                 members={b.kind === 'team' ? teams?.[b.id] : undefined}
-                editable={!running && b.kind === 'user' && b.m.id === lastUserId} />
+                editable={!running && b.kind === 'user' && b.m.id === lastUserId}
+                dev={dev} retry={!running && !pending.length && b === tailText && b.kind === 'text'} />
               </Fragment>
             )
           })}
-          {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} />))}
-          {running && !pending.length && (waiting || drafting || progress) && <StatusLine drafting={drafting ?? null} since={since ?? Date.now()} progress={progress} />}
-          {!running && lastText && !pending.length && (
+          {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} thumb={p.tool === 'browser' ? lastBrowserShot(messages) : undefined} />))}
+          {showStatus && <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={liveStep && !dev ? describe(liveStep)[2] : null} />}
+          {!running && lastText && !pending.length && (dev || (tailText?.kind === 'text' && (tailText.m.status === 'error' || tailText.m.status === 'stopped'))) && (
             <div className="after-actions">
               <button className="chip-btn" onClick={stable.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>
             </div>
@@ -471,6 +487,59 @@ type BlockProps = {
   planLive: boolean
   members?: TeamMember[]
   editable: boolean
+  /** Developer mode: every step, thinking, the model and its cost. */
+  dev: boolean
+  /** The last reply, finished: Retry is in its hover tools. */
+  retry: boolean
+}
+
+/** What the quiet chat shows (Developer mode shows every block). */
+function quietVisible(b: Block, docs: boolean): boolean {
+  switch (b.kind) {
+    case 'plan': case 'compacted': return false
+    case 'notice': return !internalNotice(b.m)
+    case 'activity': return hasQuietContent(b.steps, docs)
+    case 'text': return !!(b.m.content || b.m.status === 'error' || b.m.status === 'stopped')
+    case 'user': case 'qa': case 'team': case 'heavy': return true
+    default: { const never: never = b; return never }
+  }
+}
+
+/** A finished run in the quiet chat: what it made and the actions that matter, never its steps. */
+function QuietActivity({ steps, actions, hasDocs }: { steps: Step[]; actions: ThreadActions; hasDocs: boolean }) {
+  const done = quietActions(steps)
+  return (
+    <>
+      {done.map((a) => <div key={a.key} className={`quiet-action${a.failed ? ' failed' : ''}`} data-testid="quiet-action">{a.failed ? <span aria-hidden>!</span> : <I.Check size={12} />}{a.text}</div>)}
+      <Gallery items={galleryFromSteps(steps)} onOpen={actions.onOpenFile} />
+      <MadeFiles files={filesFromSteps(steps).filter((f) => !galleryFromSteps(steps).some((g) => g.path === f.path))} onOpen={actions.onOpenFile} />
+      {pagesFromSteps(steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
+      {stocksFromSteps(steps).map((x) => <StockCard key={x.key} data={x.data} />)}
+      {videosFromSteps(steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
+      {hasDocs && docsFromSteps(steps).map((d) => <DocCard key={d.key} doc={d.doc} at={d.at} exported={d.exported} onOpen={actions.onOpenDoc!} />)}
+    </>
+  )
+}
+
+/** Pictures SahilBot made, shown in the chat (click to open). */
+function Gallery({ items, onOpen }: { items: Array<{ key: string; path: string }>; onOpen: (path: string) => void }) {
+  const [urls, setUrls] = useState<Record<string, string>>({})
+  const key = items.map((i) => i.path).join('\n')
+  useEffect(() => {
+    let alive = true
+    for (const it of items) void api.files.preview(it.path).then((p) => { if (alive && p.url) setUrls((u) => ({ ...u, [it.path]: p.url! })) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!items.length) return null
+  return (
+    <div className="gallery" data-testid="gallery">
+      {items.map((it) => (
+        <button key={it.key} className="gallery-item" onClick={() => onOpen(it.path)} title={it.path.split('/').pop()}>
+          {urls[it.path] ? <img src={urls[it.path]} alt={it.path.split('/').pop()} /> : <span className="gallery-wait" />}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 /**
@@ -498,7 +567,7 @@ export function sameBlock(a: Block, b: Block): boolean {
   }
 }
 
-const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, running, live, waitingApproval, planLive, members, editable }: BlockProps) {
+const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, running, live, waitingApproval, planLive, members, editable, dev, retry }: BlockProps) {
   return (
     <div className={`block b-${b.kind}${cont ? ' cont' : ''}`}>
       {time && <div className="stamp">{time}</div>}
@@ -513,9 +582,12 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
         <HeavyCard board={b.board} groupId={b.groupId} live={running} />
       ) : b.kind === 'plan' ? (
         <PlanCard items={b.items} live={planLive} title={b.title} />
+      ) : b.kind === 'activity' && !dev ? (
+        <QuietActivity steps={b.steps} actions={actions} hasDocs={hasDocs} />
       ) : b.kind === 'activity' ? (
         <>
           <Activity steps={b.steps} live={live} waitingApproval={waitingApproval} onOpenFile={actions.onOpenFile} />
+          {!live && <MadeFiles files={filesFromSteps(b.steps)} onOpen={actions.onOpenFile} />}
           {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
           {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
           {videosFromSteps(b.steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
@@ -532,13 +604,34 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
       ) : b.kind === 'notice' && askBotOf(b.m) ? (
         <AskBotCard v={askBotOf(b.m)!} />
       ) : (
-        <Row b={b} actions={actions} editable={editable} cont={cont} />
+        <Row b={b} actions={actions} editable={editable} cont={cont} dev={dev} retry={retry} />
       )}
     </div>
   )
 }, (a, b) => a.time === b.time && a.cont === b.cont && a.actions === b.actions && a.hasDocs === b.hasDocs && a.running === b.running &&
   a.live === b.live && a.waitingApproval === b.waitingApproval && a.planLive === b.planLive && a.members === b.members &&
-  a.editable === b.editable && sameBlock(a.b, b.b))
+  a.editable === b.editable && a.dev === b.dev && a.retry === b.retry && sameBlock(a.b, b.b))
+
+/**
+ * The next step for an error, as a button: open the right Settings page for keys, limits and models, or
+ * Connect apps for a sign-in. Retry is always under the last reply.
+ */
+export function errorFix(error: string): { label: string; run: () => void } | null {
+  const settings = (page: string) => () => window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: page }))
+  if (/spending|monthly (limit|cap)|budget|over the monthly/i.test(error)) return { label: 'Change the monthly limit', run: settings('#monthly-limit') }
+  if (/api key|401|403|unauthori[sz]ed|rejected|out of (api )?credit|insufficient_quota|no model|model is available|not available on this account/i.test(error)) return { label: 'Open Models & Keys', run: settings('models') }
+  if (/sign[- ]?in|reconnect|needs_auth|connector|connected app/i.test(error)) return { label: 'Open Connect apps', run: () => window.dispatchEvent(new Event('sahilbot:open-connect')) }
+  return null
+}
+
+/** The newest screenshot the browser took in this chat (for a browser approval's thumbnail). */
+function lastBrowserShot(messages: Message[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0 && i >= messages.length - 40; i--) {
+    const m = messages[i]
+    if (m.role === 'tool' && m.toolName === 'browser' && m.images?.length) return m.images[m.images.length - 1]
+  }
+  return undefined
+}
 
 function stamp(at: number, prev?: number): string | null {
   if (prev && at - prev < 30 * 60_000) return null
@@ -621,7 +714,7 @@ function StepDetail({ s, onOpenFile }: { s: Step; onOpenFile: (p: string) => voi
 const QUICK = ['👍', '😄', '👎', '❤️', '🤐']
 const MORE = ['🔥', '🎉', '🙏', '👀', '🤔', '😂', '😮', '💯', '✅', '🚀', '😢', '👏']
 
-function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' } | { kind: 'heavy' }>; actions: ThreadActions; editable?: boolean; cont?: boolean }) {
+function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' } | { kind: 'heavy' }>; actions: ThreadActions; editable?: boolean; cont?: boolean; dev?: boolean; retry?: boolean }) {
   const m = b.m
   const [editing, setEditing] = useState<string | null>(null)
   if (b.kind === 'compacted') {
@@ -700,7 +793,7 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
       <div className="bubble-wrap ai-col">
         {speaker && !cont && <div className={`speaker${spStyle ? ' spk-c' : ''}`} style={spStyle}>{speaker}</div>}
         <div className={`bubble ai${error ? ' err' : ''}`} data-testid="assistant-bubble" data-status={m.status}>
-          {m.reasoning && (
+          {dev && m.reasoning && (
             <details className="reasoning" open={streaming && !m.content}>
               <summary><I.Sparkle size={14} />{streaming && !m.content ? 'Thinking…' : 'Thought process'}</summary>
               <pre>{m.reasoning.trim()}</pre>
@@ -709,6 +802,10 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
           {m.content && <Markdown text={m.content} streaming={streaming} />}
           {m.status === 'stopped' && <div className="hint">Stopped</div>}
           {error && <div>{error}</div>}
+          {error && (() => {
+            const fix = errorFix(error)
+            return fix && <button className="chip-btn err-fix" onClick={fix.run} data-testid="error-fix">{fix.label}</button>
+          })()}
         </div>
         {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && (
           <div className="sources" data-testid="sources">
@@ -737,10 +834,12 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
       {/* Beside the bubble (so stacked replies stay close): react, copy, read aloud, more; shown on hover. */}
       {m.content && !streaming && (
         <div className="ai-foot">
-          <MessageTools m={m} actions={actions} side="right" />
-          {!!m.meta?.routed && m.model && (
-            <span className="routed" title={`Auto chose this model: ${(m.meta.routed as { why: string }).why}`} data-testid="routed">
-              {(m.meta.routed as { label?: string }).label || m.model}
+          <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} />
+          {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
+          {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title="Some acceptance checks remain unresolved">Needs checking</span>}
+          {dev && m.model && (
+            <span className="routed" title={m.meta?.routed ? `Auto chose this model: ${(m.meta.routed as { why: string }).why}` : 'Picked in the model menu'} data-testid="routed">
+              {(((m.meta?.routed as { label?: string } | undefined)?.label) || m.model).split(' · ')[0]}
             </span>
           )}
         </div>
@@ -750,7 +849,7 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
 }
 
 /** Hover bar: react, reply, more (copy). Matches the bot-chat style. */
-function MessageTools({ m, actions, side, onEdit }: { m: Message; actions: ThreadActions; side: 'left' | 'right'; onEdit?: () => void }) {
+function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actions: ThreadActions; side: 'left' | 'right'; onEdit?: () => void; onRetry?: () => void }) {
   const [picker, setPicker] = useState<'quick' | 'more' | null>(null)
   const [copied, setCopied] = useState(false)
   const [menu, setMenu] = useState(false)
@@ -771,6 +870,7 @@ function MessageTools({ m, actions, side, onEdit }: { m: Message; actions: Threa
       <button className="icon-btn" title="Reply" onClick={() => actions.onReply(m.content)}><I.Reply size={17} /></button>
       {canReact && m.content && <button className="icon-btn" title={copied ? 'Copied' : 'Copy'} onClick={() => { void navigator.clipboard.writeText(m.content); setCopied(true); setTimeout(() => setCopied(false), 900) }} data-testid="copy-msg">{copied ? <I.Check size={15} /> : <I.Copy size={15} />}</button>}
       {canReact && m.content && <button className="icon-btn" title="Read aloud (Esc stops)" onClick={() => void api.voice.speak(m.content)} data-testid="read-aloud"><I.Speaker size={16} /></button>}
+      {onRetry && <button className="icon-btn" title="Retry" onClick={onRetry} data-testid="retry"><I.Reply size={15} style={{ transform: 'scaleX(-1)' }} /></button>}
       <button className="icon-btn" title="More" onClick={() => setMenu((x) => !x)}><span className="more">···</span></button>
       {picker && (
         <div className={`emoji-bar ${side}`}>

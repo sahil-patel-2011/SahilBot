@@ -2,6 +2,7 @@ import type { NeedsYouItem, QueueQuestion } from '@shared/types'
 import { questionKey, type Learner } from './learn'
 import { plainOption, safeToDefault } from './policy'
 import { argsKey, type StoredApproval, type StoredItem, type QuestionStore } from './store'
+import { grantableFolder } from '../tools/files'
 
 // The non-blocking question queue. A bot that needs input posts its question (with options and a
 // recommended default) here, the user is notified on the Mac and on paired devices, and the bot keeps
@@ -40,6 +41,8 @@ export interface QueueDeps {
   changed?: () => void
   botName?: (botId: string) => string
   threadExists?: (threadId: string) => boolean
+  /** The user approved or declined a queued action (remembered as a pattern, never as a permission: learning/decisions.ts). */
+  onApproval?: (item: StoredItem, answer: 'approve' | 'deny') => void
 }
 
 const fmt = (t: number): string => new Date(t).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -179,6 +182,7 @@ export class QuestionQueue {
       if (cur.status !== 'open') return cur
       const a = answer === 'approve' || (Array.isArray(answer) && /^(approve|allow|yes|once)/i.test(answer[0] ?? '')) ? 'approve' : 'deny'
       this.d.store.update(id, (x) => { x.status = 'answered'; x.answers = [a]; x.answeredBy = 'user'; x.answeredAt = this.now(); x.resumed = false })
+      try { this.d.onApproval?.(cur, a) } catch { /* never blocks the answer */ }
     } else {
       const raw = Array.isArray(answer) ? answer : [answer === 'approve' ? 'Yes' : 'No']
       const answers = cur.questions.map((_q, i) => plainOption(String(raw[i] ?? '').slice(0, 2000)))
@@ -344,7 +348,7 @@ export function toNeedsYou(x: StoredItem, botName: string): NeedsYouItem {
   return {
     id: x.id, source: 'queue', botId: x.botId, botName, threadId: x.threadId, kind: x.kind,
     ...(x.kind === 'question' ? { questions: x.questions } : {}),
-    ...(x.approval ? { approval: { tool: x.approval.tool, label: x.approval.label, ...(x.approval.summary ? { summary: x.approval.summary } : {}), ...(x.approval.reason ? { reason: x.approval.reason } : {}) } } : {}),
+    ...(x.approval ? { approval: { tool: x.approval.tool, label: x.approval.label, ...(x.approval.summary ? { summary: x.approval.summary } : {}), ...(x.approval.reason ? { reason: x.approval.reason } : {}), ...(grantableFolder(x.approval.reason) ? { folder: grantableFolder(x.approval.reason) } : {}) } } : {}),
     status: x.status,
     ...(x.hardStop ? { hardStop: x.hardStop } : {}),
     deadline: x.deadline,

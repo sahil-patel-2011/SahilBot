@@ -161,9 +161,10 @@ export function cleanRules(rules: unknown): CustomRule[] {
   return out
 }
 
-const LEVELS = new Set(['ask', 'auto', 'autonomous'])
-/** An autonomy level a new chat may start in: Ask first, Auto or Autonomous (never Bypass). */
+const LEVELS = new Set(['ask', 'auto'])
+/** A permission level a new chat may start in: Ask or Auto (never Bypass). 'autonomous' is Auto's old name. */
 export function cleanLevel(v: unknown): PermissionMode | undefined {
+  if (v === 'autonomous') return 'auto'
   return typeof v === 'string' && LEVELS.has(v) ? (v as PermissionMode) : undefined
 }
 /** Per-bot autonomy levels: known levels only (never Bypass), at most 500 bots. */
@@ -261,14 +262,15 @@ export class SettingsStore {
       hasTbaKey: this.secrets.has('tbaKey'),
       hasOnshapeKeys: this.secrets.has('onshapeAccessKey') && this.secrets.has('onshapeSecretKey'),
       onshapeKeyParts: { access: this.secrets.has('onshapeAccessKey'), secret: this.secrets.has('onshapeSecretKey') },
-      keys: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers))])) as Record<ProviderId, boolean>,
+      keysSaved: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers))])),
+      keys: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers)) && !(s.disabledProviders ?? []).includes(d.id)])) as Record<ProviderId, boolean>,
       search: { ...s.search, hasBraveKey: this.secrets.has('braveKey') },
       markets: { ...cleanMarkets(s.markets), keys: Object.fromEntries(MARKET_KEY_PROVIDERS.map((p) => [p, this.secrets.has(marketKeyName(p))])) as Record<MarketKeyProvider, boolean> }
     }
   }
 
   set(patch: SettingsPatch): Settings {
-    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, marketKeys, hasApiKey: _a, keys: _k, hasCursorKey: _c, hasTbaKey: _t, onshapeAccessKey, onshapeSecretKey, hasOnshapeKeys: _o, onshapeKeyParts: _op, ...rest } = patch
+    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, marketKeys, hasApiKey: _a, keys: _k, keysSaved: _ks, hasCursorKey: _c, hasTbaKey: _t, onshapeAccessKey, onshapeSecretKey, hasOnshapeKeys: _o, onshapeKeyParts: _op, ...rest } = patch
     for (const [p, k] of Object.entries(marketKeys ?? {}) as Array<[MarketKeyProvider, string | null]>) {
       if (MARKET_KEY_PROVIDERS.includes(p)) this.secrets.set(marketKeyName(p), k ? k.trim() : null)
     }
@@ -291,6 +293,7 @@ export class SettingsStore {
       mcpServer: rest.mcpServer !== undefined ? cleanMcpServer({ ...cur.mcpServer, ...rest.mcpServer }) : cur.mcpServer,
       defaultMode: rest.defaultMode !== undefined ? cleanLevel(rest.defaultMode) ?? cur.defaultMode : cur.defaultMode,
       botModes: rest.botModes !== undefined ? cleanBotModes(rest.botModes) : cur.botModes,
+      disabledProviders: rest.disabledProviders !== undefined ? [...new Set(rest.disabledProviders.filter((p) => DEFS.some((d) => d.id === p && !d.local)))] : cur.disabledProviders,
       botAutonomy: rest.botAutonomy !== undefined ? cleanBotAutonomyMap(rest.botAutonomy) : cur.botAutonomy,
       learning: rest.learning !== undefined ? cleanLearning({
         ...cur.learning, ...rest.learning,

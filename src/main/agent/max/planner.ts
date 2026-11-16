@@ -39,6 +39,8 @@ export interface MaxPlan {
   /** Why, in a few words ("brainstorming, then one pick"). */
   why: string
   scores: { team: number; swarm: number; heavy: number; deliverable: number }
+  /** Auto's sizing (auto-teamwork.ts): helpers for a team or swarm, attempts for judged attempts. */
+  helpers?: number
 }
 
 type Rule = [RegExp, number, string]
@@ -176,25 +178,6 @@ export function planMax(text: string, ctx: PlanContext = {}): MaxPlan {
     : cat === 'research' || cat === 'long-context' ? ['team', 'swarm', 'heavy'] : ['swarm', 'team', 'heavy']
   const top = order.find((k) => scores[k] === best)!
   if (top === 'swarm') return plan('swarm', words(sw.why))
-  if (top === 'team') {
-    // Many independent files or items with no research angle: a swarm of slices reads them fastest.
-    return plan('team', words(tm.why))
-  }
+  if (top === 'team') return plan('team', words(tm.why))
   return plan('heavy', words(hv.why))
-}
-
-/**
- * Auto (a bot's Max setting): whether the request clearly benefits from Max, and how. Stricter than planMax:
- * it needs a strong signal (swarmFit's ideation and many-items rules, a broad research ask, or a hard
- * single-answer problem), so ordinary requests stay with one agent.
- */
-export function maxFit(text: string, ctx: PlanContext & { swarmFit?: { fit: boolean; pattern?: 'ideate' | 'divide'; why?: string } } = {}): { fit: boolean; plan?: MaxPlan; why?: string } {
-  const plan = planMax(text, ctx)
-  const s = plan.scores
-  if (ctx.swarmFit?.fit) return { fit: true, plan: ctx.swarmFit.pattern === 'divide' && plan.strategy === 'swarm' ? { ...plan, strategy: 'team', phases: ['team'], title: strategyTitle('team', ['team']) } : plan, why: ctx.swarmFit.why ?? plan.why }
-  const strong = plan.strategy === 'hybrid' ? Math.max(s.swarm, s.team) >= 4 && s.deliverable >= 3
-    : plan.strategy === 'swarm' ? s.swarm >= 6
-      : plan.strategy === 'team' ? s.team >= 7
-        : s.heavy >= 6 && (ctx.difficulty ?? 0) >= 2
-  return strong ? { fit: true, plan, why: plan.why } : { fit: false }
 }

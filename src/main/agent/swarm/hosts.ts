@@ -5,6 +5,7 @@ import { autoVariant } from '../../llm/router'
 import { classifyTask as classifyRoute } from '../../llm/task-classifier'
 import { botMaxConfig, canSwarm, councilConfig } from './bot-config'
 import { maxSessionFor } from '../max/session'
+import { teamworkFit } from '../max/auto-teamwork'
 import type { ToolOutput, ThreadState } from '../types'
 import { BOT_SWARM_LIMIT, rateLimitedRecently, runBotSwarm, swarmFit, type BotSwarmHost, type HelperResult, type SwarmArgs } from './bot-swarm'
 import { isCloudInfo, swarmCapacity } from './capacity'
@@ -53,8 +54,19 @@ export interface AgentKit {
   runTool?(name: string, args: Record<string, unknown>): Promise<ToolOutput>
 }
 
-/** Bots (not SahilBot's own chats) work across providers; normal agent chats stay with the lead's provider. */
-export const crossProviderFor = (space: Pick<Space, 'kind' | 'isMain'> | undefined): boolean => !!space && space.kind === 'bot' && !space.isMain
+/**
+ * Bots (not SahilBot's own chats) work across providers; normal agent chats stay with the lead's provider, except
+ * a Max run Auto started (auto-teamwork.ts) on a chat whose model is Auto: Auto picks the models too, so a big
+ * team may mix Claude and GPT (the routing table's roles decide who does what).
+ */
+export const crossProviderFor = (space: Pick<Space, 'kind' | 'isMain'> | undefined, o: { autoMax?: boolean } = {}): boolean => (!!space && space.kind === 'bot' && !space.isMain) || !!o.autoMax
+
+/** This request's Max run was started by Auto, and the chat's model is Auto (not Auto (local)). */
+export function autoMaxOf(messages: Message[], requested: string | null | undefined): boolean {
+  const opener = [...messages].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+  const v = autoVariant(requested)
+  return (opener?.meta?.max as { source?: string } | undefined)?.source === 'auto' && !!v && v !== 'auto:local'
+}
 
 /**
  * This run's Max and swarm state. The max tool is listed for leads (never helpers) unless the bot's Max setting
@@ -80,8 +92,9 @@ export function swarmNote(s: Settings, space: Space | undefined, text: string, o
   if (o.swarm || cfg.mode === 'always') {
     return { note: `[Swarm is on for this request: use the swarm tool. Pick the pattern (ideate: independent ideas from distinct angles; divide: many independent items, one slice per helper), size it to the task (how many items, how broad; up to ${cfg.maxHelpers}), give a complete, self-contained goal and context, then compile the results into one answer with [H#] credits.${budget}]`, meta: { swarm: true } }
   }
+  // Auto: the same gate as Max's (auto-teamwork.ts), so small ideation ("short tweet ideas") gets no swarm.
   const fit = swarmFit(text, o)
-  if (!fit.fit) return {}
+  if (!fit.fit || teamworkFit(text, { attachments: o.attachments, unattended: o.unattended, maxHelpers: cfg.maxHelpers }).level === 'solo') return {}
   return { note: `[A swarm could help here (${fit.why}): temporary helpers working in parallel (${fit.pattern === 'ideate' ? 'divergent ideation' : 'divide and conquer'}), then you compile. Use the swarm tool only if it clearly beats doing it yourself.${budget}]`, meta: { swarmHint: true } }
 }
 
@@ -120,7 +133,7 @@ export async function runSwarmTool(kit: AgentKit, a: SwarmArgs, o: { callId: str
   const host: BotSwarmHost = {
     swarmId, threadId: thread.id, bot: { id: space?.id ?? thread.spaceId, name: space?.name ?? 'SahilBot' }, cfg, swarm,
     lead: kit.lead, usable: kit.usable, category: classifyRoute(a.goal ?? '').category,
-    localOnly: autoVariant(kit.requested) === 'auto:local', crossProvider: crossProviderFor(space),
+    localOnly: autoVariant(kit.requested) === 'auto:local', crossProvider: crossProviderFor(space, { autoMax: autoMaxOf(kit.db.listMessages(thread.id), kit.requested) }),
     cloud: kit.cloud, label: kit.label,
     capacity: (m) => {
       const c = swarmCapacity(kit.info(m), swarm)

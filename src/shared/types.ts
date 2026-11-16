@@ -2,10 +2,11 @@
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool'
 /**
- * How much a chat may do on its own. 'ask': every change asks. 'auto': routine actions run, consequential
- * outside actions ask. 'autonomous': also project commands (installs from the lockfile, git fetch/pull)
- * and overwrites inside your folders; deleting, sending, buying, credentials, security, tainted actions
- * and anything outside your folders still ask. 'bypass' (Settings → Advanced): everything but hard stops.
+ * How much a chat may do on its own. 'ask': every change asks. 'auto' (the default): local changes, routine
+ * outside steps, project commands (installs from the lockfile, git fetch/pull) and backed-up overwrites in your
+ * folders run; hard stops (money, credentials, deleting your data, mass sends, public posts, your "always ask"
+ * exceptions) and outside actions steered by web or email content ask. 'bypass': everything runs, except
+ * purchases, saved logins and one-time codes. 'autonomous' is Auto's old name (read as Auto).
  */
 export type PermissionMode = 'ask' | 'auto' | 'autonomous' | 'bypass'
 export type ToolEffect = 'read' | 'write_local' | 'write_external' | 'destructive'
@@ -154,10 +155,16 @@ export interface Settings {
   /** Stored encrypted; the renderer only ever sees `hasApiKey` / `keys`. */
   hasApiKey: boolean
   providers: ProviderSettings
-  /** Which providers have a key saved in the Keychain. */
+  /** Which providers can be used: a key saved in the Keychain and the provider not switched off. */
   keys: Record<Exclude<ProviderId, 'chatgpt' | 'xai'>, boolean> & { chatgpt?: boolean; xai?: boolean }
-  /** A Cursor API key is saved (Cursor cloud agents). */
+  /** Which providers have a key saved, switched on or off (Settings → Models & Keys shows these as saved). */
+  keysSaved?: Partial<Record<ProviderId, boolean>>
+  /** Cloud providers switched off in Settings: their models aren't used, and their keys stay saved. */
+  disabledProviders?: ProviderId[]
+  /** A Cursor API key is saved: Cursor is connected (Cloud Agents). */
   hasCursorKey: boolean
+  /** Also run Cursor's agent through its CLI on this Mac (off by default: Cursor connects by API key, for Cloud Agents). */
+  cursorLocalAgent?: boolean
   /** The Blue Alliance read key (FRC scouting), kept in the Keychain. */
   hasTbaKey?: boolean
   /** 'auto' routes each request to the right model for how hard it is. */
@@ -213,6 +220,8 @@ export interface Settings {
     allowBypass?: boolean
     /** Run terminal commands under a macOS sandbox that refuses writes outside your folders unless you approved the command (default on). */
     sandboxCommands?: boolean
+    /** Developer mode: the chat shows the model behind each reply, thinking, every step, tokens and cost (default off). */
+    devMode?: boolean
   }
   /** First-run setup finished. */
   onboarded: boolean
@@ -351,12 +360,14 @@ export interface PendingRequest {
   reason?: string
   question?: string
   options?: string[]
+  /** A file outside your folders: the folder "Always allow" opens for this chat (approvals). */
+  folder?: string
 }
 
 export type ApprovalAnswer = 'once' | 'always' | 'deny'
 
-/** What a memory is: about the user (profile, preference, person, location…), a rule to follow, or a dated work-log entry. */
-export type MemoryKind = 'profile' | 'work' | 'preference' | 'person' | 'location' | 'project' | 'trip' | 'link' | 'date' | 'rule' | 'fact' | 'worklog'
+/** What a memory is: about the user (profile, preference, person, location…), a decision they made, a rule to follow, or a dated work-log entry. */
+export type MemoryKind = 'profile' | 'work' | 'preference' | 'person' | 'location' | 'project' | 'trip' | 'link' | 'date' | 'rule' | 'fact' | 'worklog' | 'decision'
 
 export interface MemoryItem {
   id: string
@@ -627,6 +638,8 @@ export type VaultItemType = 'login' | 'card' | 'identity' | 'note' | 'address'
 
 /** What Settings may know about a vault item: never a secret value. */
 export interface VaultItemSummary {
+  apiHeader?: string
+  apiScheme?: 'bearer' | 'raw'
   id: string
   type: VaultItemType
   name: string
@@ -651,6 +664,8 @@ export interface VaultItemSummary {
 
 /** Saving any item from Settings. Secret fields are sent once, straight to main; empty on edit = keep. */
 export interface VaultItemInput {
+  apiHeader?: string
+  apiScheme?: 'bearer' | 'raw'
   id?: string
   type: VaultItemType
   name: string
@@ -1149,6 +1164,8 @@ export interface LibraryItem {
 }
 
 export interface SendInput {
+  /** Per-task resource limits, inherited by helpers and paid tool APIs. */
+  taskPolicy?: import('../main/agent/runtime/store').TaskPolicy
   threadId: string
   text: string
   images?: string[]
@@ -1232,6 +1249,8 @@ export interface SahilBotApi {
     /** Resolves dropped File objects to paths (preload only; the renderer can't fake these). */
     fromDrop(files: File[]): Promise<Attachment[]>
     preview(path: string): Promise<FilePreview>
+    /** Home's starter tiles, personalized from the user's habits (ideas.ts). */
+    ideas(): Promise<HomeIdea[]>
     /** The first lines of a document SahilBot made (PDF, Word, PowerPoint), for thumbnails. */
     snippet(path: string): Promise<string>
     /** Files SahilBot made, newest first. */
@@ -1688,12 +1707,35 @@ export interface PermissionRow {
   detail?: string
 }
 
+/** The in-app updater (main/updater.ts). */
+export interface UpdateStatus {
+  state: 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'installing' | 'error' | 'unsupported'
+  /** The newer release: "0.1.0 (build 131)". */
+  version?: string
+  /** This app: "0.1.0 (build 128)". */
+  current?: string
+  notes?: string
+  /** Download progress, 0-100. */
+  progress?: number
+  detail?: string
+  checkedAt?: number
+}
+
 export interface SahilBotApi {
+  /** Updates: status, check now, and install (backs up the data, quits, swaps the app, reopens it). */
+  update: {
+    status(): Promise<UpdateStatus>
+    check(): Promise<UpdateStatus>
+    install(): Promise<UpdateStatus>
+    onStatus(cb: (s: UpdateStatus) => void): () => void
+  }
   /** macOS permissions: status (never prompts) and the System Settings pane for each. Nothing is granted from here. */
   permissions: {
     status(): Promise<PermissionRow[]>
     /** Opens the exact System Settings pane for a permission. */
     open(kind: PermissionKind): Promise<void>
+    /** Asks for a permission: macOS's own prompt where it has one ('granted' / 'denied' / 'prompted'), else the pane ('opened'). */
+    request(kind: PermissionKind): Promise<'granted' | 'denied' | 'prompted' | 'opened'>
     /** Whether SahilBot may control one app (Automation). May show macOS's one-time prompt; doesn't launch the app. */
     automation(app: string): Promise<{ app: string; state: PermissionState; detail?: string }>
   }
@@ -2868,6 +2910,8 @@ export interface SahilBotApi {
     /** Opens the folder picker and sets it as the chat's working folder (null when cancelled). */
     pickFolder(threadId: string): Promise<WorkingFolder | null>
     clearFolder(threadId: string): Promise<WorkingFolder>
+    /** A folder picked earlier this session becomes the chat's working folder again (the Folder chip's recent list). */
+    useFolder(threadId: string, path: string): Promise<WorkingFolder>
     /** A bot's default working folder ("Works in folder"): picker, or null to clear. */
     pickBotFolder(spaceId: string): Promise<Space | null>
     clearBotFolder(spaceId: string): Promise<Space>
@@ -2916,7 +2960,7 @@ export interface NeedsYouItem {
   threadId: string
   kind: 'question' | 'approval' | 'other'
   questions?: QueueQuestion[]
-  approval?: { tool: string; label: string; summary?: string; reason?: string }
+  approval?: { tool: string; label: string; summary?: string; reason?: string; folder?: string }
   status: 'open' | 'answered' | 'defaulted' | 'cancelled'
   /** Why this never goes ahead on its own (a hard stop: money, credentials, deleting, mass sends, public posts, "always ask"). */
   hardStop?: string
@@ -2941,7 +2985,7 @@ export interface SahilBotApi {
   needsYou: {
     list(): Promise<NeedsYouItem[]>
     /** Answers a question (one answer per question), or 'approve' / 'deny' for an approval. A later answer resumes the bot. */
-    answer(id: string, answer: string[] | 'approve' | 'deny'): Promise<NeedsYouItem | null>
+    answer(id: string, answer: string[] | 'approve' | 'always' | 'deny'): Promise<NeedsYouItem | null>
     /** "Looks good" on an assumption the bot made: it leaves the review list. */
     reviewed(id: string): Promise<void>
     onChange(cb: () => void): () => void
@@ -3058,7 +3102,7 @@ export type MaxStrategy = 'team' | 'swarm' | 'heavy' | 'hybrid'
 /** One phase of a Max run (a hybrid has two). */
 export type MaxPhaseKind = 'team' | 'swarm' | 'heavy'
 
-/** A bot's Max setting: Off (only when you turn it on in the composer), Auto (the bot decides; default), Always. */
+/** A bot's Max setting: Off (only when you turn it on in the composer), Auto (teams up only for big tasks; default), Always. */
 export interface BotMaxSettings {
   mode: BotSwarmMode
   /** Most helpers per Max run (1-50, default 20). */
@@ -3095,8 +3139,8 @@ export interface MaxBoard {
   title: string
   /** Why the planner chose it, in a few words. */
   why: string
-  /** Who turned Max on: the composer, the bot's Max setting (Auto/Always), or the lead's max tool. */
-  source: 'composer' | 'bot' | 'tool'
+  /** Who turned Max on: the composer, the bot's Max setting (Always), Auto (a big task: max/auto-teamwork.ts), or the lead's max tool. */
+  source: 'composer' | 'bot' | 'auto' | 'tool'
   phases: MaxPhase[]
   /** Team phases by their agents (or max) call id. */
   teams?: Array<{ callId: string; members: TeamMember[] }>
@@ -3149,4 +3193,14 @@ export interface SahilBotApi {
   video?: {
     get(id: string): Promise<VideoCardData | null>
   }
+}
+
+/** A starter tile under Home's message box (personalized from the user's habits, apps, files and projects). */
+export interface HomeIdea {
+  icon: 'globe' | 'clock' | 'search' | 'cpu' | 'file' | 'video' | 'sparkle' | 'edit' | 'layers' | 'image' | 'inbox' | 'users' | 'listicon' | 'bolt' | 'folder'
+  label: string
+  /** What fills the message box. */
+  text: string
+  /** Suggested by the user's own patterns (not one of the generic tiles). */
+  personal?: boolean
 }

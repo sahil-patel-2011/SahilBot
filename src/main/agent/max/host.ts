@@ -5,7 +5,7 @@ import { HEAVY_ATTEMPT_NOTE, fitHeavy, heavyCap, runHeavy } from '../heavy'
 import { swarmCapacity } from '../swarm/capacity'
 import { botMaxConfig, canSwarm } from '../swarm/bot-config'
 import { heavyConfig, swarmConfig, usd } from '../swarm/config'
-import { crossProviderFor, progressOf, runSwarmTool, type AgentKit } from '../swarm/hosts'
+import { autoMaxOf, crossProviderFor, progressOf, runSwarmTool, type AgentKit } from '../swarm/hosts'
 import type { SwarmArgs } from '../swarm/bot-swarm'
 import type { ToolOutput } from '../types'
 import { planMax, type MaxPlan } from './planner'
@@ -48,7 +48,7 @@ export async function heavyForLead(kit: AgentKit, o: { goal: string; context?: s
   const s = kit.settings
   const swarm = swarmConfig(s.swarm)
   let cfg = heavyConfig(s.heavy)
-  const crossProvider = crossProviderFor(kit.space)
+  const crossProvider = crossProviderFor(kit.space, { autoMax: autoMaxOf(kit.db.listMessages(kit.thread.id), kit.requested) })
   const budgetUsd = kit.unattended ? maxBudget(kit) : undefined
   if (kit.unattended) {
     const n = fitHeavy({ cfg, lead: kit.lead, usable: kit.usable, cloud: kit.cloud, crossProvider }, heavyCap({ swarm, budgetUsd }))

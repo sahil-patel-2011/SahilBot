@@ -1,5 +1,5 @@
 import { lazy, useCallback, useEffect, useRef, useState } from 'react'
-import { autoLabel } from '@shared/model-picker'
+import { autoLabel, isAutoModel } from '@shared/model-picker'
 import type { BrowserState, ChatEvent, EffortChoice, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
 import { api } from './api'
 import { readableOn, SpaceAvatar } from './brand'
@@ -14,10 +14,12 @@ import { ThreadView } from './components/ThreadView'
 import { ProjectHome } from './components/ProjectHome'
 import * as I from './icons'
 import { Popover } from './components/Popover'
+import { ConfirmDialog } from './components/ui'
 import { toast, Toasts } from './lib/toast'
 import { VaultAuthDialog } from './components/VaultAuthDialog'
 import { Speaker } from './lib/audio'
 import { useAttention } from './lib/attention'
+import { DevMode } from './lib/dev-mode'
 import { dividerKind, newestAt, newestReplyAt } from '@shared/read-state'
 // Split chunks (src/renderer/src/lazy.tsx): loaded on idle after the first paint, opened from there.
 import { BotDetails, BotEditor, ConnectApps, Lazy, Onboarding, preloadSurfaces, Scheduled, SettingsModal, VoiceMode } from './lazy'
@@ -79,6 +81,8 @@ export function App() {
   const [showConnect, setShowConnect] = useState(false)
   const [editor, setEditor] = useState<Editor>(null)
   const [palette, setPalette] = useState(false)
+  /** Bypass picked for the first time: what to do once the user confirms (null: no dialog). */
+  const [bypassAsk, setBypassAsk] = useState<(() => void) | null>(null)
   // The Vault view (in the main area) and the memory import dialog: opened from the palette, Settings
   // or a bot's details through window events, so those surfaces don't need props from here.
   const [vaultOpen, setVaultOpen] = useState<{ path: string | null; tab?: 'people' } | null>(null)
@@ -484,6 +488,7 @@ export function App() {
     else if (a.kind === 'import-memory') setImportOpen(true)
     else if (a.kind === 'chat') void openAnyChat(a.id)
     else if (a.kind === 'usage') { setSettingsPage('usage'); setShowSettings(true) }
+    else if (a.kind === 'setting') { setSettingsPage(`#${a.anchor}`); setShowSettings(true) }
     else void openBot(a.id)
   }
 
@@ -552,6 +557,15 @@ export function App() {
     }).catch(() => undefined).finally(() => marking.current.delete(id))
   }, [thread?.id, thread?.unread, thread?.lastReadAt, ready, attention, atBottom, latestReply, markTick]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A first message waiting for the chat that's about to open (a new bot's job, "Try it" on a connected app).
+  const pendingCompose = useRef<string | null>(null)
+  useEffect(() => {
+    const t = pendingCompose.current
+    if (!t || !thread) return
+    pendingCompose.current = null
+    requestAnimationFrame(() => composer.current?.replace(t))
+  }, [thread?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // All hooks above this line: the early return below must not change the hook count.
   // Docs: a chat's documents are its own, so switching chats shows the new chat's latest (or the one asked for).
   const pendingDoc = useRef<string | null>(null)
@@ -581,7 +595,8 @@ export function App() {
 
   if (!settings) return null
 
-  const model = thread?.model ?? space?.model ?? draft.model ?? settings.defaultModel
+  // A bot chat with nothing picked routes as Auto (the app default only when that is an Auto variant).
+  const model = thread?.model ?? draft.model ?? (space && !space.isMain && space.kind !== 'project' && !isAutoModel(settings.defaultModel) ? 'auto' : settings.defaultModel)
   const mode: PermissionMode = thread?.permissionMode ?? draft.mode ?? (space && settings.botModes?.[space.id]) ?? settings.defaultMode ?? 'auto'
   const isRunning = !!thread && running.has(thread.id)
   const question = pending.find((p) => p.kind === 'question' || p.kind === 'questions' || p.kind === 'plan')
@@ -668,32 +683,27 @@ export function App() {
       onTeam={setTeamOn}
       swarm={space?.kind === 'bot' ? { mode: settings.botMax?.[space.id]?.mode ?? settings.botSwarm?.[space.id]?.mode ?? 'auto' } : null}
       council={councilChoices(models)}
-      thinking={thread?.effort ?? space?.effort ?? draft.effort ?? settings.thinking}
+      thinking={thread?.effort ?? draft.effort ?? (isBot ? 'auto' : settings.thinking)}
       onThinking={(e) => (thread ? void patchThread({ effort: e }) : setDraft((d) => ({ ...d, effort: e })))}
       mode={mode}
       allowBypass={!!settings.advanced.allowBypass}
       autoBot={isBot}
-      onMode={(m) => (thread ? void patchThread({ permissionMode: m }) : setDraft((d) => ({ ...d, mode: m })))}
+      onMode={(m) => {
+        const apply = (): void => { if (thread) void patchThread({ permissionMode: m }).catch((e: Error) => toast(e.message, 'error')); else setDraft((d) => ({ ...d, mode: m })) }
+        // Bypass asks once (the dialog below saves the answer); after that it's one click like the others.
+        if (m === 'bypass' && !settings.advanced.allowBypass) setBypassAsk(() => apply)
+        else apply()
+      }}
       onVoice={() => setVoiceOn(true)}
-      placeholder={isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? `Message ${chatBot?.name ?? 'SahilBot'}` : 'How can I help you today?'}
+      placeholder={isRunning ? `Add to what ${chatBot?.name ?? 'SahilBot'} is doing…` : isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? `Message ${chatBot?.name ?? 'SahilBot'}` : 'How can I help you today?'}
       big={!thread}
       steering={thread ? steering[thread.id] : 0}
-      context={!thread && !isBot ? (
-        <Popover label={<><I.Folder size={14} />{isProject ? space?.name : 'Project or folder'} <I.Chevron size={13} /></>} className="under-pick" title="Work in a project or a folder" testId="context-picker">
-          {(close) => (
-            <>
-              <div className="menu-head">Work in</div>
-              <button className="menu-item" onClick={() => { close(); openMain() }}><span className="check">{!isProject && <I.Check size={14} />}</span>No project</button>
-              {spaces.filter((x) => x.kind === 'project' && !x.hidden).map((x) => (
-                <button key={x.id} className="menu-item" onClick={() => { close(); void openBot(x.id) }}><span className="check">{x.id === space?.id && <I.Check size={14} />}</span>{x.name}</button>
-              ))}
-              <div className="menu-sep" />
-              <button className="menu-item" onClick={() => { close(); void api.files.pick('folder').then((xs) => composer.current?.attach(xs)) }}><I.Folder size={15} />Attach a folder…</button>
-              <button className="menu-item" onClick={() => { close(); setEditor({ space: null, mode: 'project' }) }}><I.Plus size={15} />New project…</button>
-            </>
-          )}
-        </Popover>
-      ) : undefined}
+      projects={!thread && !isBot ? {
+        list: spaces.filter((x) => x.kind === 'project' && !x.hidden).map((x) => ({ id: x.id, name: x.name, color: x.color, folder: x.folder })),
+        current: isProject ? space?.id ?? null : null,
+        onPick: (id) => { if (id) void openBot(id); else openMain() },
+        onNew: () => setEditor({ space: null, mode: 'project' })
+      } : undefined}
     />
   )
 
@@ -729,8 +739,10 @@ export function App() {
   const needThreads = new Set(Object.keys(needs))
   const needSpaces = new Set([...Object.keys(needs).map((t) => runSpaces[t] ?? (t === thread?.id ? thread.spaceId : chats.find((c) => c.id === t)?.spaceId ?? needSpaceOf[t] ?? '')).filter(Boolean), ...queuedBots])
 
+  const dev = !!settings.advanced.devMode
   return (
-    <div className="app">
+    <DevMode.Provider value={dev}>
+    <div className={`app${dev ? ' dev' : ''}`}>
       <Toasts />
       {/* The secrets vault's unlock / confirm dialog: main asks, this only shows it. */}
       <VaultAuthDialog />
@@ -803,7 +815,7 @@ export function App() {
           )}
           <div className="header-actions">
             {thread && <JobsChip threadId={thread.id} on={panel === 'jobs'} onOpen={() => setPanel((p) => (p === 'jobs' ? null : 'jobs'))} />}
-            {((isRunning && (prog?.plan || (prog?.actions ?? 0) > 0)) || plan.length > 0) && (
+            {dev && ((isRunning && (prog?.plan || (prog?.actions ?? 0) > 0)) || plan.length > 0) && (
               <button className={`progress-chip${panel === 'progress' ? ' on' : ''}`} onClick={() => setPanel((p) => (p === 'progress' ? null : 'progress'))} data-testid="progress-chip">
                 {isRunning && <span className="spin" />}
                 <I.ListIcon size={15} />
@@ -811,29 +823,26 @@ export function App() {
                 {isRunning && prog?.plan ? `Step ${prog.plan.at} of ${prog.plan.of}` : isRunning && prog ? `${prog.actions} action${prog.actions === 1 ? '' : 's'}` : `${plan.filter((t) => t.status === 'done').length} of ${plan.length} done`}
               </button>
             )}
-            {prog && prog.used / prog.window >= 0.2 && (
-              // A gauge, not a spinner: a filled track, the share used, and the number beside it.
-              <span className={`ctx-ring${prog.used / prog.window > 0.85 ? ' full' : ''}`} role="img"
-                aria-label={`Conversation memory ${Math.round((prog.used / prog.window) * 100)}% full`}
-                title={`Conversation memory: ${Math.round((prog.used / prog.window) * 100)}% full (${prog.used.toLocaleString()} of ${prog.window.toLocaleString()} tokens). Older parts are summarized only when it's nearly full.`} data-testid="ctx-ring">
-                <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--ctx-track)" strokeWidth="3" />
-                  <circle cx="10" cy="10" r="7.5" fill="none" stroke={prog.used / prog.window > 0.85 ? 'var(--accent)' : 'var(--text-2)'} strokeWidth="3"
-                    strokeDasharray={`${Math.max(2, Math.min(1, prog.used / prog.window) * 47.1)} 47.1`} transform="rotate(-90 10 10)" /></svg>
-                <span className="ctx-pct">{Math.round(Math.min(1, prog.used / prog.window) * 100)}%</span>
-              </span>
-            )}
-            {prog?.cost && (
-              <span className="hint ctx-cost" style={{ fontSize: 12, marginRight: 4 }} data-testid="ctx-cost"
-                title={`About $${prog.cost.usd < 0.01 ? prog.cost.usd.toFixed(4) : prog.cost.usd.toFixed(2)} per step at this context size (${prog.used.toLocaleString()} tokens; cached history is billed at the cache-read rate)${prog.cost.estimated ? '. Pricing estimated: this model\'s rates aren\'t known exactly.' : ''}`}>
-                ~${prog.cost.usd < 0.01 ? '<0.01' : prog.cost.usd.toFixed(2)}/step{prog.cost.estimated ? '*' : ''}
-              </span>
-            )}
-            <button className={`icon-btn globe${panel === 'browser' ? ' on' : ''}`} title="Browser" onClick={() => setPanel((p) => (p === 'browser' ? null : 'browser'))} data-testid="toggle-browser">
+            {dev && prog && prog.used / prog.window > 0.6 && (() => {
+              // Shown only once it matters: a gauge of how full the chat's memory is, explained in words.
+              const pct = Math.round(Math.min(1, prog.used / prog.window) * 100)
+              const cost = prog.cost ? ` Each step costs about $${prog.cost.usd < 0.01 ? prog.cost.usd.toFixed(4) : prog.cost.usd.toFixed(2)} at this size${prog.cost.estimated ? ' (estimated)' : ''}.` : ''
+              const tip = `Chat memory ${pct}% full: older parts will be summarized automatically, so you can keep going.${cost}`
+              return (
+                <span className={`ctx-ring${prog.used / prog.window > 0.85 ? ' full' : ''}`} role="img" tabIndex={0} aria-label={tip} title={tip} data-testid="ctx-ring">
+                  <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--ctx-track)" strokeWidth="3" />
+                    <circle cx="10" cy="10" r="7.5" fill="none" stroke={prog.used / prog.window > 0.85 ? 'var(--accent)' : 'var(--text-2)'} strokeWidth="3"
+                      strokeDasharray={`${Math.max(2, Math.min(1, prog.used / prog.window) * 47.1)} 47.1`} transform="rotate(-90 10 10)" /></svg>
+                  <span className="ctx-pct">{pct}%</span>
+                </span>
+              )
+            })()}
+            <button className={`icon-btn globe${panel === 'browser' ? ' on' : ''}`} title={browser?.controlling ? 'Browser: SahilBot is using it now (click to watch)' : 'Browser: the web pages SahilBot opens'} aria-label="Browser" onClick={() => setPanel((p) => (p === 'browser' ? null : 'browser'))} data-testid="toggle-browser">
               <I.Globe size={17} />
               {!!browser?.tabs.length && <span className={`globe-dot${browser.controlling ? ' live' : ''}`} />}
             </button>
-            <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Side panel (⌘\)" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
-            <button className="icon-btn" title="Settings (⌘,)" onClick={() => setShowSettings(true)}><I.Gear size={17} /></button>
+            <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Side panel: progress, files and documents (⌘\)" aria-label="Side panel" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
+            <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={() => setShowSettings(true)} data-testid="header-settings"><I.Gear size={17} /></button>
           </div>
         </header>
         {models && !models.ok && (
@@ -875,7 +884,7 @@ export function App() {
                   <span className="hint">Sends when SahilBot finishes</span>
                 </div>
               )}
-              {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} />}
+              {dev && !isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} />}
               {composerEl}
             </div>
           </>
@@ -908,6 +917,18 @@ export function App() {
             onThread={(id) => { if (thread?.id !== id) void api.threads.list(space?.id).then((ts) => { const t = ts.find((x) => x.id === id); if (t) setThread(t) }) }} />
         </Lazy>
       )}
+      {bypassAsk && (
+        <ConfirmDialog title="Turn on Bypass?" confirm="Turn on Bypass" danger testId="bypass-confirm"
+          onCancel={() => setBypassAsk(null)}
+          onConfirm={() => {
+            const go = bypassAsk
+            setBypassAsk(null)
+            void api.settings.set({ advanced: { ...settings.advanced, allowBypass: true } }).then((s) => { setSettings(s); go() }).catch((e: Error) => toast(e.message, 'error'))
+          }}>
+          <p>Bypass runs everything without asking, except purchases, passwords and one-time codes, which always need you.</p>
+          <p className="hint">Use it only for work you're watching. It applies to this chat and goes back to Auto when SahilBot restarts. You won't be asked again.</p>
+        </ConfirmDialog>
+      )}
       {palette && <CommandPalette spaces={spaces} chats={chats} onPick={onPalette} onClose={() => setPalette(false)} />}
       {importOpen && <Lazy><ImportMemoryDialog onClose={() => setImportOpen(false)} onDone={() => setImportOpen(false)} /></Lazy>}
       {showSettings && (
@@ -918,6 +939,7 @@ export function App() {
         </Lazy>
       )}
       {showConnect && <Lazy><ConnectApps onClose={() => setShowConnect(false)} onBrowse={(url) => { setPanel('browser'); void api.browser.navigate(url) }}
+        onTry={(text) => { setShowConnect(false); openMain(); setTimeout(() => composer.current?.replace(text), 60) }}
         onOpenBot={(id) => { setShowConnect(false); void refreshSpaces().then(() => openBot(id)) }}
         onOpenSettings={(page) => { setShowConnect(false); setSettingsPage(page); setShowSettings(true) }} /></Lazy>}
       {showScheduled && (
@@ -929,9 +951,10 @@ export function App() {
       {editor && (
         <Lazy>
           <BotEditor space={editor.space} spaces={spaces} models={models} mode={editor.mode} onClose={() => setEditor(null)}
-            onSaved={(id) => void refreshSpaces().then(() => openBot(id))} />
+            onSaved={(id, _t, suggestion) => { pendingCompose.current = suggestion ?? null; void refreshSpaces().then(() => openBot(id)) }} />
         </Lazy>
       )}
     </div>
+    </DevMode.Provider>
   )
 }

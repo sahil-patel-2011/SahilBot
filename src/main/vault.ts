@@ -272,27 +272,27 @@ export class Vault {
   }
 
   list(): VaultEntry[] {
-    return this.core.list('login').map((s) => ({
+    return this.core.list('login').filter((s) => s.meta.kind !== 'api_key').map((s) => ({
       name: s.meta.name, origin: s.meta.origins?.[0] ?? '', username: s.meta.usernameHint ?? '',
       ...(s.meta.hasTotp ? { hasTotp: true } : {}), ...(s.meta.totpIssuer ? { totpIssuer: s.meta.totpIssuer } : {}), ...(s.meta.subdomains ? { subdomains: true } : {})
     }))
   }
 
   names(): Array<{ name: string; origin: string; subdomains?: boolean }> {
-    return this.core.list('login').map((s) => ({ name: s.meta.name, origin: s.meta.origins?.[0] ?? '', ...(s.meta.subdomains ? { subdomains: true } : {}) }))
+    return this.core.list('login').filter((s) => s.meta.kind !== 'api_key').map((s) => ({ name: s.meta.name, origin: s.meta.origins?.[0] ?? '', ...(s.meta.subdomains ? { subdomains: true } : {}) }))
   }
 
   /** Whether a saved login may be typed on this page (exact origin, or its subdomains when opted in). */
   matches(name: string, pageUrl: string): boolean {
     const e = this.loginByName(name)
-    return !!e && originMatches(e.meta.origins?.[0] ?? '', pageUrl, { subdomains: !!e.meta.subdomains })
+    return !!e && e.meta.kind !== 'api_key' && originMatches(e.meta.origins?.[0] ?? '', pageUrl, { subdomains: !!e.meta.subdomains })
   }
 
   /**
    * Saves a login. `totp` is an authenticator setup key or otpauth:// link (left out = keep the saved
    * one, clearTotp = remove it). Left-out password / username = keep the saved one.
    */
-  set(e: Partial<VaultEntry> & { name: string; origin: string; password?: string; totp?: string; clearTotp?: boolean; autoFill?: boolean; notes?: string; renameFrom?: string }): void {
+  set(e: Partial<VaultEntry> & { name: string; origin: string; password?: string; totp?: string; clearTotp?: boolean; autoFill?: boolean; notes?: string; renameFrom?: string; kind?: 'api_key'; apiHeader?: string; apiScheme?: 'bearer' | 'raw' }): void {
     const name = slug(e.name)
     if (!name) throw new Error('Name is required')
     const origin = normalizeOrigin(e.origin)
@@ -310,6 +310,13 @@ export class Vault {
       const username = clip(e.username ?? old?.username ?? '', 200)
       const notes = e.notes !== undefined ? String(e.notes).slice(0, 4000) : old?.notes
       const meta = this.loginMeta(name, origin, e.subdomains ?? prev?.meta.subdomains, e.autoFill ?? prev?.meta.autoFill, username, key, prev?.meta.source)
+      if (e.kind === 'api_key' || prev?.meta.kind === 'api_key') {
+        if (new URL(origin).protocol !== 'https:') throw new Error('API keys require an HTTPS service origin.')
+        const header = e.apiHeader ?? prev?.meta.apiHeader ?? 'Authorization'
+        if (!/^[A-Za-z][A-Za-z0-9-]{0,63}$/.test(header) || /^(host|cookie|content-length|connection|proxy-authorization)$/i.test(header)) throw new Error('Choose an authentication header such as Authorization or X-API-Key.')
+        if (/[\r\n]/.test(password)) throw new Error('An API key must fit on one line.')
+        Object.assign(meta, { kind: 'api_key', apiHeader: header, apiScheme: e.apiScheme ?? prev?.meta.apiScheme ?? 'bearer', autoFill: false, subdomains: false })
+      }
       this.core.atomic(() => {
         this.core.put('login', meta, { username, password, ...(key ? { totp: key } : {}), ...(notes ? { notes } : {}) }, { id: from ? existing?.id : prev?.id })
         if (from && from.meta.name !== name) this.core.remove(from.id)
@@ -328,10 +335,35 @@ export class Vault {
   /** Only for typing into a verified field. */
   credential(name: string): { origin: string; subdomains?: boolean; username: string; password: string } | undefined {
     const it = this.loginByName(name)
-    if (!it) return undefined
+    if (!it || it.meta.kind === 'api_key') return undefined
     this.need()
     const p = this.core.get(it.id)?.payload as unknown as LoginPayload | undefined
     return p ? { origin: it.meta.origins?.[0] ?? '', ...(it.meta.subdomains ? { subdomains: true } : {}), username: p.username, password: p.password } : undefined
+  }
+
+  /** API-key metadata only. Keys stay encrypted and are injected by main into one approved request. */
+  apiKeys(): Array<{ name: string; origin: string; header: string; scheme: 'bearer' | 'raw' }> {
+    return this.core.list('login').filter((x) => x.meta.kind === 'api_key').map((x) => ({ name: x.meta.name, origin: x.meta.origins?.[0] ?? '', header: x.meta.apiHeader ?? 'Authorization', scheme: x.meta.apiScheme ?? 'bearer' }))
+  }
+
+  async withApiKey<T>(name: string, url: string, use: (header: string, value: string, redact: (s: string) => string) => Promise<T>): Promise<T> {
+    const item = this.loginByName(name), target = new URL(url)
+    if (!item || item.meta.kind !== 'api_key') throw new Error('API key not found. Add it in Settings → Privacy & Security → API Keys.')
+    if (target.protocol !== 'https:' || target.username || target.password || target.origin !== item.meta.origins?.[0]) throw new Error('This API key is restricted to its exact saved HTTPS origin.')
+    this.need()
+    const key = String(this.core.get(item.id)?.payload.password ?? '')
+    if (!key || /[\r\n]/.test(key)) throw new Error('The API key is empty or invalid.')
+    const header = item.meta.apiHeader ?? 'Authorization', value = item.meta.apiScheme === 'raw' ? key : `Bearer ${key}`
+    this.core.noteFilled([key])
+    const redact = (s: string): string => s.split(key).join('[redacted]').split(encodeURIComponent(key)).join('[redacted]').split(Buffer.from(key).toString('base64')).join('[redacted]')
+    try {
+      const out = await use(header, value, redact)
+      this.audit('fill', 'ok', { item: item.meta.name, site: target.origin, detail: 'Used API key in an approved service request' })
+      return out
+    } catch (e) {
+      this.audit('fill_blocked', 'failed', { item: item.meta.name, site: target.origin, detail: 'API request failed' })
+      throw new Error(redact(String((e as Error).message ?? e)))
+    }
   }
 
   /** Leak check values (saved passwords etc.): what's in the vault while unlocked, recent fills while locked. */
@@ -356,7 +388,7 @@ export class Vault {
     const s = field === 'id_number'
       ? this.core.list('identity').find((x) => x.meta.name.toLowerCase() === String(name ?? '').trim().toLowerCase())
       : this.loginByName(name)
-    return s ? { id: s.id, type: s.type, name: s.meta.name, origins: s.meta.origins ?? [], ...(s.meta.subdomains ? { subdomains: true } : {}), ...(s.meta.autoFill ? { autoFill: true } : {}) } : undefined
+    return s && s.meta.kind !== 'api_key' ? { id: s.id, type: s.type, name: s.meta.name, origins: s.meta.origins ?? [], ...(s.meta.subdomains ? { subdomains: true } : {}), ...(s.meta.autoFill ? { autoFill: true } : {}) } : undefined
   }
 
   /** The one value a verified fill types. Recorded as recently used (masked even after the vault locks). */
@@ -364,6 +396,7 @@ export class Vault {
     this.need()
     const it = this.core.get(id)
     if (!it) throw new Error('That item is no longer saved.')
+    if (it.meta.kind === 'api_key') throw new Error('Service API keys can only be used by an approved API request, never typed into a website.')
     const p = it.payload
     const v = field === 'password' ? String(p.password ?? '') : field === 'username' ? String(p.username ?? '') : field === 'id_number' ? String(p.number ?? '') : ''
     if (!v) throw new Error(`"${it.meta.name}" has no ${field === 'id_number' ? 'document number' : field} saved.`)
@@ -532,7 +565,7 @@ export class Vault {
     if (type === 'login') {
       const prev = i.id ? this.core.list('login').find((x) => x.id === i.id) : undefined
       // A rename keeps the saved values; the old entry goes in the same transaction.
-      this.set({ ...(prev && prev.meta.name !== slug(i.name) ? { renameFrom: prev.id } : {}), name: i.name, origin: i.site ?? prev?.meta.origins?.[0] ?? '', ...(i.username !== undefined && i.username !== '' ? { username: i.username } : prev ? {} : { username: '' }), ...(i.password ? { password: i.password } : {}), ...(i.totp ? { totp: i.totp } : {}), ...(i.clearTotp ? { clearTotp: true } : {}), ...(i.subdomains !== undefined ? { subdomains: i.subdomains } : {}), ...(i.autoFill !== undefined ? { autoFill: i.autoFill } : {}), ...(i.notes !== undefined ? { notes: i.notes } : prev ? {} : { notes: '' }) })
+      this.set({ ...(i.kind === 'api_key' ? { kind: 'api_key' as const, apiHeader: i.apiHeader, apiScheme: i.apiScheme } : {}), ...(prev && prev.meta.name !== slug(i.name) ? { renameFrom: prev.id } : {}), name: i.name, origin: i.site ?? prev?.meta.origins?.[0] ?? '', ...(i.username !== undefined && i.username !== '' ? { username: i.username } : prev ? {} : { username: '' }), ...(i.password ? { password: i.password } : {}), ...(i.totp ? { totp: i.totp } : {}), ...(i.clearTotp ? { clearTotp: true } : {}), ...(i.subdomains !== undefined ? { subdomains: i.subdomains } : {}), ...(i.autoFill !== undefined ? { autoFill: i.autoFill } : {}), ...(i.notes !== undefined ? { notes: i.notes } : prev ? {} : { notes: '' }) })
       return
     }
     if (type === 'card') { this.setCard({ id: i.id, nickname: i.name, number: i.number, cvc: i.cvc, clearCvc: i.clearCvc, expMonth: i.expMonth ?? '', expYear: i.expYear ?? '', holder: i.holder ?? '', billing: i.billing }); return }
@@ -681,7 +714,7 @@ function summarize(s: ItemSummary, addrIds: Set<string>): VaultItemSummary {
     ...(m.usernameHint ? { usernameHint: m.usernameHint } : {}), ...(m.hasTotp ? { hasTotp: true } : {}), ...(m.totpIssuer ? { totpIssuer: m.totpIssuer } : {}),
     ...(m.brand ? { brand: m.brand } : {}), ...(m.last4 ? { last4: m.last4 } : {}), ...(m.expMonth ? { expMonth: m.expMonth, expYear: m.expYear } : {}),
     ...(s.type === 'card' ? { hasCvc: !!m.hasCvc } : {}), ...(m.billing && addrIds.has(m.billing) ? { billing: m.billing } : {}),
-    ...(m.kind ? { kind: m.kind } : {}), ...(m.summary ? { summary: m.summary } : {})
+    ...(m.kind ? { kind: m.kind } : {}), ...(m.apiHeader ? { apiHeader: m.apiHeader, apiScheme: m.apiScheme } : {}), ...(m.summary ? { summary: m.summary } : {})
   }
 }
 
