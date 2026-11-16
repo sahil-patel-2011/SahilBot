@@ -73,6 +73,15 @@ export function sandboxWritable(spec: SandboxSpec, home = homedir()): string[] {
  */
 export function sandboxProfile(spec: SandboxSpec, home = homedir()): string {
   const paths = sandboxWritable(spec, home)
+  const realHome = realish(resolve(home))
+  // The whole home folder writable ("files anywhere"): still never ~/Library (login items, app data), keys,
+  // or the files a shell runs at startup. Denied after the allow-list, so they win.
+  const guard = paths.includes(realHome) ? [
+    '(deny file-write*',
+    ...HOME_GUARDED.dirs.map((d) => `  (subpath ${sbString(join(realHome, d))})`),
+    ...HOME_GUARDED.files.map((f) => `  (literal ${sbString(join(realHome, f))})`),
+    ')'
+  ] : []
   return [
     '(version 1)',
     '(allow default)',
@@ -81,8 +90,15 @@ export function sandboxProfile(spec: SandboxSpec, home = homedir()): string {
     '  (subpath "/dev")',
     ...paths.map((p) => `  (subpath ${sbString(p)})`),
     ')',
+    ...guard,
     ''
   ].join('\n')
+}
+
+/** In a home folder opened for "files anywhere": what commands still may never write. */
+export const HOME_GUARDED = {
+  dirs: ['Library/LaunchAgents', 'Library/Keychains', 'Library/Application Support/Foreman', '.ssh', '.gnupg', '.aws', '.config/gh', '.kube', '.docker'],
+  files: ['.zshrc', '.zprofile', '.zshenv', '.zlogin', '.bashrc', '.bash_profile', '.profile', '.gitconfig', '.netrc', '.npmrc']
 }
 
 export const SANDBOX_EXEC = '/usr/bin/sandbox-exec'

@@ -153,6 +153,8 @@ describe('no errors on a first run', () => {
       expect(await app.evaluate(() => (globalThis as unknown as { __keyChecks: string[] }).__keyChecks)).toEqual(['https://api.anthropic.com/v1'])
       await settle(page)
       await page.click('[data-testid="onboarding-next"]')
+      // The last step: Mac permissions and files anywhere.
+      await page.click('[data-testid="onboarding-finish"]')
       await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
       expect((await page.evaluate(() => window.foreman.settings.get())).keys.anthropic).toBeTruthy()
       await settle(page)
@@ -221,6 +223,8 @@ describe('no errors on a first run', () => {
       expect(await page.locator('[data-testid="onboarding"] [data-testid="chatgpt-plan"] .set-label').count()).toBe(0)
       await settle(page)
       await page.click('[data-testid="onboarding-next"]')
+      // The last step: Mac permissions and files anywhere.
+      await page.click('[data-testid="onboarding-finish"]')
       await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
       await settle(page)
 

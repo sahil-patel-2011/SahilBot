@@ -83,6 +83,14 @@ export function resolvePath(p: string, workspace: string, roots: string[] = [], 
   const full = resolve(expanded)
   const fullReal = realTail(full)
   const allowed = [workspace, ...roots, ...(o.base ? [o.base] : [])].map(real)
+  // The home folder as a root ("files anywhere"): everything in it except system, private and secret places.
+  const home = real(homedir())
+  const specific = allowed.filter((r) => r !== home)
+  if (!specific.some((r) => within(r, fullReal)) && allowed.includes(home) && within(home, fullReal)) {
+    const never = neverOutside(full)
+    if (never) throw new Error(`"${p}" is ${never}.`)
+    return full
+  }
   if (!allowed.some((r) => within(r, fullReal))) {
     const never = neverOutside(full)
     if (o.allowOutside && !never) return full

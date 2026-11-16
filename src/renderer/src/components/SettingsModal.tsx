@@ -891,6 +891,11 @@ function PermissionsPage({ s, patch }: P) {
         </div>
         <div className="perm-note"><I.Shield size={13} />Buying something, a password or a one-time code always needs you. Any chat can change this from the menu under its message box.</div>
       </section>
+      <Section>
+        <Row id="files-anywhere" title="Read and edit files anywhere" sub="Your files in any folder, without asking first. Deleting still asks (files go to the Trash), and system, private and secret places stay off limits.">
+          <Toggle on={s.advanced.filesAnywhere !== false} onChange={(v) => void patch({ advanced: { ...s.advanced, filesAnywhere: v } })} label="Read and edit files anywhere" testId="files-anywhere" />
+        </Row>
+      </Section>
       {!isServerRuntime && <MacPermissions />}
       <Disclosure title="Rules for specific actions" sub="Always allow or always ask, Bypass and hard stops" testId="approvals-rules">
         <ApprovalsTab s={s} patch={patch} />
@@ -910,9 +915,13 @@ const PERM_SHORT: Partial<Record<PermissionKind, string>> = {
 }
 
 /** What macOS lets SahilBot use: one Allow button each, macOS's own prompt where it has one. */
-function MacPermissions() {
+/** "Allow all": macOS's own prompt for each one in turn (the ones that need System Settings open it last). */
+const ALLOW_ALL_ORDER: PermissionKind[] = ['notifications', 'microphone', 'automation', 'accessibility', 'screen', 'fullDisk']
+
+export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what you want SahilBot to use. You can change these any time.' }: { title?: string; sub?: string } = {}) {
   const [rows, setRows] = useState<Awaited<ReturnType<typeof api.permissions.status>> | null>(null)
   const [asked, setAsked] = useState<Partial<Record<PermissionKind, string>>>({})
+  const [busy, setBusy] = useState(false)
   const refresh = (): void => void api.permissions.status().then(setRows).catch(() => setRows([]))
   useEffect(() => {
     refresh()
@@ -927,9 +936,26 @@ function MacPermissions() {
     }).catch((e) => toast(clean(e), 'error'))
   }
   const sorted = (rows ?? []).slice().sort((a, b) => PERM_ORDER.indexOf(a.kind) - PERM_ORDER.indexOf(b.kind))
+  const missing = sorted.filter((r) => r.state !== 'granted')
+  const allowAll = async (): Promise<void> => {
+    setBusy(true)
+    for (const kind of ALLOW_ALL_ORDER) {
+      if (!missing.some((r) => r.kind === kind)) continue
+      await api.permissions.request(kind).catch(() => undefined)
+      await new Promise((r) => setTimeout(r, 700))
+    }
+    setBusy(false)
+    refresh()
+    toast('macOS asked for each one. In System Settings, turn on SahilBot for Full Disk Access and Screen Recording, then reopen SahilBot.', 'ok')
+  }
   return (
-    <Section title="Your Mac" sub="Turn on only what you want SahilBot to use. You can change these any time.">
+    <Section title={title} sub={sub}>
       <div data-setting="mac-permissions">
+        {rows !== null && (
+          <Row title={missing.length ? 'Turn on everything' : 'Everything is on'} sub={missing.length ? 'Asks macOS for each permission SahilBot uses, one after another.' : 'SahilBot can use everything it needs on this Mac.'} testId="perm-all">
+            {missing.length > 0 && <button className="btn primary" disabled={busy} onClick={() => void allowAll()} data-testid="perm-allow-all">{busy ? 'Asking…' : 'Allow all'}</button>}
+          </Row>
+        )}
         {rows === null ? <Row title="Checking…" /> : sorted.map((r) => {
           const on = r.state === 'granted'
           const title = r.kind === 'automation' ? 'Mac apps' : r.title

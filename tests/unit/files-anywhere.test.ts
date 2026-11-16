@@ -1,0 +1,39 @@
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, test } from 'vitest'
+import { outsidePath, resolvePath } from '../../src/main/agent/tools/files'
+import { outsidePaths } from '../../src/main/agent/tools/shell'
+import { sandboxProfile } from '../../src/main/code/proc'
+
+// Files anywhere (on by default): the home folder is one of the chat's folders, so reading and editing files
+// there never asks. Its system, private and secret places stay off limits, for files, commands and the sandbox.
+
+const H = homedir()
+const ws = join(tmpdir(), 'ws')
+const roots = [H]
+
+describe('files anywhere', () => {
+  test('a note in Documents is read and saved without asking', () => {
+    const note = join(H, 'Documents/Obsidian Vault/Areas/School/Chemistry EP.md')
+    expect(resolvePath(note, ws, roots)).toBe(note)
+    expect(outsidePath(note, ws, roots)).toBeNull()
+    // Without it, the same file asks first.
+    expect(outsidePath(note, ws, [])).toBe(note)
+  })
+  test.each(['.ssh/id_ed25519', 'Library/Keychains/login.keychain-db', '.aws/credentials', 'Projects/app/.env'])('~/%s stays off limits', (rel) => {
+    expect(() => resolvePath(join(H, rel), ws, roots)).toThrow()
+  })
+  test('commands: home files are inside, private ones are not', () => {
+    expect(outsidePaths('cat ~/Documents/notes.txt', roots, H)).toEqual([])
+    expect(outsidePaths('cat ~/.ssh/id_ed25519', roots, H)).toEqual([join(H, '.ssh/id_ed25519')])
+    expect(outsidePaths('cp a.txt ~/Library/LaunchAgents/x.plist', roots, H)).toEqual([join(H, 'Library/LaunchAgents/x.plist')])
+  })
+  test('the sandbox opens the home folder but never login items, keys or shell startup files', () => {
+    const p = sandboxProfile({ writable: [H] })
+    expect(p).toContain('(deny file-write*\n')
+    expect(p).toMatch(/Library\/LaunchAgents/)
+    expect(p).toMatch(/\.zshrc/)
+    expect(p.indexOf('Library/LaunchAgents')).toBeGreaterThan(p.indexOf('(allow file-write*'))
+    expect(sandboxProfile({ writable: [ws] })).not.toMatch(/LaunchAgents/)
+  })
+})

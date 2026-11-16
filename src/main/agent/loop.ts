@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { SkillSuggestion, SuggestOptions } from '../skills'
 import { appToolsFor, classifyTask, intentTools, likelyTools } from './intent'
@@ -2042,6 +2043,11 @@ export class Agent {
     const group = run.group ? db.getSpace(thread.spaceId) : undefined
     const speaker = group ? space : undefined
     const state = db.getState(thread.id)
+    // Files anywhere (Settings → Permissions, on by default): the home folder is one of this chat's folders.
+    const home = homedir()
+    const anywhere = s.advanced.filesAnywhere !== false
+    if (anywhere && !(state.roots ?? []).includes(home)) state.roots = [...(state.roots ?? []), home]
+    else if (!anywhere && state.roots?.includes(home)) state.roots = state.roots.filter((r) => r !== home)
     // Bot swarms: this bot's Swarm setting lists the swarm tool (never for helpers); a Swarm request loads it.
     applySwarmState(state, s, space, !!run.helper, () => db.listMessages(thread.id), (names) => registry.load(state, names))
     let requestedChoice = requestedModel({ thread: db.getThread(thread.id), space: group ?? space, speaker, settings: s })

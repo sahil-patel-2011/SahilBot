@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ProviderId, Settings } from '@shared/types'
-import { api } from '../api'
+import { api, isServerRuntime } from '../api'
 import { Mascot } from '../brand'
 import * as I from '../icons'
 import { ChatgptPlanSettings } from './ChatgptPlanSettings'
 import '../styles-attachments.css'
+import { MacPermissions } from './SettingsModal'
 
 type Pick = Awaited<ReturnType<typeof api.models.setupPicks>>[number]
 
@@ -168,16 +169,17 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
   const next = async (): Promise<void> => {
     // Saved right away, so a yes can run the local setup (downloads need local models on).
     await api.local.set(wantLocal)
-    if (wantLocal) setStep(1.5)
-    else await finish()
+    setStep(wantLocal ? 1.5 : 2)
   }
+  // Last step: what SahilBot may use on this Mac (the Mac app only; the web UI has no macOS permissions).
+  const [anywhere, setAnywhere] = useState(settings.advanced.filesAnywhere !== false)
   const pickWorkspace = async (): Promise<void> => { const f = await api.pickFolder().catch(() => null); if (f) setWorkspace(f) }
   const connected = CLOUD.filter((c) => keys[c.id]).length
 
   return (
     <div className="scrim onboarding">
       <div className="modal onboard-card" data-testid="onboarding">
-        <div className="onboard-steps" aria-hidden>{(wantLocal ? [0, 1, 1.5] : [0, 1]).map((i) => <i key={i} className={i <= step ? 'on' : ''} />)}</div>
+        <div className="onboard-steps" aria-hidden>{(wantLocal ? [0, 1, 1.5, 2] : [0, 1, 2]).map((i) => <i key={i} className={i <= step ? 'on' : ''} />)}</div>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Mascot size={64} /></div>
         {step === 0 && (
           <>
@@ -185,7 +187,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             <p className="hint" style={{ textAlign: 'center' }}>An assistant that works on your Mac: it chats, researches, uses your apps and gets real work done. Your chats, files, memory and passwords stay here.</p>
             <div className="field"><label>What should I call you?</label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Your first name" onKeyDown={(e) => e.key === 'Enter' && setStep(1)} data-testid="onboarding-name" /></div>
             <div className="modal-actions"><button className="btn primary" onClick={() => setStep(1)} data-testid="onboarding-name-next">Continue</button></div>
-            <div className="hint onboard-time">Two steps, about a minute.</div>
+            <div className="hint onboard-time">Three steps, about a minute.</div>
           </>
         )}
         {step === 1 && (
@@ -216,7 +218,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             <label className="onboard-import"><input type="checkbox" checked={importAfter} onChange={(e) => setImportAfter(e.target.checked)} data-testid="onboarding-import" /> Afterwards, bring in what ChatGPT, Claude or Gemini already knows about me (you review it first)</label>
             <div className="modal-actions">
               <button className="btn" onClick={() => setStep(0)}>Back</button>
-              <button className="btn primary" onClick={() => void next()} data-testid="onboarding-next">{wantLocal ? 'Continue' : 'Start using SahilBot'}</button>
+              <button className="btn primary" onClick={() => void next()} data-testid="onboarding-next">Continue</button>
             </div>
           </>
         )}
@@ -226,7 +228,22 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             <LocalSetup />
             <div className="modal-actions">
               <button className="btn" onClick={() => setStep(1)}>Back</button>
-              <button className="btn primary" onClick={() => void finish()} data-testid="onboarding-local-next">Start using SahilBot</button>
+              <button className="btn primary" onClick={() => setStep(2)} data-testid="onboarding-local-next">Continue</button>
+            </div>
+          </>
+        )}
+        {step === 2 && (
+          <>
+            <h2>Let SahilBot work fully</h2>
+            <p className="hint">So it can use your screen and apps, read and edit your files, listen when you talk and tell you when it's done. macOS asks you about each one; you can change them any time in Settings → Permissions.</p>
+            {!isServerRuntime && <div className="onboard-perms" data-testid="onboarding-permissions"><MacPermissions title="" sub="" /></div>}
+            <label className="onboard-import" data-testid="onboarding-files-anywhere">
+              <input type="checkbox" checked={anywhere} onChange={(e) => setAnywhere(e.target.checked)} />
+              Read and edit my files in any folder without asking (deleting still asks; system and secret places stay off limits)
+            </label>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setStep(wantLocal ? 1.5 : 1)}>Back</button>
+              <button className="btn primary" onClick={() => void api.settings.set({ advanced: { ...settings.advanced, filesAnywhere: anywhere } }).then(() => finish())} data-testid="onboarding-finish">Start using SahilBot</button>
             </div>
           </>
         )}
