@@ -98,6 +98,7 @@
       "resources/**",
       "package.json",
       "!**/*.{map,d.ts,d.mts,d.cts,md,markdown}",
+    "!resources/oauth-clients.example.json",
       "!**/{test,tests,__tests__,example,examples,docs,doc,.github}/**",
       "!node_modules/onnxruntime-node/bin/napi-v3/{linux,win32}/**",
       "!node_modules/onnxruntime-node/bin/napi-v3/darwin/x64/**",

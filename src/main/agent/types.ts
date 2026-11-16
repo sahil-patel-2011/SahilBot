@@ -67,6 +67,8 @@ export interface ToolContext {
   spawnAgents?(tasks: Array<{ title: string; task: string }>): Promise<Array<{ title: string; status: string; report: string }>>
   /** Runs a bot swarm (tools/agents.ts swarmTool → swarm/bot-swarm.ts) and returns what the lead compiles from. */
   runSwarm?(args: import('./swarm/bot-swarm').SwarmArgs): Promise<ToolOutput>
+  /** Runs Max for the lead (tools/max.ts → max/host.ts): a team, a swarm, judged attempts or a mix. */
+  runMax?(args: import('./max/host').MaxArgs): Promise<ToolOutput>
   /** Asks another bot (tools/ask-bot.ts): its answer, or the directory of bots with list. */
   askBot?(a: { bot?: string; question?: string; list?: boolean }): Promise<ToolOutput>
   /**
@@ -202,6 +204,8 @@ export interface ThreadState {
   written?: string[]
   /** This chat's bot may swarm (its Swarm setting, set by the loop each run; never on helpers). */
   swarm?: 'auto' | 'always'
+  /** The max tool's listing for this run: the bot's Max setting ('on': Max is on for this request); unset on helpers. */
+  max?: 'off' | 'auto' | 'always' | 'on'
   /** A swarm helper or council member: only these tools are listed or run (read-only by default). */
   toolAllow?: string[]
   /** ask_bot: the bots asking in this exchange (the asker first, this bot last), for loop protection. */

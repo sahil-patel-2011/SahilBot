@@ -505,7 +505,7 @@ export class SecureVault {
   }
 
   private decryptRow(r: VaultRow, mk: Buffer, h: Header): Item {
-    if (this.tampered) throw new TamperError('The vault index was changed outside SahilBot. Review it in Settings → Vault before items are used again.')
+    if (this.tampered) throw new TamperError('The vault index was changed outside SahilBot. Review it in Settings → Privacy & Security → Passwords before items are used again.')
     if (h.manifest.items[r.id] !== r.ver) {
       this.o.audit.add({ event: 'tamper', item: safeName(r), outcome: 'blocked', detail: 'Item is missing from the signed index or is an older version' })
       throw new TamperError()

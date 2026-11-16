@@ -104,11 +104,11 @@ export function knowledgeTools(deps: KnowledgeToolDeps): ToolDef[] {
       const lines = st.sources.map((s) => `- ${s.label} (${s.kind}): ${s.path}${s.problem ? ` (not indexed: ${s.problem})` : `: ${s.files} files, ${s.chunks} passages${s.skipped ? `, ${s.skipped} skipped` : ''}${s.lastIndexed ? `, updated ${new Date(s.lastIndexed).toLocaleString()}` : ''}${s.truncated ? ' (file limit reached)' : ''}`}`)
       const search = st.embedModel
         ? `Search: keyword + meaning (${st.embedModel}; ${st.embedded} of ${st.totals.chunks} passages embedded).`
-        : st.localOff ? 'Search: keyword only (local models are off; meaning search can use OpenAI embeddings if the user turns that on in Settings → Knowledge).'
+        : st.localOff ? 'Search: keyword only (local models are off; meaning search can use OpenAI embeddings if the user turns that on in Settings → Advanced → Knowledge folders).'
         : `Search: keyword only. Installing "${st.suggestedModel}" in Ollama turns on meaning search.`
-      const state = st.paused ? 'Indexing is paused (Settings → Knowledge).' : st.indexing ? `Indexing now (${st.queued} files queued).` : 'Up to date.'
+      const state = st.paused ? 'Indexing is paused (Settings → Advanced → Knowledge folders).' : st.indexing ? `Indexing now (${st.queued} files queued).` : 'Up to date.'
       return {
-        text: `Knowledge base: ${st.totals.files} files, ${st.totals.chunks} passages.\n${lines.join('\n') || '(no folders)'}\n${search}\n${state}\nThe user adds or removes folders in Settings → Knowledge.`,
+        text: `Knowledge base: ${st.totals.files} files, ${st.totals.chunks} passages.\n${lines.join('\n') || '(no folders)'}\n${search}\n${state}\nThe user adds or removes folders in Settings → Advanced → Knowledge folders.`,
         display: `${st.totals.files} files indexed`
       }
     }

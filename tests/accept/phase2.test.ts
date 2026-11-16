@@ -68,7 +68,10 @@ describe('phase 2: agent loop + permissions + context', () => {
     // Tools were sent natively, core set only.
     const names = (llm.requests.at(-1)!.tools as Array<{ function: { name: string } }>).map((t) => t.function.name)
     // Built-in tools are all there (no cap); connector tools only after find_tools.
-    expect(names).toEqual(expect.arrayContaining(['find_tools', 'todo', 'ask_user', 'file_read', 'file_write', 'file_manage', 'create_document', 'web_search', 'fetch_page', 'memory', 'browser', 'run_command', 'agents', 'cursor', 'mac_apps', 'schedule']))
+    expect(names).toEqual(expect.arrayContaining(['find_tools', 'todo', 'ask_user', 'file_read', 'file_write', 'file_manage', 'create_document', 'web_search', 'fetch_page', 'memory', 'browser', 'run_command', 'max', 'cursor', 'mac_apps', 'schedule']))
+    // Max is the one tool for many agents; its older names (agents, swarm) still run but aren't listed up front.
+    expect(names).not.toContain('agents')
+    expect(names).not.toContain('swarm')
     // Heavy tools (computer use, code, pages…) load only when a request needs them.
     expect(names).not.toContain('computer')
 
@@ -86,8 +89,10 @@ describe('phase 2: agent loop + permissions + context', () => {
   test('ask mode: approval card, deny is respected, allow once runs', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
     await page.evaluate((ws) => window.foreman.settings.set({ workspaceDir: ws }), workspace)
+    // The picker under the box → Permissions → Ask first.
+    await page.click('[data-testid="model-picker"]')
     await page.click('[data-testid="mode-picker"]')
-    await page.locator('.menu-item', { hasText: 'Ask' }).first().click()
+    await page.click('[data-testid="mode-ask"]')
 
     llm.script.push(
       { toolCalls: [{ name: 'file_write', arguments: '{"path":"denied.md","content":"nope"}' }] },

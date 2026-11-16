@@ -6,7 +6,7 @@ import { toast } from '../lib/toast'
 import '../styles-activity.css'
 import { ClampText } from './ui'
 
-// Settings → Privacy & Permissions → Know what I'm working on. On by default (local only, nothing that
+// Settings → Privacy & Security → Activity → Know what I'm working on. On by default (local only, nothing that
 // prompts until the user's own permission check; cloud sharing stays off). Shows exactly what is
 // collected, what never is, how long it's kept, and a live preview of what a bot would see right now.
 

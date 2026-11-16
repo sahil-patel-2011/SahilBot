@@ -309,10 +309,11 @@ describe('LearningService', () => {
     expect(h.svc.store.state().threads[t.id]).toBeUndefined()
   })
 
-  test('model choice: local first; cloud only when allowed, within the daily cap; default on only with a local model', async () => {
+  test('model choice: local first; cloud only when allowed, within the daily cap; on by default', async () => {
     expect(setup().svc.enabled()).toBe(true)
     const noLocal = setup({ models: [cloudModel('claude-haiku-5-5')], cloud: true })
-    expect(noLocal.svc.enabled()).toBe(false)
+    // "Remember things automatically" is on by default, with or without a local model.
+    expect(noLocal.svc.enabled()).toBe(true)
     expect(noLocal.svc.choose()).toMatchObject({ blocked: expect.stringMatching(/No local model/) })
     const allowed = setup({ models: [cloudModel('claude-haiku-5-5')], cloud: true, learning: { enabled: true, cloudAllowed: true, dailyUsd: 0.25 }, chat: fakeChat({ memory: '[]' }) })
     expect(allowed.svc.choose()).toEqual({ model: 'claude-haiku-5-5', cloud: true })

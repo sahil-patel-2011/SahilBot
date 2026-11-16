@@ -5,7 +5,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { SpaceAvatar } from '../brand'
 import { AppIcon, IconStack, connectedApps, useAppIcons } from './ConnectedIcons'
-import { APP_STATE_TEXT, CUSTOM_REDIRECT, MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, appState, checkSummary, connectBadge, easiestFirst, keyProblem, matches, recommended, searchApps, type AppState, type Badge } from '../lib/connect-catalog'
+import { APP_STATE_TEXT, CUSTOM_REDIRECT, MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, SETUP_GROUP, appState, checkSummary, connectBadge, keyProblem, matches, recommended, searchApps, splitSection, type AppState, type Badge } from '../lib/connect-catalog'
 import { importBot } from './BotShare'
 
 const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
@@ -13,7 +13,7 @@ const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
   needs_auth: 'Needs sign-in', connected: 'Connected', error: 'Error', reconnecting: 'Reconnecting…'
 }
 
-/** SahilBot's own saved-logins vault, listed under Password Managers (opens Settings → Vault). */
+/** SahilBot's own saved-logins vault, listed under Password Managers (opens Settings → Privacy & Security → Passwords). */
 const VAULT: ConnectorPreset = {
   id: 'sahilbot-vault', name: 'SahilBot Vault', url: 'app:vault', color: '#3A3A3C', category: 'Password Managers', auth: 'app',
   description: 'Saved logins SahilBot types into sites for you, encrypted in your Keychain.'
@@ -30,10 +30,12 @@ type View = 'browse' | 'manage' | 'templates' | 'form' | 'google' | 'setup' | 'k
 const BADGE_STYLE: Record<Badge, { cls: string }> = {
   'One click': { cls: 'one-click' },
   'API key': { cls: 'api-key' },
-  'Needs setup': { cls: 'setup' }
+  'Needs setup': { cls: 'setup' },
+  'SahilBot\'s browser': { cls: 'browser' }
 }
 const badgeTitle = (b: Badge, p: ConnectorPreset): string =>
-  b === 'One click' ? 'Sign in on the app\'s own page; nothing to set up'
+  b === 'One click' ? `Opens ${p.name}'s own sign-in page in your browser; nothing to set up`
+  : b === 'SahilBot\'s browser' ? 'Sign in inside SahilBot\'s browser: SahilBot uses the site like you do (no connector)'
   : b === 'API key' ? `Paste your ${p.name} API key once (kept in your Keychain), then it connects`
   : p.auth === 'google' ? 'One-time Google setup (about 5 minutes), then one click'
   : `One-time setup at ${p.name} (about ${p.setup?.minutes ?? 5} minutes), then one click`
@@ -111,7 +113,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const connected = useMemo(() => connectedApps(configs, statuses, presets), [configs, statuses, presets])
   /** What's missing before an app can connect: its one-time setup, Google setup or API key. */
   const setupMissing = (p: ConnectorPreset | undefined, cfg: ConnectorConfig | undefined): boolean =>
-    !!p && ((p.auth === 'oauth-static' && !cfg?.clientId) || (p.auth === 'google' && !google && !cfg?.clientId) || (p.auth === 'apikey' && !(cfg && keys.has(cfg.id))))
+    !!p && ((p.auth === 'oauth-static' && !cfg?.clientId && !p.builtinClient) || (p.auth === 'google' && !google && !cfg?.clientId && !p.builtinClient) || (p.auth === 'apikey' && !(cfg && keys.has(cfg.id))))
+  /** SahilBot ships its own Google app: every Google app connects in one click (unless the user uses their own). */
+  const googleBuiltin = useMemo(() => presets.some((p) => p.auth === 'google' && p.builtinClient), [presets])
   /** The one state an app is in (Connected, Needs sign-in again, Unavailable right now, Needs setup…). */
   const stateOf = (p: ConnectorPreset | undefined, cfg: ConnectorConfig | undefined): AppState | undefined =>
     cfg ? appState(p, status(cfg.id), { setupMissing: setupMissing(p, cfg) }) : p?.unavailable ? 'unavailable' : undefined
@@ -130,20 +134,20 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   const start = async (p: ConnectorPreset): Promise<void> => {
     setErr('')
     if (p.id === VAULT.id) {
-      if (onOpenSettings) { onClose(); onOpenSettings('passwords') } else toast('Your saved logins are in Settings → Vault.')
+      if (onOpenSettings) { onClose(); onOpenSettings('passwords') } else toast('Your saved logins are in Settings → Privacy & Security → Passwords.')
       return
     }
-    // No-setup apps: just open the site in SahilBot's browser and sign in once.
+    // Web automation by design: open the site in SahilBot's own browser and sign in there once.
     if (p.auth === 'browser') { onBrowse(p.url); onClose(); return }
     // Built-in apps need nothing: just ask SahilBot to use them.
     // Kept in the catalog, but its server can't be used right now: say why instead of trying.
     if (p.unavailable) { setErr(`${p.name} is unavailable right now. ${p.unavailable}`); body.current?.scrollTo({ top: 0, behavior: 'smooth' }); return }
     if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : 'add a reminder for tomorrow at 9'}".`); return }
     const existing = configOf(p)
-    // Google apps without the shared client (and without their own): set Google up first.
-    if (p.auth === 'google' && !google && !existing?.clientId && status(existing?.id ?? '')?.state !== 'connected') { setGoogleFor(p); go('google'); return }
-    // Apps without self-registration: create their OAuth app once, then they connect in one click.
-    if (p.auth === 'oauth-static' && !existing?.clientId) { setSetupFor(p); go('setup'); return }
+    // Google apps with no client at all (no built-in one, none of the user's own): set Google up first.
+    if (p.auth === 'google' && !p.builtinClient && !google && !existing?.clientId && status(existing?.id ?? '')?.state !== 'connected') { setGoogleFor(p); go('google'); return }
+    // Apps without self-registration and no built-in client yet: create their OAuth app once, then one click.
+    if (p.auth === 'oauth-static' && !p.builtinClient && !existing?.clientId) { setSetupFor(p); go('setup'); return }
     // API-key apps: paste the key once (it goes to the Keychain), then they connect.
     if (p.auth === 'apikey' && !(existing && keys.has(existing.id))) { setKeyFor(p); go('key'); return }
     if (existing) {
@@ -284,12 +288,12 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     const [label, tone] =
       p.id === VAULT.id ? ['Open', 'ghost'] :
       p.auth === 'app' ? ['Built in', 'ok'] :
-      p.auth === 'browser' ? ['Open', 'ghost'] :
+      p.auth === 'browser' ? ['Sign in', 'ghost'] :
       st?.state === 'connected' ? ['Connected', 'done'] :
       busy ? ['Connecting…', 'ghost'] :
       as === 'unavailable' && p.unavailable ? ['Unavailable', 'ghost'] :
       as === 'reauth' ? ['Reconnect', 'solid'] :
-      p.auth === 'oauth-static' && !cfg?.clientId ? ['Set up', 'ghost'] :
+      p.auth === 'oauth-static' && !cfg?.clientId && !p.builtinClient ? ['Set up', 'ghost'] :
       p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? ['Add key', 'ghost'] :
       cfg ? ['Connect', 'solid'] : ['Add', 'ghost']
     const badge = st?.state === 'connected' || as === 'unavailable' ? null : connectBadge(p)
@@ -302,7 +306,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           : <AppIcon src={icons[p.id]} name={p.name} color={p.color} />}
         <span className="ca-item-text">
           <b>{p.name}{badge && <small className={`ca-badge ui-pill ${BADGE_STYLE[badge].cls}`} data-testid={`badge-${p.id}`} title={badgeTitle(badge, p)}>{badge}</small>}</b>
-          <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !cfg?.clientId ? `${p.description} One-time setup first.` : p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? `${p.description} Paste your API key once.` : p.description}</span>
+          <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !p.builtinClient && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !p.builtinClient && !cfg?.clientId ? `${p.description} One-time setup first.` : p.auth === 'apikey' && !(cfg && keys.has(cfg.id)) ? `${p.description} Paste your API key once.` : p.description}</span>
         </span>
         <span className={`ca-btn ${tone}`} aria-disabled={busy || undefined}>
           {label}{tone === 'done' && <I.Check size={13} />}
@@ -311,24 +315,44 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
     )
   }
 
-  const section = (title: string, items: ConnectorPreset[], opts: { limit?: number; viewAll?: string; note?: string; count?: boolean } = {}): ReactNode => {
+  /**
+   * A catalog section: what connects right away first (one click, built in, SahilBot's browser), then
+   * a clearly labelled "Needs a one-time setup" group at the end (own OAuth app, Google setup or API
+   * key still missing). `limit` caps each part in the All view; View all opens the whole category.
+   */
+  const section = (title: string, items: ConnectorPreset[], opts: { limit?: number; setupLimit?: number; viewAll?: string; note?: string; count?: boolean } = {}): ReactNode => {
     if (!items.length) return null
-    const shown = opts.limit ? items.slice(0, opts.limit) : items
+    // An app the user already set up (own client, Google setup, saved key) is ready now, not "needs setup".
+    const { ready, setup: setupAll } = splitSection(items)
+    const setup = setupAll.filter((p) => setupMissing(p, configOf(p)))
+    const readyAll = [...ready, ...setupAll.filter((p) => !setup.includes(p))]
+    const shown = opts.limit ? readyAll.slice(0, opts.limit) : readyAll
+    const setupShown = opts.setupLimit !== undefined ? setup.slice(0, opts.setupLimit) : setup
+    const hidden = readyAll.length - shown.length + setup.length - setupShown.length
     return (
       <section className="ca-section" key={title} data-testid={`section-${title}`}>
         <div className="ca-section-head">
           <h3>{title}{opts.count !== false && <span className="ca-section-n" data-testid="section-count" style={{ marginLeft: 6, fontWeight: 500, fontSize: '0.85em', color: 'var(--text-3, #888)' }}>{items.length}</span>}</h3>
           {opts.note && <span className="ca-note">{opts.note}</span>}
-          {opts.viewAll && items.length > shown.length && (
+          {opts.viewAll && hidden > 0 && (
             <button className="ca-viewall" onClick={() => setChip(opts.viewAll!)}>View all {items.length}<I.Chevron size={13} style={{ transform: 'rotate(-90deg)' }} /></button>
           )}
         </div>
-        <div className="ca-list">{shown.map(item)}</div>
+        {shown.length > 0 && <div className="ca-list" data-testid="section-ready">{shown.map(item)}</div>}
+        {setupShown.length > 0 && (
+          <div className="ca-setup-group" data-testid="section-setup">
+            <div className="ca-setup-head">
+              <span>{SETUP_GROUP}</span>
+              <span className="ca-note">{setup.length} {setup.length === 1 ? 'app' : 'apps'} · your own app or API key, once</span>
+            </div>
+            <div className="ca-list">{setupShown.map(item)}</div>
+          </div>
+        )}
       </section>
     )
   }
 
-  const openSkill = (): void => { if (onOpenSettings) { onClose(); onOpenSettings('rules') } else toast('SahilBot uses skills on its own when they fit. Manage them in Settings → Rules & Skills.') }
+  const openSkill = (): void => { if (onOpenSettings) { onClose(); onOpenSettings('rules') } else toast('SahilBot uses skills on its own when they fit. Manage them in Settings → Advanced → Rules & skills.') }
   const skillRow = (s: Skill): ReactNode => (
     <div key={s.name} className="ca-item" role="button" tabIndex={0} data-testid={`skill-${s.name}`}
       onClick={() => openSkill()}
@@ -369,13 +393,13 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
       )
     }
     if (chip !== 'All') {
-      return section(chip, easiestFirst(byCategory(chip)), chip === 'Built in' ? { note: 'No setup' } : {})
+      return section(chip, byCategory(chip), chip === 'Built in' ? { note: 'Nothing to connect' } : {})
     }
     return (
       <>
-        {section('Recommended for you', recommended(presets, connectedPresetIds), { count: false })}
-        {SECTION_ORDER.map((cat) => section(cat, easiestFirst(byCategory(cat)), { limit: 6, viewAll: cat, note: cat === 'Built in' ? 'No setup' : undefined }))}
-        <p className="ca-foot">Sign-in happens in your browser; tokens and API keys stay in your Mac's Keychain. Connected tools load only when a task needs them.</p>
+        {section('Recommended for you', recommended(presets, connectedPresetIds), { count: false, note: 'One click each' })}
+        {SECTION_ORDER.map((cat) => section(cat, byCategory(cat), { limit: 6, setupLimit: 3, viewAll: cat, note: cat === 'Built in' ? 'Nothing to connect' : undefined }))}
+        <p className="ca-foot">Connect opens the app's own sign-in page in your default browser; tokens and API keys stay in your Mac's Keychain. Connected tools load only when a task needs them.</p>
       </>
     )
   }
@@ -435,12 +459,19 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
                     {busy ? 'Connecting…' : state === 'needs_auth' ? 'Sign in' : 'Reconnect'}
                   </button>
                 )}
-                {preset?.setup && (
-                  <button className="btn" title={`Change the OAuth app ${c.name} signs in with`} data-testid="connector-setup" onClick={() => { setSetupFor(preset); go('setup') }}>Setup</button>
-                )}
+                {preset?.setup && preset.builtinClient && c.clientId ? (
+                  <button className="btn" title={`Forget your own ${c.name} app and sign in with SahilBot's`} data-testid="connector-use-builtin" onClick={() => void guard(async () => { await api.connectors.useBuiltinClient(c.id); await load(); await api.connectors.connect(c.id) })}>Use SahilBot's app</button>
+                ) : preset?.setup ? (
+                  <button className="btn" title={preset.builtinClient ? `Sign in to ${c.name} with an OAuth app you registered yourself` : `Change the OAuth app ${c.name} signs in with`} data-testid="connector-setup" onClick={() => { setSetupFor(preset); go('setup') }}>{preset.builtinClient ? 'Use your own app' : 'Setup'}</button>
+                ) : null}
                 {preset?.auth === 'apikey' && (
                   <button className="btn" title={`Replace the ${c.name} API key`} data-testid="connector-key" onClick={() => { setKeyFor(preset); go('key') }}>Key</button>
                 )}
+                {preset?.auth === 'oauth' && preset.apiKey && (keys.has(c.id) ? (
+                  <button className="btn" title={`Forget the API key and sign in to ${c.name} with one click instead`} data-testid="connector-key-clear" onClick={() => void guard(async () => { await api.connectors.clearApiKey(c.id); await load(); await api.connectors.connect(c.id) })}>Sign in instead of key</button>
+                ) : (
+                  <button className="btn" title={`${c.name} also takes an API key`} data-testid="connector-key-alt" onClick={() => { setKeyFor(preset); go('key') }}>Use an API key instead</button>
+                ))}
                 <button className="icon-btn" title="Remove" aria-label={`Remove ${c.name}`} onClick={() => { if (confirm(`Remove ${c.name}? You can add it again later.`)) void guard(() => api.connectors.remove(c.id)) }}><I.Trash size={15} /></button>
               </div>
               {tests[c.id] && (
@@ -470,8 +501,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
       </div>
       {(google || configs.some((c) => presets.find((p) => p.id === c.preset)?.auth === 'google')) && (
         <p className="ca-foot">
-          {google ? `Google apps use your OAuth client …${google.clientId.split('-')[0].slice(-4)}. ` : 'Google apps need a one-time setup. '}
-          <button className="ca-viewall" onClick={() => { setGoogleFor(null); go('google') }} data-testid="google-setup-open">{google ? 'Change Google setup' : 'Set up Google once'}</button>
+          {google ? `Google apps use your own OAuth client …${google.clientId.split('-')[0].slice(-4)}. ` : googleBuiltin ? 'Google apps sign in with SahilBot\'s own Google app. ' : 'Google apps need a one-time setup. '}
+          {google && googleBuiltin && <button className="ca-viewall" onClick={() => void guard(async () => { await api.connectors.clearGoogleClient(); await load() })} data-testid="google-use-builtin">Use SahilBot's Google app</button>}
+          <button className="ca-viewall" onClick={() => { setGoogleFor(null); go('google') }} data-testid="google-setup-open">{google ? 'Change your Google app' : googleBuiltin ? 'Use your own Google app' : 'Set up Google once'}</button>
         </p>
       )}
     </>
@@ -541,7 +573,10 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
   // ---------------------------------------------------------------- frame
 
   const moreLabel = MORE_CATEGORIES.includes(chip) ? chip : 'More'
-  const title = view === 'manage' ? 'Connected apps' : view === 'templates' ? 'Bot templates' : view === 'form' ? 'Add an app' : view === 'google' ? 'Set up Google once' : view === 'setup' && setupFor ? `Set up ${setupFor.name} once` : view === 'key' && keyFor ? `Connect ${keyFor.name}` : 'Connect Apps'
+  const title = view === 'manage' ? 'Connected apps' : view === 'templates' ? 'Bot templates' : view === 'form' ? 'Add an app'
+    : view === 'google' ? (googleBuiltin ? 'Use your own Google app' : 'Set up Google once')
+    : view === 'setup' && setupFor ? (setupFor.builtinClient ? `Use your own ${setupFor.name} app` : `Set up ${setupFor.name} once`)
+    : view === 'key' && keyFor ? (keyFor.auth === 'oauth' ? `Use a ${keyFor.name} API key instead` : `Connect ${keyFor.name}`) : 'Connect Apps'
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -626,6 +661,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot, onOpenSettings }: {
           {view === 'google' && (
             <GoogleSetup
               forApp={googleFor?.name}
+              builtin={googleBuiltin}
               onCancel={() => { setGoogleFor(null); go(googleFor ? 'browse' : 'manage') }}
               onDone={(info) => void afterGoogle(info)} />
           )}
@@ -696,9 +732,15 @@ export function AppSetup({ preset, hasClient, onDone, onCancel }: {
   }
   return (
     <div className="conn-form" data-testid="app-setup">
-      <p className="ca-lede" style={{ marginTop: 0 }}>
-        {preset.name}'s MCP server only signs in apps registered with {preset.name}, so this takes about {g.minutes} minutes, once. Then {preset.name} connects with one click and you sign in on {preset.name}'s own page.
-      </p>
+      {preset.builtinClient ? (
+        <p className="ca-lede" style={{ marginTop: 0 }} data-testid="own-app-lede">
+          You don't need this: {preset.name} already connects in one click with SahilBot's own {preset.name} app. Use your own app only if your workspace requires it (an admin-approved app, other permissions). It takes about {g.minutes} minutes.
+        </p>
+      ) : (
+        <p className="ca-lede" style={{ marginTop: 0 }}>
+          {preset.name}'s MCP server only signs in apps registered with {preset.name}, and SahilBot doesn't ship its own {preset.name} app yet, so this takes about {g.minutes} minutes, once. Then {preset.name} connects with one click and you sign in on {preset.name}'s own page.
+        </p>
+      )}
       <div className="field"><label>Redirect URL (paste this into {preset.name})</label><CopyText text={g.redirectUri} /></div>
       <ol style={{ margin: '0 0 12px', paddingLeft: 20, display: 'grid', gap: 12 }}>
         {g.steps.map((s) => (
@@ -777,7 +819,9 @@ export function ApiKeyPanel({ preset, hasKey, onDone, onCancel, compact }: {
     <div className="conn-form ca-key" data-testid="api-key-panel">
       {!compact && (
         <p className="ca-lede" style={{ marginTop: 0 }}>
-          {preset.name}'s official server signs in with your own {preset.name} API key. Paste it once: it's kept in your Mac's Keychain and only sent to {preset.name}.
+          {preset.auth === 'oauth'
+            ? `${preset.name} connects in one click without a key. If you'd rather use a ${preset.name} API key (a service account, say), paste it here: it's kept in your Mac's Keychain, only sent to ${preset.name}, and used instead of signing in.`
+            : `${preset.name}'s official server signs in with your own ${preset.name} API key. Paste it once: it's kept in your Mac's Keychain and only sent to ${preset.name}.`}
         </p>
       )}
       <div className="field">
@@ -839,11 +883,13 @@ const GOOGLE_STEPS: Array<{ title: string; text: string; links: Array<[string, s
  * and secret, checked as you type and shared by every Google app. Also shown inside the in-chat
  * Connect card when a task needs Gmail, Calendar or Drive.
  */
-export function GoogleSetup({ forApp, onDone, onCancel, compact }: {
+export function GoogleSetup({ forApp, onDone, onCancel, compact, builtin }: {
   forApp?: string
   onDone: (info: { clientId: string; hasSecret: boolean }) => void
   onCancel?: () => void
   compact?: boolean
+  /** SahilBot ships its own Google app: this panel is only "Use your own Google app". */
+  builtin?: boolean
 }) {
   const [current, setCurrent] = useState<{ clientId: string; hasSecret: boolean } | null | undefined>(undefined)
   const [editing, setEditing] = useState(false)
@@ -888,7 +934,9 @@ export function GoogleSetup({ forApp, onDone, onCancel, compact }: {
   }
   return (
     <div className="conn-form" data-testid="google-setup">
-      {!compact && <p className="ca-lede" style={{ marginTop: 0 }}>Google only lets you sign in apps registered to you, so this takes about 5 minutes, once. {forApp ? `Then ${forApp} connects` : 'Then Gmail, Calendar and Drive connect'} with one click.</p>}
+      {!compact && (builtin
+        ? <p className="ca-lede" style={{ marginTop: 0 }} data-testid="own-app-lede">You don't need this: Google apps already connect in one click with SahilBot's own Google app. Use your own Google Cloud app only if you want sign-ins to go through a project you control. It takes about 5 minutes.</p>
+        : <p className="ca-lede" style={{ marginTop: 0 }}>Google only lets you sign in apps registered with it, and SahilBot doesn't ship its own Google app yet, so this takes about 5 minutes, once. {forApp ? `Then ${forApp} connects` : 'Then Gmail, Calendar and Drive connect'} with one click.</p>)}
       <ol style={{ margin: '0 0 12px', paddingLeft: 20, display: 'grid', gap: compact ? 8 : 12 }}>
         {GOOGLE_STEPS.map((s) => (
           <li key={s.title}>

@@ -103,7 +103,6 @@ export function PeopleView(p: { onOpenNote?: (path: string) => void }) {
           </div>
           <span className="grow" />
           {status && <span className="hint">{status.entities} entries · {status.facts} facts{status.settings.paused ? ' · learning paused' : ''}</span>}
-          <button className="mm-btn" onClick={() => void api.people.learnNow().then(setStatus).catch((e) => toast(clean(e), 'error'))} title="Read recent chats and files for people and places now">Learn now</button>
         </div>
         {tab === 'cards' ? (
           card ? <CardView card={card} all={list ?? []} onChanged={(c) => { setCard(c); void load() }} onForgot={forgotten} onOpenNote={p.onOpenNote ?? openVault} /> : <div className="vault-empty">Pick someone or something on the left.</div>
@@ -237,9 +236,9 @@ function AliasAdd({ onAdd }: { onAdd: (v: string) => void }) {
   )
 }
 
-/** Settings → Privacy & Permissions, where "Know what I'm working on" lives. */
+/** Settings → Privacy & Security, where "Know what I'm working on" lives. */
 function openActivitySettings(): void {
-  window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: 'privacy' }))
+  window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: 'privacy:activity' }))
 }
 
 function PrivacyPanel({ status, onChange, onUndo }: { status: ContextEngineStatus; onChange: (s: ContextEngineStatus) => void; onUndo: (trashId: string) => void }) {

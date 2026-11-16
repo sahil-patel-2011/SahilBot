@@ -1,4 +1,4 @@
-/* Settings → Vault (VaultSettings) and the vault's unlock dialog (VaultAuthDialog). Light and dark via the app tokens. */
+/* Settings → Privacy & Security → Passwords (VaultSettings) and the vault's unlock dialog (VaultAuthDialog). Light and dark via the app tokens. */
 
 :root {
   --sv-ok: #2f9e66;

@@ -1,4 +1,4 @@
-/* Approval cards and Settings → Approval rules. */
+/* Approval cards and Settings → Privacy & Security → Approvals. */
 
 .ap-card { gap: 10px; }
 .ap-head { display: flex; gap: 10px; align-items: flex-start; }
@@ -26,7 +26,7 @@
 .ap-rule-input { width: 100%; }
 .ap-rule-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-/* Settings → Approval rules */
+/* Settings → Privacy & Security → Approvals */
 .ar-form { display: flex; flex-direction: column; gap: 10px; padding: 14px 0; }
 .ar-form label { font-size: 13.5px; color: var(--text-2); }
 .ar-form textarea { width: 100%; resize: vertical; min-height: 44px; font: inherit; font-size: 13.5px; }

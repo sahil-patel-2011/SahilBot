@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
 import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionMode, SendInput, Settings, Space, UsageRow } from '@shared/types'
-import type { GoalPatch } from '@shared/types'
+import type { GoalPatch, MemoryItem } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 // Cloud first, local opt-in (shared/local-mode.ts); attached folders are counted and indexed (knowledge/folder-scan.ts).
 import { localOff, localOn } from '@shared/local-mode'
@@ -18,7 +18,7 @@ import { OpenAITtsEngine } from './voice/tts'
 import { DEFAULT_TRANSCRIBE_MODEL, speechUsd, transcribe as openaiTranscribe, transcribeUsd } from './apis/openai'
 import { OpenAISttEngine } from './voice/stt'
 import { hookSpend } from './apis/spend'
-import { INTRO } from './agent/prompt'
+import { INTRO, setAutoMemory } from './agent/prompt'
 import { updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
@@ -27,6 +27,7 @@ import { isAuto } from './llm/router'
 import { automationStatus, fileProbe, permissionsStatus, settingsUrl } from './permissions-center'
 import { collectText, isLocal, spendHooks, streamChat, usageDetails } from './llm/client'
 import { ConnectorIcons, Connectors, PRESETS } from './connectors'
+import { OAUTH_CLIENTS_FILE, readBuiltinClients } from './oauth-clients'
 import { addTemplate, loadTemplates, type TemplateDeps } from './templates'
 import { BOT_FILE_EXT, BOT_FILE_MAX_BYTES, botFileFor, duplicateBot, importPreview, importTemplate, parseBotFile, PendingImports } from './bot-share'
 import { getCheckin, overviewTool, setCheckin } from './checkin'
@@ -77,6 +78,7 @@ import { codeTool, gitTool } from './agent/tools/code'
 import { researchTool } from './agent/tools/research'
 import { phiTool } from './agent/tools/phi'
 import { agentsTool, swarmTool } from './agent/tools/agents'
+import { maxTool } from './agent/tools/max'
 import { askBotTool } from './agent/tools/ask-bot'
 import { handoffTool } from './agent/tools/handoff'
 import { computerTool } from './agent/tools/computer'
@@ -91,7 +93,8 @@ import { findFreecadCmd } from './cad/freecad'
 import { cadDesignTool } from './cad/design-tool'
 import { Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
-import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy } from './spaces'
+import { requestedModel } from './agent/choices'
+import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort } from './spaces'
 import { ATTENDED_GRACE_MS, Learner, QuestionQueue, QuestionStore, createQuestionHost, notifyDevices as notifyQuestionDevices, toNeedsYou } from './agent/questions'
 import { DigestRunner } from './goals/digest'
 import { BrowserManager } from './browser/manager'
@@ -133,6 +136,9 @@ import { apiAccess } from './apis/keys'
 import { mediaTools } from './agent/tools/media'
 import { readDocumentImageTool, readReceipt } from './agent/tools/vision'
 import { BatchManager, batchTool } from './agent/tools/batch'
+import { VideoManager, publicHttps, videoTool, type VideoApp, type VideoLink } from './agent/tools/video'
+import { notifyDevices } from './notify'
+import type { ToolContext } from './agent/types'
 import { embeddingProvider } from './knowledge/embeddings'
 import { OPENAI_URL } from './llm/providers'
 import { fromWav } from './voice/audio'
@@ -297,6 +303,8 @@ app.whenReady().then(() => {
   let menuBar: MenuBarIcon | null = null
   const secrets = new Secrets(db)
   const settings = new SettingsStore(db, secrets)
+  // "Remember things automatically" (default on) shapes the prompts' memory guidance (agent/prompt.ts).
+  setAutoMemory(settings.get().learning?.enabled !== false)
   /** The Onshape API key pair from the Keychain (main process only; never sent to the renderer or the model). */
   /** Tests (dev builds only): a fake Onshape server stands in for cad.onshape.com. */
   const onshapeTestOrigin = !isPackaged() && process.env.FOREMAN_ONSHAPE_URL ? process.env.FOREMAN_ONSHAPE_URL : undefined
@@ -324,7 +332,7 @@ app.whenReady().then(() => {
     const threadId = usageScope.getStore()?.threadId
     if (!threadId) return fastTierFor(model, s)
     const thread = db.getThread(threadId)
-    const chosen = thread?.model || (thread ? db.getSpace(thread.spaceId)?.model : undefined) || s.defaultModel
+    const chosen = requestedModel({ thread, space: thread ? db.getSpace(thread.spaceId) : undefined, settings: s })
     const state = db.getState(threadId)
     return fastTierFor(model, s, { auto: isAuto(chosen), speedSensitive: !!state.voice || SPEED_SENSITIVE.has(state.lastCategory ?? '') })
   }
@@ -585,6 +593,8 @@ app.whenReady().then(() => {
   const registry = new ToolRegistry()
   // The context engine (People & Places), set up with the knowledge vault below; the memory tool's "about" uses it.
   const worldRef: { current?: ContextEngine } = {}
+  /** Gets speech recognition ready in the background (set once the voice service exists). */
+  const voicePrepRef: { current: (why: 'auto' | 'mic' | 'user') => void } = { current: () => undefined }
   registry.register(
     ...coreTools(results),
     ...fileTools(() => settings.get().workspaceDir, docsDir),
@@ -616,6 +626,7 @@ app.whenReady().then(() => {
     researchTool(),
     // Patient data: find and redact the 18 HIPAA identifiers before text goes anywhere (local, read-only).
     phiTool(),
+    maxTool(),
     agentsTool(),
     // Bot swarms: temporary read-only helpers, then the bot compiles (listed by the bot's Swarm setting).
     swarmTool(),
@@ -681,7 +692,29 @@ app.whenReady().then(() => {
     return Math.max(16384, Math.min(cap, m.maxFittingWindow || 32768))
   }
 
-  const connectors = new Connectors(db, secrets, registry, () => toWin('connectors:changed'))
+  // SahilBot's own OAuth app registrations (resources/oauth-clients.json; docs/oauth-registration.md):
+  // apps without self-registration then connect in one click. The env var is honoured only in
+  // development and hidden test runs; a release build reads the file CI wrote from its secret.
+  const oauthClients = readBuiltinClients({
+    presets: PRESETS,
+    allowEnv: !isPackaged() || HIDDEN,
+    // The app bundle (asar: files include resources/**), else next to the project or server root.
+    files: [
+      join(appRoot(), 'resources', OAUTH_CLIENTS_FILE),
+      ...(() => { try { const p = app.getAppPath(); return typeof p === 'string' && p ? [join(p, 'resources', OAUTH_CLIENTS_FILE)] : [] } catch { return [] } })(),
+      join(appRoot(), OAUTH_CLIENTS_FILE)
+    ]
+  })
+  for (const p of oauthClients.problems) console.warn(`[connectors] ${p}`)
+  const connectors = new Connectors(db, secrets, registry, () => toWin('connectors:changed'), {
+    oauthClients: oauthClients.clients,
+    // The provider sent the browser back: SahilBot comes to the front so the chat (or Connect apps) carries on.
+    onSignedIn: () => {
+      if (HIDDEN) return
+      try { app.focus({ steal: true }) } catch { /* not on every platform */ }
+      showMain()
+    }
+  })
   // Emailed sign-in codes: the Gmail connector when it's connected, else Mail.app (read in main, never shown to the model).
   setEmailCodeSource(gmailCodeSource((tool, args, signal) => connectors.callPresetTool('gmail', tool, args, signal)), () => connectors.presetConnected('gmail'))
 
@@ -825,6 +858,10 @@ app.whenReady().then(() => {
     if (warmupAllowed() && (patch.defaultModel !== undefined || patch.contextWindow !== undefined || patch.localKeepAlive !== undefined)) warmup.soon()
     if (patch.quickKey !== undefined) registerQuickKeyRef.current()
     if (patch.theme) applyTheme(s.theme)
+    // "Remember things automatically" (Settings → Memory): the prompts' memory guidance follows it.
+    if (patch.learning !== undefined) setAutoMemory(s.learning?.enabled !== false)
+    // Set up (onboarding just finished) or the speech model changed: get speech recognition ready.
+    if (patch.onboarded === true || patch.voiceInput !== undefined) voicePrepRef.current('auto')
     alwaysOnChanged.current(patch)
     return s
   })
@@ -1020,7 +1057,9 @@ app.whenReady().then(() => {
     return { space, threadId: thread.id }
   })
   handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'label' | 'notify' | 'effort'>>) => {
-    const s = db.updateSpace(id, patch)
+    // A bot's model and thinking are never set per bot: it chooses by itself for each request (agent/choices.ts).
+    const { model: _m, effort: _e, ...rest } = patch
+    const s = db.updateSpace(id, rest)
     // Keep a bot's one conversation titled after it.
     if (patch.name && s.kind === 'bot' && !s.isMain) for (const t of db.listThreads(id)) db.updateThread(t.id, { title: s.name })
     return s
@@ -1261,7 +1300,7 @@ app.whenReady().then(() => {
     }))
     return found.filter((x): x is NonNullable<typeof x> => !!x)
   })
-  handle('connectors:presets', () => PRESETS)
+  handle('connectors:presets', () => connectors.presets())
   handle('connectors:list', () => ({ configs: connectors.list(), statuses: connectors.statuses(), keys: connectors.keyIds() }))
   handle('connectors:save', (c: Parameters<Connectors['save']>[0] & { headerValue?: string; clientSecret?: string }) => {
     const { headerValue, clientSecret, ...rest } = c
@@ -1285,6 +1324,8 @@ app.whenReady().then(() => {
   // The key goes straight to the Keychain; only a status comes back (errors are redacted in connectors.ts).
   handle('connectors:setApiKey', (presetId: string, key: string) => connectors.setApiKey(presetId, key))
   handle('connectors:checkAll', () => connectors.checkEvery())
+  handle('connectors:useBuiltinClient', (id: string) => connectors.useBuiltinClient(id))
+  handle('connectors:clearApiKey', (id: string) => connectors.clearApiKey(id))
   void connectors.connectAll()
   // Health: a tools/list check every few minutes; dropped connections reconnect with backoff.
   connectors.startHealth()
@@ -1551,6 +1592,10 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------- always-on bots: Needs you, autonomy levels, digest
   // Bots' own chats still at the old default (Auto) move to Autonomous once; levels the user picked stay.
   try { migrateBotAutonomy(db, settings.get()) } catch (e) { console.error('[autonomy]', (e as Error).message) }
+  // Bots choose their own model and thinking (Auto for every request): stored overrides are cleared once.
+  try { migrateBotModelEffort(db) } catch (e) { console.error('[bot-auto]', (e as Error).message) }
+  // Each bot's Swarm setting became its Max setting (Off / Auto / Always, Max helpers).
+  try { const next = migrateBotMax(settings.get()); if (next) settings.set({ botMax: next }) } catch (e) { console.error('[bot-max]', (e as Error).message) }
   /** Cards open in running chats right now, as inbox items (answered through chat:respond). */
   const liveNeedsYou = (): NeedsYouItem[] => {
     const out: NeedsYouItem[] = []
@@ -1676,7 +1721,7 @@ app.whenReady().then(() => {
   for (const sp of db.listSpaces()) if (sp.kind === 'project' && sp.folder) attachments.allow(sp.folder)
 
   // ---------------------------------------------------------------- knowledge base (search over the user's own files)
-  // Sources: the workspace, every project's folder, folders added in Settings → Knowledge, and attached
+  // Sources: the workspace, every project's folder, folders added in Settings → Advanced → Knowledge folders, and attached
   // folders the user opts in. Indexing starts a few seconds after launch (not in hidden test runs unless
   // SAHILBOT_KNOWLEDGE=1); embeddings run only while no chat is running.
   let knowledgeNotify: ReturnType<typeof setTimeout> | null = null
@@ -1707,7 +1752,7 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------- learning while the app is open and idle
   // Runs only while SahilBot is running and idle (no chat for 2 minutes, nobody using the window); it stops
   // the moment a run starts or the user does something, and never after quit. Not in hidden test runs
-  // unless SAHILBOT_LEARNING=1. Everything it learns is in Settings → Memory → What I learned, with Undo.
+  // unless SAHILBOT_LEARNING=1. Everything it learns is in Settings → Memory → Learned, with Undo.
   const appThreadRef: { current?: (id: string) => boolean } = {}
 
   // ---------------------------------------------------------------- the knowledge vault (src/main/vault, docs/vault.md)
@@ -1909,6 +1954,23 @@ app.whenReady().then(() => {
       const openaiOk = !!s.voiceOutput?.openai && !!apiAccess(settings).openai()
       return { localOn: localOn(s), openai: openaiOk ? openaiVoice : null, openaiStt: openaiOk ? openaiEars : null, spendingNone: spendingMode(s) === 'none' }
     },
+    // Speech recognition runs on this Mac by default (voice is the exception to local-models opt-in):
+    // the Whisper model is picked for this Mac's memory and chip (voice/models.ts).
+    input: () => {
+      const v = settings.get().voiceInput
+      return { local: v?.local !== false, choice: v?.model ?? 'auto', bench: (v?.bench as never) ?? null, hw: { ramGB: Number(process.env.FOREMAN_RAM_GB) || totalmem() / 1024 ** 3, appleSilicon: process.arch === 'arm64' } }
+    },
+    saveBench: (b) => { settings.set({ voiceInput: { ...settings.get().voiceInput, bench: b } }) },
+    // The one-time benchmark's sentence, in the Mac's own voice (no download).
+    speechSample: () => new Promise((resolve) => {
+      const dir = mkdtempSync(join(tmpdir(), 'sahilbot-bench-'))
+      execFile('say', ['-o', join(dir, 'a.aiff'), 'Remind me to call Priya tomorrow at noon about the quarterly report.'], (e1) => {
+        if (e1) { rmSync(dir, { recursive: true, force: true }); return resolve(null) }
+        execFile('afconvert', ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', join(dir, 'a.aiff'), join(dir, 'a.wav')], (e2) => {
+          try { resolve(e2 ? null : fromWav(readFileSync(join(dir, 'a.wav'))).samples) } catch { resolve(null) } finally { rmSync(dir, { recursive: true, force: true }) }
+        })
+      })
+    }),
     emit: (e) => toWin('voice:event', e),
     respond: (text, signal, onText) => new Promise<void>((resolve, reject) => {
       const tid = voiceThread
@@ -1923,7 +1985,10 @@ app.whenReady().then(() => {
       signal.addEventListener('abort', () => { chat.stop(tid); off(); resolve() })
       chat.send({ threadId: tid, text, voice: true }).catch((err: Error) => { off(); reject(err) })
     })
-  })
+  }, { download: HIDDEN ? 'stub' : 'real' })
+  // Speech recognition downloads itself in the background once set up (never in test runs: 'stub').
+  voicePrepRef.current = (why) => void voice.prepare(why)
+  if (settings.get().onboarded) setTimeout(() => voicePrepRef.current('auto'), HIDDEN ? 300 : 20_000).unref?.()
   handle('voice:status', () => voice.status())
   handle('voice:download', (kind: 'whisper' | 'vad' | 'kokoro') => voice.download(kind))
   handle('voice:setVoice', (v: string) => voice.setVoice(v))
@@ -1983,6 +2048,54 @@ app.whenReady().then(() => {
   registry.register(batchTool(batches, { access: apiKeys, workspace: () => settings.get().workspaceDir }))
   if (!HIDDEN || process.env.SAHILBOT_BATCHES === '1') batches.resume()
   app.on('before-quit', () => batches.dispose())
+
+  // ---------------------------------------------------------------- video (HeyGen + HyperFrames connectors: agent/tools/video.ts)
+  // Avatar videos, translation and motion graphics through the user's own one-click HeyGen connectors. Renders
+  // are watched in the background; the MP4 lands in videos/ and plays in the chat. Test runs (hidden only) may
+  // point it at loopback test presets and a loopback file server.
+  const videoPresets = ((): Record<VideoApp, string> => {
+    const base: Record<VideoApp, string> = { heygen: 'heygen', hyperframes: 'hyperframes' }
+    if (!HIDDEN || !process.env.SAHILBOT_TEST_VIDEO_PRESETS) return base
+    try {
+      const j = JSON.parse(process.env.SAHILBOT_TEST_VIDEO_PRESETS) as Partial<Record<VideoApp, string>>
+      for (const k of ['heygen', 'hyperframes'] as const) if (typeof j[k] === 'string' && /^test-[a-z0-9-]{1,30}$/.test(j[k]!)) base[k] = j[k]!
+    } catch { /* ignored */ }
+    return base
+  })()
+  const videoLink: VideoLink = {
+    connected: (a) => connectors.presetConnected(videoPresets[a]),
+    name: (a) => connectors.presets().find((p) => p.id === videoPresets[a])?.name ?? (a === 'heygen' ? 'HeyGen' : 'HyperFrames by HeyGen'),
+    tools: (a) => connectors.presetTools(videoPresets[a]).map((n) => registry.get(n)).filter((t): t is NonNullable<typeof t> => !!t).map((t) => ({
+      name: t.name.slice(t.name.indexOf('__') + 2),
+      description: t.description,
+      parameters: t.parameters,
+      // The connector's own call (its sign-in and reconnect handling); the video tool did the permission check.
+      call: async (args, signal) => (await t.run(args, { signal: signal ?? new AbortController().signal } as ToolContext)).text
+    }))
+  }
+  const testLoopback = HIDDEN && process.env.SAHILBOT_TEST_VIDEO_LOOPBACK === '1'
+  const videos = new VideoManager({
+    link: videoLink,
+    workspace: () => settings.get().workspaceDir,
+    stateFile: join(sub('videos'), 'videos.json'),
+    fileUrl: (p) => attachments.url(p),
+    allowUrl: testLoopback ? (u) => publicHttps(u) || (u.protocol === 'http:' && u.hostname === '127.0.0.1') : undefined,
+    pollMs: testLoopback ? 300 : undefined,
+    maxPollMs: testLoopback ? 600 : undefined,
+    notify: (threadId, text, video) => {
+      if (!db.getThread(threadId)) return
+      const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', meta: { video } })
+      emit({ threadId, type: 'message', message: m })
+    },
+    alert: (threadId, title, body) => {
+      notifyDevices('all', { title, body, threadId, kind: 'done', tag: `video-${threadId}` })
+      if (!QUIET && Notification.isSupported()) showNote(new Notification({ title, body }), threadId)
+    }
+  })
+  registry.register(videoTool(videos))
+  handle('video:get', (id: string) => videos.card(String(id ?? '').slice(0, 80)))
+  if (!HIDDEN || testLoopback) videos.resume()
+  app.on('before-quit', () => videos.dispose())
   // Knowledge search embeddings through OpenAI, only when the user turned it on (sends document text to OpenAI).
   embeddingProvider.openai = { creds: () => (settings.get().openaiEmbeddings ? apiKeys.openai() ?? null : null) }
   const setSettings = settings.set.bind(settings)
@@ -2056,7 +2169,7 @@ app.whenReady().then(() => {
     return r.filePath
   })
 
-  // Settings → Vault: metadata-only replies (src/main/secure/ipc.ts), from the main window only.
+  // Settings → Privacy & Security → Passwords: metadata-only replies (src/main/secure/ipc.ts), from the main window only.
   registerVaultIpc(vaultHandlers({
     vault, auth: vault.auth!, purchases,
     touchIdAvailable: () => electronTouchId(HIDDEN).available(),
@@ -2095,6 +2208,11 @@ app.whenReady().then(() => {
 
   handle('memory:list', () => memory.list())
   handle('memory:remove', (id: string) => void memory.remove(id))
+  // Undo after a delete in Settings → Memory: the same memory back (id, kind, scope and dates).
+  handle('memory:restore', (m: MemoryItem) => {
+    if (!m || typeof m.id !== 'string' || typeof m.content !== 'string' || memory.get(m.id)) return memory.get(String(m?.id ?? '')) ?? null
+    return memory.restore({ id: m.id.slice(0, 64), category: m.category, content: m.content.slice(0, 2000), spaceId: typeof m.spaceId === 'string' && db.getSpace(m.spaceId) ? m.spaceId : null, source: m.source ?? 'you', createdAt: Number(m.createdAt) || Date.now(), updatedAt: Number(m.updatedAt) || Date.now(), provenance: m.provenance === 'untrusted' ? 'untrusted' : 'trusted' })
+  })
   handle('memory:add', (content: string, spaceId: string | null, category?: string) => memory.add(content, spaceId ?? null, category))
   handle('memory:update', (id: string, content: string, patch?: { category?: string; spaceId?: string | null }) => void memory.update(id, content, patch ?? {}))
   // Import memory to SahilBot (src/main/memory-import.ts): Instructions become rules (Settings → Rules).
@@ -2206,7 +2324,7 @@ app.whenReady().then(() => {
     return { loginItem, openedAtLogin, working: work.working().length, keepingAwake: awake.on, menuBarIcon: !!menuBar?.shown, routinesPaused: !!s.routinesPaused }
   }
   handle('alwaysOn:status', () => alwaysOnStatus())
-  // Settings → Privacy & Permissions: status (no prompts) and the exact System Settings pane; nothing is granted here.
+  // Settings → Privacy & Security: status (no prompts) and the exact System Settings pane; nothing is granted here.
   handle('permissions:status', () => permissionsStatus({
     accessibility: () => systemPreferences.isTrustedAccessibilityClient(false),
     media: (kind) => systemPreferences.getMediaAccessStatus(kind),

@@ -6,8 +6,8 @@ import { toast } from '../lib/toast'
 import { addRule, RULE_MAX_CHARS } from '../lib/approvalRules'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
-// Lazy: Connect Apps is its own chunk; only a Google sign-in card needs this piece of it.
-import { ApiKeyPanel, GoogleSetup, Lazy } from '../lazy'
+// Lazy: Connect Apps is its own chunk; only a card for an app that still needs its setup (or a key) uses it.
+import { ApiKeyPanel, AppSetup, GoogleSetup, Lazy } from '../lazy'
 
 const EFFECT_TEXT: Record<string, string> = {
   read: 'Reads only',
@@ -16,7 +16,11 @@ const EFFECT_TEXT: Record<string, string> = {
   destructive: 'Can delete or overwrite'
 }
 
-/** One click: sign in (browser opens for OAuth), and the agent continues with the new tools. */
+/**
+ * One click: sign in (the app's own page opens in the user's default browser), and the agent continues
+ * with the new tools. An app that isn't one click yet (no built-in client and none of the user's own,
+ * or an API key) never gets the one-click button: the card shows its one-time setup instead.
+ */
 function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -24,9 +28,15 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
   // Answered once: a connect from here, from Connect apps or from another chat all end the card.
   const answered = useRef(false)
   const respond = (answer: string): void => { if (answered.current) return; answered.current = true; void onRespond(req.id, answer) }
-  // Gmail, Calendar and Drive need "Set up Google once" first: shown right here in the card.
+  // Google apps without SahilBot's built-in Google app need "Set up Google once" first: right here in the card.
   const [googleSetup, setGoogleSetup] = useState(false)
-  useEffect(() => { if (p.auth === 'google') void api.connectors.googleClient().then((c) => setGoogleSetup(!c)).catch(() => undefined) }, [p.auth])
+  useEffect(() => { if (p.auth === 'google' && !p.builtinClient) void api.connectors.googleClient().then((c) => setGoogleSetup(!c)).catch(() => undefined) }, [p.auth, p.builtinClient])
+  // Apps without self-registration and no built-in client: their one-time setup, unless the user did it already.
+  const [ownApp, setOwnApp] = useState<boolean | null>(p.auth === 'oauth-static' && !p.builtinClient ? null : false)
+  useEffect(() => {
+    if (p.auth !== 'oauth-static' || p.builtinClient) return
+    void api.connectors.list().then((r) => setOwnApp(!r.configs.some((c) => c.preset === p.id && !!c.clientId))).catch(() => setOwnApp(true))
+  }, [p.id, p.auth, p.builtinClient])
   // Connected somewhere else meanwhile (Connect apps, another chat's card): the chat goes on with it.
   useEffect(() => api.connectors.onChange(() => {
     void api.connectors.list().then((r) => {
@@ -44,6 +54,7 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
     } catch (e) {
       const m = (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
       if (p.auth === 'google' && /one-time setup/i.test(m)) setGoogleSetup(true)
+      else if (p.auth === 'oauth-static' && /one-time setup/i.test(m)) setOwnApp(true)
       else setErr(m)
     } finally {
       setBusy(false)
@@ -59,6 +70,24 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
         </div>
         <div className="hint">{p.description} The key is kept in your Mac's Keychain and only sent to {p.name}.</div>
         <Lazy fallback="inline"><ApiKeyPanel compact preset={p} onCancel={() => respond('skip')} onDone={(st) => { if (st.state === 'connected') respond('connected') }} /></Lazy>
+      </div>
+    )
+  }
+  if (ownApp === null) return <div className="pending connect-card" data-testid="connect-card"><div className="hint">Checking {p.name}…</div></div>
+  if (ownApp) {
+    return (
+      <div className="pending connect-card" data-testid="connect-card" data-needs-setup="1">
+        <div className="pending-title">
+          <span className="conn-logo" style={{ background: p.color }}>{p.name[0]}</span>
+          {p.name} needs a one-time setup first
+        </div>
+        <div className="hint" data-testid="connect-card-setup-note">{p.name} doesn't let apps register themselves, and SahilBot doesn't ship its own {p.name} app yet. Create one in about {p.setup?.minutes ?? 5} minutes; after that it's one click.</div>
+        <Lazy fallback="inline"><AppSetup preset={p} onCancel={() => respond('skip')} onDone={async (clientId, clientSecret) => {
+          const cfg = (await api.connectors.list()).configs.find((c) => c.preset === p.id)
+          await api.connectors.save({ ...(cfg ?? { name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true }), clientId, ...(clientSecret ? { clientSecret } : {}) })
+          setOwnApp(false)
+          await go()
+        }} /></Lazy>
       </div>
     )
   }
@@ -79,7 +108,7 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
         <span className="conn-logo" style={{ background: p.color }}>{p.name[0]}</span>
         Connect {p.name} to continue?
       </div>
-      <div className="hint">{p.description} {p.auth === 'none' ? 'No sign-in needed.' : 'You sign in on their site; your login is stored in your Mac\'s Keychain.'}</div>
+      <div className="hint">{p.description} {p.auth === 'none' ? 'No sign-in needed.' : `${p.name}'s own sign-in page opens in your browser; the sign-in is kept in your Mac's Keychain.`}</div>
       {busy && p.auth !== 'none' && <div className="hint" data-testid="connect-card-waiting">Finish signing in to {p.name} in your browser; this chat goes on by itself once you're back.</div>}
       {err && <div className="hint error" data-testid="connect-card-error">{err}</div>}
       <div className="pending-actions">
@@ -413,7 +442,7 @@ function ApprovalCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
             <button className="btn primary" disabled={saving || !ruleText.trim()} onClick={() => void saveRule()} data-testid="approval-rule-save">{saving ? 'Saving…' : 'Save rule'}</button>
             <button className="btn" onClick={() => setRuleOpen(false)}>Cancel</button>
           </div>
-          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”. Manage rules in Settings → Approval rules.</div>
+          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”. Manage rules in Settings → Privacy & Security → Approvals.</div>
         </div>
       )}
     </div>

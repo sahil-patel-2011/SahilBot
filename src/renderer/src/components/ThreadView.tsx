@@ -11,10 +11,12 @@ import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
 import { PageCard, pagesFromSteps } from './PageCard'
 import { StockCard, stocksFromSteps } from './StockCard'
+import { VideoCard, videoOf, videosFromSteps } from './VideoCard'
 import { DocCard, docsFromSteps } from './doc/DocCard'
 import { AskBotCard, CouncilCard, HeavyCard, MemberRow, SpendCard, SwarmCard } from './HeavyCard'
 import { CuaCard, cuaOf } from './CuaCard'
-import { askBotOf, councilOf, groupMembers, heavyOf, isCardNotice, money, swarmOf, teamTotals, tokenCount, unfinished } from '../lib/swarm-view'
+import { askBotOf, councilOf, groupMembers, heavyOf, isCardNotice, maxOf, maxTeamCalls, money, swarmOf, teamTotals, tokenCount, unfinished } from '../lib/swarm-view'
+import { MaxCard } from './MaxCard'
 
 type Block =
   | { kind: 'user'; m: Message }
@@ -44,6 +46,8 @@ export interface ThreadActions {
 export function blocks(messages: Message[]): Block[] {
   const results = new Map<string, Message>()
   for (const m of messages) if (m.role === 'tool' && m.toolCallId) results.set(m.toolCallId, m)
+  // A Max run shows its team inside its one card: that team's own card is left out.
+  const inMax = maxTeamCalls(messages)
   const out: Block[] = []
   let act: Extract<Block, { kind: 'activity' }> | null = null
   // One plan card per request: it appears where the agent first wrote its plan and shows the latest version.
@@ -65,6 +69,8 @@ export function blocks(messages: Message[]): Block[] {
     }
     // A draft the app sent back for fixing (e.g. it cited links nobody retrieved) is replaced by the next answer.
     if (m.meta?.superseded) continue
+    // A Max hybrid's phase-1 brief is shown inside the Max card (the judged answer follows it).
+    if (m.meta?.maxBrief && !m.toolCalls?.length) continue
     const hasText = !!(m.content || m.status === 'error' || m.status === 'stopped' || (m.reasoning && !m.toolCalls?.length))
     if (hasText) { act = null; out.push({ kind: 'text', m }) }
     if (m.toolCalls?.length) {
@@ -95,7 +101,7 @@ export function blocks(messages: Message[]): Block[] {
           }
           continue
         }
-        if (call.name === 'agents') {
+        if (call.name === 'agents' && !inMax.has(call.id)) {
           let titles: string[] = []
           try { titles = (JSON.parse(call.arguments).tasks ?? []).map((t: { title: string }) => t.title) } catch { /* partial */ }
           const r = results.get(call.id)
@@ -512,8 +518,13 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
           <Activity steps={b.steps} live={live} waitingApproval={waitingApproval} onOpenFile={actions.onOpenFile} />
           {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
           {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
+          {videosFromSteps(b.steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
           {hasDocs && docsFromSteps(b.steps).map((d) => <DocCard key={d.key} doc={d.doc} at={d.at} exported={d.exported} onOpen={actions.onOpenDoc!} />)}
         </>
+      ) : b.kind === 'notice' && videoOf(b.m) ? (
+        <VideoCard data={videoOf(b.m)!} />
+      ) : b.kind === 'notice' && maxOf(b.m) ? (
+        <MaxCard board={maxOf(b.m)!} live={running} />
       ) : b.kind === 'notice' && swarmOf(b.m) ? (
         <SwarmCard board={swarmOf(b.m)!.board} live={running} />
       ) : b.kind === 'notice' && councilOf(b.m) ? (

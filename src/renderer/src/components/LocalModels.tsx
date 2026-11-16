@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { Settings } from '@shared/types'
 import { toast } from '../lib/toast'
+import { Toggle } from './Toggle'
+import { InfoTip } from './ui'
 import '../styles-attachments.css'
 
 // Settings → Models: local models are opt-in. Off (the default for new installs): one quiet row, no
@@ -34,27 +36,24 @@ export function LocalModelsRow({ s, patch, onChanged }: { s: Settings; patch: (p
 }
 
 /**
- * Settings → Voice → Speaking: which voice reads replies. Kokoro (local) only with local models on;
- * otherwise OpenAI's voice when allowed here with a key saved (paid, within the monthly limit), else the
- * Mac's own voice (free, nothing to download).
+ * Settings → Voice: OpenAI for voice (paid, within the monthly limit): it transcribes when speech
+ * recognition on this Mac isn't ready or is off, and speaks replies. Off: the Mac's own voice (free), or
+ * Kokoro on this Mac when local models are on.
  */
 export function VoiceOutputRow({ s, patch, output }: { s: Settings; patch: (p: Partial<Settings>) => Promise<unknown>; output?: 'kokoro' | 'openai' | 'say' }) {
   const allowed = !!s.voiceOutput?.openai
   const hasKey = !!s.keys?.openai
-  const now = output === 'kokoro' ? 'Kokoro (on this Mac)' : output === 'openai' ? 'OpenAI voice' : output === 'say' ? 'the Mac\'s own voice' : ''
+  const now = output === 'kokoro' ? 'Kokoro (on this Mac)' : output === 'openai' ? 'OpenAI\'s voice' : output === 'say' ? 'the Mac\'s own voice' : ''
   return (
     <div className="set-row" data-testid="voice-output-row">
       <div className="set-row-text">
-        <div className="set-row-title">Use OpenAI for voice</div>
-        <div className="set-row-sub">
-          {hasKey ? 'OpenAI listens (transcription, about 0.5¢ a minute) and speaks (about 1.5¢ a minute) through your OpenAI key, counted in your monthly limit.' : 'Needs an OpenAI key (Settings → API Keys).'}
-          {localIsOn(s) ? ' Whisper and Kokoro, when downloaded, are used first.' : ' Off: replies use the Mac\'s own voice (free); voice input needs this or local models.'}
-          {now ? ` Replies are spoken with ${now}.` : ''}
+        <div className="set-row-title">Use OpenAI for voice
+          <InfoTip>OpenAI transcribes (about 0.5¢ a minute) while speech recognition on this Mac isn't ready, and speaks replies (about 1.5¢ a minute), through your OpenAI key and within your monthly limit.{localIsOn(s) ? ' Kokoro, when downloaded, speaks first.' : ''}</InfoTip>
         </div>
+        <div className="set-row-sub">{hasKey ? (now ? `Replies use ${now}.` : 'Speaks replies with OpenAI\'s voice.') : 'Needs an OpenAI key (Models & Keys).'}</div>
       </div>
       <div className="set-row-ctl">
-        <button type="button" role="switch" aria-checked={allowed} className={`btn${allowed ? ' primary' : ''}`} disabled={!hasKey && !allowed}
-          onClick={() => void patch({ voiceOutput: { openai: !allowed } })} data-testid="voice-openai">{allowed ? 'On' : 'Off'}</button>
+        <Toggle on={allowed} disabled={!hasKey && !allowed} onChange={(v) => void patch({ voiceOutput: { openai: v } })} label="Use OpenAI for voice" testId="voice-openai" />
       </div>
     </div>
   )

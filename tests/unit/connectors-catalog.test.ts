@@ -87,19 +87,22 @@ describe('one click vs needs setup', () => {
     expect(connectBadge(preset('exa'))).toBe('One click')
     expect(connectBadge(preset('slack'))).toBe('Needs setup')
     expect(connectBadge(preset('gmail'))).toBe('Needs setup')
-    expect(connectBadge(preset('gmail-web'))).toBeNull()
+    expect(connectBadge(preset('gmail-web'))).toBe('SahilBot\'s browser')
+    // SahilBot's own app registration (resources/oauth-clients.json) makes a setup app one click.
+    expect(connectBadge({ ...preset('slack'), builtinClient: true })).toBe('One click')
+    expect(connectBadge({ ...preset('gmail'), builtinClient: true })).toBe('One click')
+    expect(needsSetup({ ...preset('github'), builtinClient: true })).toBe(false)
     expect(connectBadge(preset('custom'))).toBeNull()
     expect(needsSetup(preset('github'))).toBe(true)
   })
-  test('Recommended puts one-click apps first', () => {
+  test('Recommended shows only apps that truly connect in one click', () => {
     const r = recommended(PRESETS, new Set())
     expect(r).toHaveLength(6)
     expect(r.every(isOneClick)).toBe(true)
-    // With most one-click picks connected, setup apps fill in after the remaining one-click ones.
+    // With most one-click picks connected, setup apps never fill in: the list just gets shorter.
     const many = new Set(PRESETS.filter(isOneClick).map((p) => p.id).filter((id) => id !== 'notion'))
     const r2 = recommended(PRESETS, many)
-    expect(r2[0].id).toBe('notion')
-    expect(r2.slice(1).every((p) => !isOneClick(p))).toBe(true)
+    expect(r2.map((p) => p.id)).toEqual(['notion'])
   })
 })
 
@@ -180,7 +183,7 @@ describe('sign-in robustness', () => {
       expect((await fetch(`${base}/callback`)).status).toBe(404)
       const page = await fetch(`${base}/callback?code=good&state=${a.state()}`)
       expect(page.status).toBe(200)
-      expect(await page.text()).toMatch(/Signed in/)
+      expect(await page.text()).toMatch(/Connected to the app/)
       await expect(a.waitForCode(2000)).resolves.toBe('good')
       await fetch(`${base}/callback?error=access_denied&error_description=${encodeURIComponent('User said no')}&state=${a.state()}`)
       await expect(a.waitForCode(2000)).rejects.toThrow(/access_denied \(User said no\)/)

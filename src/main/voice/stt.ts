@@ -1,9 +1,11 @@
 import { toWav, SAMPLE_RATE } from './audio'
 
-// Speech to text, cloud first. Local models on (and Whisper downloaded): whisper.cpp on this Mac. Local
-// off: OpenAI's transcription when an OpenAI key is saved and the user allowed OpenAI for voice (the same
-// switch as spoken replies), charged against the monthly limit. Otherwise voice input says what it needs;
-// it never asks to download the Whisper model while local models are off.
+// Speech to text, local by default. Voice is the one exception to "local models are opt-in": the user
+// asked for it to run on this Mac, so whisper.cpp is used whenever its model is downloaded (it downloads
+// itself in the background after onboarding: voice/models.ts picks the size for this Mac), whatever
+// Settings → Models → Local models says. Until it's ready (or with "Transcribe on this Mac" off in
+// Settings → Voice → Advanced): OpenAI's transcription when an OpenAI key is saved and allowed (the same
+// switch as spoken replies), charged against the monthly limit. Otherwise voice input says what it needs.
 // macOS's own speech recognition isn't reachable from Electron without a native helper (SFSpeechRecognizer)
 // and Chromium's Web Speech API needs Google's servers, so neither is used.
 
@@ -15,18 +17,24 @@ export interface SpeechToText {
   transcribe(samples: Float32Array, prompt?: string): Promise<string>
 }
 
-export const NO_VOICE_INPUT = 'Voice input needs an OpenAI key or local models (Settings → Voice).'
+export const NO_VOICE_INPUT = 'Voice input needs speech recognition on this Mac or an OpenAI key (Settings → Voice).'
 
 export type SttChoice = { kind: 'whisper' } | { kind: 'openai' } | { kind: 'none'; note: string }
 
 /**
- * Which speech recognition voice input uses. Local on: Whisper (its download lives in Settings → Voice;
- * until it's there, OpenAI's when allowed). Local off: OpenAI's when allowed with a key, else a quiet note.
+ * Which speech recognition voice input uses. localOn: transcribing on this Mac is allowed (the default,
+ * independent of local models). Whisper when its model is ready; until then OpenAI's when allowed with a
+ * key; else a short note (what's downloading, or what's needed).
  */
-export function chooseStt(o: { localOn: boolean; whisperReady: boolean; openaiKey: boolean; openaiAllowed: boolean; cloudOn?: boolean; spendingNone?: boolean }): SttChoice {
+export function chooseStt(o: { localOn: boolean; whisperReady: boolean; openaiKey: boolean; openaiAllowed: boolean; cloudOn?: boolean; spendingNone?: boolean; preparing?: { label: string; progress?: number; error?: string } | null }): SttChoice {
   if (o.localOn && o.whisperReady) return { kind: 'whisper' }
   if (o.openaiKey && o.openaiAllowed && o.cloudOn !== false && !o.spendingNone) return { kind: 'openai' }
-  if (o.localOn) return { kind: 'none', note: 'Download the voice models in Settings > Voice first.' }
+  if (o.localOn) {
+    const p = o.preparing
+    if (p?.error) return { kind: 'none', note: `Speech recognition couldn't download (${p.error}). It tries again the next time you use the mic, or retry in Settings → Voice.` }
+    const pct = p && typeof p.progress === 'number' && p.progress > 0 ? `, ${Math.round(p.progress * 100)}%` : ''
+    return { kind: 'none', note: `Getting speech recognition ready on this Mac (${p?.label ?? 'Whisper'}${pct}). Try again in a minute.` }
+  }
   return { kind: 'none', note: NO_VOICE_INPUT }
 }
 

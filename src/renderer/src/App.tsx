@@ -65,22 +65,26 @@ export function App() {
   const [browser, setBrowser] = useState<BrowserState | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [view, setView] = useState<MainView>('home')
-  const [settingsPage, setSettingsPage] = useState<'general' | 'models' | 'keys' | 'passwords' | 'rules' | 'memory' | 'usage' | undefined>(undefined)
+  // A page id (new or legacy: see lib/settings-index.ts LEGACY_PAGES), optionally 'page:tab'.
+  const [settingsPage, setSettingsPage] = useState<string | undefined>(undefined)
   // The compact usage card's "Details" opens Settings → Usage.
   useEffect(() => {
-    const open = (e: Event): void => { setSettingsPage(((e as CustomEvent).detail as 'usage' | undefined) ?? undefined); setShowSettings(true) }
+    const open = (e: Event): void => { setSettingsPage(((e as CustomEvent).detail as string | undefined) ?? undefined); setShowSettings(true) }
+    // Settings → Connected apps → "Connect apps".
+    const connect = (): void => { setShowSettings(false); setShowConnect(true) }
     window.addEventListener('sahilbot:open-settings', open)
-    return () => window.removeEventListener('sahilbot:open-settings', open)
+    window.addEventListener('sahilbot:open-connect', connect)
+    return () => { window.removeEventListener('sahilbot:open-settings', open); window.removeEventListener('sahilbot:open-connect', connect) }
   }, [])
   const [showConnect, setShowConnect] = useState(false)
   const [editor, setEditor] = useState<Editor>(null)
   const [palette, setPalette] = useState(false)
   // The Vault view (in the main area) and the memory import dialog: opened from the palette, Settings
   // or a bot's details through window events, so those surfaces don't need props from here.
-  const [vaultOpen, setVaultOpen] = useState<{ path: string | null } | null>(null)
+  const [vaultOpen, setVaultOpen] = useState<{ path: string | null; tab?: 'people' } | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   useEffect(() => {
-    const openVault = (e: Event): void => { setVaultOpen({ path: ((e as CustomEvent).detail as { path?: string | null } | undefined)?.path ?? null }); setShowSettings(false) }
+    const openVault = (e: Event): void => { const d = (e as CustomEvent).detail as { path?: string | null; tab?: 'people' } | undefined; setVaultOpen({ path: d?.path ?? null, tab: d?.tab }); setShowSettings(false) }
     const openImport = (): void => setImportOpen(true)
     window.addEventListener('sahilbot:open-vault', openVault)
     window.addEventListener('sahilbot:import-memory', openImport)
@@ -344,6 +348,8 @@ export function App() {
   useEffect(() => api.onOpenThread((id) => { void refreshSpaces().then(() => openAnyChatRef.current(id)) }), [refreshSpaces])
 
   useEffect(() => api.voice.onEvent((e) => {
+    // Speech recognition finished its background download (Settings → Voice shows the progress).
+    if (e.type === 'download' && e.kind === 'whisper' && e.done && e.auto) toast(`Voice input is ready: ${e.label ?? 'Whisper'} runs on this Mac.`, 'ok')
     if (live.current.voiceOn) return
     if (e.type === 'audio') { speaker.current ??= new Speaker(); speaker.current.play(e.audio, e.rate) }
     else if (e.type === 'stop-audio') speaker.current?.stop()
@@ -410,6 +416,8 @@ export function App() {
       if (e.metaKey && e.key === '\\') { e.preventDefault(); setPanel((p) => (p && p !== 'details' ? null : 'progress')) }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); composer.current?.toggleDictation() }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setVoiceOn(true) }
+      // Max for the next message (the composer's Modes menu has it too).
+      if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'm') { e.preventDefault(); composer.current?.toggleMax() }
       // Esc stops speaking, and the current run (when no dialog is open and Esc wasn't closing something else).
       if (e.key === 'Escape') void api.voice.stopSpeaking()
       if (e.key !== 'Escape' || e.defaultPrevented || !threadRef.current) return
@@ -471,6 +479,7 @@ export function App() {
     else if (a.kind === 'panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
     else if (a.kind === 'voice') setVoiceOn(true)
     else if (a.kind === 'dictate') requestAnimationFrame(() => composer.current?.toggleDictation())
+    else if (a.kind === 'max') requestAnimationFrame(() => composer.current?.toggleMax())
     else if (a.kind === 'vault') setVaultOpen({ path: null })
     else if (a.kind === 'import-memory') setImportOpen(true)
     else if (a.kind === 'chat') void openAnyChat(a.id)
@@ -486,7 +495,7 @@ export function App() {
       sendingRef.current.add(tid)
       setQueue((q) => ({ ...q, [tid]: (q[tid] ?? []).filter((x) => x !== first) }))
       // On failure it goes back to the front and is retried after this thread's next run event (no hot retry loop).
-      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst, ...(first.heavy ? { heavy: true } : {}), ...(first.swarm ? { swarm: true } : {}), ...(first.council ? { council: first.council } : {}), ...(first.fromLink ? { meta: { fromLink: true } } : {}), ...(first.workingFolder ? { workingFolder: first.workingFolder } : {}) }).catch((e: Error) => {
+      void api.chat.send({ threadId: tid, text: first.text, images: first.images, attachments: first.attachments, team: first.team, deepResearch: first.deepResearch, planFirst: first.planFirst, ...(first.heavy ? { heavy: true } : {}), ...(first.max ? { max: true } : {}), ...(first.swarm ? { swarm: true } : {}), ...(first.council ? { council: first.council } : {}), ...(first.fromLink ? { meta: { fromLink: true } } : {}), ...(first.workingFolder ? { workingFolder: first.workingFolder } : {}) }).catch((e: Error) => {
         setQueue((q) => ({ ...q, [tid]: [first, ...(q[tid] ?? [])] }))
         toast(e.message, 'error')
       })
@@ -616,7 +625,7 @@ export function App() {
       setThread(t)
     }
     try {
-      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst, ...(o.heavy ? { heavy: true } : {}), ...(o.swarm ? { swarm: true } : {}), ...(o.council ? { council: o.council } : {}), ...(o.fromLink ? { meta: { fromLink: true } } : {}), ...(o.workingFolder ? { workingFolder: o.workingFolder } : {}) })
+      await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst, ...(o.heavy ? { heavy: true } : {}), ...(o.max ? { max: true } : {}), ...(o.swarm ? { swarm: true } : {}), ...(o.council ? { council: o.council } : {}), ...(o.fromLink ? { meta: { fromLink: true } } : {}), ...(o.workingFolder ? { workingFolder: o.workingFolder } : {}) })
       void refreshSpaces()
     } catch (e) {
       toast((e as Error).message, 'error')
@@ -657,12 +666,13 @@ export function App() {
       onManageModels={() => { setSettingsPage('models'); setShowSettings(true) }}
       team={teamCap ? { on: teamOn, ...teamCap } : null}
       onTeam={setTeamOn}
-      swarm={space?.kind === 'bot' ? { mode: settings.botSwarm?.[space.id]?.mode ?? 'auto' } : null}
+      swarm={space?.kind === 'bot' ? { mode: settings.botMax?.[space.id]?.mode ?? settings.botSwarm?.[space.id]?.mode ?? 'auto' } : null}
       council={councilChoices(models)}
       thinking={thread?.effort ?? space?.effort ?? draft.effort ?? settings.thinking}
       onThinking={(e) => (thread ? void patchThread({ effort: e }) : setDraft((d) => ({ ...d, effort: e })))}
       mode={mode}
       allowBypass={!!settings.advanced.allowBypass}
+      autoBot={isBot}
       onMode={(m) => (thread ? void patchThread({ permissionMode: m }) : setDraft((d) => ({ ...d, mode: m })))}
       onVoice={() => setVoiceOn(true)}
       placeholder={isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? `Message ${chatBot?.name ?? 'SahilBot'}` : 'How can I help you today?'}
@@ -834,7 +844,7 @@ export function App() {
         )}
 
         {vaultOpen ? (
-          <Lazy><VaultView initialPath={vaultOpen.path} onClose={() => setVaultOpen(null)} /></Lazy>
+          <Lazy><VaultView initialPath={vaultOpen.path} initialTab={vaultOpen.tab} onClose={() => setVaultOpen(null)} /></Lazy>
         ) : view === 'tasks' && !thread ? (
           <TasksView spaces={spaces} onOpenChat={(threadId) => void openAnyChat(threadId)} />
         ) : view === 'files' && !thread ? (

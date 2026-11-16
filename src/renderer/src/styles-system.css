@@ -309,7 +309,7 @@
 .mm .set-section { margin: var(--sp-4) 0; }
 .mm-group-head { margin: var(--sp-4) 0 6px 2px; padding: 0; }
 
-/* Settings → Vault and Usage: one accent; quiet meters. */
+/* Settings → Privacy & Security → Passwords and Usage: one accent; quiet meters. */
 .spend-meter.mid i, .us-meter.mid i { background: var(--warn); }
 .sv-lock-note, .sv-banner { border-radius: var(--r-lg); }
 
@@ -474,3 +474,81 @@
 @media (prefers-reduced-motion: reduce) {
   .row-spin { animation: none; border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 }
+
+/* ---------------------------------------------------------------- video card (VideoCard.tsx)
+   A HeyGen render in the chat: a thin progress bar while it works, then the MP4 inline with its file row. */
+.video-card { max-width: 560px; margin: 6px 0; }
+.video-card.live { border-color: color-mix(in srgb, var(--accent) 35%, var(--surface-line)); }
+.video-card .ui-card-head > svg { color: var(--text-3); }
+.video-card[data-status="ready"] .ui-card-head > svg { color: var(--ok-text); }
+.video-progress { display: flex; flex-direction: column; gap: var(--sp-2); }
+.video-bar { height: 3px; border-radius: var(--r-pill); background: var(--tint-2); overflow: hidden; }
+.video-bar i { display: block; height: 100%; background: var(--accent); transition: width var(--dur) var(--ease); }
+.video-player { display: block; width: 100%; max-height: 420px; border-radius: var(--r-md); background: #000; }
+.video-file { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--text-2); min-width: 0; }
+.video-file > svg { flex: none; color: var(--text-3); }
+.video-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: var(--fw-medium); }
+.video-file-actions { margin-left: auto; display: flex; gap: var(--sp-1); flex: none; }
+.video-file-actions .btn { padding: 5px 10px; font-size: var(--fs-xs); display: inline-flex; align-items: center; gap: 5px; }
+.video-done { display: flex; align-items: center; gap: 6px; color: var(--ok-text); }
+/* The File panel and file thumbnails play videos too. */
+.file-video { display: block; width: 100%; max-height: 100%; background: #000; }
+.file-thumb video { width: 100%; height: 100%; object-fit: cover; }
+
+/* ---------------------------------------------------------------- Settings: tabs, "i" tips, search results, jump flash
+   (SettingsModal.tsx, MemoryManager.tsx; ui.tsx SetTabs / InfoTip) */
+.set-tabs { display: flex; align-items: center; gap: var(--sp-1); border-bottom: 1px solid var(--line); margin: 0 0 var(--sp-4); max-width: 760px; overflow-x: auto; scrollbar-width: none; }
+.set-tabs::-webkit-scrollbar { display: none; }
+.set-tabs > button[role="tab"] {
+  position: relative; flex: none; padding: 9px 10px 10px; font-size: var(--fs-md); color: var(--text-3); font-weight: var(--fw-medium);
+  border-radius: var(--r-sm) var(--r-sm) 0 0; transition: color var(--dur) var(--ease); display: inline-flex; align-items: center; gap: 6px;
+}
+.set-tabs > button[role="tab"]:hover { color: var(--text); }
+.set-tabs > button[role="tab"][aria-selected="true"] { color: var(--text); }
+.set-tabs > button[role="tab"][aria-selected="true"]::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--text); }
+.set-tabs > button[role="tab"]:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.set-tabs-extra { margin-left: auto; flex: none; padding-left: var(--sp-2); }
+.set-tabs-extra .link-btn { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); }
+.set-tab-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--tint-warn); color: var(--warn-text); font-size: var(--fs-2xs); font-weight: var(--fw-semibold); display: inline-grid; place-items: center; }
+
+.ui-info { position: relative; display: inline-flex; vertical-align: 1px; margin-left: 6px; }
+.ui-info-btn {
+  width: 15px; height: 15px; border-radius: 50%; border: 1px solid color-mix(in srgb, var(--text-3) 70%, transparent); color: var(--text-3);
+  font: italic 600 10px/13px Georgia, 'Times New Roman', serif; display: inline-grid; place-items: center; padding: 0; cursor: help;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.ui-info-btn:hover, .ui-info.open .ui-info-btn { color: var(--text); border-color: var(--text-2); }
+.ui-info-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.ui-info-pop {
+  position: absolute; z-index: 40; top: calc(100% + 6px); left: -10px; width: max-content; max-width: min(320px, 70vw);
+  padding: 9px 11px; border-radius: var(--r-md); background: var(--panel, var(--bg)); color: var(--text-2); border: 1px solid var(--line);
+  box-shadow: var(--shadow-pop); font-size: var(--fs-sm); font-weight: var(--fw-regular); line-height: 1.45; text-transform: none; letter-spacing: 0; white-space: normal;
+}
+
+.set-results { display: flex; flex-direction: column; gap: 1px; min-height: 0; overflow-y: auto; }
+.set-result { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 10px; border-radius: var(--r-sm); text-align: left; }
+.set-result:hover, .set-result:focus-visible { background: var(--hover); }
+.set-result-title { font-size: var(--fs-md); color: var(--text); }
+.set-result-where { font-size: var(--fs-xs); color: var(--text-3); }
+.set-results-empty { padding: 10px; font-size: var(--fs-sm); color: var(--text-3); }
+
+@keyframes set-flash { 0%, 35% { background: var(--tint-accent); box-shadow: 0 0 0 6px var(--tint-accent); } 100% { background: transparent; box-shadow: 0 0 0 6px transparent; } }
+.set-flash { animation: set-flash 1.6s var(--ease); border-radius: var(--r-sm); }
+@media (prefers-reduced-motion: reduce) { .set-flash { animation: none; outline: 2px solid var(--ring); outline-offset: 4px; } }
+
+.set-progress { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.set-progress .meter { width: 120px; }
+.settings-page .hue-row { flex-wrap: wrap; }
+.settings-page .hue-row .set-slider { width: 150px; }
+.mm-add-card { margin: 0 0 var(--sp-3); padding: 0 var(--sp-4); }
+.mm-toolbar .mm-select { flex: none; }
+.settings-page .set-body > h2 + .set-sub + .set-tabs, .settings-page .set-body > .set-section + .set-tabs { margin-top: var(--sp-2); }
+
+/* At 900 px the nav and body still fit; rows wrap their controls under the text. */
+@media (max-width: 960px) {
+  .settings-page .set-nav { width: 200px; }
+  .settings-page .set-body { padding: 28px 24px 56px; }
+  .set-tabs > button[role="tab"] { padding: 9px 8px 10px; }
+}
+.set-card > .ui-disclosure:first-child { border-top: 0; }
+.set-row-title a { color: inherit; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--text) 30%, transparent); }

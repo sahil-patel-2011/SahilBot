@@ -1,7 +1,8 @@
 import type { LearnedItem, LearningSettings, LearningStatus, ModelInfo, Settings } from '@shared/types'
 import type { Db } from '../db'
 import { activityTexts, isRelayed } from '../agent/loop'
-import { cost, priceFor } from '../llm/budget'
+import { cost, priceFor, spendingMode } from '../llm/budget'
+import { isPlanModel } from '../llm/codex/ids'
 import { localOff } from '@shared/local-mode'
 import { samplingFor } from '../llm/catalog'
 import { isLocal, streamChat, type ChatRequest, type StreamPart } from '../llm/client'
@@ -26,8 +27,9 @@ import { LearningStore, isPending, type LogEntry, type UndoPlan } from './store'
 //   c. skills from multi-step work that went well;
 //   d. lessons from repeated tool errors, declined actions and the user's corrections.
 // Model: a local one first (the background task model when it's local, else the best local model); a
-// cloud model (the background one, else the cheapest) only with "Use cloud models for learning" on,
-// within a daily cap. Everything learned goes in the log, with Undo.
+// cloud model (the ChatGPT plan, else the background one, else the cheapest) with "Use cloud models for
+// learning" on (the default), within a small daily cap that also counts toward the monthly limit; with
+// the monthly limit set to None only the ChatGPT plan. Everything learned goes in the log, with Undo.
 // Outside content never teaches: a chat a connected app or another bot started, or a run that read web
 // pages, email or other apps' output, gives no lessons or skills; memories from it are unverified (kept
 // with the bot, never rules); a rule from a chat that read outside content waits for the user's OK.
@@ -148,8 +150,9 @@ export class LearningService {
     try { return this.d.endpoints.usable().filter((m) => !isRemote(m)) } catch { return [] }
   }
 
+  /** "Remember things automatically" (default on). */
   enabled(): boolean {
-    return this.settings().enabled ?? this.localModels().length > 0
+    return this.settings().enabled ?? true
   }
 
   /** The model a pass uses, or why there isn't one. */
@@ -172,10 +175,14 @@ export class LearningService {
         : 'No local model is available. Start Ollama or LM Studio, or turn on “Use cloud models for learning”.' }
     }
     if (!s.cloud?.enabled) return { blocked: 'Cloud models are off (Settings → Models).' }
-    if (bg && !bgLocal) return { model: bg, cloud: true }
+    // Monthly limit None: pay-per-use spending is off, so only the ChatGPT plan (no per-request cost) may learn.
+    const none = spendingMode(s) === 'none'
+    if (bg && !bgLocal && (!none || isPlanModel(bg))) return { model: bg, cloud: true }
     let remote: ModelInfo[] = []
     try { remote = this.d.endpoints.usable().filter(isRemote) } catch { remote = [] }
+    if (none) remote = remote.filter((m) => isPlanModel(m.id) || m.provider === 'chatgpt')
     const cheap = cheapestFor(remote)
+    if (!cheap && none) return { blocked: 'Your monthly spending limit is None, so cloud learning is skipped (a local model or the ChatGPT plan would be used).' }
     return cheap ? { model: cheap.id, cloud: true } : { blocked: 'No model is available for learning.' }
   }
 

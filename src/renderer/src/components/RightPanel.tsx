@@ -234,6 +234,7 @@ function FilePane({ path }: { path: string | null }) {
       <div className="file-body">
         {p.kind === 'pdf' && <iframe className="pdf-frame" src={p.url} title={p.name} />}
         {p.kind === 'image' && <img className="file-img" src={p.url} alt={p.name} />}
+        {p.kind === 'video' && <video className="file-video" data-testid="file-video" src={p.url} controls preload="metadata" playsInline />}
         {p.kind === 'html' && <div className="doc-page md" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(p.html ?? '', SANITIZE) }} />}
         {p.kind === 'markdown' && <div className="doc-page"><Markdown text={p.text ?? ''} /></div>}
         {p.kind === 'text' && <pre className="file-text">{p.text}</pre>}

@@ -1,6 +1,6 @@
 // The format before the envelope vault: one Keychain (safeStorage) string per item, with plain indexes
 // in settings. Read-only here: migration copies it into the new vault and keeps it as the rollback copy
-// until the user removes it (Settings → Vault → Old copies).
+// until the user removes it (Settings → Privacy & Security → Passwords → Old copies).
 
 import type { AddressEntry } from '@shared/types'
 import type { TotpConfig } from '../otp'

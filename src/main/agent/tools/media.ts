@@ -32,7 +32,7 @@ export interface MediaDeps {
   now?(): Date
 }
 
-const OPENAI_HINT = 'Needs an OpenAI API key (Settings → API Keys & Servers) and cloud models switched on.'
+const OPENAI_HINT = 'Needs an OpenAI API key (Settings → Models & Keys) and cloud models switched on.'
 
 function creds(d: MediaDeps): OpenAICreds {
   const c = d.access.openai()

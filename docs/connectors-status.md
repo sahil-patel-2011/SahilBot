@@ -1,8 +1,8 @@
 # Connector readiness
 
-Swept 2026-11-15 by `tests/live/connectors-sweep.test.ts` (read-only: an unauthenticated MCP `initialize`, RFC 9728 protected-resource metadata, RFC 8414/OIDC authorization-server metadata, and a DNS lookup of each icon domain; no client was registered and nothing signed in).
+Swept 2026-11-16 by `tests/live/connectors-sweep.test.ts` (read-only: an unauthenticated MCP `initialize`, RFC 9728 protected-resource metadata, RFC 8414/OIDC authorization-server metadata, and a DNS lookup of each icon domain; no client was registered and nothing signed in).
 
-**190 servers checked:** 185 ok, 5 warn, 0 broken, 0 unreachable. 10 catalog entries have no https server to probe (built in, browser, custom, and local servers on this Mac, which run only their allowlisted command or loopback address).
+**188 servers checked:** 183 ok, 5 warn, 0 broken, 0 unreachable. 10 catalog entries have no https server to probe (built in, browser, custom, and local servers on this Mac, which run only their allowlisted command or loopback address).
 
 Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/connectors-sweep.test.ts`
 
@@ -42,7 +42,7 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Livestorm (`livestorm`) | oauth | ok | oauth-dcr · 401 | mcp.livestorm.co/register | true | true | initialize error: "invalid_token" |
 | Bird (`bird`) | oauth | ok | oauth-dcr · 401 | platform.bird.com/v1/oauth/register | true | true | - |
 | Superhuman Mail (`superhuman-mail`) | oauth | ok | oauth-dcr · 401 | mcp.auth.mail.superhuman.com/oauth2/register | true | true | - |
-| Mailchimp Transactional (`mandrill`) | apikey | ok | key · 200 | - | - | - | initialize error: Authorization: Bearer <api_key> required |
+| Mailchimp Transactional (`mandrill`) | apikey | ok | key · 200 | - | - | - | initialize error: Authorization: Bearer <api_key> required; re-checked 2026-11-16 |
 | Chatbase (`chatbase`) | oauth | ok | oauth-dcr · 401 | www.chatbase.co/api/oauth/register | true | true | initialize error: Provide a valid OAuth access token as a bearer token. See the WWW-Authenticate header to discover the authorization server. |
 | Help Scout (`helpscout`) | oauth | ok | oauth-dcr · 401 | mcp.helpscout.net/oauth/register | true | true | initialize error: "invalid_token" |
 | Front (`front`) | oauth-static | ok | oauth-no-dcr · 401 | - | true | true | initialize error: "Missing authentication token." |
@@ -70,7 +70,7 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Similarweb (`similarweb`) | oauth | ok | oauth-dcr · 401 | mcp-auth.similarweb.com/register | true | true | initialize error: "invalid_request" |
 | Crunchbase (`crunchbase`) | oauth-static | ok | oauth-no-dcr · 401 | - | true | true | - |
 | Buffer (`buffer`) | oauth | ok | oauth-dcr · 401 | auth.buffer.com/reg | true | true | initialize error: "Authorization header is required" |
-| Brevo (`brevo`) | apikey | warn | oauth-dcr · 401 | mcp.brevo.com/oauth/register | true | true | initialize error: "invalid_token"; server now also offers OAuth with DCR (could become one click) |
+| Brevo (`brevo`) | apikey | warn | oauth-dcr · 401 | mcp.brevo.com/oauth/register | true | true | initialize error: "invalid_token"; server now also offers OAuth with DCR + PKCE S256 (public clients): could become one click if the vendor documents it; re-checked 2026-11-16 |
 | Supermetrics (`supermetrics`) | oauth | ok | oauth-dcr · 401 | api.supermetrics.com/oauth/register | true | true | initialize error: "invalid_token" |
 | Crustdata (`crustdata`) | oauth | ok | oauth-dcr · 401 | mcp.crustdata.com/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
 | Replicate (`replicate`) | oauth | ok | oauth-dcr · 401 | mcp.replicate.com/register | true | true | initialize error: "invalid_token" |
@@ -97,9 +97,9 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Cloudflare Docs (`cloudflare-docs`) | none | ok | open · 200 · docs-ai-search | - | - | - | - |
 | Supabase (`supabase`) | oauth | ok | oauth-dcr · 401 | api.supabase.com/platform/oauth/apps/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
 | Neon (`neon`) | oauth | ok | oauth-dcr · 401 | mcp.neon.tech/api/register | true | true | initialize error: "invalid_token" |
-| Hugging Face (`huggingface`) | oauth | ok | open+oauth-dcr · 200 · huggingface.co/mcp | huggingface.co/oauth/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
+| Hugging Face (`huggingface`) | oauth | ok | open+oauth-dcr · 200 · huggingface.co/mcp | huggingface.co/oauth/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that); re-checked 2026-11-16 |
 | DeepWiki (`deepwiki`) | none | ok | open · 200 · DeepWiki | - | - | - | - |
-| Context7 (`context7`) | none | ok | open+oauth-dcr · 200 · Context7 | clerk.context7.com/oauth/register | true | true | - |
+| Context7 (`context7`) | none | ok | open+oauth-dcr · 200 · Context7 | clerk.context7.com/oauth/register | true | true | open, and also offers OAuth with DCR (clerk.context7.com): stays no sign-in; re-checked 2026-11-16 |
 | Microsoft Learn (`mslearn`) | none | ok | open · 200 · Microsoft Learn MCP Server | - | - | - | - |
 | Railway (`railway`) | oauth | ok | oauth-dcr · 401 | backboard.railway.com/oauth/register | true | true | initialize error: "Authentication required" |
 | Postman (`postman`) | oauth | ok | oauth-dcr · 401 | mcp.postman.com/register | true | true | initialize error: Invalid Request: API key required |
@@ -113,8 +113,8 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Buildkite (`buildkite`) | oauth | ok | oauth-dcr · 401 | mcp.buildkite.com/oauth/register | true | true | initialize error: "access_denied" |
 | Prisma Postgres (`prisma`) | oauth | ok | oauth-dcr · 401 | auth.prisma.io/register | true | unlisted | initialize error: "invalid_token" |
 | Datadog (`datadog`) | oauth | ok | oauth-dcr · 401 | app.datadoghq.com/api/v2/oauth2/register | true | true | - |
-| Render (`render`) | apikey | ok | oauth-no-dcr · 401 | - | true | true | - |
-| PagerDuty (`pagerduty`) | apikey | ok | oauth-no-dcr · 401 | - | true | true | initialize error: "invalid_token" |
+| Render (`render`) | apikey | ok | oauth-no-dcr · 401 | - | true | true | OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app); re-checked 2026-11-16 |
+| PagerDuty (`pagerduty`) | apikey | ok | oauth-no-dcr · 401 | - | true | true | initialize error: "invalid_token"; OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app); re-checked 2026-11-16 |
 | PostHog (`posthog`) | oauth | ok | oauth-dcr · 401 | oauth.posthog.com/oauth/register/ | true | true | - |
 | Amplitude (`amplitude`) | oauth | ok | oauth-dcr · 401 | mcp.amplitude.com/register | true | true | initialize error: "invalid_request" |
 | Mixpanel (`mixpanel`) | oauth | ok | oauth-dcr · 401 | mixpanel.com/oauth/mcp/register/ | true | true | - |
@@ -124,7 +124,7 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Alpha Vantage (`alphavantage`) | oauth | ok | oauth-dcr · 401 | mcp.alphavantage.co/register | true | true | initialize error: "invalid_request" |
 | Hex (`hex`) | oauth | ok | oauth-dcr · 401 | auth.app.hex.tech/oauth2/register | true | true | - |
 | Pendo (`pendo`) | oauth | ok | oauth-dcr · 401 | app.pendo.io/oauth/v1/register | true | true | - |
-| Exa search (`exa`) | none | ok | open+oauth-dcr · 200 · exa-search-server | auth.exa.ai/api/oauth/register | true | true | - |
+| Exa search (`exa`) | none | ok | open+oauth-dcr · 200 · exa-search-server | auth.exa.ai/api/oauth/register | true | true | open, and also offers OAuth with DCR (auth.exa.ai): stays no sign-in; re-checked 2026-11-16 |
 | Perplexity (`perplexity`) | oauth | ok | oauth-dcr · 401 | api.perplexity.ai/oauth/register | true | true | initialize error: Invalid API key provided. Ensure your API key is correct and active. |
 | Tavily (`tavily`) | oauth | ok | oauth-dcr · 401 | mcp.tavily.com/register | true | true | - |
 | Firecrawl (`firecrawl`) | oauth | ok | oauth-dcr · 401 | www.firecrawl.dev/api/oauth/register | true | true | initialize error: "invalid_token" |
@@ -196,7 +196,5 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Wiley Scholar Gateway (`wiley`) | oauth | ok | oauth-dcr · 401 | connector.scholargateway.ai/register | true | true | - |
 | Udemy Business (`udemy`) | oauth | ok | oauth-dcr · 401 | api.udemy.com/auth/external/oidc/dynamic-client/register | true | true | - |
 | Strava (`strava`) | oauth | ok | oauth-dcr · 401 | www.strava.com/oauth/mcp/register_client | unlisted | true | PKCE methods not listed (SahilBot sends S256 anyway) |
-| PubMed (`pubmed`) | none | ok | open · 200 · pubmed-mcp-server | - | - | - | - |
-| ClinicalTrials.gov (`clinicaltrials`) | none | ok | open · 200 · clinical_trials | - | - | - | - |
 
 Not probed (no server URL): `cursor-app`, `apple-notes`, `apple-mail`, `gmail-web`, `gcal-web`, `gdrive-web`, `linkedin-web`, `xcode`, `figma-desktop`, `custom`.

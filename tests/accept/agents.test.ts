@@ -18,7 +18,7 @@ describe('agent platform', () => {
   const lastUser = (req: Record<string, any>): string => String([...req.messages].reverse().find((m: any) => m.role === 'user')?.content ?? '')
 
   const CITIES = ['Paris', 'Tokyo', 'Lagos', 'Lima', 'Oslo', 'Cairo', 'Seoul', 'Quito', 'Hanoi', 'Perth']
-  test('Team of Experts: the lead sends at least 10 helpers in parallel, gets their reports, and compiles them', async () => {
+  test('Max picks a research team: the lead sends at least 10 helpers in parallel, gets their reports, and compiles them', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
     // Every request decides its own reply: helpers report, the lead delegates once then answers.
     const reply = (req: Record<string, any>) => {
@@ -29,19 +29,24 @@ describe('agent platform', () => {
     for (let i = 0; i < 40; i++) llm.script.push(reply)
     // The modes live under the composer's Modes menu.
     await page.click('[data-testid="modes-menu"]')
-    await page.click('[data-testid="team-toggle"]')
-    await page.fill('[data-testid="composer-input"]', 'Compare the populations of Paris and Tokyo')
+    await page.click('[data-testid="max-toggle"]')
+    await page.fill('[data-testid="composer-input"]', 'Research and compare the populations of Paris and Tokyo across the official census sources')
     await page.keyboard.press('Enter')
     await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 30_000 }).toContain('Both helpers reported back')
     // The lead got Team mode instructions, and each helper got its own task.
     const lead = llm.requests.find((r) => !sys(r).includes('You are a helper agent') && lastUser(r).includes('Paris and Tokyo'))!
-    expect(JSON.stringify(lead.messages)).toContain('Team of Experts is on')
+    expect(JSON.stringify(lead.messages)).toContain('Max is on for this request: research team')
     const helpers = llm.requests.filter((r) => sys(r).includes('You are a helper agent'))
     // (Each helper may be sent back once: its made-up link was never opened, so the link check catches it.)
     expect([...new Set(helpers.map((r) => String(r.messages.find((m: any) => m.role === 'user')?.content).replace(/^<context from="app">[\s\S]*?<\/context>\n\n/, '')))].sort()).toEqual(CITIES.map((c) => `Find the population of ${c}.`).sort())
     expect(JSON.stringify(lead.messages)).toContain('at least 10')
     // The team card shows both helpers finished; helper threads don't appear as chats.
     await expect.poll(() => page.locator('[data-testid="team-member"].tm-done').count()).toBe(10)
+    // One Max card holds the team (the planner's strategy and why on top).
+    const card = page.locator('[data-testid="max-card"]')
+    expect(await card.getAttribute('data-strategy')).toBe('team')
+    expect(await card.locator('[data-testid="team-member"]').count()).toBe(10)
+    expect(await page.locator('[data-testid="team-card"]').count()).toBe(1)
     expect(await page.locator('[data-testid="thread-item"]').count()).toBe(1)
     await app.close()
   })

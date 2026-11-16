@@ -36,6 +36,7 @@ export function FileCard({ f, onOpen }: { f: RecentFile; onOpen: (path: string) 
     <button className="file-card" onClick={() => onOpen(f.path)} title={f.path} data-testid="file-card">
       <div className={`file-thumb t-${ext}`}>
         {pv?.kind === 'image' ? <img src={pv.url} alt="" />
+          : pv?.kind === 'video' ? <video src={`${pv.url}#t=0.5`} muted preload="metadata" />
           : pv?.kind === 'sheets' && pv.sheets?.[0] ? (
             <div className="paper sheet">{pv.sheets[0].rows.slice(0, 6).map((r, i) => <div key={i} className="sheet-row">{r.slice(0, 4).map((c, j) => <span key={j}>{String(c ?? '')}</span>)}</div>)}</div>
           ) : (
@@ -62,6 +63,7 @@ const IDEAS: Array<{ icon: ReactNode; label: string; text: string; deep?: boolea
   { icon: <I.Search size={14} />, label: 'Watch a page', text: 'Every morning, check https:// and tell me only if something important changed (price, availability, new posts).' },
   { icon: <I.Cpu size={14} />, label: 'Build an app', text: 'Build me a small web app that ' },
   { icon: <I.File size={14} />, label: 'Make a deck', text: 'Make a polished 8-slide deck about ' },
+  { icon: <I.Video size={14} />, label: 'Make a video', text: 'Make a 30-second avatar video about ' },
   { icon: <I.Sparkle size={14} />, label: 'Use my Mac', text: 'On my Mac, ' }
 ]
 

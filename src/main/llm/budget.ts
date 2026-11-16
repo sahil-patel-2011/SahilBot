@@ -131,7 +131,7 @@ export function budgetLeftFor(mode: SpendingMode, cap: number, spent: number): n
   return mode === 'unlimited' ? Infinity : mode === 'none' ? 0 : Math.max(0, cap - spent)
 }
 
-export const NONE_MESSAGE = 'Pay-per-use API spending is turned off (Settings → General → Monthly spending limit: None), so nothing was sent. Only your ChatGPT plan (via Codex) and local models can run. Connect the ChatGPT plan in Settings → Models, start a local model, or set a monthly limit.'
+export const NONE_MESSAGE = 'Pay-per-use API spending is turned off (Settings → Models & Keys → Monthly spending limit: None), so nothing was sent. Only your ChatGPT plan (via Codex) and local models can run. Connect the ChatGPT plan in Settings → Models, start a local model, or set a monthly limit.'
 
 /** One request's token detail for the usage table (the providers' own counts). */
 export interface RecordDetail {
@@ -169,7 +169,7 @@ export class Budget {
     const spent = this.spent()
     const worst = cost(model, estimatedInput, maxOutput)
     if (spent + worst > cap) {
-      throw new Error(`Cloud budget reached: $${spent.toFixed(2)} of your $${cap.toFixed(2)} monthly cap is used, and this request could cost up to $${worst.toFixed(2)}. Nothing was sent. Switch to a local model, or change the limit in Settings → General → Monthly spending limit.`)
+      throw new Error(`Cloud budget reached: $${spent.toFixed(2)} of your $${cap.toFixed(2)} monthly cap is used, and this request could cost up to $${worst.toFixed(2)}. Nothing was sent. Switch to a local model, or change the limit in Settings → Models & Keys → Monthly spending limit.`)
     }
   }
 

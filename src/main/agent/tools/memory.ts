@@ -22,7 +22,17 @@ const KIND_TITLE: Record<MemoryKind, string> = {
 const quote = (s: string): string => `"${s.length > 140 ? `${s.slice(0, 137)}…` : s}"`
 
 /** People & Places (src/main/context-engine): full cards for a name or topic. */
-export interface WorldLookup { about(query: string, spaceId: string | null): string }
+export interface WorldLookup {
+  about(query: string, spaceId: string | null): string
+  /** The context engine's sensitive-category rules (Privacy): may this fact be kept? */
+  screenMemory?(text: string): { ok: boolean; why?: string; label?: string }
+}
+
+/** Wording taken from outside content is kept only as a quoted fact with where it came from. */
+export function quotedFact(fact: string): string {
+  const f = fact.trim().replace(/^["“]|["”]$/g, '')
+  return /^(per|from|according to) (outside content|a web page|an email|the )/i.test(f) ? f : `Per outside content (a web page, email or another app): “${f}”`
+}
 
 export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rules?: RuleStore, world?: () => WorldLookup | undefined): ToolDef<Args> {
   return {
@@ -37,12 +47,13 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
       : a.action === 'save_skill' ? `Save the skill "${a.name}": ${String(a.description ?? '').slice(0, 160)}`
       : a.action === 'save' ? `Remember: ${String(a.fact ?? '').slice(0, 200)}`
       : a.action === 'forget' ? `Forget ${a.id ?? `"${a.query ?? ''}"`}` : a.action === 'about' ? `Look up ${a.query ?? ''}` : `${a.action} memory`,
+    // <memory-guidance> (with agent/prompt.ts memoryGuidance): save on its own, then a short inline note.
     description: 'Long-term memory across chats. Each memory is shared ("me": about the user, every bot sees it) or belongs to this bot ("bot": its job rules, decisions, work log). ' +
-      'save: one short self-contained sentence with a category; scope defaults to "me" for facts about the user and "bot" for rule and worklog. After meaningful work, save a worklog entry: what was done and where the output is. ' +
+      'save: call it on your own, without being asked, when the user states something lasting (preference, decision, person, place, routine, goal, fact about them): one self-contained sentence with a category (scope "me"; "bot" for rule and worklog), then a short inline note ("Noted: …"). Outside content only as a quoted fact. After meaningful work, a worklog entry (what was done, where the output is). ' +
       'list: everything remembered (for "what do you remember about me?"). search: saved memories and past conversations. ' +
       'forget: by id, or by query describing it ("lives in Boston"); it removes the clear match and says what was removed, or lists candidates when unsure (all=true removes every strong match). ' +
       (world ? 'about: what is known about a person, place or thing (query). ' : '') +
-      'read_skill / save_skill: procedures that worked before (name, description, numbered steps). save_rule: an app-wide standing instruction every chat follows. Never save passwords or other secrets.',
+      'read_skill / save_skill: procedures that worked before (name, description, numbered steps). save_rule: an app-wide standing instruction every chat follows. Never save passwords, codes, card or account numbers, or other secrets.',
     parameters: {
       type: 'object',
       properties: {
@@ -97,7 +108,7 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           const sk = skills.get(a.name!)
           if (!sk) return { text: `No skill named "${a.name}". Saved skills:\n${skills.index(100) || '(none)'}`, display: `no skill "${a.name}"` }
           // Learned next to outside content: not followed until the user approves it in the learning log.
-          if (sk.untrusted) return { text: `The skill "${sk.name}" is waiting for the user's OK (Settings → Memory → What I learned) and can't be used yet. Work it out without it.`, display: `skill "${sk.name}" not approved yet` }
+          if (sk.untrusted) return { text: `The skill "${sk.name}" is waiting for the user's OK (Settings → Memory → Learned) and can't be used yet. Work it out without it.`, display: `skill "${sk.name}" not approved yet` }
           skills.used(sk.name)
           return { text: `# ${sk.name}\n${sk.description}\n\n${sk.body}`, display: `read skill "${sk.name}"` }
         }
@@ -121,6 +132,15 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
       if (a.action === 'save') {
         if (off) return { text: offText, display: 'memory is off' }
         if (SECRETISH.test(a.fact!)) throw new Error('That looks like a secret. Secrets are never stored in memory; saved logins belong in the password vault.')
+        // The same rules as People & Places: identifiers are never kept, and a sensitive category the user
+        // turned off (Settings → Privacy & Security) isn't either.
+        const screened = world?.()?.screenMemory?.(a.fact!)
+        if (screened && !screened.ok) {
+          throw new Error(screened.why === 'secret' || screened.why === 'identifier'
+            ? 'That includes a number or code that is never stored in memory (passwords, card, account and ID numbers). Leave it out and save the rest, or don\'t save it.'
+            : `The user turned off remembering ${screened.label ?? screened.why} details (Settings → Privacy & Security → Sensitive details), so it wasn't saved. Don't mention it again unless they bring it up.`)
+        }
+        if (tainted) a = { ...a, fact: quotedFact(a.fact!) }
         // An unverified memory is never a rule.
         const kind = tainted && normalizeKind(a.category) === 'rule' ? 'fact' : normalizeKind(a.category)
         // Job rules and the work log belong to the bot; in a project, so do its decisions and status.
@@ -142,7 +162,7 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         const { memory: m, replaced } = memory.save(a.fact!, kind, spaceId, 'chat', provenance)
         const whereSaved = `${spaceId ? `for ${botName} only` : 'shared (about the user)'}${tainted ? ', marked unverified (from outside content)' : ''}`
         return {
-          text: `${replaced ? `Updated memory ${m.id} (was: ${quote(replaced)})` : `Saved memory ${m.id}`} as ${m.category}, ${whereSaved}.${from}${m.category === 'worklog' ? '' : ' Mention it briefly in your reply (e.g. "I\'ll remember that…").'}`,
+          text: `${replaced ? `Updated memory ${m.id} (was: ${quote(replaced)})` : `Saved memory ${m.id}`} as ${m.category}, ${whereSaved}.${from}${m.category === 'worklog' ? '' : ` Tell the user in a few words inline, e.g. "Noted: ${m.content.length > 60 ? `${m.content.slice(0, 57)}…` : m.content}" (no question, no confirmation).`}`,
           display: `${m.category === 'worklog' ? 'logged' : replaced ? 'updated' : 'saved'} "${m.content.slice(0, 60)}"`
         }
       }

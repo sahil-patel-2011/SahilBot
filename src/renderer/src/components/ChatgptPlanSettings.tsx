@@ -49,7 +49,7 @@ export function ChatgptPlanSettings({ onRefresh, embedded }: { onRefresh?: () =>
         <>
           <div className="set-label">ChatGPT plan (via Codex)</div>
           <div className="set-sub">
-            Use your ChatGPT subscription through OpenAI's Codex app on this Mac, with no API charges. You sign in in Codex; SahilBot never sees your password or tokens.
+            Your ChatGPT subscription through Codex on this Mac, with no API charges.
           </div>
         </>
       )}

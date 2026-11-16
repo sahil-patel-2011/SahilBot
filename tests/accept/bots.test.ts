@@ -148,8 +148,9 @@ describe('bots, group chats, reactions, attachments and documents', () => {
 
     // Deleting asks even in Bypass; deny keeps the file. (Bypass is offered only after Settings → Advanced → Offer Bypass.)
     await page.evaluate(() => window.foreman.settings.set({ advanced: { allowBypass: true } } as never))
+    await page.click('[data-testid="model-picker"]')
     await page.click('[data-testid="mode-picker"]')
-    await page.locator('.menu-item', { hasText: 'Bypass' }).click()
+    await page.click('[data-testid="mode-bypass"]')
     llm.script.push({ toolCalls: [{ name: 'file_manage', arguments: `{"op":"delete","path":${p('memo.pdf')}}` }] }, { content: 'Kept it.' })
     await send(page, 'Delete the PDF')
     const card = page.locator('[data-testid="approval-card"]')

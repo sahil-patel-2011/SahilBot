@@ -39,7 +39,7 @@ function linkify(body: string, resolved: Record<string, string | null>): string 
 
 type Tab = 'note' | 'graph' | 'changes' | 'people'
 
-export function VaultView(p: { onClose: () => void; initialPath?: string | null }) {
+export function VaultView(p: { onClose: () => void; initialPath?: string | null; initialTab?: Tab }) {
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [notes, setNotes] = useState<VaultNoteInfo[] | null>(null)
   const [q, setQ] = useState('')
@@ -47,7 +47,7 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null 
   const [area, setArea] = useState<string>('all')
   const [path, setPath] = useState<string | null>(p.initialPath ?? null)
   const [note, setNote] = useState<VaultNoteFull | null>(null)
-  const [tab, setTab] = useState<Tab>('note')
+  const [tab, setTab] = useState<Tab>(p.initialTab ?? 'note')
   const [editing, setEditing] = useState<string | null>(null)
   const [confirmTrash, setConfirmTrash] = useState(false)
   const [creating, setCreating] = useState<string | null>(null)

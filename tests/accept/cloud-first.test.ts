@@ -1,10 +1,14 @@
 import type { ElectronApplication } from 'playwright'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { launch, tempProfile } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 
 // Cloud first, local opt-in: first-run setup leads with cloud connections and asks one question about
-// local models, with Not now as the default. Not now: nothing local is installed, downloaded or offered.
+// local models, with Not now as the default. Not now: no local model is installed, downloaded or offered.
+// Voice is the one exception: speech recognition (Whisper) runs on this Mac by default.
 
 let llm: MockLlm
 const LOCAL_IPC = ['ollama:setup', 'ollama:installed', 'models:pull', 'models:setupPicks', 'detectProviders']
@@ -28,8 +32,8 @@ describe('cloud-first onboarding', () => {
   beforeAll(async () => { llm = await startMockLlm() })
   afterAll(async () => { await llm.close() })
 
-  test('declining local models: no Ollama or download IPC, no download prompts, and the choice is saved', async () => {
-    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_SKIP_ONBOARDING: '' })
+  test('declining local models: no Ollama or LLM download IPC, no download prompts (only the speech model downloads), and the choice is saved', async () => {
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_SKIP_ONBOARDING: '', FOREMAN_RAM_GB: '64', FOREMAN_MODELS_DIR: mkdtempSync(join(tmpdir(), 'cf-models-')) })
     await countLocalIpc(app, false)
     await page.locator('[data-testid="onboarding"]').waitFor()
     await page.fill('[data-testid="onboarding-name"]', 'JP')
@@ -63,17 +67,25 @@ describe('cloud-first onboarding', () => {
     expect(await row.innerText()).toContain('Local models: off')
     expect(await page.locator('[data-testid="local-turn-on"]').count()).toBe(1)
     for (const sel of ['[data-testid="recommended-row"]', '[data-testid^="pull-"]', '[data-testid="ollama-setup"]', '.install-ollama']) expect(await page.locator(sel).count()).toBe(0)
-    // Settings → Voice: no voice model downloads (Whisper, Kokoro); voice input says what it needs instead.
+    // Settings → Voice: voice is the one exception to local opt-in. Speech recognition runs on this Mac by
+    // default and downloads itself in the background after onboarding: the Whisper model picked for this
+    // Mac (64 GB here: large-v3-turbo, 8-bit), never an LLM or Ollama. (Test runs only record the request.)
     await page.click('[data-testid="settings-voice"]')
-    const note = page.locator('[data-testid="voice-input-note"]')
-    await note.waitFor()
-    expect(await note.innerText()).toContain('Voice input needs an OpenAI key or local models (Settings → Voice)')
-    expect(await page.locator('.settings-page').innerText()).not.toMatch(/Whisper large|Kokoro-82M|Silero/)
+    const speech = page.locator('[data-testid="voice-speech-model"]')
+    await speech.waitFor()
+    await expect.poll(() => speech.innerText()).toMatch(/Whisper large-v3-turbo · best for your Mac/)
+    const st = await page.evaluate(() => window.foreman.voice.status())
+    expect(st.speech).toMatchObject({ model: 'large-v3-turbo-q8_0', local: true, stub: true })
+    expect(st.speech!.requested.length).toBeGreaterThan(0)
+    for (const f of st.speech!.requested) expect(f).toMatch(/^(ggml-(small|medium|large-v3-turbo)-q[58]_[01]\.bin|silero_vad\.onnx)$/)
+    // No Kokoro (a local voice) and no LLM download buttons.
+    expect(await page.locator('.settings-page').innerText()).not.toMatch(/Kokoro-82M/)
     expect(await page.locator('.settings-page button', { hasText: /^Download$/ }).count()).toBe(0)
-    // Dictation doesn't prompt a download either: it says the same thing.
+    // Until it's ready, dictation says so (no OpenAI key here); never a download prompt.
     const err = await page.evaluate(() => window.foreman.voice.dictateStart().then(() => '', (e: Error) => e.message))
-    expect(err).toContain('Voice input needs an OpenAI key or local models')
-    expect(await page.evaluate(() => window.foreman.voice.download('whisper').then(() => 'ok', (e: Error) => e.message))).toMatch(/Local models are off/)
+    expect(err).toContain('Getting speech recognition ready on this Mac')
+    expect(await page.evaluate(() => window.foreman.voice.download('whisper').then(() => 'ok', (e: Error) => e.message))).toBe('ok')
+    expect(await page.evaluate(() => window.foreman.voice.download('kokoro').then(() => 'ok', (e: Error) => e.message))).toMatch(/Local voices are off/)
     await page.click('[data-testid="settings-close"]')
     // The model menu doesn't nudge toward downloads either.
     await page.click('[data-testid="model-picker"]')

@@ -23,7 +23,7 @@ export class ApiError extends Error {
   }
 }
 
-const KEY_HINT = (p: string): string => `Check the ${p} key in Settings → API Keys & Servers.`
+const KEY_HINT = (p: string): string => `Check the ${p} key in Settings → Models & Keys.`
 
 /** Plain-English text for each kind (the provider's own message is appended when it helps). */
 function explain(provider: 'OpenAI' | 'Anthropic', kind: ApiErrorKind, detail: string, retryAfterMs?: number): string {

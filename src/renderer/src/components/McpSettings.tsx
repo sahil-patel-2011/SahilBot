@@ -6,7 +6,7 @@ import { toast } from '../lib/toast'
 import '../styles-mcp.css'
 import { ClampText } from './ui'
 
-// Settings → Privacy & Permissions → Connected apps (MCP): let Cursor, Claude Code, Claude Desktop and
+// Settings → Connected apps → Let apps on this Mac use SahilBot: let Cursor, Claude Code, Claude Desktop and
 // Shortcuts use your bots through a local server. Off by default; one revocable token per app.
 
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')

@@ -3,7 +3,7 @@ import { closeSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PermissionKind, PermissionRow, PermissionState } from '@shared/types'
 
-// Settings → Privacy & Permissions: which macOS permissions SahilBot has, what each one enables, and a
+// Settings → Privacy & Security: which macOS permissions SahilBot has, what each one enables, and a
 // button that opens the exact System Settings pane. Nothing here grants anything (only the user can, in
 // System Settings) and the status checks never show a macOS prompt, except the Automation check, which
 // runs only when the user asks about one app.

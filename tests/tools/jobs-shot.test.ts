@@ -11,6 +11,7 @@ test('jobs and autonomy shots', async () => {
   const { app, page } = await launch(tempProfile(), llm.url)
   await page.setViewportSize({ width: 1280, height: 820 })
   // Autonomy picker.
+  await page.click('[data-testid="model-picker"]')
   await page.click('[data-testid="mode-picker"]')
   await page.waitForTimeout(250)
   await page.screenshot({ path: `${out}/jobs-picker.png` })

@@ -129,13 +129,14 @@ describe('secrets vault: sign in by reference, lock, unlock', () => {
     await app.close()
   })
 
-  test('Settings → Vault shows metadata only; Reveal shows the value to the user and hides it again', async () => {
+  test('Settings → Privacy & Security → Passwords shows metadata only; Reveal shows the value to the user and hides it again', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     await page.evaluate(([origin, username, password]) => window.foreman.vault.set({ name: 'acme', origin, username, password }), [site.url, USER.email, USER.password] as const)
     await page.evaluate(() => window.foreman.vault.setCard({ nickname: 'Personal', number: '4242424242424242', expMonth: '08', expYear: '2031', holder: 'Sam Rivera' }))
     await page.keyboard.press('Meta+,')
     await page.waitForSelector('[data-testid="settings"]')
-    await page.click('[data-testid="settings-passwords"]')
+    // Privacy & Security opens on its Passwords tab.
+    await page.click('[data-testid="settings-privacy"]')
     await page.locator('[data-testid="vault-status"]').waitFor()
     await page.locator('[data-testid="vault-item"]').first().waitFor()
     const list = await page.locator('[data-testid="settings"]').innerText()

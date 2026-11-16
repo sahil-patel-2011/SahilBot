@@ -167,9 +167,20 @@ test('cleanup-pass screenshots', async () => {
       await wait(page, 250)
       await shoot(page, 'composer-model-picker', undefined, [SIZES[1]])
       await page.keyboard.press('Escape')
+      await page.click('[data-testid="model-picker"]')
       await page.click('[data-testid="mode-picker"]')
       await wait(page, 250)
       await shoot(page, 'composer-mode-picker', undefined, [SIZES[1]])
+      await page.keyboard.press('Escape')
+      await page.click('[data-testid="thinking-picker"]')
+      await wait(page, 250)
+      await shoot(page, 'composer-thinking-picker', undefined, [SIZES[1]])
+      await page.keyboard.press('Escape')
+      await page.click('[data-testid="more-models"]')
+      await wait(page, 250)
+      await shoot(page, 'composer-more-models', undefined, [SIZES[1]])
+      // Esc closes the flyout, then the menu.
+      await page.keyboard.press('Escape')
       await page.keyboard.press('Escape')
     })
 
@@ -181,6 +192,7 @@ test('cleanup-pass screenshots', async () => {
     })
 
     await step(page, 'approval', async () => {
+      await page.click('[data-testid="model-picker"]')
       await page.click('[data-testid="mode-picker"]')
       await page.click('[data-testid="mode-ask"]')
       llm.script.push(
@@ -195,6 +207,7 @@ test('cleanup-pass screenshots', async () => {
       await shoot(page, 'chat-approval', () => bottom(page))
       await page.click('[data-testid="approve-deny"]')
       await idle(page, llm)
+      await page.click('[data-testid="model-picker"]')
       await page.click('[data-testid="mode-picker"]')
       await page.click('[data-testid="mode-auto"]')
     })
@@ -247,6 +260,7 @@ test('cleanup-pass screenshots', async () => {
     })
 
     await step(page, 'doc', async () => {
+      await page.click('[data-testid="model-picker"]')
       await page.click('[data-testid="mode-picker"]')
       await page.click('[data-testid="mode-auto"]')
       llm.script.push(
@@ -264,6 +278,7 @@ test('cleanup-pass screenshots', async () => {
     await step(page, 'jobs', async () => {
       const port = 5300 + Math.floor(Math.random() * 400)
       const server = `node -e "require('http').createServer((q,s)=>s.end('hi')).listen(${port},()=>{console.log('  ready in 212 ms');console.log('  Local:   http://localhost:${port}/');setInterval(()=>console.log('[hmr] page reload src/App.tsx'),700)})"`
+      await page.click('[data-testid="model-picker"]')
       await page.click('[data-testid="mode-picker"]')
       await page.click('[data-testid="mode-autonomous"]')
       llm.script.push(call('run_command', { command: server, background: true, wait_for: { text: 'Local:', timeout: 20 } }))
@@ -279,6 +294,7 @@ test('cleanup-pass screenshots', async () => {
       await shoot(page, 'view-jobs')
       await page.click('[data-testid="job-stop"]').catch(() => undefined)
       await page.click('[data-testid="jobs-chip"]').catch(() => undefined)
+      await page.click('[data-testid="model-picker"]')
       await page.click('[data-testid="mode-picker"]')
       await page.click('[data-testid="mode-auto"]')
     })
@@ -298,7 +314,7 @@ test('cleanup-pass screenshots', async () => {
           : { content: 'The best ideas are the supper club [H2, H5] and the farmers-market stall [H7].', delay: 0 }
       })
       if (await page.locator('[data-testid="modes-menu"]').count()) await page.click('[data-testid="modes-menu"]')
-      await page.click('[data-testid="swarm-toggle"]')
+      await page.click('[data-testid="max-toggle"]')
       await page.keyboard.press('Escape').catch(() => undefined)
       await send(page, 'Brainstorm ways to grow my bakery')
       const card = page.locator('[data-testid="swarm-card"]').first()

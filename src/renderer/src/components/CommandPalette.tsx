@@ -7,7 +7,7 @@ import { openUsageGlance } from './UsagePage'
 export type PaletteAction =
   | { kind: 'new-chat' } | { kind: 'new-bot' } | { kind: 'new-group' } | { kind: 'new-project' }
   | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'tasks' } | { kind: 'connect' } | { kind: 'settings' }
-  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'vault' } | { kind: 'import-memory' } | { kind: 'usage' }
+  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'max' } | { kind: 'vault' } | { kind: 'import-memory' } | { kind: 'usage' }
   | { kind: 'open'; id: string } | { kind: 'chat'; id: string }
 
 /** keys: the command's own shortcut, shown on the row so the palette teaches it. */
@@ -38,7 +38,8 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       // Shortcuts worth knowing: last in the default list, and found by searching.
       { a: { kind: 'panel' }, label: 'Toggle side panel', sub: 'Progress, browser, files and documents', icon: ico(<I.Panel size={15} />), group: 'Shortcuts', keys: ['⌘', '\\'] },
       { a: { kind: 'voice' }, label: 'Voice chat', sub: 'Talk with SahilBot', icon: ico(<I.Wave size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'V'] },
-      { a: { kind: 'dictate' }, label: 'Dictate a message', sub: 'Speak into the message box', icon: ico(<I.Mic size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'D'] }
+      { a: { kind: 'dictate' }, label: 'Dictate a message', sub: 'Speak into the message box', icon: ico(<I.Mic size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'D'] },
+      { a: { kind: 'max' }, label: 'Max for the next message', sub: 'Many agents at once: a research team, an idea swarm, competing attempts with a judge, or a mix', icon: ico(<I.Bolt size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'M'] }
     ]
     const bots: Item[] = [...spaces].sort((a, b) => Number(b.isMain) - Number(a.isMain)).map((s) => ({
       a: { kind: 'open', id: s.id } as PaletteAction,

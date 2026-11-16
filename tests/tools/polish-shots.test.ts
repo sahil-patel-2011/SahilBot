@@ -179,8 +179,9 @@ test('polish screenshots', async () => {
   })
 
   await step(page, 'approval', async () => {
+    await page.click('[data-testid="model-picker"]')
     await page.click('[data-testid="mode-picker"]')
-    await page.locator('.menu-item', { hasText: 'Ask' }).first().click()
+    await page.click('[data-testid="mode-ask"]')
     llm.script.push(
       { content: 'I\'ll save the summary next to your notes.', toolCalls: [{ name: 'file_write', arguments: JSON.stringify({ path: 'team-plan-summary.md', content: '# Team plan\nBest value for 5 people: $75/month.' }) }] },
       { content: 'Okay, I left it unsaved.' }

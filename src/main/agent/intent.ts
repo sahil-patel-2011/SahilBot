@@ -1,4 +1,5 @@
 import { CAD_RE } from '../cad/cad-intent'
+import { VIDEO_RE } from './video-intent'
 import { classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
 
 /**
@@ -7,6 +8,9 @@ import { classifyTask as classifyRequest, type TaskCategory as RouteCategory, ty
  * request that clearly needs them gets them loaded before the first step; anything else is one
  * find_tools call away, and a tool a chat has used stays loaded for that chat.
  */
+
+
+export { VIDEO_RE }
 
 const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
   {
@@ -34,7 +38,9 @@ const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
     when: /\b(e-?mails?|inbox|gmail|mail app|apple mail|unread|reply to|draft (a|an|the)? ?(reply|email)|newsletter|unsubscribe)\b/i
   },
   // CAD (src/main/cad/cad-intent.ts owns the words): the design workflow, Onshape, and FreeCAD when installed.
-  { tools: ['cad_design', 'onshape', 'freecad'], when: CAD_RE }
+  { tools: ['cad_design', 'onshape', 'freecad'], when: CAD_RE },
+  // Videos through the user's HeyGen connectors (tools/video.ts): avatar videos, dubbing, motion graphics.
+  { tools: ['video'], when: VIDEO_RE }
 ]
 
 /** Tools to load for a request (only names that exist in `known`). */
@@ -53,7 +59,8 @@ export function intentTools(text: string, known: Set<string>, extra: { codeProje
  */
 export function likelyTools(known: Set<string>): string[] {
   // The CAD tools stay on demand too (big schemas most chats never use).
-  const out = GROUPS.filter((g) => !g.tools.includes('computer') && !g.tools.includes('cad_design')).flatMap((g) => g.tools)
+  // So do the video tools (credits, and most chats never make a video).
+  const out = GROUPS.filter((g) => !g.tools.includes('computer') && !g.tools.includes('cad_design') && !g.tools.includes('video')).flatMap((g) => g.tools)
   return ['read_result', ...out].filter((t) => known.has(t))
 }
 

@@ -15,7 +15,7 @@ async function run(page: Page, text: string, opts: { plan?: boolean; team?: bool
   const t0 = Date.now()
   const before = await page.locator('[data-testid="assistant-bubble"]').count()
   if (opts.plan) await page.click('[data-testid="plan-toggle"]')
-  if (opts.team) await page.click('[data-testid="team-toggle"]')
+  if (opts.team) await page.click('[data-testid="max-toggle"]')
   await page.fill('[data-testid="composer-input"]', text)
   await page.keyboard.press('Enter')
   const cards: string[] = []

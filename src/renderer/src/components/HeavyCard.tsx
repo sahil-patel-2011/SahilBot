@@ -62,7 +62,7 @@ function Attempt({ a, live }: { a: HeavyAttempt; live: boolean }) {
 }
 
 /** Heavy mode: the attempts, the judge's verdict, and what it cost. */
-export function HeavyCard({ board, groupId, live }: { board: HeavyBoard; groupId: string; live: boolean }) {
+export function HeavyCard({ board, groupId, live, embedded, title }: { board: HeavyBoard; groupId: string; live: boolean; embedded?: boolean; title?: string }) {
   const [open, setOpen] = useState(true)
   const finished = ['done', 'failed', 'stopped'].includes(board.judge.status)
   const active = live && !finished
@@ -72,10 +72,10 @@ export function HeavyCard({ board, groupId, live }: { board: HeavyBoard; groupId
   const steps = board.attempts.length + 1
   const progress = (done + (board.judge.status === 'done' ? 1 : 0)) / steps
   return (
-    <div className={`heavy-card${active ? ' live' : ''}`} data-testid="heavy-card">
+    <div className={`heavy-card${active ? ' live' : ''}${embedded ? ' embedded' : ''}`} data-testid="heavy-card" data-judge={board.judge.status}>
       <button className="plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.Sparkle size={15} />
-        <span className="plan-title">Heavy</span>
+        <span className="plan-title">{title ?? 'Heavy'}</span>
         <span className="plan-count">{active ? JUDGE_STATUS[board.judge.status] : `${done} of ${board.attempts.length} attempts`}{board.spentUsd ? ` · ${money(board.spentUsd)}` : ''}</span>
         <span className="plan-bar"><i style={{ width: `${progress * 100}%` }} /></span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
@@ -122,7 +122,7 @@ export function HeavyCard({ board, groupId, live }: { board: HeavyBoard; groupId
   )
 }
 
-const SPEND_KIND: Record<NonNullable<PendingRequest['spend']>['kind'], string> = { team: 'Team of Experts', heavy: 'Heavy', swarm: 'Swarm', council: 'Council' }
+const SPEND_KIND: Record<NonNullable<PendingRequest['spend']>['kind'], string> = { team: 'Research team', heavy: 'Max · judged attempts', swarm: 'Max · swarm', council: 'Council' }
 
 /** A big swarm or a Heavy run asking for the user's OK on what it will cost. */
 export function SpendCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
@@ -207,7 +207,7 @@ function SwarmHelperRow({ h, live, credited }: { h: SwarmHelperView; live: boole
 }
 
 /** A bot swarm: helpers with their angle, model and status, ideas as they come in, cost, and the compiled result with credits. */
-export function SwarmCard({ board, live }: { board: SwarmBoard; live: boolean }) {
+export function SwarmCard({ board, live, embedded, title }: { board: SwarmBoard; live: boolean; embedded?: boolean; title?: string }) {
   const [open, setOpen] = useState(true)
   const [all, setAll] = useState(false)
   const st = swarmStats(board)
@@ -216,10 +216,10 @@ export function SwarmCard({ board, live }: { board: SwarmBoard; live: boolean })
   const credited = new Set((board.compiled?.credits ?? []).map((c) => c.n))
   const rows = all || board.helpers.length <= 12 ? board.helpers : [...board.helpers.filter((h) => h.status === 'working'), ...board.helpers.filter((h) => h.status !== 'working')].slice(0, 12)
   return (
-    <div className={`heavy-card swarm-card${active ? ' live' : ''}`} data-testid="swarm-card" data-phase={board.phase}>
+    <div className={`heavy-card swarm-card${active ? ' live' : ''}${embedded ? ' embedded' : ''}`} data-testid="swarm-card" data-phase={board.phase}>
       <button className="plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.Users size={15} />
-        <span className="plan-title">{board.bot ? `${board.bot}'s swarm` : 'Swarm'}</span>
+        <span className="plan-title">{title ?? (board.bot ? `${board.bot}'s swarm` : 'Swarm')}</span>
         <span className="plan-count" data-testid="swarm-count">{st.done} of {st.total} helpers{st.ideas ? ` · ${st.ideas} ideas` : ''} · {SWARM_PHASE[board.phase]}{board.spentUsd ? ` · ${money(board.spentUsd)}` : ''}</span>
         <span className="plan-bar"><i style={{ width: `${(st.done / Math.max(1, st.total)) * 100}%` }} /></span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />

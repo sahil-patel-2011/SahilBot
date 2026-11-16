@@ -108,3 +108,29 @@ export function Segmented<T extends string>({ value, options, onChange, label, t
     </div>
   )
 }
+
+/**
+ * A small "i" after a title: the details that don't fit the one-line description. Shown on hover or
+ * keyboard focus (and read by VoiceOver as the button's description).
+ */
+export function InfoTip({ children, label = 'More info' }: { children: ReactNode; label?: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className={`ui-info${open ? ' open' : ''}`} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button type="button" className="ui-info-btn" aria-label={label} aria-expanded={open} onClick={(e) => { e.preventDefault(); setOpen((o) => !o) }} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}>i</button>
+      {open && <span className="ui-info-pop" role="tooltip">{children}</span>}
+    </span>
+  )
+}
+
+/** Tabs inside a Settings page (Memory, Privacy & Security, Advanced): role=tablist, `settings-tab-<id>` test ids. */
+export function SetTabs<T extends string>({ value, tabs, onChange, label, extra }: { value: T; tabs: Array<{ id: T; label: ReactNode; hidden?: boolean }>; onChange: (t: T) => void; label: string; extra?: ReactNode }) {
+  return (
+    <div className="set-tabs" role="tablist" aria-label={label}>
+      {tabs.filter((t) => !t.hidden).map((t) => (
+        <button key={t.id} type="button" role="tab" aria-selected={value === t.id} className={value === t.id ? 'on' : ''} onClick={() => onChange(t.id)} data-testid={`settings-tab-${t.id}`}>{t.label}</button>
+      ))}
+      {extra && <span className="set-tabs-extra">{extra}</span>}
+    </div>
+  )
+}

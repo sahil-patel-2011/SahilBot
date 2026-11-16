@@ -234,7 +234,7 @@ export interface Settings {
   routinesPaused?: boolean
   /** How long a local model stays loaded after a message (Ollama keep_alive: '30m', '2h', or seconds; '-1' = always). */
   localKeepAlive?: string
-  /** Learning while the app is open and idle (Settings → Memory → What I learned). */
+  /** Learning while the app is open and idle (Settings → Memory → Learned). */
   learning?: LearningSettings
   /** Autonomy level new chats start in (never 'bypass'). Default 'auto'. */
   defaultMode?: PermissionMode
@@ -862,7 +862,7 @@ export interface FilePreview {
   name: string
   size: number
   url: string
-  kind: 'pdf' | 'image' | 'html' | 'markdown' | 'text' | 'sheets' | 'slides' | 'unsupported'
+  kind: 'pdf' | 'image' | 'html' | 'markdown' | 'text' | 'sheets' | 'slides' | 'video' | 'unsupported'
   html?: string
   text?: string
   sheets?: Array<{ name: string; rows: Array<Array<string | number | boolean | null>> }>
@@ -893,14 +893,26 @@ export interface ConnectorPreset {
   /**
    * oauth: one click (the server registers SahilBot itself, OAuth dynamic client registration); none: open server;
    * oauth-static: the provider needs a one-time setup (the user creates an OAuth app there and pastes its client ID, see `setup`);
-   * google: needs your Google OAuth client ID; browser: sign in once in SahilBot's browser; app: built into SahilBot.
+   * google: Google's MCP servers (SahilBot's built-in Google client, or your own from "Use your own app");
+   * browser: web automation, you sign in once inside SahilBot's own browser; app: built into SahilBot;
+   * apikey: the vendor's server takes your own API key.
    */
   auth: 'oauth' | 'none' | 'oauth-static' | 'google' | 'browser' | 'app' | 'apikey'
+  /**
+   * Set (by main, never in the catalog source) when SahilBot ships its own OAuth app registration for
+   * this oauth-static or Google app (resources/oauth-clients.json): it then connects in one click, and
+   * the setup steps are only for "Use your own app". The client itself never leaves main.
+   */
+  builtinClient?: boolean
   /** The app's own site, for its icon, when the server URL's host doesn't map to it (gmailmcp.googleapis.com → mail.google.com/mail/). */
   domain?: string
   /** One-time setup for oauth-static apps: exact steps with links, and the redirect URL to register. */
   setup?: ConnectorSetup
-  /** apikey apps: how the user's key is sent and where they get it (the key itself lives in the Keychain). */
+  /**
+   * How the user's own API key is sent and where they get it (the key itself lives in the Keychain): an
+   * apikey app's only sign-in, or on a one-click OAuth app whose vendor also documents a key, the
+   * "Use an API key instead" alternative (a saved key is then used instead of OAuth).
+   */
   apiKey?: ConnectorApiKey
   /**
    * Set when the app's server can't be used right now (it stopped answering, or moved without an
@@ -1090,7 +1102,7 @@ export type VoiceUiEvent =
   | { type: 'stop-audio' }
   | { type: 'metric'; name: string; ms: number }
   | { type: 'error'; message: string }
-  | { type: 'download'; kind: string; progress: number; done?: boolean; error?: string }
+  | { type: 'download'; kind: string; progress: number; done?: boolean; error?: string; /** Started on its own (not a click): a toast says when it's ready. */ auto?: boolean; model?: string; label?: string }
 
 export type Schedule =
   | { type: 'once'; at: string }
@@ -1322,6 +1334,10 @@ export interface SahilBotApi {
     setApiKey(presetId: string, key: string): Promise<ConnectorStatus>
     /** "Check all": re-tests every switched-on app (live ones list their tools; others reconnect without opening the browser). */
     checkAll(): Promise<ConnectorStatus[]>
+    /** "Use SahilBot's app": forget this connector's own OAuth client and sign in with the built-in one. */
+    useBuiltinClient(id: string): Promise<ConnectorConfig>
+    /** Forget the API key of a one-click app that was using "Use an API key instead" (it signs in with OAuth again). */
+    clearApiKey(id: string): Promise<void>
   }
   vault: {
     list(): Promise<VaultEntry[]>
@@ -1338,7 +1354,7 @@ export interface SahilBotApi {
     addresses(): Promise<AddressEntry[]>
     setAddress(a: Omit<AddressEntry, 'id'> & { id?: string }): Promise<AddressEntry[]>
     removeAddress(id: string): Promise<AddressEntry[]>
-    // The envelope vault (Settings → Vault). Replies carry metadata only, except reveal (after Touch ID or the master password).
+    // The envelope vault (Settings → Privacy & Security → Passwords). Replies carry metadata only, except reveal (after Touch ID or the master password).
     status(): Promise<VaultStatus>
     items(): Promise<VaultItemSummary[]>
     saveItem(input: VaultItemInput): Promise<VaultItemSummary[]>
@@ -1421,6 +1437,8 @@ export interface SahilBotApi {
     copyImportPrompt(): Promise<boolean>
     getEnabled(): Promise<boolean>
     setEnabled(on: boolean): Promise<void>
+    /** Undo a delete: puts that memory back as it was (Settings → Memory). */
+    restore(m: MemoryItem): Promise<MemoryItem | null>
   }
   rules: {
     list(): Promise<Rule[]>
@@ -1780,7 +1798,7 @@ export interface SahilBotApi {
 
 // ---- Connected apps: SahilBot's local MCP server (main: mcp-server/)
 
-/** Settings → Privacy & Permissions → Connected apps (MCP). Off by default; the port is kept so app configs keep working. */
+/** Settings → Connected apps → Let apps on this Mac use SahilBot. Off by default; the port is kept so app configs keep working. */
 export interface McpServerSettings {
   enabled: boolean
   /** 0 = pick a free port the first time the server starts (then saved here). */
@@ -1912,7 +1930,7 @@ export interface KnowledgeSearchResult {
 }
 
 export interface SahilBotApi {
-  /** Settings → Knowledge and the project home's Knowledge block. */
+  /** Settings → Advanced → Knowledge folders and the project home's Knowledge block. */
   knowledge: {
     status(): Promise<KnowledgeStatus>
     /** Opens a folder picker; null when cancelled. */
@@ -1935,10 +1953,15 @@ export interface SahilBotApi {
 // ---------------------------------------------------------------- learning (learning/: while the app is open and idle)
 
 export interface LearningSettings {
-  /** Learn while SahilBot is open. Unset = on when a local model is available, off otherwise. */
+  /**
+   * "Remember things automatically" (Settings → Memory): bots save what you tell them without being asked,
+   * and SahilBot learns while it's open and idle. Default on (unset counts as on).
+   */
   enabled?: boolean
-  /** May use a cloud model when no local one is available (default off). */
+  /** May use a cloud model when no local one is available (default on, within the daily cap and the monthly limit). */
   cloudAllowed: boolean
+  /** Keys the user set themselves ('enabled', 'cloudAllowed'): migrations to new defaults leave them alone. */
+  explicit?: string[]
   /** Daily cap (USD) on cloud spending for learning. */
   dailyUsd: number
 }
@@ -1946,7 +1969,7 @@ export interface LearningSettings {
 /** What a learned item is: a memory, a skill, a lesson from a mistake, or memory housekeeping. */
 export type LearnedKind = 'memory' | 'skill' | 'lesson' | 'merge' | 'stale' | 'trim'
 
-/** One entry in the learning log (Settings → Memory → What I learned). */
+/** One entry in the learning log (Settings → Memory → Learned). */
 export interface LearnedItem {
   id: string
   at: number
@@ -1989,7 +2012,7 @@ export interface LearningStatus {
 }
 
 export interface SahilBotApi {
-  /** Settings → Memory → What I learned. */
+  /** Settings → Memory → Learned. */
   learning: {
     status(): Promise<LearningStatus>
     list(limit?: number): Promise<LearnedItem[]>
@@ -2055,7 +2078,7 @@ export interface SahilBotApi {
 
 // ---- "Know what I'm working on": opt-in activity awareness (main: src/main/activity)
 
-/** Settings → Privacy & Permissions → Know what I'm working on. Off by default; kept only on this Mac. */
+/** Settings → Privacy & Security → Activity → Know what I'm working on. Off by default; kept only on this Mac. */
 export interface ActivitySettings {
   enabled: boolean
   /** Front window titles (needs Accessibility, and System Events once). */
@@ -2125,7 +2148,7 @@ export interface SahilBotApi {
 
 // ---------------------------------------------------------------- CAD (Onshape)
 
-/** Interface merging (append-only): the Onshape API key pair is saved (Settings → API Keys & Servers → Onshape). */
+/** Interface merging (append-only): the Onshape API key pair is saved (Settings → Models & Keys → Advanced → Keys for tools (Onshape)). */
 export interface Settings {
   hasOnshapeKeys?: boolean
   /** Which half of the Onshape key pair is saved. */
@@ -2392,7 +2415,7 @@ export interface SahilBotApi {
 /** Interface merging (append-only): knowledge-search embeddings provider. */
 export interface Settings {
   /**
-   * "Use OpenAI for knowledge search embeddings" (Settings → Knowledge). Off by default. Privacy: when on
+   * "Use OpenAI for knowledge search embeddings" (Settings → Advanced → Knowledge folders). Off by default. Privacy: when on
    * (and an OpenAI key is saved and cloud models are on), passages of the user's indexed documents are
    * sent to OpenAI (text-embedding-3-small) to build the meaning-search index; costs count toward the
    * monthly cloud budget. Off: embeddings stay on this Mac (Ollama) or keyword search alone.
@@ -2773,6 +2796,7 @@ export interface VoiceOutputSettings {
 export interface Settings {
   local?: LocalSettings
   voiceOutput?: VoiceOutputSettings
+  voiceInput?: VoiceInputSettings
 }
 
 export interface KnowledgeStatus {
@@ -2786,6 +2810,47 @@ export interface VoiceStatus {
   /** Speech recognition for voice input: 'whisper' (this Mac), 'openai' (OpenAI transcription) or 'none' (inputNote says what it needs). */
   input?: 'whisper' | 'openai' | 'none'
   inputNote?: string
+  /** Speech recognition on this Mac (src/main/voice/models.ts): the Whisper model picked for it and its download. */
+  speech?: VoiceSpeechStatus
+}
+
+/** Settings → Voice: the Whisper model voice input uses, why, and where its background download is. */
+export interface VoiceSpeechStatus {
+  /** Model id, e.g. 'large-v3-turbo-q5_0'. */
+  model: string
+  /** "Whisper large-v3-turbo" and its build ("5-bit"). */
+  label: string
+  build: string
+  mb: number
+  /** "best for your Mac", "fastest on this Mac" or "you chose it"; `why` is the one-sentence reason. */
+  reason: string
+  why: string
+  /** 'auto' or a pinned model id (Settings → Voice → Advanced). */
+  choice: string
+  /** Transcribe on this Mac (default on). */
+  local: boolean
+  ready: boolean
+  /** Another downloaded model in use until the picked one is ready. */
+  using?: { model: string; label: string }
+  state: 'ready' | 'downloading' | 'waiting' | 'error' | 'off'
+  progress?: number
+  error?: string
+  /** The one-time benchmark's time for this model (ms). */
+  bench?: number
+  /** Test runs: downloads are recorded, never fetched. */
+  stub?: boolean
+  /** Files asked for this session (only speech models: Whisper, Silero). */
+  requested: string[]
+}
+
+/** Speech recognition preferences (Settings → Voice → Advanced). */
+export interface VoiceInputSettings {
+  /** Transcribe on this Mac with Whisper (default on, independent of local models). */
+  local?: boolean
+  /** 'auto' (default: picked for this Mac) or a Whisper model id. */
+  model?: string
+  /** The one-time benchmark (voice/models.ts). */
+  bench?: { model: string; ms: number; at: number }
 }
 
 export interface SahilBotApi {
@@ -2980,4 +3045,108 @@ export interface SahilBotApi {
 export interface ModelList {
   /** Local models are switched off (cloud only): the picker hides Auto (local) and offers no downloads. */
   localOff?: boolean
+}
+
+// ---------------------------------------------------------------- Max mode (one mode for many agents)
+
+/**
+ * Max: many agents at once. SahilBot's strategy planner (agent/max/planner.ts) picks how for each request:
+ * a research team (divide and conquer), an idea swarm (independent divergent helpers, then a compile),
+ * competing attempts with a judge (Heavy), or a hybrid (explore first, then judged attempts on the deliverable).
+ */
+export type MaxStrategy = 'team' | 'swarm' | 'heavy' | 'hybrid'
+/** One phase of a Max run (a hybrid has two). */
+export type MaxPhaseKind = 'team' | 'swarm' | 'heavy'
+
+/** A bot's Max setting: Off (only when you turn it on in the composer), Auto (the bot decides; default), Always. */
+export interface BotMaxSettings {
+  mode: BotSwarmMode
+  /** Most helpers per Max run (1-50, default 20). */
+  maxHelpers: number
+  /** What one Max run may spend in a routine or goal wake-up, never asking (USD; 0 = none unattended). Default $1. */
+  routineUsd: number
+}
+
+export interface Settings {
+  /** Per-bot Max settings (Settings → bot details). Older installs kept these as botSwarm: migrated on start. */
+  botMax?: Record<string, Partial<BotMaxSettings>>
+}
+
+export interface SendInput {
+  /** Max for this message: the planner picks a team, a swarm, judged attempts or a mix. */
+  max?: boolean
+  /** Tests and the max tool: skip the planner and use this strategy. */
+  maxStrategy?: MaxStrategy
+}
+
+export interface MaxPhase {
+  kind: MaxPhaseKind
+  /** "Research team", "Idea swarm", "Judged attempts". */
+  label: string
+  status: 'waiting' | 'running' | 'done' | 'failed' | 'stopped' | 'skipped'
+  note?: string
+}
+
+/** The Max card: kept on a notice message's meta.max, updated live. Phases embed the team, swarm and Heavy boards. */
+export interface MaxBoard {
+  maxId: string
+  strategy: MaxStrategy
+  /** "idea swarm → judged final draft". */
+  title: string
+  /** Why the planner chose it, in a few words. */
+  why: string
+  /** Who turned Max on: the composer, the bot's Max setting (Auto/Always), or the lead's max tool. */
+  source: 'composer' | 'bot' | 'tool'
+  phases: MaxPhase[]
+  /** Team phases by their agents (or max) call id. */
+  teams?: Array<{ callId: string; members: TeamMember[] }>
+  swarm?: SwarmBoard
+  heavy?: HeavyBoard
+  heavyId?: string
+  /** A hybrid's first phase, as handed to the judged attempts (shortened). */
+  brief?: string
+  /** The final answer and who it credits ([H3] swarm helpers, [A2] attempts). */
+  result?: { excerpt: string; credits: Array<{ tag: string; count: number }> }
+  status: 'running' | 'done' | 'failed' | 'stopped'
+  unattended?: boolean
+  /** Ran under a routine's budget (never asked). */
+  budgetUsd?: number
+  startedAt: number
+  endedAt?: number
+}
+
+// ---- Videos (HeyGen avatar videos, translations, HyperFrames motion videos: src/main/agent/tools/video.ts) ----
+
+/** One video job as the chat's video card shows it (tool result meta.video, or a notice's meta.video). */
+export interface VideoCardData {
+  /** SahilBot's job id (v_…); the HeyGen id is `remoteId`. */
+  id: string
+  kind: 'avatar' | 'translate' | 'motion'
+  title: string
+  /** processing: HeyGen is rendering; downloading: saving the MP4; needs_input: HyperFrames asked something. */
+  status: 'processing' | 'downloading' | 'ready' | 'failed' | 'needs_input'
+  remoteId?: string
+  /** The saved MP4 (absolute) and its foreman-file: URL, once downloaded. */
+  path?: string
+  url?: string
+  size?: number
+  aspect?: string
+  /** The credit estimate shown on the approval card. */
+  credits?: number
+  /** 0–100 when HeyGen reports it. */
+  progress?: number
+  /** Rough render time, in seconds, from when it started. */
+  etaSec?: number
+  createdAt: number
+  doneAt?: number
+  error?: string
+  /** The finished video was announced with its own note in the chat (the progress card then stays compact). */
+  announced?: boolean
+}
+
+export interface SahilBotApi {
+  /** Video jobs (the chat's render-progress card checks its job here). Optional so older preloads still type-check. */
+  video?: {
+    get(id: string): Promise<VideoCardData | null>
+  }
 }

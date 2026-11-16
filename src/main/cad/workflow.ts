@@ -162,7 +162,7 @@ export function pickBackend(o: { onshapeKeys: boolean; freecad: boolean; prefer?
 
 export const SETUP_TEXT = [
   'No CAD program is set up yet. One-time setup, either one:',
-  '- Onshape (browser CAD, free plan works): create an API key pair at https://dev-portal.onshape.com/keys (Read and Write scopes), then paste the access key and secret key in Settings → API Keys & Servers → Onshape and press Test.',
+  '- Onshape (browser CAD, free plan works): create an API key pair at https://dev-portal.onshape.com/keys (Read and Write scopes), then paste the access key and secret key in Settings → Models & Keys → Advanced → Keys for tools (Onshape) and press Test.',
   '- FreeCAD (free, runs on this Mac): download it from https://www.freecad.org/downloads.php and drag FreeCAD.app into Applications; SahilBot finds it automatically (restart SahilBot after installing).',
   'Until then I can still do the design brief, concepts and feature plan, and write a CadQuery/OpenSCAD script you can run.'
 ].join('\n')

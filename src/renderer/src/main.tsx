@@ -30,6 +30,8 @@ import './styles-secure-vault.css'
 import './styles-activity.css'
 import './styles-learning.css'
 import './styles-mcp.css'
+// The composer's one picker (model, thinking, permissions): components/ComposerPicker.tsx.
+import './styles-picker.css'
 // The design system (tokens + shared primitives) decides last: see styles-system.css.
 import './styles-system.css'
 

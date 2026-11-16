@@ -59,11 +59,13 @@ function harness(models: ModelInfo[], o: { settings?: Partial<Settings>; tools?:
   const a = agent as unknown as { stream: (...args: unknown[]) => Promise<unknown> }
   const stream = a.stream.bind(agent)
   a.stream = (...args: unknown[]) => { steps.push({ model: args[1] as string, window: args[4] as number, effort: args[8] as Effort | undefined }); return stream(...args) }
-  const space = db.createSpace('Alpha', '#000000')
+  // SahilBot's own chats: a regular chat, where the composer's picks are used exactly. Bots choose by themselves.
+  const space = db.createSpace('SahilBot', '#000000', { isMain: true })
+  const bot = db.createSpace('Alpha', '#000000')
   const thread = (m: string | null = models[0].id, spaceId = space.id, mode: Thread['permissionMode'] = 'auto'): Thread => db.createThread(spaceId, mode, m)
   const run = async (t: Thread, text: string, flags?: Record<string, unknown>) => (await agent.send({ threadId: t.id, text, ...flags } as never)).done
   const notices = (t: Thread): string[] => db.listMessages(t.id).filter((m) => m.kind === 'notice').map((m) => m.content)
-  return { db, agent, settings, space, thread, run, steps, notices }
+  return { db, agent, settings, space, bot, thread, run, steps, notices }
 }
 const call = (name: string, args: Record<string, unknown> = {}) => ({ name, arguments: JSON.stringify(args) })
 const failing = (name: string): ToolDef => ({ name, label: name, group: 'Test', effect: 'read', description: 'A tool that fails', parameters: { type: 'object', properties: {} }, async run() { throw new Error('disk on fire') } }) as ToolDef
@@ -131,13 +133,28 @@ describe('model', () => {
     expect(unavailableReason(new Error('fetch failed'))).toBe('not responding')
   })
 
-  test('a bot\'s model is used for its chats (and the chat\'s own pick wins over the bot\'s)', async () => {
-    const h = harness([model('model-a', 1), model('model-b', 2)])
-    const bot = h.db.updateSpace(h.space.id, { model: 'model-b' })
+  test('a bot chooses by itself: its chats always route as Auto, whatever an older install stored or the chat picked', async () => {
+    const h = harness([model('model-a', 1), model('model-b', 2), model('model-c', 3)])
+    // Values an older install could have stored on the bot and on its chat.
+    const bot = h.db.updateSpace(h.bot.id, { model: 'model-a', effort: 'low' })
     llm.script.push({ content: 'one', delay: 0 }, { content: 'two', delay: 0 })
-    await h.run(h.thread(null, bot.id), 'hi')
-    await h.run(h.thread('model-a', bot.id), 'hi')
-    expect(llm.requests.map((r) => r.model)).toEqual(['model-b', 'model-a'])
+    await h.run(h.thread(null, bot.id), 'Refactor the whole codebase, end to end, with tests')
+    const t = h.thread('model-a', bot.id)
+    h.db.updateThread(t.id, { effort: 'low' })
+    await h.run(t, 'Refactor the whole codebase, end to end, with tests')
+    // Auto routes a hard coding task up (not the stored model-a), at Auto's own level (not the stored Low).
+    expect(llm.requests.map((r) => r.model).every((m) => m !== 'model-a')).toBe(true)
+    expect(h.steps.every((s) => s.effort !== 'low')).toBe(true)
+  })
+
+  test('regular chats keep the pick exactly (the stored bot values never leak into SahilBot\'s own chats)', async () => {
+    const h = harness([model('model-a', 1), model('model-b', 2)])
+    h.db.updateSpace(h.space.id, { model: 'model-b' })
+    llm.script.push({ content: 'one', delay: 0 }, { content: 'two', delay: 0 })
+    await h.run(h.thread('model-a'), 'hi')
+    await h.run(h.thread(null), 'hi')
+    // The chat's pick, then the app default (model-a): the space's old override is ignored.
+    expect(llm.requests.map((r) => r.model)).toEqual(['model-a', 'model-a'])
   })
 })
 
@@ -155,16 +172,21 @@ describe('effort', () => {
     }
   })
 
-  test('a bot\'s level is used for its chats; the app default when neither sets one', async () => {
+  test('a regular chat uses its own level, else the app default; a bot always thinks on Auto', async () => {
     const h = harness([model('model-a', 2)], { settings: { thinking: 'medium' } })
-    h.db.updateSpace(h.space.id, { effort: 'xhigh' })
     llm.script.push({ content: 'a', delay: 0 })
-    await h.run(h.thread('model-a'), 'hi')
+    const t = h.thread('model-a')
+    h.db.updateThread(t.id, { effort: 'xhigh' })
+    await h.run(t, 'hi')
     expect(h.steps.map((s) => s.effort)).toEqual(['xhigh'])
-    h.db.updateSpace(h.space.id, { effort: null })
     llm.script.push({ content: 'b', delay: 0 })
     await h.run(h.thread('model-a'), 'Refactor the whole codebase, end to end')
     expect(h.steps.at(-1)?.effort).toBe('medium')
+    // The bot: a stored level and the app's Medium are both ignored; Auto decides (a refactor is at least High).
+    h.db.updateSpace(h.bot.id, { effort: 'low' })
+    llm.script.push({ content: 'c', delay: 0 })
+    await h.run(h.thread('model-a', h.bot.id), 'Refactor the whole codebase, end to end')
+    expect(['high', 'xhigh', 'max']).toContain(h.steps.at(-1)?.effort)
   })
 
   test('Auto follows the request, and rises once (with a note) when the run keeps failing', async () => {
