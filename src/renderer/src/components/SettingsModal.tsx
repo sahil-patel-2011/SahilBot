@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ComputerUseSetting } from './ComputerUseSetting'
-import type { ConnectorStatus, ModelInfo, ModelList, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, VoiceStatus } from '@shared/types'
+import type { ConnectorStatus, ModelInfo, ModelList, PermissionKind, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, UpdateStatus, VoiceStatus } from '@shared/types'
 import { SENSITIVE_CATEGORIES, type ContextEngineStatus } from '@shared/context-engine'
 import { api, isServerRuntime } from '../api'
 import * as I from '../icons'
@@ -36,6 +36,7 @@ const PAGES: Array<{ id: Page; icon: ReactNode; color: string }> = [
   { id: 'general', icon: <I.Gear size={14} />, color: '#8e8e93' },
   { id: 'models', icon: <I.Cpu size={14} />, color: '#5856d6' },
   { id: 'connected', icon: <I.Plug size={14} />, color: '#007aff' },
+  { id: 'permissions', icon: <I.Shield size={14} />, color: '#34aadc' },
   { id: 'memory', icon: <I.Sparkle size={14} />, color: '#34c759' },
   { id: 'voice', icon: <I.Mic size={14} />, color: '#ff2d55' },
   { id: 'privacy', icon: <I.Shield size={14} />, color: '#5ac8fa' },
@@ -56,6 +57,7 @@ export type SettingsPatchUi = Parameters<typeof api.settings.set>[0]
 /** A page id, a legacy one ("keys", "passwords"…) or "page:tab" → the page and tab to open. */
 export function resolvePage(id?: string): { page: Page; tab?: string } {
   if (!id) return { page: 'general' }
+  if (LEGACY_PAGES[id]) return LEGACY_PAGES[id]
   const [p, tab] = id.split(':')
   if (LEGACY_PAGES[p]) return LEGACY_PAGES[p]
   return PAGES.some((x) => x.id === p) ? { page: p as Page, tab } : { page: 'general' }
@@ -241,7 +243,8 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
         <div className="set-body" ref={bodyRef} data-page={page}>
           {page === 'general' && <General s={s} patch={patch} />}
           {page === 'models' && <ModelsPage s={s} models={models} patch={patch} onRefresh={onRefreshModels} />}
-          {page === 'connected' && <ConnectedPage />}
+          {page === 'connected' && <ConnectedPage s={s} patch={patch} />}
+          {page === 'permissions' && <PermissionsPage s={s} patch={patch} />}
           {page === 'memory' && <MemoryPage spaces={spaces ?? []} tab={tabs.memory ?? 'memories'} onTab={setTab('memory')} />}
           {page === 'voice' && <VoicePage s={s} models={models} patch={patch} />}
           {page === 'privacy' && <PrivacySecurityPage s={s} patch={patch} tab={tabs.privacy ?? 'passwords'} onTab={setTab('privacy')} />}
@@ -286,6 +289,7 @@ function General({ s, patch }: P) {
             </Row>
             <Row id="menu-bar" title="Show in the menu bar" sub="See what bots are doing from any app."><Toggle on={s.menuBarIcon ?? true} onChange={(v) => void patch({ menuBarIcon: v })} label="Show SahilBot in the menu bar" testId="menu-bar-icon" /></Row>
             <Row id="open-at-login" title="Open at login" sub={loginHint}><Toggle on={s.openAtLogin ?? false} onChange={(v) => void patch({ openAtLogin: v })} label="Open at login" testId="open-at-login" /></Row>
+            <UpdatesRow />
           </>
         )}
       </Section>
@@ -341,6 +345,30 @@ function General({ s, patch }: P) {
   )
 }
 
+/** Settings → General: this version, and the newer one when there is one (downloaded and checked in the background). */
+function UpdatesRow() {
+  const [st, setSt] = useState<UpdateStatus | null>(null)
+  useEffect(() => {
+    void api.update.status().then(setSt).catch(() => undefined)
+    return api.update.onStatus(setSt)
+  }, [])
+  const text = !st ? 'Checking…'
+    : st.state === 'checking' ? 'Checking for a new version…'
+    : st.state === 'downloading' ? `Downloading ${st.version}… ${st.progress ?? 0}%`
+    : st.state === 'ready' ? `${st.version} is ready. Your chats, bots, connected apps and settings stay as they are, and a copy of your data is saved first.`
+    : st.state === 'installing' ? 'Backing up your data and restarting…'
+    : st.state === 'error' || st.state === 'unsupported' ? st.detail ?? 'Couldn\'t check for updates.'
+    : st.state === 'idle' ? `SahilBot ${st.current ?? ''}. New versions are checked for and downloaded on their own.`
+    : `SahilBot ${st.current ?? ''} is up to date.`
+  return (
+    <Row id="updates" title="Updates" sub={text} testId="updates-row">
+      {st?.state === 'ready'
+        ? <button className="btn primary" onClick={() => void api.update.install().then(setSt).catch((e: Error) => toast(clean(e), 'error'))} data-testid="update-install">Restart to update</button>
+        : <button className="btn" disabled={st?.state === 'checking' || st?.state === 'downloading' || st?.state === 'installing' || st?.state === 'unsupported'} onClick={() => void api.update.check().then(setSt)} data-testid="update-check">Check now</button>}
+    </Row>
+  )
+}
+
 // ------------------------------------------------------------------ models & keys
 
 function modelName(m: ModelInfo): string { return m.label || m.id }
@@ -364,9 +392,17 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
     return r.ok ? 'ok' : keyError(clean({ message: r.error ?? '' }))
   }
   const saveKey = (id: ProviderId) => async (k: string | null): Promise<void> => { await patch({ setKeys: { [id]: k } }); onRefresh() }
+  const saved = (id: ProviderId): boolean => !!(s.keysSaved?.[id] ?? (s.keys as Record<string, boolean | undefined>)[id])
+  const off = (id: ProviderId): boolean => !!s.disabledProviders?.includes(id)
+  /** On/off for a provider with a key saved: off keeps the key and stops using its models. */
+  const power = (id: ProviderId, name: string): ReactNode => saved(id) && (
+    <Toggle on={!off(id)} label={`Use ${name}`} testId={`provider-on-${id}`}
+      onChange={(v) => void patch({ disabledProviders: v ? (s.disabledProviders ?? []).filter((x) => x !== id) : [...new Set([...(s.disabledProviders ?? []), id])] }).then(onRefresh)} />
+  )
   const openai = s.providers.openai.baseUrl.trim() || 'https://api.openai.com/v1'
   const status = (id: string): ReactNode => {
     const p = models?.providers?.find((x) => x.id === id)
+    if (saved(id as ProviderId) && off(id as ProviderId)) return <span className="tier-badge">Off · key kept</span>
     return p && (s.keys as Record<string, boolean | undefined>)[id] ? <span className={`tier-badge${p.ok ? ' ok' : ''}`}>{p.ok ? 'Connected' : 'Not connected'}</span> : null
   }
   const installed = (models?.models ?? []).filter((m) => m.installed)
@@ -376,23 +412,27 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
     <>
       <h2>Models &amp; Keys</h2>
       <div className="set-sub">Connect at least one. Auto picks the right model for each request.</div>
-      <Section title="Connect">
+      <Section title="Connect" sub="Switch a provider off to stop using it. Its key stays saved.">
+        <div data-setting="provider-switches" />
         <Row id="key-anthropic" title={<>Claude{status('anthropic')}</>} sub={<>Anthropic API key · <a href={link('anthropic') ?? 'https://console.anthropic.com/settings/keys'} target="_blank" rel="noreferrer">get one</a></>} info="Used for every model named “claude-…”. Spending counts toward your monthly limit.">
-          <KeyField saved={s.keys.anthropic} placeholder="sk-ant-…" testId="key-anthropic" onSave={saveKey('anthropic')} onTest={test('https://api.anthropic.com/v1')} />
+          <KeyField saved={saved('anthropic')} placeholder="sk-ant-…" testId="key-anthropic" onSave={saveKey('anthropic')} onTest={test('https://api.anthropic.com/v1')} />
+          {power('anthropic', 'Claude')}
         </Row>
         <Row id="key-openai" title={<>OpenAI{status('openai')}</>} sub={<>OpenAI API key · <a href={link('openai') ?? 'https://platform.openai.com/api-keys'} target="_blank" rel="noreferrer">get one</a></>} info="GPT models at cost; also voice and meaning search when you allow them. Spending counts toward your monthly limit.">
-          <KeyField saved={s.keys.openai} placeholder="sk-…" testId="key-openai" onSave={saveKey('openai')} onTest={test(openai)} />
+          <KeyField saved={saved('openai')} placeholder="sk-…" testId="key-openai" onSave={saveKey('openai')} onTest={test(openai)} />
+          {power('openai', 'OpenAI')}
         </Row>
         <Row id="key-xai" title={<>Grok{status('xai')}</>} sub={<>xAI API key · <a href={link('xai') ?? 'https://console.x.ai'} target="_blank" rel="noreferrer">get one</a></>}
           info={<>Used for models named “grok-…”. Auto uses Grok for documents and knowledge work after Claude, and as a later choice elsewhere.{grok.length ? ` Available: ${grok.map(modelName).join(', ')}.` : ''}</>}>
-          <KeyField saved={!!s.keys.xai} placeholder="xai-…" testId="key-xai" onSave={saveKey('xai')} onTest={test('https://api.x.ai/v1')} />
+          <KeyField saved={saved('xai')} placeholder="xai-…" testId="key-xai" onSave={saveKey('xai')} onTest={test('https://api.x.ai/v1')} />
+          {power('xai', 'Grok')}
         </Row>
       </Section>
       <div data-setting="chatgpt-plan"><ChatgptPlanSettings onRefresh={onRefresh} /></div>
 
       <Section title="How models are used">
         <Row id="auto-prefers" title="Auto prefers" info="Best result: the strongest model for each kind of task. Balanced: the cheapest one that's strong enough. Cheapest: free local models first.">
-          <Segmented value={s.cloud.autoPrefers ?? 'best'} label="Auto prefers" testIdPrefix="auto-prefers" onChange={(v) => void patch({ cloud: { ...s.cloud, autoPrefers: v } })}
+          <Segmented value={s.cloud.autoPrefers ?? 'balanced'} label="Auto prefers" testIdPrefix="auto-prefers" onChange={(v) => void patch({ cloud: { ...s.cloud, autoPrefers: v } })}
             options={[{ id: 'best', label: 'Best' }, { id: 'balanced', label: 'Balanced' }, { id: 'cheapest', label: 'Cheapest' }]} />
         </Row>
         <div data-setting="local-models"><LocalModelsRow s={s} patch={patch} onChanged={onRefresh} /></div>
@@ -410,8 +450,8 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
               {usable.map((m) => <option key={m.id} value={m.id}>{modelName(m)}</option>)}
             </select>
           </Row>
-          {/* Auto picks the model and the thinking together: a thinking level only means something for a picked model. */}
-          {!isAutoModel(s.defaultModel) && <Row id="thinking" title="Thinking for new chats" info="For the model picked above. Auto leans high for real tasks and low for quick chats. Chats can choose their own.">
+          {/* A thinking choice can override Auto model routing independently. */}
+          {<Row id="thinking" title="Thinking for new chats" info="For the model picked above. Auto leans high for real tasks and low for quick chats. Chats can choose their own.">
             <select className="set-select" value={s.thinking} onChange={(e) => void patch({ thinking: e.target.value as Settings['thinking'] })} data-testid="default-thinking" aria-label="Thinking for new chats">
               <option value="auto">Auto (recommended)</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra</option><option value="max">Max</option>
             </select>
@@ -641,7 +681,7 @@ function Servers({ s, patch, models, onChanged, test, link }: P & { models: Mode
   )
 }
 
-/** Keys for tools (Cursor, market data, The Blue Alliance, Onshape): Models → Advanced. */
+/** Keys for tools (market data, The Blue Alliance, Onshape): Models → Advanced. Cursor is under Connected apps. */
 function ToolKeys({ s, patch }: P) {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const testOnshape = async (): Promise<void> => {
@@ -655,7 +695,6 @@ function ToolKeys({ s, patch }: P) {
   return (
     <Section title="Keys for tools" sub="Only for the tools that use them. SEC filings need no key.">
       <div data-setting="tool-keys">
-        <Row title={<a href="https://cursor.com/dashboard" target="_blank" rel="noreferrer">Cursor</a>} sub="Start Cursor cloud agents on your repos."><KeyField saved={s.hasCursorKey} placeholder="key_…" testId="key-cursor" onSave={async (k) => { await patch({ cursorKey: k }) }} /></Row>
         {market.map(([id, name, url, sub]) => (
           <Row key={id} title={<a href={url} target="_blank" rel="noreferrer">{name}</a>} sub={sub}>
             <KeyField saved={!!s.markets?.keys?.[id]} placeholder={`${name} key`} testId={`key-market-${id}`} onSave={async (k) => { await patch({ marketKeys: { [id]: k } } as never) }} />
@@ -682,7 +721,7 @@ function ToolKeys({ s, patch }: P) {
 
 // ------------------------------------------------------------------ connected apps
 
-function ConnectedPage() {
+function ConnectedPage({ s, patch }: P) {
   const [apps, setApps] = useState<Array<{ name: string; state: ConnectorStatus['state'] }> | null>(null)
   useEffect(() => {
     const load = (): void => void api.connectors.list().then((r) => {
@@ -704,6 +743,17 @@ function ConnectedPage() {
           sub={apps === null ? undefined : [live.map((a) => a.name).join(', '), waiting.length ? `${waiting.length} need${waiting.length === 1 ? 's' : ''} attention: ${waiting.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ') || 'One click each; you sign in with the app itself.'}>
           <button className="btn primary" onClick={() => window.dispatchEvent(new Event('sahilbot:open-connect'))} data-testid="settings-connect-apps">Connect apps</button>
         </Row>
+      </Section>
+      <Section title="Cursor" sub="Hand coding work to Cursor Cloud Agents on your GitHub repos. Cursor is connected only by its API key." testId="connect-cursor">
+        <Row title={<>Cursor{s.hasCursorKey ? <span className="tier-badge ok">Connected</span> : <span className="tier-badge">Not connected</span>}</>}
+          sub={<>Cursor API key · <a href="https://cursor.com/dashboard?tab=integrations" target="_blank" rel="noreferrer">get one</a></>}>
+          <KeyField saved={s.hasCursorKey} placeholder="key_…" testId="connect-cursor-key" onSave={async (k) => { await patch({ cursorKey: k }) }} />
+        </Row>
+        {!isServerRuntime && (
+          <Row title="Also run Cursor on this Mac" sub="Uses Cursor's command-line agent for folders on this Mac. Off: cloud agents only.">
+            <Toggle on={!!s.cursorLocalAgent} onChange={(v) => void patch({ cursorLocalAgent: v })} label="Also run Cursor on this Mac" testId="cursor-local-agent" />
+          </Row>
+        )}
       </Section>
       {!isServerRuntime && (
         <Disclosure title="Let other apps use SahilBot" sub="MCP for Cursor and Claude, Shortcuts links" testId="connected-advanced">
@@ -794,14 +844,10 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
 
 // ------------------------------------------------------------------ privacy & security
 
-const PERM_BADGE: Record<string, string> = { granted: 'Allowed', denied: 'Not allowed', 'not-determined': 'Not set', unknown: 'Unknown' }
-const AUTOMATION_APPS = ['Notes', 'Calendar', 'Reminders', 'Mail', 'Finder', 'Music']
 
 function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab: (t: string) => void }) {
   const tabs = [
     { id: 'passwords', label: 'Passwords' },
-    { id: 'approvals', label: 'Approvals' },
-    { id: 'permissions', label: 'Mac permissions', hidden: isServerRuntime },
     { id: 'activity', label: 'Activity', hidden: isServerRuntime },
     { id: 'sensitive', label: 'Sensitive details' }
   ]
@@ -809,51 +855,97 @@ function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab:
   return (
     <>
       <h2>Privacy &amp; Security</h2>
-      <div className="set-sub">Saved passwords, what bots may do without asking, and what SahilBot may see and keep.</div>
+      <div className="set-sub">Saved passwords, and what SahilBot may see and keep. What it may do on its own is under Permissions.</div>
       <Tabs value={cur} tabs={tabs} onChange={onTab} label="Privacy and security" />
       {cur === 'passwords' && <div data-setting="passwords"><SecretVaultSettings embedded /></div>}
-      {cur === 'approvals' && <ApprovalsTab s={s} patch={patch} />}
-      {cur === 'permissions' && <MacPermissions />}
       {cur === 'activity' && <div data-setting="activity"><ActivitySettings /></div>}
       {cur === 'sensitive' && <SensitiveDetails />}
     </>
   )
 }
 
-/** What macOS lets SahilBot do, and one click to the exact System Settings pane. Nothing is granted from here. */
+// ------------------------------------------------------------------ permissions
+
+const LEVELS: Array<{ id: 'ask' | 'auto'; title: string; sub: string; rec?: boolean }> = [
+  { id: 'auto', title: 'Auto', rec: true, sub: 'Works on its own. Asks before spending money, using a password, deleting your things, emailing lots of people or posting in public.' },
+  { id: 'ask', title: 'Ask first', sub: 'Checks with you before anything that changes something.' }
+]
+
+/** How much SahilBot does on its own, what the Mac lets it use, and rules for specific actions: one page. */
+function PermissionsPage({ s, patch }: P) {
+  const level = s.defaultMode === 'ask' ? 'ask' : 'auto'
+  return (
+    <>
+      <h2>Permissions</h2>
+      <div className="set-sub">What SahilBot may do without asking, and what your Mac lets it use.</div>
+      <section className="set-section" data-setting="autonomy">
+        <div className="set-label">New chats</div>
+        <div className="perm-levels" role="radiogroup" aria-label="Permissions for new chats">
+          {LEVELS.map((l) => (
+            <button key={l.id} type="button" role="radio" aria-checked={level === l.id} className={`perm-level${level === l.id ? ' on' : ''}`}
+              onClick={() => void patch({ defaultMode: l.id })} data-testid={`autonomy-${l.id}`}>
+              <span className="perm-radio" aria-hidden />
+              <span className="perm-level-text"><b>{l.title}</b>{l.rec && <span className="perm-rec">Recommended</span>}<span className="sub">{l.sub}</span></span>
+            </button>
+          ))}
+        </div>
+        <div className="perm-note"><I.Shield size={13} />Buying something, a password or a one-time code always needs you. Any chat can change this from the menu under its message box.</div>
+      </section>
+      {!isServerRuntime && <MacPermissions />}
+      <Disclosure title="Rules for specific actions" sub="Always allow or always ask, Bypass and hard stops" testId="approvals-rules">
+        <ApprovalsTab s={s} patch={patch} />
+      </Disclosure>
+    </>
+  )
+}
+
+const PERM_ORDER: PermissionKind[] = ['microphone', 'accessibility', 'screen', 'notifications', 'automation', 'fullDisk']
+const PERM_SHORT: Partial<Record<PermissionKind, string>> = {
+  microphone: 'Talk to SahilBot and dictate.',
+  accessibility: 'Use other apps for you: click, type and read their windows.',
+  screen: 'See your screen while it works for you.',
+  notifications: 'Tell you when a task is done or needs you.',
+  automation: 'Permissions are granted per app when first used. Review them in System Settings.',
+  fullDisk: 'Read Messages, Mail and Safari data when you ask. Optional.'
+}
+
+/** What macOS lets SahilBot use: one Allow button each, macOS's own prompt where it has one. */
 function MacPermissions() {
   const [rows, setRows] = useState<Awaited<ReturnType<typeof api.permissions.status>> | null>(null)
-  const [app, setApp] = useState(AUTOMATION_APPS[0])
-  const [auto, setAuto] = useState<{ app: string; state: string; detail?: string } | null>(null)
+  const [asked, setAsked] = useState<Partial<Record<PermissionKind, string>>>({})
   const refresh = (): void => void api.permissions.status().then(setRows).catch(() => setRows([]))
   useEffect(() => {
     refresh()
-    // Back from System Settings: show the new state.
+    // Back from System Settings or a macOS prompt: show the new state.
     window.addEventListener('focus', refresh)
     return () => window.removeEventListener('focus', refresh)
   }, [])
+  const allow = (kind: PermissionKind): void => {
+    void api.permissions.request(kind).then((r) => {
+      setAsked((a) => ({ ...a, [kind]: r === 'opened' ? 'Turn on SahilBot in the window that opened, then come back.' : r === 'denied' ? 'macOS said no. Use Open Settings to change it.' : '' }))
+      setTimeout(refresh, 800)
+    }).catch((e) => toast(clean(e), 'error'))
+  }
+  const sorted = (rows ?? []).slice().sort((a, b) => PERM_ORDER.indexOf(a.kind) - PERM_ORDER.indexOf(b.kind))
   return (
-    <>
-      <Section sub="Only you can turn these on, in System Settings. SahilBot asks before it uses any of them.">
-        <div data-setting="mac-permissions">
-          {rows === null ? <Row title="Checking…" /> : rows.filter((r) => r.kind !== 'automation').map((r) => (
-            <Row key={r.kind} title={<>{r.title}<span className={`tier-badge${r.state === 'granted' ? ' ok' : ''}`}>{PERM_BADGE[r.state] ?? r.state}</span></>} sub={r.enables} info={r.detail} testId={`perm-${r.kind}`}>
-              <button className="btn" onClick={() => void api.permissions.open(r.kind)} title={r.how}>Open Settings</button>
+    <Section title="Your Mac" sub="Turn on only what you want SahilBot to use. You can change these any time.">
+      <div data-setting="mac-permissions">
+        {rows === null ? <Row title="Checking…" /> : sorted.map((r) => {
+          const on = r.state === 'granted'
+          const title = r.kind === 'automation' ? 'Mac apps' : r.title
+          return (
+            <Row key={r.kind} title={title} sub={asked[r.kind] || PERM_SHORT[r.kind] || r.enables} info={[r.enables, r.how, r.detail].filter(Boolean).join(' ')} testId={`perm-${r.kind}`}>
+              {on
+                ? <span className="perm-on" data-testid={`perm-${r.kind}-on`}><I.Check size={13} />On</span>
+                : <>
+                    {asked[r.kind] && <button className="link-btn" onClick={() => void api.permissions.open(r.kind)}>Open Settings</button>}
+                    <button className="btn primary" onClick={() => allow(r.kind)} data-testid={`perm-${r.kind}-allow`}>{r.kind === 'automation' ? 'Open Settings' : r.kind === 'notifications' ? 'Turn on' : 'Allow'}</button>
+                  </>}
             </Row>
-          ))}
-        </div>
-      </Section>
-      <Section title="Automation" sub="Lets SahilBot control another app when a task needs it. macOS asks once per app.">
-        <Row title="Check an app" sub={auto ? `${auto.app}: ${PERM_BADGE[auto.state] ?? auto.state}${auto.detail ? ` · ${auto.detail}` : ''}` : 'May show macOS\'s one-time prompt.'}>
-          <div className="key-edit">
-            <select className="set-select" value={app} aria-label="App to check" onChange={(e) => { setApp(e.target.value); setAuto(null) }} data-testid="perm-auto-app">
-              {AUTOMATION_APPS.map((a) => <option key={a}>{a}</option>)}
-            </select>
-            <button className="btn" onClick={() => void api.permissions.automation(app).then(setAuto).catch((e) => setAuto({ app, state: 'unknown', detail: clean(e) }))} data-testid="perm-auto-check">Check</button>
-          </div>
-        </Row>
-      </Section>
-    </>
+          )
+        })}
+      </div>
+    </Section>
   )
 }
 
@@ -931,12 +1023,6 @@ function ApprovalsTab({ s, patch }: P) {
   )
   return (
     <>
-      <Section>
-        <Row id="autonomy" title="Permissions for new chats" info="Ask: approve every change. Auto (recommended): SahilBot works on its own and asks before money, passwords, deleting your data, sending to many people, public posts, and anything a web page or email tried to steer. Bypass is picked per chat, in the chat's Permissions menu. Each bot can set its own.">
-          <Segmented value={s.defaultMode === 'ask' ? 'ask' : 'auto'} label="Permissions for new chats" testIdPrefix="autonomy" onChange={(v) => void patch({ defaultMode: v as Settings['defaultMode'] })}
-            options={[{ id: 'ask', label: 'Ask' }, { id: 'auto', label: 'Auto' }]} />
-        </Row>
-      </Section>
       <Section title="Approval rules" sub="Decide ahead of time what SahilBot may do on its own and what always needs your OK.">
         <div className="ar-form" data-setting="approval-rules">
           <label htmlFor="rule-when">When SahilBot wants to:<InfoTip>A rule matches when every word in it appears in the action (its name, what it will do, or its details); “sends”, “sending” and “sent” all count as “send”. tool:run_command matches one tool by name (* is a wildcard); “quoted words” must appear exactly. If an Ask first rule and an Allow rule both match, SahilBot asks.</InfoTip></label>
@@ -962,16 +1048,14 @@ function ApprovalsTab({ s, patch }: P) {
           {group('allow', 'Allow automatically', 'Deleting, payments and sign-in changes still ask.')}
         </>
       )}
-      <Disclosure title="Advanced" sub="Bypass and hard stops" testId="approvals-advanced">
-        <Section>
+      <Section title="Bypass">
           <Row id="bypass" title="Bypass confirmed" info="Bypass runs everything without asking, except purchases, passwords and one-time codes, which always need you. Pick it in a chat's Permissions menu; the first time, SahilBot asks you to confirm. It resets to Auto when SahilBot restarts. Turn this off to be asked again.">
             <Toggle on={!!s.advanced.allowBypass} onChange={(v) => void patch({ advanced: { ...s.advanced, allowBypass: v } })} label="Bypass confirmed" testId="allow-bypass" />
           </Row>
           <Row title="Hard stops in Bypass" sub="Also ask before security settings, permanent deletes, mass sends and public posts in Bypass. Purchases, passwords and one-time codes always ask.">
             <Toggle on={s.advanced.hardStopsEnabled} onChange={(v) => void patch({ advanced: { ...s.advanced, hardStopsEnabled: v } })} label="Hard stops" />
           </Row>
-        </Section>
-      </Disclosure>
+      </Section>
     </>
   )
 }
@@ -1111,6 +1195,11 @@ function Developer({ s, models, patch }: P & { models: ModelList | null }) {
   }
   return (
     <>
+      <Section>
+        <Row id="dev-mode" title="Developer mode" sub="Chats also show the model behind each reply, its thinking, every step it ran, and tokens and cost.">
+          <Toggle on={!!s.advanced.devMode} onChange={(v) => void patch({ advanced: { ...s.advanced, devMode: v } })} label="Developer mode" testId="dev-mode" />
+        </Row>
+      </Section>
       <Section title="Local models">
         <Row id="context-window" title="Context window" info="How much of the conversation a local model holds. Auto gives each model up to 64K on Macs with 48 GB or more and 32K on smaller ones, never more than fits in memory.">
           <div className="seg">{WINDOWS.map((w) => <button key={w} className={s.contextWindow === w ? 'on' : ''} onClick={() => void patch({ contextWindow: w })}>{w ? `${w / 1024}K` : 'Auto'}</button>)}</div>

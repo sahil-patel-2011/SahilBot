@@ -4,7 +4,7 @@ description: Makes data and ML work correct and reproducible - pandas hygiene, n
 source: you
 uses: 0
 category: Coding
-triggers: pandas settingwithcopywarning, chained assignment, merge validate, pandas dtype, notebook to script, random seed, data leakage, train test split, cross validation, baseline model, holdout set, confidence interval, experiment tracking, mlflow, pandera schema, feature pipeline
+triggers: pandas settingwithcopywarning, chained assignment, merge validate, pandas dtype, notebook to script, jupyter notebook to a reproducible script, convert my jupyter notebook, random seed, data leakage, train test split, cross validation, baseline model, holdout set, confidence interval, experiment tracking, mlflow, pandera schema, feature pipeline
 ---
 
 ## When

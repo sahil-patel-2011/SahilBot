@@ -27,21 +27,15 @@ describe('picker label', () => {
     expect(pickerLabel({ model: 'claude-opus-5-5', models: [opus], thinking: 'auto', mode: 'auto' })).toBe('Opus 5.5')
     // 'autonomous' is Auto's old name: nothing to show.
     expect(pickerLabel({ model: 'auto', thinking: 'auto', mode: 'autonomous' })).toBe('Auto')
-    // On Auto, SahilBot picks the thinking too: a stale level never shows.
-    expect(pickerLabel({ model: 'auto', thinking: 'xhigh', mode: 'ask' })).toBe('Auto · Ask')
-    expect(pickerLabel({ model: 'auto', thinking: 'max', mode: 'auto' })).toBe('Auto')
-    expect(pickerLabel({ model: 'auto:cloud', thinking: 'high', mode: 'auto' })).toBe('Auto (cloud)')
+    // Thinking is picked independently of the model: a level shows with Auto too.
+    expect(pickerLabel({ model: 'auto', thinking: 'xhigh', mode: 'ask' })).toBe('Auto · Extra · Ask')
+    expect(pickerLabel({ model: 'auto', thinking: 'max', mode: 'auto' })).toBe('Auto · Max')
+    expect(pickerLabel({ model: 'auto:cloud', thinking: 'high', mode: 'auto' })).toBe('Auto (cloud) · High')
     expect(pickerLabel({ model: 'auto:cloud', thinking: 'auto', mode: 'auto' })).toBe('Auto (cloud)')
     expect(pickerLabel({ model: 'qwen3.8:27b', models: [qwen], mode: 'bypass' })).toBe('Qwen3.8 27B · Bypass')
   })
   test('a model the list does not know (yet) shows its id', () => {
     expect(pickerLabel({ model: 'llama3.3:70b', models: null, mode: 'auto' })).toBe('llama3.3:70b')
-  })
-  test('bot chats: model and thinking are automatic, only permissions show', () => {
-    expect(pickerLabel({ model: 'claude-opus-5-5', models: [opus], thinking: 'max', mode: 'auto', autoBot: true })).toBe('Auto')
-    expect(pickerLabel({ model: 'claude-opus-5-5', models: [opus], thinking: 'max', mode: 'autonomous', autoBot: true })).toBe('Auto')
-    expect(pickerLabel({ model: 'claude-opus-5-5', models: [opus], thinking: 'max', mode: 'ask', autoBot: true })).toBe('Auto · Ask')
-    expect(pickerLabel({ model: 'auto', mode: 'bypass', autoBot: true })).toBe('Auto · Bypass')
   })
   test('short names drop the "Claude" prefix', () => {
     expect(shortModelName('claude-sonnet-5-5', sonnet)).toBe('Sonnet 5.5')

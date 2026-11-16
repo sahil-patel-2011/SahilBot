@@ -4,7 +4,7 @@
 // on the row (tests/unit/settings-index.test.ts checks both directions, and that every saved setting has
 // an entry).
 
-export type SettingsPage = 'general' | 'models' | 'connected' | 'memory' | 'voice' | 'privacy' | 'usage' | 'server' | 'advanced'
+export type SettingsPage = 'general' | 'models' | 'connected' | 'permissions' | 'memory' | 'voice' | 'privacy' | 'usage' | 'server' | 'advanced'
 
 /** Old page ids (links from other screens, saved deep links) and where they live now. */
 export const LEGACY_PAGES: Record<string, { page: SettingsPage; tab?: string }> = {
@@ -12,11 +12,12 @@ export const LEGACY_PAGES: Record<string, { page: SettingsPage; tab?: string }> 
   appearance: { page: 'general' },
   knowledge: { page: 'advanced', tab: 'knowledge' },
   rules: { page: 'advanced', tab: 'rules' },
-  approvals: { page: 'privacy', tab: 'approvals' },
+  approvals: { page: 'permissions' },
   passwords: { page: 'privacy', tab: 'passwords' },
   vault: { page: 'privacy', tab: 'passwords' },
   activity: { page: 'privacy', tab: 'activity' },
-  permissions: { page: 'privacy', tab: 'permissions' }
+  'privacy:approvals': { page: 'permissions' },
+  'privacy:permissions': { page: 'permissions' }
 }
 
 export interface SettingEntry {
@@ -35,7 +36,7 @@ export interface SettingEntry {
 }
 
 export const PAGE_TITLES: Record<SettingsPage, string> = {
-  general: 'General', models: 'Models & Keys', connected: 'Connected apps', memory: 'Memory', voice: 'Voice',
+  general: 'General', models: 'Models & Keys', connected: 'Connected apps', permissions: 'Permissions', memory: 'Memory', voice: 'Voice',
   privacy: 'Privacy & Security', usage: 'Usage', server: 'Always-on server', advanced: 'Advanced'
 }
 
@@ -47,6 +48,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'quick-ask', page: 'general', title: 'Quick Ask shortcut', words: 'shortcut hotkey keyboard option space overlay', keys: ['quickKey'] },
   { anchor: 'menu-bar', page: 'general', title: 'Show in the menu bar', words: 'menu bar icon tray status', keys: ['menuBarIcon'] },
   { anchor: 'open-at-login', page: 'general', title: 'Open at login', words: 'startup login launch boot', keys: ['openAtLogin'] },
+  { anchor: 'updates', page: 'general', title: 'Updates', words: 'update upgrade new version latest release download install restart backup' },
   { anchor: 'density', page: 'general', title: 'Step detail', words: 'tool call density compact detailed appearance', keys: ['appearance.density'], advanced: true },
   { anchor: 'chat-width', page: 'general', title: 'Chat width', words: 'appearance width narrow wide', keys: ['appearance.chatWidth'], advanced: true },
   { anchor: 'code-wrap', page: 'general', title: 'Wrap long code lines', words: 'appearance code block word wrap', keys: ['appearance.codeWrap'], advanced: true },
@@ -62,6 +64,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'key-anthropic', page: 'models', title: 'Claude (Anthropic API key)', words: 'anthropic claude key api opus sonnet haiku fable' },
   { anchor: 'key-openai', page: 'models', title: 'OpenAI API key', words: 'openai gpt key api chatgpt' },
   { anchor: 'key-xai', page: 'models', title: 'Grok (xAI API key)', words: 'xai grok key api' },
+  { anchor: 'provider-switches', page: 'models', title: 'Turn a provider off (keeps its key)', words: 'provider off disable pause claude anthropic openai gpt grok xai switch toggle slider keep key', keys: ['disabledProviders'] },
   { anchor: 'chatgpt-plan', page: 'models', title: 'ChatGPT plan (via Codex)', words: 'chatgpt plan subscription codex sign in plus pro' },
   { anchor: 'auto-prefers', page: 'models', title: 'Auto prefers', words: 'auto routing best balanced cheapest cost quality', keys: ['cloud.autoPrefers'] },
   { anchor: 'monthly-limit', page: 'models', title: 'Monthly spending limit', words: 'budget cap spend spending limit money cost unlimited none dollars', keys: ['cloudBudgetUsd', 'spendingMode'] },
@@ -76,10 +79,10 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'background-model', page: 'models', title: 'Model for background jobs', words: 'task models background titles small jobs', keys: ['taskModels.background'], advanced: true },
   { anchor: 'computer-use', page: 'models', title: 'Computer use', words: 'computer use planner executor screen mouse keyboard', keys: ['computerUse'], advanced: true },
   { anchor: 'servers', page: 'models', title: 'Custom servers', words: 'openrouter openai base url gateway ollama lm studio custom server llama.cpp vllm address', keys: ['providers', 'baseUrl'], advanced: true },
-  { anchor: 'tool-keys', page: 'models', title: 'Keys for tools', words: 'cursor market data stocks tiingo polygon alpha vantage finnhub quotes blue alliance frc tba onshape cad key', keys: ['markets.quoteProvider', 'markets.secContact'], advanced: true },
+  { anchor: 'tool-keys', page: 'models', title: 'Keys for tools', words: 'market data stocks tiingo polygon alpha vantage finnhub quotes blue alliance frc tba onshape cad key', keys: ['markets.quoteProvider', 'markets.secContact'], advanced: true },
 
   // Connected apps
-  { anchor: 'connect-apps', page: 'connected', title: 'Connect apps', words: 'gmail calendar notion slack github drive connectors integrations mcp oauth' },
+  { anchor: 'connect-apps', page: 'connected', title: 'Connect apps', words: 'gmail calendar notion slack github drive connectors integrations mcp oauth cursor cloud agents api key', keys: ['cursorLocalAgent'] },
   { anchor: 'mcp-server', page: 'connected', title: 'Let other apps use SahilBot', words: 'mcp server cursor claude code claude desktop token port raycast alfred shortcuts links', keys: ['mcpServer'], advanced: true },
 
   // Memory
@@ -103,10 +106,10 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
   // Privacy & Security
   { anchor: 'passwords', page: 'privacy', tab: 'passwords', title: 'Passwords & vault', words: 'vault passwords login card credit id passport license secure note master password touch id lock backup export import csv' },
-  { anchor: 'autonomy', page: 'privacy', tab: 'approvals', title: 'Permissions for new chats', words: 'ask auto autonomy autonomous permission permissions mode approvals', keys: ['defaultMode', 'botModes'] },
-  { anchor: 'approval-rules', page: 'privacy', tab: 'approvals', title: 'Approval rules', words: 'approval approve allow ask first always automatically confirm rules', keys: ['customRules'] },
-  { anchor: 'bypass', page: 'privacy', tab: 'approvals', title: 'Bypass', words: 'bypass full access hard stops confirm', keys: ['advanced.allowBypass', 'advanced.hardStopsEnabled'], advanced: true },
-  { anchor: 'mac-permissions', page: 'privacy', tab: 'permissions', title: 'macOS permissions', words: 'accessibility screen recording microphone full disk access automation notifications system settings' },
+  { anchor: 'autonomy', page: 'permissions', title: 'Permissions for new chats', words: 'ask auto autonomy autonomous permission permissions mode approvals', keys: ['defaultMode', 'botModes'] },
+  { anchor: 'approval-rules', page: 'permissions', title: 'Approval rules', words: 'approval approve allow ask first always automatically confirm rules', keys: ['customRules'] },
+  { anchor: 'bypass', page: 'permissions', title: 'Bypass', words: 'bypass full access hard stops confirm', keys: ['advanced.allowBypass', 'advanced.hardStopsEnabled'], advanced: true },
+  { anchor: 'mac-permissions', page: 'permissions', title: 'Mac permissions', words: 'accessibility screen recording microphone full disk access automation notifications system settings' },
   { anchor: 'activity', page: 'privacy', tab: 'activity', title: 'Know what I\'m working on', words: 'activity window titles browser tabs timeline context share cloud exclude apps sites' },
   { anchor: 'sensitive', page: 'privacy', tab: 'sensitive', title: 'Sensitive details', words: 'health money finance religion politics children sexuality government id sensitive categories privacy' },
 
@@ -118,6 +121,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'rules', page: 'advanced', tab: 'rules', title: 'Rules', words: 'rules instructions always follow packs engineering medical business coding' },
   { anchor: 'skills', page: 'advanced', tab: 'rules', title: 'Skills', words: 'skills procedures steps learned customize' },
   { anchor: 'knowledge', page: 'advanced', tab: 'knowledge', title: 'Knowledge folders', words: 'knowledge search files folders documents index pdf embeddings rebuild openai meaning', keys: ['openaiEmbeddings'] },
+  { anchor: 'dev-mode', page: 'advanced', tab: 'developer', title: 'Developer mode', words: 'developer dev mode debug model tokens cost thinking steps commands show details', keys: ['advanced.devMode'] },
   { anchor: 'context-window', page: 'advanced', tab: 'developer', title: 'Context window (local models)', words: 'context window tokens 16k 32k 64k 128k', keys: ['contextWindow'] },
   { anchor: 'gpu', page: 'advanced', tab: 'developer', title: 'GPU memory for local models', words: 'gpu memory 90% metal wired' },
   { anchor: 'sampling', page: 'advanced', tab: 'developer', title: 'Sampling', words: 'temperature top p top k min p penalty sampling', keys: ['sampling'] }
@@ -125,7 +129,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
 /** Settings keys that aren't user-facing settings (internal state, other screens own them). */
 export const NOT_IN_SETTINGS = new Set([
-  'hasApiKey', 'keys', 'hasCursorKey', 'hasTbaKey', 'hasOnshapeKeys', 'onshapeKeyParts', 'onboarded', 'pinnedBots', 'search.hasBraveKey',
+  'hasApiKey', 'keys', 'keysSaved', 'hasCursorKey', 'hasTbaKey', 'hasOnshapeKeys', 'onshapeKeyParts', 'onboarded', 'pinnedBots', 'search.hasBraveKey',
   'appearance', 'cloud', 'search', 'advanced', 'taskModels', 'learning', 'local', 'markets', 'voiceOutput',
   // Set from other screens: bot details, the composer, the menu bar, local model loading.
   'botAutonomy', 'botSwarm', 'localKeepAlive', 'advanced.sandboxCommands', 'local.migrated', 'learning.explicit', 'cloud.maxConsultsPerRequest',

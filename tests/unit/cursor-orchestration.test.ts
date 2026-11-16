@@ -79,7 +79,7 @@ describe('cloud helpers', () => {
 describe('cursor tool', () => {
   test('effects: local agent is local, cloud asks; prompt shows in the approval', () => {
     const root = repo()
-    const t = cursorTool(() => 'key', () => root)
+    const t = cursorTool(() => 'key', () => root, () => true)
     const eff = t.effect as (a: unknown) => string
     expect(eff({ action: 'prompt', goal: 'x' })).toBe('read')
     expect(eff({ action: 'agent', folder: root, goal: 'x' })).toBe('write_local')
@@ -106,7 +106,7 @@ say({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1000, re
     chmodSync(fake, 0o755)
     process.env.CURSOR_AGENT_PATH = fake
     const progress: string[] = []
-    const t = cursorTool(() => undefined, () => root)
+    const t = cursorTool(() => undefined, () => root, () => true)
     const r = await t.run({ action: 'agent', folder: root, goal: 'Make a.txt say two' }, ctxFor(root, (p) => progress.push(p)))
     expect(progress).toEqual(expect.arrayContaining(['Cursor agent started (fake)', 'Editing a.txt']))
     expect(r.text).toMatch(/Changed a\.txt\. Prompt had: brief/)

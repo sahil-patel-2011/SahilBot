@@ -10,6 +10,7 @@ import '../styles-approvals.css'
 import '../styles-purchase.css'
 // Lazy: Connect Apps is its own chunk; only a card for an app that still needs its setup (or a key) uses it.
 import { ApiKeyPanel, AppSetup, GoogleSetup, Lazy } from '../lazy'
+import { folderName } from '../lib/plain-approval'
 
 const EFFECT_TEXT: Record<string, string> = {
   read: 'Reads only',
@@ -423,13 +424,13 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
       )}
       <div className="pending-actions">
         <button className="btn primary" onClick={() => onRespond(req.id, 'once')} data-testid="approve-once">Allow once</button>
-        <button className="btn" title={`Don't ask again for ${name} in this chat`}
+        <button className="btn" title={req.folder ? `Files in ${req.folder} won't ask again in this chat` : `Don't ask again for ${name} in this chat`}
           onClick={() => {
             // Say so only once SahilBot has taken it.
             void Promise.resolve(onRespond(req.id, 'always')).then(
-              () => toast(`${name} is allowed for the rest of this chat`, 'ok'),
+              () => toast(req.folder ? `${folderName(req.folder)} is open to this chat now` : `${name} is allowed for the rest of this chat`, 'ok'),
               (e: unknown) => toast((e as Error)?.message ?? String(e), 'error'))
-          }} data-testid="approve-always">Always allow</button>
+          }} data-testid="approve-always">{req.folder ? `Always allow in “${folderName(req.folder)}”` : 'Always allow'}</button>
         <button className="btn danger" onClick={() => onRespond(req.id, 'deny')} data-testid="approve-deny">Deny</button>
         {!danger && !ruleOpen && <button className="link-btn ap-rule-link" onClick={() => setRuleOpen(true)} data-testid="approve-make-rule">Make it a rule…</button>}
       </div>
@@ -447,7 +448,7 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
             <button className="btn primary" disabled={saving || !ruleText.trim()} onClick={() => void saveRule()} data-testid="approval-rule-save">{saving ? 'Saving…' : 'Save rule'}</button>
             <button className="btn" onClick={() => setRuleOpen(false)}>Cancel</button>
           </div>
-          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”. Manage rules in Settings → Privacy & Security → Approvals.</div>
+          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”. Manage rules in Settings → Permissions.</div>
         </div>
       )}
     </div>

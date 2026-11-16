@@ -76,7 +76,7 @@ export function HeavyCard({ board, groupId, live, embedded, title }: { board: He
       <button className="plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.Sparkle size={15} />
         <span className="plan-title">{title ?? 'Heavy'}</span>
-        <span className="plan-count">{active ? JUDGE_STATUS[board.judge.status] : `${done} of ${board.attempts.length} attempts`}{board.spentUsd ? ` · ${money(board.spentUsd)}` : ''}</span>
+        <span className="plan-count">{active ? JUDGE_STATUS[board.judge.status] : `${done} of ${board.attempts.length} attempts`}{board.spentUsd ? <span className="dev-only">{` · ${money(board.spentUsd)}`}</span> : null}</span>
         <span className="plan-bar"><i style={{ width: `${progress * 100}%` }} /></span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>
@@ -220,7 +220,7 @@ export function SwarmCard({ board, live, embedded, title }: { board: SwarmBoard;
       <button className="plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.Users size={15} />
         <span className="plan-title">{title ?? (board.bot ? `${board.bot}'s swarm` : 'Swarm')}</span>
-        <span className="plan-count" data-testid="swarm-count">{st.done} of {st.total} helpers{st.ideas ? ` · ${st.ideas} ideas` : ''} · {SWARM_PHASE[board.phase]}{board.spentUsd ? ` · ${money(board.spentUsd)}` : ''}</span>
+        <span className="plan-count" data-testid="swarm-count">{st.done} of {st.total} helpers{st.ideas ? ` · ${st.ideas} ideas` : ''} · {SWARM_PHASE[board.phase]}{board.spentUsd ? <span className="dev-only">{` · ${money(board.spentUsd)}`}</span> : null}</span>
         <span className="plan-bar"><i style={{ width: `${(st.done / Math.max(1, st.total)) * 100}%` }} /></span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>
@@ -280,7 +280,7 @@ export function CouncilCard({ board, live }: { board: CouncilBoard; live: boolea
       <button className="plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.Sparkle size={15} />
         <span className="plan-title">Agent swarm</span>
-        <span className="plan-count">{board.members.map((m) => m.label ?? m.model).join(' + ')} · {COUNCIL_PHASE[board.phase]}{board.spentUsd ? ` · ${money(board.spentUsd)}` : ''}</span>
+        <span className="plan-count"><span className="dev-only">{board.members.map((m) => m.label ?? m.model).join(' + ')} · </span>{COUNCIL_PHASE[board.phase]}{board.spentUsd ? <span className="dev-only">{` · ${money(board.spentUsd)}`}</span> : null}</span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>
       {open && (

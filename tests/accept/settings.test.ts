@@ -27,17 +27,19 @@ describe('Settings', () => {
 
       // The pages, in order, each with something on it.
       const ids = await page.locator('.set-nav .set-nav-item').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
-      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-memory', 'settings-voice', 'settings-privacy', 'settings-usage', 'settings-server', 'settings-advanced'])
+      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-permissions', 'settings-memory', 'settings-voice', 'settings-privacy', 'settings-usage', 'settings-server', 'settings-advanced'])
       const titles = await page.locator('.set-nav .set-nav-item').allInnerTexts()
-      expect(titles.map((t) => t.trim())).toEqual(['General', 'Models & Keys', 'Connected apps', 'Memory', 'Voice', 'Privacy & Security', 'Usage', 'Always-on server', 'Advanced'])
+      expect(titles.map((t) => t.trim())).toEqual(['General', 'Models & Keys', 'Connected apps', 'Permissions', 'Memory', 'Voice', 'Privacy & Security', 'Usage', 'Always-on server', 'Advanced'])
       // General: theme folded in; appearance details under More (closed).
       expect(await page.locator('[data-setting="theme"]').count()).toBe(1)
       expect(await page.locator('[data-testid="general-more"]').getAttribute('open')).toBeNull()
       // Privacy & Security: tabs for passwords, approvals, permissions, activity, sensitive details.
       await page.click('[data-testid="settings-privacy"]')
       await page.locator('[data-testid="vault-status"]').waitFor()
-      await page.click('[data-testid="settings-tab-approvals"]')
+      await page.click('[data-testid="settings-permissions"]')
+      await page.locator('[data-testid="approvals-rules"] > summary').click()
       await page.locator('[data-testid="rule-when"]').waitFor()
+      await page.click('[data-testid="settings-privacy"]')
       await page.click('[data-testid="settings-tab-sensitive"]')
       await expect.poll(() => page.locator('[data-testid^="settings-sens-"]').count()).toBeGreaterThan(5)
       // Advanced: rules & skills, knowledge folders, developer.
@@ -58,7 +60,7 @@ describe('Settings', () => {
       // ...and to one on another page's tab.
       await page.fill('[data-testid="settings-search"]', 'approval')
       await page.click('[data-testid="settings-result-approval-rules"]')
-      await expect.poll(() => page.locator('[data-testid="settings-tab-approvals"]').getAttribute('aria-selected')).toBe('true')
+      await expect.poll(() => page.locator('[data-testid="settings-permissions"]').getAttribute('class')).toContain(' on')
       expect(await page.locator('[data-testid="rule-when"]').isVisible()).toBe(true)
 
       // Memory: one switch, a plain list with category chips, click to edit, delete with Undo.

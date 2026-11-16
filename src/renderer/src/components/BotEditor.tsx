@@ -34,6 +34,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
   const [templates, setTemplates] = useState<BotTemplate[]>([])
   const [adding, setAdding] = useState<string | null>(null)
   const isNewBot = !space && mode === 'bot'
+  const [tq, setTq] = useState('')
   useEffect(() => { if (isNewBot) void api.templates.list().then(setTemplates).catch(() => undefined) }, [isNewBot])
   const addTemplate = async (t: BotTemplate): Promise<void> => {
     setErr('')
@@ -89,7 +90,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
             <div className="hint">{isGroup ? 'Bots in a group answer together and can hand work to each other with @Name.' : isProject ? 'A project is a folder plus instructions. Every chat in it can read and edit that folder.' : isNewBot ? 'A teammate with its own job and chat. It works on its own and can run on a schedule.' : 'Each bot has its own personality, look and conversation, and shares your memory.'}</div>
           </div>
         </div>
-        <div className="field"><label>Name</label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={isGroup ? 'e.g. Launch team' : isNewBot ? 'e.g. Competitor Watch (optional)' : 'e.g. Research Bot'} disabled={space?.isMain} data-testid="bot-name" /></div>
+        <div className="field"><label>Name</label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={isGroup ? 'e.g. Launch team' : isNewBot ? 'e.g. School Helper' : 'e.g. Research Bot'} disabled={space?.isMain} data-testid="bot-name" /></div>
         {isProject && (
           <>
             <div className="field"><label>Folder</label>
@@ -141,8 +142,11 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
               {templates.length > 0 && (
                 <div className="be-templates" data-testid="bot-templates-list">
                   <div className="be-templates-head"><span>Or start from a template</span><button className="link-btn" onClick={() => void importBot(onClose)} data-testid="template-import">Import from file…</button></div>
+                  {templates.length > 8 && (
+                    <input className="set-input be-template-search" value={tq} onChange={(e) => setTq(e.target.value)} placeholder={`Search ${templates.length} templates: engineering, ideas, school…`} aria-label="Search templates" data-testid="template-search" />
+                  )}
                   <div className="be-template-grid">
-                    {templates.map((t) => (
+                    {templates.filter((t) => !tq.trim() || `${t.name} ${t.description}`.toLowerCase().includes(tq.trim().toLowerCase())).map((t) => (
                       <button key={t.id} className="be-template" disabled={!!adding} onClick={() => void addTemplate(t)} data-testid={`template-${t.id}`} title={t.description}>
                         <SpaceAvatar color={t.color} shape={t.shape} size={30} />
                         <span className="be-template-text"><b>{adding === t.id ? 'Adding…' : t.name}</b><span>{t.description}</span></span>
@@ -171,7 +175,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
         {err && <div className="hint error" style={{ marginTop: 8 }}>{err}</div>}
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={() => void save()} disabled={isGroup && members.length === 0} data-testid="bot-save">{space ? 'Save' : 'Create'}</button>
+          <button className="btn primary" onClick={() => void save()} disabled={(isGroup && members.length === 0) || (isNewBot && !name.trim() && !job.trim())} title={isNewBot && !name.trim() && !job.trim() ? 'Give your bot a name (bots can\'t rename themselves)' : undefined} data-testid="bot-save">{space ? 'Save' : 'Create'}</button>
         </div>
       </div>
     </div>

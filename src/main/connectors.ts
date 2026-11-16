@@ -125,7 +125,8 @@ const S = {
 } satisfies Record<string, ConnectorSetup>
 
 export const PRESETS: ConnectorPreset[] = [
-  { id: 'cursor-app', name: 'Cursor', url: 'app:cursor', color: '#111111', category: 'Built in', domain: 'cursor.com', auth: 'app', description: 'SahilBot opens files in Cursor and can hand coding tasks to Cursor\'s agent.' },
+  // Connected only by the user's Cursor API key (Settings → Connected apps → Cursor), never by a CLI found on this Mac.
+  { id: 'cursor-app', name: 'Cursor', url: 'app:cursor', color: '#111111', category: 'Code', domain: 'cursor.com', auth: 'app', description: 'Hand coding work to Cursor Cloud Agents on your GitHub repos. Connect with your Cursor API key.' },
   { id: 'apple-notes', name: 'Notes, Reminders & Calendar', url: 'app:mac_apps', color: '#F5B400', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Your Mac\'s own apps; macOS asks once to allow access.' },
   { id: 'apple-mail', name: 'Mail (all your accounts)', url: 'app:mail', color: '#1A8CFF', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Apple Mail on this Mac: Gmail, iCloud, Outlook and more, no sign-in. macOS asks once.' },
   // Web automation, by design: the user signs in inside SahilBot's own browser and SahilBot uses the

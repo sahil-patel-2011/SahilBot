@@ -13,8 +13,5 @@
 .connect-card .connect-reason { font-size: 13px; line-height: 1.6; margin: 10px 0 6px; color: var(--text-2); }
 .connect-card .pending-actions { margin-top: 16px; gap: 8px; }
 .connect-card .btn { border-radius: 10px; min-height: 36px; }
-.row.ai .bubble-wrap { width: 100%; max-width: 100%; }
-.row.ai .bubble.ai:not(.err) { background: transparent; border: 0; border-radius: 0; padding: 0; box-shadow: none; font-size: 15px; line-height: 1.75; }
-.row.me .bubble.me { background: color-mix(in srgb, var(--text) 6%, var(--bg)); color: var(--text); border-radius: 22px; padding: 11px 17px; line-height: 1.6; }
 .row.ai .ai-foot { gap: 10px; font-size: 11px; color: var(--text-3); }
 @media (max-width: 540px) { .agent-auto-label { display: none; } .composer .agent-strategy { gap: 5px; padding-inline: 4px; } .attachment-pop .menu { width: min(320px, calc(100vw - 28px)); } }

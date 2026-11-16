@@ -89,3 +89,16 @@ describe('voice input settings', () => {
     expect(s.voiceInput).toEqual({ local: true, model: 'auto' })
   })
 })
+
+
+test('switching a provider off keeps its saved key and restores it when switched back on', () => {
+  const db = new Db(':memory:'), store = new SettingsStore(db, secrets())
+  store.set({ setKeys: { anthropic: 'fixture-provider-key' } })
+  expect(store.get().keys.anthropic).toBe(true)
+  store.set({ disabledProviders: ['anthropic'] })
+  expect(store.get().keys.anthropic).toBe(false)
+  expect(store.get().keysSaved?.anthropic).toBe(true)
+  store.set({ disabledProviders: [] })
+  expect(store.get().keys.anthropic).toBe(true)
+  expect(store.keyFor('https://api.anthropic.com/v1')).toBe('fixture-provider-key')
+})

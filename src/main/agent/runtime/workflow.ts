@@ -43,43 +43,55 @@ export function validateGraph(nodes: WorkflowNode[]): void {
   }
 }
 
-/** A bounded declarative program. It has no eval, filesystem, network or process globals. */
+/** Independent nodes (the same round of the graph) running at once. */
+export const WORKFLOW_PARALLEL = 6
+
+/**
+ * A bounded declarative program. It has no eval, filesystem, network or process globals. Nodes whose
+ * dependencies are done run together (up to WORKFLOW_PARALLEL at once), so a fan of connector reads takes about
+ * as long as the slowest one; every call still goes through the normal permissions.
+ */
 export async function executeWorkflow(nodes: WorkflowNode[], ctx: Pick<ToolContext, 'invokeTool' | 'signal'>, prior: WorkflowResult[] = [], save?: (r: WorkflowResult[]) => void): Promise<WorkflowResult[]> {
   validateGraph(nodes)
   const results = new Map(prior.filter((r) => r.status === 'done').map((r) => [r.id, r]))
   const outputs = new Map([...results].map(([id, r]) => [id, r.output]))
+  const runNode = async (node: WorkflowNode): Promise<WorkflowResult> => {
+    const bad = (node.dependsOn ?? []).find((id) => results.get(id)?.status !== 'done')
+    if (bad) return { id: node.id, status: 'blocked', error: `Dependency ${bad} failed.` }
+    try {
+      const n = refs(node, outputs) as WorkflowNode
+      let output: unknown
+      if (n.op === 'call') {
+        if (!n.tool || !ctx.invokeTool) throw new Error('A call needs an available tool.')
+        const out: ToolOutput = await ctx.invokeTool(n.tool, n.args ?? {})
+        output = { data: out.data, text: out.text, path: out.path }
+      } else {
+        const input = n.input
+        if (n.op === 'select') output = n.fields && Array.isArray(input) ? input.map((row) => Object.fromEntries(n.fields!.map((k) => [k, pointer(row, `/${k}`)]))) : pointer(input, n.pointer)
+        else if (n.op === 'filter') { if (!Array.isArray(input)) throw new Error('filter needs an array.'); output = input.filter((row) => JSON.stringify(pointer(row, n.pointer)) === JSON.stringify(n.equals)).slice(0, n.limit ?? 10_000) }
+        else if (n.op === 'map') { if (!Array.isArray(input)) throw new Error('map needs an array.'); output = input.slice(0, n.limit ?? 10_000).map((row) => pointer(row, n.pointer)) }
+        else if (n.op === 'join') {
+          if (!Array.isArray(input) || !Array.isArray(n.right) || !n.leftKey || !n.rightKey) throw new Error('join needs two arrays and key pointers.')
+          const index = new Map<string, unknown[]>()
+          for (const row of n.right) { const key = JSON.stringify(pointer(row, n.rightKey)); index.set(key, [...(index.get(key) ?? []), row]) }
+          const joined: unknown[] = []
+          for (const left of input) for (const right of index.get(JSON.stringify(pointer(left, n.leftKey))) ?? []) { if (joined.length >= (n.limit ?? 10_000)) throw new Error('Join result exceeds the row limit.'); joined.push({ left, right }) }
+          output = joined
+        } else throw new Error('Unknown workflow operation.')
+      }
+      if (JSON.stringify(output ?? null).length > 2_000_000) throw new Error('Workflow result exceeds 2 MB; use paginated tool calls.')
+      return { id: node.id, status: 'done', output }
+    } catch (e) { return { id: node.id, status: 'failed', error: (e as Error).message } }
+  }
   for (let round = 0; results.size < nodes.length && round < nodes.length; round++) {
     const ready = nodes.filter((n) => !results.has(n.id) && (n.dependsOn ?? []).every((id) => results.has(id)))
-    for (const node of ready) {
+    for (let i = 0; i < ready.length; i += WORKFLOW_PARALLEL) {
       if (ctx.signal.aborted) throw new Error('Workflow stopped; completed nodes are checkpointed.')
-      const bad = (node.dependsOn ?? []).find((id) => results.get(id)?.status !== 'done')
-      let r: WorkflowResult
-      if (bad) r = { id: node.id, status: 'blocked', error: `Dependency ${bad} failed.` }
-      else try {
-        const n = refs(node, outputs) as WorkflowNode
-        let output: unknown
-        if (n.op === 'call') {
-          if (!n.tool || !ctx.invokeTool) throw new Error('A call needs an available tool.')
-          const out: ToolOutput = await ctx.invokeTool(n.tool, n.args ?? {})
-          output = { data: out.data, text: out.text, path: out.path }
-        } else {
-          const input = n.input
-          if (n.op === 'select') output = n.fields && Array.isArray(input) ? input.map((row) => Object.fromEntries(n.fields!.map((k) => [k, pointer(row, `/${k}`)]))) : pointer(input, n.pointer)
-          else if (n.op === 'filter') { if (!Array.isArray(input)) throw new Error('filter needs an array.'); output = input.filter((row) => JSON.stringify(pointer(row, n.pointer)) === JSON.stringify(n.equals)).slice(0, n.limit ?? 10_000) }
-          else if (n.op === 'map') { if (!Array.isArray(input)) throw new Error('map needs an array.'); output = input.slice(0, n.limit ?? 10_000).map((row) => pointer(row, n.pointer)) }
-          else if (n.op === 'join') {
-            if (!Array.isArray(input) || !Array.isArray(n.right) || !n.leftKey || !n.rightKey) throw new Error('join needs two arrays and key pointers.')
-            const index = new Map<string, unknown[]>()
-            for (const row of n.right) { const key = JSON.stringify(pointer(row, n.rightKey)); index.set(key, [...(index.get(key) ?? []), row]) }
-            const joined: unknown[] = []
-            for (const left of input) for (const right of index.get(JSON.stringify(pointer(left, n.leftKey))) ?? []) { if (joined.length >= (n.limit ?? 10_000)) throw new Error('Join result exceeds the row limit.'); joined.push({ left, right }) }
-            output = joined
-          } else throw new Error('Unknown workflow operation.')
-        }
-        if (JSON.stringify(output ?? null).length > 2_000_000) throw new Error('Workflow result exceeds 2 MB; use paginated tool calls.')
-        outputs.set(node.id, output); r = { id: node.id, status: 'done', output }
-      } catch (e) { r = { id: node.id, status: 'failed', error: (e as Error).message } }
-      results.set(node.id, r); save?.([...results.values()])
+      for (const r of await Promise.all(ready.slice(i, i + WORKFLOW_PARALLEL).map(runNode))) {
+        results.set(r.id, r)
+        if (r.status === 'done') outputs.set(r.id, r.output)
+      }
+      save?.([...results.values()])
     }
   }
   return nodes.map((n) => results.get(n.id)!)

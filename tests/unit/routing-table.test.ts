@@ -182,10 +182,10 @@ describe('the routing table', () => {
     expect(slotsFor('office', 3, 'best', true)).not.toContain('fable')
     expect(slotsFor('coding', 3, 'cheapest', true)).not.toContain('fable')
   })
-  test('the setting: Best result by default', () => {
-    expect(autoPreference({})).toBe('best')
-    expect(autoPreference({ cloud: { autoPrefers: 'balanced' } })).toBe('balanced')
-    expect(autoPreference({ cloud: { autoPrefers: 'nonsense' } })).toBe('best')
+  test('the setting: Balanced by default', () => {
+    expect(autoPreference({})).toBe('balanced')
+    expect(autoPreference({ cloud: { autoPrefers: 'best' } })).toBe('best')
+    expect(autoPreference({ cloud: { autoPrefers: 'nonsense' } })).toBe('balanced')
   })
 })
 

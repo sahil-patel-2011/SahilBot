@@ -207,6 +207,8 @@ export interface ThreadState {
   lastKind?: 'chat' | 'agent'
   /** Auto's effort for the last request (a follow-up like "continue" keeps it); undefined when a level was picked. */
   lastEffort?: import('@shared/types').Effort
+  /** The last request was school work (its follow-ups are too). */
+  lastStudy?: boolean
   /** The lean system prompts frozen for this thread (chat and compact; `speakerId:` keys in groups). */
   leanSnapshots?: Record<string, string>
   /** Text appended to every system prompt variant of this thread (a helper's or Heavy attempt's note). */

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { EffortChoice, ModelInfo, ModelList, PermissionMode } from '@shared/types'
 import * as I from '../icons'
-import { AUTO_ENTRIES, autoUnavailableReason, isAutoModel, pickerModels, toDownload } from '@shared/model-picker'
+import { AUTO_ENTRIES, autoUnavailableReason, pickerModels, toDownload } from '@shared/model-picker'
 import { THINKING_LABEL, pickerLabel, runnable, shortModelName, splitModels, thinkingLevels } from '../lib/picker'
 
 // The composer's one picker, under the box on the right: model, thinking and permissions in one button
@@ -46,7 +46,7 @@ export interface PickerProps {
   mode: PermissionMode
   onMode: (m: PermissionMode) => void
   allowBypass?: boolean
-  /** A bot or group chat: model and thinking are chosen for each request (shown, not editable). */
+  /** A bot or group chat: Auto reads "chosen by the bot" (still overridable). */
   autoBot?: boolean
 }
 
@@ -79,11 +79,11 @@ export function ComposerPicker(p: PickerProps) {
   const current = usable.find((m) => m.id === p.model)
   const modes = MODES
   const mode = MODES.find((m) => m.id === (p.mode === 'autonomous' ? 'auto' : p.mode)) ?? MODES[1]
-  // Auto (any Auto variant) picks the model and the thinking together: no Thinking choice until a model is picked.
-  const hasThinking = !!(p.thinking && p.onThinking) && !p.autoBot && !isAutoModel(p.model)
-  const levels = thinkingLevels(p.autoBot ? 'auto' : p.model)
+  // Model and thinking are independent: either can be Auto or picked, and changed back at any time.
+  const hasThinking = !!(p.thinking && p.onThinking)
+  const levels = thinkingLevels(p.model)
   const thinkingShown = THINKING.filter((t) => levels.includes(t.id) || t.id === p.thinking)
-  const label = pickerLabel({ model: p.model, models: usable, thinking: hasThinking ? p.thinking : undefined, mode: p.mode, autoBot: p.autoBot })
+  const label = pickerLabel({ model: p.model, models: usable, thinking: hasThinking ? p.thinking : undefined, mode: p.mode })
   const autoVariants = AUTO_ENTRIES.filter((e) => e.id !== 'auto' && (e.id !== 'auto:local' || !list?.localOff))
   const inMore = p.model !== 'auto' && (more.some((m) => m.id === p.model) || autoVariants.some((e) => e.id === p.model))
   const toGet = toDownload(list).length
@@ -152,7 +152,7 @@ export function ComposerPicker(p: PickerProps) {
       items[next].focus()
       return
     }
-    if (/^[1-4]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey && !p.autoBot) {
+    if (/^[1-4]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) {
       const m = top[Number(e.key) - 1]
       if (m && runnable(m)) { e.preventDefault(); pickModel(m.id, true) }
     }
@@ -323,20 +323,11 @@ export function ComposerPicker(p: PickerProps) {
       {open && (
         <div ref={menu} className="menu right cpick-menu model-menu" tabIndex={-1} data-testid="picker-menu">
           <div ref={main} className="cpick-main" role="menu" aria-label="Model, thinking and permissions">
-            {p.autoBot ? (
-              <>
-                <div className="cpick-hint">This bot picks its model and thinking for each request</div>
-                <button className="menu-item cpick-row" role="menuitem" disabled aria-disabled data-testid="model-auto-bot">
-                  <span className="cpick-ico" aria-hidden><I.Cpu size={14} /></span>
-                  <span className="cpick-text">Model</span><span className="cpick-val">Auto (bot)</span>
-                </button>
-              </>
-            ) : (
-              <>
+            <>
                 <button className={`menu-item cpick-row cpick-model${autoWhy ? ' unavailable' : ''}`} role="menuitemradio" aria-checked={p.model === 'auto'}
                   onMouseEnter={plainHover} onClick={(e) => pickModel('auto', e.detail === 0)} data-testid="model-option" data-auto="auto">
                   {check(p.model === 'auto')}
-                  <span className="cpick-text">Auto <span className="cpick-rec">(recommended)</span><span className="sub">{autoWhy ?? 'Picks the model and how hard to think, for each message'}</span></span>
+                  <span className="cpick-text">Auto <span className="cpick-rec">(recommended)</span><span className="sub">{autoWhy ?? (p.autoBot ? 'The bot picks the best model for each message' : 'Picks the best model for each message')}</span></span>
                   {autoWhy && <span className="mm-badge" data-testid="auto-unavailable">Unavailable</span>}
                 </button>
                 {list && !list.ok && (
@@ -363,8 +354,7 @@ export function ComposerPicker(p: PickerProps) {
                 )}
                 <div className="menu-sep" />
                 {subRow('more', { testId: 'more-models', icon: <I.Cpu size={14} />, label: 'More models', value: inMore ? shortModelName(p.model, current) : undefined })}
-              </>
-            )}
+            </>
             <div className="menu-sep" />
             {subRow('perm', {
               testId: 'mode-picker', icon: permIcon, label: 'Permissions',

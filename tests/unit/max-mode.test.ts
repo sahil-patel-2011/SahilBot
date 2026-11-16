@@ -32,6 +32,8 @@ import { startMockLlm, type MockLlm, type ScriptedReply } from '../fixtures/mock
 
 process.env.FOREMAN_NO_VERIFY = '1'
 process.env.FOREMAN_NO_AUTOTITLE = '1'
+// These runs script every model reply; Auto's brain (llm/auto-brain.ts) has its own tests.
+process.env.FOREMAN_NO_BRAIN = '1'
 
 const local = (id: string, tier: 0 | 1 | 2 | 3, extra: Partial<ModelInfo> = {}): ModelInfo =>
   ({ id, provider: 'ollama', providerName: 'Ollama', enabled: true, installed: true, label: id.toUpperCase(), vision: false, tier, requiredGB: 1, maxFittingWindow: 131072, fits: true, ...extra }) as ModelInfo
@@ -350,7 +352,7 @@ describe('Max caps, budgets and provider rules', () => {
 })
 
 describe('bots choose their own model and thinking', () => {
-  test('requestedModel / requestedEffort: bots and groups Auto; regular chats the pick; helpers their assigned model', () => {
+  test('requestedModel / requestedEffort: bots and groups Auto until you pick; regular chats the pick; helpers their assigned model', () => {
     const s = { defaultModel: 'claude-opus-5-5', thinking: 'high' } as Settings
     const bot = { kind: 'bot', isMain: false } as Space
     const main = { kind: 'bot', isMain: true } as Space
@@ -358,7 +360,8 @@ describe('bots choose their own model and thinking', () => {
     expect(isBotSpace(bot)).toBe(true)
     expect(isBotSpace(group)).toBe(true)
     expect(isBotSpace(main)).toBe(false)
-    expect(requestedModel({ thread: { model: 'gpt-6' }, space: bot, settings: s })).toBe('auto')
+    expect(requestedModel({ thread: { model: 'gpt-6' }, space: bot, settings: s })).toBe('gpt-6')
+    expect(requestedModel({ thread: { model: null }, space: bot, settings: s })).toBe('auto')
     expect(requestedModel({ thread: { model: 'gpt-6' }, space: main, settings: s })).toBe('gpt-6')
     expect(requestedModel({ thread: { model: null }, space: main, settings: s })).toBe('claude-opus-5-5')
     expect(requestedModel({ thread: { model: null }, space: group, speaker: bot, settings: s })).toBe('auto')
@@ -366,7 +369,8 @@ describe('bots choose their own model and thinking', () => {
     // The app default's Auto variant is kept for bots (local-only stays local-only).
     expect(botModel('auto:local')).toBe('auto:local')
     expect(botModel('claude-opus-5-5')).toBe('auto')
-    expect(requestedEffort({ thread: { effort: 'low' }, space: bot, settings: s })).toBe('auto')
+    expect(requestedEffort({ thread: { effort: 'low' }, space: bot, settings: s })).toBe('low')
+    expect(requestedEffort({ thread: { effort: null }, space: bot, settings: s })).toBe('auto')
     expect(requestedEffort({ thread: { effort: 'low' }, space: main, settings: s })).toBe('low')
     expect(requestedEffort({ thread: { effort: null }, space: main, settings: s })).toBe('high')
   })

@@ -10,6 +10,7 @@ import {
   type EditInput, type ImageBackground, type ImageFormat, type ImageQuality, type OpenAICreds, type SpeechFormat, type Transcript
 } from '../../apis/openai'
 import { hookSpend, money, type Spend } from '../../apis/spend'
+import { generateXaiImages, XAI_IMAGE_MODEL, xaiImageOptions } from '../../apis/xai-images'
 import type { ToolContext, ToolDef } from '../types'
 import { resolvePath } from './files'
 
@@ -19,7 +20,7 @@ import { resolvePath } from './files'
 // then recorded (Settings → Usage). Only listed while cloud models are on and an OpenAI key is saved.
 
 export interface MediaDeps {
-  access: Pick<ApiAccess, 'cloudOn' | 'openai'>
+  access: Pick<ApiAccess, 'cloudOn' | 'openai'> & Partial<Pick<ApiAccess, 'xai'>>
   workspace(): string
   spend?: Spend
   /** The run's model can see images (generated pictures are shown to it). */
@@ -152,8 +153,8 @@ export function imageTool(d: MediaDeps): ToolDef<ImageArgs> {
     label: 'Making an image',
     group: 'Media',
     effect: 'write_local',
-    available: available(d),
-    description: `Generate or edit pictures with OpenAI's GPT image models (paid, on the user's OpenAI key; priced first against the monthly cloud budget). PNGs are saved to the workspace's images folder with the prompt in the file's metadata.
+    available: () => d.access.cloudOn() && (!!d.access.openai() || !!d.access.xai?.()),
+    description: `Generate pictures with an enabled OpenAI or xAI key, or edit pictures with OpenAI's GPT image models (paid; priced first against the monthly cloud budget). Files and their prompt metadata are saved to the workspace's images folder. Defaults to OpenAI when available, otherwise Grok Imagine. model: "${XAI_IMAGE_MODEL}" selects Grok generation (JPEG only; high quality maps to medium, its highest supported quality). Editing, transparency and PNG/WebP output require OpenAI.
 - generate(prompt, size?, quality?, n? ≤4, background?: "transparent" for logos/stickers (png/webp), format?)
 - edit(path or paths[] (up to 16 reference images), prompt, mask?: PNG whose transparent pixels mark what to change, same size as the first image)
 size: "auto", "1024x1024", "1536x1024" (landscape), "1024x1536" (portrait), or WIDTHxHEIGHT in multiples of 16 (≤3840). quality: low (drafts, cheapest), medium, high, auto. Write a specific prompt: subject, style, composition, lighting, any exact text in quotes. Content-policy refusals come back as an error: rephrase, don't retry the same prompt.`,
@@ -176,17 +177,21 @@ size: "auto", "1024x1024", "1536x1024" (landscape), "1024x1536" (portrait), or W
       required: ['action', 'prompt'],
       additionalProperties: false
     },
-    describe: (a) => `${a.action === 'edit' ? 'Edit an image' : 'Generate an image'} with OpenAI: "${(a.prompt ?? '').slice(0, 80)}"`,
+    describe: (a) => `${a.action === 'edit' ? 'Edit an image' : 'Generate an image'}: "${(a.prompt ?? '').slice(0, 80)}"`,
     async run(a, ctx) {
-      const c = creds(d)
+      if (!d.access.cloudOn()) throw new Error('Cloud models are switched off (Settings → Models & Keys).')
+      const useXai = a.model?.startsWith('grok-') || (!a.model?.trim() && !d.access.openai() && !!d.access.xai?.())
+      const c = useXai ? d.access.xai?.() : creds(d)
+      if (!c) throw new Error('Grok image generation needs an enabled xAI key in Settings → Models & Keys.')
       const prompt = (a.prompt ?? '').trim()
       if (!prompt) throw new Error('Give a prompt.')
       if (prompt.length > 32_000) throw new Error('The prompt can be at most 32,000 characters.')
       const n = Math.max(1, Math.min(4, Math.round(a.n ?? 1)))
-      const format: ImageFormat = a.format ?? 'png'
+      const format: ImageFormat = a.format ?? (useXai ? 'jpeg' : 'png')
       const edit = a.action === 'edit'
-      const model = a.model?.trim() || (edit ? DEFAULT_EDIT_MODEL : DEFAULT_IMAGE_MODEL)
-      if (!/^(gpt-image|chatgpt-image)/.test(model)) throw new Error(`"${model}" isn't a GPT image model.`)
+      const model = a.model?.trim() || (useXai ? XAI_IMAGE_MODEL : edit ? DEFAULT_EDIT_MODEL : DEFAULT_IMAGE_MODEL)
+      if (useXai && (model !== XAI_IMAGE_MODEL || edit || a.background === 'transparent' || format !== 'jpeg')) throw new Error(`Grok generation uses ${XAI_IMAGE_MODEL} with JPEG output. Editing, transparency and PNG/WebP output need an enabled OpenAI key.`)
+      if (!useXai && !/^(gpt-image|chatgpt-image)/.test(model)) throw new Error(`"${model}" isn't a GPT image model.`)
       const ws = ctx.workspaceDir || d.workspace()
       const roots = ctx.state.roots ?? []
       const load = (p: string, what: string): EditInput => {
@@ -212,12 +217,13 @@ size: "auto", "1024x1024", "1536x1024" (landscape), "1024x1536" (portrait), or W
           if (fi && (fi.width !== mi.width || fi.height !== mi.height)) throw new Error(`The mask (${mi.width}×${mi.height}) must be the same size as the image (${fi.width}×${fi.height}).`)
         }
       }
-      const est = estimateImageUsd({ n, size: a.size, quality: a.quality, promptChars: prompt.length, inputImages: images.length + (mask ? 1 : 0) })
+      const xaiOptions = useXai ? xaiImageOptions(a.size, a.quality) : undefined
+      const est = xaiOptions ? n * xaiOptions.unitUsd : estimateImageUsd({ n, size: a.size, quality: a.quality, promptChars: prompt.length, inputImages: images.length + (mask ? 1 : 0) })
       spend.beforeUsd(c.baseUrl, model, est)
       ctx.progress?.(`${edit ? 'Editing' : 'Generating'} ${n > 1 ? `${n} images` : 'the image'}…`)
       const opts = { model, prompt, n, size: a.size, quality: a.quality, background: a.background, output_format: format }
-      const res = await (edit ? editImages(c, { ...opts, images, mask }, ctx.signal, d.fetch) : generateImages(c, opts, ctx.signal, d.fetch)).catch(plain)
-      const usd = imageUsageUsd(res.usage) ?? est
+      const res = await (xaiOptions ? generateXaiImages(c, prompt, n, xaiOptions, ctx.signal, d.fetch) : edit ? editImages(c, { ...opts, images, mask }, ctx.signal, d.fetch) : generateImages(c, opts, ctx.signal, d.fetch)).catch(plain)
+      const usd = xaiOptions ? res.images.length * xaiOptions.unitUsd : imageUsageUsd(res.usage) ?? est
       spend.afterUsd(c.baseUrl, model, usd)
 
       const now = (d.now ?? (() => new Date()))()
@@ -240,6 +246,8 @@ size: "auto", "1024x1024", "1536x1024" (landscape), "1024x1536" (portrait), or W
         text: `${edit ? 'Edited' : 'Generated'} ${saved.length} image(s) with ${model}${res.size ? ` (${res.size}${res.quality ? `, ${res.quality}` : ''})` : ''}, cost ${money(usd)}:\n${rel.map((p) => `- ${p}`).join('\n')}${show.length ? '\nThe image(s) are attached below: check them against the request before presenting.' : '\nThis model can\'t see images; describe them from the prompt and let the user open the files.'}`,
         images: show.length ? show : undefined,
         path: saved[0],
+        // Shown in the chat as pictures (ThreadView), whether or not the model can see them.
+        meta: { gallery: saved },
         display: `${saved.length} image(s) · ${money(usd)}`
       }
     }

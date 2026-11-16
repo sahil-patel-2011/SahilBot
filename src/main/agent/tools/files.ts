@@ -91,6 +91,31 @@ export function resolvePath(p: string, workspace: string, roots: string[] = [], 
   return full
 }
 
+/** Home folders whose first level is what people mean by "a folder" ("Obsidian Vault" in Documents). */
+const HOME_TOPS = new Set(['Documents', 'Desktop', 'Downloads', 'Pictures', 'Music', 'Movies'])
+
+/**
+ * The folder an approval for a file outside your folders can open for good ("Always allow in Obsidian Vault"):
+ * the first folder inside Documents, Desktop, Downloads… (the vault, the project), else the file's own folder.
+ * Never a system or private place, and never the whole home folder.
+ */
+export function folderToGrant(full: string): string | undefined {
+  if (neverOutside(full)) return undefined
+  const home = homedir()
+  const own = existsSync(full) && statSync(full).isDirectory() ? full : dirname(full)
+  const rel = relative(home, own)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return rel ? own : undefined
+  const parts = rel.split(sep)
+  if (HOME_TOPS.has(parts[0])) return parts.length >= 2 ? join(home, parts[0], parts[1]) : undefined
+  return own
+}
+
+/** The folder an approval's reason ("reading /…/file.md, outside your folders") can grant, if any. */
+export function grantableFolder(reason: string | undefined): string | undefined {
+  const m = reason?.match(/(?:reading|writing|copying(?: to)?|moving(?: to)?|creating a folder at) (\/.+?), outside your folders/)
+  return m ? folderToGrant(m[1]) : undefined
+}
+
 /**
  * The resolved path when `p` points outside the workspace, the attached folders and the working folder
  * (and isn't a place SahilBot never goes): such a call asks first. null when it's inside, or refused anyway.

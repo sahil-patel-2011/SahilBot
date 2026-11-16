@@ -21,15 +21,16 @@ describe('bots, group chats, reactions, attachments and documents', () => {
   afterAll(async () => { await llm.close() })
   beforeEach(() => { llm.script.length = 0 })
 
-  test('a new bot introduces itself, asks what to focus on, and renames itself from the answer', async () => {
+  test('a new bot introduces itself, asks what to focus on, and saves instructions from the answer (keeping the name you gave it)', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     await page.evaluate(() => window.foreman.settings.set({ userName: 'Sahil' }))
     llm.script.push(
       { content: "Hey Sahil! I'm your new bot, fresh and ready to take on whatever you want to throw at me.", toolCalls: [{ name: 'ask_user', arguments: '{"question":"What do you want me to focus on?","options":["Vantage app work","Robotics team stuff","Personal errands"]}' }] },
-      { toolCalls: [{ name: 'update_bot', arguments: '{"name":"Robo Coach","instructions":"You help with the robotics team."}' }] },
-      { content: 'Done — I am Robo Coach now.' }
+      { toolCalls: [{ name: 'update_bot', arguments: '{"instructions":"You help with the robotics team."}' }] },
+      { content: 'Done — I will focus on the robotics team.' }
     )
     await page.click('[data-testid="new-bot"]')
+    await page.fill('[data-testid="bot-name"]', 'Robo Coach')
     await page.click('[data-testid="bot-save"]')
     const q = page.locator('[data-testid="question-card"]')
     await q.waitFor({ timeout: 20_000 })

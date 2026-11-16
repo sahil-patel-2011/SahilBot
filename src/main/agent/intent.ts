@@ -1,6 +1,6 @@
 import { CAD_RE } from '../cad/cad-intent'
 import { VIDEO_RE } from './video-intent'
-import { classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
+import { IMAGE_RE, classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
 
 /**
  * Which on-demand tools a request needs, read from the request itself. Heavy tools (computer use, code,
@@ -10,7 +10,7 @@ import { classifyTask as classifyRequest, type TaskCategory as RouteCategory, ty
  */
 
 
-export { VIDEO_RE }
+export { IMAGE_RE, VIDEO_RE }
 
 const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
   {
@@ -40,8 +40,29 @@ const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
   // CAD (src/main/cad/cad-intent.ts owns the words): the design workflow, Onshape, and FreeCAD when installed.
   { tools: ['cad_design', 'onshape', 'freecad'], when: CAD_RE },
   // Videos through the user's HeyGen connectors (tools/video.ts): avatar videos, dubbing, motion graphics.
-  { tools: ['video'], when: VIDEO_RE }
+  { tools: ['video'], when: VIDEO_RE },
+  // Pictures: the GPT image models (tools/media.ts).
+  { tools: ['image'], when: IMAGE_RE }
 ]
+
+/** Words in an app's name too generic to mean that app on their own. */
+const GENERIC = new Set(['google', 'microsoft', 'apple', 'cloud', 'online', 'workspace', 'app', 'apps', 'web', 'browser', 'sahilbot', 'the', 'and', 'for', 'business', 'platform', 'mcp', 'server', 'remote', 'local'])
+
+/**
+ * A connected app's tools, when the request names that app ("check my Notion", "post it in Slack", "what's on
+ * my calendar"): loaded before the first step, so the model calls the app right away instead of spending a step
+ * finding its tools. At most `cap` tools in all.
+ */
+export function appToolsFor(text: string, tools: Array<{ name: string; group?: string; connector?: boolean }>, cap = 40): string[] {
+  const t = ` ${text.toLowerCase().replace(/[^a-z0-9.]+/g, ' ')} `
+  const said = (group: string): boolean => {
+    const name = group.toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9.]+/g, ' ').trim()
+    if (name && t.includes(` ${name} `)) return true
+    return name.split(' ').some((w) => w.length >= 4 && !GENERIC.has(w) && (t.includes(` ${w} `) || t.includes(` ${w}s `)))
+  }
+  const groups = [...new Set(tools.filter((x) => x.connector && x.group).map((x) => x.group!))].filter(said)
+  return tools.filter((x) => x.connector && x.group && groups.includes(x.group)).map((x) => x.name).slice(0, cap)
+}
 
 /** Tools to load for a request (only names that exist in `known`). */
 export function intentTools(text: string, known: Set<string>, extra: { codeProject?: boolean } = {}): string[] {

@@ -19,6 +19,7 @@ import { toast, Toasts } from './lib/toast'
 import { VaultAuthDialog } from './components/VaultAuthDialog'
 import { Speaker } from './lib/audio'
 import { useAttention } from './lib/attention'
+import { DevMode } from './lib/dev-mode'
 import { dividerKind, newestAt, newestReplyAt } from '@shared/read-state'
 // Split chunks (src/renderer/src/lazy.tsx): loaded on idle after the first paint, opened from there.
 import { BotDetails, BotEditor, ConnectApps, Lazy, Onboarding, preloadSurfaces, Scheduled, SettingsModal, VoiceMode } from './lazy'
@@ -594,7 +595,8 @@ export function App() {
 
   if (!settings) return null
 
-  const model = thread?.model ?? space?.model ?? draft.model ?? settings.defaultModel
+  // A bot chat with nothing picked routes as Auto (the app default only when that is an Auto variant).
+  const model = thread?.model ?? draft.model ?? (space && !space.isMain && space.kind !== 'project' && !isAutoModel(settings.defaultModel) ? 'auto' : settings.defaultModel)
   const mode: PermissionMode = thread?.permissionMode ?? draft.mode ?? (space && settings.botModes?.[space.id]) ?? settings.defaultMode ?? 'auto'
   const isRunning = !!thread && running.has(thread.id)
   const question = pending.find((p) => p.kind === 'question' || p.kind === 'questions' || p.kind === 'plan')
@@ -674,14 +676,14 @@ export function App() {
       onStop={() => thread && void api.chat.stop(thread.id)}
       models={models}
       model={model}
-      onModel={(id) => (thread ? void patchThread({ model: id }) : setDraft((d) => ({ ...d, model: id, ...(isAutoModel(id) ? { effort: null } : {}) })))}
+      onModel={(id) => (thread ? void patchThread({ model: id }) : setDraft((d) => ({ ...d, model: id })))}
       onRefreshModels={() => void refreshModels()}
       onManageModels={() => { setSettingsPage('models'); setShowSettings(true) }}
       team={teamCap ? { on: teamOn, ...teamCap } : null}
       onTeam={setTeamOn}
       swarm={space?.kind === 'bot' ? { mode: settings.botMax?.[space.id]?.mode ?? settings.botSwarm?.[space.id]?.mode ?? 'auto' } : null}
       council={councilChoices(models)}
-      thinking={isAutoModel(model) ? 'auto' : thread?.effort ?? space?.effort ?? draft.effort ?? settings.thinking}
+      thinking={thread?.effort ?? draft.effort ?? (isBot ? 'auto' : settings.thinking)}
       onThinking={(e) => (thread ? void patchThread({ effort: e }) : setDraft((d) => ({ ...d, effort: e })))}
       mode={mode}
       allowBypass={!!settings.advanced.allowBypass}
@@ -693,7 +695,7 @@ export function App() {
         else apply()
       }}
       onVoice={() => setVoiceOn(true)}
-      placeholder={isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? `Message ${chatBot?.name ?? 'SahilBot'}` : 'How can I help you today?'}
+      placeholder={isRunning ? `Add to what ${chatBot?.name ?? 'SahilBot'} is doing…` : isBot ? `Message ${space?.name}` : isProject && !thread ? `Start a chat in ${space?.name}` : thread ? `Message ${chatBot?.name ?? 'SahilBot'}` : 'How can I help you today?'}
       big={!thread}
       steering={thread ? steering[thread.id] : 0}
       projects={!thread && !isBot ? {
@@ -737,8 +739,10 @@ export function App() {
   const needThreads = new Set(Object.keys(needs))
   const needSpaces = new Set([...Object.keys(needs).map((t) => runSpaces[t] ?? (t === thread?.id ? thread.spaceId : chats.find((c) => c.id === t)?.spaceId ?? needSpaceOf[t] ?? '')).filter(Boolean), ...queuedBots])
 
+  const dev = !!settings.advanced.devMode
   return (
-    <div className="app">
+    <DevMode.Provider value={dev}>
+    <div className={`app${dev ? ' dev' : ''}`}>
       <Toasts />
       {/* The secrets vault's unlock / confirm dialog: main asks, this only shows it. */}
       <VaultAuthDialog />
@@ -811,7 +815,7 @@ export function App() {
           )}
           <div className="header-actions">
             {thread && <JobsChip threadId={thread.id} on={panel === 'jobs'} onOpen={() => setPanel((p) => (p === 'jobs' ? null : 'jobs'))} />}
-            {((isRunning && (prog?.plan || (prog?.actions ?? 0) > 0)) || plan.length > 0) && (
+            {dev && ((isRunning && (prog?.plan || (prog?.actions ?? 0) > 0)) || plan.length > 0) && (
               <button className={`progress-chip${panel === 'progress' ? ' on' : ''}`} onClick={() => setPanel((p) => (p === 'progress' ? null : 'progress'))} data-testid="progress-chip">
                 {isRunning && <span className="spin" />}
                 <I.ListIcon size={15} />
@@ -819,7 +823,7 @@ export function App() {
                 {isRunning && prog?.plan ? `Step ${prog.plan.at} of ${prog.plan.of}` : isRunning && prog ? `${prog.actions} action${prog.actions === 1 ? '' : 's'}` : `${plan.filter((t) => t.status === 'done').length} of ${plan.length} done`}
               </button>
             )}
-            {prog && prog.used / prog.window > 0.6 && (() => {
+            {dev && prog && prog.used / prog.window > 0.6 && (() => {
               // Shown only once it matters: a gauge of how full the chat's memory is, explained in words.
               const pct = Math.round(Math.min(1, prog.used / prog.window) * 100)
               const cost = prog.cost ? ` Each step costs about $${prog.cost.usd < 0.01 ? prog.cost.usd.toFixed(4) : prog.cost.usd.toFixed(2)} at this size${prog.cost.estimated ? ' (estimated)' : ''}.` : ''
@@ -880,7 +884,7 @@ export function App() {
                   <span className="hint">Sends when SahilBot finishes</span>
                 </div>
               )}
-              {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} />}
+              {dev && !isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} />}
               {composerEl}
             </div>
           </>
@@ -951,5 +955,6 @@ export function App() {
         </Lazy>
       )}
     </div>
+    </DevMode.Provider>
   )
 }

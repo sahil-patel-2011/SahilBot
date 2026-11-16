@@ -105,7 +105,11 @@ function promptFor(a: CursorArgs, mode: CursorBrief['mode'], folder?: string): s
   return a.task?.trim() ? `${brief}\n\n# More instructions\n${a.task.trim()}` : brief
 }
 
-export function cursorTool(cursorKey: () => string | undefined = () => undefined, getWorkspace: () => string = () => homedir()): ToolDef<CursorArgs> {
+/**
+ * Cursor is connected only by its API key (Cloud Agents): a cursor-agent CLI on this Mac never connects it
+ * by itself. The CLI runs local agents only when the user turned that on (Connect apps → Cursor).
+ */
+export function cursorTool(cursorKey: () => string | undefined = () => undefined, getWorkspace: () => string = () => homedir(), localAllowed: () => boolean = () => false): ToolDef<CursorArgs> {
   const folderOf = (a: CursorArgs): string | undefined => (a.folder ? (isAbsolute(a.folder) ? a.folder : resolve(getWorkspace(), a.folder)) : undefined)
   const shownPrompt = (a: CursorArgs, mode: CursorBrief['mode']): string => {
     const p = promptFor(a, mode, mode === 'local' ? folderOf(a) : undefined)
@@ -165,13 +169,14 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
     },
     async run(a, ctx) {
       const key = cursorKey()
-      if (a.action.startsWith('cloud_') && !key) throw new Error('Cursor cloud agents need a Cursor API key. Ask the user to add it in Settings → Models & Keys (from the Cursor dashboard → API Keys).')
+      if (a.action.startsWith('cloud_') && !key) throw new Error('Cursor isn\'t connected. Ask the user to connect it in Connect apps → Cursor with a Cursor API key (cursor.com/dashboard → Integrations → API Keys).')
+      if (a.action === 'agent' && !localAllowed()) throw new Error(key ? 'Run this as a Cursor cloud agent (cloud_launch with the GitHub repo). Running Cursor\'s CLI on this Mac is off; the user can turn it on in Connect apps → Cursor.' : 'Cursor isn\'t connected. Ask the user to connect it in Connect apps → Cursor with a Cursor API key, then use a cloud agent (cloud_launch).')
       switch (a.action) {
         case 'status': {
           const agent = agentPath()
           return {
-            text: `Cursor app: ${cursorInstalled() ? 'installed' : 'not installed (cursor.com/download)'}\nCursor agent on this Mac: ${agent ? `installed (${agent})` : 'not installed. The user can install it with: curl https://cursor.com/install -fsS | bash'}\nCursor cloud agents: ${key ? 'connected (API key saved)' : 'not connected (add a Cursor API key in Settings)'}\nGitHub CLI for reviewing PRs: ${ghInstalled() ? 'installed' : 'not installed (brew install gh)'}`,
-            display: cursorInstalled() ? 'Cursor is installed' : 'Cursor not installed'
+            text: `Cursor: ${key ? 'connected (cloud agents, with the user\'s API key)' : 'not connected (the user connects it in Connect apps → Cursor with a Cursor API key)'}\nCursor app (opening files): ${cursorInstalled() ? 'installed' : 'not installed (cursor.com/download)'}\nLocal agents through Cursor's CLI: ${localAllowed() ? (agent ? `on (${agent})` : 'on, but cursor-agent isn\'t installed') : 'off (the user can turn it on in Connect apps → Cursor)'}\nGitHub CLI for reviewing PRs: ${ghInstalled() ? 'installed' : 'not installed (brew install gh)'}`,
+            display: key ? 'Cursor is connected' : 'Cursor not connected'
           }
         }
         case 'open': {

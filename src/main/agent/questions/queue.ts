@@ -2,6 +2,7 @@ import type { NeedsYouItem, QueueQuestion } from '@shared/types'
 import { questionKey, type Learner } from './learn'
 import { plainOption, safeToDefault } from './policy'
 import { argsKey, type StoredApproval, type StoredItem, type QuestionStore } from './store'
+import { grantableFolder } from '../tools/files'
 
 // The non-blocking question queue. A bot that needs input posts its question (with options and a
 // recommended default) here, the user is notified on the Mac and on paired devices, and the bot keeps
@@ -347,7 +348,7 @@ export function toNeedsYou(x: StoredItem, botName: string): NeedsYouItem {
   return {
     id: x.id, source: 'queue', botId: x.botId, botName, threadId: x.threadId, kind: x.kind,
     ...(x.kind === 'question' ? { questions: x.questions } : {}),
-    ...(x.approval ? { approval: { tool: x.approval.tool, label: x.approval.label, ...(x.approval.summary ? { summary: x.approval.summary } : {}), ...(x.approval.reason ? { reason: x.approval.reason } : {}) } } : {}),
+    ...(x.approval ? { approval: { tool: x.approval.tool, label: x.approval.label, ...(x.approval.summary ? { summary: x.approval.summary } : {}), ...(x.approval.reason ? { reason: x.approval.reason } : {}), ...(grantableFolder(x.approval.reason) ? { folder: grantableFolder(x.approval.reason) } : {}) } } : {}),
     status: x.status,
     ...(x.hardStop ? { hardStop: x.hardStop } : {}),
     deadline: x.deadline,

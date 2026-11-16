@@ -180,6 +180,7 @@ describe('no errors on a first run', () => {
       // 4. Make a bot: it introduces itself.
       llm.script.push({ content: "Hi JP! I'm your new bot, ready for whatever you need." })
       await page.click('[data-testid="new-bot"]')
+      await page.fill('[data-testid="bot-name"]', 'My helper')
       await page.click('[data-testid="bot-save"]')
       await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText().catch(() => ''), { timeout: 20_000 }).toContain('your new bot')
       await idle(page)

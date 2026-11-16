@@ -133,18 +133,39 @@ describe('model', () => {
     expect(unavailableReason(new Error('fetch failed'))).toBe('not responding')
   })
 
-  test('a bot chooses by itself: its chats always route as Auto, whatever an older install stored or the chat picked', async () => {
+  test('a bot chooses by itself until you pick: a stored bot override is ignored, a pick in its chat is used exactly', async () => {
     const h = harness([model('model-a', 1), model('model-b', 2), model('model-c', 3)])
-    // Values an older install could have stored on the bot and on its chat.
+    // A value an older install could have stored on the bot itself: ignored.
     const bot = h.db.updateSpace(h.bot.id, { model: 'model-a', effort: 'low' })
     llm.script.push({ content: 'one', delay: 0 }, { content: 'two', delay: 0 })
     await h.run(h.thread(null, bot.id), 'Refactor the whole codebase, end to end, with tests')
+    expect(llm.requests[0].model).not.toBe('model-a')
+    expect(h.steps[0].effort).not.toBe('low')
+    // Picked in the bot's chat: that model and that level, exactly.
     const t = h.thread('model-a', bot.id)
     h.db.updateThread(t.id, { effort: 'low' })
     await h.run(t, 'Refactor the whole codebase, end to end, with tests')
-    // Auto routes a hard coding task up (not the stored model-a), at Auto's own level (not the stored Low).
-    expect(llm.requests.map((r) => r.model).every((m) => m !== 'model-a')).toBe(true)
-    expect(h.steps.every((s) => s.effort !== 'low')).toBe(true)
+    expect(llm.requests.at(-1)?.model).toBe('model-a')
+    expect(h.steps.at(-1)?.effort).toBe('low')
+  })
+
+  test('switching models mid-chat keeps the whole conversation, and the new model is told once that it is taking over', async () => {
+    const h = harness([model('model-a', 1), model('model-b', 2)])
+    llm.script.push({ content: 'The secret word is PINEAPPLE-42.', delay: 0 }, { content: 'It was PINEAPPLE-42.', delay: 0 }, { content: 'Still here.', delay: 0 })
+    const t = h.thread('model-a')
+    await h.run(t, 'Remember the secret word PINEAPPLE-42.')
+    h.db.updateThread(t.id, { model: 'model-b' })
+    await h.run(t, 'What was the secret word?')
+    await h.run(t, 'Thanks')
+    const second = JSON.stringify(llm.requests[1].messages)
+    expect(llm.requests[1].model).toBe('model-b')
+    expect(second).toContain('Remember the secret word PINEAPPLE-42.')
+    expect(second).toContain('The secret word is PINEAPPLE-42.')
+    expect(second).toMatch(/Model switch: you are MODEL-B, taking over this conversation from MODEL-A/)
+    // Once: the next turn on the same model carries the same stored note, not a new one.
+    const third = JSON.stringify(llm.requests[2].messages)
+    expect(third.match(/Model switch:/g)?.length).toBe(1)
+    expect(h.db.listMessages(t.id).filter((m) => m.meta?.modelSwitch).length).toBe(1)
   })
 
   test('regular chats keep the pick exactly (the stored bot values never leak into SahilBot\'s own chats)', async () => {
@@ -189,26 +210,23 @@ describe('effort', () => {
     expect(['high', 'xhigh', 'max']).toContain(h.steps.at(-1)?.effort)
   })
 
-  test('a chat on Auto never sends a manual thinking level: a stale one on the chat or the app is ignored', async () => {
-    const h = harness([model('model-a', 2)], { settings: { thinking: 'max', defaultModel: 'auto' } })
-    // The chat's own Auto with a stored Max (an older chat, or a level left from a model it went back from).
+  test('thinking is independent of the model: a level picked on Auto is sent exactly', async () => {
+    const h = harness([model('model-a', 2)], { settings: { thinking: 'auto', defaultModel: 'auto' } })
     const t = h.thread('auto')
     h.db.updateThread(t.id, { effort: 'max' })
     llm.script.push({ content: 'hey!', delay: 0 })
     await h.run(t, 'hi')
-    expect(h.steps.at(-1)?.effort).toBe('low')
-    // No model on the chat and the app on Auto: the app's Max doesn't apply either.
-    const u = h.thread(null as never)
-    h.db.updateThread(u.id, { effort: 'max' })
+    expect(h.steps.at(-1)?.effort).toBe('max')
+    // Nothing picked: Auto decides (small talk thinks Low).
     llm.script.push({ content: 'hey again', delay: 0 })
-    await h.run(u, 'hi')
+    await h.run(h.thread('auto'), 'hi')
     expect(h.steps.at(-1)?.effort).toBe('low')
-    expect(requestedEffort({ thread: { model: 'auto', effort: 'max' }, space: null, settings: { defaultModel: 'claude-opus-5-5', thinking: 'max' } })).toBe('auto')
-    expect(requestedEffort({ thread: { model: 'auto:cloud', effort: 'high' }, space: null, settings: { defaultModel: 'auto', thinking: 'high' } })).toBe('auto')
-    expect(requestedEffort({ thread: { model: null, effort: 'high' }, space: null, settings: { defaultModel: 'auto', thinking: 'high' } })).toBe('auto')
-    expect(requestedEffort({ thread: { model: 'claude-opus-5-5', effort: 'high' }, space: null, settings: { defaultModel: 'auto', thinking: 'low' } })).toBe('high')
-    expect(effortFor('auto', 'high')).toBeNull()
-    expect(effortFor('claude-opus-5-5', 'high')).toBe('high')
+    expect(requestedEffort({ thread: { model: 'auto', effort: 'max' }, space: null, settings: { defaultModel: 'claude-opus-5-5', thinking: 'auto' } })).toBe('max')
+    expect(requestedEffort({ thread: { model: null, effort: null }, space: null, settings: { defaultModel: 'auto', thinking: 'high' } })).toBe('high')
+    expect(requestedEffort({ thread: { model: null, effort: null }, space: { kind: 'bot', isMain: false }, settings: { defaultModel: 'auto', thinking: 'high' } })).toBe('auto')
+    expect(requestedEffort({ thread: { model: null, effort: 'medium' }, space: { kind: 'bot', isMain: false }, settings: { defaultModel: 'auto', thinking: 'high' } })).toBe('medium')
+    expect(effortFor('auto', 'high')).toBe('high')
+    expect(effortFor('claude-opus-5-5', 'auto')).toBe('auto')
   })
 
   test('Auto follows the request, and rises once (with a note) when the run keeps failing', async () => {
@@ -332,4 +350,18 @@ describe('mode toggles, permission mode, fast mode', () => {
     expect(fastTierFor('claude-opus-5-5', off, { auto: true, speedSensitive: true })).toBeUndefined()
     expect(fastTierFor('claude-opus-5-5', on, { auto: true, speedSensitive: false })).toBeUndefined()
   })
+})
+
+
+test('model and effort overrides while working apply on the next step and preserve earlier observations', async () => {
+  let change = () => {}
+  const switchTool: ToolDef = { name: 'switch_fixture', label: 'Switch fixture', effect: 'read', description: 'switch fixture', parameters: { type: 'object', properties: {}, additionalProperties: false }, async run() { change(); return { text: 'Observed fixture receipt A-42' } } }
+  const h = harness([model('model-a', 2), model('model-b', 2)], { tools: [switchTool] })
+  const t = h.thread('model-a')
+  change = () => { h.db.updateThread(t.id, { model: 'model-b', effort: 'low' }) }
+  llm.script.push({ toolCalls: [call('switch_fixture')], delay: 0 }, { content: 'Receipt A-42 retained.', delay: 0 })
+  await h.run(t, 'Inspect the fixture and report the receipt')
+  expect(llm.requests.map((r) => r.model)).toEqual(['model-a', 'model-b'])
+  expect(JSON.stringify(llm.requests[1].messages)).toContain('Observed fixture receipt A-42')
+  expect(h.steps.at(-1)?.effort).toBe('low')
 })

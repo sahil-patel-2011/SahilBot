@@ -4,6 +4,7 @@ import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
+import { folderName, plainApproval } from '../lib/plain-approval'
 
 // The "Needs you" inbox: every bot's pending questions and approvals in one place, with one-tap answers.
 // Questions a bot posted while it kept working (main: agent/questions) and cards open in running chats
@@ -76,9 +77,9 @@ function NeedsYouCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bo
   // Questions already answered by a reply in the chat start filled in.
   const [answers, setAnswers] = useState<string[]>(() => qs.map((_q, i) => x.answers?.[i] ?? ''))
   const [busy, setBusy] = useState(false)
-  const send = (a: string[] | 'approve' | 'deny'): void => {
+  const send = (a: string[] | 'approve' | 'always' | 'deny'): void => {
     setBusy(true)
-    void api.needsYou.answer(x.id, a).then(() => { toast(a === 'deny' ? 'Declined' : 'Sent to the bot') }).catch((e: Error) => toast(e.message)).finally(() => { setBusy(false); onDone() })
+    void api.needsYou.answer(x.id, a).then(() => { toast(a === 'deny' ? 'Declined' : a === 'always' && x.approval?.folder ? `${folderName(x.approval.folder)} is open to this bot now` : 'Sent to the bot') }).catch((e: Error) => toast(e.message)).finally(() => { setBusy(false); onDone() })
   }
   const pickOne = (i: number, v: string): void => {
     const next = answers.slice()
@@ -89,15 +90,19 @@ function NeedsYouCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bo
   }
   const style = { '--bot': bot?.color ?? 'var(--accent)' } as React.CSSProperties
   if (x.kind === 'approval' || x.kind === 'other') {
+    const plain = plainApproval(x.approval)
+    const folder = x.approval?.folder
     return (
       <article className="tk-card ny-card" data-testid="needs-you-item" data-kind={x.kind} data-id={x.id} style={style}>
         <Head item={x} bot={bot} chip={x.kind === 'approval' ? 'Needs your OK' : 'Waiting'} />
-        <p className="tk-title"><b>{x.approval?.summary ?? x.approval?.label ?? 'An action'}</b></p>
-        {x.approval?.reason && <p className="tk-reason">{x.approval.reason}</p>}
-        <div className="tk-actions">
-          {x.kind === 'approval' && <button className="bd-btn primary" disabled={busy} onClick={() => send('approve')} data-testid="needs-you-approve">Approve</button>}
-          {x.kind === 'approval' && <button className="bd-btn" disabled={busy} onClick={() => send('deny')} data-testid="needs-you-deny">Deny</button>}
-          <button className="bd-btn" onClick={onOpen}>Open chat</button>
+        <p className="tk-title"><b>{plain.title}</b></p>
+        {plain.where && <p className="ny-where"><I.Folder size={13} />{plain.where}</p>}
+        {plain.why && <p className="tk-reason ny-why">{plain.why}</p>}
+        <div className="tk-actions ny-actions">
+          {x.kind === 'approval' && <button className="bd-btn primary" disabled={busy} onClick={() => send('approve')} data-testid="needs-you-approve">Allow</button>}
+          {x.kind === 'approval' && folder && <button className="bd-btn" disabled={busy} onClick={() => send('always')} title={folder} data-testid="needs-you-always">Always allow in “{folderName(folder)}”</button>}
+          {x.kind === 'approval' && <button className="bd-btn" disabled={busy} onClick={() => send('deny')} data-testid="needs-you-deny">Don't allow</button>}
+          <button className="link-btn ny-open" onClick={onOpen}>Open chat</button>
         </div>
       </article>
     )
@@ -107,27 +112,33 @@ function NeedsYouCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bo
       <Head item={x} bot={bot} chip={qs.length > 1 ? `${qs.length} questions` : 'Question'} />
       {qs.map((q, i) => {
         const rec = recommended(q)
+        // The recommended answer first, then the rest in the bot's order.
+        const opts = (q.options ?? []).map(plain).filter((o, k, all) => all.indexOf(o) === k)
+        const ordered = rec && opts.includes(plain(rec)) ? [plain(rec), ...opts.filter((o) => o !== plain(rec))] : opts
         return (
           <div className="ny-question" key={i}>
             <p className="tk-title"><b>{q.question}</b></p>
-            {q.options?.length ? (
-              <div className="tk-actions">
-                {q.options.map((o) => (
-                  <button key={o} className={`bd-btn${answers[i] === plain(o) ? ' primary' : ''}`} disabled={busy} onClick={() => pickOne(i, plain(o))} data-testid="needs-you-option">
-                    {plain(o)}{rec && plain(rec) === plain(o) ? ' (recommended)' : ''}
+            {ordered.length > 0 && (
+              <div className="ny-options" role="group" aria-label={q.question}>
+                {ordered.map((o) => (
+                  <button key={o} className={`ny-option${answers[i] === o ? ' on' : ''}`} disabled={busy} onClick={() => pickOne(i, o)} data-testid="needs-you-option">
+                    <span>{o}</span>{rec && plain(rec) === o && <span className="ny-rec">Recommended</span>}
                   </button>
                 ))}
               </div>
-            ) : null}
-            <span className="tk-input"><input value={answers[i]} placeholder={q.options?.length ? 'Or type your own answer' : 'Type your answer'} disabled={busy} onChange={(e) => { const n = answers.slice(); n[i] = e.target.value; setAnswers(n) }}
-              onKeyDown={(e) => { if (e.key === 'Enter' && qs.length === 1 && answers[i].trim()) send(answers) }} aria-label={`Answer: ${q.question}`} data-testid="needs-you-input" /></span>
+            )}
+            <div className="ny-own">
+              <input value={answers[i]} placeholder={ordered.length ? 'Or type your own answer' : 'Type your answer'} disabled={busy} onChange={(e) => { const n = answers.slice(); n[i] = e.target.value; setAnswers(n) }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && qs.length === 1 && answers[i].trim()) send(answers) }} aria-label={`Answer: ${q.question}`} data-testid="needs-you-input" />
+              {qs.length === 1 && <button className="bd-btn primary" disabled={busy || !answers[i].trim()} onClick={() => send(answers)} data-testid="needs-you-send">Send</button>}
+            </div>
           </div>
         )
       })}
-      <p className="tk-reason">{x.source === 'live' ? 'The bot is waiting on this right now' : deadlineLine(x)}</p>
-      <div className="tk-actions">
-        {(qs.length > 1 || answers.some((a) => a.trim())) && <button className="bd-btn primary" disabled={busy || !answers.some((a) => a.trim())} onClick={() => send(answers)} data-testid="needs-you-send">Send</button>}
-        <button className="bd-btn" onClick={onOpen}>Open chat</button>
+      <div className="ny-foot">
+        <span className="ny-deadline"><I.Clock size={12} />{x.source === 'live' ? 'The bot is waiting on this right now' : deadlineLine(x)}</span>
+        {qs.length > 1 && <button className="bd-btn primary" disabled={busy || !answers.some((a) => a.trim())} onClick={() => send(answers)} data-testid="needs-you-send">Send answers</button>}
+        <button className="link-btn ny-open" onClick={onOpen}>Open chat</button>
       </div>
     </article>
   )

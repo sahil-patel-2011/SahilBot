@@ -25,15 +25,13 @@ export function shortModelName(id: string, m?: Pick<ModelInfo, 'label'>): string
 }
 
 /**
- * The picker button: "Auto" when the model is Auto and the permissions are Auto (the default); otherwise the
- * overrides ("Opus 5.5 · High", "Auto · Ask", "Auto · Bypass"). On Auto, SahilBot picks the thinking too, so a
- * thinking level never shows there. In a bot or group chat only the permissions can differ.
+ * The picker button: "Auto" when the model, thinking and permissions are all Auto (the default); otherwise the
+ * overrides ("Opus 5.5 · High", "Auto · Low", "Auto · Ask", "Auto · Bypass").
  */
-export function pickerLabel(o: { model: string; models?: Array<Pick<ModelInfo, 'id' | 'label'>> | null; thinking?: EffortChoice; mode: PermissionMode; autoBot?: boolean }): string {
+export function pickerLabel(o: { model: string; models?: Array<Pick<ModelInfo, 'id' | 'label'>> | null; thinking?: EffortChoice; mode: PermissionMode }): string {
   const perm = o.mode !== 'auto' && o.mode !== 'autonomous' ? MODE_LABEL[o.mode] : undefined
-  if (o.autoBot) return ['Auto', perm].filter(Boolean).join(' · ')
   const modelPart = isAutoModel(o.model) ? (o.model && o.model !== 'auto' ? shortModelName(o.model) : undefined) : shortModelName(o.model, o.models?.find((m) => m.id === o.model))
-  const think = !isAutoModel(o.model) && o.thinking && o.thinking !== 'auto' ? THINKING_LABEL[o.thinking] : undefined
+  const think = o.thinking && o.thinking !== 'auto' ? THINKING_LABEL[o.thinking] : undefined
   if (!modelPart && !think && !perm) return 'Auto'
   return [modelPart ?? 'Auto', think, perm].filter(Boolean).join(' · ')
 }

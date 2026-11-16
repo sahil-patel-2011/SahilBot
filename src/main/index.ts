@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, shell, systemPreferences } from 'electron'
 import { autoPool, autoVariant } from './llm/router'
 import { execFileSync } from 'node:child_process'
 import { homedir, tmpdir, totalmem } from 'node:os'
@@ -9,7 +9,7 @@ import { classifyTask, type TaskCategory } from './llm/task-classifier'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
-import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionMode, SendInput, Settings, Space, UsageRow } from '@shared/types'
+import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, SendInput, Settings, Space, UsageRow } from '@shared/types'
 import type { GoalPatch, MemoryItem } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 // Cloud first, local opt-in (shared/local-mode.ts); attached folders are counted and indexed (knowledge/folder-scan.ts).
@@ -65,6 +65,7 @@ import { MemoryStore, similar, type ImportItemIn } from './memory'
 import { IMPORT_MAX_CHARS, ruleName } from './memory-import'
 import { MEMORY_IMPORT_PROMPT } from '@shared/memory-import'
 import { appRoot, dataDir, isPackaged, sub } from './paths'
+import { Updater, backupBeforeUpgrade, bundleBuild, bundleOf } from './updater'
 import { SkillStore } from './skills'
 import { docxText, pdfText, pptxText } from './docs/read'
 import { RuleStore } from './rules'
@@ -96,7 +97,6 @@ import { cadDesignTool } from './cad/design-tool'
 import { Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { requestedModel } from './agent/choices'
-import { isAutoModel } from '@shared/model-picker'
 import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels } from './spaces'
 import { ATTENDED_GRACE_MS, Learner, QuestionQueue, QuestionStore, createQuestionHost, notifyDevices as notifyQuestionDevices, toNeedsYou } from './agent/questions'
 import { DigestRunner } from './goals/digest'
@@ -126,6 +126,8 @@ import { LearningService } from './learning/service'
 import { DecisionRecorder } from './learning/decisions'
 import { knowledgeTools, resolveScope } from './agent/tools/knowledge'
 import { vaultTool } from './agent/tools/vault'
+import { apiRequestTool } from './agent/tools/api-request'
+import { chatHistoryTool } from './agent/tools/chat-history'
 import { VaultService } from './vault/service'
 import { ContextEngine } from './context-engine/service'
 import { aboutTool } from './agent/tools/about'
@@ -296,6 +298,16 @@ function createQuickWindow(): BrowserWindow {
 app.whenReady().then(() => {
   mark('app ready')
   setupApp()
+  // A new version's first start: a copy of the database before its migrations run (main/updater.ts). Only the
+  // instance that holds the lock (a second one is quitting).
+  if (isPackaged() && app.hasSingleInstanceLock()) {
+    try { backupBeforeUpgrade(dataDir(), app.getVersion(), bundleBuild(bundleOf(process.execPath))) }
+    catch (e) {
+      dialog.showErrorBox('Your data has been kept safe', `SahilBot could not make its required backup before opening this version. Your data has not been migrated or removed. Free some space or check folder permissions, then reopen SahilBot.\n\n${(e as Error).message}`)
+      app.quit()
+      return
+    }
+  }
   const db = new Db(join(dataDir(), 'foreman.db'))
   mark('database open')
   db.sweepStreaming()
@@ -601,6 +613,8 @@ app.whenReady().then(() => {
   const voicePrepRef: { current: (why: 'auto' | 'mic' | 'user') => void } = { current: () => undefined }
   registry.register(
     ...coreTools(results),
+    apiRequestTool(vault),
+    chatHistoryTool(db),
     ...fileTools(() => settings.get().workspaceDir, docsDir),
     // Office: review_document (core; every new document gets checked) and the office tool (find_tools("office"/"excel"/"pdf")):
     // spreadsheets read/edited in place, PDF forms, merge/split, batch file jobs, receipts, meeting notes.
@@ -614,7 +628,7 @@ app.whenReady().then(() => {
     // Built in and always available (connector tools are found with find_tools).
     { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since), sites }), core: true },
     sitesTool(sites),
-    { ...cursorTool(() => secrets.get('cursorKey'), () => settings.get().workspaceDir), core: true },
+    { ...cursorTool(() => secrets.get('cursorKey'), () => settings.get().workspaceDir, () => !!settings.get().cursorLocalAgent), core: true },
     { ...macAppsTool(), core: true },
     // Email through Apple Mail (every account in Mail; drafts by default, sending and bulk changes ask).
     { ...mailTool(), core: false, group: 'Email' },
@@ -1077,7 +1091,7 @@ app.whenReady().then(() => {
     const thread = db.createThread(space.id, kind === 'bot' ? botLevel(settings.get(), space) : 'auto', null)
     db.updateThread(thread.id, { title: name })
     if (kind === 'bot' && input.intro !== false) {
-      // The new bot greets the user and asks what to focus on; it can rename itself afterwards.
+      // The new bot greets the user and asks what to focus on, then saves instructions for it (never a new name).
       const state = db.getState(thread.id)
       state.loaded = ['update_bot']
       db.setState(thread.id, state)
@@ -1128,12 +1142,7 @@ app.whenReady().then(() => {
     }
     // 'autonomous' is the old name of Auto.
     if (patch?.permissionMode === 'autonomous') patch = { ...patch, permissionMode: 'auto' }
-    // Auto picks the model and the thinking together: going back to Auto drops a thinking level, and a level
-    // can't be set while the chat is on Auto.
-    if (patch && ('model' in patch || 'effort' in patch)) {
-      const model = 'model' in patch ? patch.model : db.getThread(id)?.model
-      if (isAutoModel(model)) patch = { ...patch, effort: null }
-    }
+    // Keep explicit Auto distinct from an unset effort, which inherits the app default.
     // A local model picked for this chat: load it while the user types.
     if (patch.model && warmupAllowed()) warmup.soon(patch.model)
     // "Mark as Unread" opens on a NEW divider at the bot's latest reply (Db.markUnread).
@@ -1672,7 +1681,7 @@ app.whenReady().then(() => {
       for (const r of chat.pending(threadId)) {
         if (!ids.includes(r.id)) continue
         const base = { id: `live:${threadId}:${r.id}`, source: 'live' as const, botId: t.spaceId, botName: botName(t.spaceId), threadId, status: 'open' as const, createdAt: t.updatedAt ?? Date.now() }
-        if (r.kind === 'approval' && !r.spend) out.push({ ...base, kind: 'approval', approval: { tool: r.tool ?? '', label: r.label ?? r.tool ?? 'Action', ...(r.summary ? { summary: needsYouText(r) } : {}), ...(r.reason ? { reason: r.reason } : {}) } })
+        if (r.kind === 'approval' && !r.spend) out.push({ ...base, kind: 'approval', approval: { tool: r.tool ?? '', label: r.label ?? r.tool ?? 'Action', ...(r.summary ? { summary: needsYouText(r) } : {}), ...(r.reason ? { reason: r.reason } : {}), ...(r.folder ? { folder: r.folder } : {}) } })
         else if (r.kind === 'question') out.push({ ...base, kind: 'question', questions: [{ question: r.question ?? '', ...(r.options?.length ? { options: r.options } : {}) }] })
         else if (r.kind === 'questions') out.push({ ...base, kind: 'question', questions: (r.questions ?? []).map((q) => ({ question: q.question, ...(q.options?.length ? { options: q.options } : {}) })) })
         else out.push({ ...base, kind: 'other', approval: { tool: r.tool ?? r.kind, label: r.label ?? (r.kind === 'plan' ? 'Plan' : r.kind === 'connect' ? 'Connect an app' : 'Waiting for you'), summary: needsYouText(r) } })
@@ -1681,20 +1690,29 @@ app.whenReady().then(() => {
     return out
   }
   handle('needsYou:list', () => [...liveNeedsYou(), ...questions.inbox()])
-  handle('needsYou:answer', async (id: string, answer: string[] | 'approve' | 'deny') => {
+  handle('needsYou:answer', async (id: string, answer: string[] | 'approve' | 'always' | 'deny') => {
     const ref = String(id ?? '')
     if (ref.startsWith('live:')) {
       const [, threadId, reqId] = ref.split(':')
       const r = chat.pending(threadId).find((x) => x.id === reqId)
       if (!r) return null
       const list = Array.isArray(answer) ? answer.map((a) => String(a ?? '')) : []
-      if (r.kind === 'approval' && !r.spend) chat.respond(threadId, reqId, answer === 'approve' ? 'once' : 'deny')
+      if (r.kind === 'approval' && !r.spend) chat.respond(threadId, reqId, answer === 'approve' ? 'once' : answer === 'always' ? 'always' : 'deny')
       else if (r.kind === 'question') chat.respond(threadId, reqId, list[0] ?? (answer === 'approve' ? 'Yes' : 'No'))
       else if (r.kind === 'questions') chat.respond(threadId, reqId, JSON.stringify(list))
       else throw new Error('Open the chat to answer this one.')
       return null
     }
-    const item = await questions.answer(ref, Array.isArray(answer) ? answer.map((a) => String(a ?? '')) : answer === 'approve' ? 'approve' : 'deny')
+    // "Always allow in <folder>" on a queued approval: the folder joins that chat's folders, then it runs.
+    if (answer === 'always') {
+      const queued = questions.inbox().find((x) => x.id === ref)
+      if (queued?.approval?.folder) {
+        const st = db.getState(queued.threadId)
+        st.roots = [...new Set([...(st.roots ?? []), queued.approval.folder])]
+        db.setState(queued.threadId, st)
+      }
+    }
+    const item = await questions.answer(ref, Array.isArray(answer) ? answer.map((a) => String(a ?? '')) : answer === 'approve' || answer === 'always' ? 'approve' : 'deny')
     return item ? toNeedsYou(item, botName(item.botId)) : null
   })
   handle('needsYou:reviewed', (id: string) => questions.reviewed(String(id)))
@@ -2393,6 +2411,17 @@ app.whenReady().then(() => {
     return { loginItem, openedAtLogin, working: work.working().length, keepingAwake: awake.on, menuBarIcon: !!menuBar?.shown, routinesPaused: !!s.routinesPaused }
   }
   handle('alwaysOn:status', () => alwaysOnStatus())
+  // ---- Updates (main/updater.ts): check, download and verify in the background; install on the user's click.
+  const updater = new Updater({
+    execPath: process.execPath, version: app.getVersion(), packaged: isPackaged(), dataDir: dataDir(),
+    emit: (st) => toWin('update:status', st), quit: () => app.quit(), openUrl: (u) => void shell.openExternal(u),
+    vacuumInto: (path) => db.sql.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`)
+  })
+  updater.start()
+  app.on('will-quit', () => updater.stop())
+  handle('update:status', () => updater.get())
+  handle('update:check', () => updater.check())
+  handle('update:install', () => updater.install())
   // Settings → Privacy & Security: status (no prompts) and the exact System Settings pane; nothing is granted here.
   handle('permissions:status', () => permissionsStatus({
     accessibility: () => systemPreferences.isTrustedAccessibilityClient(false),
@@ -2402,6 +2431,34 @@ app.whenReady().then(() => {
     home: homedir()
   }))
   handle('permissions:open', async (kind: string) => { await shell.openExternal(settingsUrl(kind)) })
+  // "Allow": macOS's own one-click prompt where it has one (microphone, accessibility, screen, notifications),
+  // so the user isn't left hunting through a System Settings list; the exact pane otherwise, or once denied.
+  handle('permissions:request', async (kind: PermissionKind) => {
+    const pane = async (): Promise<'opened'> => { await shell.openExternal(settingsUrl(kind)); return 'opened' }
+    switch (kind) {
+      case 'microphone':
+        if (systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') return (await systemPreferences.askForMediaAccess('microphone')) ? 'granted' : 'denied'
+        return pane()
+      case 'accessibility':
+        if (systemPreferences.isTrustedAccessibilityClient(false)) return 'granted'
+        systemPreferences.isTrustedAccessibilityClient(true)
+        return 'prompted'
+      case 'screen':
+        if (systemPreferences.getMediaAccessStatus('screen') === 'not-determined') {
+          await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } }).catch(() => [])
+          return 'prompted'
+        }
+        return pane()
+      case 'notifications':
+        // The first notification is what makes macOS ask; once it's been asked, the pane is where it's changed.
+        if (!Notification.isSupported()) return pane()
+        new Notification({ title: 'SahilBot', body: 'Notifications are on: SahilBot will tell you when a task finishes or needs you.' }).show()
+        return 'prompted'
+      case 'automation': return pane()
+      case 'fullDisk': return pane()
+      default: { const never: never = kind; throw new Error(`Unknown permission "${String(never)}".`) }
+    }
+  })
   handle('permissions:automation', (appName: string) => automationStatus(String(appName).slice(0, 80)))
   handle('alwaysOn:pauseRoutines', (paused: boolean) => { setRoutinesPaused(!!paused); return alwaysOnStatus() })
   // One notification for chats cut off last time (each also has a Continue notice in the chat).

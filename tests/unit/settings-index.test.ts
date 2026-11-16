@@ -26,7 +26,7 @@ describe('the settings search index', () => {
     const keys: string[] = []
     for (const [k, v] of Object.entries(s)) {
       keys.push(k)
-      if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'sampling', 'botModes', 'fastMode', 'computerUse', 'modelContext', 'mcpServer', 'botAutonomy', 'botSwarm', 'voiceInput', 'keys', 'onshapeKeyParts'].includes(k)) for (const sub of Object.keys(v)) keys.push(`${k}.${sub}`)
+      if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'sampling', 'botModes', 'fastMode', 'computerUse', 'modelContext', 'mcpServer', 'botAutonomy', 'botSwarm', 'voiceInput', 'keys', 'keysSaved', 'onshapeKeyParts'].includes(k)) for (const sub of Object.keys(v)) keys.push(`${k}.${sub}`)
     }
     const covered = new Set(SETTINGS_INDEX.flatMap((e) => e.keys ?? []))
     const missing = keys.filter((k) => !NOT_IN_SETTINGS.has(k) && !covered.has(k) && !covered.has(k.split('.')[0]))

@@ -13,6 +13,7 @@ import { fromTransfer, mergeAttachments, oversize, rejectedText } from '../lib/a
 import { toast } from '../lib/toast'
 import { findSecrets } from '@shared/secret-detect'
 import { requestStrategy, STRATEGY_LABEL } from '@shared/request-strategy'
+import { useDevMode } from '../lib/dev-mode'
 import '../styles-agent-experience.css'
 
 /** Autonomy levels (defined with the picker). */
@@ -99,6 +100,7 @@ export const Composer = forwardRef<ComposerHandle, {
   /** A bot or group chat: the picker shows model and thinking as chosen automatically (permissions stay editable). */
   autoBot?: boolean
 }>(function Composer(p, ref) {
+  const dev = useDevMode()
   const [dictating, setDictating] = useState(false)
   const [dictError, setDictError] = useState<string | null>(null)
   const mic = useRef<Mic | null>(null)
@@ -320,9 +322,11 @@ export const Composer = forwardRef<ComposerHandle, {
               </>
             )}
           </Popover>
-          <span className="agent-strategy" data-testid="agent-strategy" title="Chooses tools and brings in specialist agents when useful. You can ask it to plan first, research, or use an agent swarm.">
-            <I.Sparkle size={14} /><span>{STRATEGY_LABEL[strategy]}</span><span className="agent-auto-label">Automatic</span>
-          </span>
+          {dev && (
+            <span className="agent-strategy" data-testid="agent-strategy" title="Chooses tools and brings in specialist agents when useful. You can ask it to plan first, research, or use an agent swarm.">
+              <I.Sparkle size={14} /><span>{STRATEGY_LABEL[strategy]}</span><span className="agent-auto-label">Automatic</span>
+            </span>
+          )}
           <span className="spacer" />
           {dictating && (
             <span className="dictating" data-testid="dictating">
@@ -352,7 +356,7 @@ export const Composer = forwardRef<ComposerHandle, {
         <ComposerPicker models={p.models} model={p.model} onModel={p.onModel} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
           thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} />
       </div>
-      {p.running && !p.answering && (
+      {dev && p.running && !p.answering && (
         <div className="steer-hint" data-testid="steer-hint">
           <kbd>Enter</kbd> send now (SahilBot adjusts) · <kbd>⌘Enter</kbd> send after it finishes
           {p.steering ? <span className="steering"> · <span className="spin" /> adjusting at its next step…</span> : null}

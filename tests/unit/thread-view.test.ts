@@ -4,6 +4,7 @@ import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
 import { parseHTML } from 'linkedom'
 import { beforeAll, describe, expect, it } from 'vitest'
+import { DevMode } from '../../src/renderer/src/lib/dev-mode'
 import type { Message } from '@shared/types'
 
 type TV = typeof import('../../src/renderer/src/components/ThreadView')
@@ -56,8 +57,13 @@ describe('thread view on long chats', () => {
     const html = renderToString(createElement(tv.ThreadView, { messages: ms, running: false, pending: [], actions }))
     const took = performance.now() - t0
     expect(html).toContain('data-testid="show-earlier"')
-    expect((html.match(/data-testid="user-bubble"/g) ?? []).length).toBe(tv.WINDOW / 3)
-    expect((html.match(/data-testid="assistant-bubble"/g) ?? []).length).toBe(tv.WINDOW / 3)
+    // The quiet chat leaves out the steps: question + answer per turn.
+    expect((html.match(/data-testid="user-bubble"/g) ?? []).length).toBe(tv.WINDOW / 2)
+    expect((html.match(/data-testid="assistant-bubble"/g) ?? []).length).toBe(tv.WINDOW / 2)
+    // Developer mode mounts the steps too: question + steps + answer per turn.
+    const dev = renderToString(createElement(DevMode.Provider, { value: true }, createElement(tv.ThreadView, { messages: ms, running: false, pending: [], actions })))
+    expect((dev.match(/data-testid="user-bubble"/g) ?? []).length).toBe(tv.WINDOW / 3)
+    expect((dev.match(/data-testid="activity"/g) ?? []).length).toBe(tv.WINDOW / 3)
     // The newest answer is there; the oldest isn't mounted.
     expect(html).toContain('Answer 199')
     expect(html).not.toContain('Answer 0<')

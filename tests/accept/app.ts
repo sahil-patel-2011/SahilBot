@@ -14,6 +14,12 @@ export async function launch(dataDir: string, baseUrl: string, extraEnv: Record<
   })
   const page = await app.firstWindow()
   await page.waitForSelector('[data-testid="composer-input"]')
+  // The tests read every step, the model and the cost: Developer mode shows them (quiet: SAHILBOT_QUIET=1).
+  if (!extraEnv.SAHILBOT_QUIET) {
+    await page.evaluate(() => window.foreman.settings.set({ advanced: { devMode: true } } as never))
+    await page.reload()
+    await page.waitForSelector('[data-testid="composer-input"]')
+  }
   return { app, page }
 }
 

@@ -52,7 +52,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
   /** "Try it" on a connected app: a new chat with this first message in the box. */
   onTry?: (text: string) => void
   /** Open Settings at a page (falls back to a toast). */
-  onOpenSettings?: (page: 'passwords' | 'rules') => void
+  onOpenSettings?: (page: 'passwords' | 'rules' | 'connected') => void
 }) {
   const [presets, setPresets] = useState<ConnectorPreset[]>([])
   const [configs, setConfigs] = useState<ConnectorConfig[]>([])
@@ -74,6 +74,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
   const [keyFor, setKeyFor] = useState<ConnectorPreset | null>(null)
   /** Connector ids with an API key saved (main never sends the keys themselves). */
   const [keys, setKeys] = useState<Set<string>>(new Set())
+  /** Cursor is connected by its API key (kept with the other settings keys, not a connector's). */
+  const [cursorOn, setCursorOn] = useState(false)
   /** Test connection results by connector id. */
   const [tests, setTests] = useState<Record<string, { ok: boolean; text: string }>>({})
   /** "Check all": running, and its one-line result. */
@@ -87,6 +89,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     setConfigs(r.configs)
     setStatuses(r.statuses)
     setKeys(new Set(r.keys ?? []))
+    setCursorOn(!!(await api.settings.get().catch(() => null))?.hasCursorKey)
     setGoogle(await api.connectors.googleClient().catch(() => null))
   }
   useEffect(() => {
@@ -105,7 +108,11 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
 
   const status = (id: string): ConnectorStatus | undefined => statuses.find((s) => s.id === id)
   const configOf = (p: ConnectorPreset): ConnectorConfig | undefined => configs.find((c) => c.preset === p.id)
-  const connected = useMemo(() => connectedApps(configs, statuses, presets), [configs, statuses, presets])
+  const connected = useMemo(() => {
+    const apps = connectedApps(configs, statuses, presets)
+    if (cursorOn) apps.push({ id: 'cursor-cloud-key', presetId: 'cursor-app', name: 'Cursor', color: '#111111' })
+    return apps
+  }, [configs, statuses, presets, cursorOn])
   /** What's missing before an app can connect: its one-time setup, Google setup or API key. */
   const setupMissing = (p: ConnectorPreset | undefined, cfg: ConnectorConfig | undefined): boolean =>
     !!p && ((p.auth === 'oauth-static' && !cfg?.clientId && !p.builtinClient) || (p.auth === 'google' && !google && !cfg?.clientId && !p.builtinClient) || (p.auth === 'apikey' && !(cfg && keys.has(cfg.id))))
@@ -137,6 +144,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     // Built-in apps need nothing: just ask SahilBot to use them.
     // Kept in the catalog, but its server can't be used right now: say why instead of trying.
     if (p.unavailable) { setErr(`${p.name} is unavailable right now. ${p.unavailable}`); body.current?.scrollTo({ top: 0, behavior: 'smooth' }); return }
+    // Cursor: its API key lives in Settings → Connected apps (Cloud Agents).
+    if (p.id === 'cursor-app') { if (onOpenSettings) { onClose(); onOpenSettings('connected') } else toast('Add your Cursor API key in Settings → Connected apps.'); return }
     if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : 'add a reminder for tomorrow at 9'}".`); return }
     const existing = configOf(p)
     // Google apps with no client at all (no built-in one, none of the user's own): set Google up first.
@@ -267,6 +276,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     const as = p.id === VAULT.id || p.auth === 'app' || p.auth === 'browser' ? undefined : stateOf(p, cfg)
     const [label, tone] =
       p.id === VAULT.id ? ['Open', 'ghost'] :
+      p.id === 'cursor-app' ? (cursorOn ? ['Connected', 'done'] : ['Add key', 'add']) :
       p.auth === 'app' ? ['Built in', 'ok'] :
       p.auth === 'browser' ? ['Sign in', 'ghost'] :
       st?.state === 'connected' ? ['Connected', 'done'] :
@@ -389,7 +399,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
 
   const manage = (): ReactNode => (
     <>
-      {configs.length === 0 && (
+      {configs.length === 0 && !cursorOn && (
         <div className="ca-empty">
           <b>No apps connected yet.</b>
           <span>Connect an app and SahilBot can use it in any chat.</span>
@@ -398,6 +408,11 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
       )}
       {checked && view === 'manage' && <div className="hint" data-testid="check-all-result" style={{ margin: '0 0 10px' }}>{checked}</div>}
       <div className="ca-manage">
+        {cursorOn && <div className="ca-app" data-testid="cursor-cloud-connection">
+          <AppIcon src={icons['cursor-app']} name="Cursor" color="#111111" />
+          <div><b>Cursor</b><div className="hint">Cloud Agents · API key saved</div></div>
+          <button className="btn" onClick={() => { if (onOpenSettings) { onClose(); onOpenSettings('connected') } }}>Manage key</button>
+        </div>}
         {configs.map((c) => {
           const st = status(c.id)
           const preset = presets.find((p) => p.id === c.preset)

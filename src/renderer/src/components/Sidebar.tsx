@@ -11,6 +11,8 @@ import { openUsageGlance } from './UsagePage'
 import { money, useSpend } from './SpendingLimit'
 import { countLabel } from '@shared/read-state'
 import { rowSubtitle } from '../lib/ux'
+import { useDevMode } from '../lib/dev-mode'
+import { UpdateButton } from './UpdateButton'
 
 /** The profile menu's usage line: "Usage · $3.20 of $200 this month". */
 const spendLabel = (b: ReturnType<typeof useSpend>): string => !b ? 'Usage' : b.mode === 'amount' ? `Usage · ${money(b.spent)} of ${money(b.cap)} this month` : `Usage · ${money(b.spent)} this month`
@@ -56,6 +58,7 @@ export function Sidebar(p: {
   needThreads?: Set<string>
   needSpaces?: Set<string>
 }) {
+  const dev = useDevMode()
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [dragging, setDragging] = useState<{ kind: 'space' | 'chat'; id: string } | null>(null)
@@ -347,7 +350,6 @@ export function Sidebar(p: {
           {section('projects', 'Projects', (
             <>
               {projects.map((s) => smallRow(s, 'project-item'))}
-              {!projects.length && <div className="nav-empty">A folder, instructions and chats</div>}
             </>
           ), (
             <>
@@ -360,7 +362,6 @@ export function Sidebar(p: {
             <>
               {pinnedChats.map(chatRow)}
               {recents.map(chatRow)}
-              {!pinnedChats.length && !recents.length && <div className="nav-empty">Your chats with {main?.name ?? 'SahilBot'} show up here</div>}
             </>
           ), (
             <>
@@ -382,8 +383,9 @@ export function Sidebar(p: {
         </div>
       </div>
 
+      <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
-        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} title={`${p.userName || 'You'}${p.modelLabel ? ` · ${p.modelLabel}` : ''}\nSettings (⌘,) · right-click for more`} data-testid="profile">{initials}</button>
+        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} title={`${p.userName || 'You'}${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}\nSettings (⌘,) · right-click for more`} data-testid="profile">{initials}</button>
         <button className="sb-connect" onClick={p.onConnect} data-testid="connect-apps">
           <ConnectedIcons max={3} />
           <I.Plug size={16} className="sb-plug" />

@@ -25,7 +25,7 @@ function TeamPhase({ callId, members, live }: { callId: string; members: TeamMem
     <div className="max-team team-card embedded" data-testid="team-card">
       <div className="max-sec-head">
         <I.Users size={14} /><span className="plan-title">Research team</span>
-        <span className="plan-count">{done} of {members.length} done{t.usd ? ` · ${money(t.usd)}` : ''}{t.tokens ? ` · ${tokenCount(t.tokens)}` : ''}</span>
+        <span className="plan-count">{done} of {members.length} done{t.usd ? <span className="dev-only">{` · ${money(t.usd)}`}</span> : null}{t.tokens ? <span className="dev-only">{` · ${tokenCount(t.tokens)}`}</span> : null}</span>
         {live && left > 0 && <button className="link-btn max-stop" onClick={() => void api.swarm.stopRemaining(callId)} data-testid="team-stop-remaining">Stop remaining ({left})</button>}
       </div>
       <div className="team-board">
@@ -76,7 +76,7 @@ export function MaxCard({ board, live }: { board: MaxBoard; live: boolean }) {
         <span className="max-badge" aria-hidden><I.Bolt size={13} /></span>
         <span className="plan-title">Agent swarm</span>
         <span className="max-title" data-testid="max-title">{board.title}</span>
-        <span className="plan-count max-status">{statusLine(board, live)}{tot.usd ? ` · ${money(tot.usd)}` : ''}</span>
+        <span className="plan-count max-status">{statusLine(board, live)}{tot.usd ? <span className="dev-only">{` · ${money(tot.usd)}`}</span> : null}</span>
         <span className="plan-bar"><i style={{ width: `${Math.min(1, progress) * 100}%` }} /></span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>

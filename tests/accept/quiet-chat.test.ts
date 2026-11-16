@@ -1,0 +1,56 @@
+import { mkdirSync } from 'node:fs'
+import type { Page } from 'playwright'
+import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { launch, tempProfile } from './app'
+import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
+
+// The quiet chat (Developer mode off): messages as bubbles, one working line with a timer that counts from
+// when you pressed send, and none of the steps, thinking, model names, tokens or costs. SB_SHOTS=<dir> also
+// saves screenshots.
+
+let llm: MockLlm
+beforeAll(async () => { llm = await startMockLlm() })
+afterAll(async () => { await llm.close() })
+
+const shots = process.env.SB_SHOTS
+const shot = async (page: Page, name: string): Promise<void> => {
+  if (!shots) return
+  mkdirSync(shots, { recursive: true })
+  await page.screenshot({ path: `${shots}/${name}.png` })
+}
+
+describe('quiet chat', () => {
+  test('a task reads like a conversation: a short note, quiet work, the result', async () => {
+    const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_QUIET: '1' })
+    await page.setViewportSize({ width: 1100, height: 760 })
+    llm.script.push(
+      { content: 'On it, putting together a study guide for your chem quiz.', reasoning: 'The user wants a stoichiometry study guide.', toolCalls: [{ name: 'todo', arguments: JSON.stringify({ items: [{ text: 'Write the study guide', status: 'in_progress' }] }) }], delay: 40 },
+      { toolCalls: [{ name: 'file_write', arguments: JSON.stringify({ path: 'Chem study guide.md', content: '# Stoichiometry\n\ngrams → moles → moles → grams\n' }) }, { name: 'todo', arguments: JSON.stringify({ items: [{ text: 'Write the study guide', status: 'done' }] }) }], delay: 600 },
+      { content: 'Done! Your study guide is saved.\n\n**The key idea:** grams of A → moles of A → moles of B → grams of B.\n\n1. Grams to moles: divide by the molar mass.\n2. Mole ratio: use the balanced equation.\n3. Moles to grams: multiply by the molar mass.', reasoning: 'Summarize.', delay: 30 }
+    )
+    await page.fill('[data-testid="composer-input"]', 'Help me study for my chem quiz on stoichiometry')
+    await page.keyboard.press('Enter')
+    // While it works: one status line with a running timer.
+    await page.waitForSelector('[data-testid="turn-timer"]', { timeout: 15_000 })
+    await shot(page, '1-working')
+    await expect.poll(() => page.locator('[data-testid="stop"]').count(), { timeout: 30_000 }).toBe(0)
+    await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').count()).toBe(2)
+    expect(await page.locator('[data-testid="activity"]').count()).toBe(0)
+    expect(await page.locator('[data-testid="plan-card"]').count()).toBe(0)
+    expect(await page.locator('details.reasoning').count()).toBe(0)
+    expect(await page.locator('[data-testid="routed"]').count()).toBe(0)
+    expect(await page.locator('[data-testid="run-summary"]').count()).toBe(0)
+    // What it made stays: the file card.
+    expect(await page.locator('[data-testid="made-file"]').count()).toBe(1)
+    await shot(page, '2-done')
+
+    // Developer mode shows the steps and the thinking again.
+    await page.evaluate(() => window.foreman.settings.set({ advanced: { devMode: true } } as never))
+    await page.reload()
+    await page.locator('aside >> text=Help me study for my chem quiz').first().click()
+    await page.waitForSelector('[data-testid="activity"]')
+    expect(await page.locator('details.reasoning').count()).toBeGreaterThan(0)
+    await shot(page, '3-dev-mode')
+    await app.close()
+  })
+})

@@ -27,10 +27,7 @@ describe('agent platform', () => {
       return { toolCalls: [{ name: 'agents', arguments: JSON.stringify({ tasks: CITIES.map((c) => ({ title: `${c} facts`, task: `Find the population of ${c}.` })) }) }] }
     }
     for (let i = 0; i < 40; i++) llm.script.push(reply)
-    // The modes live under the composer's Modes menu.
-    await page.click('[data-testid="modes-menu"]')
-    await page.click('[data-testid="max-toggle"]')
-    await page.fill('[data-testid="composer-input"]', 'Research and compare the populations of Paris and Tokyo across the official census sources')
+    await page.fill('[data-testid="composer-input"]', 'Use an agent swarm to research and compare the populations of Paris and Tokyo across the official census sources')
     await page.keyboard.press('Enter')
     await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 30_000 }).toContain('Both helpers reported back')
     // The lead got Team mode instructions, and each helper got its own task.
@@ -213,10 +210,7 @@ describe('quick ask and deep research', () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
     llm.script.push({ content: 'ok' })
     const before = llm.requests.length
-    // The modes live under the composer's Modes menu.
-    await page.click('[data-testid="modes-menu"]')
-    await page.click('[data-testid="deep-toggle"]')
-    await page.fill('[data-testid="composer-input"]', 'the market for at-home urology tests')
+    await page.fill('[data-testid="composer-input"]', 'Run deep research on the market for at-home urology tests')
     await page.keyboard.press('Enter')
     await expect.poll(() => llm.requests.length).toBeGreaterThan(before)
     const sent = JSON.stringify(llm.requests[before].messages)
@@ -245,10 +239,7 @@ describe('plan, then execute', () => {
         : { content: 'answers did not arrive' },
       (req) => toolOut(req).includes('approved the plan') ? { content: 'Plan approved; here is the newsletter draft.' } : { content: 'plan was not approved' }
     )
-    // The modes live under the composer's Modes menu.
-    await page.click('[data-testid="modes-menu"]')
-    await page.click('[data-testid="plan-toggle"]')
-    await page.fill('[data-testid="composer-input"]', 'Write our monthly newsletter')
+    await page.fill('[data-testid="composer-input"]', 'Plan first before writing our monthly newsletter')
     await page.keyboard.press('Enter')
     // One card, two questions: pick an option, type the other answer.
     const card = page.locator('[data-testid="questions-card"]')
