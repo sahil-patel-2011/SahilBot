@@ -84,16 +84,37 @@ export function useFolderCounts(atts: Attachment[], update: (path: string, patch
   }, [pending])
 }
 
+/** Folders picked this session, newest first (main accepts only those: attach:useFolder). Not saved anywhere. */
+const recentFolders: string[] = []
+const remember = (path: string): void => {
+  const i = recentFolders.indexOf(path)
+  if (i >= 0) recentFolders.splice(i, 1)
+  recentFolders.unshift(path)
+  recentFolders.length = Math.min(recentFolders.length, 4)
+}
+
+/** The Folder chip's project choices (Home only, before the chat exists). */
+export interface FolderProjects {
+  list: Array<{ id: string; name: string; color: string; folder: string | null }>
+  /** The open project, if any. */
+  current: string | null
+  onPick: (id: string | null) => void
+  onNew: () => void
+}
+
 /**
- * The chat's working folder: relative paths, file tools and commands start there. A new chat (no thread
- * yet) keeps the choice as a draft and sends it with the first message.
+ * One "Folder" chip under the box: where this chat works. A plain folder (relative paths, file tools and
+ * commands start there; anywhere else asks first), a project (its folder, instructions and chats) on Home,
+ * or a folder picked earlier this session. A new chat (no thread yet) keeps the choice as a draft and sends
+ * it with the first message.
  */
-export function WorkFolderChip({ threadId, inherited, draft, onDraft }: {
+export function WorkFolderChip({ threadId, inherited, draft, onDraft, projects }: {
   threadId?: string
   /** The bot's or project's folder, used when the chat doesn't pick one. */
   inherited?: string | null
   draft: string | null
   onDraft: (path: string | null) => void
+  projects?: FolderProjects
 }) {
   const [wf, setWf] = useState<WorkingFolder | null>(null)
   useEffect(() => {
@@ -106,10 +127,18 @@ export function WorkFolderChip({ threadId, inherited, draft, onDraft }: {
   }, [threadId])
   const path = threadId ? wf?.path ?? null : draft ?? inherited ?? null
   const source = threadId ? wf?.source ?? null : draft ? 'chat' : inherited ? 'bot' : null
+  const project = projects?.current ? projects.list.find((x) => x.id === projects.current) : undefined
   const pick = async (): Promise<void> => {
     try {
-      if (threadId) { const r = await api.attach.pickFolder(threadId); if (r) setWf(r) }
-      else { const r = await api.attach.pick('folder'); const f = r.added.find((a) => a.kind === 'folder'); if (f) onDraft(f.path) }
+      if (threadId) { const r = await api.attach.pickFolder(threadId); if (r) { setWf(r); if (r.path) remember(r.path) } }
+      else { const r = await api.attach.pick('folder'); const f = r.added.find((a) => a.kind === 'folder'); if (f) { remember(f.path); onDraft(f.path) } }
+    } catch (e) { toast(clean(e), 'error') }
+  }
+  const useRecent = async (dir: string): Promise<void> => {
+    try {
+      if (threadId) setWf(await api.attach.useFolder(threadId, dir))
+      else onDraft(dir)
+      remember(dir)
     } catch (e) { toast(clean(e), 'error') }
   }
   const clear = async (): Promise<void> => {
@@ -118,18 +147,37 @@ export function WorkFolderChip({ threadId, inherited, draft, onDraft }: {
       else onDraft(null)
     } catch (e) { toast(clean(e), 'error') }
   }
+  const recents = recentFolders.filter((r) => r !== path).slice(0, 3)
+  const label = project && !draft ? project.name : path ? folderName(path) : 'Folder'
+  const whose = source === 'bot' ? ' (the bot\'s)' : source === 'project' ? ' (the project\'s)' : ''
   return (
     <Popover
-      label={<><I.Folder size={14} /><span className="wf-name">{path ? folderName(path) : 'Working folder'}</span></>}
-      className={`under-pick wf-pick${path ? ' on' : ''}`}
-      title={path ? `Working folder: ${path}${source === 'bot' ? ' (the bot\'s)' : source === 'project' ? ' (the project\'s)' : ''}. Relative paths and commands start here.` : 'Choose a working folder for this chat: file tools and commands start there'}
+      label={<><I.Folder size={14} /><span className="wf-name">{label}</span><I.Chevron size={12} className="wf-chev" /></>}
+      className={`under-pick wf-pick${path || project ? ' on' : ''}`}
+      title={project && !draft ? `Working in the project ${project.name}${path ? ` (${path})` : ''}` : path ? `Working folder: ${path}${whose}. Files and commands start here; anywhere else asks first.` : 'Choose where this chat works: a folder on your Mac or a project'}
       testId="working-folder">
       {(close) => (
         <div className="wf-menu">
-          <div className="menu-head">Working folder{source === 'bot' ? ' · the bot\'s' : source === 'project' ? ' · the project\'s' : ''}</div>
-          {path && <div className="wf-path" data-testid="working-folder-path">{path}</div>}
-          <button className="menu-item" onClick={() => { close(); void pick() }} data-testid="working-folder-pick"><I.Folder size={15} />{path ? 'Choose another folder…' : 'Choose a folder…'}<span className="sub">SahilBot reads, writes and runs commands there. Anywhere else asks first.</span></button>
-          {path && source === 'chat' && <button className="menu-item" onClick={() => { close(); void clear() }} data-testid="working-folder-clear"><I.Close size={15} />{inherited ? 'Use the bot\'s folder' : 'No working folder'}</button>}
+          <div className="menu-head">{project && !draft ? `Project · ${project.name}` : `Folder${source === 'bot' ? ' · the bot\'s' : source === 'project' ? ' · the project\'s' : ''}`}</div>
+          {path && <div className="wf-path" data-testid="working-folder-path">{path.replace(/^\/Users\/[^/]+/, '~')}</div>}
+          <button className="menu-item" onClick={() => { close(); void pick() }} data-testid="working-folder-pick"><I.Folder size={15} /><span className="wf-item-text">{path ? 'Work in another folder…' : 'Work in a folder…'}<span className="sub">SahilBot reads, writes and runs commands there. Anywhere else asks first.</span></span></button>
+          {recents.map((r) => (
+            <button key={r} className="menu-item" onClick={() => { close(); void useRecent(r) }} data-testid="working-folder-recent" title={r}><I.Clock size={15} /><span className="wf-item-text">{folderName(r)}<span className="sub">{r.replace(/^\/Users\/[^/]+/, '~')}</span></span></button>
+          ))}
+          {path && source === 'chat' && <button className="menu-item" onClick={() => { close(); void clear() }} data-testid="working-folder-clear"><I.Close size={15} />{inherited ? 'Use the bot\'s folder' : 'No folder'}</button>}
+          {projects && (
+            <>
+              <div className="menu-sep" />
+              <div className="menu-head">Use a project<span className="menu-head-sub">a folder with its own instructions and chats</span></div>
+              {projects.list.map((x) => (
+                <button key={x.id} className="menu-item" role="menuitemradio" aria-checked={x.id === projects.current} onClick={() => { close(); projects.onPick(x.id) }} data-testid="folder-project">
+                  <span className="check">{x.id === projects.current && <I.Check size={14} />}</span>{x.name}
+                </button>
+              ))}
+              {projects.current && <button className="menu-item" onClick={() => { close(); projects.onPick(null) }} data-testid="folder-no-project"><span className="check" />No project</button>}
+              <button className="menu-item" onClick={() => { close(); projects.onNew() }} data-testid="folder-new-project"><I.Plus size={15} />New project…</button>
+            </>
+          )}
         </div>
       )}
     </Popover>
@@ -149,7 +197,7 @@ export function BotFolderRow({ space, onChanged }: { space: { id: string; kind: 
   return (
     <div className="bd-row" data-testid="bot-folder-row">
       <span className="bd-row-text">Works in folder
-        <span className="bd-row-sub">{space.folder ? <span className="bot-folder-path" data-testid="bot-folder-path">{space.folder}</span> : 'Its chats read, write, search and run commands there. Anywhere else asks first.'}</span>
+        <span className="bd-row-sub">{space.folder ? <span className="bot-folder-path" data-testid="bot-folder-path">{space.folder}</span> : 'Its files and commands start there. Anywhere else asks first.'}</span>
       </span>
       <span style={{ display: 'flex', gap: 6 }}>
         <button className="bd-btn" disabled={busy} onClick={() => void run(() => api.attach.pickBotFolder(space.id))} data-testid="bot-folder-pick">{space.folder ? 'Change…' : 'Choose…'}</button>

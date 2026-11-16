@@ -1,12 +1,12 @@
 import type { BotAutonomySettings, PermissionMode, QueueQuestion, Settings, Space } from '@shared/types'
-import { hardStopText, isPermissionMode } from '../permissions'
+import { hardStopText } from '../permissions'
 
 // Always-on bots: their autonomy level, "Always ask for…" exceptions, question deadline and daily digest.
 // No Electron imports: the agent loop, main and tests all use these.
 
 export const BOT_AUTONOMY_DEFAULTS: BotAutonomySettings = { alwaysAsk: [], deadlineHours: 4, digest: { enabled: true, time: '18:00' } }
 /** The level a bot works at until the user picks one. Regular chats keep the app's default (Settings → defaultMode). */
-export const BOT_DEFAULT_LEVEL: PermissionMode = 'autonomous'
+export const BOT_DEFAULT_LEVEL: PermissionMode = 'auto'
 export const ALWAYS_ASK_LIMIT = 20
 /** Attended bot runs show the question card this long before it moves to the Needs-you queue and the bot carries on. */
 export const ATTENDED_GRACE_MS = 2 * 60_000
@@ -53,13 +53,13 @@ export function botAutonomyConfig(s: Pick<Settings, 'botAutonomy'> | null | unde
 }
 
 /**
- * The autonomy level a chat of this space starts in: the bot's own pick, else Autonomous for an always-on
- * bot, else the app default (Auto). Never Bypass.
+ * The permission level a chat of this space starts in: the bot's own pick, else Auto for an always-on bot,
+ * else the app default (Auto). Never Bypass; 'autonomous' (older settings) reads as Auto.
  */
 export function botLevel(s: Pick<Settings, 'botModes' | 'defaultMode'> | null | undefined, space: Pick<Space, 'id' | 'kind' | 'isMain'> | null | undefined): PermissionMode {
   const mine = space ? s?.botModes?.[space.id] : undefined
   const m = mine ?? (isAlwaysOnBot(space) ? BOT_DEFAULT_LEVEL : s?.defaultMode ?? 'auto')
-  return isPermissionMode(m) && m !== 'bypass' ? m : 'auto'
+  return m === 'ask' ? 'ask' : 'auto'
 }
 
 /** The recommended default for a question: its explicit default, an option marked "(recommended)", else the first option. */

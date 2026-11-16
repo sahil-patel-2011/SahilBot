@@ -63,6 +63,23 @@ export function summaryText(f: RunFacts, o: { autonomous: boolean; asked?: numbe
   return s
 }
 
+/**
+ * The status line under the last reply, in plain words: "Done · 3 actions · 1 file changed · <$0.01". Tokens go
+ * in the hover card (and Usage). `asked` (how many times it needed you) shows only when it did.
+ */
+export function statusLine(f: RunFacts, u: RunUsage | null, o: { asked?: number } = {}): string {
+  const parts = ['Done']
+  if (f.actions) parts.push(plural(f.actions, 'action'))
+  if (f.files) parts.push(`${plural(f.files, 'file')} changed`)
+  if (f.jobs) parts.push(`${plural(f.jobs, 'background job')} started`)
+  if (o.asked) parts.push(`asked you ${o.asked === 1 ? 'once' : `${o.asked} times`}`)
+  const paid = !!u && u.cloud && u.input + u.output > 0
+  // A plain chat reply (no actions) says nothing, unless it cost something.
+  if (!f.actions && !paid) return ''
+  if (u && u.input + u.output > 0) parts.push(u.cloud ? fmtUsd(u.usd) : 'free (local)')
+  return parts.length > 1 ? parts.join(' · ') : ''
+}
+
 export function usageText(u: RunUsage | null, detailed: boolean): string {
   if (!u || u.input + u.output === 0) return ''
   const total = `${fmtTokens(u.input + u.output)} tokens${detailed ? ` (${fmtTokens(u.input)} in / ${fmtTokens(u.output)} out)` : ''}`

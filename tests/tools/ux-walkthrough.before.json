@@ -1,0 +1,90 @@
+{
+  "recorded": "2026-11-16T11:49:06.598Z",
+  "tasks": {
+    "a": {
+      "clicks": 4,
+      "keys": 2,
+      "typed": 3,
+      "screens": [
+        "onboarding: name",
+        "onboarding: connect AI",
+        "onboarding: workspace",
+        "onboarding: import memory",
+        "home",
+        "chat"
+      ],
+      "ms": 421,
+      "ok": true
+    },
+    "b": {
+      "clicks": 2,
+      "keys": 1,
+      "typed": 3,
+      "screens": [
+        "home",
+        "new bot",
+        "bot chat"
+      ],
+      "ms": 1131,
+      "ok": true
+    },
+    "c": {
+      "clicks": 2,
+      "keys": 2,
+      "typed": 1,
+      "screens": [
+        "home",
+        "connect apps",
+        "home",
+        "chat"
+      ],
+      "ms": 1161,
+      "ok": true
+    },
+    "d": {
+      "clicks": 3,
+      "keys": 1,
+      "typed": 1,
+      "screens": [
+        "home",
+        "chat",
+        "file preview"
+      ],
+      "ms": 673,
+      "ok": true
+    },
+    "e": {
+      "clicks": 2,
+      "keys": 3,
+      "typed": 3,
+      "screens": [
+        "home",
+        "search",
+        "settings"
+      ],
+      "ms": 924,
+      "ok": true
+    },
+    "f": {
+      "clicks": 2,
+      "keys": 0,
+      "typed": 0,
+      "screens": [
+        "home",
+        "needs you"
+      ],
+      "ms": 106,
+      "ok": true
+    },
+    "g": {
+      "clicks": 2,
+      "keys": 0,
+      "typed": 0,
+      "screens": [
+        "home"
+      ],
+      "ms": 69,
+      "ok": true
+    }
+  }
+}

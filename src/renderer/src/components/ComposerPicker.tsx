@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { EffortChoice, ModelInfo, ModelList, PermissionMode } from '@shared/types'
 import * as I from '../icons'
-import { AUTO_ENTRIES, autoUnavailableReason, pickerModels, toDownload } from '@shared/model-picker'
+import { AUTO_ENTRIES, autoUnavailableReason, isAutoModel, pickerModels, toDownload } from '@shared/model-picker'
 import { THINKING_LABEL, pickerLabel, runnable, shortModelName, splitModels, thinkingLevels } from '../lib/picker'
 
 // The composer's one picker, under the box on the right: model, thinking and permissions in one button
@@ -18,12 +18,11 @@ const THINKING: Array<{ id: EffortChoice; sub: string }> = [
   { id: 'max', sub: 'Thinks as long as it needs. Slowest; most tokens' }
 ]
 
-/** Autonomy levels, least to most on its own. Bypass shows only when Settings → Advanced allows it. */
+/** Permission levels, least to most on its own. Bypass asks for a one-time confirmation the first time (App.tsx). */
 export const MODES: Array<{ id: PermissionMode; label: string; sub: string }> = [
-  { id: 'ask', label: 'Ask first', sub: 'Approve every action that changes something' },
-  { id: 'auto', label: 'Auto', sub: 'Routine steps run on their own. Asks before installing, sending, buying, posting or deleting' },
-  { id: 'autonomous', label: 'Autonomous', sub: 'Also runs builds, tests, installs from the project\'s lockfile, git and file changes in your folders. Still asks before deleting, sending, buying, or going outside your folders' },
-  { id: 'bypass', label: 'Bypass', sub: 'Everything runs except hard stops. Resets on restart.' }
+  { id: 'ask', label: 'Ask', sub: 'Asks before every action that changes something' },
+  { id: 'auto', label: 'Auto', sub: 'Recommended. Works on its own; asks before money, passwords, deleting your data, mass sends and public posts' },
+  { id: 'bypass', label: 'Bypass', sub: 'Runs everything without asking, except purchases, passwords and one-time codes. Resets on restart' }
 ]
 
 const TIER = ['Instant', 'Light', 'Standard', 'Heavy']
@@ -78,9 +77,10 @@ export function ComposerPicker(p: PickerProps) {
   const usable = pickerModels(list)
   const { top, more } = splitModels(usable)
   const current = usable.find((m) => m.id === p.model)
-  const modes = MODES.filter((m) => m.id !== 'bypass' || p.allowBypass || p.mode === 'bypass')
-  const mode = MODES.find((m) => m.id === p.mode) ?? MODES[1]
-  const hasThinking = !!(p.thinking && p.onThinking)
+  const modes = MODES
+  const mode = MODES.find((m) => m.id === (p.mode === 'autonomous' ? 'auto' : p.mode)) ?? MODES[1]
+  // Auto (any Auto variant) picks the model and the thinking together: no Thinking choice until a model is picked.
+  const hasThinking = !!(p.thinking && p.onThinking) && !p.autoBot && !isAutoModel(p.model)
   const levels = thinkingLevels(p.autoBot ? 'auto' : p.model)
   const thinkingShown = THINKING.filter((t) => levels.includes(t.id) || t.id === p.thinking)
   const label = pickerLabel({ model: p.model, models: usable, thinking: hasThinking ? p.thinking : undefined, mode: p.mode, autoBot: p.autoBot })
@@ -253,7 +253,7 @@ export function ComposerPicker(p: PickerProps) {
             <span className="cpick-text">{m.id === 'bypass' ? <span className="ui-text-danger">{m.label}</span> : m.label}<span className="sub">{m.sub}</span></span>
           </button>
         ))}
-        <div className="menu-foot">Passwords are never shared, and purchases always ask, at every level.</div>
+        <div className="menu-foot">Purchases, passwords and one-time codes always need you, at every level.</div>
       </>
     )
     if (sub === 'more') {
@@ -305,20 +305,18 @@ export function ComposerPicker(p: PickerProps) {
     return null
   }
 
-  const permIcon = p.mode === 'bypass' ? <span className="dot red" /> : p.mode === 'autonomous' ? <I.Play size={13} /> : <I.Shield size={14} />
+  const permIcon = p.mode === 'bypass' ? <span className="dot red" /> : <I.Shield size={14} />
   const thinkingValue = THINKING_LABEL[p.thinking ?? 'auto']
 
   return (
-    <div ref={wrap} className={`pick under-pick cpick${p.mode === 'bypass' ? ' bypass' : ''}${p.mode === 'autonomous' ? ' autonomous' : ''}${open ? ' is-open' : ''}`}>
+    <div ref={wrap} className={`pick under-pick cpick${p.mode === 'bypass' ? ' bypass' : ''}${open ? ' is-open' : ''}`}>
       <button ref={btn} className="cpick-btn" data-testid="model-picker" aria-haspopup="menu" aria-expanded={open}
-        title={`${label} · model, thinking and permissions for this chat`}
+        title={`${label} · model${hasThinking ? ', thinking' : ''} and permissions for this chat`}
         onClick={(e) => {
           if (open) { close(); return }
           pendingFocus.current = e.detail === 0 ? 'item' : 'menu'
           setOpen(true)
         }}>
-        {p.mode === 'bypass' && <span className="dot red" aria-label="Bypass is on" />}
-        {p.mode === 'autonomous' && <I.Play size={12} />}
         <span className="cpick-label">{label}</span>
         <I.Chevron size={13} className="cpick-btn-chev" aria-hidden />
       </button>
@@ -327,24 +325,18 @@ export function ComposerPicker(p: PickerProps) {
           <div ref={main} className="cpick-main" role="menu" aria-label="Model, thinking and permissions">
             {p.autoBot ? (
               <>
-                <div className="cpick-hint">Model and thinking: chosen automatically for each request</div>
+                <div className="cpick-hint">This bot picks its model and thinking for each request</div>
                 <button className="menu-item cpick-row" role="menuitem" disabled aria-disabled data-testid="model-auto-bot">
                   <span className="cpick-ico" aria-hidden><I.Cpu size={14} /></span>
                   <span className="cpick-text">Model</span><span className="cpick-val">Auto (bot)</span>
                 </button>
-                {hasThinking && (
-                  <button className="menu-item cpick-row" role="menuitem" disabled aria-disabled data-testid="thinking-picker">
-                    <span className="cpick-ico" aria-hidden><I.Sparkle size={14} /></span>
-                    <span className="cpick-text">Thinking</span><span className="cpick-val">Auto (bot)</span>
-                  </button>
-                )}
               </>
             ) : (
               <>
                 <button className={`menu-item cpick-row cpick-model${autoWhy ? ' unavailable' : ''}`} role="menuitemradio" aria-checked={p.model === 'auto'}
                   onMouseEnter={plainHover} onClick={(e) => pickModel('auto', e.detail === 0)} data-testid="model-option" data-auto="auto">
                   {check(p.model === 'auto')}
-                  <span className="cpick-text">Auto <span className="cpick-rec">(recommended)</span><span className="sub">{autoWhy ?? 'The right model for each message, local or cloud'}</span></span>
+                  <span className="cpick-text">Auto <span className="cpick-rec">(recommended)</span><span className="sub">{autoWhy ?? 'Picks the model and how hard to think, for each message'}</span></span>
                   {autoWhy && <span className="mm-badge" data-testid="auto-unavailable">Unavailable</span>}
                 </button>
                 {list && !list.ok && (
@@ -377,7 +369,7 @@ export function ComposerPicker(p: PickerProps) {
             {subRow('perm', {
               testId: 'mode-picker', icon: permIcon, label: 'Permissions',
               value: <span className={p.mode === 'bypass' ? 'ui-text-danger' : undefined}>{mode.label}</span>,
-              title: 'Autonomy: how much SahilBot does without asking'
+              title: 'Permissions: how much SahilBot does without asking'
             })}
           </div>
           {sub && (

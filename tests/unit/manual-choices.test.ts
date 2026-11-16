@@ -13,7 +13,7 @@ import { escalateEffort, supportedEffort } from '../../src/main/llm/auto-effort'
 import { chosenWindow, providerMaxPrompt } from '../../src/main/llm/context-window'
 import { classifyTask } from '../../src/main/llm/task-classifier'
 import { classifyTask as classifyKind } from '../../src/main/agent/intent'
-import { fallbackNotice, mayEscalateEffort, mayReplaceForInvalidCalls, unavailableReason } from '../../src/main/agent/choices'
+import { effortFor, fallbackNotice, mayEscalateEffort, mayReplaceForInvalidCalls, requestedEffort, unavailableReason } from '../../src/main/agent/choices'
 import { fastTierFor } from '../../src/main/llm/fast-mode'
 import { modelHealth } from '../../src/main/llm/model-health'
 import { modeFlags } from '../../src/renderer/src/lib/swarm-view'
@@ -187,6 +187,28 @@ describe('effort', () => {
     llm.script.push({ content: 'c', delay: 0 })
     await h.run(h.thread('model-a', h.bot.id), 'Refactor the whole codebase, end to end')
     expect(['high', 'xhigh', 'max']).toContain(h.steps.at(-1)?.effort)
+  })
+
+  test('a chat on Auto never sends a manual thinking level: a stale one on the chat or the app is ignored', async () => {
+    const h = harness([model('model-a', 2)], { settings: { thinking: 'max', defaultModel: 'auto' } })
+    // The chat's own Auto with a stored Max (an older chat, or a level left from a model it went back from).
+    const t = h.thread('auto')
+    h.db.updateThread(t.id, { effort: 'max' })
+    llm.script.push({ content: 'hey!', delay: 0 })
+    await h.run(t, 'hi')
+    expect(h.steps.at(-1)?.effort).toBe('low')
+    // No model on the chat and the app on Auto: the app's Max doesn't apply either.
+    const u = h.thread(null as never)
+    h.db.updateThread(u.id, { effort: 'max' })
+    llm.script.push({ content: 'hey again', delay: 0 })
+    await h.run(u, 'hi')
+    expect(h.steps.at(-1)?.effort).toBe('low')
+    expect(requestedEffort({ thread: { model: 'auto', effort: 'max' }, space: null, settings: { defaultModel: 'claude-opus-5-5', thinking: 'max' } })).toBe('auto')
+    expect(requestedEffort({ thread: { model: 'auto:cloud', effort: 'high' }, space: null, settings: { defaultModel: 'auto', thinking: 'high' } })).toBe('auto')
+    expect(requestedEffort({ thread: { model: null, effort: 'high' }, space: null, settings: { defaultModel: 'auto', thinking: 'high' } })).toBe('auto')
+    expect(requestedEffort({ thread: { model: 'claude-opus-5-5', effort: 'high' }, space: null, settings: { defaultModel: 'auto', thinking: 'low' } })).toBe('high')
+    expect(effortFor('auto', 'high')).toBeNull()
+    expect(effortFor('claude-opus-5-5', 'high')).toBe('high')
   })
 
   test('Auto follows the request, and rises once (with a note) when the run keeps failing', async () => {

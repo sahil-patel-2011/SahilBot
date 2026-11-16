@@ -94,7 +94,8 @@ import { cadDesignTool } from './cad/design-tool'
 import { Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { requestedModel } from './agent/choices'
-import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort } from './spaces'
+import { isAutoModel } from '@shared/model-picker'
+import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels } from './spaces'
 import { ATTENDED_GRACE_MS, Learner, QuestionQueue, QuestionStore, createQuestionHost, notifyDevices as notifyQuestionDevices, toNeedsYou } from './agent/questions'
 import { DigestRunner } from './goals/digest'
 import { BrowserManager } from './browser/manager'
@@ -974,7 +975,11 @@ app.whenReady().then(() => {
   handle('onshape:test', () => testOnshapeKeys({ keys: onshapeKeys, testOrigin: onshapeTestOrigin }))
 
   handle('models:test', async (baseUrl: string, apiKey?: string) => {
-    const r = await providerModels('custom', 'Test', baseUrl, apiKey || settings.keyFor(baseUrl), settings.get().contextWindow || 32768)
+    // FOREMAN_ANTHROPIC_URL: a local stand-in for Anthropic's API in hidden test runs (like FOREMAN_OPENAI_URL),
+    // so first-run's "Connect Claude" check never reaches the real API.
+    const alt = process.env.FOREMAN_ANTHROPIC_URL
+    const url = alt && /(^|\.)anthropic\.com$/.test((() => { try { return new URL(baseUrl).hostname } catch { return '' } })()) ? alt : baseUrl
+    const r = await providerModels('custom', 'Test', url, apiKey || settings.keyFor(baseUrl), settings.get().contextWindow || 32768)
     return r.ok ? { ok: true, count: r.models.length } : { ok: false, count: 0, error: r.error }
   })
 
@@ -1044,7 +1049,7 @@ app.whenReady().then(() => {
       attachments.allow(input.folder)
     }
     const space = db.createSpace(name, input.color ?? pick(SPACE_COLORS.slice(2)), { kind, shape: input.shape ?? pick(SHAPES), members: input.members ?? [], folder: input.folder })
-    // A new bot works at Autonomous (its Bot details level); groups and projects keep the app default.
+    // A new bot works at its Bot details level (Auto unless the user picked Ask); groups and projects keep the app default.
     const thread = db.createThread(space.id, kind === 'bot' ? botLevel(settings.get(), space) : 'auto', null)
     db.updateThread(thread.id, { title: name })
     if (kind === 'bot' && input.intro !== false) {
@@ -1088,14 +1093,22 @@ app.whenReady().then(() => {
   handle('threads:create', (spaceId: string) => {
     const s = settings.get()
     const space = db.getSpace(spaceId)
-    // An always-on bot without its own pick works at Autonomous; everything else keeps the app default.
+    // An always-on bot without its own pick works at Auto; everything else keeps the app default.
     const m = space && isAlwaysOnBot(space) ? botLevel(s, space) : s.botModes?.[spaceId] ?? s.defaultMode
     return db.createThread(spaceId, isPermissionMode(m) && m !== 'bypass' ? m : 'auto', null)
   })
   handle('threads:update', (id: string, patch: Parameters<Db['updateThread']>[1]) => {
-    // Bypass only when Settings offers it (advanced.allowBypass); a chat already in Bypass may stay there.
+    // Bypass only once the user confirmed it (the one-time dialog saves advanced.allowBypass); a chat already in Bypass may stay there.
     if (patch && 'permissionMode' in patch && !modeChangeAllowed(patch.permissionMode, { allowBypass: settings.get().advanced.allowBypass, current: db.getThread(id)?.permissionMode })) {
-      throw new Error(patch.permissionMode === 'bypass' ? 'Bypass is turned off in Settings → Advanced.' : `Unknown autonomy level "${String(patch.permissionMode)}".`)
+      throw new Error(patch.permissionMode === 'bypass' ? 'Turn on Bypass from the Permissions menu first (it asks you to confirm once).' : `Unknown permission level "${String(patch.permissionMode)}".`)
+    }
+    // 'autonomous' is the old name of Auto.
+    if (patch?.permissionMode === 'autonomous') patch = { ...patch, permissionMode: 'auto' }
+    // Auto picks the model and the thinking together: going back to Auto drops a thinking level, and a level
+    // can't be set while the chat is on Auto.
+    if (patch && ('model' in patch || 'effort' in patch)) {
+      const model = 'model' in patch ? patch.model : db.getThread(id)?.model
+      if (isAutoModel(model)) patch = { ...patch, effort: null }
     }
     // A local model picked for this chat: load it while the user types.
     if (patch.model && warmupAllowed()) warmup.soon(patch.model)
@@ -1197,6 +1210,13 @@ app.whenReady().then(() => {
     if (!f) return null
     attachments.accept([f.path])
     return setWorkingFolder(String(threadId), f.path)
+  })
+  // A folder the user picked earlier this session (and only such a folder): the Folder chip's recent list.
+  handle('attach:useFolder', (threadId: string, path: string) => {
+    if (!db.getThread(String(threadId ?? ''))) throw new Error('That chat is gone.')
+    const ok = attachments.accept([String(path ?? '')])
+    if (!ok.length) throw new Error('Choose that folder again with "Work in a folder…".')
+    return setWorkingFolder(String(threadId), ok[0])
   })
   handle('attach:clearFolder', (threadId: string) => { if (!db.getThread(String(threadId ?? ''))) throw new Error('That chat is gone.'); return setWorkingFolder(String(threadId), null) })
   // A bot's "Works in folder": its chats work there unless a chat picks its own.
@@ -1590,8 +1610,9 @@ app.whenReady().then(() => {
   handle('goals:runNow', (id: string) => goals.runNow(String(id)))
 
   // ---------------------------------------------------------------- always-on bots: Needs you, autonomy levels, digest
-  // Bots' own chats still at the old default (Auto) move to Autonomous once; levels the user picked stay.
   try { migrateBotAutonomy(db, settings.get()) } catch (e) { console.error('[autonomy]', (e as Error).message) }
+  // Three permission levels (Ask / Auto / Bypass): 'autonomous' becomes Auto, and Auto chats lose a stale thinking level, once.
+  try { migratePermissionLevels(db, settings.get(), (p) => settings.set(p)) } catch (e) { console.error('[levels]', (e as Error).message) }
   // Bots choose their own model and thinking (Auto for every request): stored overrides are cleared once.
   try { migrateBotModelEffort(db) } catch (e) { console.error('[bot-auto]', (e as Error).message) }
   // Each bot's Swarm setting became its Max setting (Off / Auto / Always, Max helpers).
@@ -1632,8 +1653,10 @@ app.whenReady().then(() => {
   })
   handle('needsYou:reviewed', (id: string) => questions.reviewed(String(id)))
   // Bot details → Autonomy: saved for the bot's new chats, and applied to its own conversations now.
-  handle('botAutonomy:setLevel', (spaceId: string, level: PermissionMode) => {
-    if (level !== 'ask' && level !== 'auto' && level !== 'autonomous') throw new Error(`Unknown autonomy level "${String(level)}".`)
+  handle('botAutonomy:setLevel', (spaceId: string, picked: PermissionMode) => {
+    // A bot's own level is Ask or Auto ('autonomous' is Auto's old name); Bypass is per chat only.
+    const level: PermissionMode | null = picked === 'autonomous' ? 'auto' : picked === 'ask' || picked === 'auto' ? picked : null
+    if (!level) throw new Error(`Unknown permission level "${String(picked)}".`)
     const space = db.getSpace(spaceId)
     if (!space) throw new Error('That bot no longer exists.')
     settings.set({ botModes: { ...(settings.get().botModes ?? {}), [spaceId]: level } })

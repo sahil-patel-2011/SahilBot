@@ -1,23 +1,36 @@
 import type { PermissionMode, ToolEffect } from '@shared/types'
 import type { Decision, PermissionInput } from './types'
 
-const STRICTNESS: Record<PermissionMode, number> = { ask: 3, auto: 2, autonomous: 1, bypass: 0 }
+// Three levels: Ask (every change asks), Auto (the default: routine work runs, hard stops and steered
+// outside actions ask) and Bypass (everything runs, except purchases, saved logins and one-time codes).
+// 'autonomous' is the old name of what Auto does now: still read (older chats, settings, handoffs), and
+// treated exactly as Auto everywhere (normalizeMode); migratePermissionLevels (spaces.ts) rewrites stored values once.
+const STRICTNESS: Record<PermissionMode, number> = { ask: 3, auto: 2, autonomous: 2, bypass: 0 }
 
-/** Every autonomy level, strictest first. */
-export const PERMISSION_MODES: PermissionMode[] = ['ask', 'auto', 'autonomous', 'bypass']
+/** The levels the user can pick, strictest first. */
+export const PERMISSION_MODES: PermissionMode[] = ['ask', 'auto', 'bypass']
 export const isPermissionMode = (m: unknown): m is PermissionMode => typeof m === 'string' && m in STRICTNESS
+/** The level a stored mode means today: 'autonomous' (older chats and settings) is Auto. */
+export const normalizeMode = (m: PermissionMode): Exclude<PermissionMode, 'autonomous'> => (m === 'autonomous' ? 'auto' : m)
 
 /**
  * Tools that only write inside the workspace and attached folders, and keep a backup when they overwrite
- * something (files.ts backup()). Autonomous runs their overwrites; deleting still asks (a hard stop).
+ * something (files.ts backup()). Auto runs their overwrites; deleting still asks (a hard stop).
  */
 export const BACKED_UP_OVERWRITES = new Set(['file_write', 'file_manage', 'create_document'])
 
-/** The stricter of two permission modes (ask > auto > autonomous > bypass). A missing one doesn't loosen anything. */
+/** The stricter of two permission modes (ask > auto > bypass). A missing one doesn't loosen anything. */
 export function stricterMode(a: PermissionMode, b?: PermissionMode | null): PermissionMode {
-  if (!b || !(b in STRICTNESS)) return a
-  return STRICTNESS[b] > STRICTNESS[a] ? b : a
+  if (!b || !(b in STRICTNESS)) return normalizeMode(a)
+  return STRICTNESS[b] > STRICTNESS[a] ? normalizeMode(b) : normalizeMode(a)
 }
+
+/**
+ * A hard stop about typing a saved credential (a login, an ID number, a password field). Like purchases and
+ * one-time codes, it asks even in Bypass with hard stops switched off: credentials always need the user.
+ */
+export const isCredentialStop = (s: string | null | undefined): boolean =>
+  typeof s === 'string' && /\b(saved login|saved ID|password field|secret scan flagged)\b/i.test(s)
 
 /**
  * The single place that decides whether a tool call runs, asks, or is refused.
@@ -39,36 +52,38 @@ export function decide(p: PermissionInput): Decision {
   if (p.effect === 'read' && p.hardStop) return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}` }
 
   // A read that opens an address steered by fetched content can leak data in the URL itself.
-  if (p.effect === 'read') return p.tainted && p.mode !== 'bypass' ? { verdict: 'ask', reason: 'Opens an address taken from a web page or email' } : { verdict: 'allow' }
+  if (p.effect === 'read') return p.tainted && normalizeMode(p.mode) !== 'bypass' ? { verdict: 'ask', reason: 'Opens an address taken from a web page or email' } : { verdict: 'allow' }
 
-  if (p.hardStop && (p.mode !== 'bypass' || p.hardStopsEnabled)) {
+  const mode = normalizeMode(p.mode)
+  // Hard stops ask at every level. Bypass skips them only when Settings says so, and never for credentials.
+  if (p.hardStop && (mode !== 'bypass' || p.hardStopsEnabled || isCredentialStop(p.hardStop))) {
     return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}` }
   }
 
-  // Nobody is there to watch an unattended run (routines, wake-ups): Autonomous works like Auto there. An
-  // always-on bot keeps Autonomous (its hard stops, taint and the purchase / code gates still apply).
-  const mode: PermissionMode = p.unattended && p.mode === 'autonomous' && !p.alwaysOn ? 'auto' : p.mode
   // Taint is checked before the local-write shortcut: a terminal command steered by fetched content asks
   // whatever it does (checkTaint flags run_command at every effect; other tools' local writes never are).
-  if (p.tainted && (mode === 'auto' || mode === 'autonomous')) return { verdict: 'ask', reason: 'Uses details taken from a web page or email' }
+  if (p.tainted && mode === 'auto') return { verdict: 'ask', reason: 'Uses details taken from a web page or email' }
   switch (mode) {
     case 'bypass':
       return { verdict: 'allow' }
-    case 'autonomous':
-      // Auto, plus: project commands (installs from the lockfile, git fetch/pull) and overwrites inside
-      // your folders that keep a backup. Taint, hard stops (deleting, sending, buying, credentials,
-      // security, history rewrites) and every other consequential outside action still ask.
+    case 'auto':
+      // Nobody is there to watch an unattended run (a routine, a wake-up) outside an always-on bot: only local
+      // changes and routine outside steps run; project commands, overwrites and other outside actions wait.
+      if (p.unattended && !p.alwaysOn) {
+        if (p.effect === 'write_local') return { verdict: 'allow' }
+        if (p.effect === 'write_external' && p.consequential === false) return { verdict: 'allow' }
+        if (p.alwaysAllowed && p.effect === 'write_external') return { verdict: 'allow' }
+        return { verdict: 'ask', reason: p.effect === 'destructive' ? 'Destructive action' : 'Acts outside this Mac' }
+      }
+      // Local changes, routine outside steps (sign in, next page, search, save draft), project commands
+      // (installs from the lockfile, git fetch/pull) and overwrites inside your folders that keep a backup.
+      // Taint, hard stops (deleting, sending, buying, credentials, security, history rewrites) and every
+      // other consequential outside action still ask.
       if (p.effect === 'write_local') return { verdict: 'allow' }
       if (p.effect === 'write_external' && (p.consequential === false || p.consequential === 'project')) return { verdict: 'allow' }
       if (p.alwaysAllowed && p.effect === 'write_external') return { verdict: 'allow' }
       if (p.effect === 'destructive' && BACKED_UP_OVERWRITES.has(p.tool)) return { verdict: 'allow' }
-      return { verdict: 'ask', reason: p.effect === 'destructive' ? 'Deletes or replaces something' : 'Acts outside this Mac (Autonomous still asks for this)' }
-    case 'auto':
-      if (p.effect === 'write_local') return { verdict: 'allow' }
-      // Routine outside actions (sign in, next page, search, save draft) don't interrupt the user.
-      if (p.effect === 'write_external' && p.consequential === false) return { verdict: 'allow' }
-      if (p.alwaysAllowed && p.effect === 'write_external') return { verdict: 'allow' }
-      return { verdict: 'ask', reason: p.effect === 'destructive' ? 'Destructive action' : 'Acts outside this Mac' }
+      return { verdict: 'ask', reason: p.effect === 'destructive' ? 'Deletes or replaces something' : 'Acts outside this Mac' }
     case 'ask':
     default:
       if (p.alwaysAllowed && !p.tainted && p.effect !== 'destructive') return { verdict: 'allow' }
@@ -493,7 +508,7 @@ export function recipientCount(args: unknown): number {
 }
 
 /**
- * A hard stop for an always-on bot: an action that always asks the user, even in Autonomous, with an
+ * A hard stop for an always-on bot: an action that always asks the user, even in Auto, with an
  * Allow rule or "Always allow", and that a question's deadline never decides on its own. Money moves and
  * purchases, credentials and one-time codes, deleting the user's data, mass sends, public posting, and
  * whatever the user listed under "Always ask for…" for this bot. Reads are never stopped here (decide()

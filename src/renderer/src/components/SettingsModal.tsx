@@ -7,7 +7,7 @@ import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { Toggle } from './Toggle'
 import { ModelContextSelect } from './ModelContextSelect'
-import { recommendedRows } from '@shared/model-picker'
+import { isAutoModel, recommendedRows } from '@shared/model-picker'
 import { MemoryPage } from './MemoryManager'
 import { SecretVaultSettings } from './VaultSettings'
 import { KnowledgeSettings } from './KnowledgeSettings'
@@ -22,7 +22,7 @@ import { ActivitySettings } from './ActivitySettings'
 import { AlwaysOnServerPage, ServerPage } from './ServerSettings'
 import { ClampText, Disclosure, InfoTip, Segmented, SetTabs as Tabs } from './ui'
 import { addRule, loadRules, removeRule, RULE_LIMIT, RULE_MAX_CHARS } from '../lib/approvalRules'
-import { LEGACY_PAGES, PAGE_TITLES, searchSettings, type SettingEntry, type SettingsPage } from '../lib/settings-index'
+import { LEGACY_PAGES, PAGE_TITLES, SETTINGS_INDEX, searchSettings, type SettingEntry, type SettingsPage } from '../lib/settings-index'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
 
@@ -159,11 +159,13 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   onRefreshModels: () => void
   initialPage?: string
 }) {
-  const start = resolvePage(initialPage)
+  // "#anchor" (the ⌘K search): open the setting's own page and tab, scrolled to it.
+  const anchored = initialPage?.startsWith('#') ? SETTINGS_INDEX.find((e) => e.anchor === initialPage.slice(1)) : undefined
+  const start = anchored ? { page: anchored.page, tab: anchored.tab } : resolvePage(initialPage)
   const [page, setPage] = useState<Page>(start.page)
   const [tabs, setTabs] = useState<Partial<Record<Page, string>>>(start.tab ? { [start.page]: start.tab } : {})
   const [find, setFind] = useState('')
-  const [jump, setJump] = useState<string | null>(null)
+  const [jump, setJump] = useState<string | null>(anchored?.anchor ?? null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const pages = PAGES.filter((x) => !isServerRuntime || x.id !== 'voice')
   const results = useMemo(() => searchSettings(find, { server: isServerRuntime }), [find])
@@ -401,18 +403,19 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
       <Disclosure title="Advanced" sub="Defaults, routing, fast mode, model list, servers and tool keys" testId="models-advanced">
         <Section title="Defaults">
           <Row id="default-model" title="Model for new chats" info="Auto picks a fast model for quick chats and a stronger one for real tasks. Each chat can pick its own.">
-            <select className="set-select" value={s.defaultModel} onChange={(e) => void patch({ defaultModel: e.target.value })} data-testid="default-model" aria-label="Model for new chats">
+            <select className="set-select" value={s.defaultModel} onChange={(e) => void patch({ defaultModel: e.target.value, ...(isAutoModel(e.target.value) ? { thinking: 'auto' as const } : {}) })} data-testid="default-model" aria-label="Model for new chats">
               <option value="auto">Auto (recommended)</option>
               {localIsOn(s) && <option value="auto:local">Auto (local only)</option>}
               <option value="auto:cloud">Auto (cloud only)</option>
               {usable.map((m) => <option key={m.id} value={m.id}>{modelName(m)}</option>)}
             </select>
           </Row>
-          <Row id="thinking" title="Thinking for new chats" info="Auto leans high for real tasks and low for quick chats. Chats and bots can choose their own.">
+          {/* Auto picks the model and the thinking together: a thinking level only means something for a picked model. */}
+          {!isAutoModel(s.defaultModel) && <Row id="thinking" title="Thinking for new chats" info="For the model picked above. Auto leans high for real tasks and low for quick chats. Chats can choose their own.">
             <select className="set-select" value={s.thinking} onChange={(e) => void patch({ thinking: e.target.value as Settings['thinking'] })} data-testid="default-thinking" aria-label="Thinking for new chats">
               <option value="auto">Auto (recommended)</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra</option><option value="max">Max</option>
             </select>
-          </Row>
+          </Row>}
           <Row id="background-model" title="Model for background jobs" sub="Chat titles and other tiny jobs.">
             <select className="set-select" value={s.taskModels.background} aria-label="Model for background jobs" onChange={(e) => void patch({ taskModels: { ...s.taskModels, background: e.target.value } })}>
               <option value="">Smallest local model</option>
@@ -929,9 +932,9 @@ function ApprovalsTab({ s, patch }: P) {
   return (
     <>
       <Section>
-        <Row id="autonomy" title="Autonomy for new chats" info="Ask first: approve every change. Auto: routine steps run; installing, sending, buying, posting and deleting ask. Autonomous: also builds, tests, git and file changes in your folders; deleting, sending, buying and credentials still ask. Each bot can set its own.">
-          <Segmented value={s.defaultMode ?? 'auto'} label="Autonomy for new chats" testIdPrefix="autonomy" onChange={(v) => void patch({ defaultMode: v as Settings['defaultMode'] })}
-            options={[{ id: 'ask', label: 'Ask first' }, { id: 'auto', label: 'Auto' }, { id: 'autonomous', label: 'Autonomous' }]} />
+        <Row id="autonomy" title="Permissions for new chats" info="Ask: approve every change. Auto (recommended): SahilBot works on its own and asks before money, passwords, deleting your data, sending to many people, public posts, and anything a web page or email tried to steer. Bypass is picked per chat, in the chat's Permissions menu. Each bot can set its own.">
+          <Segmented value={s.defaultMode === 'ask' ? 'ask' : 'auto'} label="Permissions for new chats" testIdPrefix="autonomy" onChange={(v) => void patch({ defaultMode: v as Settings['defaultMode'] })}
+            options={[{ id: 'ask', label: 'Ask' }, { id: 'auto', label: 'Auto' }]} />
         </Row>
       </Section>
       <Section title="Approval rules" sub="Decide ahead of time what SahilBot may do on its own and what always needs your OK.">
@@ -955,16 +958,16 @@ function ApprovalsTab({ s, patch }: P) {
       </Section>
       {rules === null ? <div className="hint">Loading…</div> : (
         <>
-          {group('ask', 'Ask first', 'Even in Auto mode.')}
+          {group('ask', 'Ask first', 'Even in Auto.')}
           {group('allow', 'Allow automatically', 'Deleting, payments and sign-in changes still ask.')}
         </>
       )}
       <Disclosure title="Advanced" sub="Bypass and hard stops" testId="approvals-advanced">
         <Section>
-          <Row id="bypass" title="Offer Bypass in the autonomy picker" info="Bypass runs everything without asking except hard stops. It resets to Auto when SahilBot restarts. Only for work you watch.">
-            <Toggle on={!!s.advanced.allowBypass} onChange={(v) => void patch({ advanced: { ...s.advanced, allowBypass: v } })} label="Offer Bypass" testId="allow-bypass" />
+          <Row id="bypass" title="Bypass confirmed" info="Bypass runs everything without asking, except purchases, passwords and one-time codes, which always need you. Pick it in a chat's Permissions menu; the first time, SahilBot asks you to confirm. It resets to Auto when SahilBot restarts. Turn this off to be asked again.">
+            <Toggle on={!!s.advanced.allowBypass} onChange={(v) => void patch({ advanced: { ...s.advanced, allowBypass: v } })} label="Bypass confirmed" testId="allow-bypass" />
           </Row>
-          <Row title="Hard stops in Bypass" sub="Always ask before payments, credentials, security settings and permanent deletes.">
+          <Row title="Hard stops in Bypass" sub="Also ask before security settings, permanent deletes, mass sends and public posts in Bypass. Purchases, passwords and one-time codes always ask.">
             <Toggle on={s.advanced.hardStopsEnabled} onChange={(v) => void patch({ advanced: { ...s.advanced, hardStopsEnabled: v } })} label="Hard stops" />
           </Row>
         </Section>

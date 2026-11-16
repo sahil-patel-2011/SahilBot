@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { decide, isPurchaseStop, PURCHASE_STOP, stricterMode } from '../../src/main/agent/permissions'
+import { decide, isCredentialStop, isPurchaseStop, normalizeMode, PERMISSION_MODES, PURCHASE_STOP, stricterMode } from '../../src/main/agent/permissions'
 import { decideWithRule } from '../../src/main/agent/loop'
 import { isProjectCommand, outsidePaths, shellTool } from '../../src/main/agent/tools/shell'
 import type { PermissionInput } from '../../src/main/agent/types'
@@ -20,9 +20,9 @@ describe('autonomy levels: decide()', () => {
     ['a read', { effect: 'read' }, { ask: 'allow', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
     ['a workspace write / build / test', { effect: 'write_local' }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
     ['a routine outside step (search, next page)', { effect: 'write_external', consequential: false }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
-    ['a project command (npm ci, git pull)', { effect: 'write_external', tool: 'run_command', consequential: 'project' }, { ask: 'ask', auto: 'ask', autonomous: 'allow', bypass: 'allow' }],
+    ['a project command (npm ci, git pull)', { effect: 'write_external', tool: 'run_command', consequential: 'project' }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
     ['a consequential outside action (send, push, post)', { effect: 'write_external', consequential: true }, { ask: 'ask', auto: 'ask', autonomous: 'ask', bypass: 'allow' }],
-    ['overwriting a file in your folders (backup kept)', { effect: 'destructive', tool: 'file_write' }, { ask: 'ask', auto: 'ask', autonomous: 'allow', bypass: 'allow' }],
+    ['overwriting a file in your folders (backup kept)', { effect: 'destructive', tool: 'file_write' }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
     ['a destructive call of another tool (connector delete)', { effect: 'destructive', tool: 'notion__delete_page' }, { ask: 'ask', auto: 'ask', autonomous: 'ask', bypass: 'allow' }]
   ]
   for (const [what, p, want] of table) {
@@ -58,17 +58,42 @@ describe('autonomy levels: decide()', () => {
     expect(decideWithRule({ ...base, effect: 'write_local' }, 'ask').verdict).toBe('ask')
     expect(decideWithRule({ ...base, effect: 'write_external', consequential: 'project' }, 'ask').verdict).toBe('ask')
   })
-  test('unattended runs keep the stricter behavior: Autonomous works like Auto there', () => {
+  test('unattended runs (no always-on bot) stay cautious in Auto: only local changes and routine steps run', () => {
     expect(v({ mode: 'autonomous', unattended: true, effect: 'write_external', consequential: 'project' })).toBe('ask')
     expect(v({ mode: 'autonomous', unattended: true, effect: 'destructive', tool: 'file_write' })).toBe('ask')
     expect(v({ mode: 'autonomous', unattended: true, effect: 'write_local' })).toBe('allow')
   })
-  test('the stricter of two levels', () => {
+  test('the stricter of two levels ("autonomous" is Auto\'s old name)', () => {
     expect(stricterMode('autonomous', 'auto')).toBe('auto')
     expect(stricterMode('auto', 'autonomous')).toBe('auto')
-    expect(stricterMode('bypass', 'autonomous')).toBe('autonomous')
+    expect(stricterMode('bypass', 'autonomous')).toBe('auto')
     expect(stricterMode('autonomous', 'ask')).toBe('ask')
-    expect(stricterMode('autonomous', null)).toBe('autonomous')
+    expect(stricterMode('autonomous', null)).toBe('auto')
+    expect(stricterMode('bypass', 'ask')).toBe('ask')
+  })
+  test('Auto is the old Autonomous: the same verdict for every call', () => {
+    for (const effect of ['read', 'write_local', 'write_external', 'destructive'] as ToolEffect[]) {
+      for (const consequential of [true, false, 'project'] as const) {
+        for (const extra of [{}, { tainted: true }, { hardStop: 'sends a message to Mom' }, { unattended: true }, { unattended: true, alwaysOn: true }, { alwaysAllowed: true }]) {
+          const p = { effect, consequential, tool: 'file_write', ...extra }
+          expect(v({ ...p, mode: 'auto' })).toBe(v({ ...p, mode: 'autonomous' }))
+        }
+      }
+    }
+    expect(normalizeMode('autonomous')).toBe('auto')
+    expect(normalizeMode('bypass')).toBe('bypass')
+    expect(PERMISSION_MODES).toEqual(['ask', 'auto', 'bypass'])
+  })
+  test('Bypass never skips saved logins, password fields, purchases or one-time codes, even with hard stops off', () => {
+    for (const stop of ['typing the saved login "Bank" (password) into bank.com', 'typing the saved ID "Passport" (document number) into gov.example', 'typing into a password field']) {
+      expect(isCredentialStop(stop)).toBe(true)
+      expect(v({ mode: 'bypass', effect: 'write_external', hardStop: stop, hardStopsEnabled: false })).toBe('ask')
+    }
+    // Other hard stops are the user's call in Bypass (Settings: hard stops in Bypass).
+    expect(v({ mode: 'bypass', effect: 'destructive', tool: 'file_manage', hardStop: 'deleting notes.txt', hardStopsEnabled: false })).toBe('allow')
+    expect(v({ mode: 'bypass', effect: 'destructive', tool: 'file_manage', hardStop: 'deleting notes.txt', hardStopsEnabled: true })).toBe('ask')
+    // The purchase and one-time-code cards are the browser's own, at every level.
+    expect(decide({ ...base, mode: 'bypass', effect: 'write_external', hardStop: `${PURCHASE_STOP}Place order on shop.com`, hardStopsEnabled: false }).reason).toContain(PURCHASE_STOP)
   })
   test('every level x effect gives a verdict', () => {
     for (const mode of LEVELS) for (const effect of ['read', 'write_local', 'write_external', 'destructive'] as ToolEffect[]) expect(['allow', 'ask', 'deny']).toContain(v({ mode, effect }))
@@ -146,12 +171,13 @@ describe('commands that write outside your folders ask', () => {
 })
 
 describe('default autonomy settings', () => {
-  test('a new chat may start in Ask first, Auto or Autonomous, never Bypass', () => {
-    expect(cleanLevel('autonomous')).toBe('autonomous')
+  test('a new chat may start in Ask or Auto, never Bypass; a saved "autonomous" reads as Auto', () => {
+    expect(cleanLevel('autonomous')).toBe('auto')
     expect(cleanLevel('ask')).toBe('ask')
+    expect(cleanLevel('auto')).toBe('auto')
     expect(cleanLevel('bypass')).toBeUndefined()
     expect(cleanLevel('nope')).toBeUndefined()
-    expect(cleanBotModes({ a: 'autonomous', b: 'bypass', c: 'auto', d: 3 })).toEqual({ a: 'autonomous', c: 'auto' })
+    expect(cleanBotModes({ a: 'autonomous', b: 'bypass', c: 'auto', d: 3, e: 'ask' })).toEqual({ a: 'auto', c: 'auto', e: 'ask' })
     expect(cleanBotModes(['x'])).toEqual({})
   })
 })

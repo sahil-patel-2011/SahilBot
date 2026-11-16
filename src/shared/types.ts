@@ -2,10 +2,11 @@
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool'
 /**
- * How much a chat may do on its own. 'ask': every change asks. 'auto': routine actions run, consequential
- * outside actions ask. 'autonomous': also project commands (installs from the lockfile, git fetch/pull)
- * and overwrites inside your folders; deleting, sending, buying, credentials, security, tainted actions
- * and anything outside your folders still ask. 'bypass' (Settings → Advanced): everything but hard stops.
+ * How much a chat may do on its own. 'ask': every change asks. 'auto' (the default): local changes, routine
+ * outside steps, project commands (installs from the lockfile, git fetch/pull) and backed-up overwrites in your
+ * folders run; hard stops (money, credentials, deleting your data, mass sends, public posts, your "always ask"
+ * exceptions) and outside actions steered by web or email content ask. 'bypass': everything runs, except
+ * purchases, saved logins and one-time codes. 'autonomous' is Auto's old name (read as Auto).
  */
 export type PermissionMode = 'ask' | 'auto' | 'autonomous' | 'bypass'
 export type ToolEffect = 'read' | 'write_local' | 'write_external' | 'destructive'
@@ -2868,6 +2869,8 @@ export interface SahilBotApi {
     /** Opens the folder picker and sets it as the chat's working folder (null when cancelled). */
     pickFolder(threadId: string): Promise<WorkingFolder | null>
     clearFolder(threadId: string): Promise<WorkingFolder>
+    /** A folder picked earlier this session becomes the chat's working folder again (the Folder chip's recent list). */
+    useFolder(threadId: string, path: string): Promise<WorkingFolder>
     /** A bot's default working folder ("Works in folder"): picker, or null to clear. */
     pickBotFolder(spaceId: string): Promise<Space | null>
     clearBotFolder(spaceId: string): Promise<Space>

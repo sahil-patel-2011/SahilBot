@@ -103,9 +103,9 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
   // Privacy & Security
   { anchor: 'passwords', page: 'privacy', tab: 'passwords', title: 'Passwords & vault', words: 'vault passwords login card credit id passport license secure note master password touch id lock backup export import csv' },
-  { anchor: 'autonomy', page: 'privacy', tab: 'approvals', title: 'Autonomy for new chats', words: 'ask first auto autonomous permission mode approvals', keys: ['defaultMode', 'botModes'] },
+  { anchor: 'autonomy', page: 'privacy', tab: 'approvals', title: 'Permissions for new chats', words: 'ask auto autonomy autonomous permission permissions mode approvals', keys: ['defaultMode', 'botModes'] },
   { anchor: 'approval-rules', page: 'privacy', tab: 'approvals', title: 'Approval rules', words: 'approval approve allow ask first always automatically confirm rules', keys: ['customRules'] },
-  { anchor: 'bypass', page: 'privacy', tab: 'approvals', title: 'Offer Bypass', words: 'bypass full access hard stops', keys: ['advanced.allowBypass', 'advanced.hardStopsEnabled'], advanced: true },
+  { anchor: 'bypass', page: 'privacy', tab: 'approvals', title: 'Bypass', words: 'bypass full access hard stops confirm', keys: ['advanced.allowBypass', 'advanced.hardStopsEnabled'], advanced: true },
   { anchor: 'mac-permissions', page: 'privacy', tab: 'permissions', title: 'macOS permissions', words: 'accessibility screen recording microphone full disk access automation notifications system settings' },
   { anchor: 'activity', page: 'privacy', tab: 'activity', title: 'Know what I\'m working on', words: 'activity window titles browser tabs timeline context share cloud exclude apps sites' },
   { anchor: 'sensitive', page: 'privacy', tab: 'sensitive', title: 'Sensitive details', words: 'health money finance religion politics children sexuality government id sensitive categories privacy' },

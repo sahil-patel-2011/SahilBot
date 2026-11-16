@@ -22,8 +22,9 @@ function deadlineLine(x: NeedsYouItem): string {
   if (!x.deadline) return 'Waiting for you'
   const ms = x.deadline - Date.now()
   if (ms <= 0) return 'Going ahead with the default now'
-  const h = Math.floor(ms / 3_600_000), m = Math.round((ms % 3_600_000) / 60_000)
-  return x.hardStop ? `Waits for you (${x.hardStop.replace(/^Question \d+: /, '')})` : `Goes with the default in ${h ? `${h} h ` : ''}${m} min`
+  // Whole minutes, rounded up: "3 h 60 min" never shows (it's "4 h").
+  const total = Math.ceil(ms / 60_000), h = Math.floor(total / 60), m = total % 60
+  return x.hardStop ? `Waits for you (${x.hardStop.replace(/^Question \d+: /, '')})` : `Goes with the default in ${h ? `${h} h` : ''}${h && m ? ' ' : ''}${m || !h ? `${m} min` : ''}`
 }
 
 /** The inbox items, live: reloads when a bot posts, answers arrive, or a chat's cards change. */
@@ -159,7 +160,7 @@ function ReviewCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bot?
 }
 
 /** Bot details rows for an always-on bot: "Always ask for…" exceptions, question deadline, daily digest. */
-export function AlwaysOnRows({ spaceId }: { spaceId: string }) {
+export function AlwaysOnRows({ spaceId, part = 'all' }: { spaceId: string; part?: 'behaviour' | 'notifications' | 'all' }) {
   const [all, setAll] = useState<Record<string, Partial<BotAutonomySettings>> | null>(null)
   const [draft, setDraft] = useState('')
   useEffect(() => {
@@ -180,10 +181,18 @@ export function AlwaysOnRows({ spaceId }: { spaceId: string }) {
     save({ alwaysAsk: [...mine.alwaysAsk, t].slice(0, 20) })
     setDraft('')
   }
+  const digest = (
+    <div className="bd-row">
+      <span className="bd-row-text">Daily digest<span className="bd-row-sub">A short summary in this chat on days it worked.</span></span>
+      {mine.digest.enabled && <input className="bd-select bd-num" type="time" value={mine.digest.time} onChange={(e) => { if (/^\d{2}:\d{2}$/.test(e.target.value)) save({ digest: { ...mine.digest, time: e.target.value } }) }} aria-label="Digest time" data-testid="bot-digest-time" />}
+      <button role="switch" aria-checked={mine.digest.enabled} aria-label="Daily digest" className={`switch${mine.digest.enabled ? ' on' : ''}`} onClick={() => save({ digest: { ...mine.digest, enabled: !mine.digest.enabled } })} data-testid="bot-digest"><i /></button>
+    </div>
+  )
+  if (part === 'notifications') return digest
   return (
     <>
       <div className="bd-row" data-testid="bot-always-ask">
-        <span className="bd-row-text">Always ask for…<span className="bd-row-sub">Things this bot asks about first, whatever its autonomy: “send email”, “calendar”, “tool:github__*”.</span></span>
+        <span className="bd-row-text">Always ask for…<span className="bd-row-sub">Even in Auto, e.g. “send email”, “calendar”.</span></span>
       </div>
       {mine.alwaysAsk.map((w) => (
         <div className="bd-row" key={w}>
@@ -196,18 +205,14 @@ export function AlwaysOnRows({ spaceId }: { spaceId: string }) {
         <button className="bd-btn" onClick={add} disabled={!draft.trim()}>Add</button>
       </div>
       <label className="bd-row">
-        <span className="bd-row-text">Question deadline<span className="bd-row-sub">If you haven’t answered by then, it goes ahead with its recommended default when that’s safe and says so. Money, passwords, deleting and posting always wait.</span></span>
+        <span className="bd-row-text">Question deadline<span className="bd-row-sub">Then it goes with its recommended answer, when that's safe. Money, passwords, deleting and posting always wait.</span></span>
         <select className="bd-select" value={String(mine.deadlineHours)} onChange={(e) => save({ deadlineHours: Number(e.target.value) })} data-testid="bot-question-deadline" aria-label="Question deadline">
           {[0.5, 1, 2, 4, 8, 12, 24, 48, 168].concat([0.5, 1, 2, 4, 8, 12, 24, 48, 168].includes(mine.deadlineHours) ? [] : [mine.deadlineHours]).sort((a, b) => a - b).map((h) => (
             <option key={h} value={String(h)}>{h < 1 ? `${h * 60} minutes` : h === 168 ? '1 week' : h === 1 ? '1 hour' : `${h} hours`}</option>
           ))}
         </select>
       </label>
-      <div className="bd-row">
-        <span className="bd-row-text">Daily digest<span className="bd-row-sub">What it did, what’s pending and what needs you, in this chat and as a notification. Skipped on quiet days.</span></span>
-        {mine.digest.enabled && <input className="bd-select bd-num" type="time" value={mine.digest.time} onChange={(e) => { if (/^\d{2}:\d{2}$/.test(e.target.value)) save({ digest: { ...mine.digest, time: e.target.value } }) }} aria-label="Digest time" data-testid="bot-digest-time" />}
-        <button role="switch" aria-checked={mine.digest.enabled} aria-label="Daily digest" className={`switch${mine.digest.enabled ? ' on' : ''}`} onClick={() => save({ digest: { ...mine.digest, enabled: !mine.digest.enabled } })} data-testid="bot-digest"><i /></button>
-      </div>
+      {part === 'all' && digest}
     </>
   )
 }

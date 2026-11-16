@@ -75,9 +75,19 @@ export function requestedModel(o: { thread?: Pick<Thread, 'model' | 'parentId'> 
   return o.thread?.model || o.settings.defaultModel
 }
 
-/** The thinking a run asks for: bots always Auto; regular chats the chat's pick, else the app's. */
-export function requestedEffort(o: { thread?: Pick<Thread, 'effort'> | null; space?: Pick<Space, 'kind' | 'isMain'> | null; speaker?: Pick<Space, 'kind' | 'isMain'> | null; settings: Pick<Settings, 'thinking'> }): EffortChoice {
+/**
+ * The thinking a run asks for. Bots: always Auto. A chat on Auto (any Auto variant): Auto too, since SahilBot
+ * picks the model and the thinking together; a level stored on the chat or as the app default (older installs,
+ * or picked for a model the chat later left) never applies there. Otherwise the chat's pick, else the app's.
+ */
+export function requestedEffort(o: { thread?: Pick<Thread, 'effort'> & Partial<Pick<Thread, 'model' | 'parentId'>> | null; space?: Pick<Space, 'kind' | 'isMain'> | null; speaker?: Pick<Space, 'kind' | 'isMain'> | null; settings: Pick<Settings, 'thinking'> & Partial<Pick<Settings, 'defaultModel'>> }): EffortChoice {
   if (o.speaker || isBotSpace(o.space)) return 'auto'
+  const model = requestedModel({ thread: o.thread ? { model: o.thread.model ?? null, parentId: o.thread.parentId ?? null } : null, space: o.space, settings: { defaultModel: o.settings.defaultModel ?? 'auto' } })
+  if (isAutoModel(model)) return 'auto'
   const pick = o.thread?.effort ?? o.settings.thinking
   return pick && ['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(pick) ? pick : 'auto'
 }
+
+/** Auto picks the model and the thinking: an effort stored with an Auto model means nothing and is cleared. */
+export const effortFor = (model: string | null | undefined, effort: EffortChoice | null | undefined): EffortChoice | null =>
+  isAutoModel(model) ? null : effort ?? null

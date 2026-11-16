@@ -2,12 +2,12 @@ import { describe, expect, test } from 'vitest'
 import { botHardStop, decide, hardStopText, MASS_SEND_MIN, OTP_STOP, PURCHASE_STOP, recipientCount } from '../../src/main/agent/permissions'
 import { decideWithRule } from '../../src/main/agent/loop'
 import { BOT_AUTONOMY_DEFAULTS, botAutonomyConfig, botLevel, cleanBotAutonomy, isAlwaysOnBot, recommendedDefault, safeToDefault } from '../../src/main/agent/questions/policy'
-import { migrateBotAutonomy } from '../../src/main/spaces'
+import { migrateBotAutonomy, migratePermissionLevels } from '../../src/main/spaces'
 import type { PermissionInput } from '../../src/main/agent/types'
 import { Db } from '../../src/main/db'
 import type { ToolEffect } from '../../src/shared/types'
 
-// Always-on bots: Autonomous by default, hard stops that still stop, taint that still asks, and the
+// Always-on bots: Auto by default, hard stops that still stop, taint that still asks, and the
 // user's "Always ask for…" exceptions. Regular chats keep the app default.
 
 const base: PermissionInput = { mode: 'autonomous', effect: 'read', tool: 't', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false }
@@ -22,8 +22,11 @@ function botVerdict(p: Partial<PermissionInput> & { summary?: string; label?: st
 
 describe('autonomy level defaults', () => {
   const settings = { defaultMode: 'auto' as const, botModes: {} }
-  test('a bot works at Autonomous; the main chat, groups and projects keep the app default', () => {
-    expect(botLevel(settings, { id: 'b', kind: 'bot', isMain: false })).toBe('autonomous')
+  test('a bot works at Auto; the main chat, groups and projects keep the app default', () => {
+    expect(botLevel(settings, { id: 'b', kind: 'bot', isMain: false })).toBe('auto')
+    expect(botLevel({ defaultMode: 'ask' }, { id: 'b', kind: 'bot', isMain: false })).toBe('auto')
+    // A level saved under the old name reads as Auto.
+    expect(botLevel({ botModes: { b: 'autonomous' } }, { id: 'b', kind: 'bot', isMain: false })).toBe('auto')
     expect(botLevel(settings, { id: 'm', kind: 'bot', isMain: true })).toBe('auto')
     expect(botLevel(settings, { id: 'g', kind: 'group', isMain: false })).toBe('auto')
     expect(botLevel(settings, { id: 'p', kind: 'project', isMain: false })).toBe('auto')
@@ -36,25 +39,52 @@ describe('autonomy level defaults', () => {
     expect(botLevel({ botModes: { b: 'auto' } }, { id: 'b', kind: 'bot', isMain: false })).toBe('auto')
     expect(botLevel({ botModes: { b: 'bypass' as never } }, { id: 'b', kind: 'bot', isMain: false })).toBe('auto')
   })
-  test('existing bots move to Autonomous once; Ask-first chats, picked bots, the main chat and helpers stay', () => {
+  test('the old "move bots to Autonomous" step changes nothing now (Auto is what Autonomous was), and stays done', () => {
+    const db = new Db(':memory:')
+    const bot = db.createSpace('Scout', '#111')
+    const botT = db.createThread(bot.id, 'auto', null)
+    const askT = db.createThread(bot.id, 'ask', null)
+    expect(migrateBotAutonomy(db, { botModes: {} })).toBe(0)
+    expect(db.getThread(botT.id)!.permissionMode).toBe('auto')
+    expect(db.getThread(askT.id)!.permissionMode).toBe('ask')
+    expect(db.getSetting('botAutonomyDefaultV1')).toBe(1)
+  })
+  test('migration: "autonomous" chats and settings become Auto; Auto chats lose a stale thinking level; once only', () => {
     const db = new Db(':memory:')
     const main = db.createSpace('SahilBot', '#000', { isMain: true })
     const bot = db.createSpace('Scout', '#111')
-    const picked = db.createSpace('Picked', '#222')
-    const group = db.createSpace('Team', '#333', { kind: 'group' })
-    const mainT = db.createThread(main.id, 'auto', null)
-    const botT = db.createThread(bot.id, 'auto', null)
-    const askT = db.createThread(bot.id, 'ask', null)
-    const helper = db.createThread(bot.id, 'auto', null, botT.id)
-    const pickedT = db.createThread(picked.id, 'auto', null)
-    const groupT = db.createThread(group.id, 'auto', null)
-    expect(migrateBotAutonomy(db, { botModes: { [picked.id]: 'auto' } })).toBe(1)
-    expect(db.getThread(botT.id)!.permissionMode).toBe('autonomous')
-    for (const [t, m] of [[mainT, 'auto'], [askT, 'ask'], [helper, 'auto'], [pickedT, 'auto'], [groupT, 'auto']] as const) expect(db.getThread(t.id)!.permissionMode).toBe(m)
-    // Once only: a chat the user later set back to Auto stays there.
-    db.updateThread(botT.id, { permissionMode: 'auto' })
-    expect(migrateBotAutonomy(db, { botModes: {} })).toBe(0)
-    expect(db.getThread(botT.id)!.permissionMode).toBe('auto')
+    const a = db.createThread(bot.id, 'autonomous', null)
+    const ask = db.createThread(bot.id, 'ask', null)
+    const bypass = db.createThread(main.id, 'bypass', null)
+    // Thinking: an Auto chat (its own Auto, or none with the app on Auto) drops it; a picked model keeps it.
+    const autoChat = db.updateThread(db.createThread(main.id, 'auto', 'auto').id, { effort: 'high' })
+    const inherit = db.updateThread(db.createThread(main.id, 'auto', null).id, { effort: 'low' })
+    const picked = db.updateThread(db.createThread(main.id, 'auto', 'claude-opus-5-5').id, { effort: 'max' })
+    const local = db.updateThread(db.createThread(main.id, 'auto', 'auto:local').id, { effort: 'medium' })
+    const saved: Array<Record<string, unknown>> = []
+    const n = migratePermissionLevels(db, { defaultModel: 'auto', defaultMode: 'autonomous' as never, botModes: { [bot.id]: 'autonomous' as never, x: 'ask' }, thinking: 'high' }, (p) => saved.push(p))
+    expect(n).toBeGreaterThanOrEqual(5)
+    expect(db.getThread(a.id)!.permissionMode).toBe('auto')
+    expect(db.getThread(ask.id)!.permissionMode).toBe('ask')
+    expect(db.getThread(bypass.id)!.permissionMode).toBe('bypass')
+    expect(db.getThread(autoChat.id)!.effort).toBeNull()
+    expect(db.getThread(inherit.id)!.effort).toBeNull()
+    expect(db.getThread(local.id)!.effort).toBeNull()
+    expect(db.getThread(picked.id)!.effort).toBe('max')
+    expect(saved).toEqual([{ defaultMode: 'auto', botModes: { [bot.id]: 'auto', x: 'ask' }, thinking: 'auto' }])
+    // Once only.
+    db.updateThread(a.id, { permissionMode: 'autonomous' })
+    expect(migratePermissionLevels(db, { defaultModel: 'auto', defaultMode: 'auto', botModes: {}, thinking: 'high' }, () => undefined)).toBe(0)
+    expect(db.getThread(a.id)!.permissionMode).toBe('autonomous')
+  })
+  test('migration with a concrete default model keeps the app\'s thinking and chats that inherit that model', () => {
+    const db = new Db(':memory:')
+    const main = db.createSpace('SahilBot', '#000', { isMain: true })
+    const inherit = db.updateThread(db.createThread(main.id, 'auto', null).id, { effort: 'low' })
+    const saved: Array<Record<string, unknown>> = []
+    migratePermissionLevels(db, { defaultModel: 'claude-opus-5-5', defaultMode: 'ask', botModes: {}, thinking: 'high' }, (p) => saved.push(p))
+    expect(db.getThread(inherit.id)!.effort).toBe('low')
+    expect(saved).toEqual([])
   })
   test('per-bot settings are cleaned: exceptions trimmed and capped, deadline 15 min to a week, HH:MM digest', () => {
     expect(cleanBotAutonomy(undefined)).toEqual(BOT_AUTONOMY_DEFAULTS)
@@ -149,18 +179,20 @@ describe('question defaults a deadline may use', () => {
 
 describe('unattended runs (routines, wake-ups)', () => {
   const v = (p: Partial<PermissionInput>) => decide({ ...base, unattended: true, ...p }).verdict
-  test('a chat that is not an always-on bot\'s drops to Auto when nobody watches', () => {
+  test('a chat that is not an always-on bot\'s stays cautious when nobody watches', () => {
     expect(v({ effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('ask')
     expect(v({ effect: 'destructive', tool: 'file_write' })).toBe('ask')
     expect(v({ effect: 'write_external', consequential: false })).toBe('allow')
   })
-  test('an always-on bot at Autonomous stays Autonomous: project commands and backed-up overwrites run', () => {
-    expect(v({ alwaysOn: true, effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('allow')
-    expect(v({ alwaysOn: true, effect: 'destructive', tool: 'file_write' })).toBe('allow')
-    expect(v({ alwaysOn: true, effect: 'write_local' })).toBe('allow')
-    // Its own level is still its level: an Ask-first or Auto bot doesn't loosen.
-    expect(v({ alwaysOn: true, mode: 'auto', effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('ask')
+  test('an always-on bot at Auto keeps full Auto: project commands and backed-up overwrites run', () => {
+    for (const mode of ['auto', 'autonomous'] as const) {
+      expect(v({ alwaysOn: true, mode, effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('allow')
+      expect(v({ alwaysOn: true, mode, effect: 'destructive', tool: 'file_write' })).toBe('allow')
+      expect(v({ alwaysOn: true, mode, effect: 'write_local' })).toBe('allow')
+    }
+    // Its own level is still its level: an Ask bot doesn't loosen.
     expect(v({ alwaysOn: true, mode: 'ask', effect: 'write_local' })).toBe('ask')
+    expect(v({ alwaysOn: true, mode: 'ask', effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('ask')
   })
   test('hard stops, taint and the purchase / code gates are exactly as before', () => {
     expect(v({ alwaysOn: true, effect: 'write_external', consequential: true, tool: 'gmail__send_email' })).toBe('ask')

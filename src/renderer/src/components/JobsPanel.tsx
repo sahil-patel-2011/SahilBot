@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import type { ChatEvent, JobEvent, JobInfo, Message, PermissionMode, RunUsage } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
-import { fmtTokens, fmtUsd, plural, runFacts, summaryText, usageText } from '../lib/run-summary'
+import { fmtTokens, fmtUsd, plural, runFacts, statusLine, usageText } from '../lib/run-summary'
 
 // Background jobs (dev servers, watchers, long builds) a chat started with run_command background: true:
 // the Jobs tab, the header chip, and the end-of-run summary line (actions, tokens, cost).
@@ -261,28 +261,29 @@ export function RunSummary({ threadId, messages, mode }: { threadId: string; mes
     return () => { alive = false }
   }, [threadId, since, count])
   if (!facts) return null
-  const autonomous = mode === 'autonomous'
   const a = asks.get(threadId)
   const asked = a && a.since >= since - 10_000 ? a.n : undefined
-  const words = summaryText(facts, { autonomous, asked })
-  const tokens = usageText(usage, facts.actions > 0)
-  if (!words && !tokens) return null
-  const quiet = !autonomous && facts.actions === 0
+  const line = statusLine(facts, usage, { asked })
+  if (!line) return null
+  // The permission level shows only when it isn't the default (Auto).
+  const level = mode === 'ask' ? 'Ask' : mode === 'bypass' ? 'Bypass' : null
+  const tokens = usageText(usage, true)
   return (
-    <div className={`run-summary${quiet ? ' quiet' : ''}${autonomous ? ' autonomous' : ''}`} data-testid="run-summary" tabIndex={usage?.models.length ? 0 : -1}>
+    <div className={`run-summary${facts.actions === 0 ? ' quiet' : ''}`} data-testid="run-summary" tabIndex={tokens ? 0 : -1} aria-label={`${line}${tokens ? `. ${tokens}` : ''}`}>
       <span className="rs-line">
-        {autonomous && words && <span className="rs-badge"><I.Play size={10} />Autonomous</span>}
-        {words && <span className="rs-words">{words}</span>}
-        {tokens && <span className="rs-tokens">{words && <span className="rs-sep" aria-hidden>·</span>}{tokens}</span>}
+        {level && <span className={`rs-badge${mode === 'bypass' ? ' danger' : ''}`} data-testid="run-summary-level">{level}</span>}
+        <span className="rs-words">{line}</span>
       </span>
-      {usage && usage.models.length > 0 && (
+      {tokens && (
         <span className="rs-tip" role="tooltip">
-          {usage.models.map((m) => (
+          <span className="rs-row rs-total"><b>This reply</b><span>{tokens}</span></span>
+          {usage && usage.models.map((m) => (
             <span key={m.model} className="rs-row">
               <b>{m.model}</b>
               <span>{plural(m.calls, 'call')} · {fmtTokens(m.input)} in / {fmtTokens(m.output)} out · {m.cloud ? fmtUsd(m.usd) : 'local'}</span>
             </span>
           ))}
+          <span className="rs-row rs-foot">Monthly totals: Settings → Usage</span>
         </span>
       )}
     </div>

@@ -48,3 +48,7 @@ export const Video = (p: P) => <svg {...base(p)}><rect x="3" y="6" width="13" he
 export const Speaker = (p: P) => <svg {...base(p)}><path d="M11 5 6 9H3v6h3l5 4V5z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></svg>
 /** Max mode: a bolt over stacked agents. */
 export const Bolt = (p: P) => <svg {...base(p)}><path d="M13 2 5 13.5h6L10 22l8.5-12H12.5L13 2Z" /></svg>
+/** An inbox tray: Needs you & Tasks (bots' questions, approvals and long-running goals). */
+export const Inbox = (p: P) => <svg {...base(p)}><path d="M4 13.5 6.2 6a2 2 0 0 1 1.9-1.5h7.8A2 2 0 0 1 17.8 6l2.2 7.5" /><path d="M4 13.5V18a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4.5h-4.5a3.5 3.5 0 0 1-7 0Z" /></svg>
+/** Show in Finder: a folder with an arrow. */
+export const Reveal = (p: P) => <svg {...base(p)}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><path d="M10 14h5M13 11.5 15.5 14 13 16.5" /></svg>

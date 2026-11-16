@@ -1,0 +1,114 @@
+/* ================================================================ intuitiveness pass
+   Loaded after the design system: plain-language approval previews, the one Folder chip, the Bypass
+   indicator, files made in a run, the inbox button, Connect apps' Add / Connected / Try it, the New bot
+   job field and templates, the two-step onboarding and grouped bot details. Tokens only. */
+
+/* ---- composer: the Folder chip, Bypass, the "while it works" hint */
+.wf-pick .wf-chev { opacity: .55; margin-left: -2px; flex: none; }
+.wf-pick:not(.on) .wf-name { color: var(--text-2); }
+.menu-head-sub { display: block; font-weight: var(--fw-regular); text-transform: none; letter-spacing: 0; color: var(--text-3); font-size: var(--fs-2xs); margin-top: 1px; }
+.bypass-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px 0 8px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--danger-text); background: var(--tint-danger); white-space: nowrap; }
+.bypass-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent); }
+.steer-hint { justify-content: center; font-size: var(--fs-2xs); color: var(--text-3); opacity: .9; padding-top: 4px; }
+.steer-hint kbd { font-size: 10.5px; padding: 0 5px; }
+
+/* ---- a small yes / no dialog */
+.modal.ui-confirm { width: min(440px, calc(100vw - 32px)); }
+.ui-confirm h2 { margin: 0 0 8px; font-size: var(--fs-lg); }
+.ui-confirm-body p { margin: 0 0 8px; line-height: 1.5; color: var(--text); }
+.ui-confirm-body p.hint { color: var(--text-2); font-size: var(--fs-sm); }
+.btn.danger-solid { background: var(--danger); color: #fff; }
+.btn.danger-solid:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 88%, #000); }
+
+/* ---- approval cards: what will happen, with a preview; raw arguments behind "Technical details" */
+.ap-summary b { font-weight: var(--fw-semibold); background: var(--tint-2); padding: 0 5px; border-radius: var(--r-xs); overflow-wrap: anywhere; }
+.ap-preview { margin: 2px 0 2px; border: 1px solid var(--surface-line); border-radius: var(--r-md); background: var(--surface-sunken); overflow: hidden; }
+.ap-file-head { display: flex; align-items: center; gap: 6px; padding: 7px 12px; font-size: var(--fs-xs); color: var(--text-2); border-bottom: 1px solid var(--surface-line); }
+.ap-file-name { font-weight: var(--fw-semibold); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-file-meta { margin-left: auto; color: var(--text-3); white-space: nowrap; }
+.ap-file-body { max-height: 200px; overflow: hidden; padding: 8px 12px; position: relative; font-size: var(--fs-sm); }
+.ap-file-body pre { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.ap-file-body.md > * { font-size: var(--fs-sm); }
+.ap-file-body.md h1, .ap-file-body.md h2, .ap-file-body.md h3 { font-size: var(--fs-md); margin: 2px 0 6px; }
+.ap-file-body.md p, .ap-file-body.md ul, .ap-file-body.md ol { margin: 0 0 6px; }
+.ap-file-more { padding: 5px 12px 7px; font-size: var(--fs-2xs); color: var(--text-3); border-top: 1px dashed var(--surface-line); }
+.ap-cmd { margin: 0; padding: 10px 12px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.ap-cmd code::before { content: '$ '; color: var(--text-3); }
+.ap-cmd-why { padding: 7px 12px; font-size: var(--fs-xs); color: var(--text-2); border-top: 1px solid var(--surface-line); }
+.ap-fields { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; padding: 9px 12px; font-size: var(--fs-sm); }
+.ap-fields dt { color: var(--text-3); }
+.ap-fields dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.ap-msg-body { padding: 9px 12px; border-top: 1px solid var(--surface-line); font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; max-height: 160px; overflow: hidden; color: var(--text); }
+.ap-click { display: flex; align-items: stretch; }
+.ap-thumb { width: 132px; max-height: 96px; object-fit: cover; object-position: top left; border-right: 1px solid var(--surface-line); flex: none; }
+.ap-details > summary { font-size: var(--fs-xs); }
+.ap-rule-link { margin-left: auto; font-size: var(--fs-xs); color: var(--text-3); }
+.ap-rule-link:hover { color: var(--text-2); }
+
+/* ---- files a run made: Open / Show in Finder, right under its steps */
+.made-files { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 2px; max-width: 520px; }
+.made-file { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; border: 1px solid var(--surface-line); border-radius: var(--r-md); background: var(--surface); }
+.made-file-icon { width: 30px; height: 30px; border-radius: var(--r-sm); display: grid; place-items: center; color: var(--accent-text); background: var(--tint-accent); flex: none; }
+.made-file-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.made-file-text b { font-size: var(--fs-sm); font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.made-file-text span { font-size: var(--fs-2xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.made-file .btn.small { height: 28px; padding: 0 12px; font-size: var(--fs-xs); }
+.made-file .btn.ghost { background: transparent; padding: 0 8px; color: var(--text-2); }
+.made-file .btn.ghost:hover { background: var(--hover); }
+
+/* ---- the run's status line: plain words; tokens in the hover card */
+.run-summary .rs-badge.danger { background: var(--tint-danger); color: var(--danger-text); }
+.run-summary .rs-tip .rs-total { font-weight: var(--fw-medium); }
+.run-summary .rs-tip .rs-foot { color: var(--text-3); font-size: var(--fs-2xs); }
+.err-fix { margin-top: 8px; }
+
+/* ---- sidebar: the inbox button's count */
+.tk-nav { position: relative; }
+.tk-nav-count { position: absolute; top: -2px; right: -2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--r-pill); background: var(--accent); color: #fff; font-size: 10px; font-weight: var(--fw-semibold); line-height: 16px; text-align: center; box-shadow: 0 0 0 2px var(--sidebar); font-variant-numeric: tabular-nums; }
+
+/* ---- Connect apps: Add vs Connected, and Try it */
+.ca-btn.add { background: transparent; color: var(--text); box-shadow: inset 0 0 0 1px var(--surface-line); gap: 3px; }
+.ca-item:hover .ca-btn.add { background: var(--hover); }
+.ca-btn.done { background: var(--tint-ok); color: var(--ok-text); border-radius: var(--r-pill); padding: 0 10px 0 8px; gap: 4px; }
+.ca-try { height: 28px; padding: 0 10px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--accent-text); background: var(--tint-accent); flex: none; }
+.ca-try:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+/* ---- New bot: the job, and templates */
+.bot-job { width: 100%; min-height: 56px; resize: vertical; font: inherit; }
+.be-templates { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.be-templates-head { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); font-weight: var(--fw-semibold); color: var(--text-2); margin-bottom: 8px; text-transform: none; }
+.be-template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; max-height: 220px; overflow: auto; }
+.be-template { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-md); border: 1px solid var(--surface-line); background: var(--surface); text-align: left; min-width: 0; }
+.be-template:hover:not(:disabled) { background: var(--hover); }
+.be-template-text { display: flex; flex-direction: column; min-width: 0; }
+.be-template-text b { font-size: var(--fs-sm); }
+.be-template-text span { font-size: var(--fs-2xs); color: var(--text-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+[data-testid="bot-editor"] .ui-disclosure { margin-top: 10px; }
+
+/* ---- onboarding: two steps */
+.onboard-workspace { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: var(--fs-sm); color: var(--text-2); flex-wrap: wrap; }
+.onboard-workspace b { color: var(--text); font-weight: var(--fw-medium); }
+.onboard-import { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; font-size: var(--fs-sm); color: var(--text-2); cursor: pointer; }
+.onboard-import input { margin-top: 3px; }
+.onboard-nokey { margin-top: 8px; }
+.onboard-time { text-align: center; margin-top: 10px; }
+
+/* ---- bot details: grouped settings, compact "automatic" line */
+.bd-row.bd-row-compact { padding-top: 8px; padding-bottom: 8px; }
+.bd-row.bd-row-compact .bd-row-text { font-size: var(--fs-sm); color: var(--text-2); }
+
+/* ---- the context ring only appears once it matters; keyboard focus shows its tooltip target */
+.ctx-ring:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--r-sm); }
+
+/* ---- fixes from the screenshot review */
+.modal textarea.bot-job { min-height: 64px; height: 72px; font-family: var(--font); font-size: var(--fs-md); }
+[data-testid="bot-editor"] textarea[data-testid="bot-instructions"] { min-height: 120px; }
+.wf-menu { min-width: 300px; }
+.wf-menu .menu-item { align-items: flex-start; }
+.wf-menu .menu-item > svg { margin-top: 2px; flex: none; }
+.wf-item-text { display: flex; flex-direction: column; min-width: 0; text-align: left; }
+.wf-menu .wf-item-text .sub { margin: 1px 0 0; padding: 0; white-space: normal; line-height: 1.35; color: var(--text-3); font-size: var(--fs-xs); }
+.bd-num[type="time"] { width: 104px; }
+/* Onboarding: the main button stays in view while the connect step scrolls. */
+.onboard-card .modal-actions { position: sticky; bottom: -24px; margin-bottom: -24px; padding: 12px 0 24px; background: linear-gradient(to bottom, transparent, var(--panel) 14px); }
+.modes-menu .mode-keys { font: inherit; font-size: 10.5px; color: var(--text-3); padding: 1px 5px; border-radius: 5px; border: 1px solid var(--surface-line); align-self: center; flex: none; }

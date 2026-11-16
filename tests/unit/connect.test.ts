@@ -117,6 +117,9 @@ describe('connect categories', () => {
     expect(MORE_CATEGORIES).toEqual(SECTION_ORDER.filter((c) => !(MAIN_CHIPS as readonly string[]).includes(c)))
     expect(MORE_CATEGORIES).not.toContain('Productivity')
     expect(MORE_CATEGORIES).toContain('Finance & commerce')
+    // Most common first; Password Managers sits under More.
+    expect([...MAIN_CHIPS]).toEqual(['Productivity', 'Communication', 'Code', 'Design'])
+    expect(MORE_CATEGORIES).toContain('Password Managers')
   })
   test('recommendations skip connected apps; search and letter colors', () => {
     const r = recommended(PRESETS, new Set(['gmail']))

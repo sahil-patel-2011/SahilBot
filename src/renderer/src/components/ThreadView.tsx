@@ -10,6 +10,7 @@ import { describe, duration, stepStatus, summarize, type Step } from '../lib/ste
 import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
 import { PageCard, pagesFromSteps } from './PageCard'
+import { MadeFiles, filesFromSteps } from './MadeFiles'
 import { StockCard, stocksFromSteps } from './StockCard'
 import { VideoCard, videoOf, videosFromSteps } from './VideoCard'
 import { DocCard, docsFromSteps } from './doc/DocCard'
@@ -434,7 +435,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
               </Fragment>
             )
           })}
-          {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} />))}
+          {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} thumb={p.tool === 'browser' ? lastBrowserShot(messages) : undefined} />))}
           {running && !pending.length && (waiting || drafting || progress) && <StatusLine drafting={drafting ?? null} since={since ?? Date.now()} progress={progress} />}
           {!running && lastText && !pending.length && (
             <div className="after-actions">
@@ -516,6 +517,7 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
       ) : b.kind === 'activity' ? (
         <>
           <Activity steps={b.steps} live={live} waitingApproval={waitingApproval} onOpenFile={actions.onOpenFile} />
+          {!live && <MadeFiles files={filesFromSteps(b.steps)} onOpen={actions.onOpenFile} />}
           {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
           {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
           {videosFromSteps(b.steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
@@ -539,6 +541,27 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
 }, (a, b) => a.time === b.time && a.cont === b.cont && a.actions === b.actions && a.hasDocs === b.hasDocs && a.running === b.running &&
   a.live === b.live && a.waitingApproval === b.waitingApproval && a.planLive === b.planLive && a.members === b.members &&
   a.editable === b.editable && sameBlock(a.b, b.b))
+
+/**
+ * The next step for an error, as a button: open the right Settings page for keys, limits and models, or
+ * Connect apps for a sign-in. Retry is always under the last reply.
+ */
+export function errorFix(error: string): { label: string; run: () => void } | null {
+  const settings = (page: string) => () => window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: page }))
+  if (/spending|monthly (limit|cap)|budget|over the monthly/i.test(error)) return { label: 'Change the monthly limit', run: settings('#monthly-limit') }
+  if (/api key|401|403|unauthori[sz]ed|rejected|out of (api )?credit|insufficient_quota|no model|model is available|not available on this account/i.test(error)) return { label: 'Open Models & Keys', run: settings('models') }
+  if (/sign[- ]?in|reconnect|needs_auth|connector|connected app/i.test(error)) return { label: 'Open Connect apps', run: () => window.dispatchEvent(new Event('sahilbot:open-connect')) }
+  return null
+}
+
+/** The newest screenshot the browser took in this chat (for a browser approval's thumbnail). */
+function lastBrowserShot(messages: Message[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0 && i >= messages.length - 40; i--) {
+    const m = messages[i]
+    if (m.role === 'tool' && m.toolName === 'browser' && m.images?.length) return m.images[m.images.length - 1]
+  }
+  return undefined
+}
 
 function stamp(at: number, prev?: number): string | null {
   if (prev && at - prev < 30 * 60_000) return null
@@ -709,6 +732,10 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
           {m.content && <Markdown text={m.content} streaming={streaming} />}
           {m.status === 'stopped' && <div className="hint">Stopped</div>}
           {error && <div>{error}</div>}
+          {error && (() => {
+            const fix = errorFix(error)
+            return fix && <button className="chip-btn err-fix" onClick={fix.run} data-testid="error-fix">{fix.label}</button>
+          })()}
         </div>
         {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && (
           <div className="sources" data-testid="sources">

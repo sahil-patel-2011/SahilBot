@@ -56,7 +56,7 @@ import { usesResponses } from '../llm/openai-models'
 import { autoPool, autoUnavailable, autoVariant } from '../llm/router'
 import { captureConstraints } from './notes'
 import { ContextManager, OUTPUT_RESERVE, ResultStore, upperEstimate, ServerTokenCounter, SUMMARY_INSTRUCTIONS, pinRunContext, resultLimit, taskBrief, withPinned, wrapToolOutput, type TokenCounter } from './context'
-import { ALWAYS_TAINT_CHECKED, appReadRisk, botHardStop, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, ruleVerdict, stricterMode } from './permissions'
+import { ALWAYS_TAINT_CHECKED, appReadRisk, botHardStop, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, normalizeMode, ruleVerdict, stricterMode } from './permissions'
 import { ATTENDED_GRACE_MS, isAlwaysOnBot } from './questions/policy'
 import type { TypedSlot } from './questions/queue'
 import { ALWAYS_ON_PROMPT, learnedLine, queuedApprovalText, queuedQuestionText, type BotQuestionConfig, type QuestionHost } from './questions/host'
@@ -1887,7 +1887,7 @@ export class Agent {
       if (typeof m.meta?.mcpClientId === 'string' || typeof m.meta?.fromApp === 'string') run.fromApp = String(m.meta?.fromApp || 'A connected app').slice(0, 60)
       if (!m.meta?.handoff) return
       const mode = m.meta.mode
-      if (mode === 'ask' || mode === 'auto' || mode === 'autonomous' || mode === 'bypass') run.modeCap = run.modeCap ? stricterMode(run.modeCap, mode) : mode
+      if (mode === 'ask' || mode === 'auto' || mode === 'autonomous' || mode === 'bypass') run.modeCap = run.modeCap ? stricterMode(run.modeCap, mode) : normalizeMode(mode)
       if (m.meta.tainted) { run.forceTaint = true; track.web = true }
     }
     const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
@@ -2527,7 +2527,7 @@ export class Agent {
     let summary: string | undefined
     try { summary = tool.describe?.(args) } catch { summary = undefined }
     const rule = ruleVerdict(s.customRules, { tool: tool.name, label: tool.label, summary, args: call.arguments })
-    // An always-on bot (not a helper): Autonomous means Autonomous on a schedule too.
+    // An always-on bot (not a helper): Auto works fully on a schedule too.
     const alwaysOn = !run.helper && !!this.d.questions?.config(thread.id)
     // Long-term memory: a save whose wording came from (or, after reading, reads like) fetched content asks.
     const hardStop = tool.hardStop?.(args, { roots: state.roots ?? [], folder: state.folder }) ?? (tool.name === 'memory' ? memoryRisk(args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted) : null)
@@ -2543,7 +2543,7 @@ export class Agent {
       tainted: (!!run.forceTaint && (effect === 'write_external' || effect === 'destructive' || ALWAYS_TAINT_CHECKED.has(tool.name))) || checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText),
       leaksSecret: containsSecret(args, this.d.secretValues()),
       consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended && !alwaysOn, state }) : true,
-      // Nobody watches an unattended run: the Autonomous level works like Auto there, except in an always-on
+      // Nobody watches an unattended run: Auto works cautiously there (decide()), except in an always-on
       // bot, whose hard stops (botStops), taint and the purchase / one-time-code gates still apply.
       unattended: run.unattended,
       alwaysOn

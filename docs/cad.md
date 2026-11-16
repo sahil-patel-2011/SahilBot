@@ -92,7 +92,7 @@ Approvals:
   - plan → feature JSON mapping and the spec check;
   - builds, rebuilds, constraint fallback, assemblies and mates against the fake server;
   - every new onshape action;
-  - approvals (Auto / Autonomous verdicts, destructive ops, hard stops);
+  - approvals (Ask / Auto / Bypass verdicts, destructive ops, hard stops);
   - FreeCAD compile, script syntax (`python3 -I` ast parse), the build with a stubbed runner, and wireframes.
 - `tests/fixtures/fake-onshape.ts` is a stateful fake. It checks every HMAC signature, keeps
   documents, tabs and features, returns featurespecs in the OpenAPI shape, and computes the cube and

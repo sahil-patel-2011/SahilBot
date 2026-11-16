@@ -3,12 +3,15 @@ import type { Space, Thread } from '@shared/types'
 import { Mascot, SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { openUsageGlance } from './UsagePage'
+import { PAGE_TITLES, searchSettings } from '../lib/settings-index'
 
 export type PaletteAction =
   | { kind: 'new-chat' } | { kind: 'new-bot' } | { kind: 'new-group' } | { kind: 'new-project' }
   | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'tasks' } | { kind: 'connect' } | { kind: 'settings' }
   | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'max' } | { kind: 'vault' } | { kind: 'import-memory' } | { kind: 'usage' }
   | { kind: 'open'; id: string } | { kind: 'chat'; id: string }
+  /** A setting: Settings opens on its page and tab, scrolled to it (lib/settings-index.ts). */
+  | { kind: 'setting'; anchor: string }
 
 /** keys: the command's own shortcut, shown on the row so the palette teaches it. */
 type Item = { a: PaletteAction; label: string; sub?: string; icon: React.ReactNode; group: string; keys?: string[] }
@@ -23,7 +26,7 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
     const ico = (n: React.ReactNode): React.ReactNode => <span className="pal-icon">{n}</span>
     const commands: Item[] = [
       { a: { kind: 'new-bot' }, label: 'Create new Bot', icon: ico(<I.Plus size={16} />), group: 'Start' },
-      { a: { kind: 'new-chat' }, label: 'New chat', icon: ico(<I.Edit size={15} />), group: 'Start' },
+      { a: { kind: 'new-chat' }, label: 'New chat', icon: ico(<I.Edit size={15} />), group: 'Start', keys: ['⌘', 'N'] },
       { a: { kind: 'new-group' }, label: 'Create group chat', icon: ico(<I.Users size={16} />), group: 'Start' },
       { a: { kind: 'new-project' }, label: 'New project', icon: ico(<I.Folder size={15} />), group: 'Start' },
       { a: { kind: 'projects' }, label: 'Projects', sub: 'All your projects', icon: ico(<I.Folder size={15} />), group: 'Go to' },
@@ -52,7 +55,15 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
     const t = q.trim().toLowerCase()
     // Without a query: start something, your bots, places to go, projects, a few recent chats, then shortcuts.
     if (!t) return [...commands.filter((c) => c.group === 'Start'), ...bots.filter((b) => b.group === 'Bots'), ...commands.filter((c) => c.group === 'Go to'), ...bots.filter((b) => b.group === 'Projects'), ...recent.slice(0, 5), ...commands.filter((c) => c.group === 'Shortcuts')]
-    return [...bots, ...commands, ...recent].filter((x) => x.label.toLowerCase().includes(t) || (x.group !== 'Chats' && x.sub?.toLowerCase().includes(t)) || (x.group === 'Shortcuts' && /^(short|keys?|kbd)/.test(t)))
+    const found = [...bots, ...commands, ...recent].filter((x) => x.label.toLowerCase().includes(t) || (x.group !== 'Chats' && x.sub?.toLowerCase().includes(t)) || (x.group === 'Shortcuts' && /^(short|keys?|kbd)/.test(t)))
+    // Settings by what they do ("monthly limit", "dark mode", "voice"): opens Settings right at the row.
+    const settings: Item[] = searchSettings(t).slice(0, 6).map((e) => ({
+      a: { kind: 'setting', anchor: e.anchor }, label: e.title, sub: `Settings → ${PAGE_TITLES[e.page]}${e.advanced ? ' · Advanced' : ''}`,
+      icon: ico(<I.Gear size={15} />), group: 'Settings'
+    }))
+    // A setting whose title matches every word goes first; otherwise settings follow the bots, chats and commands.
+    const strong = settings.filter((x) => t.split(/\s+/).every((w) => x.label.toLowerCase().includes(w)))
+    return strong.length && !found.some((x) => x.label.toLowerCase() === t) ? [...strong, ...found, ...settings.filter((x) => !strong.includes(x))] : [...found, ...settings]
   }, [spaces, chats, q])
 
   useEffect(() => setSel(0), [q])
@@ -75,7 +86,7 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
     <div className="palette-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="palette-to">
         <I.Search size={16} />
-        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search bots, chats and commands" aria-label="Search bots, chats and commands" data-testid="palette-input" />
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search bots, chats, commands and settings" aria-label="Search bots, chats, commands and settings" data-testid="palette-input" />
         <button className="icon-btn" onClick={onClose} aria-label="Close" title="Close (Esc)"><I.Close size={16} /></button>
       </div>
       <div className="palette" data-testid="palette">

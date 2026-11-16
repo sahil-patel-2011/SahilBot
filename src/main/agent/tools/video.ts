@@ -1,4 +1,4 @@
-import { closeSync, createReadStream, createWriteStream, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, createReadStream, createWriteStream, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Readable } from 'node:stream'
@@ -538,6 +538,8 @@ export class VideoManager {
       j.status = 'processing'
       j.error = `Download failed: ${(e as Error).message}`
       this.save()
+      // Keep watching: the next check fetches a fresh link (a save-by-id job has no timer yet).
+      if (!this.timers.has(j.id)) this.schedule(j.id, this.d.pollMs ?? 30_000)
       throw e
     }
     j.status = 'ready'
@@ -838,8 +840,7 @@ Creating, translating and rendering spend HeyGen credits: the user approves each
               const ans = await ctx.askUser(`Upload "${basename(full)}" (${(statSync(full).size / 1e6).toFixed(1)} MB) from this Mac to HeyGen to translate it into ${lang}?`, ['Upload', 'Don\'t upload'])
               if (!/^upload\b/i.test(ans.trim())) return { text: `Not uploaded (the user answered "${ans.slice(0, 80)}"). Nothing was sent to HeyGen.`, display: 'not uploaded' }
             }
-            const est0 = translateEstimate(secs, lipSync)
-            m.checkCap(est0.credits)
+            m.checkCap(translateEstimate(secs, lipSync).credits) // before anything leaves this Mac
             const up = await m.upload(full, ctx.signal)
             video = { type: 'asset_id', asset_id: up.assetId }
           } else {
@@ -923,7 +924,13 @@ Creating, translating and rendering spend HeyGen credits: the user approves each
             if (j.status !== 'ready') return cardOut(j, `${describeJob(j, ws(ctx))}\nNot finished yet: it's saved here automatically when it is.`, j.status)
             if (!target) return cardOut(j, `Saved: ${relative(ws(ctx), j.path!)}.`, 'saved', j.path)
           }
-          // A HeyGen video made elsewhere (or a copy to another place): fetch its current link and save it.
+          // A copy of a video already on this Mac: copy the file (no new download, and no expired link).
+          if (j?.status === 'ready' && j.path && existsSync(j.path) && target) {
+            mkdirSync(dirname(target), { recursive: true })
+            copyFileSync(j.path, target)
+            return cardOut(j, `Copied to ${relative(ws(ctx), target)}.`, 'saved', target)
+          }
+          // A HeyGen video made elsewhere: fetch its current link and save it.
           const isTranslation = j?.kind === 'translate'
           const t = m.need(isTranslation ? 'get_translation' : 'get_video')
           const remote = j?.renderId && j.kind === 'motion' ? null : (j?.remoteId ?? a.id)
@@ -935,7 +942,7 @@ Creating, translating and rendering spend HeyGen credits: the user approves each
             url = videoUrlIn(text, json)
           } else if (j?.path && target) {
             mkdirSync(dirname(target), { recursive: true })
-            writeFileSync(target, readFileSync(j.path))
+            copyFileSync(j.path, target)
             return cardOut(j, `Copied to ${relative(ws(ctx), target)}.`, 'saved', target)
           }
           if (!url) throw new Error('HeyGen gave no download link for that video.')

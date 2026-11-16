@@ -197,7 +197,7 @@ export interface ThreadState {
   snapshotNote?: string
   /**
    * Project folders as this chat first saw them (git top level → commit, origin URL, git config hash):
-   * Autonomous installs and pulls only run while the lockfile and origin still match (tools/shell.ts).
+   * Auto's installs and pulls only run while the lockfile and origin still match (tools/shell.ts).
    */
   projectTrust?: Record<string, { head: string; origin: string; config: string; at: number }>
   /** Install config or git internals this chat wrote ('*': it touched some): installs and pulls ask again. */
@@ -233,13 +233,13 @@ export interface PermissionInput {
   /**
    * The outside action has real consequences (sends, buys, posts, deletes). Defaults to true.
    * 'project': it reaches outside only to set up the user's own project (installs from its lockfile into
-   * its folder, git fetch/pull): Autonomous runs it; Ask and Auto treat it as consequential.
+   * its folder, git fetch/pull): Auto runs it (attended); Ask treats it as consequential.
    */
   consequential?: boolean | 'project'
-  /** A run with nobody watching (routine, goal wake-up, helper): Autonomous works like Auto. */
+  /** A run with nobody watching (routine, goal wake-up, helper): Auto works cautiously (decide()). */
   unattended?: boolean
   /**
-   * An always-on bot's chat (not a helper): an unattended run keeps Autonomous. Its bot hard stops
+   * An always-on bot's chat (not a helper): an unattended run keeps full Auto. Its bot hard stops
    * (permissions.ts botHardStop), taint and the purchase / one-time-code gates still apply.
    */
   alwaysOn?: boolean

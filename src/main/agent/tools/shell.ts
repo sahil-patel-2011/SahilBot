@@ -13,7 +13,7 @@ import type { ThreadState, ToolContext, ToolDef } from '../types'
 // - a KNOWN local build / test / VCS / file tool (make, tsc, vitest, git commit, mkdir…, a script file in
 //   your folders, a package.json script that exists): runs in Auto, asks in Ask;
 // - anything else (unknown programs, network tools, installs, package runners like npx, inline code like
-//   python -c / node -e / sh -c, background processes): asks in Auto and Autonomous;
+//   python -c / node -e / sh -c, background processes): asks in Ask and Auto;
 // - deletes or rewrites history (rm, git reset --hard…): always asks, even in Bypass;
 // - system-level (sudo, launchctl, defaults write, disk tools, chmod outside your folders…): refused.
 //
@@ -26,11 +26,11 @@ import type { ThreadState, ToolContext, ToolDef } from '../types'
 // returns, managed by the JobManager (src/main/jobs). Starting one needs the same approval as running
 // the command. "&", nohup, setsid, screen -d and tmux new -d ask: background work goes through jobs.
 //
-// Autonomous mode: a command made only of `cd` into your folders and project steps (npm ci / npm install
+// Auto mode: a command made only of `cd` into your folders and project steps (npm ci / npm install
 // / pnpm install / yarn install from the project's committed, unmodified lockfile; git fetch / git pull
-// from the origin recorded when the folder was first seen) is a "project command": Autonomous runs it,
+// from the origin recorded when the folder was first seen) is a "project command": Auto runs it,
 // Auto asks. A command that writes to paths outside the workspace and attached folders counts as acting
-// outside this Mac's folders (asks in Auto and Autonomous), and commands run under a macOS sandbox that
+// outside this Mac's folders (asks in Ask and Auto), and commands run under a macOS sandbox that
 // refuses such writes unless the user approved the command (code/proc.ts, advanced.sandboxCommands).
 
 type Args = { command: string; cwd?: string; timeout?: number; background?: boolean; wait_for?: WaitFor }
@@ -760,7 +760,7 @@ export function outsidePaths(cmd: string, allowed: string[], cwd?: string): stri
   return [...new Set(out)].slice(0, 8)
 }
 
-// ---------- project commands (Autonomous) ----------
+// ---------- project commands (Auto) ----------
 
 /** Files that decide what an install runs and where packages come from: committed and unmodified, or no auto. */
 const NPM_FILES = { required: ['package.json'], optional: ['.npmrc'] }
@@ -977,7 +977,7 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
     untrusted: true,
     effect: (a, c) => effectOf(a, c.roots, c.folder).effect,
     // Installs, pushes and network commands are never routine: Auto asks. Setting up the project from its
-    // own lockfile (or git fetch / pull) is a project command: Autonomous runs it (never unattended).
+    // own lockfile (or git fetch / pull) is a project command: Auto runs it (never unattended).
     consequential: (a, call) => {
       if (call.unattended || !deps.workspace) return true
       try {

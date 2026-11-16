@@ -34,6 +34,8 @@ import './styles-mcp.css'
 import './styles-picker.css'
 // The design system (tokens + shared primitives) decides last: see styles-system.css.
 import './styles-system.css'
+// Intuitiveness pass (plain-language approvals, Folder chip, Bypass indicator, files made, inbox): after the tokens.
+import './styles-ux.css'
 
 // The same page serves the main window and the Quick Ask bar (#quick).
 const quick = location.hash === '#quick'

@@ -8,7 +8,7 @@ import { modeFlags } from '../lib/swarm-view'
 // Model, thinking and permissions: one picker under the box (components/ComposerPicker.tsx).
 import { ComposerPicker, MODES } from './ComposerPicker'
 // Attachments: drop, paste, the + menu (files, folder, screenshot) and the working folder (components/Attachments.tsx).
-import { AttachmentChips, DropOverlay, WorkFolderChip, useFolderCounts } from './Attachments'
+import { AttachmentChips, DropOverlay, WorkFolderChip, useFolderCounts, type FolderProjects } from './Attachments'
 import { fromTransfer, mergeAttachments, oversize, rejectedText } from '../lib/attachments'
 import { toast } from '../lib/toast'
 import { findSecrets } from '@shared/secret-detect'
@@ -77,8 +77,8 @@ export const Composer = forwardRef<ComposerHandle, {
   onManageModels?: () => void
   thinking?: EffortChoice
   onThinking?: (e: EffortChoice) => void
-  /** Left side of the row under the box (Home: the project or folder picker). */
-  context?: ReactNode
+  /** Home, before the chat exists: projects the Folder chip offers ("Use a project…"). */
+  projects?: FolderProjects
   /** The big Home version of the box. */
   big?: boolean
   /** Steering messages waiting for the agent's next step. */
@@ -282,7 +282,7 @@ export const Composer = forwardRef<ComposerHandle, {
       on: planFirst && !council, toggle: () => setPlanFirst((x) => !x), blocked: council ? 'Off while Council is on' : undefined,
       title: 'Plan first: SahilBot asks what it needs to know, shows you its plan, and starts only when you approve' })
     const helpers = p.team.maxAgents
-    modeList.push({ id: 'max', testId: 'max-toggle', label: 'Max', sub: 'Many agents at once: SahilBot picks a research team, an idea swarm, competing attempts with a judge, or a mix.', icon: <I.Bolt size={15} />,
+    modeList.push({ id: 'max', testId: 'max-toggle', label: 'Max', keys: '⌘⇧M', sub: 'Many agents at once: SahilBot picks a research team, an idea swarm, competing attempts with a judge, or a mix.', icon: <I.Bolt size={15} />,
       on: (maxOn || maxAlways) && !council, toggle: () => { if (!maxAlways) setMaxOn((x) => !x) },
       blocked: council ? 'Off while Council is on' : maxAlways ? 'Always on for this bot (its Max setting)' : undefined,
       title: `Max: many agents at once. SahilBot picks a research team, an idea swarm, competing attempts with a judge, or a mix, sized to the task (up to ${helpers} helpers on this model), and shows its plan on one live card (⌘⇧M)` })
@@ -336,7 +336,7 @@ export const Composer = forwardRef<ComposerHandle, {
           return <div className="composer-secret-hint" data-testid="composer-secret-hint"><I.Shield size={12} />That looks like a {what}. SahilBot hides it from the model and offers to save it to your Vault.</div>
         })()}
         <div className="composer-bar">
-          <Popover label={<I.Plus size={19} />} className="plus-pop" title="Attach files or a folder">
+          <Popover label={<I.Plus size={19} />} className="plus-pop" title="Attach files, a folder or a screenshot">
             {(close) => (
               <>
                 <button className="menu-item" onClick={() => { close(); void pick('files') }} data-testid="attach-files"><I.Paperclip size={15} />Upload files or photos<span className="sub">Any type, up to 100 MB each. You can also drop or paste them</span></button>
@@ -356,6 +356,7 @@ export const Composer = forwardRef<ComposerHandle, {
                       onClick={() => { m.toggle(); close() }} data-testid={m.testId} title={m.title}>
                       <span className="mode-ico" aria-hidden>{m.icon}</span>
                       <span className="mode-text">{m.label}<span className="sub">{m.blocked ?? m.sub}</span></span>
+                      {m.keys && <kbd className="mode-keys" aria-label={`Shortcut ${m.keys}`}>{m.keys}</kbd>}
                       <span className="mode-state" aria-hidden>{m.on && <I.Check size={15} />}</span>
                     </button>
                   ))}
@@ -402,26 +403,30 @@ export const Composer = forwardRef<ComposerHandle, {
           {p.running && !p.answering && !canSend ? (
             <button className="c-btn primary stop" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
           ) : canSend ? (
-            <button className="c-btn primary send" title={p.running && !p.answering ? 'Steer: SahilBot takes this into account right away (⌘Enter queues it instead)' : 'Send'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
+            <button className="c-btn primary send" title={p.running && !p.answering ? 'Send now: SahilBot adjusts what it is doing (⌘Enter sends after it finishes)' : 'Send (Enter)'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
           ) : (
             <button className="c-btn voice" title="Voice chat (⌘⇧V)" aria-label="Voice chat" onClick={p.onVoice} data-testid="voice-btn"><I.Wave size={17} /></button>
           )}
         </div>
       </div>
       <div className="under">
-        {p.context}
-        <WorkFolderChip threadId={p.threadId} inherited={p.inheritedFolder} draft={draftFolder} onDraft={setDraftFolder} />
+        <WorkFolderChip threadId={p.threadId} inherited={p.inheritedFolder} draft={draftFolder} onDraft={setDraftFolder} projects={p.projects} />
         <span className="spacer" />
-        {p.mode === 'autonomous' && p.running && (
-          <span className="autonomy-chip" role="status" data-testid="autonomous-chip"
-            title="Working on its own: builds, tests, installs from the lockfile, git and file changes in your folders run without asking. Deleting, sending, buying and anything outside your folders still ask.">
-            <span className="autonomy-dot" aria-hidden />Working on its own
+        {p.mode === 'bypass' && (
+          <span className="bypass-chip" role="status" data-testid="bypass-chip"
+            title="Bypass is on for this chat: everything runs without asking, except purchases, passwords and one-time codes. It resets to Auto when SahilBot restarts.">
+            <span className="bypass-dot" aria-hidden />Bypass on
           </span>
         )}
         <ComposerPicker models={p.models} model={p.model} onModel={p.onModel} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
           thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} />
       </div>
-      {p.running && !p.answering && <div className="steer-hint" data-testid="steer-hint"><kbd>Enter</kbd> steers SahilBot now · <kbd>⌘Enter</kbd> queues for when it's done{p.steering ? <span className="steering"> · <span className="spin" /> steering at its next step…</span> : null}</div>}
+      {p.running && !p.answering && (
+        <div className="steer-hint" data-testid="steer-hint">
+          <kbd>Enter</kbd> send now (SahilBot adjusts) · <kbd>⌘Enter</kbd> send after it finishes
+          {p.steering ? <span className="steering"> · <span className="spin" /> adjusting at its next step…</span> : null}
+        </div>
+      )}
       {dictError && <div className="bypass-banner">{dictError}</div>}
       {linkText !== null && text.trim() !== '' && (
         <div className="bypass-banner" data-testid="link-prefill-banner">
@@ -430,10 +435,9 @@ export const Composer = forwardRef<ComposerHandle, {
             : 'Text from a link, edited by you — review before sending.'}
         </div>
       )}
-      {p.mode === 'bypass' && <div className="bypass-banner">Bypass is on for this chat: actions run without asking, except hard stops.</div>}
     </div>
   )
 })
 
 /** One entry in the composer's Modes menu. */
-type ModeItem = { id: string; testId: string; label: string; chipLabel?: string; sub: string; icon: ReactNode; on: boolean; toggle: () => void; blocked?: string; title: string }
+type ModeItem = { id: string; testId: string; label: string; keys?: string; chipLabel?: string; sub: string; icon: ReactNode; on: boolean; toggle: () => void; blocked?: string; title: string }

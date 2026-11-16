@@ -95,6 +95,7 @@ const api: SahilBotApi = {
     folder: call('attach:folder') as never,
     pickFolder: call('attach:pickFolder') as never,
     clearFolder: call('attach:clearFolder') as never,
+    useFolder: call('attach:useFolder') as never,
     pickBotFolder: call('attach:pickBotFolder') as never,
     clearBotFolder: call('attach:clearBotFolder') as never,
     pick: call('attach:pick') as never

@@ -161,9 +161,10 @@ export function cleanRules(rules: unknown): CustomRule[] {
   return out
 }
 
-const LEVELS = new Set(['ask', 'auto', 'autonomous'])
-/** An autonomy level a new chat may start in: Ask first, Auto or Autonomous (never Bypass). */
+const LEVELS = new Set(['ask', 'auto'])
+/** A permission level a new chat may start in: Ask or Auto (never Bypass). 'autonomous' is Auto's old name. */
 export function cleanLevel(v: unknown): PermissionMode | undefined {
+  if (v === 'autonomous') return 'auto'
   return typeof v === 'string' && LEVELS.has(v) ? (v as PermissionMode) : undefined
 }
 /** Per-bot autonomy levels: known levels only (never Bypass), at most 500 bots. */

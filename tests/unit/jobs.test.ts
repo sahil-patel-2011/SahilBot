@@ -7,7 +7,7 @@ import { detectAddresses, JobManager, jobLine, patternOf, portOpen } from '../..
 import { jobsTool } from '../../src/main/agent/tools/jobs'
 import { shellTool } from '../../src/main/agent/tools/shell'
 import { emptyState, type ToolContext } from '../../src/main/agent/types'
-import { runFacts, summaryText, usageText, fmtTokens } from '../../src/renderer/src/lib/run-summary'
+import { runFacts, statusLine, summaryText, usageText, fmtTokens } from '../../src/renderer/src/lib/run-summary'
 import type { Message } from '../../src/shared/types'
 
 const dir = mkdtempSync(join(tmpdir(), 'sb-jobs-'))
@@ -214,6 +214,13 @@ describe('end-of-run summary', () => {
     expect(f).toMatchObject({ commands: 3, files: 4, jobs: 1 })
     expect(summaryText(f, { autonomous: true, asked: 0 })).toBe('Ran 3 commands, edited 4 files, started 1 job — 0 needed you')
     expect(summaryText(f, { autonomous: false })).toBe('Ran 3 commands, edited 4 files, started 1 job')
+    // The line under the reply: plain words; tokens live in the hover card.
+    const u = { input: 300, output: 60, usd: 0.0004, cloud: true, calls: 1, models: [] }
+    expect(statusLine(f, u)).toBe('Done · 8 actions · 4 files changed · 1 background job started · <$0.01')
+    expect(statusLine(f, u, { asked: 1 })).toContain('asked you once')
+    expect(statusLine({ ...f, actions: 1, files: 0, jobs: 0, commands: 0 }, u)).toBe('Done · 1 action · <$0.01')
+    expect(statusLine({ ...f, actions: 0, files: 0, jobs: 0, commands: 0 }, null)).toBe('')
+    expect(statusLine({ ...f, actions: 1, files: 0, jobs: 0, commands: 0 }, { ...u, cloud: false })).toBe('Done · 1 action · free (local)')
   })
   test('tokens and cost', () => {
     expect(fmtTokens(950)).toBe('950')
