@@ -1,10 +1,12 @@
 import type { QueueQuestion } from '@shared/types'
+import { PREFERENCE_QUESTION, decisionFromAnswer, saveDecision, type DecisionMemory } from '../../decisions'
 import { hardStopText, looksInstructionLike, stem } from '../permissions'
+import { autoMemoryOn } from '../prompt'
 import { plainOption } from './policy'
 import type { QuestionStore } from './store'
 
 // Learning from answers: a preference the user answered once ("PDF or Word for the weekly report?") is
-// kept, per bot, with where it came from, and saved as a memory the bot sees in every chat. The next time
+// kept, per bot, and saved as a decision memory the bot sees in every chat (decisions.ts). The next time
 // the bot is about to ask the same thing, the saved answer is used instead. Answers to questions a run
 // asked after reading outside content are never learned (a page could steer the question), and neither
 // is anything with an address in it or that touches a hard stop.
@@ -13,7 +15,7 @@ const STOP = new Set(('a an the to for of on in at by with and or any me my mine
   'should would will can could shall be is are was were am which what how when where who whom whose want like prefer please use using ' +
   'there here than then so if just also into about over from up out now next time one each').split(' '))
 
-const PREFERENCE = /\b(prefer|preference|would you like|do you want|want me to|which (style|format|tone|time|day|layout|font|colou?r|language|length|channel|file type|template|voice|currency|unit)|how (often|long|formal|detailed|much detail|should i (format|name|sign|address))|what (tone|style|format|time|day|name)|favou?rite|by default|usually|from now on|every time)\b/i
+const PREFERENCE = PREFERENCE_QUESTION
 
 /** A question's comparable key: its significant words, stemmed and sorted. */
 export function questionKey(question: string): string {
@@ -47,12 +49,11 @@ export function learnable(q: QueueQuestion, answer: string, o: { tainted?: boole
 
 export interface LearnedAnswer { answer: string; question: string; at: number; questionId: string | null }
 
-export interface MemorySink {
-  save(content: string, category: string, spaceId: string | null, source?: 'chat' | 'you' | 'import' | 'learned', provenance?: 'trusted' | 'untrusted'): { memory: { id: string } }
-}
+/** Where learned answers are remembered (the memory store). */
+export type MemorySink = DecisionMemory
 
 export class Learner {
-  constructor(private store: QuestionStore, private memory?: MemorySink, private now: () => number = Date.now) {}
+  constructor(private store: QuestionStore, private memory?: MemorySink, _now: () => number = Date.now) {}
 
   /** A saved answer for this question in this bot: the same significant words, or nearly (≥ 75% overlap). */
   find(botId: string, q: QueueQuestion): LearnedAnswer | null {
@@ -69,16 +70,19 @@ export class Learner {
     return { answer: best.row.answer, question: best.row.question, at: best.row.createdAt, questionId: best.row.questionId }
   }
 
-  /** Remembers the user's answer to a preference question (and saves it as a memory with its provenance). */
+  /**
+   * Remembers the user's answer: any choice that generalizes becomes a decision memory for this bot (the
+   * same question answered again replaces it), and a preference answer is also kept to answer the same
+   * question next time without asking. Nothing from a tainted run (it read outside content).
+   */
   learn(botId: string, q: QueueQuestion, answer: string, o: { questionId?: string | null; tainted?: boolean; botName?: string } = {}): { learned: boolean; memoryId?: string } {
     const clean = plainOption(answer)
-    if (!learnable(q, clean, o)) return { learned: false }
-    const when = new Date(this.now()).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
     let memoryId: string | undefined
-    try {
-      const text = `When ${o.botName ?? 'this bot'} asked "${q.question.replace(/\s+/g, ' ').trim().slice(0, 200)}", the user chose: ${clean}. (Learned from the user's answer on ${when}${o.questionId ? `, question ${o.questionId}` : ''}; use it instead of asking again.)`
-      memoryId = this.memory?.save(text, 'preference', botId, 'chat', 'trusted').memory.id
-    } catch { /* memory off or full: the learned answer below still works */ }
+    const d = this.memory ? decisionFromAnswer(q, clean, { tainted: o.tainted }) : null
+    if (d) {
+      try { memoryId = saveDecision(this.memory!, d, botId, { auto: autoMemoryOn() })?.memory.id } catch { /* memory full: the learned answer below still works */ }
+    }
+    if (!learnable(q, clean, o)) return { learned: false, ...(memoryId ? { memoryId } : {}) }
     this.store.learn(botId, questionKey(q.question), q.question, clean, o.questionId ?? null, memoryId ?? null)
     return { learned: true, ...(memoryId ? { memoryId } : {}) }
   }

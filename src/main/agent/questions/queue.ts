@@ -40,6 +40,8 @@ export interface QueueDeps {
   changed?: () => void
   botName?: (botId: string) => string
   threadExists?: (threadId: string) => boolean
+  /** The user approved or declined a queued action (remembered as a pattern, never as a permission: learning/decisions.ts). */
+  onApproval?: (item: StoredItem, answer: 'approve' | 'deny') => void
 }
 
 const fmt = (t: number): string => new Date(t).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -179,6 +181,7 @@ export class QuestionQueue {
       if (cur.status !== 'open') return cur
       const a = answer === 'approve' || (Array.isArray(answer) && /^(approve|allow|yes|once)/i.test(answer[0] ?? '')) ? 'approve' : 'deny'
       this.d.store.update(id, (x) => { x.status = 'answered'; x.answers = [a]; x.answeredBy = 'user'; x.answeredAt = this.now(); x.resumed = false })
+      try { this.d.onApproval?.(cur, a) } catch { /* never blocks the answer */ }
     } else {
       const raw = Array.isArray(answer) ? answer : [answer === 'approve' ? 'Yes' : 'No']
       const answers = cur.questions.map((_q, i) => plainOption(String(raw[i] ?? '').slice(0, 2000)))

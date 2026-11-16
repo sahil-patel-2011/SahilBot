@@ -32,9 +32,15 @@ export function updateBotTool(db: Db, files: SpaceFiles, changed: () => void): T
       if (bot.isMain && a.name) throw new Error('The main bot keeps its name.')
       db.updateSpace(bot.id, { ...(a.name ? { name: a.name.trim() } : {}), ...(a.color ? { color: COLORS[a.color] } : {}) })
       if (a.instructions) files.setPrompt(bot.id, a.instructions.trim() + '\n')
+      const saved = db.getSpace(bot.id), instructions = files.getPrompt(bot.id)
+      const verified = !!saved && (!a.name || saved.name === a.name.trim()) && (!a.instructions || instructions.trim() === a.instructions.trim())
+      if (!verified) throw new Error('The profile update did not read back correctly. Check the saved profile before reporting completion.')
+      ctx.state.systemSnapshot = undefined
+      ctx.state.leanSnapshots = {}
+      ctx.state.snapshots = {}
       changed()
       const parts = [a.name && `name "${a.name}"`, a.color && `color ${a.color}`, a.instructions && 'instructions'].filter(Boolean)
-      return { text: `Updated your ${parts.join(', ')}. New instructions apply from the next conversation.`, display: `updated ${parts.join(', ')}` }
+      return { text: `Saved and read back your ${parts.join(', ')}. The updated profile applies in this conversation too.`, data: { name: saved!.name, instructions, verified }, verification: { passed: true, criterion: 'Bot profile saved', detail: `Read back the saved profile for ${saved!.name}.` }, display: `updated ${parts.join(', ')}` }
     }
   }
 }

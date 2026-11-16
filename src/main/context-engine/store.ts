@@ -131,6 +131,10 @@ export class GraphStore {
         corrected INTEGER NOT NULL DEFAULT 0, scope TEXT, category TEXT);
       CREATE INDEX IF NOT EXISTS ce_attributes_entity ON ce_attributes(entity_id);
       CREATE INDEX IF NOT EXISTS ce_attributes_source ON ce_attributes(source_kind, source_ref);
+      CREATE TABLE IF NOT EXISTS ce_attribute_history (
+        id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFERENCES ce_entities(id) ON DELETE CASCADE,
+        key TEXT NOT NULL, snapshot TEXT NOT NULL, valid_from INTEGER NOT NULL, valid_to INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS ce_attribute_history_entity ON ce_attribute_history(entity_id, key, valid_from);
       CREATE TABLE IF NOT EXISTS ce_relations (
         id TEXT PRIMARY KEY, from_id TEXT NOT NULL, rel TEXT NOT NULL, to_id TEXT NOT NULL, trust TEXT NOT NULL, confidence REAL NOT NULL,
         source_kind TEXT NOT NULL, source_ref TEXT, source_label TEXT, source_link TEXT, at INTEGER NOT NULL, created_at INTEGER NOT NULL, note TEXT, scope TEXT);
@@ -363,8 +367,14 @@ export class GraphStore {
       if (locked && !a.corrected) return { result: 'kept', id: locked.id }
       const stronger = visible.find((x) => TRUST_RANK[x.trust] > TRUST_RANK[a.trust] && !a.corrected)
       if (stronger) return { result: 'kept', id: stronger.id }
+      // Extraction order is not chronology: an old chat/file may be indexed after a recent one.
+      const newer = visible.find((x) => x.at > at && !a.corrected)
+      if (newer) return { result: 'kept', id: newer.id }
       // Replace: the old value goes (the newer or the user's word wins).
-      for (const x of visible) this.db.sql.prepare('DELETE FROM ce_attributes WHERE id = ?').run(x.id)
+      for (const x of visible) {
+        this.db.sql.prepare('INSERT INTO ce_attribute_history VALUES(?,?,?,?,?,?)').run(uid(), entityId, key, JSON.stringify(x), x.at, a.corrected ? now : at)
+        this.db.sql.prepare('DELETE FROM ce_attributes WHERE id = ?').run(x.id)
+      }
       const id = this.insertAttr(entityId, { ...a, key, value, at }, vnorm, scope)
       this.touch()
       return { result: 'replaced', id }
@@ -383,6 +393,15 @@ export class GraphStore {
     return id
   }
 
+  /** Historical values are evidence, never current instructions. Forgetting the entity purges them. */
+  history(entityId: string, key?: string): Array<{ fact: StoredAttribute; validFrom: number; validTo: number | null }> {
+    const old = this.db.sql.prepare('SELECT * FROM ce_attribute_history WHERE entity_id=? ORDER BY valid_from').all(entityId) as Row[]
+    return [...old.map((r) => ({ fact: JSON.parse(String(r.snapshot)) as StoredAttribute, validFrom: Number(r.valid_from), validTo: Number(r.valid_to) as number | null })),
+      ...this.attributes(entityId).map((fact) => ({ fact, validFrom: fact.at, validTo: null as number | null }))].filter((x) => !key || x.fact.key === normKey(key))
+  }
+
+  atTime(entityId: string, at: number): StoredAttribute[] { return this.history(entityId).filter((x) => x.validFrom <= at && (x.validTo === null || x.validTo > at)).map((x) => x.fact) }
+
   /** Removes a fact; `byUser` also keeps a hash so extraction never adds it back. */
   removeAttribute(id: string, byUser = true): boolean {
     const a = this.attribute(id)
@@ -390,6 +409,7 @@ export class GraphStore {
     const e = this.entity(a.entityId)
     if (byUser && e) this.reject(rejectHash(e.name, a.key, a.value))
     this.db.sql.prepare('DELETE FROM ce_attributes WHERE id = ?').run(id)
+    if (byUser) this.db.sql.prepare("DELETE FROM ce_attribute_history WHERE entity_id=? AND key=?").run(a.entityId, a.key)
     this.touch()
     return true
   }
@@ -399,6 +419,7 @@ export class GraphStore {
     const n = Number(this.db.sql.prepare('DELETE FROM ce_attributes WHERE source_kind = ? AND source_ref = ?').run(kind, ref).changes)
       + Number(this.db.sql.prepare('DELETE FROM ce_relations WHERE source_kind = ? AND source_ref = ?').run(kind, ref).changes)
       + Number(this.db.sql.prepare('DELETE FROM ce_mentions WHERE source_kind = ? AND source_ref = ?').run(kind, ref).changes)
+      + Number(this.db.sql.prepare("DELETE FROM ce_attribute_history WHERE json_extract(snapshot, '$.source.kind')=? AND json_extract(snapshot, '$.source.ref')=?").run(kind, ref).changes)
     if (n) this.touch()
     return n
   }

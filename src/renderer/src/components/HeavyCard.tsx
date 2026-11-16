@@ -122,7 +122,7 @@ export function HeavyCard({ board, groupId, live, embedded, title }: { board: He
   )
 }
 
-const SPEND_KIND: Record<NonNullable<PendingRequest['spend']>['kind'], string> = { team: 'Research team', heavy: 'Max · judged attempts', swarm: 'Max · swarm', council: 'Council' }
+const SPEND_KIND: Record<NonNullable<PendingRequest['spend']>['kind'], string> = { team: 'Agent swarm · research', heavy: 'Agent swarm · independent review', swarm: 'Agent swarm', council: 'Agent swarm · cross-provider review' }
 
 /** A big swarm or a Heavy run asking for the user's OK on what it will cost. */
 export function SpendCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
@@ -279,7 +279,7 @@ export function CouncilCard({ board, live }: { board: CouncilBoard; live: boolea
     <div className={`heavy-card council-card${active ? ' live' : ''}`} data-testid="council-card" data-phase={board.phase}>
       <button className="plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.Sparkle size={15} />
-        <span className="plan-title">Council</span>
+        <span className="plan-title">Agent swarm</span>
         <span className="plan-count">{board.members.map((m) => m.label ?? m.model).join(' + ')} · {COUNCIL_PHASE[board.phase]}{board.spentUsd ? ` · ${money(board.spentUsd)}` : ''}</span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>

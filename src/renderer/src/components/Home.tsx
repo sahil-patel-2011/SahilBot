@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { FilePreview, Space, Thread } from '@shared/types'
+import type { FilePreview, HomeIdea, Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { Mascot } from '../brand'
 import * as I from '../icons'
@@ -56,16 +56,12 @@ export function FileCard({ f, onOpen }: { f: RecentFile; onOpen: (path: string) 
   )
 }
 
-/** Starter ideas under the box: one click fills it in. */
-const IDEAS: Array<{ icon: ReactNode; label: string; text: string; deep?: boolean }> = [
-  { icon: <I.Globe size={14} />, label: 'Plan a trip', text: 'Plan a 4-day trip to ' },
-  { icon: <I.Clock size={14} />, label: 'Morning brief', text: 'Every weekday at 8am, give me a short morning brief: today\'s calendar and reminders, the weather where I live, and the most important news about my work and interests.' },
-  { icon: <I.Search size={14} />, label: 'Watch a page', text: 'Every morning, check https:// and tell me only if something important changed (price, availability, new posts).' },
-  { icon: <I.Cpu size={14} />, label: 'Build an app', text: 'Build me a small web app that ' },
-  { icon: <I.File size={14} />, label: 'Make a deck', text: 'Make a polished 8-slide deck about ' },
-  { icon: <I.Video size={14} />, label: 'Make a video', text: 'Make a 30-second avatar video about ' },
-  { icon: <I.Sparkle size={14} />, label: 'Use my Mac', text: 'On my Mac, ' }
-]
+/** Starter ideas under the box (personalized in main: ideas.ts); one click fills it in. */
+const ICON: Record<HomeIdea['icon'], ReactNode> = {
+  globe: <I.Globe size={14} />, clock: <I.Clock size={14} />, search: <I.Search size={14} />, cpu: <I.Cpu size={14} />, file: <I.File size={14} />,
+  video: <I.Video size={14} />, sparkle: <I.Sparkle size={14} />, edit: <I.Edit size={14} />, layers: <I.Layers size={14} />, image: <I.Image size={14} />,
+  inbox: <I.Inbox size={14} />, users: <I.Users size={14} />, listicon: <I.ListIcon size={14} />, bolt: <I.Bolt size={14} />, folder: <I.Folder size={14} />
+}
 
 export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, onIdea }: {
   onIdea?: (text: string, deep?: boolean) => void
@@ -76,7 +72,9 @@ export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, 
   refreshKey?: unknown
 }) {
   const [files, setFiles] = useState<RecentFile[]>([])
+  const [ideas, setIdeas] = useState<HomeIdea[]>([])
   useEffect(() => { void api.files.recent(3).then(setFiles) }, [refreshKey])
+  useEffect(() => { void api.files.ideas().then(setIdeas).catch(() => undefined) }, [refreshKey])
   return (
     <div className="home">
       <div className="home-hero">
@@ -84,7 +82,7 @@ export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, 
         {composer}
         {onIdea && (
           <div className="ideas" data-testid="ideas">
-            {IDEAS.map((x) => <button key={x.label} className="idea" onClick={() => onIdea(x.text, x.deep)}>{x.icon}{x.label}</button>)}
+            {ideas.map((x) => <button key={x.label} className={`idea${x.personal ? ' personal' : ''}`} title={x.personal ? 'Suggested from what you do with SahilBot' : undefined} onClick={() => onIdea(x.text)}>{ICON[x.icon]}{x.label}</button>)}
           </div>
         )}
         {files.length > 0 && (

@@ -3,6 +3,10 @@ import type { PermissionMode, ToolEffect } from '@shared/types'
 export type JsonSchema = Record<string, unknown>
 
 export interface ToolOutput {
+  /** Validated machine-readable result; also shown to the model and available to workflows. */
+  data?: unknown
+  /** Evidence produced by the implementation, never a model's assertion of success. */
+  verification?: { passed: boolean; criterion: string; detail: string }
   /** Text the model sees (wrapped as data before it reaches the model). */
   text: string
   /** Images the model sees on its next step (e.g. browser screenshots). */
@@ -22,6 +26,12 @@ export interface ToolOutput {
 }
 
 export interface ToolContext {
+  runId?: string
+  /** Stable across a resumed action; adapters may pass it to APIs supporting idempotency keys. */
+  idempotencyKey?: string
+  /** Calls the normal permission/validation/ledger path, including from workflows and verifiers. */
+  invokeTool?: (name: string, args: Record<string, unknown>) => Promise<ToolOutput>
+  recall?: (query: string, limit?: number) => Promise<import('../memory-system').RecallHit[]>
   threadId: string
   signal: AbortSignal
   workspaceDir: string
@@ -46,7 +56,7 @@ export interface ToolContext {
   searchTools(query: string): Array<{ name: string; description: string; loaded: boolean; connector?: boolean }>
   readResult(id: string): string | undefined
   /** Offers a one-click connect card for an app that isn't connected; resolves to the app's tools once connected (empty if not). `fullName`: only an app the query names in full. */
-  offerConnect?(query: string, o?: { fullName?: boolean }): Promise<Array<{ name: string; description: string; loaded: boolean }>>
+  offerConnect?(query: string, o?: { fullName?: boolean; reason?: string }): Promise<Array<{ name: string; description: string; loaded: boolean }>>
   /** The model this run uses. */
   model?: string
   /** Group chats: the bot speaking right now (its own memories, rules and work log are its, not shared). */
@@ -86,6 +96,9 @@ export interface ToolDef<A = any> {
   name: string
   description: string
   parameters: JsonSchema
+  outputSchema?: JsonSchema
+  /** Retry only when the adapter explicitly guarantees that repeating the action is safe. */
+  idempotent?: boolean
   /** What running it can do to the world. May depend on arguments (browser actions). */
   /** `roots`: the chat's attached folders, so a path inside one resolves. */
   effect: ToolEffect | ((args: A, call: { roots: string[]; folder?: string }) => ToolEffect)
@@ -125,6 +138,9 @@ export interface TodoItem {
 }
 
 export interface ThreadState {
+  workerFolder?: string
+  taskPolicy?: import('./runtime/store').TaskPolicy
+  acceptance?: Array<{ criterion: string; tool: string; args: Record<string, unknown>; pointer?: string; equals?: unknown; contains?: string }>
   /** Non-core tools loaded into this thread, in load order (appended, never reordered). */
   loaded: string[]
   /** Tools the user allowed "always" in this thread. */

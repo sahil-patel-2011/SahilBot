@@ -110,11 +110,12 @@ function ConnectCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: 
         <span className="conn-logo" style={{ background: p.color }}>{p.name[0]}</span>
         Connect {p.name} to continue?
       </div>
-      <div className="hint">{p.description} {p.auth === 'none' ? 'No sign-in needed.' : `${p.name}'s own sign-in page opens in your browser; the sign-in is kept in your Mac's Keychain.`}</div>
+      {req.question && <p className="connect-reason">{req.question}</p>}
+      <div className="hint">{p.description} {p.auth === 'none' ? 'No sign-in needed.' : `Sign in or create an account on ${p.name}'s page. Your password stays with ${p.name}.`}</div>
       {busy && p.auth !== 'none' && <div className="hint" data-testid="connect-card-waiting">Finish signing in to {p.name} in your browser; this chat goes on by itself once you're back.</div>}
       {err && <div className="hint error" data-testid="connect-card-error">{err}</div>}
       <div className="pending-actions">
-        <button className="btn primary" disabled={busy} onClick={() => void go()} data-testid="connect-card-go">{busy ? (p.auth === 'none' ? 'Connecting…' : 'Waiting for sign-in…') : err ? 'Try again' : `Connect ${p.name}`}</button>
+        <button className="btn primary" disabled={busy} onClick={() => void go()} data-testid="connect-card-go">{busy ? (p.auth === 'none' ? 'Connecting…' : 'Waiting for sign-in…') : err ? 'Try again' : p.auth === 'none' ? `Connect ${p.name}` : 'Connect / Sign in'}</button>
         <button className="btn" onClick={() => respond('skip')} data-testid="connect-card-skip">Not now</button>
       </div>
     </div>

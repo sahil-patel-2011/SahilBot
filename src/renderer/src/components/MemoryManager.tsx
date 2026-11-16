@@ -17,6 +17,7 @@ import { ClampText, Disclosure, InfoTip, SetTabs } from './ui'
 const KINDS: Array<{ k: MemoryKind; label: string; one: string }> = [
   { k: 'profile', label: 'About you', one: 'About you' },
   { k: 'preference', label: 'Preferences', one: 'Preference' },
+  { k: 'decision', label: 'Decisions', one: 'Decision' },
   { k: 'person', label: 'People', one: 'Person' },
   { k: 'location', label: 'Places', one: 'Place' },
   { k: 'work', label: 'Work', one: 'Work' },

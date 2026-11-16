@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { BotMaxSettings, BotShape, BotTemplate, ModelList, Space } from '@shared/types'
+import type { BotShape, BotTemplate, ModelList, Space } from '@shared/types'
 import { api } from '../api'
 import { COLORS, SHAPES, SpaceAvatar } from '../brand'
 import * as I from '../icons'
@@ -40,15 +40,6 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
     setAdding(t.id)
     try { const r = await api.templates.add(t.id); onSaved(r.spaceId, r.threadId); onClose() } catch (e) { setErr((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')) } finally { setAdding(null) }
   }
-  // Max (bots): Off / Auto / Always and Max helpers; saved with the rest. (Older installs: the Swarm setting.)
-  const [maxCfg, setMaxCfg] = useState<Partial<BotMaxSettings>>({})
-  const [maxAll, setMaxAll] = useState<Record<string, Partial<BotMaxSettings>>>({})
-  useEffect(() => { void api.settings.get().then((x) => { setMaxAll(x.botMax ?? {}); if (space) setMaxCfg({ ...x.botSwarm?.[space.id], ...x.botMax?.[space.id] }) }) }, [space])
-  const saveMax = async (id: string): Promise<void> => {
-    if (!Object.keys(maxCfg).length) return
-    await api.settings.set({ botMax: { ...maxAll, [id]: { ...maxAll[id], ...maxCfg } } })
-    window.dispatchEvent(new Event('sahilbot:settings-changed'))
-  }
   const bots = spaces.filter((s) => s.kind === 'bot')
 
   useEffect(() => {
@@ -70,7 +61,6 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
       if (space) {
         await api.spaces.update(space.id, { name: name.trim() || space.name, color, shape, ...(mode === 'group' ? { members } : {}) })
         if (mode !== 'group') await api.spaces.setPrompt(space.id, prompt)
-        if (mode === 'bot') await saveMax(space.id)
         onSaved(space.id)
       } else {
         if (mode === 'project' && !folder) throw new Error('Choose the project folder.')
@@ -79,7 +69,6 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
         // The job goes into its instructions (with anything typed there) and, ready to send, into its chat box.
         const instructions = [task ? `Your job: ${task}` : '', prompt.trim()].filter(Boolean).join('\n\n')
         if (mode !== 'group' && instructions) await api.spaces.setPrompt(r.space.id, instructions)
-        if (mode === 'bot') await saveMax(r.space.id)
         onSaved(r.space.id, r.threadId, task || undefined)
       }
       onClose()
@@ -131,23 +120,6 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
               </div>
             </div>
           )
-          const max = (
-            <div className="field"><label>Max</label>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <select value={maxCfg.mode ?? 'auto'} onChange={(e) => setMaxCfg((x) => ({ ...x, mode: e.target.value as BotMaxSettings['mode'] }))} data-testid="editor-max-mode" aria-label="Max">
-                  <option value="off">Off</option>
-                  <option value="auto">Auto: the bot decides</option>
-                  <option value="always">Always</option>
-                </select>
-                {(maxCfg.mode ?? 'auto') !== 'off' && (
-                  <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>Max helpers
-                    <input type="number" min={1} max={50} value={maxCfg.maxHelpers ?? 20} style={{ width: 64 }} data-testid="editor-max-helpers"
-                      onChange={(e) => { const n = Math.round(Number(e.target.value)); if (Number.isFinite(n)) setMaxCfg((x) => ({ ...x, maxHelpers: Math.min(50, Math.max(1, n)) })) }} />
-                  </label>
-                )}
-              </div>
-            </div>
-          )
           const instructions = (
             <>
               <h3>{isNewBot ? 'Personality and extra instructions' : 'Personality and instructions'}</h3>
@@ -157,7 +129,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
               <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Who is this bot? What should it focus on, and how should it talk?" data-testid="bot-instructions" />
             </>
           )
-          if (!isNewBot) return <>{look}{max}<div className="hint bot-auto-note" data-testid="editor-auto-model"><I.Sparkle size={12} /> This bot picks its own model and thinking for each request, for the best result.</div>{instructions}</>
+          if (!isNewBot) return <>{look}<div className="hint bot-auto-note" data-testid="editor-auto-model"><I.Sparkle size={12} /> Chooses its tools, models and specialist agents as the task needs.</div>{instructions}</>
           return (
             <>
               <div className="field"><label htmlFor="bot-job">What's its job?</label>
@@ -165,7 +137,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
                   onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save() } }} data-testid="bot-job" />
               </div>
               <div className="hint bot-auto-note" data-testid="editor-auto-model"><I.Sparkle size={12} /> It opens in its own chat with this job ready to send. Leave it empty and the bot introduces itself.</div>
-              <Disclosure title="Look, Max and instructions" sub="Optional" testId="bot-editor-more">{look}{max}{instructions}</Disclosure>
+              <Disclosure title="Appearance and instructions" sub="Optional" testId="bot-editor-more">{look}{instructions}</Disclosure>
               {templates.length > 0 && (
                 <div className="be-templates" data-testid="bot-templates-list">
                   <div className="be-templates-head"><span>Or start from a template</span><button className="link-btn" onClick={() => void importBot(onClose)} data-testid="template-import">Import from file…</button></div>

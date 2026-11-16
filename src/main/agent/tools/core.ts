@@ -21,7 +21,7 @@ export function coreTools(results: ResultStore): ToolDef[] {
       let connected = false
       // An app that isn't connected yet: the user gets a one-click Connect card right in the chat. When
       // built-in tools matched too, only for an app the query names in full ("acme tasks", "google calendar").
-      if (ctx.offerConnect && !hits.some((h) => h.connector)) {
+      if (ctx.offerConnect) {
         const app = await ctx.offerConnect(query, hits.length ? { fullName: true } : undefined)
         if (app.length) {
           // The app just connected: its tools that match the request, else all of them (the request's words
@@ -37,6 +37,20 @@ export function coreTools(results: ResultStore): ToolDef[] {
       const added = ctx.loadTools(toLoad)
       const lines = hits.slice(0, 8).map((h) => `- ${h.name}: ${h.description.split('\n')[0]}${added.includes(h.name) ? ' (loaded now)' : h.loaded ? ' (already loaded)' : ' (not loaded: tool limit reached)'}`)
       return { text: `${connected ? 'The app is connected now. ' : ''}Tools matching "${query}":\n${lines.join('\n')}${connected && added.length ? '\nThey are callable from your next step: use them now to answer.' : ''}`, display: added.length ? `loaded ${added.join(', ')}` : `searched "${query}"` }
+    }
+  }
+
+  const connectApp: ToolDef<{ app: string; reason: string }> = {
+    name: 'connect_app', label: 'Connect an app', group: 'Connectors', effect: 'read',
+    available: (state) => !state.depth,
+    description: 'Show a connector tile with a Connect / Sign in button when the app you need is not connected or its login expired. Give the full app name and why this task needs it. The user signs up/signs in on the provider’s page; never ask for passwords in chat. After the tile connects, use its tools. Respect a skip.',
+    parameters: { type: 'object', properties: { app: { type: 'string', minLength: 1 }, reason: { type: 'string', minLength: 1, maxLength: 500 } }, required: ['app', 'reason'], additionalProperties: false },
+    async run({ app, reason }, ctx) {
+      if (!ctx.offerConnect) throw new Error('Connectors are unavailable in this session.')
+      const ready = ctx.searchTools(app).filter((t) => t.connector)
+      const tools = ready.length ? ready : await ctx.offerConnect(app, { reason })
+      const added = ctx.loadTools(tools.map((t) => t.name))
+      return { text: tools.length ? `${app} is connected. Use these tools now:\n${tools.map((t) => `- ${t.name}: ${t.description}`).join('\n')}` : `No connection to ${app} was established. Continue without it; the user can connect later from Connect apps.`, data: { connected: tools.length > 0, tools: tools.map((t) => t.name), loaded: added }, display: tools.length ? `${app} connected` : `${app} not connected` }
     }
   }
 
@@ -175,5 +189,5 @@ export function coreTools(results: ResultStore): ToolDef[] {
     }
   }
 
-  return [findTools, readResult, todo, notesTool(), askUser, proposePlan]
+  return [findTools, connectApp, readResult, todo, notesTool(), askUser, proposePlan]
 }

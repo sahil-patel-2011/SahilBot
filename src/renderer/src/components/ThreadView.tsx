@@ -765,9 +765,11 @@ function Row({ b, actions, editable, cont }: { b: Exclude<Block, { kind: 'activi
       {m.content && !streaming && (
         <div className="ai-foot">
           <MessageTools m={m} actions={actions} side="right" />
+          {(m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
+          {(m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title="Some acceptance checks remain unresolved">Needs checking</span>}
           {!!m.meta?.routed && m.model && (
             <span className="routed" title={`Auto chose this model: ${(m.meta.routed as { why: string }).why}`} data-testid="routed">
-              {(m.meta.routed as { label?: string }).label || m.model}
+              {((m.meta.routed as { label?: string }).label || m.model).split(' · ')[0]}
             </span>
           )}
         </div>

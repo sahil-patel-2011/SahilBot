@@ -3,7 +3,9 @@ import { autoPool, autoVariant } from './llm/router'
 import { execFileSync } from 'node:child_process'
 import { homedir, tmpdir, totalmem } from 'node:os'
 import { writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
+import { homeIdeas } from './ideas'
+import { classifyTask, type TaskCategory } from './llm/task-classifier'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
@@ -18,7 +20,7 @@ import { OpenAITtsEngine } from './voice/tts'
 import { DEFAULT_TRANSCRIBE_MODEL, speechUsd, transcribe as openaiTranscribe, transcribeUsd } from './apis/openai'
 import { OpenAISttEngine } from './voice/stt'
 import { hookSpend } from './apis/spend'
-import { INTRO, setAutoMemory } from './agent/prompt'
+import { INTRO, autoMemoryOn, setAutoMemory } from './agent/prompt'
 import { updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
@@ -121,6 +123,7 @@ import { alertFromPrompt, usMarketOpen } from './markets/alerts'
 import { stockTools } from './agent/tools/stocks'
 import { KnowledgeService } from './knowledge/service'
 import { LearningService } from './learning/service'
+import { DecisionRecorder } from './learning/decisions'
 import { knowledgeTools, resolveScope } from './agent/tools/knowledge'
 import { vaultTool } from './agent/tools/vault'
 import { VaultService } from './vault/service'
@@ -739,11 +742,19 @@ app.whenReady().then(() => {
   // Mac and paired devices, and a later answer resumes the bot. Deadlines go ahead with safe defaults only.
   const questionStore = new QuestionStore(db)
   const learner = new Learner(questionStore, memory)
+  // The user's decisions (answers, picks, corrections, approval patterns) as memories the agent acts on.
+  // Memories only: the permission engine never reads them (learning/decisions.ts).
+  const decisions = new DecisionRecorder({ db, memory, auto: autoMemoryOn, secretValues: () => vault.secretValues(), isAppThread: (id) => appThreadRef.current?.(id) ?? false })
   const chatRef: { current: Agent | null } = { current: null }
   let needsYouTimer: ReturnType<typeof setTimeout> | null = null
   const questions = new QuestionQueue({
     store: questionStore, learner,
     botName: (id) => botName(id),
+    onApproval: (item, a) => {
+      let args: Record<string, unknown> = {}
+      try { const v = JSON.parse(item.approval?.args ?? '{}') as unknown; if (v && typeof v === 'object' && !Array.isArray(v)) args = v as Record<string, unknown> } catch { /* pretty text only */ }
+      if (item.approval) decisions.approval(item.threadId, { tool: item.approval.tool, label: item.approval.label, summary: item.approval.summary, args, answer: a, tainted: item.tainted })
+    },
     threadExists: (id) => !!db.getThread(id),
     notify: (item, o) => {
       const r: PendingRequest = item.kind === 'approval'
@@ -787,7 +798,20 @@ app.whenReady().then(() => {
   // The card shows for a while when you're looking at the bot's chat; otherwise it goes to Needs you at once.
   const questionHost = createQuestionHost({ db, settings, queue: questions, learner, grace: (threadId) => (mainFocused() && viewingThread === threadId ? ATTENDED_GRACE_MS : 0) })
   const chat = new Agent({
+    memoryEmbedder: () => knowledge.recallEmbedder(),
+    recallFiles: async (query, threadId, signal) => {
+      const state = db.getState(threadId), spaceId = db.getThread(threadId)?.spaceId ?? null
+      const folders = [...new Set([...(state.roots ?? []), ...(state.folder ? [state.folder] : [])])]
+      const files = folders.length ? await knowledge.search(query, { scope: folders, k: 8, signal }).catch(() => null) : null
+      const vault = notesVaultRef.current
+      const notes = vault?.search(query, vault.sectionsFor(spaceId), 6) ?? []
+      return [
+        ...(files?.hits ?? []).map((h) => ({ id: `file:${h.citation}`, kind: 'file' as const, text: h.snippet, score: h.score, at: h.modified, source: { path: h.path }, quoted: true })),
+        ...notes.map((n) => ({ id: `vault:${n.path}`, kind: 'vault' as const, text: n.snippet, score: n.score, at: Date.now(), source: { path: n.path }, quoted: true }))
+      ]
+    },
     questions: questionHost,
+    decisions,
     cua,
     connectors,
     db, settings, endpoints, spaces, memory, skills, rules, registry, results, docsDir, emit, fitWindow,
@@ -1303,6 +1327,21 @@ app.whenReady().then(() => {
     } catch { return '' }
   })
   // Files SahilBot made, for Home and the Files page (only ones that still exist).
+  // Home's starter tiles, from the user's own habits (request kinds, connected apps, files made, projects).
+  handle('ideas:home', () => {
+    const recent: TaskCategory[] = []
+    for (const t of db.listThreads().slice(0, 30)) {
+      const first = db.listMessages(t.id).find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.scheduled && !m.meta?.fromApp && !m.meta?.mcpClientId && !m.meta?.handoff)
+      if (first?.content.trim()) recent.push(classifyTask(first.content.slice(0, 2000)).category)
+    }
+    const st = new Map(connectors.statuses().map((x) => [x.id, x.state]))
+    const apps = connectors.list().filter((c) => c.preset && st.get(c.id) === 'connected').map((c) => c.preset!)
+    const made = db.recentFiles(20).map((f) => extname(f.path))
+    const projects = memory.list().filter((m) => m.category === 'project' && m.provenance !== 'untrusted').sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((m) => m.content.replace(/^(?:the user(?:'s)?\s+|i(?:'m| am)\s+|currently\s+)?(?:is\s+)?(?:working on|building|project:?)\s+/i, '').split(/[,.;:(\u2014\u2013]|\s-\s/)[0].trim())
+      .filter((p) => p.length <= 40)
+    return homeIdeas({ recent, apps, made, projects })
+  })
   handle('files:recent', (limit?: number) => db.recentFiles(limit ?? 60).filter((f) => existsSync(f.path)).map((f) => ({ ...f, name: basename(f.path), size: statSync(f.path).size })))
   handle('files:reveal', (path: string) => attachments.reveal(path))
   handle('providers', () => PROVIDERS)
@@ -1617,6 +1656,13 @@ app.whenReady().then(() => {
   try { migrateBotModelEffort(db) } catch (e) { console.error('[bot-auto]', (e as Error).message) }
   // Each bot's Swarm setting became its Max setting (Off / Auto / Always, Max helpers).
   try { const next = migrateBotMax(settings.get()); if (next) settings.set({ botMax: next }) } catch (e) { console.error('[bot-max]', (e as Error).message) }
+  // Strategy is now inferred per request. Preserve resource caps while retiring old per-bot modes.
+  if (!db.getSetting('agent:automatic-strategy-v1')) {
+    const current = settings.get()
+    const automatic = (all: typeof current.botMax) => Object.fromEntries(Object.entries(all ?? {}).map(([id, cfg]) => [id, { ...cfg, mode: 'auto' as const }]))
+    settings.set({ botMax: automatic(current.botMax), botSwarm: automatic(current.botSwarm) })
+    db.setSetting('agent:automatic-strategy-v1', true)
+  }
   /** Cards open in running chats right now, as inbox items (answered through chat:respond). */
   const liveNeedsYou = (): NeedsYouItem[] => {
     const out: NeedsYouItem[] = []

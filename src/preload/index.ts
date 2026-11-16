@@ -66,6 +66,7 @@ const api: SahilBotApi = {
     open: call('files:open') as never,
     reveal: call('files:reveal') as never,
     recent: call('files:recent') as never,
+    ideas: call('ideas:home') as never,
     snippet: call('files:snippet') as never
   },
   // Attachments (main: attachments.ts): dropped or pasted File objects resolve to paths here; ones with no

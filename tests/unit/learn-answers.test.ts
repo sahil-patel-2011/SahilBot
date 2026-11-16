@@ -3,8 +3,8 @@ import { Learner, QuestionQueue, QuestionStore, isPreference, learnable, questio
 import { Db } from '../../src/main/db'
 import { MemoryStore } from '../../src/main/memory'
 
-// Learning from answers: a preference answered once becomes a memory (with where it came from) and a saved
-// answer, so the bot doesn't ask again. Never for answers to questions asked after reading outside content.
+// Learning from answers: a preference answered once becomes a decision memory (the bot's own, trusted) and a
+// saved answer, so the bot doesn't ask again. Never for answers to questions asked after reading outside content.
 
 describe('what counts as a preference worth remembering', () => {
   test('taste questions do; one-off facts and hard stops don\'t', () => {
@@ -35,13 +35,13 @@ describe('learning from the user\'s answers', () => {
     return { db, space, thread, store, memory, learner, queue }
   }
 
-  test('an answered preference becomes a memory with provenance and is used instead of asking again', async () => {
+  test('an answered preference becomes a decision memory with provenance and is used instead of asking again', async () => {
     const h = setup()
     const { item } = h.queue.postQuestions({ botId: h.space.id, threadId: h.thread.id, questions: [{ question: 'Which format do you prefer for the weekly report?', options: ['PDF (recommended)', 'Word'] }], deadlineMs: 3_600_000 })
     await h.queue.answer(item.id, ['Word'])
-    const saved = h.memory.list(h.space.id).find((m) => m.category === 'preference')!
-    expect(saved.content).toMatch(/When Scout asked "Which format do you prefer for the weekly report\?", the user chose: Word/)
-    expect(saved.content).toContain(`question ${item.id}`)
+    const saved = h.memory.list(h.space.id).find((m) => m.category === 'decision')!
+    expect(saved.content).toBe('Which format do you prefer for the weekly report? → Word (over PDF)')
+    expect(h.store.learned(h.space.id)[0].memoryId).toBe(saved.id)
     expect(saved.provenance ?? 'trusted').toBe('trusted')
     expect(saved.spaceId).toBe(h.space.id)
     const found = h.learner.find(h.space.id, { question: 'Which format do you prefer for the weekly reports?', options: ['PDF', 'Word'] })
@@ -59,6 +59,8 @@ describe('learning from the user\'s answers', () => {
     }
     expect(h.learner.find(h.space.id, { question: 'Which tone do you prefer for client emails?' })!.answer).toBe('Formal')
     expect(h.store.learned(h.space.id)).toHaveLength(1)
+    // One decision memory for the topic: the newer choice, with the earlier one noted.
+    expect(h.memory.list(h.space.id).filter((m) => m.category === 'decision').map((m) => m.content)).toEqual(['Which tone do you prefer for client emails? → Formal (over Friendly) (earlier: Friendly)'])
   })
 
   test('nothing is learned from a deadline\'s default, a tainted question, or a non-preference', async () => {
@@ -74,6 +76,6 @@ describe('learning from the user\'s answers', () => {
     const f = queue.postQuestions({ botId: h.space.id, threadId: h.thread.id, questions: [{ question: 'Did the build pass on CI?', options: ['Yes', 'No'] }], deadlineMs: 3_600_000 }).item
     await queue.answer(f.id, ['Yes'])
     expect(store.learned(h.space.id)).toHaveLength(0)
-    expect(h.memory.list(h.space.id).filter((m) => m.category === 'preference')).toHaveLength(0)
+    expect(h.memory.list(h.space.id).filter((m) => m.category === 'decision' || m.category === 'preference')).toHaveLength(0)
   })
 })

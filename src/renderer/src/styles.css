@@ -830,6 +830,7 @@ a.btn { text-decoration: none; color: inherit; display: inline-block; }
 .ideas { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 22px; }
 .idea { display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 18px; border: 1px solid var(--card-line); background: var(--card); font-size: 13.5px; color: var(--text-2); }
 .idea:hover { color: var(--text); border-color: color-mix(in srgb, var(--text) 25%, var(--card-line)); }
+.idea.personal svg { color: var(--accent); }
 
 /* ---------------------------------------------------------------- Quick Ask (floating bar) */
 .quick-mode, .quick-mode body, .quick-mode #root { background: transparent !important; height: auto; overflow: hidden; }

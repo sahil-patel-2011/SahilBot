@@ -1052,7 +1052,7 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       const clean = stripAnsi(out.output).trimEnd()
       const status = out.timedOut ? `stopped after ${limit / 1000}s` : out.stopped ? 'stopped' : `exit code ${out.code}`
       const hint = out.timedOut ? '\n(It was still running. If it is a server or watcher, start it with background: true instead.)' : ''
-      return { text: `$ ${a.command}\n(in ${cwd}; ${status})\n${clean || '(no output)'}${hint}`, display: `${a.command.slice(0, 60)} · ${status}` }
+      return { text: `$ ${a.command}\n(in ${cwd}; ${status})\n${clean || '(no output)'}${hint}`, data: { exitCode: out.code, timedOut: out.timedOut, stopped: out.stopped, stdout: out.stdout, stderr: out.stderr, cwd }, display: `${a.command.slice(0, 60)} · ${status}` }
     }
   }
 }

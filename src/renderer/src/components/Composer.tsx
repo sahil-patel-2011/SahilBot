@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { Attachment, EffortChoice, ModelList, PermissionMode } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
@@ -12,6 +12,8 @@ import { AttachmentChips, DropOverlay, WorkFolderChip, useFolderCounts, type Fol
 import { fromTransfer, mergeAttachments, oversize, rejectedText } from '../lib/attachments'
 import { toast } from '../lib/toast'
 import { findSecrets } from '@shared/secret-detect'
+import { requestStrategy, STRATEGY_LABEL } from '@shared/request-strategy'
+import '../styles-agent-experience.css'
 
 /** Autonomy levels (defined with the picker). */
 export { MODES }
@@ -107,11 +109,8 @@ export const Composer = forwardRef<ComposerHandle, {
   const [drag, setDrag] = useState(false)
   const [draftFolder, setDraftFolder] = useState<string | null>(null)
   const [deep, setDeep] = useState(false)
-  const [planFirst, setPlanFirst] = useState(false)
   // Max: on for this message (a bot whose Max setting is Always has it on for every request).
-  const maxAlways = p.swarm?.mode === 'always'
   const [maxOn, setMaxOn] = useState(false)
-  const [council, setCouncil] = useState<true | string[] | null>(null)
   /** Text a sahilbot:// link put in the box (null: none). Cleared when the box is emptied or sent. */
   const [linkText, setLinkText] = useState<string | null>(null)
   const ta = useRef<HTMLTextAreaElement>(null)
@@ -128,7 +127,7 @@ export const Composer = forwardRef<ComposerHandle, {
       requestAnimationFrame(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } })
     },
     setDeep(on: boolean) { setDeep(on) },
-    toggleMax() { setMaxOn((x) => !x); setCouncil(null) },
+    toggleMax() { setMaxOn((x) => !x) },
     insert(t: string) {
       setText((cur) => (cur ? `${cur}\n${t}` : t))
       // Put the caret at the end so the user can just keep typing.
@@ -215,10 +214,9 @@ export const Composer = forwardRef<ComposerHandle, {
     // Sent exactly as the link had it: not the user's own words (the agent treats it as relayed text).
     const fromLink = linkText !== null && text.trim() === linkText.trim()
     // Council replaces the other modes for this message (see modeFlags); Max goes with Plan first and Deep Research.
-    p.onSend({ text: text.trim(), images, attachments: atts, ...(draftFolder && !p.threadId ? { workingFolder: draftFolder } : {}), ...modeFlags({ deep, planFirst, max: maxOn || maxAlways, council }), queue, ...(fromLink ? { fromLink } : {}) })
+    p.onSend({ text: text.trim(), images, attachments: atts, ...(draftFolder && !p.threadId ? { workingFolder: draftFolder } : {}), ...modeFlags({ deep: deep || (!fromLink && requestStrategy(text).kind === 'research'), planFirst: !fromLink && requestStrategy(text).kind === 'plan', max: maxOn || (!fromLink && requestStrategy(text).kind === 'swarm') }), queue, ...(fromLink ? { fromLink } : {}) })
     setDeep(false)
     setMaxOn(false)
-    setCouncil(null)
     setLinkText(null)
     setText('')
     setImages([])
@@ -273,30 +271,7 @@ export const Composer = forwardRef<ComposerHandle, {
     } catch (e) { toast((e as Error).message, 'error') }
   }
 
-  // Modes (one menu; the ones that are on show as removable chips): Plan first, Max, Deep Research, Council.
-  // Max is one mode for many agents (a research team, an idea swarm, competing attempts with a judge, or a mix:
-  // SahilBot picks per request). Council excludes Max (see modeFlags): those show as unavailable.
-  const modeList: ModeItem[] = []
-  if (p.team) {
-    modeList.push({ id: 'plan', testId: 'plan-toggle', label: 'Plan first', sub: 'Questions and a plan to approve first', icon: <I.ListIcon size={15} />,
-      on: planFirst && !council, toggle: () => setPlanFirst((x) => !x), blocked: council ? 'Off while Council is on' : undefined,
-      title: 'Plan first: SahilBot asks what it needs to know, shows you its plan, and starts only when you approve' })
-    const helpers = p.team.maxAgents
-    modeList.push({ id: 'max', testId: 'max-toggle', label: 'Max', keys: '⌘⇧M', sub: 'Many agents at once: SahilBot picks a research team, an idea swarm, competing attempts with a judge, or a mix.', icon: <I.Bolt size={15} />,
-      on: (maxOn || maxAlways) && !council, toggle: () => { if (!maxAlways) setMaxOn((x) => !x) },
-      blocked: council ? 'Off while Council is on' : maxAlways ? 'Always on for this bot (its Max setting)' : undefined,
-      title: `Max: many agents at once. SahilBot picks a research team, an idea swarm, competing attempts with a judge, or a mix, sized to the task (up to ${helpers} helpers on this model), and shows its plan on one live card (⌘⇧M)` })
-    modeList.push({ id: 'deep', testId: 'deep-toggle', label: 'Deep Research', sub: 'A team researches; you get a cited PDF', icon: <I.Search size={15} />,
-      on: deep && !council, toggle: () => setDeep((d) => !d), blocked: council ? 'Off while Council is on' : undefined,
-      title: 'Deep Research: a team of helper agents researches in parallel, then SahilBot writes a cited report and saves it as a PDF' })
-  }
-  if (p.council) {
-    const names = Array.isArray(council) ? council.map((id) => p.council!.find((m) => m.id === id)?.label ?? id).join(' + ') : 'the best Claude + the best GPT'
-    modeList.push({ id: 'council', testId: 'council-toggle', label: 'Council', chipLabel: `Council${Array.isArray(council) ? ` (${council.length})` : ''}`, sub: 'Several providers plan and review', icon: <I.Shield size={15} />,
-      on: !!council && !maxOn, toggle: () => setCouncil((c) => (c ? null : true)), blocked: maxOn ? 'Off while Max is on' : undefined,
-      title: council ? `Council is on: ${names} plan, critique each other, merge one plan, carry it out and review each other (you OK the cost first)` : 'Council: frontier models from different providers plan together, critique each other, then carry it out and review each other' })
-  }
-  const activeModes = modeList.filter((m) => m.on)
+  const strategy = deep ? 'research' : maxOn ? 'swarm' : requestStrategy(text).kind
 
   return (
     <div className="composer-inner">
@@ -336,62 +311,18 @@ export const Composer = forwardRef<ComposerHandle, {
           return <div className="composer-secret-hint" data-testid="composer-secret-hint"><I.Shield size={12} />That looks like a {what}. SahilBot hides it from the model and offers to save it to your Vault.</div>
         })()}
         <div className="composer-bar">
-          <Popover label={<I.Plus size={19} />} className="plus-pop" title="Attach files, a folder or a screenshot">
+          <Popover label={<I.Plus size={19} />} className="plus-pop attachment-pop" title="Attach files, a folder or a screenshot">
             {(close) => (
               <>
-                <button className="menu-item" onClick={() => { close(); void pick('files') }} data-testid="attach-files"><I.Paperclip size={15} />Upload files or photos<span className="sub">Any type, up to 100 MB each. You can also drop or paste them</span></button>
-                <button className="menu-item" onClick={() => { close(); void pick('folder') }} data-testid="attach-folder"><I.Folder size={15} />Attach a folder<span className="sub">SahilBot can read, search and edit files inside it</span></button>
-                <button className="menu-item" onClick={() => { close(); void takeScreenshot() }} data-testid="attach-screenshot"><I.Image size={15} />Take screenshot<span className="sub">Drag over part of the screen (Esc cancels)</span></button>
+                <button className="menu-item" onClick={() => { close(); void pick('files') }} data-testid="attach-files"><I.Paperclip size={17} /><span className="attachment-menu-copy"><span>Upload files or photos</span><span className="sub">Drop or paste files · up to 100 MB each</span></span></button>
+                <button className="menu-item" onClick={() => { close(); void pick('folder') }} data-testid="attach-folder"><I.Folder size={17} /><span className="attachment-menu-copy"><span>Add a folder</span><span className="sub">Work with the files inside</span></span></button>
+                <button className="menu-item" onClick={() => { close(); void takeScreenshot() }} data-testid="attach-screenshot"><I.Image size={17} /><span className="attachment-menu-copy"><span>Take a screenshot</span><span className="sub">Select an area of your screen</span></span></button>
               </>
             )}
           </Popover>
-          {modeList.length > 0 && (
-            <Popover
-              label={<><I.Sliders size={16} /><span className="modes-label">Modes</span>{activeModes.length > 0 && <span className="modes-count" aria-label={`${activeModes.length} on`}>{activeModes.length}</span>}</>}
-              className={`modes-pop${activeModes.length ? ' on' : ''}`} menuClass="modes-wrap" title="Modes: Plan first, Max, Deep Research, Council" testId="modes-menu">
-              {(close) => (
-                <div className="modes-menu" role="menu" aria-label="Modes">
-                  {modeList.map((m) => (
-                    <button key={m.id} className={`menu-item${m.on ? ' on' : ''}`} role="menuitemcheckbox" aria-checked={m.on} disabled={!!m.blocked}
-                      onClick={() => { m.toggle(); close() }} data-testid={m.testId} title={m.title}>
-                      <span className="mode-ico" aria-hidden>{m.icon}</span>
-                      <span className="mode-text">{m.label}<span className="sub">{m.blocked ?? m.sub}</span></span>
-                      {m.keys && <kbd className="mode-keys" aria-label={`Shortcut ${m.keys}`}>{m.keys}</kbd>}
-                      <span className="mode-state" aria-hidden>{m.on && <I.Check size={15} />}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </Popover>
-          )}
-          {activeModes.length > 0 && (
-            <span className="mode-chips">
-              {activeModes.map((m) => (
-                <span key={m.id} className="mode-chip" data-testid={`mode-chip-${m.id}`} title={m.title}>
-                  {m.icon}<span className="mode-chip-label">{m.chipLabel ?? m.label}</span>
-                  {m.id === 'council' && p.council && (
-                    <Popover label={<I.Chevron size={12} />} className="council-pick" title="Choose the council's members" testId="council-pick">
-                      {(close) => (
-                        <>
-                          <button className={`menu-item${council === true ? ' on' : ''}`} onClick={() => { setCouncil(true); close() }}>Auto<span className="sub">The best Claude and the best GPT available</span></button>
-                          {p.council!.map((cm) => {
-                            const picked = Array.isArray(council) && council.includes(cm.id)
-                            return (
-                              <button key={cm.id} className={`menu-item${picked ? ' on' : ''}`} data-testid="council-member-pick"
-                                onClick={() => setCouncil((c) => { const cur = Array.isArray(c) ? c : []; const next = cur.includes(cm.id) ? cur.filter((x) => x !== cm.id) : [...cur, cm.id].slice(0, 4); return next.length ? next : true })}>
-                                {picked ? <I.Check size={13} /> : <span style={{ width: 13 }} />}{cm.label}
-                              </button>
-                            )
-                          })}
-                        </>
-                      )}
-                    </Popover>
-                  )}
-                  {!m.blocked && <button className="mode-chip-x" onClick={m.toggle} aria-label={`Turn off ${m.label}`} title={`Turn off ${m.label}`}><I.Close size={12} /></button>}
-                </span>
-              ))}
-            </span>
-          )}
+          <span className="agent-strategy" data-testid="agent-strategy" title="Chooses tools and brings in specialist agents when useful. You can ask it to plan first, research, or use an agent swarm.">
+            <I.Sparkle size={14} /><span>{STRATEGY_LABEL[strategy]}</span><span className="agent-auto-label">Automatic</span>
+          </span>
           <span className="spacer" />
           {dictating && (
             <span className="dictating" data-testid="dictating">
@@ -439,5 +370,3 @@ export const Composer = forwardRef<ComposerHandle, {
   )
 })
 
-/** One entry in the composer's Modes menu. */
-type ModeItem = { id: string; testId: string; label: string; keys?: string; chipLabel?: string; sub: string; icon: ReactNode; on: boolean; toggle: () => void; blocked?: string; title: string }

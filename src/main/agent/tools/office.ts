@@ -538,7 +538,7 @@ export function reviewDocumentTool(o: { getWorkspace: () => string }): ToolDef<{
         } catch { /* text review still stands */ }
       }
       const look = images.length ? `\nAttached: ${pages ? `an overview of all pages and page ${pages} full size` : 'an overview of all pages (ask for pages: "2" to see one full size)'}. Look at them: alignment, spacing, anything cut off or awkward.` : ''
-      return { text: formatReview(r) + look, display: `${r.pass ? 'passed' : 'failed'} review: ${basename(full)}`, ...(images.length ? { images } : {}) }
+      return { text: formatReview(r) + look, data: { passed: r.pass, path: full }, verification: { passed: r.pass, criterion: `Document review: ${full}`, detail: formatReview(r).slice(0, 4000) }, display: `${r.pass ? 'passed' : 'failed'} review: ${basename(full)}`, ...(images.length ? { images } : {}) }
     }
   }
 }

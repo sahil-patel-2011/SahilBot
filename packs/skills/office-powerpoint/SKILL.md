@@ -8,7 +8,7 @@ category: Office
 
 create_document with a .pptx path and slides. 16:9, slide masters (slides added later in PowerPoint keep the design), slide numbers on. theme: modern (default) | classic | minimal to match the report; background: light (default) | dark; accent = brand color (too-light accents are darkened for text automatically).
 
-1. Write the storyline first: one message per slide, titles that state the point ("Churn fell to 2% after onboarding changes", not "Churn"). Typical: title → agenda (optional) → 1 slide per key point with evidence → recommendation → next steps → closing. 6-12 slides for a 15-minute talk.
+1. Write the storyline first: one message per slide, titles that state the point ("Churn fell to 2% after onboarding changes", not "Churn"). Typical: title → agenda (optional) → 1 slide per key point with evidence → recommendation → next steps → closing. No fixed slide count: size the deck to the content (roughly one slide per 1–2 minutes when a talk length is given); never pad or cut to hit a number.
 2. Pick the layout for the content:
    - bullets: 3-5 short bullets (≤ 12 words each); sub-points indented with two spaces.
    - chart: chart {type: column|bar|line|area|pie|doughnut, categories, series: [{name, values}], number_format: "$#,##0" or "0%"} with 1-2 bullets as the takeaway. Line for trends over time, column for comparing categories, bar for long labels or rankings, pie/doughnut only for parts of one whole (≤ 6 slices).

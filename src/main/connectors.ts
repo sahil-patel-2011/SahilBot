@@ -555,7 +555,7 @@ interface Live {
   names: Map<string, string>
 }
 
-type ServerTool = { name: string; description?: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string } }
+type ServerTool = { name: string; description?: string; inputSchema: Record<string, unknown>; outputSchema?: Record<string, unknown>; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; title?: string } }
 
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
@@ -2114,7 +2114,7 @@ export class Connectors {
 
   /** The agent tool names a live connector made from this catalog entry offers (empty when it isn't live). */
   presetTools(preset: string): string[] {
-    return this.list().filter((c) => c.preset === preset).flatMap((c) => this.live.get(c.id)?.tools ?? [])
+    return this.list().filter((c) => c.preset === preset && this.status.get(c.id)?.state === 'connected').flatMap((c) => this.live.get(c.id)?.tools ?? [])
   }
 
   /** True when a connector made from this catalog entry is live. */
@@ -2143,6 +2143,7 @@ export class Connectors {
     const lost = (reason: string): void => { if (this.live.get(c.id)?.client === client) this.lost(c.id, reason) }
     const expired = (): void => {
       if (this.live.get(c.id)?.client !== client) return
+      this.setStatus({ id: c.id, state: 'needs_auth', tools: 0, error: expiredText(c.name), reason: 'expired', checkedAt: Date.now() })
       void this.teardown(c.id).then(() => this.setStatus({ id: c.id, state: 'needs_auth', tools: 0, error: expiredText(c.name), reason: 'expired', checkedAt: Date.now() }))
     }
     // An API-key server's errors may echo the request: keep its key out of what the agent sees.
@@ -2160,6 +2161,8 @@ export class Connectors {
       describe: (args) => `${c.name}: ${t.annotations?.title ?? t.name.replace(/_/g, ' ')} ${JSON.stringify(args).slice(0, 160)}`,
       description: `[${c.name}] ${(t.description ?? t.name).slice(0, 900)}`,
       parameters: t.inputSchema && Object.keys(t.inputSchema).length ? t.inputSchema : { type: 'object', properties: {} },
+      ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
+      idempotent: t.annotations?.idempotentHint === true,
       async run(args, ctx) {
         let r: Awaited<ReturnType<Client['callTool']>>
         try {
@@ -2168,7 +2171,7 @@ export class Connectors {
           const m = scrub((e as Error).message)
           if (!ctx.signal.aborted && isAuthError(e)) {
             expired()
-            throw new Error(`${c.name}'s sign-in expired or was revoked, so this didn't run. Tell the user to press Reconnect for ${c.name} in Connect apps (one click), then try again.`)
+            throw new Error(`${c.name}'s sign-in expired or was revoked. Reconnect here: call connect_app with app "${c.name}" to show its Connect / Sign in tile in this chat; continue after sign-in. Reconcile any uncertain write before repeating it.`)
           }
           if (!ctx.signal.aborted && isConnectionError(m)) {
             lost(m)
@@ -2177,8 +2180,8 @@ export class Connectors {
           throw m === (e as Error).message ? e : new Error(m)
         }
         const { text, images } = contentOf(r)
-        if (r.isError) throw new Error(scrub(text) || `${t.name} failed`)
-        return { text: text || '(no output)', images: images.length ? images : undefined, display: t.annotations?.title ?? t.name.replace(/_/g, ' ') }
+        if (r.isError) { const error = new Error(scrub(text) || `${t.name} failed`); if (isAuthError(error)) expired(); throw error }
+        return { text: text || '(no output)', data: (r as { structuredContent?: unknown }).structuredContent, images: images.length ? images : undefined, display: t.annotations?.title ?? t.name.replace(/_/g, ' ') }
       }
     }
   }

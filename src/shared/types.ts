@@ -356,8 +356,8 @@ export interface PendingRequest {
 
 export type ApprovalAnswer = 'once' | 'always' | 'deny'
 
-/** What a memory is: about the user (profile, preference, person, location…), a rule to follow, or a dated work-log entry. */
-export type MemoryKind = 'profile' | 'work' | 'preference' | 'person' | 'location' | 'project' | 'trip' | 'link' | 'date' | 'rule' | 'fact' | 'worklog'
+/** What a memory is: about the user (profile, preference, person, location…), a decision they made, a rule to follow, or a dated work-log entry. */
+export type MemoryKind = 'profile' | 'work' | 'preference' | 'person' | 'location' | 'project' | 'trip' | 'link' | 'date' | 'rule' | 'fact' | 'worklog' | 'decision'
 
 export interface MemoryItem {
   id: string
@@ -1150,6 +1150,8 @@ export interface LibraryItem {
 }
 
 export interface SendInput {
+  /** Per-task resource limits, inherited by helpers and paid tool APIs. */
+  taskPolicy?: import('../main/agent/runtime/store').TaskPolicy
   threadId: string
   text: string
   images?: string[]
@@ -1233,6 +1235,8 @@ export interface SahilBotApi {
     /** Resolves dropped File objects to paths (preload only; the renderer can't fake these). */
     fromDrop(files: File[]): Promise<Attachment[]>
     preview(path: string): Promise<FilePreview>
+    /** Home's starter tiles, personalized from the user's habits (ideas.ts). */
+    ideas(): Promise<HomeIdea[]>
     /** The first lines of a document SahilBot made (PDF, Word, PowerPoint), for thumbnails. */
     snippet(path: string): Promise<string>
     /** Files SahilBot made, newest first. */
@@ -3061,7 +3065,7 @@ export type MaxStrategy = 'team' | 'swarm' | 'heavy' | 'hybrid'
 /** One phase of a Max run (a hybrid has two). */
 export type MaxPhaseKind = 'team' | 'swarm' | 'heavy'
 
-/** A bot's Max setting: Off (only when you turn it on in the composer), Auto (the bot decides; default), Always. */
+/** A bot's Max setting: Off (only when you turn it on in the composer), Auto (teams up only for big tasks; default), Always. */
 export interface BotMaxSettings {
   mode: BotSwarmMode
   /** Most helpers per Max run (1-50, default 20). */
@@ -3098,8 +3102,8 @@ export interface MaxBoard {
   title: string
   /** Why the planner chose it, in a few words. */
   why: string
-  /** Who turned Max on: the composer, the bot's Max setting (Auto/Always), or the lead's max tool. */
-  source: 'composer' | 'bot' | 'tool'
+  /** Who turned Max on: the composer, the bot's Max setting (Always), Auto (a big task: max/auto-teamwork.ts), or the lead's max tool. */
+  source: 'composer' | 'bot' | 'auto' | 'tool'
   phases: MaxPhase[]
   /** Team phases by their agents (or max) call id. */
   teams?: Array<{ callId: string; members: TeamMember[] }>
@@ -3152,4 +3156,14 @@ export interface SahilBotApi {
   video?: {
     get(id: string): Promise<VideoCardData | null>
   }
+}
+
+/** A starter tile under Home's message box (personalized from the user's habits, apps, files and projects). */
+export interface HomeIdea {
+  icon: 'globe' | 'clock' | 'search' | 'cpu' | 'file' | 'video' | 'sparkle' | 'edit' | 'layers' | 'image' | 'inbox' | 'users' | 'listicon' | 'bolt' | 'folder'
+  label: string
+  /** What fills the message box. */
+  text: string
+  /** Suggested by the user's own patterns (not one of the generic tiles). */
+  personal?: boolean
 }

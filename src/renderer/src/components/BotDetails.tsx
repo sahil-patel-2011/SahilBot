@@ -211,12 +211,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                 {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} part="notifications" />}
               </div>
 
-              {space.kind === 'bot' && (
-                <>
-                  <div className="bd-section-title">Max</div>
-                  <div className="bd-card" data-testid="bot-max"><MaxRows spaceId={space.id} /></div>
-                </>
-              )}
+              <p className="bd-agent-note"><I.Sparkle size={13} /> Chooses its tools, models and specialist agents automatically. Ask it to plan first or use an agent swarm whenever you need.</p>
               {space.kind !== 'group' && (
                 <>
                   <div className="bd-section-title">Vault</div>
@@ -410,7 +405,7 @@ function AutonomyRow({ space }: { space: Space }) {
 }
 
 /**
- * Max: Off (only when you turn it on in the composer) / Auto (the bot decides; default) / Always, Max helpers (1-50)
+ * Max: Off (only when you turn it on in the composer) / Auto (teams up only for big tasks; default) / Always, Max helpers (1-50)
  * and what one Max run may spend in a routine. Older installs kept these as the Swarm setting (read as the fallback).
  */
 export function MaxRows({ spaceId }: { spaceId: string }) {
@@ -434,7 +429,7 @@ export function MaxRows({ spaceId }: { spaceId: string }) {
   return (
     <>
       <label className="bd-row">
-        <span className="bd-row-text">Max<span className="bd-row-sub">{mode === 'off' ? 'Only when you turn Max on in the composer.' : mode === 'always' ? 'Every request runs many agents: a team, a swarm, judged attempts or a mix.' : 'Turns Max on by itself when many agents would do better.'}</span></span>
+        <span className="bd-row-text">Max<span className="bd-row-sub">{mode === 'off' ? 'Only when you turn Max on in the composer.' : mode === 'always' ? 'Every request runs many agents: a team, a swarm, judged attempts or a mix.' : 'Teams up only for big tasks (reports, big comparisons, many files); small ones stay with one agent.'}</span></span>
         <select className="bd-select" value={mode} onChange={(e) => save({ mode: e.target.value as BotMaxSettings['mode'] })} data-testid="bot-max-mode" aria-label="Max">
           <option value="off">Off</option>
           <option value="auto">Auto</option>

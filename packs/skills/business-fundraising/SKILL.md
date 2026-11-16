@@ -13,7 +13,7 @@ Options: revenue/bootstrapping, customer prepayments, grants (SBIR/STTR in the U
 ## What investors look for
 Team (why you, domain insight), market (large and growing; bottom-up sizing), traction (revenue, growth rate, retention, engagement, pilots), product insight ("secret"), business model and unit economics, why now, and a clear use of funds tied to milestones that unlock the next round.
 
-## Deck structure (10-12 slides; see pitch-deck skill for building the file)
+## Deck structure (usually 10-12 slides, more if needed; see pitch-deck skill for building the file)
 Title/one-liner; problem; solution and demo; why now; market size; traction; business model; competition (positioning, not a feature checklist); go-to-market; team; financials and milestones; the ask (amount, instrument, use of funds, runway it buys). One message per slide, headline states it, numbers sourced. Build with create_document (.pptx), talk track in speaker notes.
 
 ## Instruments in plain terms
