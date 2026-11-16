@@ -198,7 +198,7 @@ const SLOT_FAMILY: Partial<Record<Slot, string[]>> = { fable: ['fable', 'mythos'
 export const spendingPrefs: { mode: 'amount' | 'unlimited' | 'none' } = { mode: 'amount' }
 
 /** Why Auto had nothing to route to under the None limit. */
-export const NONE_ROUTE_MESSAGE = 'Auto has no model to use: pay-per-use API spending is turned off (Settings → General → Monthly spending limit: None), so only your ChatGPT plan (via Codex) and local models can run, and neither is available right now. Connect the ChatGPT plan in Settings → Models, start a local model, or set a monthly limit.'
+export const NONE_ROUTE_MESSAGE = 'Auto has no model to use: pay-per-use API spending is turned off (Settings → Models & Keys → Monthly spending limit: None), so only your ChatGPT plan (via Codex) and local models can run, and neither is available right now. Connect the ChatGPT plan in Settings → Models, start a local model, or set a monthly limit.'
 
 /** A model billed per token (a cloud API), as opposed to local or covered by the ChatGPT plan. */
 export const payPerUse = (m: ModelInfo): boolean => remote(m) && !isPlanModel(m.id) && m.provider !== 'chatgpt'

@@ -1,0 +1,92 @@
+/* ---------------------------------------------------------------- the composer's one picker
+   (components/ComposerPicker.tsx) Model, thinking and permissions behind one quiet button under the box.
+   The menu opens upward, right-aligned; Thinking, More models and Permissions open as side flyouts. */
+
+/* The button: the value, then a small chevron. Long overrides ellipsize. */
+.cpick > button.cpick-btn {
+  display: inline-flex; align-items: center; gap: 6px; max-width: min(260px, 42vw); min-width: 0;
+  padding: 5px 8px 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--text-2);
+}
+.cpick > button.cpick-btn:hover, .cpick.is-open > button.cpick-btn { background: var(--hover); color: var(--text); }
+.cpick > button.cpick-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.cpick-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cpick > button.cpick-btn .cpick-btn-chev { flex: none; color: var(--text-3); transition: transform .14s ease-out; }
+.cpick.is-open > button.cpick-btn .cpick-btn-chev { transform: rotate(180deg); }
+.cpick > button.cpick-btn .dot { flex: none; }
+.cpick.bypass > button.cpick-btn { color: var(--danger-text); font-weight: var(--fw-semibold); }
+.cpick.autonomous > button.cpick-btn { color: var(--text); }
+.cpick.autonomous > button.cpick-btn > svg:first-child { color: var(--bot, var(--accent)); flex: none; }
+
+/* The menu: its own size, never a scroll box itself (the flyouts sit outside it). */
+.menu.cpick-menu, .menu.cpick-menu.model-menu {
+  width: 300px; min-width: 0; max-width: calc(100vw - 24px); max-height: none; overflow: visible;
+  padding: 0; outline: none; z-index: 30;
+}
+.cpick-main { padding: 5px; max-height: calc(100vh - 96px); overflow-y: auto; overscroll-behavior: contain; border-radius: inherit; }
+
+/* Rows: check (or icon), the text with a one-line sub, then a value, a key hint or a chevron. */
+.cpick-menu .menu-item.cpick-row, .cpick-fly .menu-item.cpick-row {
+  align-items: center; gap: 10px; padding: 7px 10px; font-size: var(--fs-md); line-height: 1.3; min-height: 34px;
+}
+.cpick-menu .cpick-row:focus-visible, .cpick-fly .cpick-row:focus-visible { outline: none; background: var(--hover); box-shadow: inset 0 0 0 1.5px var(--ring); }
+.cpick-menu .cpick-row:focus:not(:focus-visible), .cpick-fly .cpick-row:focus:not(:focus-visible) { outline: none; }
+.cpick-text { flex: 1; min-width: 0; }
+.cpick-row .cpick-text .sub {
+  display: block; margin: 1px 0 0; padding: 0; font-size: var(--fs-xs); color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cpick-check { color: var(--bot, var(--accent-text)); display: grid; place-items: center; align-self: center; }
+.cpick-ico { flex: none; width: 14px; display: grid; place-items: center; color: var(--text-3); }
+.cpick-ico .dot { width: 7px; height: 7px; }
+.cpick-rec { color: var(--text-3); font-weight: var(--fw-regular); }
+.cpick-val {
+  flex: none; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-sm); color: var(--text-3);
+}
+.cpick-row .cpick-chev { flex: none; color: var(--text-3); transform: rotate(-90deg); margin-right: -2px; }
+.cpick-subrow.open { background: var(--hover); }
+.cpick-subrow.open .cpick-chev, .cpick-subrow.open .cpick-val { color: var(--text-2); }
+.cpick-menu kbd.cpick-key {
+  flex: none; min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 4px;
+  font: var(--fw-medium) 11px/1 var(--font); color: var(--text-3); background: transparent;
+  border: 1px solid var(--line); border-radius: var(--r-xs);
+}
+.cpick-row:hover kbd.cpick-key, .cpick-row:focus-visible kbd.cpick-key { color: var(--text-2); }
+.cpick-menu .menu-sep, .cpick-fly .menu-sep { margin: 4px 8px; }
+.cpick-menu .menu-head, .cpick-fly .menu-head { padding: 6px 10px 3px; font-size: var(--fs-2xs); letter-spacing: .01em; }
+
+/* Auto entries with nothing to route to (mm-badge comes from the model-menu rules). */
+.cpick-row.unavailable .cpick-text { color: var(--text-2); }
+.cpick-row .mm-badge { align-self: center; }
+
+.cpick-hint { padding: 7px 10px 5px; font-size: var(--fs-xs); color: var(--text-3); line-height: 1.4; }
+.cpick-menu .cpick-row:disabled { opacity: 1; cursor: default; color: var(--text-2); }
+.cpick-menu .cpick-row:disabled .cpick-val { color: var(--text-3); }
+.cpick-menu .cpick-model:disabled { opacity: .45; cursor: not-allowed; }
+.cpick-error { padding: 6px 10px; font-size: var(--fs-sm); }
+.cpick-error-title { font-weight: var(--fw-semibold); margin-bottom: 2px; }
+.cpick-empty { padding: 6px 10px; font-size: var(--fs-xs); color: var(--text-3); }
+
+/* Flyouts: the same surface as a menu, placed by the component (beside the row, inside the window). */
+.cpick-fly {
+  position: absolute; top: 0; width: 290px; max-width: calc(100vw - 16px);
+  max-height: min(480px, calc(100vh - 16px)); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-pop);
+  padding: 5px; z-index: 31; text-align: left; animation: cpick-in .12s ease-out;
+}
+.cpick-fly-more { width: 310px; }
+.cpick-fly-perm { width: 320px; }
+.cpick-fly-perm .cpick-row, .cpick-fly-thinking .cpick-row { align-items: flex-start; }
+.cpick-fly-perm .cpick-row .cpick-check, .cpick-fly-thinking .cpick-row .cpick-check { margin-top: 2px; align-self: flex-start; }
+.cpick-fly-perm .cpick-text .sub { white-space: normal; line-height: 1.35; }
+.cpick-fly .menu-foot {
+  font-size: var(--fs-2xs); color: var(--text-3); padding: 8px 10px 4px; margin-top: 4px;
+  border-top: 1px solid var(--line); line-height: 1.4;
+}
+@keyframes cpick-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+
+/* Short windows: subs give way so the whole menu fits above the box. */
+@media (max-height: 640px) {
+  .cpick-main .cpick-model .cpick-text .sub { display: none; }
+  .cpick-menu .menu-item.cpick-row { min-height: 30px; padding-top: 5px; padding-bottom: 5px; }
+}

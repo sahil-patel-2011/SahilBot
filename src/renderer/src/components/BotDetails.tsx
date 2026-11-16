@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import type { BotSwarmSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
+import type { BotMaxSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
@@ -190,14 +190,13 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                   <span className="bd-row-text">Notify me when this bot finishes or needs me</span>
                   <Toggle on={notify} onChange={(v) => { setNotify(v); void saveSpace({ notify: v }) }} label="Notifications" testId="bot-notify" />
                 </div>
-                <div className="bd-row">
-                  <span className="bd-row-text">Model</span>
-                  <span className="bd-row-value" title={space.model ?? 'Auto'}>{space.model ?? 'Auto'}</span>
-                </div>
-                <div className="bd-row">
-                  <span className="bd-row-text">Thinking</span>
-                  <span className="bd-row-value" data-testid="bot-effort-value">{({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[space.effort ?? ''] ?? 'App default'}</span>
-                </div>
+                {/* A bot chooses its own model and thinking for each request (never set per bot). */}
+                {(space.kind === 'group' || (space.kind === 'bot' && !space.isMain)) && (
+                  <div className="bd-row bd-row-readonly" data-testid="bot-auto-line">
+                    <span className="bd-row-text">Model and thinking: chosen automatically for each request</span>
+                    <span className="bd-row-value">Auto</span>
+                  </div>
+                )}
                 <AutonomyRow space={space} />
                 {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} />}
                 <BotFolderRow space={space} onChanged={p.onChanged} />
@@ -206,9 +205,9 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                   <span className="bd-chev"><I.Chevron size={14} /></span>
                 </button>
                 {space.kind !== 'group' && (
-                  <Disclosure title="Advanced" sub={space.kind === 'bot' ? 'Vault, Swarm' : 'Vault'} testId="bot-advanced">
+                  <Disclosure title="Advanced" sub={space.kind === 'bot' ? 'Vault, Max' : 'Vault'} testId="bot-advanced">
                     <VaultBotRows spaceId={space.id} />
-                    {space.kind === 'bot' && <SwarmRows spaceId={space.id} />}
+                    {space.kind === 'bot' && <MaxRows spaceId={space.id} />}
                   </Disclosure>
                 )}
               </div>
@@ -397,29 +396,33 @@ function AutonomyRow({ space }: { space: Space }) {
   )
 }
 
-/** Swarm: Off / Auto (the bot decides) / Always, Max helpers (1-50) and what a routine's swarm may spend. */
-export function SwarmRows({ spaceId }: { spaceId: string }) {
-  const [all, setAll] = useState<Record<string, Partial<BotSwarmSettings>> | null>(null)
+/**
+ * Max: Off (only when you turn it on in the composer) / Auto (the bot decides; default) / Always, Max helpers (1-50)
+ * and what one Max run may spend in a routine. Older installs kept these as the Swarm setting (read as the fallback).
+ */
+export function MaxRows({ spaceId }: { spaceId: string }) {
+  const [all, setAll] = useState<Record<string, Partial<BotMaxSettings>> | null>(null)
+  const [old, setOld] = useState<Partial<BotMaxSettings>>({})
   useEffect(() => {
     let alive = true
-    void api.settings.get().then((x) => { if (alive) setAll(x.botSwarm ?? {}) })
+    void api.settings.get().then((x) => { if (alive) { setAll(x.botMax ?? {}); setOld(x.botSwarm?.[spaceId] ?? {}) } })
     return () => { alive = false }
   }, [spaceId])
   if (!all) return null
-  const mine = all[spaceId] ?? {}
+  const mine = { ...old, ...(all[spaceId] ?? {}) }
   const mode = mine.mode ?? 'auto'
   const max = mine.maxHelpers ?? 20
   const routine = mine.routineUsd ?? 1
-  const save = (patch: Partial<BotSwarmSettings>): void => {
+  const save = (patch: Partial<BotMaxSettings>): void => {
     const next = { ...all, [spaceId]: { ...mine, ...patch } }
     setAll(next)
-    void api.settings.set({ botSwarm: next }).then(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
+    void api.settings.set({ botMax: next }).then(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
   }
   return (
     <>
       <label className="bd-row">
-        <span className="bd-row-text">Swarm<span className="bd-row-sub">{mode === 'off' ? 'Never uses temporary helpers.' : mode === 'always' ? 'Every request goes to a swarm, then this bot compiles it.' : 'Decides on its own when many helpers would do better.'}</span></span>
-        <select className="bd-select" value={mode} onChange={(e) => save({ mode: e.target.value as BotSwarmSettings['mode'] })} data-testid="bot-swarm-mode" aria-label="Swarm">
+        <span className="bd-row-text">Max<span className="bd-row-sub">{mode === 'off' ? 'Only when you turn Max on in the composer.' : mode === 'always' ? 'Every request runs many agents: a team, a swarm, judged attempts or a mix.' : 'Turns Max on by itself when many agents would do better.'}</span></span>
+        <select className="bd-select" value={mode} onChange={(e) => save({ mode: e.target.value as BotMaxSettings['mode'] })} data-testid="bot-max-mode" aria-label="Max">
           <option value="off">Off</option>
           <option value="auto">Auto</option>
           <option value="always">Always</option>
@@ -429,12 +432,12 @@ export function SwarmRows({ spaceId }: { spaceId: string }) {
         <>
           <label className="bd-row">
             <span className="bd-row-text">Max helpers<span className="bd-row-sub">Up to 50, sized to each task.</span></span>
-            <input className="bd-select bd-num" type="number" min={1} max={50} value={max} data-testid="bot-swarm-max" aria-label="Max helpers"
+            <input className="bd-select bd-num" type="number" min={1} max={50} value={max} data-testid="bot-max-helpers" aria-label="Max helpers"
               onChange={(e) => { const n = Math.round(Number(e.target.value)); if (Number.isFinite(n)) save({ maxHelpers: Math.min(50, Math.max(1, n)) }) }} />
           </label>
           <label className="bd-row">
-            <span className="bd-row-text">Routine swarm budget<span className="bd-row-sub">Most one swarm may spend in a routine. $0 = none.</span></span>
-            <input className="bd-select bd-num" type="number" min={0} max={100} step={0.5} value={routine} data-testid="bot-swarm-routine" aria-label="Routine swarm budget"
+            <span className="bd-row-text">Routine Max budget<span className="bd-row-sub">Most one Max run may spend in a routine. $0 = none.</span></span>
+            <input className="bd-select bd-num" type="number" min={0} max={100} step={0.5} value={routine} data-testid="bot-max-routine" aria-label="Routine Max budget"
               onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) save({ routineUsd: Math.min(100, Math.max(0, n)) }) }} />
           </label>
         </>

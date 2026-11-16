@@ -25,6 +25,8 @@ describe('phase 1: shell + streaming chat + model selector + persistence', () =>
     await page.keyboard.press('Escape')
     await page.keyboard.press('Meta+,')
     await page.click('[data-testid="settings-models"]')
+    // The model list lives under Models & Keys → Advanced.
+    await page.click('[data-testid="models-advanced"] > summary')
     await page.click('[data-testid="model-toggle-llama3.3:70b"]')
     await page.click('[data-testid="settings-close"]')
     await page.click('[data-testid="model-picker"]')

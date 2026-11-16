@@ -23,14 +23,17 @@ export function chipOf(category: string): string {
  */
 const RECOMMENDED = ['notion', 'gmail', 'gcal', 'figma', 'linear', 'fathom', 'canva', 'dropbox', 'exa', 'kiwi', 'granola', 'trello', 'zillow', 'gitlab', 'stripe', 'tavily', 'strava', 'heygen', 'vercel', 'cloudflare', 'slack', 'github', 'gdrive', 'gsheets', 'asana']
 
-/** Signs in with one click: the app registers SahilBot itself, or needs no sign-in. */
-export function isOneClick(p: Pick<ConnectorPreset, 'auth'>): boolean {
-  return p.auth === 'oauth' || p.auth === 'none'
+/**
+ * Signs in with one click: the app registers SahilBot itself (DCR), needs no sign-in, or SahilBot
+ * ships its own app registration for it (`builtinClient`). Same rule as main (connectors.isOneClick).
+ */
+export function isOneClick(p: Pick<ConnectorPreset, 'auth' | 'builtinClient'>): boolean {
+  return p.auth === 'oauth' || p.auth === 'none' || ((p.auth === 'oauth-static' || p.auth === 'google') && !!p.builtinClient)
 }
 
-/** Needs a one-time setup before the first sign-in (an OAuth app at the provider, or "Set up Google once"). */
-export function needsSetup(p: Pick<ConnectorPreset, 'auth'>): boolean {
-  return p.auth === 'oauth-static' || p.auth === 'google'
+/** Needs a one-time setup before the first sign-in: an OAuth app at the provider (or Google) and no built-in client yet. */
+export function needsSetup(p: Pick<ConnectorPreset, 'auth' | 'builtinClient'>): boolean {
+  return (p.auth === 'oauth-static' || p.auth === 'google') && !p.builtinClient
 }
 
 /** Connects with the user's own API key, pasted once (kept in the Keychain). */
@@ -38,28 +41,53 @@ export function needsKey(p: Pick<ConnectorPreset, 'auth'>): boolean {
   return p.auth === 'apikey'
 }
 
-export type Badge = 'One click' | 'API key' | 'Needs setup'
-
-/** The badge on a catalog row: "One click", "API key", "Needs setup", or none (built in, browser, custom). */
-export function connectBadge(p: Pick<ConnectorPreset, 'id' | 'auth'>): Badge | null {
-  if (p.id === 'custom') return null
-  return isOneClick(p) ? 'One click' : needsKey(p) ? 'API key' : needsSetup(p) ? 'Needs setup' : null
+/** Web automation: the user signs in inside SahilBot's own browser (no connector). */
+export function isBrowserSignIn(p: Pick<ConnectorPreset, 'auth'>): boolean {
+  return p.auth === 'browser'
 }
 
-/** How easy an app is to connect, for ordering inside a section: one click, then a pasted key, then a setup. */
-export function ease(p: Pick<ConnectorPreset, 'auth'>): number {
-  return p.auth === 'app' || p.auth === 'browser' ? 0 : isOneClick(p) ? 1 : needsKey(p) ? 2 : 3
+export type Badge = 'One click' | 'API key' | 'Needs setup' | 'SahilBot\'s browser'
+
+/** The badge on a catalog row: "One click", "API key", "Needs setup", "SahilBot's browser", or none (built in, custom). */
+export function connectBadge(p: Pick<ConnectorPreset, 'id' | 'auth' | 'builtinClient'>): Badge | null {
+  if (p.id === 'custom') return null
+  return isOneClick(p) ? 'One click' : isBrowserSignIn(p) ? 'SahilBot\'s browser' : needsKey(p) ? 'API key' : needsSetup(p) ? 'Needs setup' : null
+}
+
+/**
+ * How easy an app is to connect, for ordering inside a section: built in, one click, then a sign-in
+ * inside SahilBot's browser (below the app's real one-click connector), then a pasted key, then a setup.
+ */
+export function ease(p: Pick<ConnectorPreset, 'auth' | 'builtinClient'>): number {
+  return p.auth === 'app' ? 0 : isOneClick(p) ? 1 : isBrowserSignIn(p) ? 2 : needsKey(p) ? 3 : 4
 }
 
 /** A section's apps with the easiest to connect first (stable: catalog order within each kind). */
-export function easiestFirst<T extends Pick<ConnectorPreset, 'auth'>>(ps: T[]): T[] {
+export function easiestFirst<T extends Pick<ConnectorPreset, 'auth' | 'builtinClient'>>(ps: T[]): T[] {
   return ps.map((p, i) => [p, i] as const).sort((a, b) => ease(a[0]) - ease(b[0]) || a[1] - b[1]).map(([p]) => p)
 }
 
-/** Six suggestions, skipping what's already connected; one-click apps come first. */
+/**
+ * Not ready in one click: a one-time setup (an OAuth app of your own, Google setup) or your API key.
+ * These go in each section's "Needs a one-time setup" group, after everything that connects at once.
+ */
+export function needsOneTimeSetup(p: Pick<ConnectorPreset, 'id' | 'auth' | 'builtinClient'>): boolean {
+  return p.id !== 'custom' && (needsSetup(p) || needsKey(p))
+}
+
+/** A section split in two: what connects right away (easiest first), then the "Needs a one-time setup" group. */
+export function splitSection<T extends Pick<ConnectorPreset, 'id' | 'auth' | 'builtinClient'>>(ps: T[]): { ready: T[]; setup: T[] } {
+  const sorted = easiestFirst(ps)
+  return { ready: sorted.filter((p) => !needsOneTimeSetup(p)), setup: sorted.filter(needsOneTimeSetup) }
+}
+
+/** The group heading for apps that need their one-time setup first. */
+export const SETUP_GROUP = 'Needs a one-time setup'
+
+/** Six suggestions, skipping what's already connected: only apps that truly connect in one click. */
 export function recommended(presets: ConnectorPreset[], connectedPresetIds: Set<string>, n = 6): ConnectorPreset[] {
-  const open = RECOMMENDED.map((id) => presets.find((p) => p.id === id)).filter((p): p is ConnectorPreset => !!p && !connectedPresetIds.has(p.id))
-  return easiestFirst(open).slice(0, n)
+  const open = RECOMMENDED.map((id) => presets.find((p) => p.id === id)).filter((p): p is ConnectorPreset => !!p && !connectedPresetIds.has(p.id) && isOneClick(p))
+  return open.slice(0, n)
 }
 
 /** Redirect URL for a custom server's own OAuth client (main: connectors.setupRedirect(); a unit test keeps them equal). */
@@ -113,7 +141,7 @@ export function searchScore(q: string, p: Pick<ConnectorPreset, 'name' | 'descri
 }
 
 /** Catalog apps matching a search, best first (name hits, then easiest to connect). */
-export function searchApps<T extends Pick<ConnectorPreset, 'name' | 'description' | 'category' | 'auth'> & { id?: string }>(q: string, ps: T[]): T[] {
+export function searchApps<T extends Pick<ConnectorPreset, 'name' | 'description' | 'category' | 'auth' | 'builtinClient'> & { id?: string }>(q: string, ps: T[]): T[] {
   return ps.map((p, i) => ({ p, i, s: searchScore(q, p) })).filter((x) => x.s > 0)
     .sort((a, b) => b.s - a.s || ease(a.p) - ease(b.p) || a.i - b.i).map((x) => x.p)
 }
@@ -127,9 +155,9 @@ export function letterColor(hex: string): string {
   return lum > 0.68 ? '#111' : '#fff'
 }
 
-/** "Gmail (no setup)" → "Gmail" for compact rows. */
+/** "Gmail (in SahilBot's browser)" → "Gmail" for compact rows. */
 export function shortName(name: string): string {
-  return name.replace(/\s*\(no setup\)$/i, '')
+  return name.replace(/\s*\((no setup|in SahilBot's browser)\)$/i, '')
 }
 
 /** Light checks on a pasted API key, for feedback while typing (main checks again and has the final say). */
@@ -155,7 +183,7 @@ export const APP_STATE_TEXT: Record<AppState, string> = {
 }
 
 export function appState(
-  p: Pick<ConnectorPreset, 'auth' | 'unavailable'> | undefined,
+  p: Pick<ConnectorPreset, 'auth' | 'unavailable' | 'builtinClient'> | undefined,
   st: Pick<ConnectorStatus, 'state' | 'reason'> | undefined,
   o: { setupMissing?: boolean } = {}
 ): AppState {

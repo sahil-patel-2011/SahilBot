@@ -78,7 +78,7 @@ async function cursorApi(key: string, method: string, path: string, body?: unkno
   })
   const text = await res.text()
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw new Error('Cursor rejected the API key. Add a valid one in Settings → API Keys & Servers (Cursor dashboard → API Keys).')
+    if (res.status === 401 || res.status === 403) throw new Error('Cursor rejected the API key. Add a valid one in Settings → Models & Keys (Cursor dashboard → API Keys).')
     if (res.status === 404) throw new Error(`Cursor has no agent or run at ${path.split('?')[0]}. Check the id with cloud_list.`)
     if (res.status === 409) throw new Error('That Cursor agent is still working. Check its status, or wait before sending a follow-up.')
     if (res.status === 429) throw new Error('Cursor is rate-limiting requests. Wait a minute before checking again.')
@@ -165,7 +165,7 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
     },
     async run(a, ctx) {
       const key = cursorKey()
-      if (a.action.startsWith('cloud_') && !key) throw new Error('Cursor cloud agents need a Cursor API key. Ask the user to add it in Settings → API Keys & Servers (from the Cursor dashboard → API Keys).')
+      if (a.action.startsWith('cloud_') && !key) throw new Error('Cursor cloud agents need a Cursor API key. Ask the user to add it in Settings → Models & Keys (from the Cursor dashboard → API Keys).')
       switch (a.action) {
         case 'status': {
           const agent = agentPath()

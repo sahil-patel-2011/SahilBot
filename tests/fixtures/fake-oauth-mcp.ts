@@ -10,7 +10,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 // HTTP) protected by it (RFC 9728 metadata, WWW-Authenticate on 401). It can also be an open server
 // or one that takes an API key. Everything is on 127.0.0.1; nothing leaves the machine.
 
-export interface FakeTool { name: string; description?: string; readOnly?: boolean; reply?: (args: Record<string, unknown>) => string }
+export interface FakeTool { name: string; description?: string; readOnly?: boolean; reply?: (args: Record<string, unknown>) => string; /** The tool's input schema (default: no properties). */ inputSchema?: Record<string, unknown>; /** Answer with isError (the reply is the error text). */ error?: (args: Record<string, unknown>) => string | null }
 
 export interface FakeOptions {
   /** oauth: sign-in (DCR unless dcr: false); open: no auth; apikey: `Authorization: Bearer <apiKey>`. */
@@ -28,6 +28,8 @@ export interface FakeOptions {
   refresh?: boolean
   tools?: FakeTool[]
   name?: string
+  /** Extra plain HTTP routes on the same origin (no auth), e.g. a file download: pathname → handler. */
+  routes?: Record<string, (req: IncomingMessage, res: ServerResponse) => void>
 }
 
 const loopbackCallback = (u: string): boolean => { try { const x = new URL(u); return x.protocol === 'http:' && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(x.hostname) && x.pathname === '/callback' } catch { return false } }
@@ -109,13 +111,15 @@ export async function startFakeServer(o: FakeOptions = {}): Promise<FakeServer> 
     log.mcp.push({ method, auth, status: 200 })
     const mcp = new McpServer({ name: o.name ?? 'fake', version: '1.0.0' }, { capabilities: { tools: {} } })
     mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: tools.map((t) => ({ name: t.name, description: t.description ?? t.name, inputSchema: { type: 'object', properties: {} }, ...(t.readOnly ? { annotations: { readOnlyHint: true } } : {}) }))
+      tools: tools.map((t) => ({ name: t.name, description: t.description ?? t.name, inputSchema: t.inputSchema ?? { type: 'object', properties: {} }, ...(t.readOnly ? { annotations: { readOnlyHint: true } } : {}) }))
     }))
     mcp.setRequestHandler(CallToolRequestSchema, async (r) => {
       const t = tools.find((x) => x.name === r.params.name)
       const args = (r.params.arguments ?? {}) as Record<string, unknown>
       log.calls.push({ name: r.params.name, args })
       if (!t) return { isError: true, content: [{ type: 'text', text: `no tool ${r.params.name}` }] }
+      const err = t.error?.(args)
+      if (err) return { isError: true, content: [{ type: 'text', text: err }] }
       return { content: [{ type: 'text', text: t.reply ? t.reply(args) : 'ok' }] }
     })
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
@@ -128,6 +132,8 @@ export async function startFakeServer(o: FakeOptions = {}): Promise<FakeServer> 
     void (async () => {
       const u = new URL(req.url ?? '/', origin)
       if (u.pathname === '/mcp') return mcpHandler(req, res)
+      const route = o.routes?.[u.pathname]
+      if (route) return route(req, res)
       if (mode !== 'oauth') return json(res, 404, { error: 'not_found' })
       if (u.pathname === '/.well-known/oauth-protected-resource/mcp' || u.pathname === '/.well-known/oauth-protected-resource') {
         return json(res, 200, { resource: `${origin}/mcp`, authorization_servers: [origin], bearer_methods_supported: ['header'], scopes_supported: ['read', 'write'] })

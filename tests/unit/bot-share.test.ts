@@ -156,7 +156,8 @@ describe('duplicating a bot', () => {
     expect(made).toEqual({ spaceId: 'b2', threadId: 'th2' })
     expect(log[0]).toBe('bot Writer copy #7C5CFF star')
     expect(log[1]).toBe('prompt b2 Use AP style.')
-    expect(log[2]).toBe('update b2 {"label":"Drafts my newsletter","model":"qwen3.5:9b","notify":true}')
+    // Not the model: a bot always chooses its own (Auto).
+    expect(log[2]).toBe('update b2 {"label":"Drafts my newsletter","notify":true}')
     expect(routines).toEqual([expect.objectContaining({ title: 'Weekly draft', spaceId: 'b2' })])
     expect(log[3]).toMatch(/copy of Writer.*1 routine \(paused.*chats and memories weren't copied/)
     expect(log.at(-1)).toBe('changed')

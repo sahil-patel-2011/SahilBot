@@ -84,7 +84,7 @@ export function VaultAuthDialog() {
           <input ref={input} className="sv-auth-input" type="password" autoComplete="off" spellCheck={false} placeholder="Master password" value={pw}
             onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submit() }} disabled={busy} data-testid="vault-auth-password" aria-label="Master password" />
         )}
-        {req.needs === 'confirm' && <p className="sv-auth-note">This vault is protected by your Mac's Keychain only. Set a master password in Settings → Vault for stronger protection.</p>}
+        {req.needs === 'confirm' && <p className="sv-auth-note">This vault is protected by your Mac's Keychain only. Set a master password in Settings → Privacy & Security → Passwords for stronger protection.</p>}
         {(err || wait > 0) && <div className="sv-auth-err" role="alert" data-testid="vault-auth-error">{wait > 0 ? `${err.replace(/ Try again in \d+s\.$/, '')} Try again in ${wait}s.` : err}</div>}
         <div className="sv-auth-actions">
           {req.touchId && <button className="btn sv-touch" disabled={busy} onClick={() => void send({ touchId: true })} data-testid="vault-auth-touchid"><FingerprintGlyph size={16} /> Touch ID</button>}

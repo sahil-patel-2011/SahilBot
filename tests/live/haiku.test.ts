@@ -77,7 +77,7 @@ describe.skipIf(!KEY)('live: Claude Haiku 5.5', () => {
     save()
     // Team of Experts with real helpers.
     await page.click('[data-testid="main-bot"]')
-    await page.click('[data-testid="team-toggle"]')
+    await page.click('[data-testid="max-toggle"]')
     log.team = await ask(page, 'What are the capital cities of Australia and Canada? Have one helper check each, and cite sources.')
     log.teamMembers = await page.locator('[data-testid="team-member"]').allInnerTexts()
     save()

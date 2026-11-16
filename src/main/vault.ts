@@ -216,7 +216,7 @@ export class Vault {
     const ok = this.auth ? await this.auth.unlock(reason, { attended }) : false
     if (!ok || !this.core.isUnlocked()) {
       throw new VaultLockedError(attended
-        ? 'The vault is locked and wasn\'t unlocked, so nothing was typed. Ask the user to unlock it (Settings → Vault, Touch ID or the master password) if they want you to continue.'
+        ? 'The vault is locked and wasn\'t unlocked, so nothing was typed. Ask the user to unlock it (Settings → Privacy & Security → Passwords, Touch ID or the master password) if they want you to continue.'
         : 'The vault is locked and nobody is here to unlock it, so nothing was typed. Tell the user.')
     }
   }
@@ -520,7 +520,7 @@ export class Vault {
     return it ? { ...(it.payload as unknown as AddressEntry), id: hit.id, nickname: hit.meta.name } : undefined
   }
 
-  // ------------------------------------------------------------------ every type (Settings → Vault)
+  // ------------------------------------------------------------------ every type (Settings → Privacy & Security → Passwords)
 
   items(): VaultItemSummary[] {
     const addrIds = new Set(this.core.list('address').map((a) => a.id))

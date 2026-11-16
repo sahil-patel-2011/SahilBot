@@ -91,7 +91,7 @@ export class SkillStore {
    * Skills marked `untrusted: true` are left out until approved.
    */
   index(max = 40, budget = 2000): string {
-    // Unverified learned skills wait for the user's OK (Settings → Memory → What I learned); redirect packs
+    // Unverified learned skills wait for the user's OK (Settings → Memory → Learned); redirect packs
     // (merged into another pack, no description) aren't listed.
     const all = this.list().filter((s) => !s.untrusted && !isRedirect(s))
     const mine = all.filter((s) => s.source !== 'builtin').slice(0, max).map((s) => `- ${s.name}: ${s.description}`)

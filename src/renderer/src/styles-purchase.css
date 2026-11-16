@@ -24,7 +24,7 @@
 .pc-facts dd { margin: 0; overflow-wrap: anywhere; }
 .pc-note { font-size: 12px; }
 
-/* Settings → Vault */
+/* Settings → Privacy & Security → Passwords */
 .pw-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--hover); margin: 4px 0 10px; }
 .pw-tab { border: 0; background: transparent; padding: 5px 14px; border-radius: 7px; font: inherit; font-size: 13px; color: inherit; cursor: pointer; }
 .pw-tab.on { background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); font-weight: 600; }

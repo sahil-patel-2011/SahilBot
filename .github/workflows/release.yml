@@ -14,7 +14,9 @@
 #   server   contents: read, no secrets (Linux). Builds SahilBot Server and packs
 #            SahilBot-server-linux-arm64.tar.gz and -x64.tar.gz (docs/server.md), smoke-tests the x64 one.
 #   publish  runs only for refs/heads/main, in the `release` environment (add required reviewers there to
-#            gate it). contents: write; the signing / notarization secrets exist only in its Package step.
+#            gate it). contents: write; the signing / notarization secrets exist only in its Package step,
+#            and SAHILBOT_OAUTH_CLIENTS_JSON (SahilBot's own OAuth app registrations, optional) only in the
+#            step that writes resources/oauth-clients.json (docs/oauth-registration.md).
 #
 # Signing: with the repository secrets CSC_LINK + CSC_KEY_PASSWORD (a Developer ID Application
 # certificate, .p12 as base64) the app is signed with it; with APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +
@@ -204,6 +206,14 @@ jobs:
           if ! printf '%s' "$BUILD" | grep -Eq '^[0-9]+$'; then echo "::error::bad build number: $BUILD"; exit 1; fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+
+      # SahilBot's own OAuth app registrations (docs/oauth-registration.md), when the repository secret
+      # SAHILBOT_OAUTH_CLIENTS_JSON is set: written to resources/oauth-clients.json (gitignored) for
+      # electron-builder to package. This step sees only that secret; without it the file isn't written.
+      - name: Built-in OAuth clients
+        env:
+          SAHILBOT_OAUTH_CLIENTS_JSON: ${{ secrets.SAHILBOT_OAUTH_CLIENTS_JSON }}
+        run: node scripts/write-oauth-clients.mjs
 
       - name: Package (DMG + ZIP, arm64)
         id: package

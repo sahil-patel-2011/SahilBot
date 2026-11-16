@@ -344,7 +344,7 @@ export function chunk<T>(list: T[], size: number): T[][] {
 
 // ------------------------------------------------------------------ errors
 
-export const MAIL_PERMISSION_HELP = 'macOS blocked SahilBot from controlling Mail. Open SahilBot Settings → Privacy & Permissions (or System Settings → Privacy & Security → Automation), allow SahilBot to control Mail, then try again.'
+export const MAIL_PERMISSION_HELP = 'macOS blocked SahilBot from controlling Mail. Open SahilBot Settings → Privacy & Security (or System Settings → Privacy & Security → Automation), allow SahilBot to control Mail, then try again.'
 
 /** What went wrong in an osascript run, from its error text. */
 export function classifyMailError(message: string): 'permission' | 'not_running' | 'timeout' | 'other' {

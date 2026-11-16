@@ -90,6 +90,6 @@ export function gate(i: GateInput): GateResult {
   const type = String(i.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
   if (type !== 'application/json') return { ok: false, status: 415, error: 'Content-Type must be application/json.' }
   const token = bearerOf(i.headers.authorization)
-  if (!token) return { ok: false, status: 401, error: 'Missing bearer token. Create one in SahilBot → Settings → Privacy & Permissions → Connected apps.', authFailure: true }
+  if (!token) return { ok: false, status: 401, error: 'Missing bearer token. Create one in SahilBot → Settings → Connected apps → Let apps on this Mac use SahilBot.', authFailure: true }
   return { ok: true, token }
 }

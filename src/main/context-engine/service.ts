@@ -543,6 +543,17 @@ export class ContextEngine {
     return assemble(this.store, { query: o.query, history: o.history, attachments: o.attachments, spaceId: o.spaceId, window: o.window, memories: o.memories, vault: o.vault ?? null, now: this.now() })
   }
 
+  /**
+   * The memory tool's check (agent/tools/memory.ts): a memory follows the same rules as a People & Places
+   * fact: secrets and identifiers never, and a sensitive category the user turned off not either.
+   */
+  screenMemory(text: string): { ok: boolean; why?: string; label?: string } {
+    const r = screen(text, this.settings().sensitive, { secretValues: this.d.secretValues?.() ?? [] })
+    if (r.ok) return { ok: true }
+    const label = SENSITIVE_CATEGORIES.find((c) => c.id === r.why)?.label.toLowerCase()
+    return { ok: false, why: r.why, ...(label ? { label } : {}) }
+  }
+
   // ---------------------------------------------------------------- the about tool
 
   /** "Who is Priya", "what do I know about Lisbon": full cards for what the query names, plus what they link to. */

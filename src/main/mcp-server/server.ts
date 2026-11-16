@@ -177,7 +177,7 @@ export class McpHttpServer {
       if (!client) {
         if (!this.authFailures.take('all').ok) return reject(res, 429, 'Too many failed sign-ins. Try again in a minute.')
         this.logFailure(null, 'invalid or revoked token')
-        return reject(res, 401, 'Invalid or revoked token. Connect the app again in SahilBot → Settings → Privacy & Permissions → Connected apps.', { 'www-authenticate': 'Bearer realm="SahilBot", error="invalid_token"' })
+        return reject(res, 401, 'Invalid or revoked token. Connect the app again in SahilBot → Settings → Connected apps → Let apps on this Mac use SahilBot.', { 'www-authenticate': 'Bearer realm="SahilBot", error="invalid_token"' })
       }
       const rate = this.perClient.take(client.id)
       if (!rate.ok) {

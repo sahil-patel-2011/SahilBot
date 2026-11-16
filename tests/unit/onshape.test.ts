@@ -100,7 +100,7 @@ describe('Onshape client requests', () => {
   })
   test('missing keys say how to set them up', async () => {
     const c = new OnshapeClient({ keys: () => undefined })
-    await expect(c.get('/documents')).rejects.toThrow(/Settings → API Keys & Servers → Onshape/)
+    await expect(c.get('/documents')).rejects.toThrow(/Settings → Models & Keys → Advanced → Keys for tools \(Onshape\)/)
   })
 })
 

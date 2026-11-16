@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import type { BotShape, BotSwarmSettings, EffortChoice, ModelList, Space } from '@shared/types'
+import type { BotMaxSettings, BotShape, ModelList, Space } from '@shared/types'
 import { api } from '../api'
 import { COLORS, SHAPES, SpaceAvatar } from '../brand'
 import * as I from '../icons'
-import { pickerModels } from '@shared/model-picker'
 
-/** Customize a bot (name, look, instructions, model) or a group chat (name, members). */
+/**
+ * Customize a bot (name, look, Max, instructions) or a group chat (name, members). A bot's model and thinking
+ * aren't set here: it chooses them by itself for each request (Auto), for the best result.
+ */
 export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
   space: Space | null
   spaces: Space[]
@@ -18,20 +20,17 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
   const [color, setColor] = useState(space?.color ?? COLORS[3])
   const [shape, setShape] = useState<BotShape>(space?.shape ?? 'pebble')
   const [prompt, setPrompt] = useState('')
-  const [model, setModel] = useState<string>(space?.model ?? '')
-  /** '' = the app default; 'auto' or a level overrides it for this bot's chats. */
-  const [effort, setEffort] = useState<EffortChoice | ''>(space?.effort ?? '')
   const [members, setMembers] = useState<string[]>(space?.members ?? [])
   const [path, setPath] = useState('')
   const [folder, setFolder] = useState<string | null>(space?.folder ?? null)
   const [err, setErr] = useState('')
-  // Swarm (bots): Off / Auto / Always and Max helpers; saved with the rest.
-  const [swarm, setSwarm] = useState<Partial<BotSwarmSettings>>({})
-  const [swarmAll, setSwarmAll] = useState<Record<string, Partial<BotSwarmSettings>>>({})
-  useEffect(() => { void api.settings.get().then((x) => { setSwarmAll(x.botSwarm ?? {}); if (space) setSwarm(x.botSwarm?.[space.id] ?? {}) }) }, [space])
-  const saveSwarm = async (id: string): Promise<void> => {
-    if (!Object.keys(swarm).length) return
-    await api.settings.set({ botSwarm: { ...swarmAll, [id]: { ...swarmAll[id], ...swarm } } })
+  // Max (bots): Off / Auto / Always and Max helpers; saved with the rest. (Older installs: the Swarm setting.)
+  const [maxCfg, setMaxCfg] = useState<Partial<BotMaxSettings>>({})
+  const [maxAll, setMaxAll] = useState<Record<string, Partial<BotMaxSettings>>>({})
+  useEffect(() => { void api.settings.get().then((x) => { setMaxAll(x.botMax ?? {}); if (space) setMaxCfg({ ...x.botSwarm?.[space.id], ...x.botMax?.[space.id] }) }) }, [space])
+  const saveMax = async (id: string): Promise<void> => {
+    if (!Object.keys(maxCfg).length) return
+    await api.settings.set({ botMax: { ...maxAll, [id]: { ...maxAll[id], ...maxCfg } } })
     window.dispatchEvent(new Event('sahilbot:settings-changed'))
   }
   const bots = spaces.filter((s) => s.kind === 'bot')
@@ -53,16 +52,15 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
     setErr('')
     try {
       if (space) {
-        await api.spaces.update(space.id, { name: name.trim() || space.name, color, shape, model: model || null, effort: effort || null, ...(mode === 'group' ? { members } : {}) })
+        await api.spaces.update(space.id, { name: name.trim() || space.name, color, shape, ...(mode === 'group' ? { members } : {}) })
         if (mode !== 'group') await api.spaces.setPrompt(space.id, prompt)
-        if (mode === 'bot') await saveSwarm(space.id)
+        if (mode === 'bot') await saveMax(space.id)
         onSaved(space.id)
       } else {
         if (mode === 'project' && !folder) throw new Error('Choose the project folder.')
         const r = await api.spaces.create({ name: name.trim() || undefined, color, shape, kind: mode, members, intro: mode === 'bot' && !prompt.trim(), folder: folder ?? undefined })
         if (mode !== 'group' && prompt.trim()) await api.spaces.setPrompt(r.space.id, prompt)
-        if (mode === 'bot') await saveSwarm(r.space.id)
-        if (model || effort) await api.spaces.update(r.space.id, { model: model || null, effort: effort || null })
+        if (mode === 'bot') await saveMax(r.space.id)
         onSaved(r.space.id, r.threadId)
       }
       onClose()
@@ -113,40 +111,22 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
                 ))}</div>
               </div>
             </div>
-            <div className="field"><label>Model</label>
-              <select value={model} onChange={(e) => setModel(e.target.value)}>
-                <option value="">App default</option>
-                {/* Only models that can run now; a saved choice that's gone stays visible so it can be changed. */}
-                {models && model && !pickerModels(models).some((m) => m.id === model) && <option value={model}>{model} (not available: uses Auto)</option>}
-                {pickerModels(models).map((m) => <option key={m.id} value={m.id} disabled={!m.fits && !m.maxFittingWindow}>{m.label || m.id}</option>)}
-              </select>
-            </div>
-            <div className="field"><label>Thinking</label>
-              <select value={effort} onChange={(e) => setEffort(e.target.value as EffortChoice | '')} data-testid="bot-effort">
-                <option value="">App default</option>
-                <option value="auto">Auto: picks for each request</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="xhigh">Extra</option>
-                <option value="max">Max</option>
-              </select>
-            </div>
-            <div className="field"><label>Swarm</label>
+            <div className="field"><label>Max</label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <select value={swarm.mode ?? 'auto'} onChange={(e) => setSwarm((x) => ({ ...x, mode: e.target.value as BotSwarmSettings['mode'] }))} data-testid="editor-swarm-mode" aria-label="Swarm">
+                <select value={maxCfg.mode ?? 'auto'} onChange={(e) => setMaxCfg((x) => ({ ...x, mode: e.target.value as BotMaxSettings['mode'] }))} data-testid="editor-max-mode" aria-label="Max">
                   <option value="off">Off</option>
                   <option value="auto">Auto: the bot decides</option>
                   <option value="always">Always</option>
                 </select>
-                {(swarm.mode ?? 'auto') !== 'off' && (
+                {(maxCfg.mode ?? 'auto') !== 'off' && (
                   <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>Max helpers
-                    <input type="number" min={1} max={50} value={swarm.maxHelpers ?? 20} style={{ width: 64 }} data-testid="editor-swarm-max"
-                      onChange={(e) => { const n = Math.round(Number(e.target.value)); if (Number.isFinite(n)) setSwarm((x) => ({ ...x, maxHelpers: Math.min(50, Math.max(1, n)) })) }} />
+                    <input type="number" min={1} max={50} value={maxCfg.maxHelpers ?? 20} style={{ width: 64 }} data-testid="editor-max-helpers"
+                      onChange={(e) => { const n = Math.round(Number(e.target.value)); if (Number.isFinite(n)) setMaxCfg((x) => ({ ...x, maxHelpers: Math.min(50, Math.max(1, n)) })) }} />
                   </label>
                 )}
               </div>
             </div>
+            <div className="hint bot-auto-note" data-testid="editor-auto-model"><I.Sparkle size={12} /> This bot picks its own model and thinking for each request, for the best result.</div>
             <h3>Personality and instructions</h3>
             <div className="hint" style={{ marginBottom: 6 }}>
               {space ? <span title={path}>Saved as a plain file ({path.split('/').pop()}) next to the bot's other files.</span> : 'Leave empty and the bot will introduce itself and ask what to focus on.'}

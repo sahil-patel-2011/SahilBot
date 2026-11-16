@@ -45,12 +45,12 @@ export function useSpend(): { spent: number; cap: number; requests: number; mode
 }
 
 const MODES: Array<{ id: SpendingMode; label: string; sub: string }> = [
-  { id: 'amount', label: 'Limit', sub: 'Every pay-per-use request is priced before it is sent; one that could pass this month’s limit is refused.' },
+  { id: 'amount', label: 'Limit', sub: 'A request that could pass this month’s limit is refused before it’s sent.' },
   { id: 'unlimited', label: 'Unlimited', sub: 'No cap. Spend is still tracked and shown.' },
-  { id: 'none', label: 'None', sub: 'No pay-per-use API spending at all: only your ChatGPT plan (via Codex) and local models run.' }
+  { id: 'none', label: 'None', sub: 'No pay-per-use spending: only your ChatGPT plan and local models run.' }
 ]
 
-/** Settings → General → Monthly spending limit. */
+/** Settings → Models & Keys → Monthly spending limit. */
 export function SpendingLimitSection({ s, patch }: { s: Settings; patch: Patch }) {
   const b = useSpend()
   const mode = modeOf(s)
@@ -80,7 +80,7 @@ export function SpendingLimitSection({ s, patch }: { s: Settings; patch: Patch }
             <span>per month</span>
           </div>
         )}
-        <div className="spend-sub">{MODES.find((m) => m.id === mode)!.sub} Limits are monthly; weekly numbers on the Usage page are only statistics. Requests a provider rejects aren’t counted.</div>
+        <div className="spend-sub">{MODES.find((m) => m.id === mode)!.sub}</div>
       </div>
     </section>
   )

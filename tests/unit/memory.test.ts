@@ -50,7 +50,7 @@ describe('memory scopes', () => {
     const t = threadIn(writer.id)
     const r1 = await run({ action: 'save', fact: 'Always ask before publishing a post.', category: 'rule' }, t)
     expect(r1.text).toMatch(/for Writer only/)
-    expect(r1.text).toMatch(/I'll remember that/)
+    expect(r1.text).toMatch(/Tell the user in a few words inline, e.g. "Noted: Always ask before publishing a post\."/)
     await run({ action: 'save', fact: 'Lives in Atlanta, GA.', category: 'location' }, t)
     await run({ action: 'save', fact: 'Drafted the launch post → ~/Documents/launch.md', category: 'worklog' }, t)
     await run({ action: 'save', fact: 'Likes dark roast coffee.', category: 'preference', scope: 'bot' }, t)

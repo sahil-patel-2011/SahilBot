@@ -45,7 +45,7 @@ test('redesign screenshots', async () => {
       }
       for (let i = 0; i < 40; i++) llm.script.push(reply)
       await page.click('[data-testid="modes-menu"]')
-      await page.click('[data-testid="team-toggle"]')
+      await page.click('[data-testid="max-toggle"]')
       await page.fill('[data-testid="composer-input"]', 'Research what works for clinic SEO in 2026')
       await page.keyboard.press('Enter')
       await page.waitForSelector('[data-testid="team-card"]')

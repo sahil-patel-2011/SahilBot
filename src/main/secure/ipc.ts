@@ -1,4 +1,4 @@
-// Settings → Vault talks to main only through these handlers. Every reply is metadata (names, sites,
+// Settings → Privacy & Security → Passwords talks to main only through these handlers. Every reply is metadata (names, sites,
 // brand, last 4, expiry, counts, audit rows) except reveal and totpCode, which show a value to the user
 // after Touch ID or the master password, with the window's content protected from screen capture.
 // tests/unit/vault-ipc.test.ts calls every handler with a known secret saved and scans the replies.

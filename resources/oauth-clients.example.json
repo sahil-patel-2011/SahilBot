@@ -1,0 +1,6 @@
+{
+  "$comment": "SahilBot's own OAuth app registrations: copy to resources/oauth-clients.json (gitignored) or put the JSON in the SAHILBOT_OAUTH_CLIENTS_JSON repository secret (release builds write it to that file). Keys are catalog preset ids, plus \"google\" for every Google app. redirect is \"loopback\" (any 127.0.0.1 port, e.g. Google Desktop clients) or the exact URI registered with the provider. Checklist per provider: docs/oauth-registration.md. Replace every REPLACE_ME, delete the entries you don't have, and never commit the real file.",
+  "slack": { "clientId": "REPLACE_ME.REPLACE_ME", "redirect": "http://localhost:47613/callback" },
+  "github": { "clientId": "Ov23liREPLACE_ME", "clientSecret": "REPLACE_ME_INSTALLED_APP_SECRET", "redirect": "http://127.0.0.1:47613/callback" },
+  "google": { "clientId": "1234567890-REPLACEME.apps.googleusercontent.com", "clientSecret": "GOCSPX-REPLACE_ME", "redirect": "loopback" }
+}

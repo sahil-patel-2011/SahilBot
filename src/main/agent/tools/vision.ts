@@ -183,7 +183,7 @@ PDFs with a text layer are cheaper with file_read. What comes back is the docume
     describe: (a) => `Read ${basename(a.path ?? '')} with Claude vision`,
     async run(a, ctx) {
       const c = d.access.anthropic()
-      if (!c) throw new Error(d.access.cloudOn() ? 'No Anthropic API key is saved (Settings → API Keys & Servers).' : 'Cloud models are switched off, so Claude vision is unavailable.')
+      if (!c) throw new Error(d.access.cloudOn() ? 'No Anthropic API key is saved (Settings → Models & Keys).' : 'Cloud models are switched off, so Claude vision is unavailable.')
       const full = resolvePath(a.path ?? '', ctx.workspaceDir || d.workspace(), ctx.state.roots ?? [])
       if (!existsSync(full) || statSync(full).isDirectory()) throw new Error(`No such file: ${a.path}`)
       const schema = a.schema ?? (a.preset === 'receipt' ? RECEIPT_SCHEMA : undefined)

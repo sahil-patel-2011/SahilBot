@@ -24,7 +24,7 @@ describe('bot swarms, council and ask_bot', () => {
   afterAll(async () => { await llm.close() })
   beforeEach(() => { llm.script.length = 0; llm.requests.length = 0 })
 
-  test('a bot runs a 10-helper swarm: hidden temporary helpers, a live card, the compile and credits', async () => {
+  test('Max on a bot picks a 10-helper swarm: hidden temporary helpers, a live card, the compile and credits', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
     await page.evaluate(() => window.foreman.spaces.create({ name: 'Ideas Bot', intro: false }))
     await openBot(page, 'Ideas Bot')
@@ -40,10 +40,13 @@ describe('bot swarms, council and ask_bot', () => {
         : { content: 'SWARM COMPILED: the best ideas are the club [H2, H5] and the stall [H9].', delay: 0 }
     })
     await page.click('[data-testid="modes-menu"]') // the modes live under the composer's Modes menu
-    await page.click('[data-testid="swarm-toggle"]')
+    await page.click('[data-testid="max-toggle"]')
     await send(page, 'Brainstorm ways to grow my bakery')
     await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 60_000 }).toContain('SWARM COMPILED')
-    const card = page.locator('[data-testid="swarm-card"]')
+    // The swarm is a phase of the one Max card.
+    const max = page.locator('[data-testid="max-card"]')
+    await expect.poll(() => max.getAttribute('data-strategy'), { timeout: 15_000 }).toBe('swarm')
+    const card = max.locator('[data-testid="swarm-card"]')
     await expect.poll(() => card.getAttribute('data-phase'), { timeout: 15_000 }).toBe('done')
     expect(await card.locator('[data-testid="swarm-helper"][data-status="done"]').count()).toBe(10)
     expect(await card.locator('[data-testid="swarm-count"]').innerText()).toMatch(/10 of 10 helpers · 20 ideas/)

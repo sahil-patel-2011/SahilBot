@@ -118,3 +118,74 @@
 .council-wrap .council-pick > button { padding: 4px; color: var(--text-3); }
 .bd-num { width: 72px; text-align: right; }
 .bd-num { width: 72px; text-align: right; }
+
+/* ---- Max: one card for many agents (strategy · why · phases · result) ---- */
+.max-card { position: relative; }
+.max-card.live { border-color: color-mix(in srgb, var(--accent) 40%, var(--surface-line)); }
+.max-card.live::before {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; border-radius: var(--r-card) var(--r-card) 0 0;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 50% 100%; background-repeat: no-repeat;
+  animation: max-sweep 2.4s var(--ease, ease) infinite;
+}
+@keyframes max-sweep { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+.max-head { gap: 8px; }
+.max-badge {
+  flex: none; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center;
+  background: linear-gradient(140deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #7c3aed)); color: #fff;
+}
+.max-badge svg { color: #fff; }
+.max-title { color: var(--text-2); font-weight: var(--fw-medium, 500); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.max-head .max-status { flex: none; }
+.max-body { gap: 12px; }
+.max-why { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: var(--fs-xs); color: var(--text-2); }
+.max-why-k { font-size: var(--fs-2xs); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); }
+.max-why-v { color: var(--text-2); }
+.max-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.max-step {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: var(--r-pill);
+  background: var(--tint); font-size: var(--fs-xs); color: var(--text-2); position: relative;
+}
+.max-step .ms-dot { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 10.5px; font-weight: 600; background: var(--tint-2); color: var(--text-2); }
+.max-step .ms-ico { display: inline-grid; color: var(--text-3); }
+.max-step .ms-label { font-weight: 600; color: var(--text); }
+.max-step .ms-status { color: var(--text-3); }
+.max-step .ms-arrow { position: absolute; right: -12px; color: var(--text-3); font-size: 11px; }
+.max-step:not(:last-child) { margin-right: 10px; }
+.max-step.ms-running { background: var(--tint-accent); }
+.max-step.ms-running .ms-dot { background: var(--accent); color: #fff; animation: max-pulse 1.6s ease-in-out infinite; }
+.max-step.ms-running .ms-status { color: var(--accent-text); }
+.max-step.ms-done .ms-dot { background: color-mix(in srgb, var(--ok) 85%, transparent); color: #fff; }
+.max-step.ms-done .ms-status { color: var(--ok-text); }
+.max-step.ms-failed .ms-status, .max-step.ms-stopped .ms-status { color: var(--danger-text); }
+.max-step.ms-skipped { opacity: .6; }
+@keyframes max-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); } }
+.max-phase { display: flex; flex-direction: column; gap: 8px; }
+.max-phase:empty { display: none; }
+.max-note { font-size: var(--fs-xs); color: var(--text-3); padding: 0 2px; }
+.max-wait { padding: 2px 4px; font-size: var(--fs-xs); }
+/* Embedded boards: the team, swarm and Heavy cards inside the Max card, as quiet inset panels. */
+.heavy-card.embedded, .team-card.embedded { border: 1px solid var(--surface-line); border-radius: var(--r-md); background: color-mix(in srgb, var(--text) 1.5%, var(--surface)); }
+.heavy-card.embedded > .plan-head { min-height: 36px; padding: 8px 12px; }
+.heavy-card.embedded .heavy-body { padding: 2px 12px 12px; }
+.max-sec-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px 2px; font-size: var(--fs-sm); color: var(--text-2); }
+.max-sec-head > svg { color: var(--text-3); flex: none; }
+.max-sec-head .max-stop { margin-left: auto; font-size: 12.5px; color: var(--danger-text); padding: 2px 6px; }
+.max-team .team-board { padding: 4px 8px 10px; }
+.max-team .team-rows { max-height: 340px; overflow-y: auto; }
+.max-brief { border-radius: var(--r-md); padding: 6px 10px; background: var(--tint); font-size: var(--fs-sm); }
+.max-brief[open] { max-height: 420px; overflow-y: auto; }
+.max-result { border-radius: var(--r-md); padding: 8px 10px; background: color-mix(in srgb, var(--ok) 7%, transparent); font-size: var(--fs-sm); }
+.max-result details { margin-top: 4px; }
+.max-result details[open] { max-height: 420px; overflow-y: auto; }
+.max-credits { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 6px; color: var(--text-3); font-size: var(--fs-xs); }
+.max-agents { color: var(--text-3); }
+@media (prefers-reduced-motion: reduce) { .max-card.live::before, .max-step.ms-running .ms-dot { animation: none; } }
+@container (max-width: 560px) { .max-title { display: none; } .max-step .ms-status { display: none; } }
+
+/* Bots choose their own model and thinking: a quiet read-only line (bot editor, bot details). */
+.bot-auto-note { display: flex; align-items: center; gap: 6px; margin: 2px 0 10px; font-size: var(--fs-xs); color: var(--text-3); }
+.bot-auto-note svg { color: var(--accent-text); flex: none; }
+.bd-row-readonly .bd-row-text { color: var(--text-2); }
+.max-why .sw-pill { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: var(--fs-2xs); color: var(--text-2); background: var(--tint); margin-left: 0; padding: 1px 8px; border-radius: var(--r-pill); }
+/* The Max entry in the Modes menu explains itself in full (two lines). */
+.modes-menu .menu-item[data-testid="max-toggle"] .sub { white-space: normal; display: block; overflow: visible; }

@@ -206,9 +206,10 @@ describe('the Vault view', () => {
     expect(st.settings.bots[id]).toEqual({ level: 'normal' })
     st = await page.evaluate((sid) => window.foreman.notesVault.setBot(sid, { enabled: false, level: null }), id)
     expect(st.settings.bots[id]).toEqual({ enabled: false })
-    // Settings → Memory shows the vault section.
+    // Settings → Memory → Knowledge vault shows the vault section.
     await page.click('[data-testid="profile"]')
     await page.click('[data-testid="settings-memory"]')
+    await page.click('[data-testid="settings-tab-vault"]')
     await page.locator('[data-testid="vault-settings"]').waitFor()
     expect(await page.locator('[data-testid="vault-level-aggressive"]').getAttribute('aria-checked')).toBe('true')
     await app.close()

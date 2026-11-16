@@ -1,4 +1,4 @@
-/* Settings → Memory → What I learned (LearningLog). Tokens from styles.css only, so light and dark both work. */
+/* Settings → Memory → Learned (LearningLog). Tokens from styles.css only, so light and dark both work. */
 
 .ll { margin: 26px 0 18px; }
 .ll-head { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 10px 4px; }

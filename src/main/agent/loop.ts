@@ -17,7 +17,7 @@ import type { Endpoints } from '../llm/endpoints'
 import type { HeavyBoard, Sampling } from '@shared/types'
 import { cost as priceOf } from '../llm/budget'
 import { claudeFamily } from '../llm/claude-models'
-import { HEAVY_ATTEMPT_NOTE, runHeavy } from './heavy'
+import { HEAVY_ATTEMPT_NOTE, fitHeavy, heavyCap, runHeavy } from './heavy'
 import { heavyConfig, swarmConfig, usd } from './swarm/config'
 import { helperModelFor, isCloudInfo, swarmCapacity } from './swarm/capacity'
 import { SwarmLedger, estimateFor, swarmScope, threadCost } from './swarm/ledger'
@@ -25,7 +25,13 @@ import { AdaptiveLimit, RATE_LIMITED, runPool } from './swarm/pool'
 // Bot swarms and Council mode (swarm/hosts.ts builds them on the AgentKit below).
 import { finishSwarms } from './swarm/bot-swarm'
 import { ASK_NOTE, ASK_WAIT_MS, botDirectory, planAsk } from './tools/ask-bot'
-import { applySwarmState, runCouncilFor, runSwarmTool, swarmNote, type AgentKit, type KitHelper } from './swarm/hosts'
+import { applySwarmState, crossProviderFor, runCouncilFor, runSwarmTool, swarmNote, type AgentKit, type KitHelper } from './swarm/hosts'
+// Max mode (agent/max): one mode for many agents. The planner picks a team, a swarm, judged attempts or a mix;
+// one live card shows it (max/session.ts); the lead's max tool runs on the same machinery (max/host.ts).
+import { HYBRID_PHASE2, maxDecision, maxNote } from './max/decide'
+import { maxBudget, runMaxTool } from './max/host'
+import { finishMax, maxSessionFor, openMaxSession, type MaxSession } from './max/session'
+import { botMaxConfig } from './swarm/bot-config'
 import { def as providerDef } from '../llm/providers'
 import { attachmentNotes } from '../attach-process'
 import { localOff } from '@shared/local-mode'
@@ -34,8 +40,8 @@ import { autoPreference } from '../llm/routing-table'
 import { autoRoute, budgetTightFor, planFallback } from '../llm/auto-route'
 import { modelHealth } from '../llm/model-health'
 import { spendingMode } from '../llm/budget'
-import { effortChoice, escalateEffort, resolveEffort } from '../llm/auto-effort'
-import { fallbackNotice, mayReplaceForInvalidCalls } from './choices'
+import { escalateEffort, resolveEffort } from '../llm/auto-effort'
+import { fallbackNotice, mayReplaceForInvalidCalls, requestedEffort, requestedModel } from './choices'
 // Model routing's classifier (category + difficulty); agent/intent.ts classifyTask is the chat-mode one.
 import { CATEGORY_LABEL, classifyTask as classifyRoute, requestTokens, type TaskClass as RouteClass } from '../llm/task-classifier'
 import { isPremiumClaude } from '../llm/claude-models'
@@ -435,6 +441,16 @@ export class Agent {
     // Council: like Heavy, it needs someone there (cost OK, disagreements, Cursor launches) and replaces the other modes.
     if (input.council && opts.unattended) throw new Error('Council mode needs you there to OK what it costs and settle disagreements, so it can\'t run unattended. Send it without Council.')
     if (input.council) input = { ...input, team: false, deepResearch: false, planFirst: false, heavy: false, swarm: false }
+    // Max (max/decide.ts): the composer's toggle, or the bot's Max setting (Always; Auto only hints). The planner's
+    // first phase sets the path: judged attempts (heavy), a team, or a swarm; a hybrid's second phase follows.
+    const sp0 = this.d.db.getSpace(thread.spaceId)
+    const mx = maxDecision({ settings: this.d.settings.get(), space: sp0, text: input.text, attachments: input.attachments?.length, unattended: opts.unattended, max: input.max, strategy: input.maxStrategy, council: input.council, deepResearch: input.deepResearch, group: sp0?.kind === 'group' })
+    const maxPlan = mx.plan
+    if (maxPlan) {
+      const first = maxPlan.phases[0]
+      input = first === 'heavy' ? { ...input, max: true, heavy: true, team: false, deepResearch: false, planFirst: false, swarm: false }
+        : { ...input, max: true, heavy: false, team: first === 'team' || !!input.deepResearch, swarm: false }
+    }
 
     const history = this.d.db.listMessages(thread.id)
     const lastUserAt = [...history].reverse().find((m) => m.role === 'user')?.createdAt ?? 0
@@ -456,13 +472,18 @@ export class Agent {
       input = { ...input, team: true }
       notes.push('[Deep Research is on: research this thoroughly with your team, then deliver a report. Write it with create_document as a PDF in the workspace folder "Research" (e.g. "Research/<short title>.pdf"): a title, a 5-8 sentence executive summary up top, sections with clear headings, tables for comparisons and numbers, what is uncertain or disputed, and a numbered Sources list (title and URL) that every [n] in the text points to. Re-open the PDF to check it, then reply with a short summary of the findings and the file path.]')
     }
-    if (input.team) {
+    if (maxPlan && maxPlan.phases[0] !== 'heavy') {
+      const { min, max } = this.teamSize(thread)
+      const helpers = botMaxConfig(this.d.settings.get(), sp0?.id).maxHelpers
+      notes.push(maxNote(maxPlan, { teamMin: Math.min(min, helpers), teamMax: Math.min(max, helpers), maxHelpers: helpers, unattended: opts.unattended, budgetUsd: opts.unattended ? maxBudget({ settings: this.d.settings.get(), space: sp0 }) : undefined }))
+    } else if (mx.hint && !input.swarm) notes.push(mx.hint)
+    if (input.team && !maxPlan) {
       const { min, max } = this.teamSize(thread)
       notes.push(`[Team of Experts is on for this request: 1) Write your plan with todo. 2) Split the research into at least ${min} focused, non-overlapping parts (up to ${max}; different sources, angles, sub-questions, options or sections) and send them all at once with the agents tool; give each helper a complete, self-contained task and say exactly what to report (findings with source URLs, numbers with dates). 3) Compile their reports: compare them, resolve disagreements, check anything important yourself, fill gaps. 4) Then finish the job yourself and double-check it before you answer: one complete, well-organized result, with sources.]`)
     }
 
     // Bot swarms: the composer's Swarm toggle or the bot's Always turn it on; Auto hints when the request fits.
-    const sw = input.heavy || input.council ? {} : swarmNote(this.d.settings.get(), this.d.db.getSpace(thread.spaceId), input.text, { swarm: input.swarm, attachments: input.attachments?.length, unattended: opts.unattended })
+    const sw = input.heavy || input.council || maxPlan || (mx.hint && !input.swarm) ? {} : swarmNote(this.d.settings.get(), this.d.db.getSpace(thread.spaceId), input.text, { swarm: input.swarm, attachments: input.attachments?.length, unattended: opts.unattended })
     if (sw.note) notes.push(sw.note)
 
     if (input.voice) {
@@ -511,6 +532,8 @@ export class Agent {
         ...(input.planFirst ? { planFirst: true } : {}),
         ...(input.heavy ? { heavy: true } : {}),
         ...(sw.meta ?? {}),
+        ...(maxPlan ? { max: { strategy: maxPlan.strategy, phases: maxPlan.phases, pattern: maxPlan.pattern, title: maxPlan.title, why: maxPlan.why, source: mx.source }, ...(maxPlan.phases[0] !== 'heavy' ? { maxNote: notes.find((n) => n.startsWith('[Max is on')) } : {}) } : {}),
+        ...(mx.hint && !input.swarm ? { maxHint: true } : {}),
         ...(input.council ? { council: input.council } : {})
       }
     })
@@ -661,8 +684,9 @@ export class Agent {
     let status: 'finished' | 'stopped' | 'error' = 'finished'
     let error: string | undefined
     try {
+      const mxs = this.maxStart(thread, run)
       if (!space || space.kind !== 'group') {
-        status = this.heavyWanted(thread, run) ? await this.heavy(thread, run, space) : this.councilWanted(thread, run) ? await this.council(thread, run, space) : await this.loop(thread, run, space)
+        status = mxs?.board.strategy === 'hybrid' ? await this.maxHybrid(thread, run, space, mxs) : this.heavyWanted(thread, run) ? await this.heavy(thread, run, space) : this.councilWanted(thread, run) ? await this.council(thread, run, space) : await this.loop(thread, run, space)
       } else {
         const members = space.members.map((id) => this.d.db.getSpace(id)).filter((b): b is Space => !!b)
         if (!members.length) throw new Error('This group has no bots. Add some in its settings.')
@@ -688,7 +712,10 @@ export class Agent {
       if (!(e as { shown?: boolean }).shown) this.notice(thread.id, `Something went wrong: ${error}`)
     }
     // Swarm cards: the run's last answer is the compiled result (credits), and their sessions close.
-    finishSwarms(thread.id, [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content)?.content ?? '', status)
+    const finalAnswer = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.maxBrief && !m.meta?.superseded)?.content ?? ''
+    finishSwarms(thread.id, finalAnswer, status)
+    // The Max card: the answer is its result (credits), and its session closes.
+    finishMax(thread.id, finalAnswer, status)
     // Unregister before announcing the end, so a message sent the instant the UI unlocks is accepted.
     this.runs.delete(thread.id)
     if (status === 'finished') void this.autoTitle(thread.id)
@@ -831,7 +858,7 @@ export class Agent {
   /** Team of Experts size for this Mac (local models) or the swarm settings (cloud): at least 10 helpers when it can run them. */
   private teamSize(thread: Thread): { min: number; max: number } {
     const s = this.d.settings.get()
-    const want = thread.model || this.d.db.getSpace(thread.spaceId)?.model || s.defaultModel
+    const want = requestedModel({ thread: this.d.db.getThread(thread.id) ?? thread, space: this.d.db.getSpace(thread.spaceId), settings: s })
     // Auto variants size the team for the strongest model they may route to (local only / cloud only).
     const v = autoVariant(want)
     const id = v ? [...autoPool(v, this.d.endpoints.usable())].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id : want
@@ -959,7 +986,10 @@ export class Agent {
     const leadCap = swarmCapacity(this.modelInfo(lead), cfg)
     // On the cloud, helpers default to a cheaper, faster model than the lead (all within the run's mode caps and taint rules).
     const model = helperModelFor(lead, cfg.helperModel, this.d.endpoints.usable(), leadCap.cloud)
-    const cap = model === lead ? leadCap : swarmCapacity(this.modelInfo(model), cfg)
+    const cap0 = model === lead ? leadCap : swarmCapacity(this.modelInfo(model), cfg)
+    // Max: the bot's Max helpers caps its teams too (up to 50, never above what the model or settings allow).
+    const maxOn = !!maxSessionFor(rootId) || !![...db.listMessages(parent.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.meta?.max
+    const cap = maxOn ? { ...cap0, maxAgents: Math.min(cap0.maxAgents, botMaxConfig(s, db.getSpace(parent.spaceId)?.id).maxHelpers) } : cap0
     const used = this.teamUsed.get(rootId) ?? 0
     // Team of Experts: the first team must be wide enough to research properly.
     const teamMode = depth === 1 && !![...db.listMessages(parent.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.meta?.team
@@ -1005,7 +1035,11 @@ export class Agent {
     const group = this.groups.get(rootCallId) ?? new Set<string>()
     for (const m of members) group.add(m.id)
     this.groups.set(rootCallId, group)
-    const show = (): void => this.d.emit({ threadId: rootId, type: 'team', callId: rootCallId, members: board.map((m) => ({ ...m })) })
+    const show = (): void => {
+      this.d.emit({ threadId: rootId, type: 'team', callId: rootCallId, members: board.map((m) => ({ ...m })) })
+      // A Max run shows the team as a phase of its one card.
+      maxSessionFor(rootId)?.setTeam(rootCallId, board)
+    }
     show()
     const children: Array<string | undefined> = []
     const isCloud = (m: string): boolean => this.cloudModel(m)
@@ -1091,24 +1125,60 @@ export class Agent {
 
   /** Heavy applies to this run: the user's own message asked for it, someone is watching, not a group or a resume. */
   private heavyWanted(thread: Thread, run: Run): boolean {
-    if (run.unattended || run.helper || run.intro || run.group) return false
+    if (run.helper || run.intro || run.group) return false
     const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    // Unattended only under Max (a routine's budget, never asking); a plain Heavy message needs someone there.
+    if (run.unattended && !opener?.meta?.max) return false
     return !!opener?.meta?.heavy && !isRelayed(opener)
   }
 
+  /** Max is on for this request: its one live card opens before anything runs. */
+  private maxStart(thread: Thread, run: Run): MaxSession | undefined {
+    if (run.helper || run.intro) return undefined
+    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const m = opener?.meta?.max as { strategy?: string; phases?: string[]; pattern?: 'ideate' | 'divide'; title?: string; why?: string; source?: 'composer' | 'bot' } | undefined
+    if (!m || !m.strategy || !Array.isArray(m.phases)) return undefined
+    const space = this.d.db.getSpace(thread.spaceId)
+    const plan = { strategy: m.strategy as 'team', phases: m.phases as Array<'team'>, pattern: m.pattern, title: m.title ?? m.strategy, why: m.why ?? '', scores: { team: 0, swarm: 0, heavy: 0, deliverable: 0 } }
+    return openMaxSession({ db: this.d.db, threadId: thread.id, emit: (msg) => this.d.emit({ threadId: thread.id, type: 'message', message: msg }), plan, source: m.source ?? 'composer', unattended: run.unattended, budgetUsd: run.unattended ? maxBudget({ settings: this.d.settings.get(), space }) : undefined })
+  }
+
+  /**
+   * A Max hybrid: phase 1 is the lead's own run with its team or swarm (it replies with a working brief, kept on
+   * the card); phase 2 runs judged attempts that write the final deliverable from that brief.
+   */
+  private async maxHybrid(thread: Thread, run: Run, space: Space | undefined, mx: MaxSession): Promise<'finished' | 'stopped' | 'error'> {
+    const { db } = this.d
+    const first = (mx.board.phases[0]?.kind === 'team' ? 'team' : 'swarm') as 'team' | 'swarm'
+    const status = await this.loop(thread, run, space)
+    if (status !== 'finished' || run.ctrl.signal.aborted) return status
+    const brief = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)
+    if (!brief) return status
+    brief.meta = { ...brief.meta, maxBrief: mx.id }
+    db.updateMessage(brief)
+    this.d.emit({ threadId: thread.id, type: 'message', message: brief })
+    // The swarm's credits come from the brief (its compile); then phase 2 starts.
+    finishSwarms(thread.id, brief.content, 'finished')
+    mx.setBrief(brief.content)
+    mx.phase(first, 'done')
+    return this.heavy(thread, run, space, { brief: brief.content, kind: first })
+  }
+
   /** Heavy mode for this request (heavy.ts): N hidden attempts, a judge, and the final answer in the chat. */
-  private async heavy(thread: Thread, run: Run, space: Space | undefined): Promise<'finished' | 'stopped' | 'error'> {
+  private async heavy(thread: Thread, run: Run, space: Space | undefined, phase2?: { brief: string; kind: 'team' | 'swarm' }): Promise<'finished' | 'stopped' | 'error'> {
     const { db } = this.d
     const s = this.d.settings.get()
     const state = db.getState(thread.id)
-    const { model: lead } = await this.chooseModel(db.getThread(thread.id)?.model || space?.model || s.defaultModel, thread, state)
+    const { model: lead } = await this.chooseModel(requestedModel({ thread: db.getThread(thread.id), space, settings: s }), thread, state)
     db.setState(thread.id, state)
     const history = db.listMessages(thread.id)
     const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)!
     const prior = history.filter((m) => m.id !== opener.id && (m.role === 'user' || m.role === 'assistant') && m.kind === 'normal' && m.content && !m.meta?.hidden && !m.meta?.superseded).slice(-6)
     const context = prior.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.replace(/\s+/g, ' ').slice(0, 1500)}`).join('\n')
-    const note = typeof opener.meta?.note === 'string' ? opener.meta.note : ''
-    const task = [opener.content, note, context ? `Earlier in this chat (for context):\n${context}` : ''].filter(Boolean).join('\n\n')
+    // A hybrid's phase 2: the lead's phase-1 instructions don't apply to the attempts; its brief does.
+    const note0 = typeof opener.meta?.note === 'string' ? opener.meta.note : ''
+    const note = typeof opener.meta?.maxNote === 'string' ? note0.replace(opener.meta.maxNote, '').trim() : note0
+    const task = [opener.content, note, phase2 ? HYBRID_PHASE2(phase2.kind, phase2.brief.slice(0, 40_000)) : '', context ? `Earlier in this chat (for context):\n${context}` : ''].filter(Boolean).join('\n\n')
     // Taint for the attempts, as the lead would have it: outside text this chat read, other bots' messages,
     // what the user is working on, and the earlier replies quoted as context. The request is the user's own words.
     const seed = {
@@ -1116,19 +1186,35 @@ export class Agent {
         ...history.filter((m) => m.role === 'tool' && m.meta?.untrusted).slice(-20).map((m) => m.content),
         ...history.filter((m) => m.role === 'user' && isRelayed(m) && !m.meta?.helperTask).slice(-10).map(relayedText),
         ...activityTexts(state.pins),
-        ...(context ? [context] : [])
+        ...(context ? [context] : []),
+        ...(phase2 ? [phase2.brief] : [])
       ],
       userText: userTextOf(history)
     }
-    const cfg = heavyConfig(s.heavy)
+    let cfg = heavyConfig(s.heavy)
     const swarm = swarmConfig(s.swarm)
     const groupId = `heavy-${randomUUID().slice(0, 8)}`
+    // Max: bots mix providers, agent chats keep every attempt on the lead's; unattended, it fits the routine's budget.
+    const mx = maxSessionFor(thread.id)
+    const crossProvider = opener.meta?.max ? crossProviderFor(space) : true
+    const budgetUsd = run.unattended ? maxBudget({ settings: s, space }) : undefined
+    if (run.unattended) {
+      const n = fitHeavy({ cfg, lead, usable: this.d.endpoints.usable(), cloud: (m) => this.cloudModel(m), crossProvider }, heavyCap({ swarm, budgetUsd }))
+      if (!n) {
+        mx?.phase('heavy', 'skipped', `Not run: the ${usd(budgetUsd ?? 0)} routine budget can't cover two attempts and a judge`)
+        if (phase2) return 'finished'
+        return this.loop(thread, run, space)
+      }
+      cfg = { ...cfg, attempts: n }
+    }
     let card: Message | undefined
     const ids = new Set<string>()
     const publish = (b: HeavyBoard): void => {
       // Stop remaining covers the attempts not finished yet (a re-checking one included).
       for (const a of b.attempts) ids.add(a.id)
       this.groups.set(groupId, new Set(b.attempts.filter((a) => a.status === 'queued' || a.status === 'working').map((a) => a.id)))
+      // A Max run shows the attempts and the judge as a phase of its one card.
+      if (mx) { mx.setHeavy(b, groupId); return }
       if (!card) card = db.insertMessage({ threadId: thread.id, role: 'assistant', content: `Heavy: ${b.attempts.length} attempts`, kind: 'notice', status: 'done', meta: { heavy: b, heavyId: groupId } })
       else { card.meta = { ...card.meta, heavy: b }; db.updateMessage(card) }
       this.d.emit({ threadId: thread.id, type: 'message', message: { ...card, meta: { ...card.meta } } })
@@ -1140,11 +1226,13 @@ export class Agent {
     }
     try {
       return await runHeavy({
-        cfg, swarm, lead, usable: this.d.endpoints.usable(), task, request: opener.content, context, signal: run.ctrl.signal, groupId,
+        cfg, swarm, lead, usable: this.d.endpoints.usable(), task, request: opener.content, context: phase2 ? [context, `Phase 1 brief (Max):\n${phase2.brief.slice(0, 8000)}`].filter(Boolean).join('\n\n') : context, signal: run.ctrl.signal, groupId,
+        crossProvider, unattended: !!run.unattended, budgetUsd,
         cloud: (m) => this.cloudModel(m),
         label: (m) => this.modelLabel(m),
         localParallel: swarmCapacity(this.modelInfo(lead), swarm).parallel,
-        approve: async (summary, spend) => (await this.ask(thread.id, run, { kind: 'approval', tool: 'heavy', label: 'Heavy', effect: 'read', summary, reason: `no new attempt starts past the ${usd(spend.capUsd)} cap`, spend })) !== 'deny',
+        title: opener.meta?.max ? 'Max · judged attempts' : undefined,
+        approve: async (summary, spend) => (await this.ask(thread.id, run, { kind: 'approval', tool: 'heavy', label: opener.meta?.max ? 'Max' : 'Heavy', effect: 'read', summary, reason: `no new attempt starts past the ${usd(spend.capUsd)} cap`, spend })) !== 'deny',
         publish,
         attempt: async (a, o) => {
           const r = await this.helperRun(thread, run, {
@@ -1219,7 +1307,7 @@ export class Agent {
   private async council(thread: Thread, run: Run, space: Space | undefined): Promise<'finished' | 'stopped' | 'error'> {
     const { db } = this.d
     const state = db.getState(thread.id)
-    await this.chooseModel(db.getThread(thread.id)?.model || space?.model || this.d.settings.get().defaultModel, thread, state)
+    await this.chooseModel(requestedModel({ thread: db.getThread(thread.id), space, settings: this.d.settings.get() }), thread, state)
     db.setState(thread.id, state)
     const history = db.listMessages(thread.id)
     const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)!
@@ -1236,7 +1324,7 @@ export class Agent {
     const { db } = this.d
     const s = this.d.settings.get()
     const space = run.speaker ?? db.getSpace(thread.spaceId)
-    const requested = db.getThread(thread.id)?.model || space?.model || s.defaultModel
+    const requested = requestedModel({ thread: db.getThread(thread.id), space, speaker: run.speaker, settings: s })
     const lead = this.lastModel.get(thread.id) ?? requested
     const userText = run.taint?.userText() ?? run.seed?.userText ?? userTextOf(db.listMessages(thread.id))
     const untrusted = [...(run.taint?.untrusted ?? run.seed?.untrusted ?? [])].slice(-20)
@@ -1337,7 +1425,7 @@ export class Agent {
   /** One model call without tools, counted toward a swarm's (or council's) cap. */
   /** The thinking level for a council, swarm or Heavy step: the chat's, bot's or app's pick exactly, else High. */
   private pickedEffort(thread: Thread, space: Space | undefined): Effort {
-    const pick = effortChoice(this.d.db.getThread(thread.id)?.effort, space?.effort, this.d.settings.get().thinking)
+    const pick = requestedEffort({ thread: this.d.db.getThread(thread.id), space, settings: this.d.settings.get() })
     return pick === 'auto' ? 'high' : (pick as Effort)
   }
 
@@ -1654,7 +1742,7 @@ export class Agent {
     const state = db.getState(thread.id)
     // Bot swarms: this bot's Swarm setting lists the swarm tool (never for helpers); a Swarm request loads it.
     applySwarmState(state, s, space, !!run.helper, () => db.listMessages(thread.id), (names) => registry.load(state, names))
-    const chosen = await this.chooseModel(speaker?.model || db.getThread(thread.id)?.model || space?.model || s.defaultModel, thread, state)
+    const chosen = await this.chooseModel(requestedModel({ thread: db.getThread(thread.id), space: group ?? space, speaker, settings: s }), thread, state)
     let model = chosen.model
     let routed = chosen.routed
     // Planner + executor computer use (agent/cua): the executor model runs this loop; the planner plans and checks out of band.
@@ -1840,7 +1928,7 @@ export class Agent {
     track.task = isTaskRun({ tier: routed?.tier, flags: opener?.meta, openPlan }) && !chatRun
     // Thinking (llm/auto-effort.ts): a level chosen for the chat, its bot or the app is used exactly; Auto picks
     // per request from the task, leaning high (agent work at least High, the hardest Extra, Heavy Max, voice Low).
-    const effortPick = effortChoice(db.getThread(thread.id)?.effort, space?.effort, group?.effort, s.thinking)
+    const effortPick = requestedEffort({ thread: db.getThread(thread.id), space: group ?? space, speaker, settings: s })
     // Auto starts from the request's decided effort (category, difficulty, stakes, deliverable, tool depth) and may
     // rise once mid-run (escalateEffort: repeated failures or a long plan); a picked level is sent exactly.
     let effortBump: Effort | undefined
@@ -1920,8 +2008,12 @@ export class Agent {
           if (claude && !all.some((m) => m.role === 'assistant')) want.push(...likelyTools(known).filter((n) => (window >= 200_000 || n === 'read_result') && !state.loaded.includes(n) && !want.includes(n)))
           // Plan first and Team of Experts need their tools listed even on a small window's slimmer set.
           if (opener.meta?.planFirst) want.push('propose_plan')
-          if (opener.meta?.team || opener.meta?.deepResearch) want.push('agents')
+          if (opener.meta?.deepResearch || (opener.meta?.team && !opener.meta?.max)) want.push('agents')
+          if (opener.meta?.max || opener.meta?.maxHint) want.push('max')
           if (want.length) registry.load(state, want)
+          // Core tools a mode needs stay listed when the profile slims down later this step (load skips a tool
+          // the full set already lists).
+          for (const n of ['max', 'agents']) if (want.includes(n) && registry.get(n) && !state.loaded.includes(n)) state.loaded.push(n)
         }
         // Small windows: a slimmer prompt and tool set, so the conversation keeps most of the window (compaction
         // is for history, not for a big fixed prompt). Big windows stay on the full set. Within a run it only
@@ -2070,7 +2162,7 @@ export class Agent {
           if (lastUser?.meta?.team && !run.helper && !(this.teamUsed.get(state.rootId ?? thread.id) ?? 0) && !teamNudged && step < HARD_CAP) {
             teamNudged = true
             budget = Math.max(budget, step + 2)
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] Team of Experts is on for this request, but you haven't used your team. Split the research into at least ${this.teamSize(thread).min} focused parts and send them with the agents tool, then compile their reports into the final answer.` })
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] ${lastUser.meta?.max ? 'Max (a research team) is on' : 'Team of Experts is on'} for this request, but you haven't used your team. Split the research into at least ${this.teamSize(thread).min} focused parts and send them with the ${lastUser.meta?.max ? 'max tool (strategy "team", tasks)' : 'agents tool'}, then compile their reports into the final answer.` })
             assistant.meta = { ...assistant.meta, superseded: true }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
@@ -2644,8 +2736,13 @@ export class Agent {
       spawnAgents: (tasks) => this.runTeam(thread, run, call.id, tasks),
       askBot: (a) => this.askBot(thread, run, a),
       runSwarm: (a) => runSwarmTool(this.kit(thread, run), a, { callId: call.id, budgetChars: Math.floor(teamShare(ctx.window) * 3.2) }),
+      runMax: (a) => runMaxTool(this.kit(thread, run), a, {
+        callId: call.id, budgetChars: Math.floor(teamShare(ctx.window) * 3.2),
+        // The team strategy is the agents tool's run (same report format, caps and approvals).
+        team: async (tasks) => { const t = this.d.registry.get('agents'); if (!t) throw new Error('Helper agents are not available here.'); return t.run({ tasks }, toolCtx) }
+      }),
       progress: (text) => this.d.emit({ threadId: thread.id, type: 'tool_progress', callId: call.id, tool: tool.name, text: text.slice(0, 300) }),
-      outputBudget: tool.name === 'agents' || tool.name === 'swarm' ? teamShare(ctx.window) : tool.name === 'read_result' && !isLocal(this.d.endpoints.for(this.lastModel.get(thread.id) ?? thread.model ?? s.defaultModel).baseUrl) ? resultLimit(ctx.window) : undefined,
+      outputBudget: tool.name === 'agents' || tool.name === 'swarm' || tool.name === 'max' ? teamShare(ctx.window) : tool.name === 'read_result' && !isLocal(this.d.endpoints.for(this.lastModel.get(thread.id) ?? thread.model ?? s.defaultModel).baseUrl) ? resultLimit(ctx.window) : undefined,
       model: this.lastModel.get(thread.id),
       speakerId: run.group ? run.speaker?.id : undefined,
       provenance,
@@ -2672,7 +2769,7 @@ export class Agent {
     const id = `r-${call.id.replace(/[^\w-]/g, '').slice(-12)}-${Date.now().toString(36)}`
     // The team's reports are the work itself: the lead must see them whole, so they get a big share of the window.
     // Cloud windows hold bigger results whole (resultLimit); local models keep the 2K that keeps prefill fast.
-    const off = await this.d.results.maybeOffload(out.text, id, counter, tool.name === 'agents' ? teamShare(ctx.window) : isLocal(cep.baseUrl) ? undefined : resultLimit(ctx.window))
+    const off = await this.d.results.maybeOffload(out.text, id, counter, tool.name === 'agents' || tool.name === 'max' ? teamShare(ctx.window) : isLocal(cep.baseUrl) ? undefined : resultLimit(ctx.window))
     if (effect !== 'read') ctx.track.changed = true
     // A tool that wrote install config or git internals: this chat's installs and pulls ask again (shell.ts).
     if (effect !== 'read' && tool.name !== 'run_command') noteTrustWrites(state, `${call.arguments}\n${out.path ?? ''}`)

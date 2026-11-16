@@ -6,7 +6,7 @@ import { Toggle } from './Toggle'
 import { toast } from '../lib/toast'
 import { ClampText } from './ui'
 
-// Settings → Knowledge: the folders SahilBot can search (with counts), meaning search (an Ollama
+// Settings → Advanced → Knowledge folders: the folders SahilBot can search (with counts), meaning search (an Ollama
 // embedding model) or keyword only, add/remove folders, pause and rebuild.
 
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
@@ -66,7 +66,7 @@ export function KnowledgeResult({ h }: { h: KnowledgeHit }) {
   )
 }
 
-export function KnowledgeSettings() {
+export function KnowledgeSettings({ embedded }: { embedded?: boolean } = {}) {
   const [st, setSt] = useKnowledgeStatus()
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<KnowledgeHit[] | null>(null)
@@ -81,13 +81,13 @@ export function KnowledgeSettings() {
     if (!q.trim()) { setHits(null); return }
     void api.knowledge.search(q.trim(), { k: 8 }).then((r) => setHits(r.hits)).catch((e) => toast(clean(e)))
   }
-  if (!st) return <><h2>Knowledge</h2><div className="hint">Loading…</div></>
+  if (!st) return <>{!embedded && <h2>Knowledge</h2>}<div className="hint">Loading…</div></>
   const state = st.paused ? 'Paused' : st.indexing ? `Indexing${st.queued ? ` · ${st.queued} files to go` : ''}…` : st.lastScan ? `Up to date · checked ${ago(st.lastScan)}` : 'Not checked yet'
   return (
     <div data-testid="knowledge-settings">
-      <h2>Knowledge</h2>
+      {!embedded && <h2>Knowledge</h2>}
       <div className="set-sub" title="Secrets (.env files, keys, keychains), hidden folders, dependencies, build output and anything in .gitignore are never indexed.">
-        Bots search your workspace, project folders and folders you add, and cite the file they used. Everything stays on this Mac; secrets, hidden folders and build output are never indexed.
+        Bots search your workspace, project folders and folders you add, and cite the file they used. Stays on this Mac; secrets and build output are never indexed.
       </div>
 
       <Card title="Search">
@@ -156,7 +156,7 @@ export function KnowledgeSettings() {
   )
 }
 
-/** Shared by Settings → Knowledge and the project home. */
+/** Shared by Settings → Advanced → Knowledge folders and the project home. */
 export const KB_CSS = `
 .kb-hits { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .kb-hit { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border, rgba(127,127,127,.2)); background: transparent; color: inherit; cursor: pointer; font: inherit; }

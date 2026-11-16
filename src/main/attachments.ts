@@ -26,6 +26,8 @@ export async function imageDataUrl(p: string, maxEdge: number): Promise<string |
 // drag-and-drop the preload resolves. Main remembers those paths; the renderer can't invent them.
 
 export const SCHEME = 'foreman-file'
+/** Videos the File panel plays (a <video> over foreman-file:). */
+const VIDEO_PREVIEW = new Set(['.mp4', '.m4v', '.mov', '.webm'])
 
 export class Attachments {
   private picked = new Set<string>()
@@ -143,7 +145,9 @@ export class Attachments {
       let p = ''
       try { p = decodeURIComponent(new URL(req.url).pathname) } catch { /* refused below */ }
       if (!p || !this.isAllowed(p) || !existsSync(p)) return new Response('Not allowed', { status: 403 })
-      const res = await net.fetch(pathToFileURL(p).toString())
+      // A <video> asks for byte ranges (seeking): passed on to the file fetch.
+      const range = req.headers.get('range')
+      const res = await net.fetch(pathToFileURL(p).toString(), range ? { headers: { range } } : undefined)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(fileHeaders(p))) headers.set(k, v)
       return new Response(res.body, { status: res.status, statusText: res.statusText, headers })
@@ -160,6 +164,7 @@ export class Attachments {
     if (st.isDirectory()) return { ...base, kind: 'unsupported', note: 'This is a folder.' }
     if (IMAGE_EXT.has(ext) || ext === '.svg') return { ...base, kind: 'image' }
     if (ext === '.pdf') return { ...base, kind: 'pdf' }
+    if (VIDEO_PREVIEW.has(ext)) return { ...base, kind: 'video' }
     if (ext === '.docx') return { ...base, kind: 'html', html: await docxHtml(full) }
     if (ext === '.xlsx' || ext === '.xlsm') return { ...base, kind: 'sheets', sheets: await xlsxSheets(full, 500) }
     if (ext === '.pptx') return { ...base, kind: 'slides', slides: await pptxSlides(full) }

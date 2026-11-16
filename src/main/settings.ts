@@ -7,7 +7,8 @@ import { homedir } from 'node:os'
 import type { Appearance, CustomRule, LearningSettings, MarketKeyProvider, MarketsSettings, McpServerSettings, PermissionMode, ProviderId, Settings } from '@shared/types'
 import type { Db } from './db'
 import type { Secrets } from './secrets'
-import type { LocalSettings, VoiceOutputSettings } from '@shared/types'
+import type { LocalSettings, VoiceInputSettings, VoiceOutputSettings } from '@shared/types'
+import { isWhisperId } from './voice/models'
 import { migrateLocal } from '@shared/local-mode'
 import { hasLocalModels } from './local-detect'
 
@@ -51,8 +52,9 @@ export const DEFAULTS: Stored = {
   markets: { quoteProvider: 'auto', secContact: '' },
   // Connected apps (MCP): off until the user turns it on; port 0 = pick a free one on first start.
   mcpServer: { enabled: false, port: 0 },
-  // Learning while the app is open and idle: on by default when a local model exists (enabled unset).
-  learning: { cloudAllowed: false, dailyUsd: 0.25 },
+  // "Remember things automatically": on by default, local model first, else a cloud model within the
+  // small daily cap (which also counts toward the monthly limit).
+  learning: { enabled: true, cloudAllowed: true, dailyUsd: 0.25 },
   // Knowledge search embeddings through OpenAI instead of Ollama: off until the user turns it on
   // (it sends passages of their indexed documents to OpenAI).
   openaiEmbeddings: false
@@ -65,11 +67,44 @@ export function cleanMcpServer(v: unknown): McpServerSettings {
   return { enabled: x.enabled === true, port }
 }
 
-/** Learning settings as saved: enabled stays unset until the user picks (the default depends on local models); a daily cap of $0-$5. */
+/** Learning settings as saved: on/off (unset counts as on), cloud allowed, a daily cap of $0-$5, and which keys the user set. */
 export function cleanLearning(v: unknown): LearningSettings {
   const x = (v ?? {}) as Partial<LearningSettings>
   const n = typeof x.dailyUsd === 'number' && Number.isFinite(x.dailyUsd) ? x.dailyUsd : 0.25
-  return { ...(typeof x.enabled === 'boolean' ? { enabled: x.enabled } : {}), cloudAllowed: x.cloudAllowed === true, dailyUsd: Math.max(0, Math.min(5, Math.round(n * 100) / 100)) }
+  const explicit = Array.isArray(x.explicit) ? [...new Set(x.explicit.filter((k): k is string => k === 'enabled' || k === 'cloudAllowed'))].sort() : []
+  return {
+    ...(typeof x.enabled === 'boolean' ? { enabled: x.enabled } : {}),
+    cloudAllowed: x.cloudAllowed === true,
+    dailyUsd: Math.max(0, Math.min(5, Math.round(n * 100) / 100)),
+    ...(explicit.length ? { explicit } : {})
+  }
+}
+
+/**
+ * Learning became on by default (with cloud learning inside the daily cap). An install from before keeps
+ * what the user chose: "Learn while SahilBot is open" was only ever saved when they flipped it, and cloud
+ * learning only ever saved as on by their choice; everything else moves to the new defaults.
+ */
+export function migrateLearning(v: unknown): LearningSettings {
+  const x = (v ?? {}) as Partial<LearningSettings>
+  const c = cleanLearning(v)
+  const explicit = new Set(c.explicit ?? [])
+  if (typeof x.enabled === 'boolean') explicit.add('enabled')
+  if (x.cloudAllowed === true) explicit.add('cloudAllowed')
+  return {
+    enabled: explicit.has('enabled') ? c.enabled ?? true : true,
+    cloudAllowed: explicit.has('cloudAllowed') ? c.cloudAllowed : true,
+    dailyUsd: c.dailyUsd,
+    ...(explicit.size ? { explicit: [...explicit].sort() } : {})
+  }
+}
+
+/** Speech recognition preferences as saved: on this Mac (default), 'auto' or a known Whisper model, the benchmark. */
+export function cleanVoiceInput(v: unknown): VoiceInputSettings {
+  const x = (v ?? {}) as Partial<VoiceInputSettings>
+  const b = x.bench
+  const bench = b && typeof b.model === 'string' && isWhisperId(b.model) && Number.isFinite(b.ms) && b.ms >= 0 && Number.isFinite(b.at) ? { model: b.model, ms: Math.round(b.ms), at: b.at } : undefined
+  return { local: x.local !== false, model: isWhisperId(x.model) ? x.model : 'auto', ...(bench ? { bench } : {}) }
 }
 
 /** The local-models choice as saved (undefined: not decided yet, which counts as off). */
@@ -167,6 +202,12 @@ export class SettingsStore {
       const local = saved ? migrateLocal(saved, o.hasLocalModels ?? hasLocalModels) : null
       if (saved && local) this.db.setSetting('settings', { ...saved, local })
     }
+    // Learning on by default (memory that fills itself in): existing installs move unless the user chose.
+    if (!this.db.getSetting<number>('learningOnV2')) {
+      const saved = this.db.getSetting<Partial<Stored>>('settings')
+      if (saved) this.db.setSetting('settings', { ...saved, learning: migrateLearning(saved.learning) })
+      this.db.setSetting('learningOnV2', 1)
+    }
     // Auto thinking became the default: a saved 'medium' was the old default (which already adapted to each
     // request), so it becomes Auto once. Any other saved level was a choice and is kept (now used exactly).
     if (!this.db.getSetting<number>('effortAuto')) {
@@ -197,7 +238,8 @@ export class SettingsStore {
       catchUpHours: cleanCatchUpHours(s.catchUpHours),
       markets: cleanMarkets(s.markets),
       mcpServer: cleanMcpServer(s.mcpServer),
-      learning: cleanLearning(s.learning),
+      learning: cleanLearning(s.learning ?? DEFAULTS.learning),
+      voiceInput: cleanVoiceInput(s.voiceInput),
       // Not decided yet (first run, before onboarding asks): off.
       local: cleanLocal(s.local) ?? { enabled: false },
       voiceOutput: cleanVoiceOutput(s.voiceOutput),
@@ -250,7 +292,12 @@ export class SettingsStore {
       defaultMode: rest.defaultMode !== undefined ? cleanLevel(rest.defaultMode) ?? cur.defaultMode : cur.defaultMode,
       botModes: rest.botModes !== undefined ? cleanBotModes(rest.botModes) : cur.botModes,
       botAutonomy: rest.botAutonomy !== undefined ? cleanBotAutonomyMap(rest.botAutonomy) : cur.botAutonomy,
-      learning: rest.learning !== undefined ? cleanLearning({ ...cur.learning, ...rest.learning }) : cur.learning,
+      learning: rest.learning !== undefined ? cleanLearning({
+        ...cur.learning, ...rest.learning,
+        // A switch the user flipped is theirs: later default changes leave it alone.
+        explicit: [...(cur.learning?.explicit ?? []), ...(['enabled', 'cloudAllowed'] as const).filter((k) => typeof (rest.learning as Partial<LearningSettings>)[k] === 'boolean')]
+      }) : cur.learning,
+      voiceInput: rest.voiceInput !== undefined ? cleanVoiceInput({ ...cur.voiceInput, ...rest.voiceInput }) : cur.voiceInput,
       local: rest.local !== undefined ? cleanLocal({ ...cur.local, ...rest.local, migrated: false }) ?? cur.local : cur.local,
       voiceOutput: rest.voiceOutput !== undefined ? cleanVoiceOutput({ ...cur.voiceOutput, ...rest.voiceOutput }) : cur.voiceOutput,
       providers: rest.providers ? {

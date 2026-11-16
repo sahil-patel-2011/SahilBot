@@ -5,29 +5,16 @@ import * as I from '../icons'
 import { Mic } from '../lib/audio'
 import { Popover } from './Popover'
 import { modeFlags } from '../lib/swarm-view'
-import { AUTO_ENTRIES, autoLabel, autoUnavailableReason, pickerModels, toDownload } from '@shared/model-picker'
+// Model, thinking and permissions: one picker under the box (components/ComposerPicker.tsx).
+import { ComposerPicker, MODES } from './ComposerPicker'
 // Attachments: drop, paste, the + menu (files, folder, screenshot) and the working folder (components/Attachments.tsx).
 import { AttachmentChips, DropOverlay, WorkFolderChip, useFolderCounts } from './Attachments'
 import { fromTransfer, mergeAttachments, oversize, rejectedText } from '../lib/attachments'
 import { toast } from '../lib/toast'
 import { findSecrets } from '@shared/secret-detect'
 
-const THINKING: Array<{ id: EffortChoice; label: string; sub: string }> = [
-  { id: 'auto', label: 'Auto', sub: 'Recommended. Picks for each request: more for coding, research and real tasks, less for quick chats' },
-  { id: 'low', label: 'Low', sub: 'Fastest. Quick answers, little thinking' },
-  { id: 'medium', label: 'Medium', sub: 'Balanced. Some thinking on every request' },
-  { id: 'high', label: 'High', sub: 'Thinks things through more carefully' },
-  { id: 'xhigh', label: 'Extra', sub: 'Deep thinking for hard problems and long tasks' },
-  { id: 'max', label: 'Max', sub: 'Thinks as long as it needs. Slowest; uses the most tokens' }
-]
-
-/** Autonomy levels, least to most on its own. Bypass shows only when Settings → Advanced allows it. */
-export const MODES: Array<{ id: PermissionMode; label: string; sub: string }> = [
-  { id: 'ask', label: 'Ask first', sub: 'Approve every action that changes something' },
-  { id: 'auto', label: 'Auto', sub: 'Routine steps run on their own. Asks before installing, sending, buying, posting or deleting' },
-  { id: 'autonomous', label: 'Autonomous', sub: 'Also runs builds, tests, installs from the project\'s lockfile, git and file changes in your folders. Still asks before deleting, sending, buying, or going outside your folders' },
-  { id: 'bypass', label: 'Bypass', sub: 'Everything runs except hard stops. Resets on restart.' }
-]
+/** Autonomy levels (defined with the picker). */
+export { MODES }
 
 export interface ComposerHandle {
   insert(text: string): void
@@ -36,6 +23,8 @@ export interface ComposerHandle {
   /** Text from a sahilbot:// link: shown with a "review before sending" banner, marked if sent unedited. */
   prefillFromLink(text: string): void
   setDeep(on: boolean): void
+  /** ⌘⇧M and the command palette: Max on or off for the next message. */
+  toggleMax(): void
   focus(): void
   toggleDictation(): void
   attach(items: Attachment[]): void
@@ -55,8 +44,10 @@ export interface Outgoing {
   planFirst?: boolean
   /** The text came from a sahilbot:// link and was sent as it was (not edited): it isn't the user's own words. */
   fromLink?: boolean
-  /** Heavy: several independent attempts, then a judge compares them and writes the answer. */
+  /** Heavy (older clients): several independent attempts, then a judge. Max covers it now. */
   heavy?: boolean
+  /** Max: many agents at once; SahilBot picks a team, a swarm, judged attempts or a mix. */
+  max?: true
   /** Swarm (bot chats): temporary helpers, then the bot compiles. */
   swarm?: true
   /** Council: true = Auto members, or the chosen model ids. */
@@ -103,6 +94,8 @@ export const Composer = forwardRef<ComposerHandle, {
   threadId?: string
   /** The bot's or project's folder, the working folder when the chat doesn't pick one. */
   inheritedFolder?: string | null
+  /** A bot or group chat: the picker shows model and thinking as chosen automatically (permissions stay editable). */
+  autoBot?: boolean
 }>(function Composer(p, ref) {
   const [dictating, setDictating] = useState(false)
   const [dictError, setDictError] = useState<string | null>(null)
@@ -115,8 +108,9 @@ export const Composer = forwardRef<ComposerHandle, {
   const [draftFolder, setDraftFolder] = useState<string | null>(null)
   const [deep, setDeep] = useState(false)
   const [planFirst, setPlanFirst] = useState(false)
-  const [heavy, setHeavy] = useState(false)
-  const [swarmOn, setSwarmOn] = useState(p.swarm?.mode === 'always')
+  // Max: on for this message (a bot whose Max setting is Always has it on for every request).
+  const maxAlways = p.swarm?.mode === 'always'
+  const [maxOn, setMaxOn] = useState(false)
   const [council, setCouncil] = useState<true | string[] | null>(null)
   /** Text a sahilbot:// link put in the box (null: none). Cleared when the box is emptied or sent. */
   const [linkText, setLinkText] = useState<string | null>(null)
@@ -134,6 +128,7 @@ export const Composer = forwardRef<ComposerHandle, {
       requestAnimationFrame(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } })
     },
     setDeep(on: boolean) { setDeep(on) },
+    toggleMax() { setMaxOn((x) => !x); setCouncil(null) },
     insert(t: string) {
       setText((cur) => (cur ? `${cur}\n${t}` : t))
       // Put the caret at the end so the user can just keep typing.
@@ -219,12 +214,11 @@ export const Composer = forwardRef<ComposerHandle, {
     }
     // Sent exactly as the link had it: not the user's own words (the agent treats it as relayed text).
     const fromLink = linkText !== null && text.trim() === linkText.trim()
-    // Heavy replaces Team, Deep Research and Plan first for this message (see modeFlags).
-    p.onSend({ text: text.trim(), images, attachments: atts, ...(draftFolder && !p.threadId ? { workingFolder: draftFolder } : {}), ...modeFlags({ team: p.team?.on, deep, planFirst, heavy, swarm: swarmOn && !!p.swarm && p.swarm.mode !== 'off', council }), queue, ...(fromLink ? { fromLink } : {}) })
+    // Council replaces the other modes for this message (see modeFlags); Max goes with Plan first and Deep Research.
+    p.onSend({ text: text.trim(), images, attachments: atts, ...(draftFolder && !p.threadId ? { workingFolder: draftFolder } : {}), ...modeFlags({ deep, planFirst, max: maxOn || maxAlways, council }), queue, ...(fromLink ? { fromLink } : {}) })
     setDeep(false)
-    setHeavy(false)
+    setMaxOn(false)
     setCouncil(null)
-    setSwarmOn(p.swarm?.mode === 'always')
     setLinkText(null)
     setText('')
     setImages([])
@@ -279,45 +273,30 @@ export const Composer = forwardRef<ComposerHandle, {
     } catch (e) { toast((e as Error).message, 'error') }
   }
 
-  // Modes (one menu; the ones that are on show as removable chips). Heavy replaces Team, Deep Research and Plan
-  // first for a message, and Council and Heavy exclude each other (see modeFlags): those show as unavailable.
-  const swarmAvail = !!p.swarm && p.swarm.mode !== 'off'
+  // Modes (one menu; the ones that are on show as removable chips): Plan first, Max, Deep Research, Council.
+  // Max is one mode for many agents (a research team, an idea swarm, competing attempts with a judge, or a mix:
+  // SahilBot picks per request). Council excludes Max (see modeFlags): those show as unavailable.
   const modeList: ModeItem[] = []
   if (p.team) {
     modeList.push({ id: 'plan', testId: 'plan-toggle', label: 'Plan first', sub: 'Questions and a plan to approve first', icon: <I.ListIcon size={15} />,
-      on: planFirst && !heavy, toggle: () => setPlanFirst((x) => !x), blocked: heavy ? 'Off while Heavy is on' : undefined,
+      on: planFirst && !council, toggle: () => setPlanFirst((x) => !x), blocked: council ? 'Off while Council is on' : undefined,
       title: 'Plan first: SahilBot asks what it needs to know, shows you its plan, and starts only when you approve' })
+    const helpers = p.team.maxAgents
+    modeList.push({ id: 'max', testId: 'max-toggle', label: 'Max', sub: 'Many agents at once: SahilBot picks a research team, an idea swarm, competing attempts with a judge, or a mix.', icon: <I.Bolt size={15} />,
+      on: (maxOn || maxAlways) && !council, toggle: () => { if (!maxAlways) setMaxOn((x) => !x) },
+      blocked: council ? 'Off while Council is on' : maxAlways ? 'Always on for this bot (its Max setting)' : undefined,
+      title: `Max: many agents at once. SahilBot picks a research team, an idea swarm, competing attempts with a judge, or a mix, sized to the task (up to ${helpers} helpers on this model), and shows its plan on one live card (⌘⇧M)` })
     modeList.push({ id: 'deep', testId: 'deep-toggle', label: 'Deep Research', sub: 'A team researches; you get a cited PDF', icon: <I.Search size={15} />,
-      on: deep && !heavy, toggle: () => setDeep((d) => !d), blocked: heavy ? 'Off while Heavy is on' : undefined,
+      on: deep && !council, toggle: () => setDeep((d) => !d), blocked: council ? 'Off while Council is on' : undefined,
       title: 'Deep Research: a team of helper agents researches in parallel, then SahilBot writes a cited report and saves it as a PDF' })
-    if (p.onTeam) {
-      const t = p.team
-      modeList.push({ id: 'team', testId: 'team-toggle', label: 'Team of Experts', chipLabel: 'Team', sub: `${Math.min(10, t.maxAgents)} to ${t.maxAgents} helpers research in parallel`, icon: <I.Users size={15} />,
-        on: t.on && !deep && !heavy, toggle: () => p.onTeam!(!t.on), blocked: heavy ? 'Off while Heavy is on' : deep ? 'Deep Research already uses a team' : undefined,
-        title: `Team of Experts: helper agents research in parallel, then SahilBot puts it together (${t.why})` })
-    }
-  }
-  if (swarmAvail) {
-    modeList.push({ id: 'swarm', testId: 'swarm-toggle', label: 'Swarm', sub: 'Many helpers, then the bot compiles', icon: <I.Layers size={15} />,
-      on: swarmOn && !heavy && !council, toggle: () => setSwarmOn((x) => !x), blocked: heavy ? 'Off while Heavy is on' : council ? 'Off while Council is on' : undefined,
-      title: 'Swarm: temporary helpers (each with its own angle or slice) work on the job, then the bot compiles their work with credits. On Auto the bot decides on its own' })
   }
   if (p.council) {
     const names = Array.isArray(council) ? council.map((id) => p.council!.find((m) => m.id === id)?.label ?? id).join(' + ') : 'the best Claude + the best GPT'
     modeList.push({ id: 'council', testId: 'council-toggle', label: 'Council', chipLabel: `Council${Array.isArray(council) ? ` (${council.length})` : ''}`, sub: 'Several providers plan and review', icon: <I.Shield size={15} />,
-      on: !!council && !heavy, toggle: () => setCouncil((c) => (c ? null : true)), blocked: heavy ? 'Off while Heavy is on' : undefined,
+      on: !!council && !maxOn, toggle: () => setCouncil((c) => (c ? null : true)), blocked: maxOn ? 'Off while Max is on' : undefined,
       title: council ? `Council is on: ${names} plan, critique each other, merge one plan, carry it out and review each other (you OK the cost first)` : 'Council: frontier models from different providers plan together, critique each other, then carry it out and review each other' })
   }
-  if (p.team) {
-    modeList.push({ id: 'heavy', testId: 'heavy-toggle', label: 'Heavy', sub: 'Several attempts, then a judge', icon: <I.Sparkle size={15} />,
-      on: heavy && !council, toggle: () => setHeavy((h) => !h), blocked: council ? 'Off while Council is on' : undefined,
-      title: 'Heavy: several independent attempts, then a judge compares them, checks what they disagree on and writes the final answer (you OK the cost first when it is more than a little)' })
-  }
   const activeModes = modeList.filter((m) => m.on)
-  const current = p.models?.models.find((m) => m.id === p.model)
-  const modelLabel = (p.model ? autoLabel(p.model) : undefined) ?? (current?.label || p.model || 'Choose model')
-  const mode = MODES.find((m) => m.id === p.mode) ?? MODES[1]
-  const modes = MODES.filter((m) => m.id !== 'bypass' || p.allowBypass || p.mode === 'bypass')
 
   return (
     <div className="composer-inner">
@@ -369,7 +348,7 @@ export const Composer = forwardRef<ComposerHandle, {
           {modeList.length > 0 && (
             <Popover
               label={<><I.Sliders size={16} /><span className="modes-label">Modes</span>{activeModes.length > 0 && <span className="modes-count" aria-label={`${activeModes.length} on`}>{activeModes.length}</span>}</>}
-              className={`modes-pop${activeModes.length ? ' on' : ''}`} menuClass="modes-wrap" title="Modes: Plan first, Deep Research, Team, Swarm, Council, Heavy" testId="modes-menu">
+              className={`modes-pop${activeModes.length ? ' on' : ''}`} menuClass="modes-wrap" title="Modes: Plan first, Max, Deep Research, Council" testId="modes-menu">
               {(close) => (
                 <div className="modes-menu" role="menu" aria-label="Modes">
                   {modeList.map((m) => (
@@ -407,7 +386,7 @@ export const Composer = forwardRef<ComposerHandle, {
                       )}
                     </Popover>
                   )}
-                  <button className="mode-chip-x" onClick={m.toggle} aria-label={`Turn off ${m.label}`} title={`Turn off ${m.label}`}><I.Close size={12} /></button>
+                  {!m.blocked && <button className="mode-chip-x" onClick={m.toggle} aria-label={`Turn off ${m.label}`} title={`Turn off ${m.label}`}><I.Close size={12} /></button>}
                 </span>
               ))}
             </span>
@@ -433,45 +412,14 @@ export const Composer = forwardRef<ComposerHandle, {
         {p.context}
         <WorkFolderChip threadId={p.threadId} inherited={p.inheritedFolder} draft={draftFolder} onDraft={setDraftFolder} />
         <span className="spacer" />
-        <Popover label={<><I.Cpu size={14} />{modelLabel}</>} className="under-pick" title="Model" testId="model-picker" menuClass="right">
-          {(close) => <ModelMenu list={p.models} model={p.model} onPick={(id) => { p.onModel(id); close() }} onRefresh={p.onRefreshModels} onManage={p.onManageModels ? () => { close(); p.onManageModels!() } : undefined} />}
-        </Popover>
-        {p.thinking && p.onThinking && (
-          <Popover label={<><I.Sparkle size={14} /><span className="dim">{THINKING.find((t) => t.id === p.thinking)?.label}</span></>} className="under-pick" title="Thinking for this chat" testId="thinking-picker" menuClass="right">
-            {(close) => (
-              <>
-                <div className="menu-head">Thinking · a level you pick is used as is</div>
-                {THINKING.map((t) => (
-                  <button key={t.id} className="menu-item" onClick={() => { p.onThinking!(t.id); close() }} data-testid={`thinking-${t.id}`}>
-                    <span className="check">{t.id === p.thinking && <I.Check size={14} />}</span>
-                    <span>{t.label}<span className="sub">{t.sub}</span></span>
-                  </button>
-                ))}
-              </>
-            )}
-          </Popover>
-        )}
         {p.mode === 'autonomous' && p.running && (
           <span className="autonomy-chip" role="status" data-testid="autonomous-chip"
             title="Working on its own: builds, tests, installs from the lockfile, git and file changes in your folders run without asking. Deleting, sending, buying and anything outside your folders still ask.">
             <span className="autonomy-dot" aria-hidden />Working on its own
           </span>
         )}
-        <Popover label={<>{p.mode === 'bypass' ? <span className="dot red" /> : p.mode === 'autonomous' ? <I.Play size={13} /> : <I.Shield size={14} />}{mode.label}</>}
-          className={`under-pick${p.mode === 'bypass' ? ' bypass' : ''}${p.mode === 'autonomous' ? ' autonomous' : ''}`} menuClass="right" title="Autonomy: how much SahilBot does without asking" testId="mode-picker">
-          {(close) => (
-            <div className="autonomy-menu">
-              <div className="menu-head">Autonomy · this chat</div>
-              {modes.map((m) => (
-                <button key={m.id} className="menu-item" onClick={() => { p.onMode(m.id); close() }} data-testid={`mode-${m.id}`} aria-checked={m.id === p.mode} role="menuitemradio">
-                  <span className="check">{m.id === p.mode && <I.Check size={14} />}</span>
-                  <span>{m.id === 'bypass' ? <span className="ui-text-danger">{m.label}</span> : m.label}<span className="sub">{m.sub}</span></span>
-                </button>
-              ))}
-              <div className="menu-foot">Passwords are never shared, and purchases always ask, at every level.</div>
-            </div>
-          )}
-        </Popover>
+        <ComposerPicker models={p.models} model={p.model} onModel={p.onModel} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
+          thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} />
       </div>
       {p.running && !p.answering && <div className="steer-hint" data-testid="steer-hint"><kbd>Enter</kbd> steers SahilBot now · <kbd>⌘Enter</kbd> queues for when it's done{p.steering ? <span className="steering"> · <span className="spin" /> steering at its next step…</span> : null}</div>}
       {dictError && <div className="bypass-banner">{dictError}</div>}
@@ -487,63 +435,5 @@ export const Composer = forwardRef<ComposerHandle, {
   )
 })
 
-const TIER = ['Instant', 'Light', 'Standard', 'Heavy']
-
 /** One entry in the composer's Modes menu. */
 type ModeItem = { id: string; testId: string; label: string; chipLabel?: string; sub: string; icon: ReactNode; on: boolean; toggle: () => void; blocked?: string; title: string }
-
-function ModelMenu({ list, model, onPick, onRefresh, onManage }: { list: ModelList | null; model: string; onPick: (id: string) => void; onRefresh: () => void; onManage?: () => void }) {
-  if (!list) return <div className="menu-head">Loading models…</div>
-  // Only models that can run now: downloaded local ones and cloud ones with a key. Downloads live in Settings.
-  const shown = pickerModels(list)
-  const groups = [...new Set(shown.map((m) => m.providerName))]
-  const more = toDownload(list).length
-  return (
-    <div className="model-menu">
-      {AUTO_ENTRIES.filter((e) => e.id !== 'auto:local' || !list.localOff).map((e) => {
-        // A variant with nothing to route to says why (and stays pickable: models may come back).
-        const why = autoUnavailableReason(e.id, list)
-        return (
-          <button key={e.id} className={`menu-item${why ? ' unavailable' : ''}`} onClick={() => onPick(e.id)} data-testid="model-option" data-auto={e.id}>
-            <span className="check">{model === e.id && <I.Check size={14} />}</span>
-            <span>{e.label}<span className="sub">{why ?? e.sub}</span></span>
-            {/* Still pickable (models may come back), but it reads as "not right now" at a glance. */}
-            {why && <span className="mm-badge" data-testid="auto-unavailable">Unavailable</span>}
-          </button>
-        )
-      })}
-      {!list.ok && (
-        <div style={{ padding: '6px 10px', fontSize: 13, maxWidth: 320 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>No model server answered</div>
-          <div className="hint">{list.error}</div>
-        </div>
-      )}
-      {groups.map((g) => (
-        <div key={g}>
-          <div className="menu-sep" />
-          <div className="menu-head">{g}{shown.some((m) => m.providerName === g && m.note !== 'remote') ? ` · this Mac: ${list.totalGB} GB` : ''}</div>
-          {shown.filter((m) => m.providerName === g).map((m) => (
-            <button key={m.id} className="menu-item" disabled={!m.fits && m.maxFittingWindow === 0} onClick={() => onPick(m.id)}
-              title={m.fits ? '' : m.note} data-testid="model-option">
-              <span className="check">{m.id === model && <I.Check size={14} />}</span>
-              <span>
-                {m.label || m.id}{m.vision ? ' · 👁' : ''}
-                <span className="sub">
-                  {TIER[m.tier]}{m.label ? ` · ${m.id}` : ''} · {m.note === 'remote' ? 'cloud' : `${m.requiredGB} GB`}
-                  {!m.fits && m.note && m.note !== 'remote' ? ` · ${m.note}` : ''}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-      ))}
-      <div className="menu-sep" />
-      {onManage && (
-        <button className="menu-item" onClick={onManage} data-testid="manage-models">
-          <span>Manage models…{more > 0 && <span className="sub">{more} recommended for this Mac to download</span>}</span>
-        </button>
-      )}
-      <button className="menu-item" onClick={onRefresh}>Refresh list</button>
-    </div>
-  )
-}

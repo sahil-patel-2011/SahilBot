@@ -1,14 +1,25 @@
-// SahilBot's mascot: a tilted squircle wearing a hard-hat brim, with two dot eyes.
+// SahilBot's mascot (matches the app icon): a tilted squircle in a yellow hard hat, with bright eyes and a smile.
 export function Mascot({ size = 96 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" aria-label="SahilBot">
-      <g transform="rotate(-10 50 54)">
-        <rect x="14" y="24" width="72" height="66" rx="30" fill="var(--text)" />
-        <path d="M22 40c4-16 16-24 28-24s24 8 28 24" fill="var(--accent)" />
-        <rect x="12" y="37" width="76" height="8" rx="4" fill="var(--accent)" />
-        <rect x="47" y="14" width="6" height="10" rx="3" fill="var(--accent)" />
-        <ellipse cx="38" cy="62" rx="5" ry="7.5" fill="var(--bg)" />
-        <ellipse cx="62" cy="62" rx="5" ry="7.5" fill="var(--bg)" />
+      <defs>
+        <linearGradient id="sb-hat" x1="0.3" y1="0" x2="0.7" y2="1">
+          <stop offset="0" stopColor="#FFE58F" />
+          <stop offset="0.6" stopColor="#FFC93C" />
+          <stop offset="1" stopColor="#F2A400" />
+        </linearGradient>
+      </defs>
+      <g transform="rotate(-8 50 56)">
+        <rect x="14" y="26" width="72" height="66" rx="30" fill="var(--text)" />
+        <path d="M21 42c4-17 16-25 29-25s25 8 29 25Z" fill="url(#sb-hat)" />
+        <path d="M30 37c2-7 6-12 11-14" fill="none" stroke="#fff" strokeOpacity="0.6" strokeWidth="2.6" strokeLinecap="round" />
+        <rect x="11" y="39" width="78" height="8" rx="4" fill="#F2A900" />
+        <rect x="47" y="12" width="6" height="11" rx="3" fill="#FFC93C" />
+        <ellipse cx="38" cy="64" rx="5" ry="7.5" fill="var(--bg)" />
+        <ellipse cx="62" cy="64" rx="5" ry="7.5" fill="var(--bg)" />
+        <circle cx="39.6" cy="61" r="1.5" fill="var(--text)" opacity="0.35" />
+        <circle cx="63.6" cy="61" r="1.5" fill="var(--text)" opacity="0.35" />
+        <path d="M45 76c3 2.4 7 2.4 10 0" fill="none" stroke="var(--bg)" strokeWidth="2.2" strokeLinecap="round" />
       </g>
       <circle cx="80" cy="82" r="11" fill="var(--accent)" stroke="var(--sidebar)" strokeWidth="4" />
       <path d="m80 76 1.8 3.7 4 .6-2.9 2.8.7 4-3.6-1.9-3.6 1.9.7-4-2.9-2.8 4-.6Z" fill="#fff" />

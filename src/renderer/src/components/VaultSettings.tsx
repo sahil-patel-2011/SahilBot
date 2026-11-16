@@ -9,7 +9,7 @@ import { FingerprintGlyph, LockGlyph } from './VaultAuthDialog'
 import '../styles-secure-vault.css'
 import { ClampText } from './ui'
 
-// Settings → Vault. Everything here is metadata (names, sites, brand, last 4, expiry) except a Reveal,
+// Settings → Privacy & Security → Passwords. Everything here is metadata (names, sites, brand, last 4, expiry) except a Reveal,
 // which main sends only after Touch ID or the master password and this page hides again after 20 s.
 // Values typed into a form go straight to main and are cleared from the page once saved.
 
@@ -55,7 +55,7 @@ function protection(st: VaultStatus): string {
   return 'Keychain only'
 }
 
-export function SecretVaultSettings() {
+export function SecretVaultSettings({ embedded }: { embedded?: boolean } = {}) {
   const [st, setSt] = useState<VaultStatus | null>(null)
   const [items, setItems] = useState<VaultItemSummary[]>([])
   const [tab, setTab] = useState<Tab>('logins')
@@ -73,12 +73,12 @@ export function SecretVaultSettings() {
     setBusy(true)
     try { await fn(); await refresh(); if (ok) toast(ok, 'ok') } catch (e) { toast(clean(e), 'error') } finally { setBusy(false) }
   }
-  if (!st) return <><h2>Vault</h2><div className="set-sub">Loading…</div></>
+  if (!st) return <>{!embedded && <h2>Vault</h2>}<div className="set-sub">Loading…</div></>
   const t = TABS.find((x) => x.id === tab)!
   return (
     <>
-      <h2>Vault</h2>
-      <div className="set-sub">Passwords, cards, IDs and notes SahilBot can type into a website for you, without the assistant ever seeing them. Encrypted on this Mac; every purchase still waits for your click on a Purchase card.</div>
+      {!embedded && <h2>Vault</h2>}
+      <div className="set-sub">{embedded ? 'Passwords, cards and IDs SahilBot types into websites for you without ever seeing them. Encrypted on this Mac.' : 'Passwords, cards, IDs and notes SahilBot can type into a website for you, without the assistant ever seeing them. Encrypted on this Mac; every purchase still waits for your click on a Purchase card.'}</div>
 
       <div className={`sv-status${st.locked ? ' locked' : ' open'}`} data-testid="vault-status" data-locked={st.locked ? '1' : '0'}>
         <div className="sv-status-icon"><LockGlyph open={!st.locked} size={22} /></div>

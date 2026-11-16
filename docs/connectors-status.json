@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-15",
+  "date": "2026-11-16",
   "rows": [
     {
       "id": "gmail",
@@ -753,7 +753,8 @@
       "observed": "key",
       "problems": [],
       "notes": [
-        "initialize error: Authorization: Bearer <api_key> required"
+        "initialize error: Authorization: Bearer <api_key> required",
+        "re-checked 2026-11-16"
       ],
       "iconDomain": "mandrillapp.com",
       "iconResolves": true,
@@ -1382,7 +1383,8 @@
       "problems": [],
       "notes": [
         "initialize error: \"invalid_token\"",
-        "server now also offers OAuth with DCR (could become one click)"
+        "server now also offers OAuth with DCR + PKCE S256 (public clients): could become one click if the vendor documents it",
+        "re-checked 2026-11-16"
       ],
       "iconDomain": "brevo.com",
       "iconResolves": true,
@@ -1974,7 +1976,8 @@
       "observed": "open+oauth-dcr",
       "problems": [],
       "notes": [
-        "token endpoint does not list \"none\" auth (DCR may hand out a client secret; the SDK handles that)"
+        "token endpoint does not list \"none\" auth (DCR may hand out a client secret; the SDK handles that)",
+        "re-checked 2026-11-16"
       ],
       "iconDomain": "huggingface.co",
       "iconResolves": true,
@@ -2011,7 +2014,10 @@
       "status": "ok",
       "observed": "open+oauth-dcr",
       "problems": [],
-      "notes": [],
+      "notes": [
+        "open, and also offers OAuth with DCR (clerk.context7.com): stays no sign-in",
+        "re-checked 2026-11-16"
+      ],
       "iconDomain": "context7.com",
       "iconResolves": true,
       "http": 200,
@@ -2320,7 +2326,10 @@
       "status": "ok",
       "observed": "oauth-no-dcr",
       "problems": [],
-      "notes": [],
+      "notes": [
+        "OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app)",
+        "re-checked 2026-11-16"
+      ],
       "iconDomain": "render.com",
       "iconResolves": true,
       "http": 401,
@@ -2341,7 +2350,9 @@
       "observed": "oauth-no-dcr",
       "problems": [],
       "notes": [
-        "initialize error: \"invalid_token\""
+        "initialize error: \"invalid_token\"",
+        "OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app)",
+        "re-checked 2026-11-16"
       ],
       "iconDomain": "pagerduty.com",
       "iconResolves": true,
@@ -2557,7 +2568,10 @@
       "status": "ok",
       "observed": "open+oauth-dcr",
       "problems": [],
-      "notes": [],
+      "notes": [
+        "open, and also offers OAuth with DCR (auth.exa.ai): stays no sign-in",
+        "re-checked 2026-11-16"
+      ],
       "iconDomain": "exa.ai",
       "iconResolves": true,
       "http": 200,
@@ -4075,34 +4089,6 @@
       "publicClients": "unlisted",
       "refresh": true,
       "cimd": false
-    },
-    {
-      "id": "pubmed",
-      "name": "PubMed",
-      "auth": "none",
-      "url": "https://pubmed.mcp.claude.com/mcp",
-      "status": "ok",
-      "observed": "open",
-      "problems": [],
-      "notes": [],
-      "iconDomain": "pubmed.ncbi.nlm.nih.gov",
-      "iconResolves": true,
-      "http": 200,
-      "serverName": "pubmed-mcp-server"
-    },
-    {
-      "id": "clinicaltrials",
-      "name": "ClinicalTrials.gov",
-      "auth": "none",
-      "url": "https://hcls.mcp.claude.com/clinical_trials/mcp",
-      "status": "ok",
-      "observed": "open",
-      "problems": [],
-      "notes": [],
-      "iconDomain": "clinicaltrials.gov",
-      "iconResolves": true,
-      "http": 200,
-      "serverName": "clinical_trials"
     }
   ]
 }

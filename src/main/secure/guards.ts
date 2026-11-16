@@ -109,7 +109,7 @@ export interface FillRequest {
 /** Checks that don't need the page's DOM: site, HTTPS, approval. The first problem, or null. */
 export function fillProblem(r: FillRequest, name: string): string | null {
   const page = originOfUrl(r.pageUrl) || 'this page'
-  if (!r.origins.length) return `"${name}" has no site it may be typed on. Add one in Settings → Vault.`
+  if (!r.origins.length) return `"${name}" has no site it may be typed on. Add one in Settings → Privacy & Security → Passwords.`
   if (!r.origins.some((o) => originMatches(o, r.pageUrl, { subdomains: !!r.subdomains }))) return `"${name}" is saved for ${r.origins.join(', ')}, but this page is ${page}. It will only be typed on its own site.`
   if (!isSecurePage(r.pageUrl)) return `This page (${page}) isn't secure (not HTTPS), so nothing from the vault is typed into it.`
   if (r.expectedOrigin && r.expectedOrigin !== originOfUrl(r.pageUrl)) return `The page changed to ${page} since this step was approved for ${r.expectedOrigin}, so nothing was typed.`

@@ -147,7 +147,7 @@ function harness(o: { model: ModelInfo; baseUrl: string; strategy?: ContextStrat
     // No counter override: the app's own ServerTokenCounter (the fakes have no /tokenize, like LM Studio and the cloud).
     secretValues: () => [], fitWindow: (_m, w) => w
   })
-  const space = db.listSpaces()[0] ?? db.createSpace('Auditor', '#000000')
+  const space = db.listSpaces()[0] ?? db.createSpace('Auditor', '#000000', { isMain: true })
   const thread = (): Thread => db.createThread(space.id, 'autonomous', o.model.id)
   return { db, dirs, agent, events, settings, thread, run: async (t: Thread, text: string) => (await agent.send({ threadId: t.id, text })).done }
 }

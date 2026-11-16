@@ -56,6 +56,8 @@ const api: SahilBotApi = {
     messages: call('threads:messages') as never,
     react: call('threads:react') as never
   },
+  // The chat's video card checks its render here (agent/tools/video.ts).
+  video: { get: call('video:get') as never },
   files: {
     pick: call('files:pick') as never,
     // Paths of dropped files are only knowable here, from real File objects.
@@ -226,6 +228,8 @@ const api: SahilBotApi = {
     clearGoogleClient: call('connectors:clearGoogleClient') as never,
     setApiKey: call('connectors:setApiKey') as never,
     checkAll: call('connectors:checkAll') as never,
+    useBuiltinClient: call('connectors:useBuiltinClient') as never,
+    clearApiKey: call('connectors:clearApiKey') as never,
     onIcons(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('connectors:icons', fn)
@@ -293,7 +297,8 @@ const api: SahilBotApi = {
     list: call('memory:list') as never, remove: call('memory:remove') as never, add: call('memory:add') as never, update: call('memory:update') as never,
     importPreview: call('memory:importPreview') as never, importCommit: call('memory:importCommit') as never,
     importSave: call('memory:importSave') as never, copyImportPrompt: call('memory:copyImportPrompt') as never,
-    getEnabled: call('memory:getEnabled') as never, setEnabled: call('memory:setEnabled') as never
+    getEnabled: call('memory:getEnabled') as never, setEnabled: call('memory:setEnabled') as never,
+    restore: call('memory:restore') as never
   },
   rules: { list: call('rules:list') as never, save: call('rules:save') as never, setEnabled: call('rules:setEnabled') as never, remove: call('rules:remove') as never },
   // The knowledge vault (src/main/vault): notes your bots keep, Obsidian-compatible.
@@ -322,7 +327,7 @@ const api: SahilBotApi = {
       return () => { ipcRenderer.removeListener('people:changed', fn) }
     }
   },
-  // Settings → Memory → What I learned.
+  // Settings → Memory → Learned.
   learning: {
     status: call('learning:status') as never, list: call('learning:list') as never, undo: call('learning:undo') as never,
     approve: call('learning:approve') as never, dismiss: call('learning:dismiss') as never,
@@ -381,7 +386,7 @@ const api: SahilBotApi = {
       return () => { ipcRenderer.removeListener('knowledge:changed', fn) }
     }
   },
-  // Connected apps (MCP server): Settings → Privacy & Permissions.
+  // Connected apps (MCP server): Settings → Privacy & Security.
   mcp: {
     status: call('mcp:status') as never, setEnabled: call('mcp:setEnabled') as never,
     createClient: call('mcp:createClient') as never, revokeClient: call('mcp:revokeClient') as never,

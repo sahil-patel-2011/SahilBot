@@ -9,3 +9,6 @@ vendor/whisper.cpp
 test-results/
 playwright-report/
 .claude/worktrees/
+
+# SahilBot's own OAuth app registrations (docs/oauth-registration.md): never committed.
+resources/oauth-clients.json

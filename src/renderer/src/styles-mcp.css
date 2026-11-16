@@ -1,4 +1,4 @@
-/* Settings → Privacy & Permissions → Connected apps (MCP) */
+/* Settings → Connected apps → Let apps on this Mac use SahilBot */
 .mcp { margin-top: 8px; }
 .mcp code { font-family: var(--mono); font-size: 12px; padding: 1px 5px; border-radius: 5px; background: var(--hover); color: var(--text); word-break: break-all; }
 .mcp .set-row-title code { font-size: 12.5px; }

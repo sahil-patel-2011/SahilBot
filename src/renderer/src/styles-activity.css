@@ -1,4 +1,4 @@
-/* Settings → Privacy & Permissions → Know what I'm working on */
+/* Settings → Privacy & Security → Activity → Know what I'm working on */
 .act { margin-top: 8px; }
 .act .set-row-ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .act .switch[disabled] { opacity: 0.5; cursor: default; }

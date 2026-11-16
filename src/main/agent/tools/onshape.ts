@@ -12,7 +12,7 @@ import { isCreatedDoc, markCreated } from '../../cad/created'
 import { CLASH_SCRIPT, SHADED_VIEWS } from '../../cad/onshape-build'
 import type { ToolContext, ToolDef, ToolOutput } from '../types'
 
-// Onshape CAD through its REST API with the user's API keys (Settings → API Keys & Servers → Onshape).
+// Onshape CAD through its REST API with the user's API keys (Settings → Models & Keys → Advanced → Keys for tools (Onshape)).
 // Reads are free to run. Anything that changes the user's CAD (variables, configuration defaults, a new
 // feature, a new version) is an outside action that always asks, goes to a workspace only (never a
 // version), and shows the document, element and old → new values on the approval card. Exports are

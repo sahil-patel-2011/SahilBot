@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import type { LearnedItem, LearnedKind, LearningSettings, LearningStatus, Space } from '@shared/types'
+import type { LearnedItem, LearnedKind, Space } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import '../styles-learning.css'
-import { ClampText } from './ui'
 
-// Settings → Memory → What I learned: everything SahilBot learned on its own while the app was idle
-// (memories, skills, lessons, and memory tidying), grouped by day, each with Undo; plus the switches
-// for learning, cloud use and its daily cap, and when it ran and will run next. A rule learned from a
-// chat that read outside content, and a skill from a borderline run, wait here for Approve or Dismiss.
+// Settings → Memory → Learned: everything SahilBot learned on its own while the app was idle (memories,
+// skills, lessons, and memory tidying), grouped by day, each with Undo. A rule learned from a chat that
+// read outside content, and a skill from a borderline run, wait here for Approve or Dismiss. The switches
+// (Remember things automatically, cloud learning and its cap) are on the Memory page itself.
 
 const KIND: Record<LearnedKind, { label: string; icon: (p: { size?: number }) => ReactNode; tone: string }> = {
   memory: { label: 'Memory', icon: (p) => <I.Sparkle {...p} />, tone: 'mem' },
@@ -42,61 +41,22 @@ function dayLabel(t: number): string {
 
 const time = (t: number): string => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 
-function ago(t: number, now: number): string {
-  const m = Math.round((now - t) / 60_000)
-  if (m < 1) return 'just now'
-  if (m < 60) return `${m} min ago`
-  const h = Math.round(m / 60)
-  if (h < 24) return `${h} h ago`
-  return dayLabel(t).toLowerCase() === 'yesterday' ? 'yesterday' : dayLabel(t)
-}
-
 export function LearningLog({ spaces }: { spaces: Space[] }) {
-  const [status, setStatus] = useState<LearningStatus | null>(null)
   const [items, setItems] = useState<LearnedItem[] | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [showAll, setShowAll] = useState(false)
-  const [cap, setCap] = useState('')
-  const [now, setNow] = useState(Date.now())
   const busyUndo = useRef(new Set<string>())
   const byId = useMemo(() => new Map(spaces.map((s) => [s.id, s])), [spaces])
 
   const reload = (): void => {
-    void api.learning.status().then((s) => { setStatus(s); setCap((c) => (c === '' ? s.settings.dailyUsd.toFixed(2) : c)) }).catch(() => undefined)
     void api.learning.list(300).then(setItems).catch(() => setItems([]))
   }
   useEffect(() => {
     reload()
     let t: ReturnType<typeof setTimeout> | null = null
     const off = api.learning.onChanged(() => { if (!t) t = setTimeout(() => { t = null; reload() }, 250) })
-    const tick = setInterval(() => { setNow(Date.now()); void api.learning.status().then(setStatus).catch(() => undefined) }, 20_000)
-    return () => { off(); clearInterval(tick); if (t) clearTimeout(t) }
+    return () => { off(); if (t) clearTimeout(t) }
   }, [])
-
-  const save = async (patch: Partial<LearningSettings>): Promise<void> => {
-    if (!status) return
-    const next = { ...status.settings, ...patch }
-    setStatus({ ...status, settings: next, enabled: next.enabled ?? status.enabled })
-    try {
-      await api.settings.set({ learning: next })
-      reload()
-    } catch (e) { toast(clean(e), 'error'); reload() }
-  }
-
-  const saveCap = (): void => {
-    const n = Number(cap.replace(/[^0-9.]/g, ''))
-    if (!Number.isFinite(n) || n < 0) { setCap(status?.settings.dailyUsd.toFixed(2) ?? '0.25'); return }
-    const v = Math.min(5, Math.round(n * 100) / 100)
-    setCap(v.toFixed(2))
-    if (v !== status?.settings.dailyUsd) void save({ dailyUsd: v })
-  }
-
-  const learnNow = async (): Promise<void> => {
-    try {
-      setStatus(await api.learning.runNow())
-      toast('Learning from your recent chats…', 'ok')
-    } catch (e) { toast(clean(e), 'error') }
-  }
 
   const undo = async (it: LearnedItem): Promise<void> => {
     if (busyUndo.current.has(it.id)) return
@@ -132,75 +92,8 @@ export function LearningLog({ spaces }: { spaces: Space[] }) {
     return c
   }, [items])
 
-  const on = status?.enabled ?? false
-  const st = status?.settings
-  const line = (): ReactNode => {
-    if (!status) return 'Loading…'
-    if (status.running) return <><span className="ll-pulse" aria-hidden />Learning now{status.job ? `: ${status.job.toLowerCase()}` : ''}…</>
-    if (!on) return 'Off. Nothing is learned in the background; bots still save what you tell them.'
-    if (status.blocked) return status.blocked
-    const parts: string[] = []
-    if (status.lastRunAt) parts.push(`Last ran ${ago(status.lastRunAt, now)}${status.lastSummary ? `: ${status.lastSummary}` : ''}`)
-    else parts.push('Hasn\'t run yet.')
-    if (status.nextRunAt) parts.push(status.nextRunAt <= now + 60_000 ? 'Next run as soon as you\'re away for 2 minutes.' : `Next run around ${time(status.nextRunAt)}, when you're away.`)
-    return parts.join(' ')
-  }
-
   return (
     <section className="set-section ll" data-testid="learning-log">
-      <div className="ll-head">
-        <div>
-          <div className="ll-title"><I.Sparkle size={15} />What I learned</div>
-          <div className="ll-sub">While SahilBot is open and you're away, it reviews recent chats to remember what you didn't ask it to, turn work that went well into skills, and learn from mistakes. It stops the moment you're back.</div>
-        </div>
-      </div>
-
-      <div className="set-card">
-        <div className="set-row">
-          <div className="set-row-text">
-            <div className="set-row-title">Learn while SahilBot is open</div>
-            <ClampText>{status && !status.localAvailable && !st?.cloudAllowed ? 'Needs a local model (Ollama or LM Studio), or cloud learning below.' : 'Uses your background model, local first. Never after you quit.'}</ClampText>
-          </div>
-          <div className="set-row-ctl">
-            <button role="switch" aria-checked={on} aria-label="Learn while SahilBot is open" className={`switch${on ? ' on' : ''}`} disabled={!status}
-              onClick={() => void save({ enabled: !on })} data-testid="learning-enabled"><i /></button>
-          </div>
-        </div>
-        <div className="set-row">
-          <div className="set-row-text">
-            <div className="set-row-title">Use cloud models for learning</div>
-            <ClampText>Only when no local model is available. Spending stops at the daily cap (it also counts toward your monthly cloud budget).</ClampText>
-          </div>
-          <div className="set-row-ctl ll-cloud">
-            {st?.cloudAllowed && (
-              <label className="ll-cap" title="Daily cap for learning">
-                <span>$</span>
-                <input inputMode="decimal" value={cap} onChange={(e) => setCap(e.target.value)} onBlur={saveCap} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} aria-label="Daily cap in dollars" data-testid="learning-cap" />
-                <span>/day</span>
-              </label>
-            )}
-            <button role="switch" aria-checked={!!st?.cloudAllowed} aria-label="Use cloud models for learning" className={`switch${st?.cloudAllowed ? ' on' : ''}`} disabled={!status}
-              onClick={() => void save({ cloudAllowed: !st?.cloudAllowed })} data-testid="learning-cloud"><i /></button>
-          </div>
-        </div>
-        <div className="set-row ll-status-row">
-          <div className="set-row-text">
-            <div className={`ll-status${status?.running ? ' live' : ''}${on && status?.blocked ? ' warn' : ''}`} data-testid="learning-status">{line()}</div>
-            {status?.model && on && (
-              <ClampText>
-                {status.cloud ? 'Cloud' : 'Local'} model: {status.model}
-                {status.cloud && ` · $${status.spentTodayUsd.toFixed(2)} of $${status.settings.dailyUsd.toFixed(2)} used today`}
-              </ClampText>
-            )}
-          </div>
-          <div className="set-row-ctl">
-            <button className="mm-btn" disabled={!status || status.running || (!!status.blocked && on)} onClick={() => void learnNow()} data-testid="learning-now">
-              <I.Play size={13} />{status?.running ? 'Learning…' : 'Learn now'}
-            </button>
-          </div>
-        </div>
-      </div>
-
       {waiting > 0 && (
         <div className="set-card"><div className="ll-status warn" data-testid="learning-waiting">{waiting === 1 ? '1 item is' : `${waiting} items are`} waiting for your OK below: learned from a chat that also read outside content (a web page, email or another app), so nothing is used until you approve it.</div></div>
       )}

@@ -2,7 +2,7 @@ import { shell } from 'electron'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -16,6 +16,7 @@ import { CONSEQUENTIAL } from './agent/permissions'
 import type { Db } from './db'
 import type { Secrets } from './secrets'
 import { gmailPolicy, type ToolPolicy } from './mail/gmail'
+import { builtinFor, type BuiltinClient, type BuiltinClients } from './oauth-clients'
 
 // MCP connectors: remote servers with OAuth sign-in (browser + loopback callback, tokens in
 // the Keychain) and local stdio servers. Each server's tools become agent tools loaded on
@@ -127,10 +128,12 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'cursor-app', name: 'Cursor', url: 'app:cursor', color: '#111111', category: 'Built in', domain: 'cursor.com', auth: 'app', description: 'SahilBot opens files in Cursor and can hand coding tasks to Cursor\'s agent.' },
   { id: 'apple-notes', name: 'Notes, Reminders & Calendar', url: 'app:mac_apps', color: '#F5B400', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Your Mac\'s own apps; macOS asks once to allow access.' },
   { id: 'apple-mail', name: 'Mail (all your accounts)', url: 'app:mail', color: '#1A8CFF', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Apple Mail on this Mac: Gmail, iCloud, Outlook and more, no sign-in. macOS asks once.' },
-  { id: 'gmail-web', name: 'Gmail (no setup)', url: 'https://mail.google.com/', color: '#EA4335', category: 'Built in', domain: 'mail.google.com/mail/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser; SahilBot uses Gmail like you do.' },
-  { id: 'gcal-web', name: 'Google Calendar (no setup)', url: 'https://calendar.google.com/', color: '#4285F4', category: 'Built in', domain: 'calendar.google.com/calendar/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
-  { id: 'gdrive-web', name: 'Google Drive (no setup)', url: 'https://drive.google.com/', color: '#0F9D58', category: 'Built in', domain: 'drive.google.com/drive/', auth: 'browser', description: 'Sign in once in SahilBot\'s browser.' },
-  { id: 'linkedin-web', name: 'LinkedIn (no setup)', url: 'https://www.linkedin.com/', color: '#0A66C2', category: 'Built in', auth: 'browser', description: 'Any site works this way: sign in once in SahilBot\'s browser.' },
+  // Web automation, by design: the user signs in inside SahilBot's own browser and SahilBot uses the
+  // site like they do (no connector, no API). Listed next to the app's real connector, below it.
+  { id: 'gmail-web', name: 'Gmail (in SahilBot\'s browser)', url: 'https://mail.google.com/', color: '#EA4335', category: 'Communication', domain: 'mail.google.com/mail/', auth: 'browser', description: 'Sign in inside SahilBot\'s browser; SahilBot uses Gmail on the web like you do.' },
+  { id: 'gcal-web', name: 'Google Calendar (in SahilBot\'s browser)', url: 'https://calendar.google.com/', color: '#4285F4', category: 'Productivity', domain: 'calendar.google.com/calendar/', auth: 'browser', description: 'Sign in inside SahilBot\'s browser; SahilBot uses Calendar on the web like you do.' },
+  { id: 'gdrive-web', name: 'Google Drive (in SahilBot\'s browser)', url: 'https://drive.google.com/', color: '#0F9D58', category: 'Productivity', domain: 'drive.google.com/drive/', auth: 'browser', description: 'Sign in inside SahilBot\'s browser; SahilBot uses Drive on the web like you do.' },
+  { id: 'linkedin-web', name: 'LinkedIn (in SahilBot\'s browser)', url: 'https://www.linkedin.com/', color: '#0A66C2', category: 'Social', auth: 'browser', description: 'Sign in inside SahilBot\'s browser; any site works this way.' },
   // On this Mac: official servers that desktop apps run themselves (no key, nothing downloaded). Only the exact
   // command or loopback address in LOCAL_SERVERS runs under these entries.
   { id: 'xcode', name: 'Xcode', url: 'stdio:xcrun mcpbridge', color: '#147EFB', category: 'On this Mac', domain: 'developer.apple.com', auth: 'none', description: 'Build, test, read and edit the project open in Xcode 26.3 or later.' }, // NEW 2026-11-15: Apple's own bridge (developer.apple.com/documentation/xcode/giving-external-agents-access-to-xcode): `xcrun mcpbridge` over stdio; Xcode → Settings → Intelligence → "Allow external agents to use Xcode tools"
@@ -206,7 +209,7 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'similarweb', name: 'Similarweb', url: 'https://mcp.similarweb.com/mcp', color: '#092540', category: 'Sales & marketing', auth: 'oauth', description: 'Website traffic and market data.' }, // 2026-11-15: 401+PRM, DCR mcp-auth.similarweb.com/register
   { id: 'crunchbase', name: 'Crunchbase', url: 'https://mcp.crunchbase.com/mcp', color: '#146AFF', category: 'Sales & marketing', auth: 'oauth-static', setup: S.crunchbase, description: 'Companies, funding and people.' }, // 2026-11-15: 401+PRM, AS crunchbase.com has no registration_endpoint (client-ID metadata documents only) (was 'oauth': fixed)
   { id: 'buffer', name: 'Buffer', url: 'https://mcp.buffer.com/mcp', color: '#231F20', category: 'Social', domain: 'buffer.com', auth: 'oauth', description: 'Draft, queue and schedule social posts; publishing asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR auth.buffer.com/reg; URL from developers.buffer.com
-  { id: 'brevo', name: 'Brevo', url: 'https://mcp.brevo.com/v1/brevo/mcp', color: '#0B996E', category: 'Sales & marketing', domain: 'brevo.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://app.brevo.com/settings/keys/api', hint: 'Account → SMTP & API → API Keys → Generate a new key, and tick the MCP option.' }, description: 'Contacts, lists, email and SMS campaigns; sending always asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM /v1/brevo/mcp; developers.brevo.com/docs/mcp-protocol: "Authorization: Bearer <MCP token>" (2026-11-15: the server also advertises OAuth DCR at mcp.brevo.com/oauth, not in Brevo's docs: kept on the documented key)
+  { id: 'brevo', name: 'Brevo', url: 'https://mcp.brevo.com/v1/brevo/mcp', color: '#0B996E', category: 'Sales & marketing', domain: 'brevo.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://app.brevo.com/settings/keys/api', hint: 'Account → SMTP & API → API Keys → Generate a new key, and tick the MCP option.' }, description: 'Contacts, lists, email and SMS campaigns; sending always asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM /v1/brevo/mcp; developers.brevo.com/docs/mcp-protocol: "Authorization: Bearer <MCP token>" (2026-11-15: the server also advertises OAuth DCR at mcp.brevo.com/oauth, not in Brevo's docs: kept on the documented key) Re-probed 2026-11-15: AS mcp.brevo.com/oauth has DCR + S256 + public clients, but developers.brevo.com/docs/mcp-protocol documents only the MCP token (OAuth is described only for Brevo's own Claude/ChatGPT connectors, with fewer tools): stays apikey until Brevo documents OAuth for MCP clients.
   { id: 'supermetrics', name: 'Supermetrics', url: 'https://mcp.supermetrics.com/mcp', color: '#4B2FD6', category: 'Sales & marketing', domain: 'supermetrics.com', auth: 'oauth', description: 'Ad, SEO and social reporting: Google, Meta, TikTok, LinkedIn Ads and more.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR api.supermetrics.com/oauth/register
   { id: 'crustdata', name: 'Crustdata', url: 'https://mcp.crustdata.com/mcp', color: '#0A0A0A', category: 'Sales & marketing', domain: 'crustdata.com', auth: 'oauth', description: 'Search and enrich company and people data.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR mcp.crustdata.com/register
   { id: 'replicate', name: 'Replicate', url: 'https://mcp.replicate.com/sse', color: '#202020', category: 'Media & AI', domain: 'replicate.com', auth: 'oauth', description: 'Run AI models for images, video, audio and text; runs bill your account.' }, // NEW 2026-11-15, swept 2026-11-15: 401 (/sse), PRM resource mcp.replicate.com, DCR mcp.replicate.com/register; URL from replicate.com/docs/reference/mcp
@@ -220,7 +223,7 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'paypal', name: 'PayPal', url: 'https://mcp.paypal.com/mcp', color: '#003087', category: 'Finance & commerce', auth: 'oauth', description: 'Invoices, orders and disputes.' }, // 2026-11-15: 401+PRM, DCR mcp.paypal.com/register
   { id: 'square', name: 'Square', url: 'https://mcp.squareup.com/mcp', color: '#3E4348', category: 'Finance & commerce', domain: 'squareup.com', auth: 'oauth', description: 'Payments, orders and catalog.' }, // 2026-11-15: 401+PRM /mcp (Streamable HTTP), DCR mcp.squareup.com/register (was /sse: moved to the streamable endpoint)
   { id: 'plaid', name: 'Plaid', url: 'https://mcp.plaid.com/mcp', color: '#111111', category: 'Finance & commerce', auth: 'oauth', description: 'Your Plaid developer dashboard: items, logs and usage.' }, // 2026-11-15: 401+PRM, DCR api.dashboard.plaid.com/oauth/register
-  { id: 'xero', name: 'Xero', url: 'https://mcp.xero.com/mcp', color: '#13B5EA', category: 'Finance & commerce', auth: 'oauth-static', setup: S.xero, description: 'Accounting: invoices and contacts.' }, // 2026-11-15: 401+PRM, AS identity.xero.com has no registration_endpoint (was 'oauth': fixed)
+  { id: 'xero', name: 'Xero', url: 'https://api.xero.com/mcp/v1', color: '#13B5EA', category: 'Finance & commerce', auth: 'oauth-static', setup: S.xero, description: 'Accounting: invoices and contacts.' }, // 2026-11-15: Xero's docs list api.xero.com/mcp/v1; 401 + RFC 9728 resource_metadata (api.xero.com/.well-known/oauth-protected-resource/mcp/v1). The older mcp.xero.com/mcp answers 401 without it.
   { id: 'mercury', name: 'Mercury', url: 'https://mcp.mercury.com/mcp', color: '#5266EB', category: 'Finance & commerce', domain: 'mercury.com', auth: 'oauth', description: 'Accounts, transactions and cash flow; payments always ask.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR mcp.mercury.com/register
   { id: 'brex', name: 'Brex', url: 'https://api.brex.com/mcp', color: '#F46A35', category: 'Finance & commerce', domain: 'brex.com', auth: 'oauth', description: 'Your cards, expenses, limits and policy.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM (resource api.brex.com), DCR api.brex.com/v3/clients
   { id: 'mollie', name: 'Mollie', url: 'https://mcp.mollie.com/mcp', color: '#0A0A0A', category: 'Finance & commerce', domain: 'mollie.com', auth: 'oauth', description: 'Payments, refunds, subscriptions and settlements.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR api.mollie.com/oauth2/register
@@ -252,8 +255,8 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'buildkite', name: 'Buildkite', url: 'https://mcp.buildkite.com/mcp', color: '#14CC80', category: 'Code', domain: 'buildkite.com', auth: 'oauth', description: 'Pipelines, builds, jobs, logs and test results.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR mcp.buildkite.com/oauth/register; URL from buildkite.com/docs/apis/mcp-server
   { id: 'prisma', name: 'Prisma Postgres', url: 'https://mcp.prisma.io/mcp', color: '#2D3748', category: 'Code', domain: 'prisma.io', auth: 'oauth', description: 'Create and manage Prisma Postgres databases, backups and queries.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR auth.prisma.io/register; URL from prisma.io/docs/ai/tools/mcp-server
   { id: 'datadog', name: 'Datadog', url: 'https://mcp.datadoghq.com/v1/mcp', color: '#632CA6', category: 'Code', domain: 'datadoghq.com', auth: 'oauth', description: 'Logs, metrics, traces, monitors and incidents (US1 site; an admin turns on MCP access).' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR app.datadoghq.com/api/v2/oauth2/register; URL from docs.datadoghq.com/bits_ai/mcp_server/setup
-  { id: 'render', name: 'Render', url: 'https://mcp.render.com/mcp', color: '#8A05FF', category: 'Code', domain: 'render.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://dashboard.render.com/u/settings?add-api-key', hint: 'Account Settings → API Keys → Create API Key.', placeholder: 'rnd_…' }, description: 'Services, deploys, logs, metrics and databases on Render.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, AS api.render.com has no registration_endpoint; render.com/docs/mcp-server: header "Authorization: Bearer <YOUR_API_KEY>"
-  { id: 'pagerduty', name: 'PagerDuty', url: 'https://mcp.pagerduty.com/mcp', color: '#06AC38', category: 'Code', domain: 'pagerduty.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Token token={key}', getKeyUrl: 'https://support.pagerduty.com/main/docs/api-access-keys', hint: 'In PagerDuty: My Profile → User Settings → Create API User Token (US service region).' }, description: 'Incidents, services and on-call; paging people always asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, AS app.pagerduty.com has no registration_endpoint; docs.pagerduty.com/developer/mcp-tooling-remote-server: "Authorization": "Token token=<key>"
+  { id: 'render', name: 'Render', url: 'https://mcp.render.com/mcp', color: '#8A05FF', category: 'Code', domain: 'render.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://dashboard.render.com/u/settings?add-api-key', hint: 'Account Settings → API Keys → Create API Key.', placeholder: 'rnd_…' }, description: 'Services, deploys, logs, metrics and databases on Render.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, AS api.render.com has no registration_endpoint; render.com/docs/mcp-server: header "Authorization: Bearer <YOUR_API_KEY>" Re-probed 2026-11-15: still no registration_endpoint (S256, public clients); render.com/docs/mcp-server documents OAuth for Render's own plugins and API keys: stays apikey.
+  { id: 'pagerduty', name: 'PagerDuty', url: 'https://mcp.pagerduty.com/mcp', color: '#06AC38', category: 'Code', domain: 'pagerduty.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Token token={key}', getKeyUrl: 'https://support.pagerduty.com/main/docs/api-access-keys', hint: 'In PagerDuty: My Profile → User Settings → Create API User Token (US service region).' }, description: 'Incidents, services and on-call; paging people always asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, AS app.pagerduty.com has no registration_endpoint; docs.pagerduty.com/developer/mcp-tooling-remote-server: "Authorization": "Token token=<key>" Re-probed 2026-11-15: still no registration_endpoint; PagerDuty documents API tokens and pre-registered Scoped OAuth apps (127.0.0.1 redirects): stays apikey.
   // Data & analytics
   { id: 'posthog', name: 'PostHog', url: 'https://mcp.posthog.com/mcp', color: '#F54E00', category: 'Data & analytics', auth: 'oauth', description: 'Product analytics and flags.' }, // 2026-11-15: 401+PRM, DCR oauth.posthog.com/oauth/register/
   { id: 'amplitude', name: 'Amplitude', url: 'https://mcp.amplitude.com/mcp', color: '#1E61F0', category: 'Data & analytics', auth: 'oauth', description: 'Product analytics.' }, // 2026-11-15: 401+PRM, DCR mcp.amplitude.com/register
@@ -361,10 +364,12 @@ export const PRESETS: ConnectorPreset[] = [
 ]
 
 /**
- * Test-only one-click catalog entries for acceptance tests (a local fake OAuth + MCP server), from
+ * Test-only catalog entries for acceptance tests (a local fake OAuth + MCP server), from
  * SAHILBOT_TEST_PRESETS (a JSON array of { id, name, url, description?, auth? }). Honoured only in a
- * hidden test run (SAHILBOT_HIDDEN=1), only for loopback server URLs, only for one-click auth
- * ('oauth' or 'none'), and never replacing a real catalog entry. A normal run ignores it.
+ * hidden test run (SAHILBOT_HIDDEN=1), only for loopback server URLs, only for 'oauth', 'none' or
+ * 'oauth-static' (an app without self-registration: it connects in one click only with a built-in
+ * client from SAHILBOT_OAUTH_CLIENTS_JSON, else it needs its setup), and never replacing a real
+ * catalog entry. A normal run ignores it.
  */
 export function testPresets(env: NodeJS.ProcessEnv = process.env, existing: Array<Pick<ConnectorPreset, 'id'>> = PRESETS): ConnectorPreset[] {
   if (env.SAHILBOT_HIDDEN !== '1' || !env.SAHILBOT_TEST_PRESETS) return []
@@ -377,10 +382,13 @@ export function testPresets(env: NodeJS.ProcessEnv = process.env, existing: Arra
     const id = typeof x?.id === 'string' ? x.id : ''
     const name = typeof x?.name === 'string' ? x.name.trim().slice(0, 40) : ''
     const url = typeof x?.url === 'string' ? x.url : ''
-    const auth = x?.auth === 'none' ? 'none' : 'oauth'
+    const auth = x?.auth === 'none' ? 'none' : x?.auth === 'oauth-static' ? 'oauth-static' : 'oauth'
     if (!/^test-[a-z0-9-]{1,30}$/.test(id) || !name || taken.has(id) || !/^http:\/\//.test(url) || !isLoopbackUrl(url)) continue
     taken.add(id)
-    out.push({ id, name, url, auth, color: '#64748B', category: 'Other', description: typeof x.description === 'string' ? x.description.slice(0, 200) : `${name} (test app).` })
+    const setup: ConnectorSetup | undefined = auth === 'oauth-static'
+      ? { minutes: 2, needsSecret: false, redirectUri: setupRedirect(), steps: [{ title: `Create an OAuth app in ${name}`, text: 'Test app: any client ID the fake server knows.', links: [] }] }
+      : undefined
+    out.push({ id, name, url, auth, ...(setup ? { setup } : {}), color: '#64748B', category: 'Other', description: typeof x.description === 'string' ? x.description.slice(0, 200) : `${name} (test app).` })
   }
   return out
 }
@@ -393,9 +401,12 @@ export function namedIn(text: string, name: string): boolean {
   return ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `.includes(` ${n} `)
 }
 
-/** Signs in with one click: the server registers SahilBot itself (or needs no sign-in). */
-export function isOneClick(p: Pick<ConnectorPreset, 'auth'>): boolean {
-  return p.auth === 'oauth' || p.auth === 'none'
+/**
+ * Signs in with one click: the server registers SahilBot itself (DCR), needs no sign-in, or SahilBot
+ * ships its own app registration for it (`builtinClient`, set on the presets main hands out).
+ */
+export function isOneClick(p: Pick<ConnectorPreset, 'auth' | 'builtinClient'>): boolean {
+  return p.auth === 'oauth' || p.auth === 'none' || ((p.auth === 'oauth-static' || p.auth === 'google') && !!p.builtinClient)
 }
 
 /**
@@ -655,12 +666,16 @@ export const EFFECT_MAPS: Record<string, EffectRule[]> = {
     [/^delete_branch$/i, DESTROY]
   ],
   heygen: [
-    // Video generation spends plan credits.
-    [/(generate|create|render)/i, ASK]
+    [/^delete_/i, DESTROY],
+    // Video generation, conversions, uploads and consents spend plan credits or act on the account.
+    [/(generate|create|render|text_to_video|image_to_video|reference_to_video|convert_speech|send_video_agent_message|update_video_translation)/i, ASK],
+    [/^(get|list|search|bulk_video_translation_statuses)/i, READ]
   ],
   hyperframes: [
     [/^render/i, ASK],
-    [/^compose$/i, { effect: 'write_external', consequential: false }]
+    // compose renders the MP4 on its own (its own description), so it may spend credits.
+    [/^compose$/i, ASK],
+    [/^(get|list)_/i, READ]
   ],
   docusign: [
     [/(send|void|resend)_?envelope|^send/i, SEND_HARD('sends documents for signature through Docusign')]
@@ -1248,7 +1263,11 @@ interface OauthOptions {
   /** Scopes to ask for instead of the server's advertised set (rewritten into the authorize URL). */
   scope?: string
   /** Opens the sign-in page (default: the user's browser, see openSignIn). */
-  open?: (url: string) => Promise<void>
+  open?: (url: string) => Promise<unknown>
+  /** The app's name, for the page the browser shows after signing in ("Connected to Slack"). */
+  appName?: string
+  /** The provider sent the browser back with a code: bring SahilBot to the front. */
+  onSignedIn?: () => void
 }
 
 /** 127.0.0.1, ::1 or localhost. */
@@ -1258,34 +1277,96 @@ export function isLoopbackUrl(url: string): boolean {
 
 /**
  * Loads a sign-in page without a browser, following its redirects back to SahilBot's loopback
- * callback. Only for local fake authorization servers in tests: every hop must stay on loopback.
+ * callback, and returns the last page's text (the callback page). Only for local fake authorization
+ * servers in tests: every hop must stay on loopback.
  */
-export async function headlessSignIn(url: string, fetcher: typeof fetch = fetch): Promise<void> {
+export async function headlessSignIn(url: string, fetcher: typeof fetch = fetch): Promise<string> {
   let u = url
   for (let hop = 0; hop < 6; hop++) {
     if (!isLoopbackUrl(u)) throw new Error('Headless sign-in only follows loopback addresses')
     const r = await fetcher(u, { redirect: 'manual', signal: AbortSignal.timeout(10_000) })
     const loc = r.headers.get('location')
+    if (!loc) return (await r.text().catch(() => '')).slice(0, 20_000)
     await r.body?.cancel().catch(() => undefined)
-    if (!loc) return
     u = new URL(loc, u).href
   }
+  return ''
 }
 
+/** Sign-in pages a hidden (test) run asked to open: captured here, never opened in a real browser. */
+export const capturedSignIns: Array<{ url: string; page?: string; at: number }> = []
+
 /**
- * Opens a sign-in page in the user's browser. Acceptance tests set SAHILBOT_TEST_OAUTH_FETCH=1 to sign
- * in to a local fake authorization server headlessly instead; that never applies to a real provider
- * (the page must be on loopback).
+ * Opens a sign-in page in the user's default browser (shell.openExternal; on SahilBot Server the shim
+ * asks the paired browser to open it). Never in one of SahilBot's own windows: the provider's page,
+ * its cookies and the password typed there stay in the browser the user already trusts.
+ *
+ * A hidden test run (SAHILBOT_HIDDEN) never opens the user's browser: the URL is captured
+ * (capturedSignIns, plus a JSON line in SAHILBOT_TEST_EXTERNAL_LOG when set). With
+ * SAHILBOT_TEST_OAUTH_FETCH=1 a loopback page (a local fake authorization server) is then signed in
+ * headlessly, and the callback page it ends on is captured too. That never applies to a real provider.
  */
-export async function openSignIn(url: string): Promise<void> {
-  if (process.env.SAHILBOT_TEST_OAUTH_FETCH === '1' && isLoopbackUrl(url)) { await headlessSignIn(url); return }
+export async function openSignIn(url: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  if (env.SAHILBOT_HIDDEN) {
+    const rec: { url: string; page?: string; at: number } = { url, at: Date.now() }
+    try {
+      if (env.SAHILBOT_TEST_OAUTH_FETCH === '1' && isLoopbackUrl(url)) rec.page = await headlessSignIn(url)
+    } finally {
+      capturedSignIns.push(rec)
+      if (env.SAHILBOT_TEST_EXTERNAL_LOG) { try { appendFileSync(env.SAHILBOT_TEST_EXTERNAL_LOG, `${JSON.stringify(rec)}\n`) } catch { /* test log only */ } }
+    }
+    return
+  }
   await shell.openExternal(url)
 }
 
-/** Sign-in result page shown in the browser tab. */
-function callbackPage(ok: boolean, detail?: string): string {
-  const esc = (t: string): string => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
-  return `<!doctype html><meta charset=utf-8><title>SahilBot</title><body style="font:16px -apple-system;display:grid;place-items:center;height:90vh"><div style="max-width:520px;text-align:center">${ok ? 'Signed in. You can close this tab and return to SahilBot.' : `Sign-in didn't finish.${detail ? `<br><small style="color:#888">${esc(detail)}</small>` : ''}`}</div>`
+const esc = (t: string): string => t.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
+
+/**
+ * The page the browser tab shows after the provider sends it back to SahilBot: "Connected to <App>"
+ * or what went wrong and what to do. Self-contained (no scripts, no outside requests), in SahilBot's
+ * own look (the renderer's design tokens: colors, type, radius; light and dark).
+ */
+export function callbackPage(ok: boolean, o: { app?: string; detail?: string; hint?: string } = {}): string {
+  const app = o.app?.trim() || 'the app'
+  const title = ok ? `Connected to ${app}` : `Couldn’t connect ${o.app?.trim() || ''}`.trim()
+  const lede = ok ? 'You can close this tab and go back to SahilBot.' : (o.hint ?? 'Go back to SahilBot and press Connect to try again.')
+  const icon = ok
+    ? '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'
+    : '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 7v6"/><path d="M12 17h.01"/></svg>'
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<title>${esc(title)} · SahilBot</title>
+<style>
+:root{--bg:#fff;--card:#fff;--line:#e7e7e5;--text:#121212;--text-2:#5e5e5e;--text-3:#9a9a9a;--soft:#f4f3ef;--accent:#ff6a1a;--ok:#30a46c;--danger:#e5484d;--font:-apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;--shadow:0 1px 2px rgba(0,0,0,.04),0 4px 16px rgba(0,0,0,.06);color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#161616;--card:#1f1f1e;--line:#2c2c2a;--text:#ededec;--text-2:#a8a8a6;--text-3:#6f6f6d;--soft:#232322;--shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.35);color-scheme:dark}}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 var(--font);display:grid;place-items:center;padding:24px;-webkit-font-smoothing:antialiased}
+main{width:100%;max-width:440px;background:var(--card);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);padding:32px 28px 26px;text-align:center}
+.mark{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;margin:0 auto 18px;color:#fff;background:${ok ? 'var(--ok)' : 'var(--danger)'}}
+h1{font-size:21px;line-height:1.25;margin:0 0 8px;font-weight:650;letter-spacing:-.01em}
+p{margin:0;color:var(--text-2)}
+.detail{margin-top:16px;padding:10px 12px;border-radius:12px;background:var(--soft);color:var(--text-2);font-size:13px;text-align:left;word-break:break-word}
+.brand{margin-top:22px;display:flex;align-items:center;justify-content:center;gap:7px;color:var(--text-3);font-size:12.5px}
+.brand i{width:9px;height:9px;border-radius:3px;background:var(--accent);display:inline-block}
+</style></head>
+<body><main data-result="${ok ? 'connected' : 'error'}">
+<div class="mark">${icon}</div>
+<h1>${esc(title)}</h1>
+<p>${esc(lede)}</p>
+${!ok && o.detail ? `<div class="detail">${esc(o.detail.slice(0, 300))}</div>` : ''}
+<div class="brand"><i></i>SahilBot</div>
+</main></body></html>`
+}
+
+/** What to do after a provider sent back an error instead of a code (shown on the callback page). */
+function callbackHint(err: string | null, stateBad: boolean): string {
+  if (stateBad) return 'This sign-in link was out of date. Go back to SahilBot and press Connect again.'
+  if (err === 'access_denied') return 'Sign-in was cancelled or access wasn\'t allowed. Go back to SahilBot and press Connect to try again.'
+  if (err === 'invalid_scope') return 'The app refused the permissions SahilBot asked for. Go back to SahilBot: it shows what to change.'
+  if (err && /client|redirect/i.test(err)) return 'The app didn\'t accept SahilBot\'s sign-in settings. Go back to SahilBot: it shows what to fix.'
+  return 'Go back to SahilBot and press Connect to try again.'
 }
 
 export class Oauth implements OAuthClientProvider {
@@ -1299,7 +1380,9 @@ export class Oauth implements OAuthClientProvider {
   private fixedRedirect?: string
   private interactive: boolean
   private scopeOverride?: string
-  private open: (url: string) => Promise<void>
+  private open: (url: string) => Promise<unknown>
+  private appName?: string
+  private onSignedIn?: () => void
   /** Leave out the RFC 8707 resource indicator (a server that answered invalid_target). */
   noResource = false
 
@@ -1310,7 +1393,9 @@ export class Oauth implements OAuthClientProvider {
     this.fixedRedirect = o.fixedRedirect
     this.interactive = o.interactive ?? true
     this.scopeOverride = o.scope
-    this.open = o.open ?? openSignIn
+    this.open = o.open ?? ((u) => openSignIn(u))
+    this.appName = o.appName
+    this.onSignedIn = o.onSignedIn
     this.noResource = this.read<boolean>('noResource') ?? false
   }
 
@@ -1340,9 +1425,15 @@ export class Oauth implements OAuthClientProvider {
     const err = u.searchParams.get('error')
     if (!code && !err) { res.writeHead(404); res.end(); return } // prefetch or reload
     const desc = u.searchParams.get('error_description') ?? undefined
-    const stateBad = !!u.searchParams.get('state') && u.searchParams.get('state') !== this.stateValue
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    res.end(callbackPage(!err && !stateBad, stateBad ? 'The sign-in link was out of date. Press Connect again in SahilBot.' : desc ?? (err ?? undefined)))
+    // CSRF (RFC 6749 §10.12): a code counts only with this sign-in's own state. An error without one
+    // is still reported as that error; a wrong state never is.
+    const state = u.searchParams.get('state')
+    const stateBad = code ? state !== this.stateValue : !!state && state !== this.stateValue
+    const ok = !err && !stateBad
+    res.writeHead(ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' })
+    res.end(callbackPage(ok, { app: this.appName, detail: stateBad ? undefined : desc ?? err ?? undefined, hint: callbackHint(err, stateBad) }))
+    // Back to SahilBot: the browser tab has done its job.
+    if (ok) { try { this.onSignedIn?.() } catch { /* focus is best effort */ } }
     const out: { code?: string; error?: Error } = stateBad
       ? { error: new Error('Sign-in state mismatch') }
       : err ? { error: new Error(`Sign-in failed: ${err}${desc ? ` (${desc.slice(0, 200)})` : ''}`) } : { code: code! }
@@ -1463,10 +1554,14 @@ export class Oauth implements OAuthClientProvider {
  * Plain words for sign-in failures, with the fix. `setup` is the app's one-time setup guide when it
  * has one; `redirect` is the URL a pre-registered client must use.
  */
-export function explainAuthError(message: string, ctx: { name: string; url?: string; hasSetup?: boolean; staticClient?: boolean; redirect?: string }): string {
+export function explainAuthError(message: string, ctx: { name: string; url?: string; hasSetup?: boolean; staticClient?: boolean; redirect?: string; builtin?: boolean }): string {
   const m = String(message ?? '')
   const host = (() => { try { return new URL(ctx.url ?? '').host } catch { return ctx.name } })()
   const redirect = ctx.redirect ?? setupRedirect()
+  // SahilBot's own app registration was refused: nothing the user typed is wrong; their own app is the way round it.
+  if (ctx.builtin && /redirect_uri|redirect url|redirect uri|invalid_client|unauthorized_client|client.*(not found|unknown|invalid)|invalid_scope/i.test(m)) {
+    return `${ctx.name} didn't accept SahilBot's own ${ctx.name} app right now (${/invalid_scope/i.test(m) ? 'permissions' : /redirect/i.test(m) ? 'redirect URL' : 'client'}). Press Connect to try again; if it keeps happening, open Connect apps → ${ctx.name} → "Use your own app".`
+  }
   if (/does not support dynamic client registration|registration.*(not (supported|allowed|enabled))|invalid_client_metadata|invalid_redirect_uri|unapproved_software_statement|(registration|register).*\b(40[0-5])\b/i.test(m) && !ctx.staticClient) {
     return ctx.hasSetup
       ? `${ctx.name} needs a one-time setup: open Connect apps → ${ctx.name} and follow the steps (you create a small OAuth app there and paste its client ID).`
@@ -1490,7 +1585,40 @@ export class Connectors {
   private attempts = new Map<string, number>()
   private healthTimer: ReturnType<typeof setInterval> | null = null
 
-  constructor(private db: Db, private secrets: Secrets, private registry: ToolRegistry, private changed: () => void, private opts: { openExternal?: (url: string) => Promise<void> } = {}) {}
+  constructor(private db: Db, private secrets: Secrets, private registry: ToolRegistry, private changed: () => void, private opts: {
+    /** Opens a sign-in page (default openSignIn: the user's browser; captured in hidden test runs). */
+    openExternal?: (url: string) => Promise<unknown>
+    /** SahilBot's own app registrations (resources/oauth-clients.json, see oauth-clients.ts). */
+    oauthClients?: BuiltinClients
+    /** A provider sent the browser back with a code: bring SahilBot to the front. */
+    onSignedIn?: (name: string) => void
+  } = {}) {}
+
+  /** The built-in client for a catalog app (its own, or Google's shared one), if SahilBot ships one. */
+  builtin(preset: Pick<ConnectorPreset, 'id' | 'auth'> | string | undefined): BuiltinClient | undefined {
+    const p = typeof preset === 'string' ? PRESETS.find((x) => x.id === preset) : preset
+    return builtinFor(this.opts.oauthClients ?? {}, p)
+  }
+
+  /** A catalog entry as the UI sees it: `builtinClient` marks apps that connect with SahilBot's own app registration. */
+  private decorate(p: ConnectorPreset): ConnectorPreset {
+    return this.builtin(p) ? { ...p, builtinClient: true } : p
+  }
+
+  /** The catalog for Connect apps and in-chat cards (built-in clients flagged; secrets never leave main). */
+  presets(): ConnectorPreset[] {
+    return PRESETS.map((p) => this.decorate(p))
+  }
+
+  /** Connects with one click right now: one-click in the catalog, or the user already set up their own app or key. */
+  private ready(p: ConnectorPreset): boolean {
+    if (isOneClick(p)) return true
+    const cfg = this.list().find((c) => c.preset === p.id)
+    if (p.auth === 'oauth-static') return !!cfg?.clientId
+    if (p.auth === 'google') return !!(cfg?.clientId || this.googleClient())
+    if (p.auth === 'apikey') return !!(cfg && this.secrets.get(keySecret(cfg.id)))
+    return false
+  }
 
   list(): ConnectorConfig[] {
     return this.db.getSetting<ConnectorConfig[]>('connectors') ?? []
@@ -1501,26 +1629,32 @@ export class Connectors {
     const q = query.toLowerCase()
     const connected = new Set(this.list().filter((c) => this.status.get(c.id)?.state === 'connected').map((c) => c.preset))
     const words = q.split(/[^a-z0-9.]+/).filter((w) => w.length > 2)
-    const open = PRESETS.filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app')
+    const open = this.presets().filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app')
+    const readyNow = new Map(open.map((p) => [p.id, this.ready(p)]))
     // Only apps the request names in full ("google calendar", "notion"): for a find_tools search that also
     // matched built-in tools, so "calendar" still means the built-in one and "browser" isn't Browserbase.
-    if (o.fullName) return open.filter((p) => namedIn(q, p.name)).sort((a, b) => Number(isOneClick(b)) - Number(isOneClick(a)))
+    if (o.fullName) return open.filter((p) => namedIn(q, p.name)).sort((a, b) => Number(readyNow.get(b.id)) - Number(readyNow.get(a.id)))
     // Everyday words don't pick apps by name either ("data" isn't a request for Datadog or Crustdata).
     const byName = open.filter((p) => words.some((w) => !SUGGEST_STOP.has(w) && (p.name.toLowerCase().includes(w) || p.id.startsWith(w))))
     const byUse = open.filter((p) => !byName.includes(p) && words.some((w) => !SUGGEST_STOP.has(w) && p.description.toLowerCase().split(/[^a-z0-9]+/).includes(w)))
-    // One-click apps first within each group: the in-chat card can connect them right away.
-    const ready = (xs: ConnectorPreset[]): ConnectorPreset[] => [...xs.filter(isOneClick), ...xs.filter((p) => !isOneClick(p))]
+    // Apps that connect in one click right now first within each group: the in-chat card connects them at once.
+    const ready = (xs: ConnectorPreset[]): ConnectorPreset[] => [...xs.filter((p) => readyNow.get(p.id)), ...xs.filter((p) => !readyNow.get(p.id))]
     return [...ready(byName), ...ready(byUse)]
   }
 
-  /** One-click connect for a catalog entry (OAuth opens the browser). Google apps use the shared client from "Set up Google once". */
+  /**
+   * One-click connect for a catalog entry: OAuth opens the provider's page in the user's browser. Apps
+   * without self-registration use SahilBot's built-in client, else the user's own (their one-time
+   * setup, or "Set up Google once" for Google apps).
+   */
   async connectPreset(id: string): Promise<ConnectorStatus> {
     const p = PRESETS.find((x) => x.id === id)
     if (!p || p.auth === 'browser' || p.auth === 'app' || !p.url) throw new Error('This connector needs setup in Connect apps.')
     if (p.unavailable) throw new Error(p.unavailable)
-    if (p.auth === 'google' && !this.googleClient()) throw new Error(GOOGLE_SETUP_NEEDED)
     const existing = this.list().find((c) => c.preset === id)
-    if (p.auth === 'oauth-static' && !existing?.clientId) throw new Error(setupNeeded(p))
+    const builtin = this.builtin(p)
+    if (p.auth === 'google' && !builtin && !existing?.clientId && !this.googleClient()) throw new Error(GOOGLE_SETUP_NEEDED)
+    if (p.auth === 'oauth-static' && !builtin && !existing?.clientId) throw new Error(setupNeeded(p))
     if (p.auth === 'apikey' && !(existing && this.secrets.get(keySecret(existing.id)))) throw new Error(apiKeyNeeded(p))
     const cfg = existing ?? this.save({ name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true })
     return this.connect(cfg.id, true)
@@ -1546,15 +1680,41 @@ export class Connectors {
     const id = clientId.trim()
     this.secrets.set(GOOGLE_CLIENT_KEY, JSON.stringify({ clientId: id, clientSecret: clientSecret!.trim() }))
     // A different client can't use the old one's tokens: Google connectors without their own client sign in again.
-    if (prev && prev.clientId !== id) {
-      for (const c of this.list()) if (GOOGLE_PRESETS.includes(c.preset ?? '') && !c.clientId) new Oauth(c.id, this.secrets).invalidateCredentials('all')
-    }
+    if (prev && prev.clientId !== id) this.resetGoogleSignIns()
     this.changed()
     return { clientId: id, hasSecret: true }
   }
 
+  /** Forgets the user's own Google client: Google apps go back to SahilBot's built-in one (if it ships one) and sign in again. */
   clearGoogleClient(): void {
+    const had = !!this.googleClient()
     this.secrets.set(GOOGLE_CLIENT_KEY, null)
+    if (had) this.resetGoogleSignIns()
+    this.changed()
+  }
+
+  /** Google connectors without their own client: their tokens belonged to the old shared client. */
+  private resetGoogleSignIns(): void {
+    for (const c of this.list()) if (GOOGLE_PRESETS.includes(c.preset ?? '') && !c.clientId) new Oauth(c.id, this.secrets).invalidateCredentials('all')
+  }
+
+  /**
+   * "Use SahilBot's app" for an app the user had set up with their own OAuth app: their client ID and
+   * secret are forgotten and it signs in again with the built-in client.
+   */
+  useBuiltinClient(id: string): ConnectorConfig {
+    const c = this.list().find((x) => x.id === id)
+    if (!c) throw new Error('Unknown connector')
+    const p = PRESETS.find((x) => x.id === c.preset)
+    if (!p || !this.builtin(p)) throw new Error(`SahilBot doesn't have its own ${c.name} app yet, so ${c.name} needs yours.`)
+    const { clientId: _old, ...rest } = c
+    void _old
+    return this.save(rest)
+  }
+
+  /** Forgets the API key of an app that also signs in with OAuth ("Use an API key instead", undone). */
+  clearApiKey(id: string): void {
+    this.secrets.set(keySecret(id), null)
     this.changed()
   }
 
@@ -1566,7 +1726,8 @@ export class Connectors {
    */
   async setApiKey(presetId: string, raw: string): Promise<ConnectorStatus> {
     const p = PRESETS.find((x) => x.id === presetId)
-    if (!p || p.auth !== 'apikey' || !p.apiKey) throw new Error('This app doesn\'t sign in with an API key.')
+    // An apikey app, or a one-click app whose vendor documents a key too ("Use an API key instead").
+    if (!p || (p.auth !== 'apikey' && p.auth !== 'oauth') || !p.apiKey) throw new Error('This app doesn\'t sign in with an API key.')
     const key = normalizeApiKey(raw, p.apiKey)
     const problem = validateApiKey(key, p)
     if (problem) throw new Error(problem)
@@ -1605,9 +1766,10 @@ export class Connectors {
     // Local catalog entries (Xcode, Figma desktop) always run exactly their allowed command or address.
     const c = pinLocal(input)
     if (c.kind === 'remote' && !/^https?:\/\//.test(c.url ?? '')) throw new Error('Enter the server URL (https://…).')
-    if (PRESETS.find((p) => p.id === c.preset)?.auth === 'google' && !c.clientId && !this.googleClient()) throw new Error(GOOGLE_SETUP_NEEDED)
     const preset = PRESETS.find((p) => p.id === c.preset)
-    if (preset?.auth === 'oauth-static' && !c.clientId?.trim()) throw new Error(setupNeeded(preset))
+    // Apps without self-registration need a client: SahilBot's built-in one, or the user's own.
+    if (preset?.auth === 'google' && !c.clientId && !this.googleClient() && !this.builtin(preset)) throw new Error(GOOGLE_SETUP_NEEDED)
+    if (preset?.auth === 'oauth-static' && !c.clientId?.trim() && !this.builtin(preset)) throw new Error(setupNeeded(preset))
     if (c.clientId !== undefined && !/^[\x21-\x7e]{4,300}$/.test(c.clientId.trim())) throw new Error('That client ID looks wrong (it has spaces or odd characters). Copy it again.')
     if (c.kind === 'stdio' && !c.command?.trim()) throw new Error('Enter the command that starts the server.')
     const all = this.list()
@@ -1726,8 +1888,9 @@ export class Connectors {
         if (local && (local.kind !== 'stdio' || c.command !== local.command || JSON.stringify(c.args ?? []) !== JSON.stringify(local.args))) throw new Error(`${c.name}'s command was changed, so SahilBot won't run it. Remove the app and connect it again.`)
         const env = Object.fromEntries(Object.entries({ ...process.env, ...(c.env ?? {}) }).filter(([k, v]) => v !== undefined && !SAFE_ENV_BLOCK.test(k))) as Record<string, string>
         await client.connect(new StdioClientTransport({ command: c.command!, args: c.args ?? [], env, stderr: 'ignore' }))
-      } else if (preset?.auth === 'apikey' && preset.apiKey) {
-        // The user's own key, added to this connection's requests only (never to c.url).
+      } else if (preset?.apiKey && (preset.auth === 'apikey' || this.secrets.get(keySecret(id)))) {
+        // The user's own key (an apikey app, or "Use an API key instead" on a one-click app), added to
+        // this connection's requests only (never to c.url).
         const key = this.secrets.get(keySecret(id))
         if (!key) throw new Error(apiKeyNeeded(preset))
         // The key only ever goes to the app's own server: a saved URL edited to point anywhere else is refused.
@@ -1744,16 +1907,31 @@ export class Connectors {
       } else {
         const local = c.preset && isLocalPreset({ id: c.preset }) ? LOCAL_SERVERS[c.preset] : undefined
         if (local && (local.kind !== 'remote' || c.url !== local.url)) throw new Error(`${c.name}'s address was changed, so SahilBot won't connect to it. Remove the app and connect it again.`)
-        // Google apps share the client from "Set up Google once" unless this connector has its own.
+        // Which OAuth client signs in, first that applies: this connector's own (its one-time setup),
+        // the user's shared Google client ("Use your own app" for Google), SahilBot's built-in client
+        // (resources/oauth-clients.json), or none (the server registers SahilBot itself, DCR).
         const isGoogle = preset?.auth === 'google'
         const shared = isGoogle ? this.sharedGoogle() : null
-        const clientId = c.clientId ?? shared?.clientId
-        const secret = this.secrets.get(`mcp:${id}:clientSecret`) ?? (c.clientId ? undefined : shared?.clientSecret)
+        const builtin = !c.clientId && !shared && c.url === preset?.url ? this.builtin(preset) : undefined
+        const clientId = c.clientId ?? shared?.clientId ?? builtin?.clientId
+        const secret = c.clientId ? this.secrets.get(`mcp:${id}:clientSecret`) ?? undefined : shared ? shared.clientSecret : builtin?.clientSecret
         if (isGoogle && !clientId) throw new Error(GOOGLE_SETUP_NEEDED)
         if (preset?.auth === 'oauth-static' && !clientId) throw new Error(setupNeeded(preset))
-        // A pre-registered client (not Google's Desktop client, which takes any loopback port) signs in on the fixed redirect URL it was registered with.
-        const fixedRedirect = clientId && !isGoogle ? redirectFor(c.preset) : undefined
-        auth = new Oauth(id, this.secrets, { staticClient: clientId ? { client_id: clientId, ...(secret ? { client_secret: secret } : {}) } : undefined, fixedRedirect, interactive, open: this.opts.openExternal })
+        // A pre-registered client signs in on the exact redirect URL it was registered with. The user's
+        // Google Desktop client (and a built-in "loopback" one) takes any loopback port instead.
+        const fixedRedirect = builtin ? (builtin.redirect === 'loopback' ? undefined : builtin.redirect) : clientId && !isGoogle ? redirectFor(c.preset) : undefined
+        // Tokens belong to the client that got them: a different client now (the user switched to their
+        // own app, or back to SahilBot's) signs in again instead of refreshing with the wrong one.
+        const ref = clientId ?? 'dcr'
+        const refKey = `mcp:${id}:clientRef`
+        const prevRef = this.secrets.get(refKey)
+        if (prevRef && prevRef !== ref) new Oauth(id, this.secrets).invalidateCredentials('all')
+        if (prevRef !== ref) this.secrets.set(refKey, ref)
+        auth = new Oauth(id, this.secrets, {
+          staticClient: clientId ? { client_id: clientId, ...(secret ? { client_secret: secret } : {}) } : undefined,
+          fixedRedirect, interactive, open: this.opts.openExternal, scope: builtin?.scopes, appName: c.name,
+          onSignedIn: () => this.opts.onSignedIn?.(c.name)
+        })
         const signedInBefore = auth.signedInBefore()
         await auth.listen()
         const url = new URL(c.url!)
@@ -1812,7 +1990,12 @@ export class Connectors {
         if (interactive) return this.connect(id, interactive, fromRetry)
       }
       const localHint = c.preset && isLocalPreset({ id: c.preset }) ? LOCAL_SERVERS[c.preset].hint : undefined
-      const msg = localHint ? `${raw.replace(/[.\s]+$/, '')}. ${localHint}` : preset?.auth === 'apikey' ? explainKeyError(raw, preset) : c.kind === 'remote' ? explainAuthError(raw, { name: c.name, url: c.url, hasSetup: !!preset?.setup, staticClient: !!(c.clientId || preset?.auth === 'google'), redirect: c.clientId ? redirectFor(c.preset) : undefined }) : raw
+      const usedKey = !!preset?.apiKey && (preset.auth === 'apikey' || !!this.secrets.get(keySecret(id)))
+      const builtinUsed = !c.clientId && !(preset?.auth === 'google' && this.googleClient()) && c.url === preset?.url ? this.builtin(preset) : undefined
+      const msg = localHint ? `${raw.replace(/[.\s]+$/, '')}. ${localHint}`
+        : usedKey && preset ? explainKeyError(raw, preset)
+        : c.kind === 'remote' ? explainAuthError(raw, { name: c.name, url: c.url, hasSetup: !!preset?.setup, staticClient: !!(c.clientId || preset?.auth === 'google' || builtinUsed), builtin: !!builtinUsed, redirect: c.clientId ? redirectFor(c.preset) : builtinUsed && builtinUsed.redirect !== 'loopback' ? builtinUsed.redirect : undefined })
+        : raw
       const reason = connectorReason(msg)
       const st: ConnectorStatus = { id, state: 'error', tools: 0, error: msg.slice(0, 400), ...(reason ? { reason } : {}) }
       this.setStatus(st)

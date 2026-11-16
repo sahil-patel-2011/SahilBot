@@ -161,7 +161,7 @@ export class BatchManager {
 
   private creds(): AnthropicCreds {
     const c = this.d.access.anthropic()
-    if (!c) throw new Error(this.d.access.cloudOn() ? 'No Anthropic API key is saved (Settings → API Keys & Servers).' : 'Cloud models are switched off, so batches can\'t run.')
+    if (!c) throw new Error(this.d.access.cloudOn() ? 'No Anthropic API key is saved (Settings → Models & Keys).' : 'Cloud models are switched off, so batches can\'t run.')
     return c
   }
 

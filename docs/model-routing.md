@@ -248,18 +248,18 @@ Each model on **Settings → Models → Installed and available** has a **Contex
 
 ## What you pick is what happens
 
-What the app does with each manual choice (tests in `tests/unit/manual-choices.test.ts`; the rules are in `src/main/agent/choices.ts`):
+What the app does with each manual choice in a regular chat (SahilBot's own chats and projects; tests in `tests/unit/manual-choices.test.ts`; the rules are in `src/main/agent/choices.ts`). Bots are the exception: they always choose by themselves (last row).
 
 | Choice | What the app does |
 |---|---|
-| Model (chat, bot, default) | Used for every step. If it's gone (deleted, key removed), the chat says so and that chat, bot or default moves to Auto. If it errors after retries, Auto's fallback for the request answers ([Failures](#failures-and-fallbacks)) and the chat says which and why: "Claude Opus 5.5 is unavailable (rate limited); used Claude Sonnet 5.5 for the rest of this task." It is still tried first on the next request. A picked model is never swapped for making invalid tool calls; only Auto's own picks are. |
-| Effort (chat, bot, default) | Sent exactly on every step: no floors, no adaptive shift, no escalation. Each provider maps it to the nearest level the model accepts. |
+| Model (chat, default) | Used for every step. If it's gone (deleted, key removed), the chat says so and that chat or the default moves to Auto. If it errors after retries, Auto's fallback for the request answers ([Failures](#failures-and-fallbacks)) and the chat says which and why: "Claude Opus 5.5 is unavailable (rate limited); used Claude Sonnet 5.5 for the rest of this task." It is still tried first on the next request. A picked model is never swapped for making invalid tool calls; only Auto's own picks are. |
+| Effort (chat, default) | Sent exactly on every step: no floors, no adaptive shift, no escalation. Each provider maps it to the nearest level the model accepts. |
 | Context window (per model) | Used exactly, clamped only to the provider's maximum. |
-| Plan first, Team, Deep Research | Sent as chosen. Each makes the run full agent work, and each sets a difficulty floor. Deep Research turns on its team. |
-| Heavy, Council | Exclusive in the composer: turning one on hides the other modes, and the main process enforces the same if a message arrives with several. |
+| Plan first, Max, Deep Research | Sent as chosen. Each makes the run full agent work, and each sets a difficulty floor. Deep Research turns on its team. Max is one mode for many agents: its strategy planner (`src/main/agent/max/planner.ts`, local rules plus the task classifier, no model call) picks a research team, an idea swarm, competing attempts with a judge, or a hybrid (explore first, then judged attempts on the deliverable), and one live card shows the choice and why. It replaces the older Team of Experts, Swarm and Heavy toggles. |
+| Council | Exclusive in the composer: turning it on turns Max off (and the other way round), and the main process enforces the same if a message arrives with both. |
 | Permission mode | The chat's mode is left as chosen. It is only ever made stricter, for a handoff from a stricter bot or untrusted relayed content (security). |
 | Fast mode | A per-model "on" / "off" / "ultrafast" is honored exactly. Auto's "only where speed matters" rule applies only to models Auto picked. |
-| Per-bot model and effort | Used for the bot's chats. The chat's own pick wins over the bot's. |
+| Bots: model and effort | Never set per bot. A bot's chats (and a group's) always route as Auto (model) and Auto (thinking): the bot chooses for the best result on each request. Stored `Space.model` / `Space.effort` from older installs and picks made in a bot's chat are ignored, and cleared once on start (`spaces.ts` `migrateBotModelEffort`; the columns stay). The app default's Auto variant still applies (Auto (local) stays local, Auto (cloud) stays cloud); a concrete default model doesn't. In a bot's chat the composer's picker shows "Auto (bot)" read-only for model and thinking (permissions stay editable). Helpers keep the model their orchestrator assigned. |
 
 ## Simulated guarantees
 

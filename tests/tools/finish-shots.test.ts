@@ -119,10 +119,10 @@ test('finishing-pass screenshots', async () => {
 
   await step(page, 'heavy-chip', async () => {
     await page.click('[data-testid="modes-menu"]')
-    await page.click('[data-testid="heavy-toggle"]')
+    await page.click('[data-testid="max-toggle"]')
     await shoot(page, 'composer-heavy-on')
     await page.click('[data-testid="modes-menu"]')
-    await page.click('[data-testid="heavy-toggle"]')
+    await page.click('[data-testid="max-toggle"]')
   })
 
   await step(page, 'panel', async () => {

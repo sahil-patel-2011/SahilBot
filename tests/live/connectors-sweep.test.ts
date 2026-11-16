@@ -1,5 +1,5 @@
 import { lookup } from 'node:dns/promises'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import type { ConnectorPreset } from '@shared/types'
@@ -9,7 +9,9 @@ import { LOCAL_SERVERS, PRESETS, iconDomain, isLocalPreset } from '../../src/mai
 // read-only probes used to verify the catalog by hand. Free (no model calls) and safe: it never
 // registers a client, signs in, or sends a credential. Run with
 //   LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/connectors-sweep.test.ts
-// It writes docs/connectors-status.json and docs/connectors-status.md.
+// It writes docs/connectors-status.json and docs/connectors-status.md. To re-check only some apps
+// (their rows are replaced, the rest kept from the last full sweep):
+//   LIVE_SWEEP=1 LIVE_SWEEP_IDS=render,pagerduty,brevo npx vitest run --config vitest.live.config.mts tests/live/connectors-sweep.test.ts
 
 const UA = 'SahilBot-readiness-sweep/1 (read-only; no sign-in)'
 const TIMEOUT = 15_000
@@ -201,10 +203,12 @@ export async function probe(p: ConnectorPreset): Promise<SweepRow> {
       break
     case 'none':
       if (!row.serverName) broken(`expected an open server, initialize answered ${init.res.status}${rpcError ? ` (${rpcError})` : ''}`)
+      else if (row.registration) row.notes.push(`open, and also offers OAuth with DCR (${new URL(row.registration).host}): stays no sign-in`)
       break
     case 'apikey':
       if (row.observed !== 'key' && !row.observed.startsWith('oauth')) broken(`expected the server to ask for an API key, it answered "${row.observed}"`)
-      if (row.registration) row.notes.push('server now also offers OAuth with DCR (could become one click)')
+      if (row.registration) row.notes.push(`server now also offers OAuth with DCR${row.pkceS256 === true ? ' + PKCE S256' : ''}${row.publicClients === true ? ' (public clients)' : ''}: could become one click if the vendor documents it`)
+      else if (as) row.notes.push(`OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app)`)
       break
     case 'google':
       if (!isGoogle) broken(`expected Google sign-in (accounts.google.com), got ${row.authServer ?? 'no authorization server'}`)
@@ -255,15 +259,24 @@ function markdown(rows: SweepRow[], date: string, skipped: ConnectorPreset[]): s
 
 describe.skipIf(!process.env.LIVE_SWEEP)('live: connector readiness sweep', () => {
   test('every catalog server still answers the way its preset expects', async () => {
-    const targets = PRESETS.filter((p) => /^https:\/\//.test(p.url) && p.auth !== 'browser' && p.auth !== 'app' && !isLocalPreset(p))
-    const skipped = PRESETS.filter((p) => !targets.includes(p))
+    const all = PRESETS.filter((p) => /^https:\/\//.test(p.url) && p.auth !== 'browser' && p.auth !== 'app' && !isLocalPreset(p))
+    const skipped = PRESETS.filter((p) => !all.includes(p))
     // Every remote catalog server is probed; the only entries skipped are built in, browser, custom and local ones.
     expect(skipped.filter((p) => !['browser', 'app'].includes(p.auth) && p.id !== 'custom' && !isLocalPreset(p)).map((p) => p.id)).toEqual([])
     expect(skipped.filter(isLocalPreset).map((p) => p.id).sort()).toEqual(Object.keys(LOCAL_SERVERS).sort())
-    const rows = await mapLimit(targets, 8, (p) => probe(p).catch((e) => ({ id: p.id, name: p.name, auth: p.auth, url: p.url, status: 'unreachable' as Status, observed: 'unreachable', problems: [String(e)], notes: [] })))
+    const only = (process.env.LIVE_SWEEP_IDS ?? '').split(',').map((x) => x.trim()).filter(Boolean)
+    const targets = only.length ? all.filter((p) => only.includes(p.id)) : all
+    const probed = await mapLimit(targets, 8, (p) => probe(p).catch((e) => ({ id: p.id, name: p.name, auth: p.auth, url: p.url, status: 'unreachable' as Status, observed: 'unreachable', problems: [String(e)], notes: [] })))
     const date = new Date().toISOString().slice(0, 10)
     const dir = resolve('docs')
     mkdirSync(dir, { recursive: true })
+    // A partial run replaces just its rows (dated), keeping the rest from the last sweep, in catalog order.
+    let rows: SweepRow[] = probed
+    if (only.length) {
+      const prev = existsSync(resolve(dir, 'connectors-status.json')) ? (JSON.parse(readFileSync(resolve(dir, 'connectors-status.json'), 'utf8')).rows as SweepRow[]) : []
+      const fresh = new Map(probed.map((r) => [r.id, { ...r, notes: [...r.notes, `re-checked ${date}`] }]))
+      rows = all.map((p) => fresh.get(p.id) ?? prev.find((r) => r.id === p.id)).filter((r): r is SweepRow => !!r)
+    }
     writeFileSync(resolve(dir, 'connectors-status.json'), JSON.stringify({ date, rows }, null, 2) + '\n')
     writeFileSync(resolve(dir, 'connectors-status.md'), markdown(rows, date, skipped))
     const bad = rows.filter((r) => r.status === 'broken' || r.status === 'unreachable')

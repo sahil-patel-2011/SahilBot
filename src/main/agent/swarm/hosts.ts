@@ -3,7 +3,8 @@ import type { CouncilBoard, Message, ModelInfo, PendingRequest, Settings, Space,
 import type { Db } from '../../db'
 import { autoVariant } from '../../llm/router'
 import { classifyTask as classifyRoute } from '../../llm/task-classifier'
-import { botSwarmConfig, canSwarm, councilConfig } from './bot-config'
+import { botMaxConfig, canSwarm, councilConfig } from './bot-config'
+import { maxSessionFor } from '../max/session'
 import type { ToolOutput, ThreadState } from '../types'
 import { BOT_SWARM_LIMIT, rateLimitedRecently, runBotSwarm, swarmFit, type BotSwarmHost, type HelperResult, type SwarmArgs } from './bot-swarm'
 import { isCloudInfo, swarmCapacity } from './capacity'
@@ -55,20 +56,25 @@ export interface AgentKit {
 /** Bots (not SahilBot's own chats) work across providers; normal agent chats stay with the lead's provider. */
 export const crossProviderFor = (space: Pick<Space, 'kind' | 'isMain'> | undefined): boolean => !!space && space.kind === 'bot' && !space.isMain
 
-/** This run's swarm state: the bot's setting lists the tool; a Swarm request (toggle, Always, Auto's hint) loads it. */
+/**
+ * This run's Max and swarm state. The max tool is listed for leads (never helpers) unless the bot's Max setting
+ * is Off; Max on for this request (the composer, the bot's Always) lists it whatever the setting. The swarm tool
+ * is the max tool's older name: still runs for chats that call it (in-flight threads), listed only when loaded.
+ */
 export function applySwarmState(state: ThreadState, s: Settings, space: Space | undefined, helper: boolean, messages: () => Message[], load: (names: string[]) => void): void {
-  if (helper || state.depth || !canSwarm(space)) { state.swarm = undefined; return }
-  const mode = botSwarmConfig(s.botSwarm, space!.id).mode
-  state.swarm = mode === 'off' ? undefined : mode
-  if (!state.swarm) return
+  if (helper || state.depth) { state.swarm = undefined; state.max = undefined; return }
   const last = [...messages()].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
-  if (last?.meta?.swarm || last?.meta?.swarmHint) load(['swarm'])
+  const mode = botMaxConfig(s, space?.id).mode
+  const on = !!last?.meta?.max
+  state.max = on ? 'on' : canSwarm(space) ? mode : 'auto'
+  state.swarm = on ? (mode === 'off' ? 'auto' : mode) : canSwarm(space) && mode !== 'off' ? mode : undefined
+  if (state.max !== 'off' && (on || last?.meta?.maxHint || last?.meta?.swarm || last?.meta?.swarmHint)) load(['max'])
 }
 
 /** The note and flags a message gets for swarms: the toggle or Always turn it on; Auto hints when it fits. */
 export function swarmNote(s: Settings, space: Space | undefined, text: string, o: { swarm?: boolean; attachments?: number; unattended?: boolean }): { note?: string; meta?: Record<string, unknown> } {
   if (!canSwarm(space)) return {}
-  const cfg = botSwarmConfig(s.botSwarm, space!.id)
+  const cfg = botMaxConfig(s, space!.id)
   if (cfg.mode === 'off') return {}
   const budget = o.unattended ? ` This runs unattended: the swarm must fit this bot's routine budget ($${cfg.routineUsd.toFixed(2)}) and never asks; it shrinks or is skipped if over.` : ''
   if (o.swarm || cfg.mode === 'always') {
@@ -83,6 +89,9 @@ export function swarmNote(s: Settings, space: Space | undefined, text: string, o
 function card(kit: AgentKit, threadId: string, content: string, key: 'swarm' | 'council', idKey: 'swarmId' | 'councilId', id: string): (board: SwarmBoard | CouncilBoard) => void {
   let m: Message | undefined
   return (board) => {
+    // A Max run shows one card: the swarm is a phase of it.
+    const mx = key === 'swarm' ? maxSessionFor(threadId) : undefined
+    if (mx) { mx.setSwarm(board as SwarmBoard); return }
     if (!m) m = kit.db.insertMessage({ threadId, role: 'assistant', content, kind: 'notice', status: 'done', meta: { [key]: board, [idKey]: id } })
     else { m.meta = { ...m.meta, [key]: board }; kit.db.updateMessage(m) }
     kit.emit(threadId, { ...m, meta: { ...m.meta } })
@@ -90,7 +99,7 @@ function card(kit: AgentKit, threadId: string, content: string, key: 'swarm' | '
 }
 
 /** Live cost, what it's doing and its text so far, from a helper's own messages. */
-function progressOf(kit: AgentKit, childId: string): { usd: number; tokens: number; detail?: string; text?: string } {
+export function progressOf(kit: AgentKit, childId: string): { usd: number; tokens: number; detail?: string; text?: string } {
   const ms = kit.db.listMessages(childId)
   const last = [...ms].reverse().find((m) => m.role === 'tool' || (m.role === 'assistant' && m.content))
   const text = [...ms].reverse().find((m) => m.role === 'assistant' && m.content)?.content
@@ -98,16 +107,18 @@ function progressOf(kit: AgentKit, childId: string): { usd: number; tokens: numb
 }
 
 /** Runs the swarm tool for the lead. */
-export async function runSwarmTool(kit: AgentKit, a: SwarmArgs, o: { callId: string; budgetChars?: number }): Promise<ToolOutput> {
+export async function runSwarmTool(kit: AgentKit, a: SwarmArgs, o: { callId: string; budgetChars?: number; max?: boolean }): Promise<ToolOutput> {
   const { thread, space } = kit
-  const cfg = botSwarmConfig(kit.settings.botSwarm, space?.id)
-  if (!canSwarm(space) || cfg.mode === 'off') throw new Error('Swarms are off for this bot (its Swarm setting). Do the work yourself.')
+  const cfg = botMaxConfig(kit.settings, space?.id)
+  // Max runs swarms anywhere (projects and SahilBot's chats too); the old swarm tool only in bots with Max on.
+  const maxOn = o.max || !!maxSessionFor(thread.id)
+  if (!maxOn && (!canSwarm(space) || cfg.mode === 'off')) throw new Error('Max is off for this bot (its Max setting). Do the work yourself.')
   if (thread.parentId) throw new Error('Helpers and council members can\'t start swarms. Do the work yourself, or split it with the agents tool.')
   const swarm = swarmConfig(kit.settings.swarm)
   const swarmId = `swarm-${o.callId.replace(/[^\w-]/g, '').slice(-6)}${randomUUID().slice(0, 4)}`
   const publish = card(kit, thread.id, `Swarm: ${a.goal?.slice(0, 80) ?? ''}`, 'swarm', 'swarmId', swarmId)
   const host: BotSwarmHost = {
-    swarmId, threadId: thread.id, bot: { id: space!.id, name: space!.name }, cfg, swarm,
+    swarmId, threadId: thread.id, bot: { id: space?.id ?? thread.spaceId, name: space?.name ?? 'SahilBot' }, cfg, swarm,
     lead: kit.lead, usable: kit.usable, category: classifyRoute(a.goal ?? '').category,
     localOnly: autoVariant(kit.requested) === 'auto:local', crossProvider: crossProviderFor(space),
     cloud: kit.cloud, label: kit.label,

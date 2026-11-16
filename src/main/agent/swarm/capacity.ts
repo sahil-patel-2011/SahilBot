@@ -56,9 +56,11 @@ export function helperModelFor(lead: string, setting: string, usable: ModelInfo[
  * strongest cloud model, premium Claude only when the lead already is one; local leads keep their model,
  * so nothing is sent to the cloud and no second local model has to load).
  */
-export function judgeModelFor(lead: string, usable: ModelInfo[], cloud: boolean): string {
+export function judgeModelFor(lead: string, usable: ModelInfo[], cloud: boolean, crossProvider = true): string {
   if (!cloud) return lead
-  const best = usable.filter((m) => isCloudInfo(m) && toolsOk(m) && (!isPremiumClaude(m.id) || isPremiumClaude(lead))).sort(byStrength)[0]
+  // Agent chats (crossProvider false) stay with the lead's provider: Max's provider rule.
+  const leadProvider = usable.find((m) => m.id === lead)?.provider
+  const best = usable.filter((m) => isCloudInfo(m) && toolsOk(m) && (!isPremiumClaude(m.id) || isPremiumClaude(lead)) && (crossProvider || !leadProvider || m.provider === leadProvider)).sort(byStrength)[0]
   return best?.id ?? lead
 }
 
@@ -68,13 +70,15 @@ export function judgeModelFor(lead: string, usable: ModelInfo[], cloud: boolean)
  * provider is keyed (e.g. 2× Sonnet + 1× Opus + 1× GPT); the rest on the lead's. An explicit list is used
  * as given (unusable ids fall back to the lead's model) and padded with the lead's.
  */
-export function heavyMix(lead: string, mix: 'auto' | 'same' | string[], usable: ModelInfo[], n: number, cloud: boolean): string[] {
+export function heavyMix(lead: string, mix: 'auto' | 'same' | string[], usable: ModelInfo[], n: number, cloud: boolean, crossProvider = true): string[] {
   if (!cloud || mix === 'same') return Array(n).fill(lead)
-  if (Array.isArray(mix)) return Array.from({ length: n }, (_, i) => (mix[i] && usable.some((m) => m.id === mix[i] && toolsOk(m)) ? mix[i] : lead))
-  const strongest = judgeModelFor(lead, usable, cloud)
-  const S = strongest !== lead ? strongest : undefined
   const leadProvider = usable.find((m) => m.id === lead)?.provider
-  const other = usable.filter((m) => isCloudInfo(m) && toolsOk(m) && m.provider !== leadProvider && !isPremiumClaude(m.id) && m.id !== S).sort(byStrength)[0]?.id
+  // Agent chats (crossProvider false) never send an attempt to another provider.
+  const allowed = (id: string): boolean => crossProvider || !leadProvider || usable.find((m) => m.id === id)?.provider === leadProvider
+  if (Array.isArray(mix)) return Array.from({ length: n }, (_, i) => (mix[i] && usable.some((m) => m.id === mix[i] && toolsOk(m)) && allowed(mix[i]) ? mix[i] : lead))
+  const strongest = judgeModelFor(lead, usable, cloud, crossProvider)
+  const S = strongest !== lead ? strongest : undefined
+  const other = crossProvider ? usable.filter((m) => isCloudInfo(m) && toolsOk(m) && m.provider !== leadProvider && !isPremiumClaude(m.id) && m.id !== S).sort(byStrength)[0]?.id : undefined
   if (n === 2) return [lead, other ?? S ?? lead]
   if (n === 3) return [lead, S ?? lead, other ?? lead]
   return Array.from({ length: n }, (_, i) => (i === 2 ? S ?? lead : i === 3 ? other ?? lead : lead))

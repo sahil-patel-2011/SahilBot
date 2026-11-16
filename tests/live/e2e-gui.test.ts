@@ -105,7 +105,7 @@ describe.skipIf(!KEY)('live e2e: the full app on Claude through the GUI', () => 
       await page.locator('[data-testid="space-item"]', { hasText: 'Ideas Lab' }).click()
       await page.waitForSelector('[data-testid="composer-input"]')
       await page.click('[data-testid="modes-menu"]').catch(() => undefined)
-      await page.click('[data-testid="swarm-toggle"]').catch(() => undefined)
+      await page.click('[data-testid="max-toggle"]').catch(() => undefined)
       await page.keyboard.press('Escape').catch(() => undefined)
       await snap('swarm-armed')
       const t0 = Date.now()

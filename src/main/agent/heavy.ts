@@ -122,16 +122,36 @@ export interface HeavyHost {
   notice(text: string): void
   /** Ticks for live board updates (tests shorten it). */
   tickMs?: number
+  /** Bots mix providers; agent chats keep every attempt and the judge on the lead's provider (Max's rule). */
+  crossProvider?: boolean
+  /** A routine or goal (Max unattended): never asks; the run must fit budgetUsd. */
+  unattended?: boolean
+  /** This run's hard cap when lower than the swarm cap (a routine's Max budget). */
+  budgetUsd?: number
+  /** What the cost card and notices call it ("Max · judged attempts"; default Heavy). */
+  title?: string
 }
 
-export function heavyPlan(h: Pick<HeavyHost, 'cfg' | 'lead' | 'usable' | 'cloud'>): { models: string[]; judge: string; estimate: number } {
+export function heavyPlan(h: Pick<HeavyHost, 'cfg' | 'lead' | 'usable' | 'cloud' | 'crossProvider'>): { models: string[]; judge: string; estimate: number } {
   const cloud = h.cloud(h.lead)
-  const models = heavyMix(h.lead, h.cfg.mix, h.usable, h.cfg.attempts, cloud)
-  const judge = judgeModelFor(h.lead, h.usable, cloud)
+  const models = heavyMix(h.lead, h.cfg.mix, h.usable, h.cfg.attempts, cloud, h.crossProvider ?? true)
+  const judge = judgeModelFor(h.lead, h.usable, cloud, h.crossProvider ?? true)
   const attempts = models.reduce((s, m) => s + estimateFor(m, h.cloud(m), TYPICAL_ATTEMPT), 0)
   // The judge reads every answer twice (compare, then write) and writes a full answer.
   const judging = h.cloud(judge) ? cost(judge, 8_000 + models.length * 3_000, 1_500) + cost(judge, 8_000 + models.length * 3_500, 3_000) : 0
   return { models, judge, estimate: attempts + judging }
+}
+
+/** The cap one Heavy run works under: the swarm cap, or a lower budget (a routine's). */
+export const heavyCap = (h: Pick<HeavyHost, 'swarm' | 'budgetUsd'>): number => (h.budgetUsd !== undefined ? Math.max(0, Math.min(h.budgetUsd, h.swarm.maxUsd)) : h.swarm.maxUsd)
+
+/**
+ * The most attempts (down to 2) whose estimate fits `cap`; 0 when even two don't (on local models everything
+ * fits: nothing is paid). Max shrinks a routine's judged attempts to its budget instead of asking.
+ */
+export function fitHeavy(h: Pick<HeavyHost, 'cfg' | 'lead' | 'usable' | 'cloud' | 'crossProvider'>, cap: number): number {
+  for (let n = h.cfg.attempts; n >= 2; n--) if (heavyPlan({ ...h, cfg: { ...h.cfg, attempts: n } }).estimate <= cap + 1e-9) return n
+  return 0
 }
 
 const countLine = (models: string[], label: (m: string) => string): string => {
@@ -144,13 +164,14 @@ const countLine = (models: string[], label: (m: string) => string): string => {
 export async function runHeavy(h: HeavyHost): Promise<'finished' | 'stopped' | 'error'> {
   const { models, judge, estimate } = heavyPlan(h)
   const N = models.length
-  const cap = h.swarm.maxUsd
-  if (h.cloud(h.lead) || models.some((m) => h.cloud(m)) || h.cloud(judge)) {
+  const cap = heavyCap(h)
+  // Unattended (a routine under Max): never asks; the caller sized it to the budget (fitHeavy).
+  if (!h.unattended && (h.cloud(h.lead) || models.some((m) => h.cloud(m)) || h.cloud(judge))) {
     if (estimate > h.swarm.askAboveUsd) {
-      const summary = `Run Heavy: ${N} attempts (${countLine(models, h.label)}) + judge ${h.label(judge)} · est. ${usd(estimate)} · cap ${usd(cap)}`
+      const summary = `${h.title ?? 'Run Heavy'}: ${N} attempts (${countLine(models, h.label)}) + judge ${h.label(judge)} · est. ${usd(estimate)} · cap ${usd(cap)}`
       const ok = await h.approve(summary, { kind: 'heavy', count: N, model: h.label(judge), estimateUsd: estimate, capUsd: cap })
       if (!ok) {
-        h.notice('Heavy run cancelled before it started: nothing was spent. Send the message again without Heavy for a normal answer.')
+        h.notice(h.title ? `${h.title} cancelled before they started: nothing was spent. Send the message again without Max for a normal answer.` : 'Heavy run cancelled before it started: nothing was spent. Send the message again without Heavy for a normal answer.')
         return 'stopped'
       }
     }

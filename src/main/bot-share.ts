@@ -278,7 +278,7 @@ export interface DuplicateDeps {
   routines(spaceId: string): ScheduledTask[]
   createBot(name: string, color: string, shape: BotShape): { spaceId: string; threadId: string }
   setPrompt(spaceId: string, text: string): void
-  /** Label, model and notifications. */
+  /** Label and notifications (a bot's model is always Auto: never copied). */
   updateSpace(spaceId: string, patch: Partial<Pick<Space, 'label' | 'model' | 'notify'>>): void
   /** Creates it paused. */
   createRoutine(r: { title: string; prompt: string; schedule: Schedule; spaceId: string }): void
@@ -300,7 +300,7 @@ export function duplicateBot(id: string, d: DuplicateDeps): { spaceId: string; t
   const prompt = d.getPrompt(src.id)
   const made = d.createBot(copyName(src.name), src.color, src.shape === 'mascot' ? 'blob' : src.shape)
   d.setPrompt(made.spaceId, prompt)
-  d.updateSpace(made.spaceId, { label: src.label ?? null, model: src.model, notify: src.notify !== false })
+  d.updateSpace(made.spaceId, { label: src.label ?? null, notify: src.notify !== false })
   let copied = 0
   for (const r of d.routines(src.id)) {
     try { d.createRoutine({ title: r.title, prompt: r.prompt, schedule: r.schedule, spaceId: made.spaceId }); copied++ } catch { /* a one-off in the past can't be copied */ }

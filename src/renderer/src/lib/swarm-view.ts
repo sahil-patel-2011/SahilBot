@@ -1,4 +1,4 @@
-import type { CouncilBoard, HeavyBoard, Message, SwarmBoard, TeamMember } from '@shared/types'
+import type { CouncilBoard, HeavyBoard, MaxBoard, Message, SwarmBoard, TeamMember } from '@shared/types'
 
 // Pure helpers for the Team board, the Heavy card and the composer's mode chips (kept out of the
 // components so they can be tested without a window).
@@ -40,12 +40,13 @@ export function heavyOf(m: Pick<Message, 'kind' | 'meta'>): { board: HeavyBoard;
 }
 
 /**
- * The mode flags a message goes out with. Heavy and Council replace the others (their members can't ask
- * questions or run the chat's team); Deep Research always brings the team; Swarm (bot chats) goes with Team,
- * Deep Research and Plan first.
+ * The mode flags a message goes out with. Council replaces the others (its members can't ask questions or run the
+ * chat's team); Max goes with Plan first and Deep Research (it then researches with a team); Deep Research always
+ * brings the team. heavy / swarm / team are the older modes' flags (Max covers them; kept for queued messages).
  */
-export function modeFlags(o: { team?: boolean; deep?: boolean; planFirst?: boolean; heavy?: boolean; swarm?: boolean; council?: true | string[] | null }): { team: boolean; deepResearch: boolean; planFirst: boolean; heavy?: true; swarm?: true; council?: true | string[] } {
+export function modeFlags(o: { team?: boolean; deep?: boolean; planFirst?: boolean; heavy?: boolean; swarm?: boolean; max?: boolean; council?: true | string[] | null }): { team: boolean; deepResearch: boolean; planFirst: boolean; heavy?: true; swarm?: true; max?: true; council?: true | string[] } {
   if (o.council) return { team: false, deepResearch: false, planFirst: false, council: o.council }
+  if (o.max) return { team: !!o.deep, deepResearch: !!o.deep, planFirst: !!o.planFirst, max: true }
   if (o.heavy) return { team: false, deepResearch: false, planFirst: false, heavy: true }
   return { team: !!(o.team || o.deep), deepResearch: !!o.deep, planFirst: !!o.planFirst, ...(o.swarm ? { swarm: true as const } : {}) }
 }
@@ -72,8 +73,30 @@ export function askBotOf(m: Pick<Message, 'kind' | 'meta'>): AskBotView | undefi
   return m.kind === 'notice' && v && typeof v.bot === 'string' ? v : undefined
 }
 
-/** A notice that carries one of the swarm cards (swarm, council, ask_bot). */
-export const isCardNotice = (m: Pick<Message, 'kind' | 'meta'>): boolean => !!(swarmOf(m) || councilOf(m) || askBotOf(m))
+/** The Max card a notice carries (meta.max), if it does. */
+export function maxOf(m: Pick<Message, 'kind' | 'meta'>): MaxBoard | undefined {
+  const b = m.meta?.max as MaxBoard | undefined
+  return m.kind === 'notice' && b && Array.isArray(b.phases) && typeof b.strategy === 'string' ? b : undefined
+}
+
+/** Team calls (agents / max) shown inside a Max card: their own Team card is left out of the chat. */
+export function maxTeamCalls(messages: Array<Pick<Message, 'kind' | 'meta'>>): Set<string> {
+  const ids = new Set<string>()
+  for (const m of messages) for (const t of maxOf(m)?.teams ?? []) ids.add(t.callId)
+  return ids
+}
+
+/** Everything a Max run spent and how many agents it ran, across its phases. */
+export function maxTotals(b: MaxBoard): { usd: number; agents: number; done: number } {
+  const team = (b.teams ?? []).flatMap((t) => t.members)
+  const usd = teamTotals(team).usd + (b.swarm?.spentUsd ?? 0) + (b.heavy?.spentUsd ?? 0)
+  const agents = team.length + (b.swarm?.helpers.length ?? 0) + (b.heavy?.attempts.length ?? 0)
+  const done = team.filter((m) => m.status === 'done').length + (b.swarm?.helpers.filter((h) => h.status === 'done').length ?? 0) + (b.heavy?.attempts.filter((a) => a.status === 'done').length ?? 0)
+  return { usd, agents, done }
+}
+
+/** A notice that carries one of the swarm cards (Max, swarm, council, ask_bot). */
+export const isCardNotice = (m: Pick<Message, 'kind' | 'meta'>): boolean => !!(maxOf(m) || swarmOf(m) || councilOf(m) || askBotOf(m))
 
 /** Swarm progress for the card's header: done of total, ideas so far, the top-credited helpers. */
 export function swarmStats(b: SwarmBoard): { done: number; total: number; ideas: number; working: number; top: Array<{ n: number; count: number }> } {

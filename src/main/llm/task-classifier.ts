@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs'
 import type { Attachment, Effort, Tier } from '@shared/types'
 import { cadSignals } from '../cad/cad-intent'
+import { VIDEO_RE } from '../agent/video-intent'
 import { autoEffort } from './auto-effort'
 
 // One decision for every request: what kind of task it is (the routing table's category, routing-table.ts),
@@ -328,7 +329,7 @@ export const RULE_CONFIDENCE: Record<string, number> = {
   voice: 0.95, 'long-context': 0.95, 'follow-up': 0.9, 'follow-up:new': 0.8, 'deep-research': 0.95, 'small-talk': 0.95, empty: 0.85,
   incident: 0.85, 'computer-use': 0.9, 'computer-use:url': 0.9, shopping: 0.85, cad: 0.9,
   coding: 0.92, 'coding:project': 0.88, 'code-quick': 0.85, 'code-quick:snippet': 0.85,
-  'agent-tools:self': 0.9, 'agent-tools:relay': 0.9, 'agent-tools:mine': 0.9, 'agent-tools:files': 0.85, 'agent-tools:folder': 0.7,
+  'agent-tools:self': 0.9, 'agent-tools:relay': 0.9, 'agent-tools:mine': 0.9, 'agent-tools:files': 0.85, 'agent-tools:folder': 0.7, 'agent-tools:video': 0.85,
   math: 0.9, research: 0.85, office: 0.9, 'office:file': 0.9, vision: 0.9, 'role-prior': 0.75, 'research:role': 0.7, 'writing:role': 0.7,
   // Blind holdout 2 (written after tuning, measured before any fix): connector 2/4, writing 3/5.
   'agent-tools:connector': 0.75, writing: 0.8, 'office:weak': 0.6, 'agent-tools:weak': 0.6,
@@ -390,6 +391,8 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (cad.build) return { category: 'cad', rule: 'cad', why: cad.assembly ? 'builds a CAD assembly' : 'builds in CAD' }
     if (has(CAD_STRONG, t) || ((t.match(new RegExp(CAD_WEAK.source, 'g')) ?? []).length >= 2 && (question || has(/\b(design|model|make|add|print|export|thick\w*|mount)\b/, t))) || (has(CAD_WEAK, t) && (/\b(\d+ ?mm|nema|bracket|enclosure|housing|gearbox|tolerance|press[- ]fit|infill|layer height|nozzle|(a|the|my|waterproof|pla|petg|resin) print)\b/.test(t)) && (has(/\b(design|model|make|add|print|export|fillet|extrude|thick|wall|holes?)\b/, t) || question))) return { category: 'cad', rule: 'cad', why: 'CAD work' }
     if (/\.(step|stp|stl|sldprt|f3d|fcstd|iges?)\b/.test(fileNames)) return { category: 'cad', rule: 'cad', why: 'a CAD file' }
+    // A video made with the user's HeyGen app (tools/video.ts): credits and a file, so agent work.
+    if (!question && has(VIDEO_RE, t)) return { category: 'agent-tools', rule: 'agent-tools:video', why: 'makes a video with HeyGen' }
     if (has(MESSAGE_ON, t)) return { category: 'agent-tools', rule: 'agent-tools:self', why: 'a message on a chat app' }
     if (!officeFirst && (codeish || (ctx.codeProject && has(CODE_ACT, t) && !officeDeliverable && !has(WRITING, t)))) {
       const explainOnly = has(EXPLAIN_ONLY, t)

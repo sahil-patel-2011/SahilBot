@@ -64,9 +64,11 @@ function harness(models: ModelInfo[], extra: Partial<Settings> = {}) {
     counter: () => ({ count: async (t: string) => estimate(t) })
   })
   const space = db.createSpace('Alpha', '#000000')
-  const thread = (m: string | null = models[0].id): Thread => db.createThread(space.id, 'auto', m)
+  // SahilBot's own chats keep a picked model exactly; bots (Alpha) always route as Auto.
+  const main = db.createSpace('SahilBot', '#000000', { isMain: true })
+  const thread = (m: string | null = models[0].id, spaceId = space.id): Thread => db.createThread(spaceId, 'auto', m)
   const teams = (): TeamMember[][] => events.filter((e): e is Extract<ChatEvent, { type: 'team' }> => e.type === 'team').map((e) => e.members)
-  return { db, agent, events, settings, space, thread, teams }
+  return { db, agent, events, settings, space, main, thread, teams }
 }
 
 type Req = Record<string, any>
@@ -349,7 +351,7 @@ describe('Heavy mode', () => {
   test('N attempts on a model mix, a judge compares them, re-checks the contested point once, and writes the final answer', async () => {
     const h = harness([SONNET, OPUS, GPT], { swarm: { askAboveUsd: 100 }, heavy: { attempts: 3, mix: 'auto' } } as never)
     const seen = heavyRouter()
-    const t = h.thread('claude-sonnet-5-5')
+    const t = h.thread('claude-sonnet-5-5', h.main.id)
     expect(await (await h.agent.send({ threadId: t.id, text: 'What is the answer?', heavy: true })).done).toBe('finished')
     // 2 x the lead's... with 3 attempts: the lead's, the strongest, another provider's.
     const attemptModels = llm.requests.filter((r) => /Heavy attempt \d+ of 3/.test(sysOf(r)) && !lastUser(r).includes('[From the judge]')).map((r) => [Number(sysOf(r).match(/Heavy attempt (\d+)/)![1]), r.model]).sort()
@@ -398,7 +400,7 @@ describe('Heavy mode', () => {
   test('above the threshold it asks first; a no ends it before anything is spent', async () => {
     const h = harness([SONNET, OPUS], { heavy: { attempts: 3, mix: 'same' }, swarm: { askAboveUsd: 0.05 } } as never)
     heavyRouter()
-    const t = h.thread('claude-sonnet-5-5')
+    const t = h.thread('claude-sonnet-5-5', h.main.id)
     const done = (await h.agent.send({ threadId: t.id, text: 'Q?', heavy: true })).done
     const req = await answerNext(h.agent, t.id, 'deny')
     expect(req.summary).toMatch(/^Run Heavy: 3 attempts \(3× CLAUDE-SONNET-5-5\) \+ judge CLAUDE-OPUS-5-5 · est\. \$\d+\.\d\d · cap \$5\.00$/)

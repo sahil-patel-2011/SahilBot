@@ -63,7 +63,7 @@ export function explainStatus(status: number, detail: string, retryAfterS?: numb
   const d = detail ? ` Onshape said: ${detail.slice(0, 400)}` : ''
   switch (status) {
     case 400: return `Onshape rejected the request (400 Bad Request).${d} Check the ids, parameter names and values (read the element first to see what it has).`
-    case 401: return `Onshape did not accept the API keys (401 Unauthorized).${d} Fix: in Settings → API Keys & Servers → Onshape, paste a valid access key and secret key (create them at ${KEYS_URL}). Keys only work on the stack they were made on (cad.onshape.com vs a company's <name>.onshape.com), and signed requests need this Mac's clock within 5 minutes of the real time.`
+    case 401: return `Onshape did not accept the API keys (401 Unauthorized).${d} Fix: in Settings → Models & Keys → Advanced → Keys for tools (Onshape), paste a valid access key and secret key (create them at ${KEYS_URL}). Keys only work on the stack they were made on (cad.onshape.com vs a company's <name>.onshape.com), and signed requests need this Mac's clock within 5 minutes of the real time.`
     case 402: return `This Onshape account has used up its annual API call allowance (402).${d} Fix: wait for the plan's yearly reset or ask the team's Onshape admin about the limit; only successful calls count against it.`
     case 403: return `Onshape refused access (403 Forbidden).${d} Fix: make sure the document is shared with the account that owns the API keys, and that the key has the needed scope at ${KEYS_URL} (reading needs Read; changes need Write, and edit access to the document).`
     case 404: return `Onshape could not find that (404 Not Found).${d} Fix: check the document URL and ids (copy the URL from the browser with the right tab open); the element may have been deleted, belong to another workspace, or be a different kind (a Part Studio action on an assembly, for example).`
@@ -121,7 +121,7 @@ export class OnshapeClient {
     let method = verb
     const keys = this.o.keys()
     if (!keys?.accessKey || !keys.secretKey) {
-      throw new OnshapeError(`Onshape API keys aren't set up yet. Ask the user to create an API key pair at ${KEYS_URL} (Read scope to look at CAD; Write scope too for changes) and paste the access key and secret key in Settings → API Keys & Servers → Onshape, then press Test.`, 0)
+      throw new OnshapeError(`Onshape API keys aren't set up yet. Ask the user to create an API key pair at ${KEYS_URL} (Read scope to look at CAD; Write scope too for changes) and paste the access key and secret key in Settings → Models & Keys → Advanced → Keys for tools (Onshape), then press Test.`, 0)
     }
     let url = this.url(path, opts)
     const body = opts.body === undefined ? undefined : JSON.stringify(opts.body)

@@ -161,7 +161,8 @@ describe('speech output', () => {
 })
 
 describe('speech input', () => {
-  test('Whisper only with local on; OpenAI transcription when allowed with a key; else a note (never a Whisper download prompt)', () => {
+  test('speech recognition on this Mac by default (voice is the exception to local opt-in); OpenAI until it is ready; else a note', () => {
+    // localOn here is "Transcribe on this Mac" (Settings → Voice, default on), not local models.
     const base = { whisperReady: true, openaiKey: true, openaiAllowed: true }
     expect(chooseStt({ ...base, localOn: true })).toEqual({ kind: 'whisper' })
     expect(chooseStt({ ...base, localOn: false })).toEqual({ kind: 'openai' })
@@ -170,9 +171,9 @@ describe('speech input', () => {
     expect(chooseStt({ ...base, localOn: false, openaiKey: false })).toEqual({ kind: 'none', note: NO_VOICE_INPUT })
     expect(chooseStt({ ...base, localOn: false, spendingNone: true })).toEqual({ kind: 'none', note: NO_VOICE_INPUT })
     expect(chooseStt({ ...base, localOn: false, cloudOn: false })).toEqual({ kind: 'none', note: NO_VOICE_INPUT })
-    expect(NO_VOICE_INPUT).toBe('Voice input needs an OpenAI key or local models (Settings → Voice).')
-    // Local on without Whisper and no OpenAI: the existing download hint (downloads are allowed then).
-    expect(chooseStt({ localOn: true, whisperReady: false, openaiKey: false, openaiAllowed: false })).toMatchObject({ kind: 'none', note: expect.stringMatching(/Download the voice models/) })
+    expect(NO_VOICE_INPUT).toBe('Voice input needs speech recognition on this Mac or an OpenAI key (Settings → Voice).')
+    // Not ready yet and no OpenAI: what's happening (it downloads itself; never a prompt).
+    expect(chooseStt({ localOn: true, whisperReady: false, openaiKey: false, openaiAllowed: false })).toMatchObject({ kind: 'none', note: expect.stringMatching(/Getting speech recognition ready on this Mac/) })
   })
 
   test('OpenAI transcription: a WAV per utterance, priced before and charged after; no request for a blip', async () => {

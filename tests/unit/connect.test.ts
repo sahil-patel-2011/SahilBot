@@ -107,9 +107,11 @@ describe('connect categories', () => {
     expect(chipOf(cat('hubspot'))).toBe('More')
     expect(chipOf('Design')).toBe('Design')
   })
-  test('no-setup and built-in apps stay together in "Built in"', () => {
-    expect(PRESETS.filter((p) => p.auth === 'browser' || p.auth === 'app').every((p) => p.category === 'Built in')).toBe(true)
-    expect(PRESETS.filter((p) => p.category === 'Built in').length).toBeGreaterThanOrEqual(4)
+  test('built-in apps stay in "Built in"; browser sign-ins sit next to the app they automate', () => {
+    expect(PRESETS.filter((p) => p.auth === 'app').every((p) => p.category === 'Built in')).toBe(true)
+    expect(PRESETS.filter((p) => p.category === 'Built in').length).toBeGreaterThanOrEqual(3)
+    // "Gmail (in SahilBot's browser)" is listed with Gmail (below its one-click connector), not apart from it.
+    expect(['gmail-web', 'gcal-web', 'gdrive-web'].map((id) => preset(id).category)).toEqual(['gmail', 'gcal', 'gdrive'].map((id) => preset(id).category))
   })
   test('More holds every section that is not a main chip', () => {
     expect(MORE_CATEGORIES).toEqual(SECTION_ORDER.filter((c) => !(MAIN_CHIPS as readonly string[]).includes(c)))
