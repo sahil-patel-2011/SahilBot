@@ -161,7 +161,7 @@ const FLOOR2: ReadonlySet<TaskCategory> = new Set<TaskCategory>(['coding', 'comp
 export function applyBrain(d: TaskClass, a: BrainAnswer, brainLabel: string): TaskClass {
   const forced = /attach|folder|is on|Plan first|Deep Research|team task|Heavy|Council/.test(`${d.why} ${d.kindWhy}`)
   let difficulty = a.difficulty
-  if (FLOOR2.has(a.category) && difficulty < 2) difficulty = 2
+  if ((FLOOR2.has(a.category) || FLOOR2.has(d.category)) && difficulty < 2) difficulty = 2
   if (forced && difficulty < d.difficulty) difficulty = d.difficulty
   const kind: TaskKind = d.kind === 'agent' || a.kind === 'agent' || a.image || a.needs.includes('make-images') || a.needs.includes('computer-use') ? 'agent' : 'chat'
   const voice = a.category === 'voice' || d.category === 'voice'
@@ -169,7 +169,8 @@ export function applyBrain(d: TaskClass, a: BrainAnswer, brainLabel: string): Ta
   return {
     ...d, category: voice ? 'voice' : a.category, difficulty: difficulty as Tier, kind, effort,
     kindWhy: kind === d.kind ? d.kindWhy : 'read by Auto: needs tools',
-    signals: { ...d.signals, study: a.study || undefined, stakes: a.study ? false : d.signals.stakes },
+    // School work if either read says so; stakes the rules found always stay (the brain can't clear them).
+    signals: { ...d.signals, study: a.study || d.signals.study || undefined, stakes: d.signals.stakes },
     why: `${CATEGORY_LABEL[voice ? 'voice' : a.category]} · read by ${brainLabel}${a.why ? `: ${a.why}` : ''}`,
     rule: `${d.rule}+brain`, confident: true, confidence: Math.max(d.confidence, 0.9),
     needsVision: d.needsVision || a.needs.includes('see-images')
