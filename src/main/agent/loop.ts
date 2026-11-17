@@ -2080,6 +2080,11 @@ export class Agent {
     // Planner + executor computer use (agent/cua): the executor model runs this loop; the planner plans and checks out of band.
     const cuaPair = await this.cuaStart(thread, run, state, model, routed)
     if (cuaPair) { model = cuaPair.executor; this.lastModel.set(thread.id, model); if (routed) routed = { ...routed, label: cuaPair.label } }
+    // One teamwork decision per request: when Max, a team, Heavy, Council, Deep Research or a Max hint already
+    // covers it (the user's or Auto's), the brain's own team (planner, pair, fan-out) is dropped, so the lead never
+    // gets two sets of helpers or two conflicting "send helpers" notes.
+    const asked = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    if (routed?.team && asked && (asked.meta?.max || asked.meta?.maxHint || asked.meta?.team || asked.meta?.heavy || asked.meta?.council || asked.meta?.deepResearch || asked.meta?.swarm || asked.meta?.swarmHint)) routed = { ...routed, team: undefined }
     // Teamwork (Auto's brain): a stronger model plans first; the run's model carries the plan out with the whole conversation.
     if (routed?.team?.planner && !cuaPair && !run.helper) await this.planFirst(thread, run, model, routed.team, routed.task?.difficulty === 3 ? 'xhigh' : 'high')
     // A pair (Auto's brain): the partner model gives its own take first; this model builds on the best of both.

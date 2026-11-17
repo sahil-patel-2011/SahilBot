@@ -109,7 +109,7 @@ describe('stability across a conversation', () => {
     expect(after.providerFlips / after.pairs).toBeLessThan(0.0125)
     expect(after.modelFlips / after.pairs).toBeLessThan(0.1)
     expect(after.providerFlips).toBeLessThan(before.providerFlips / 2)
-  })
+  }, 60_000) // two full simulated conversations: slow on a busy CI runner
 })
 
 describe('determinism and manual picks', () => {

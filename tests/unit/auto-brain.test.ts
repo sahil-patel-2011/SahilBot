@@ -324,6 +324,20 @@ describe('fan-out', () => {
     expect(llm.requests[1].model).toBe('claude-opus-5-5')
     expect(JSON.stringify(llm.requests[1].messages)).toMatch(/send about 4 helpers in one agents call/)
   })
+  test('one teamwork decision per request: with Max already on, the brain adds no helpers or planner of its own', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    const t = h.thread()
+    llm.script.push(
+      { content: JSON.stringify(answer({ category: 'research', fanout: 5, helper: SONNET.id, team: 'plan', planner: FABLE.id, why: 'a big report' })), delay: 0 },
+      { content: 'Report written.', delay: 0 }
+    )
+    await (await h.agent.send({ threadId: t.id, text: 'Write a comprehensive market research report on home batteries', max: true } as never)).done
+    const lead = llm.requests.find((r) => r.model !== 'gpt-6-luna')!
+    expect(llm.requests.some((r) => r.model === FABLE.id)).toBe(false)
+    expect(JSON.stringify(lead.messages)).not.toMatch(/send about 5 helpers in one agents call/)
+    expect(JSON.stringify(lead.messages)).toMatch(/Max is on/)
+  })
 })
 
 describe('reasoning together', () => {
