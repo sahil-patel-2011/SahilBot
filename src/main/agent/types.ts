@@ -235,6 +235,8 @@ export const emptyState = (): ThreadState => ({ loaded: [], alwaysAllow: [], tod
 export interface Decision {
   verdict: 'allow' | 'ask' | 'deny'
   reason?: string
+  /** Allowed because every recipient is trusted (agent/trusted.ts): counts toward the bot's hourly limit once it runs. */
+  trusted?: boolean
 }
 
 export interface PermissionInput {
@@ -261,4 +263,11 @@ export interface PermissionInput {
    * (permissions.ts botHardStop), taint and the purchase / one-time-code gates still apply.
    */
   alwaysOn?: boolean
+  /**
+   * A send whose every recipient is on this bot's "Can message without asking" list or is the user
+   * (agent/trusted.ts). Lifts the send hard stop in Auto and Bypass, attended or not, tainted or not.
+   */
+  trustedSend?: boolean
+  /** Why a send to trusted people still asks (too many at once, hourly limit): added to the card's reason. */
+  trustNote?: string
 }

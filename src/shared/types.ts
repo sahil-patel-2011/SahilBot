@@ -212,6 +212,8 @@ export interface Settings {
   sampling: Record<string, Partial<Sampling>>
   theme: 'system' | 'light' | 'dark'
   userName: string
+  /** The user's own email addresses and phone numbers (Settings → General): bots may always message them without asking. */
+  me?: { emails: string[]; phones: string[] }
   workspaceDir: string
   search: { provider: 'auto' | 'none' | 'brave' | 'searxng' | 'duckduckgo'; searxngUrl: string; hasBraveKey: boolean }
   advanced: {
@@ -239,6 +241,11 @@ export interface Settings {
   openAtLogin?: boolean
   /** Keep the Mac from idle-sleeping while a chat or routine is running (default on). */
   keepAwakeWhileWorking?: boolean
+  /**
+   * Keep working with the lid closed (off by default): while a chat, bot or routine runs and 5 minutes after,
+   * the Mac doesn't sleep even with the lid shut (main/lid-awake.ts; needs an administrator once).
+   */
+  lidAwake?: boolean
   /** Routines missed while SahilBot was closed or the Mac slept run once on launch/wake if due within this many hours (0 = never catch up). */
   catchUpHours?: number
   /** "Pause all routines" from the menu bar icon: no routine fires until resumed. */
@@ -1080,6 +1087,15 @@ export interface BotTemplate {
   skills?: string[]
 }
 
+/** How Google is connected (Connect apps → Google): no secrets, just the way and the address. */
+export interface GoogleConnectLink { method: 'oauth' | 'mail' | 'app-password'; address?: string; at: number }
+export interface GoogleConnectStatus {
+  link: GoogleConnectLink | null
+  oauth: { builtin: boolean; ownClient: boolean; connected: boolean; configId?: string }
+  mail: Array<{ account: string; address: string }>
+  mailOpen: boolean
+}
+
 export interface ConnectorStatus {
   id: string
   state: 'off' | 'disconnected' | 'connecting' | 'signing_in' | 'needs_auth' | 'connected' | 'error' | 'reconnecting'
@@ -1359,6 +1375,17 @@ export interface SahilBotApi {
     useBuiltinClient(id: string): Promise<ConnectorConfig>
     /** Forget the API key of a one-click app that was using "Use an API key instead" (it signs in with OAuth again). */
     clearApiKey(id: string): Promise<void>
+    /** "Paste key": main reads the Mac's clipboard (only now), checks the key's shape, saves and verifies it. The clipboard never comes back. */
+    pasteApiKey(presetId: string): Promise<ConnectorStatus>
+  }
+  /** Connect apps → Google: Sign in with Google, the Mac's Mail app, or an app password (main/mail/google-connect.ts). */
+  google: {
+    /** withMail: also look for Google accounts in Apple Mail (the Google panel; Connect apps' list doesn't). */
+    status(withMail?: boolean): Promise<GoogleConnectStatus>
+    useMail(address: string): Promise<GoogleConnectLink>
+    useAppPassword(address: string, password: string): Promise<GoogleConnectLink>
+    useOauth(): Promise<GoogleConnectLink>
+    disconnect(): Promise<void>
   }
   vault: {
     list(): Promise<VaultEntry[]>
@@ -1511,6 +1538,8 @@ export interface SahilBotApi {
     status(): Promise<AlwaysOnStatus>
     /** Pause or resume every routine at once (same as the menu bar icon's item). */
     pauseRoutines(paused: boolean): Promise<AlwaysOnStatus>
+    /** Turns working with the lid closed on (asks macOS for an administrator the first time) or off. */
+    setLidAwake(on: boolean): Promise<{ ok: boolean; error?: string }>
   }
   chat: {
     /**
@@ -2937,7 +2966,11 @@ export interface BotAutonomySettings {
   /** How long a posted question waits before the bot goes ahead with its recommended default (hours, 0.25-168; default 4). */
   deadlineHours: number
   /** The daily digest: what the bot did, what's pending, what needs you. */
-  digest: { enabled: boolean; time: string }
+  digest: { enabled: boolean; time: string }  /**
+   * "Can message without asking": emails and phone numbers this bot may email or text without asking, in
+   * Auto, also unattended (agent/trusted.ts). The user's own (Settings.me) always count. Omitted when empty.
+   */
+  trustedRecipients?: string[]
 }
 
 /** One question in a queued question card. */

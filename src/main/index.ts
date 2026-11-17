@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, shell, systemPreferences } from 'electron'
 import { autoPool, autoVariant } from './llm/router'
 import { execFileSync } from 'node:child_process'
-import { homedir, tmpdir, totalmem } from 'node:os'
+import { homedir, tmpdir, totalmem, userInfo } from 'node:os'
 import { writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { homeIdeas } from './ideas'
@@ -110,11 +110,18 @@ import { electronTouchId, electronVaultFiles, protectSender, registerVaultIpc, s
 import { PurchaseGate } from './browser/checkout'
 import { recentEmail, recentTexts, setEmailCodeSource } from './otp'
 import { mailTool } from './agent/tools/mail'
+import { resendTool, RESEND_KEY_SECRET } from './agent/tools/resend'
+import { gmailImapTool } from './agent/tools/gmail-imap'
+import { GoogleConnect } from './mail/google-connect'
+import { mailRunner } from './mail/runner'
+import { TrustedSends } from './agent/trusted'
+import { chatParticipants, withChatDb } from './messages/chatdb'
 import { gmailCodeSource } from './mail/gmail'
 import { findOllamaBinary, setupOllama, startOllama, stopOllama } from './ollama-setup'
 import { needsYouBody } from './needs-you'
 import { MenuBarIcon, type TrayItem } from './tray'
 import { KeepAwake, RESUME_NEXT_NOTE, RESUME_NOTE, WorkTracker, wantAwake } from './resume'
+import { LidAwake } from './lid-awake'
 import type { MenuAction } from './shell'
 import { getWatchlist, setWatchlist } from './watchlist'
 import { MarketData } from './markets/data'
@@ -733,6 +740,20 @@ app.whenReady().then(() => {
       showMain()
     }
   })
+  // Connect apps → Google: Sign in with Google (the Gmail connector), the Mac's Mail app, or an app password
+  // (Gmail over IMAP/SMTP: the gmail_imap tool). The app password stays in the Keychain (mail/google-connect.ts).
+  const googleConnect = new GoogleConnect({
+    db, secrets, runner: mailRunner(), changed: () => toWin('connectors:changed'),
+    oauth: () => {
+      const cfg = connectors.list().find((c) => c.preset === 'gmail')
+      return { builtin: !!connectors.builtin('gmail'), ownClient: !!connectors.googleClient() || !!cfg?.clientId, connected: connectors.presetConnected('gmail'), ...(cfg ? { configId: cfg.id } : {}) }
+    }
+  })
+  registry.register(
+    // Resend: transactional email with the user's own key (Connect apps → Resend), sent only to api.resend.com.
+    { ...resendTool({ key: () => secrets.get(RESEND_KEY_SECRET), workspace: () => settings.get().workspaceDir }), core: false },
+    { ...gmailImapTool({ creds: () => googleConnect.credentials() }), core: false }
+  )
   // Emailed sign-in codes: the Gmail connector when it's connected, else Mail.app (read in main, never shown to the model).
   setEmailCodeSource(gmailCodeSource((tool, args, signal) => connectors.callPresetTool('gmail', tool, args, signal)), () => connectors.presetConnected('gmail'))
 
@@ -825,6 +846,11 @@ app.whenReady().then(() => {
       ]
     },
     questions: questionHost,
+    // Trusted recipients: a bot's "Can message without asking" list plus the user's own email and phone.
+    trustedSends: new TrustedSends({
+      config: (botId) => ({ bot: botAutonomyConfig(settings.get(), botId).trustedRecipients ?? [], me: [...(settings.get().me?.emails ?? []), ...(settings.get().me?.phones ?? [])] }),
+      lookup: { chatParticipants: (guid) => { try { return withChatDb((d) => chatParticipants(d, guid)) } catch { return null } } }
+    }),
     decisions,
     cua,
     connectors,
@@ -1394,6 +1420,15 @@ app.whenReady().then(() => {
   handle('connectors:checkAll', () => connectors.checkEvery())
   handle('connectors:useBuiltinClient', (id: string) => connectors.useBuiltinClient(id))
   handle('connectors:clearApiKey', (id: string) => connectors.clearApiKey(id))
+  // "Paste key": the clipboard is read here, only when the user clicks; its text never goes back to the window.
+  handle('connectors:pasteApiKey', (presetId: string) => connectors.pasteApiKey(presetId, () => clipboard.readText()))
+  // Connect apps → Google (three ways); the app password goes straight to the Keychain, only the link comes back.
+  // Mail is asked about its accounts only from the Google panel, and never in hidden (test) runs: no Automation prompt on screen.
+  handle('google:status', (withMail?: boolean) => googleConnect.status({ mail: !!withMail && !HIDDEN }))
+  handle('google:useMail', (address: string) => googleConnect.useMail(address))
+  handle('google:useAppPassword', (address: string, password: string) => googleConnect.useAppPassword(address, password))
+  handle('google:useOauth', () => googleConnect.useOauth())
+  handle('google:disconnect', () => googleConnect.disconnect())
   void connectors.connectAll()
   // Health: a tools/list check every few minutes; dropped connections reconnect with backoff.
   connectors.startHealth()
@@ -2369,7 +2404,22 @@ app.whenReady().then(() => {
     alwaysOnChanged.current({ routinesPaused: paused })
   }
   const awake = new KeepAwake(powerSaveBlocker)
-  const refreshAwake = (): void => { awake.set(!HIDDEN && wantAwake(settings.get().keepAwakeWhileWorking, work.working().length)) }
+  // Lid closed too (off by default; main/lid-awake.ts): while anything runs and 5 minutes after.
+  const lid = new LidAwake({
+    marker: join(dataDir(), 'lid-awake.hold'), user: userInfo().username, pid: process.pid,
+    setting: () => !HIDDEN && settings.get().lidAwake === true, working: () => work.working().length
+  })
+  void lid.recover().then(() => lid.refresh())
+  app.on('will-quit', () => { if (lid.on) void lid.release() })
+  const refreshAwake = (): void => { awake.set(!HIDDEN && wantAwake(settings.get().keepAwakeWhileWorking, work.working().length)); void lid.refresh() }
+  handle('alwaysOn:setLidAwake', async (on: boolean) => {
+    if (on) {
+      try { await lid.grant() } catch (e) { settings.set({ lidAwake: false }); return { ok: false, error: (e as Error).message } }
+    }
+    settings.set({ lidAwake: !!on })
+    await lid.refresh()
+    return { ok: true }
+  })
   work.onChange = () => { refreshAwake(); menuBar?.refresh() }
   menuBar = new MenuBarIcon(() => ({
     working: work.working().filter((id) => db.getThread(id)).map((id): TrayItem => ({ threadId: id, label: chatLabel(id) })),

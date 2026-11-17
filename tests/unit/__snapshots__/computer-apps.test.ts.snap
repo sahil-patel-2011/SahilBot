@@ -168,9 +168,13 @@ end run",
   set target to item 1 of argv
   set msg to item 2 of argv
   set mode to item 3 of argv
+  set svcName to item 4 of argv
   tell application "Messages"
     if mode is "chat" then
       send msg to chat id target
+    else if svcName is "SMS" then
+      set svc to 1st account whose service type = SMS
+      send msg to participant target of svc
     else
       set svc to 1st account whose service type = iMessage
       send msg to participant target of svc

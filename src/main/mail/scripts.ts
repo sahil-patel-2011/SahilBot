@@ -10,6 +10,16 @@ export const ACCOUNTS = String.raw`(i) => Mail.accounts().map((a) => {
   return o;
 })`
 
+/** Accounts with their incoming server, to find Google accounts (imap.gmail.com) for Connect apps → Google. */
+export const ACCOUNT_SERVERS = String.raw`(i) => Mail.accounts().map((a) => {
+  const o = { name: a.name() };
+  try { o.emails = a.emailAddresses() } catch (e) {}
+  try { o.enabled = a.enabled() } catch (e) {}
+  try { o.type = String(a.accountType()) } catch (e) {}
+  try { o.server = String(a.serverName()) } catch (e) {}
+  return o;
+})`
+
 export const MAILBOXES = String.raw`(i) => {
   const out = [];
   for (const a of accountsFor(i.account)) {

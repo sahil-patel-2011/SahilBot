@@ -55,9 +55,16 @@ export function decide(p: PermissionInput): Decision {
   if (p.effect === 'read') return p.tainted && normalizeMode(p.mode) !== 'bypass' ? { verdict: 'ask', reason: 'Opens an address taken from a web page or email' } : { verdict: 'allow' }
 
   const mode = normalizeMode(p.mode)
+  // Trusted recipients (agent/trusted.ts): a send that reaches only people on this bot's "Can message without
+  // asking" list, or the user, runs in Auto and Bypass, attended or not, even after reading outside content
+  // (the recipients were matched exactly against the user's list, so outside content can't have chosen them).
+  // Only a send stop is lifted: purchases and codes returned above, credentials and every other stop still ask.
+  if (p.trustedSend && p.effect === 'write_external' && mode !== 'ask' && (!p.hardStop || (/^sends?\b/i.test(p.hardStop.trim()) && !isCredentialStop(p.hardStop)))) {
+    return { verdict: 'allow', reason: 'Every recipient is on your trusted list', trusted: true }
+  }
   // Hard stops ask at every level. Bypass skips them only when Settings says so, and never for credentials.
   if (p.hardStop && (mode !== 'bypass' || p.hardStopsEnabled || isCredentialStop(p.hardStop))) {
-    return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}` }
+    return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}${p.trustNote ? ` (${p.trustNote})` : ''}` }
   }
 
   // Taint is checked before the local-write shortcut: a terminal command steered by fetched content asks
@@ -514,7 +521,7 @@ export function recipientCount(args: unknown): number {
  * whatever the user listed under "Always ask for…" for this bot. Reads are never stopped here (decide()
  * already asks for reads with a hard stop or taint). Purchases and one-time codes keep their own cards.
  */
-export function botHardStop(a: { tool: string; effect: ToolEffect; args: unknown; label?: string; summary?: string; hardStop?: string | null; alwaysAsk?: string[]; argsText?: string }): { kind: BotStopKind; reason: string } | null {
+export function botHardStop(a: { tool: string; effect: ToolEffect; args: unknown; label?: string; summary?: string; hardStop?: string | null; alwaysAsk?: string[]; argsText?: string; trusted?: boolean }): { kind: BotStopKind; reason: string } | null {
   if (isSelfGated(a.hardStop)) return null
   const argsText = a.argsText ?? (() => { try { return JSON.stringify(a.args ?? {}) } catch { return '' } })()
   const rules = (a.alwaysAsk ?? []).filter((w) => typeof w === 'string' && w.trim()).slice(0, RULE_LIMIT)
@@ -522,6 +529,9 @@ export function botHardStop(a: { tool: string; effect: ToolEffect; args: unknown
   if (hit) return { kind: 'always_ask', reason: `You asked this bot to always ask for "${hit}"` }
   if (a.effect === 'read') return null
   const head = [a.tool.replace(/[_-]+/g, ' '), a.label, a.summary].filter(Boolean).join(' \n')
+  // A send to trusted people only (decide() allowed it, agent/trusted.ts capped its size and rate): a message
+  // can't buy, delete or post, so only "always ask" and credentials (a code or password in the text) stop it.
+  if (a.trusted) return CREDENTIAL_WORDS.test(head) || CREDENTIAL_WORDS.test(a.hardStop ?? '') ? { kind: 'credentials', reason: 'Uses a password, code or other credential' } : null
   const declared = a.hardStop ?? ''
   const outside = a.effect === 'write_external' || a.effect === 'destructive'
   if (outside && (MONEY_WORDS.test(head) || PAYMENT.test(declared))) return { kind: 'money', reason: 'Moves money or buys something' }

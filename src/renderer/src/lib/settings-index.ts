@@ -43,6 +43,7 @@ export const PAGE_TITLES: Record<SettingsPage, string> = {
 export const SETTINGS_INDEX: SettingEntry[] = [
   // General
   { anchor: 'user-name', page: 'general', title: 'Your name', words: 'name call me first name', keys: ['userName'] },
+  { anchor: 'me-contact', page: 'general', title: 'Your email and phone', words: 'me my email address phone number mobile text sms imessage trusted message without asking', keys: ['me', 'me.emails', 'me.phones'] },
   { anchor: 'workspace', page: 'general', title: 'Workspace folder', words: 'folder files save output directory', keys: ['workspaceDir'] },
   { anchor: 'theme', page: 'general', title: 'Theme', words: 'appearance dark light mode system', keys: ['theme'] },
   { anchor: 'quick-ask', page: 'general', title: 'Quick Ask shortcut', words: 'shortcut hotkey keyboard option space overlay', keys: ['quickKey'] },
@@ -56,6 +57,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'reduce-transparency', page: 'general', title: 'Reduce transparency', words: 'appearance solid background accessibility', keys: ['appearance.reduceTransparency'], advanced: true },
   { anchor: 'font-size', page: 'general', title: 'Text size', words: 'appearance font size typography bigger smaller', keys: ['appearance.fontSize'], advanced: true },
   { anchor: 'keep-awake', page: 'general', title: 'Keep the Mac awake while bots work', words: 'sleep awake always on caffeinate', keys: ['keepAwakeWhileWorking'], advanced: true },
+  { anchor: 'lid-awake', page: 'general', title: 'Keep working with the lid closed', words: 'lid closed shut clamshell sleep awake laptop travel', keys: ['lidAwake'] },
   { anchor: 'catch-up', page: 'general', title: 'Catch up on missed routines', words: 'routines schedule missed asleep closed', keys: ['catchUpHours'], advanced: true },
   { anchor: 'routines-paused', page: 'general', title: 'Pause all routines', words: 'routines schedule stop pause', keys: ['routinesPaused'], advanced: true },
   { anchor: 'web-search', page: 'general', title: 'Web search', words: 'search provider brave searxng duckduckgo key internet', keys: ['search.provider', 'search.searxngUrl'], advanced: true },
