@@ -230,6 +230,12 @@ const LEVELS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
  * lowest above. Never 'none' or 'minimal' (Astra and 6.1 Sol reject none; quick replies still reason a
  * little). undefined: the model's efforts aren't documented here, so nothing is sent.
  */
+/** The least reasoning the model accepts ('none' where it can), for short structured answers. */
+export function quickestEffort(model: string): OpenAIEffort | undefined {
+  const ok = openaiInfo(model)?.efforts
+  return ok?.length ? (['none', 'minimal', 'low'] as OpenAIEffort[]).find((e) => ok.includes(e)) : undefined
+}
+
 export function openaiEffort(model: string, effort: Effort = 'medium'): OpenAIEffort | undefined {
   const ok = openaiInfo(model)?.efforts
   if (!ok?.length) return undefined

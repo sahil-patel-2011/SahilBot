@@ -1,7 +1,7 @@
 import type { ToolCall } from '@shared/types'
 import type { ChatRequest, StreamPart, WireMessage } from './client'
 import { retryAfterFrom } from './retry'
-import { openaiCompactAt, openaiEffort, openaiInfo, openaiMaxTokens, openaiWindow, usesResponses, writeFactors, type ContextStrategy } from './openai-models'
+import { openaiCompactAt, openaiEffort, openaiInfo, quickestEffort, openaiMaxTokens, openaiWindow, usesResponses, writeFactors, type ContextStrategy } from './openai-models'
 import { claudeWindow } from './claude-models'
 import { fastSupport } from './fast-mode'
 
@@ -197,7 +197,7 @@ export function buildResponsesRequest(req: ChatRequest, drop: Set<string> = drop
     breakpoint: cache && !drop.has('prompt_cache_breakpoint') ? { mode: 'explicit', ...(long ? { ttl: '12h' } : {}) } : undefined,
     phase: !!spec?.phase
   })
-  const effort = req.effort ? openaiEffort(req.model, req.effort) : undefined
+  const effort = req.noThinking ? quickestEffort(req.model) ?? openaiEffort(req.model, 'low') : req.effort ? openaiEffort(req.model, req.effort) : undefined
   const reasoning: Record<string, unknown> = {}
   if (effort) reasoning.effort = effort
   // Readable reasoning summaries stream into the step's thinking ("auto": the most detailed available).

@@ -1349,7 +1349,7 @@ app.whenReady().then(() => {
     const projects = memory.list().filter((m) => m.category === 'project' && m.provenance !== 'untrusted').sort((a, b) => b.updatedAt - a.updatedAt)
       .map((m) => m.content.replace(/^(?:the user(?:'s)?\s+|i(?:'m| am)\s+|currently\s+)?(?:is\s+)?(?:working on|building|project:?)\s+/i, '').split(/[,.;:(\u2014\u2013]|\s-\s/)[0].trim())
       .filter((p) => p.length <= 40)
-    return homeIdeas({ recent, apps, made, projects })
+    return homeIdeas({ recent, apps, made, projects }, 5)
   })
   handle('files:recent', (limit?: number) => db.recentFiles(limit ?? 60).filter((f) => existsSync(f.path)).map((f) => ({ ...f, name: basename(f.path), size: statSync(f.path).size })))
   handle('files:reveal', (path: string) => attachments.reveal(path))

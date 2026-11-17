@@ -41,7 +41,7 @@ import { attachmentNotes } from '../attach-process'
 import { localOff } from '@shared/local-mode'
 import { pick, routingPrefs } from '../llm/router'
 import { autoPreference, isStudy, noGrokFor, payPerUse, premiumModel, windowOf } from '../llm/routing-table'
-import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainModel, skipBrain, teamFor, type BrainAnswer } from '../llm/auto-brain'
+import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainModel, brainTimeout, skipBrain, teamFor, type BrainAnswer } from '../llm/auto-brain'
 import { autoRoute, budgetTightFor, planFallback } from '../llm/auto-route'
 import { modelHealth } from '../llm/model-health'
 import { spendingMode } from '../llm/budget'
@@ -1843,7 +1843,9 @@ export class Agent {
     // (Only local models: a cloud model missing from usable() is off, unaffordable or over the spending limit.)
     if (!usable.length) usable = (this.d.endpoints.last?.models ?? []).filter((m) => m.installed && !s.hiddenModels.includes(m.id) && (!isRemoteModel(m) || !!process.env.FOREMAN_BASE_URL) && (!localOff(s) || process.env.FOREMAN_BASE_URL || !providerDef(m.provider).local))
     const all = this.d.db.listMessages(thread.id)
-    const last = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    // The request being worked on: an "Approved: …" or an answer from Needs you continues the request it belongs to.
+    const shown = [...all].reverse().filter((m) => m.role === 'user' && !m.meta?.hidden)
+    const last = shown.find((m) => !m.meta?.questionAnswer) ?? shown[0]
     const files = [...((last?.meta?.files as Array<{ name: string; path: string }>) ?? []).map((f) => ({ kind: /\.(png|jpe?g|gif|webp|heic)$/i.test(f.path) ? 'image' : 'file', path: f.path, name: f.name })),
       ...((last?.meta?.folders as string[]) ?? []).map((p) => ({ kind: 'folder', path: p, name: p }))] as Attachment[]
     // What kind of task and how hard (llm/task-classifier.ts: local rules, no model call), then the routing table.
@@ -1877,10 +1879,12 @@ export class Agent {
         input: { text: last.content, history, attachments: files.map((f) => `${f.kind}: ${f.name}`), images: last.images?.length ?? 0, role: role && !role.isMain && role.kind === 'bot' ? [role.name, role.label].filter(Boolean).join(': ') : undefined, preference, models: brainPool, rules: task, outcomes, budgetTight },
         ask: async ({ model: m, system, user, signal }) => {
           const ep = this.d.endpoints.for(m)
-          return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model: m, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(m, s.sampling), maxTokens: 500, effort: 'low', signal }))
-        }
+          return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model: m, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(m, s.sampling), maxTokens: 500, effort: 'low', noThinking: true, signal }))
+        },
+        timeoutMs: brainTimeout(thinker), signal: this.runs.get(thread.id)?.ctrl.signal
       })
       if (got.answer) { brain = got.answer; task = applyBrain(task, brain, thinker.label ?? thinker.id) }
+      else task = { ...task, why: `${task.why} · ${got.late ? `${thinker.label ?? thinker.id} was still reading, so the basic rules picked` : 'basic rules (no read)'}` }
     }
     const r = { tier: task.difficulty, why: task.why }
     const prevCategory = state.lastCategory

@@ -7,7 +7,9 @@ import { ResultStore, estimate } from '../../src/main/agent/context'
 import { ToolRegistry } from '../../src/main/agent/registry'
 import { coreTools } from '../../src/main/agent/tools/core'
 import { Db } from '../../src/main/db'
-import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainModel, parseBrain, skipBrain, teamFor, type BrainAnswer } from '../../src/main/llm/auto-brain'
+import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainModel, brainPrompt, brainTimeout, parseBrain, skipBrain, teamFor, type BrainAnswer } from '../../src/main/llm/auto-brain'
+import { buildClaudeRequest } from '../../src/main/llm/anthropic'
+import { quickestEffort } from '../../src/main/llm/openai-models'
 import { classifyTask } from '../../src/main/llm/task-classifier'
 import { modelHealth } from '../../src/main/llm/model-health'
 import type { ModelInfo, Settings, Thread } from '../../src/shared/types'
@@ -96,7 +98,41 @@ describe('the brain\'s decision', () => {
     const broken = await askBrain({ messageId: 'b', input, model: LUNA.id, cache: new BrainCache(), ask: async () => { throw new Error('down') } })
     expect(broken.answer).toBeUndefined()
     expect(skipBrain('thanks!', classifyTask('thanks!'), 0)).toBe(true)
+    expect(skipBrain('so, generate 1000000 digits of pi', classifyTask('so, generate 1000000 digits of pi'), 0)).toBe(false)
     expect(skipBrain('Help me study for my chem quiz', classifyTask('Help me study for my chem quiz'), 0)).toBe(false)
+  })
+})
+
+describe('the read is reliable', () => {
+  const input = { text: 'Refactor the auth module', history: [], attachments: [], images: 0, preference: 'balanced' as const, models: ALL, rules: classifyTask('Refactor the auth module') }
+  const reply = JSON.stringify({ category: 'coding', kind: 'agent', difficulty: 3, effort: 'high', study: false, image: false, needs: ['coding'], model: OPUS.id, team: 'solo', fanout: 0, why: 'big refactor' })
+
+  test('a read that misses the wait is kept for the same request, and never asked twice', async () => {
+    const cache = new BrainCache()
+    let calls = 0
+    const ask = (): Promise<string> => { calls++; return new Promise((r) => setTimeout(() => r(reply), 120)) }
+    const first = await askBrain({ messageId: 'm', input, model: LUNA.id, cache, timeoutMs: 20, ask })
+    expect(first).toMatchObject({ late: true })
+    expect(first.answer).toBeUndefined()
+    // The next turn of the same request (still reading): waits for that read, no second call.
+    const second = await askBrain({ messageId: 'm', input, model: LUNA.id, cache, timeoutMs: 1000, ask })
+    expect(second.answer?.model).toBe(OPUS.id)
+    expect(calls).toBe(1)
+    expect((await askBrain({ messageId: 'm', input, model: LUNA.id, cache, ask })).cached).toBe(true)
+  })
+
+  test('the brain judges difficulty itself: the prompt has no keyword verdict to copy', () => {
+    const { system, user } = brainPrompt(input)
+    expect(user).not.toMatch(/rules|difficulty \d/i)
+    expect(system).toMatch(/never by the words used/)
+  })
+
+  test('a slower brain gets a longer wait; the routing call runs without thinking', () => {
+    expect(brainTimeout(HAIKU)).toBeGreaterThan(brainTimeout(LUNA))
+    const { params } = buildClaudeRequest({ baseUrl: 'https://api.anthropic.com/v1', model: HAIKU.id, messages: [{ role: 'user', content: 'x' }], sampling: { temperature: 0.2, topP: 1 } as never, maxTokens: 500, effort: 'low', noThinking: true })
+    expect(params.thinking).toBeUndefined()
+    expect(buildClaudeRequest({ baseUrl: 'https://api.anthropic.com/v1', model: HAIKU.id, messages: [{ role: 'user', content: 'x' }], sampling: { temperature: 0.2, topP: 1 } as never, maxTokens: 500, effort: 'low' }).params.thinking).toBeDefined()
+    expect(quickestEffort('gpt-6-luna')).toBe('none')
   })
 })
 
@@ -163,6 +199,22 @@ describe('the brain in the agent loop', () => {
     expect(exec).toContain('Extract the plugin API')
     expect(exec).toContain('Refactor the whole app to a plugin architecture')
     expect(JSON.stringify(llm.requests[0].messages)).toContain('Refactor the whole app to a plugin architecture')
+  })
+
+  test('an approval from Needs you continues the request it belongs to: no new read, the same model', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    const t = h.thread()
+    llm.script.push(
+      { content: JSON.stringify(answer({ category: 'coding', kind: 'agent', difficulty: 3, model: OPUS.id, why: 'big refactor' })), delay: 0 },
+      { content: 'Queued the change for your approval.', delay: 0 }
+    )
+    await h.run(t, 'Refactor the auth module and move the tokens to the keychain')
+    expect(llm.requests.map((r) => r.model)).toEqual(['gpt-6-luna', 'claude-opus-5-5'])
+    llm.requests.length = 0
+    llm.script.push({ content: 'Done: the change is made.', delay: 0 })
+    await (await h.agent.send({ threadId: t.id, text: 'Approved: Document', meta: { questionAnswer: 'q1' } } as never)).done
+    expect(llm.requests.map((r) => r.model)).toEqual(['claude-opus-5-5'])
   })
 
   test('school work goes where the brain sends it, at the effort it chose', async () => {

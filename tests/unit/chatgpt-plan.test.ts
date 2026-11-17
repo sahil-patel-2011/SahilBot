@@ -12,7 +12,7 @@ import { priceFor } from '../../src/main/llm/budget'
 import { streamChat, type StreamPart, type WireMessage } from '../../src/main/llm/client'
 import { Endpoints, missingReason } from '../../src/main/llm/endpoints'
 import { CODEX_URL, PLAN_PREFIX, billingOf, chatgptPlan, closeAll, codexAvailable, openSessions, PlanLimitError } from '../../src/main/llm/codex'
-import { findCodex, parseLoginStatus, parseMcpList } from '../../src/main/llm/codex/detect'
+import { findCodex, parseLoginStatus, parseMcpList, parseMcpServers } from '../../src/main/llm/codex/detect'
 import { bridgeTools, codexEffort, fingerprint, renderTranscript, runOverrides } from '../../src/main/llm/codex/session'
 import { limitWindows, windowLabel } from '../../src/main/llm/codex/plan'
 import type { ChatEvent, ModelInfo, Settings, Thread } from '../../src/shared/types'
@@ -121,6 +121,9 @@ describe('detection and sign-in status (documented commands only)', () => {
     expect(parseMcpList('[{"name":"github"},{"name":"bad name"},"notes"]')).toEqual(['github', 'notes'])
     expect(parseMcpList('{"figma":{}}')).toEqual(['figma'])
     expect(parseMcpList('nope')).toEqual([])
+    // Servers already off are skipped; the rest keep their transport (Codex rejects an entry without one).
+    expect(parseMcpServers('[{"name":"code-review","enabled":false,"transport":{"type":"stdio","command":"/bin/sh"}},{"name":"cua_repl","enabled":true,"transport":{"type":"stdio","command":"/x/node"}},{"name":"web","transport":{"type":"streamable_http","url":"https://x.test/mcp"}}]'))
+      .toEqual([{ name: 'cua_repl', command: '/x/node' }, { name: 'web', url: 'https://x.test/mcp' }])
     expect(windowLabel(300)).toBe('5-hour limit')
     expect(windowLabel(10080)).toBe('Weekly limit')
     expect(limitWindows({ primary: { usedPercent: 130, windowDurationMins: 300, resetsAt: 1_900_000_000 } })[0]).toMatchObject({ usedPercent: 100, resetsAt: 1_900_000_000_000 })
@@ -141,6 +144,10 @@ describe('runs are configured to keep actions in SahilBot', () => {
     ]))
     expect(kv.join(' ')).not.toMatch(/sbr_/)
     expect(kv).not.toContain('mcp_servers.sahilbot.enabled=false')
+    // Every server switched off also names a transport, or Codex won't start ("invalid transport").
+    expect(kv).toContain('mcp_servers.github.command="/usr/bin/false"')
+    const b = runOverrides({ instructionsFile: '/tmp/i.md', disable: [{ name: 'cua_repl', command: '/x/node' }, { name: 'web', url: 'https://x.test/mcp' }] }).filter((_, i) => i % 2 === 1)
+    expect(b).toEqual(expect.arrayContaining(['mcp_servers.cua_repl.enabled=false', 'mcp_servers.cua_repl.command="/x/node"', 'mcp_servers.web.enabled=false', 'mcp_servers.web.url="https://x.test/mcp"']))
   })
 
   test('transcript and fingerprints', () => {

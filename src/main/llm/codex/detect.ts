@@ -91,24 +91,33 @@ export async function loginStatus(bin: string): Promise<{ mode: LoginMode; text:
   return parseLoginStatus(r.code, `${r.stdout}\n${r.stderr}`)
 }
 
+/** A server of the user's to switch off, with its transport: `mcp_servers.<name>.enabled=false` alone makes Codex reject the config ("invalid transport"). */
+export interface McpServerOff { name: string; command?: string; url?: string }
+
 /**
- * Names of MCP servers in the user's own Codex config (`codex mcp list --json`), so a SahilBot run can
- * switch them off: tools that run outside SahilBot's approvals have no place in its runs.
+ * MCP servers that are on in the user's own Codex config or plugins (`codex mcp list --json`), so a SahilBot run
+ * can switch them off: tools that run outside SahilBot's approvals have no place in its runs.
  */
-export async function userMcpServers(bin: string): Promise<string[]> {
+export async function userMcpServers(bin: string): Promise<McpServerOff[]> {
   const r = await run(bin, ['mcp', 'list', '--json'], { timeoutMs: 8000 }).catch(() => undefined)
   if (!r || r.code !== 0) return []
-  return parseMcpList(r.stdout)
+  return parseMcpServers(r.stdout)
 }
 
-export function parseMcpList(out: string): string[] {
+export function parseMcpServers(out: string): McpServerOff[] {
   let j: unknown
   try { j = JSON.parse(out.trim() || '[]') } catch { return [] }
-  const names: string[] = []
-  const list = Array.isArray(j) ? j : j && typeof j === 'object' ? (Array.isArray((j as { servers?: unknown }).servers) ? (j as { servers: unknown[] }).servers : Object.keys(j as object).map((name) => ({ name }))) : []
+  const list: unknown[] = Array.isArray(j) ? j : j && typeof j === 'object' ? (Array.isArray((j as { servers?: unknown }).servers) ? (j as { servers: unknown[] }).servers : Object.entries(j as object).map(([name, v]) => ({ ...(v && typeof v === 'object' ? v : {}), name }))) : []
+  const seen = new Map<string, McpServerOff>()
   for (const x of list) {
-    const name = typeof x === 'string' ? x : x && typeof x === 'object' ? (x as { name?: unknown }).name : undefined
-    if (typeof name === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(name)) names.push(name)
+    const o = (typeof x === 'string' ? { name: x } : x && typeof x === 'object' ? x : {}) as { name?: unknown; enabled?: unknown; transport?: { command?: unknown; url?: unknown } }
+    if (typeof o.name !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(o.name) || o.enabled === false) continue
+    const command = typeof o.transport?.command === 'string' ? o.transport.command : undefined
+    const url = typeof o.transport?.url === 'string' ? o.transport.url : undefined
+    seen.set(o.name, { name: o.name, ...(command ? { command } : url ? { url } : {}) })
   }
-  return [...new Set(names)]
+  return [...seen.values()]
 }
+
+/** Names only (the servers that are on). */
+export const parseMcpList = (out: string): string[] => parseMcpServers(out).map((x) => x.name)
