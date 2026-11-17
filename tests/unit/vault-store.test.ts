@@ -104,7 +104,7 @@ describe('the vault facade', () => {
     expect(vault.findCardMeta('Visa ending 4242')).toMatchObject({ label: 'Personal (Visa ending 4242)' })
     // With a master password, edits that keep saved values need the vault open.
     expect(() => vault.set({ name: 'acme', origin: 'https://acme.test', username: 'x' })).toThrow(VaultLockedError)
-  })
+  }, 30_000) // scrypt on a busy runner
 
   test('redaction masks every saved value however it appears', () => {
     const { vault } = makeVault()

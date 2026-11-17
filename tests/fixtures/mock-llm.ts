@@ -11,6 +11,8 @@ export interface ScriptedReply {
   /** ms between streamed chunks */
   delay?: number
   status?: number
+  /** With a non-200 status: the error message the server answers with. */
+  errorMessage?: string
   /** finish_reason to report (default: tool_calls or stop), e.g. 'length' for a reply cut off by the output limit. */
   finish?: string
   /** Token counts to report (default 100 prompt / 20 completion). */
@@ -94,7 +96,7 @@ export async function startMockLlm(): Promise<MockLlm> {
         : resolveReply(state.script.shift(), json) ?? { content: `Echo: ${lastUserText(json.messages)}`, reasoning: 'Thinking about it.' }
       if (reply.status && reply.status !== 200) {
         res.statusCode = reply.status
-        return res.end(JSON.stringify({ error: { message: 'scripted failure' } }))
+        return res.end(JSON.stringify({ error: { message: reply.errorMessage ?? 'scripted failure' } }))
       }
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       const send = (delta: Record<string, unknown>, finish: string | null = null): void => {

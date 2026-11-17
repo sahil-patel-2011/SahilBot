@@ -403,6 +403,21 @@ export function namedIn(text: string, name: string): boolean {
 }
 
 /**
+ * The text asks to USE the app (the user's account, or something in it), not just mentions it: "my Notion",
+ * "add it to Notion", "my Notion workspace", or a search for the app itself ("notion"). "Web search for Notion
+ * and Obsidian pricing" only talks about the apps.
+ */
+export function usesApp(text: string, name: string): boolean {
+  if (!namedIn(text, name)) return false
+  const t = ` ${text.toLowerCase().replace(/[^a-z0-9']+/g, ' ')} `
+  const n = name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  // The app's name is (nearly) the whole query: a search for its tools ("notion", "acme tasks", "notion tools").
+  if (t.replace(` ${n} `, ' ').trim().split(/\s+/).filter(Boolean).length <= 2) return true
+  return new RegExp(` (?:my|our|the user's|user's|in|into|to|from|via|with|using) ${n} `).test(t) ||
+    new RegExp(` ${n} (?:account|workspace|page|pages|database|databases|inbox|board|boards|calendar|drive|doc|docs|notes|tasks|issues|project|projects|repo|repos|channel|channels|files|folder|data|connector|api|integration|tools?) `).test(t)
+}
+
+/**
  * Signs in with one click: the server registers SahilBot itself (DCR), needs no sign-in, or SahilBot
  * ships its own app registration for it (`builtinClient`, set on the presets main hands out).
  */
@@ -1632,9 +1647,10 @@ export class Connectors {
     const words = q.split(/[^a-z0-9.]+/).filter((w) => w.length > 2)
     const open = this.presets().filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app')
     const readyNow = new Map(open.map((p) => [p.id, this.ready(p)]))
-    // Only apps the request names in full ("google calendar", "notion"): for a find_tools search that also
-    // matched built-in tools, so "calendar" still means the built-in one and "browser" isn't Browserbase.
-    if (o.fullName) return open.filter((p) => namedIn(q, p.name)).sort((a, b) => Number(readyNow.get(b.id)) - Number(readyNow.get(a.id)))
+    // Only apps the request names in full AND asks to use ("my google calendar", "add it to notion"): for a
+    // find_tools search that also matched built-in tools, so "calendar" still means the built-in one, "browser"
+    // isn't Browserbase, and researching an app ("notion vs obsidian pricing") never asks to connect it.
+    if (o.fullName) return open.filter((p) => usesApp(q, p.name)).sort((a, b) => Number(readyNow.get(b.id)) - Number(readyNow.get(a.id)))
     // Everyday words don't pick apps by name either ("data" isn't a request for Datadog or Crustdata).
     const byName = open.filter((p) => words.some((w) => !SUGGEST_STOP.has(w) && (p.name.toLowerCase().includes(w) || p.id.startsWith(w))))
     const byUse = open.filter((p) => !byName.includes(p) && words.some((w) => !SUGGEST_STOP.has(w) && p.description.toLowerCase().split(/[^a-z0-9]+/).includes(w)))

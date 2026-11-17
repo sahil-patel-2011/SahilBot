@@ -258,6 +258,31 @@ describe('swarm budget', () => {
     expect(final.slice(1).every((m) => m.status === 'stopped' && /cap/.test(m.detail ?? ''))).toBe(true)
   })
 
+  test('a helper stopped by the team cap mid-task still reports what it found (one tool-free wrap-up)', async () => {
+    const h = harness([SONNET], { swarm: { maxUsd: 100, maxParallel: 1, askAboveUsd: 100, helperModel: 'same' } } as never)
+    let helperTurns = 0
+    let leadTurns = 0
+    route((r) => {
+      // The wrap-up: no tools, the findings in the prompt.
+      if (/team's spending cap stopped you/.test(sysOf(r))) return { content: 'Freed costs $99/month (getfreed.ai/pricing, 2026). BAA: not confirmed.', delay: 0 }
+      if (!isHelper(r)) return ++leadTurns === 1 ? { toolCalls: [call('agents', { tasks: tasks(1) })], delay: 0 } : { content: 'Here is the compiled answer.', delay: 0 }
+      helperTurns++
+      return helperTurns === 1
+        ? { toolCalls: [call('notes', { action: 'add', section: 'State', text: 'Freed: $99/month per clinician (getfreed.ai/pricing)' })], delay: 0 }
+        : { status: 400, errorMessage: 'Swarm cloud budget reached: this team has used $5.00 of its $5.00 cap, and this request could cost about $0.10. Nothing was sent. Finish with what you have.', delay: 0 }
+    })
+    const t = h.thread()
+    expect(await (await h.agent.send({ threadId: t.id, text: 'research' })).done).toBe('finished')
+    const wrap = llm.requests.find((r) => /team's spending cap stopped you/.test(sysOf(r)))
+    expect(wrap).toBeDefined()
+    expect(wrap!.tools ?? []).toHaveLength(0)
+    expect(lastUser(wrap!)).toMatch(/Research part 1/)
+    expect(lastUser(wrap!)).toMatch(/Freed: \$99\/month/)
+    const r = toolResult(h, t)!
+    expect(r.content).toContain('Freed costs $99/month')
+    expect(r.content).toMatch(/reached the team's spending cap/)
+  })
+
   test('ledger: requests reserve and settle like goal spend; one that could pass the cap is refused', () => {
     const l = new SwarmLedger(0.1)
     expect(l.canLaunch(0.5)).toBe(true) // the first always starts
