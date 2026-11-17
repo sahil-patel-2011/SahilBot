@@ -239,6 +239,11 @@ export interface Settings {
   openAtLogin?: boolean
   /** Keep the Mac from idle-sleeping while a chat or routine is running (default on). */
   keepAwakeWhileWorking?: boolean
+  /**
+   * Keep working with the lid closed (off by default): while a chat, bot or routine runs and 5 minutes after,
+   * the Mac doesn't sleep even with the lid shut (main/lid-awake.ts; needs an administrator once).
+   */
+  lidAwake?: boolean
   /** Routines missed while SahilBot was closed or the Mac slept run once on launch/wake if due within this many hours (0 = never catch up). */
   catchUpHours?: number
   /** "Pause all routines" from the menu bar icon: no routine fires until resumed. */
@@ -1511,6 +1516,8 @@ export interface SahilBotApi {
     status(): Promise<AlwaysOnStatus>
     /** Pause or resume every routine at once (same as the menu bar icon's item). */
     pauseRoutines(paused: boolean): Promise<AlwaysOnStatus>
+    /** Turns working with the lid closed on (asks macOS for an administrator the first time) or off. */
+    setLidAwake(on: boolean): Promise<{ ok: boolean; error?: string }>
   }
   chat: {
     /**

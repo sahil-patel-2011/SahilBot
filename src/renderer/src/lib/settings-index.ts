@@ -56,6 +56,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'reduce-transparency', page: 'general', title: 'Reduce transparency', words: 'appearance solid background accessibility', keys: ['appearance.reduceTransparency'], advanced: true },
   { anchor: 'font-size', page: 'general', title: 'Text size', words: 'appearance font size typography bigger smaller', keys: ['appearance.fontSize'], advanced: true },
   { anchor: 'keep-awake', page: 'general', title: 'Keep the Mac awake while bots work', words: 'sleep awake always on caffeinate', keys: ['keepAwakeWhileWorking'], advanced: true },
+  { anchor: 'lid-awake', page: 'general', title: 'Keep working with the lid closed', words: 'lid closed shut clamshell sleep awake laptop travel', keys: ['lidAwake'] },
   { anchor: 'catch-up', page: 'general', title: 'Catch up on missed routines', words: 'routines schedule missed asleep closed', keys: ['catchUpHours'], advanced: true },
   { anchor: 'routines-paused', page: 'general', title: 'Pause all routines', words: 'routines schedule stop pause', keys: ['routinesPaused'], advanced: true },
   { anchor: 'web-search', page: 'general', title: 'Web search', words: 'search provider brave searxng duckduckgo key internet', keys: ['search.provider', 'search.searxngUrl'], advanced: true },

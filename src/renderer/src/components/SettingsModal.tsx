@@ -318,7 +318,8 @@ function General({ s, patch }: P) {
           </Row>
         </Section>
         <Section title="Routines">
-          {!isServerRuntime && <Row id="keep-awake" title="Keep the Mac awake while bots work" info="Only while a chat or routine is running. Closing the lid still sleeps."><Toggle on={s.keepAwakeWhileWorking ?? true} onChange={(v) => void patch({ keepAwakeWhileWorking: v })} label="Keep the Mac awake while bots work" testId="keep-awake" /></Row>}
+          {!isServerRuntime && <Row id="keep-awake" title="Keep the Mac awake while bots work" info="Only while a chat or routine is running. Closing the lid still sleeps (see the next setting)."><Toggle on={s.keepAwakeWhileWorking ?? true} onChange={(v) => void patch({ keepAwakeWhileWorking: v })} label="Keep the Mac awake while bots work" testId="keep-awake" /></Row>}
+          {!isServerRuntime && <LidAwakeRow on={s.lidAwake === true} onChanged={() => void patch({})} />}
           <Row id="catch-up" title="Catch up on missed routines" info="If SahilBot was closed or the Mac was asleep, each missed routine runs once if it was due within this window.">
             <select className="set-select" value={s.catchUpHours ?? 12} onChange={(e) => void patch({ catchUpHours: Number(e.target.value) })} data-testid="catch-up" aria-label="Catch up on missed routines">
               {CATCH_UP.map(([h, label]) => <option key={h} value={h}>{label}</option>)}
@@ -1243,5 +1244,26 @@ function Developer({ s, models, patch }: P & { models: ModelList | null }) {
         ))}
       </Section>
     </>
+  )
+}
+
+/**
+ * Keep working with the lid closed (off by default). Turning it on asks macOS for an administrator once
+ * (main/lid-awake.ts); a refusal leaves it off and says why.
+ */
+function LidAwakeRow({ on, onChanged }: { on: boolean; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const set = async (v: boolean): Promise<void> => {
+    setBusy(true)
+    try {
+      const r = await api.alwaysOn.setLidAwake(v)
+      if (!r.ok) toast(r.error ?? 'Couldn\'t turn it on.', 'error')
+      else if (v) toast('On: the Mac keeps working with the lid closed while bots run, and for 5 minutes after.', 'ok')
+    } catch (e) { toast(clean(e), 'error') } finally { setBusy(false); onChanged() }
+  }
+  return (
+    <Row id="lid-awake" title="Keep working with the lid closed" info="While a chat, bot or routine is working (and for 5 minutes after it finishes), the Mac stays awake even with the lid shut, then sleeps as usual. The first time, macOS asks for an administrator password. It lets the Mac sleep below 20% battery; don't leave a working Mac in a closed bag.">
+      <Toggle on={on} disabled={busy} onChange={(v) => void set(v)} label="Keep working with the lid closed" testId="lid-awake" />
+    </Row>
   )
 }

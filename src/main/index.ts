@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, shell, systemPreferences } from 'electron'
 import { autoPool, autoVariant } from './llm/router'
 import { execFileSync } from 'node:child_process'
-import { homedir, tmpdir, totalmem } from 'node:os'
+import { homedir, tmpdir, totalmem, userInfo } from 'node:os'
 import { writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { homeIdeas } from './ideas'
@@ -115,6 +115,7 @@ import { findOllamaBinary, setupOllama, startOllama, stopOllama } from './ollama
 import { needsYouBody } from './needs-you'
 import { MenuBarIcon, type TrayItem } from './tray'
 import { KeepAwake, RESUME_NEXT_NOTE, RESUME_NOTE, WorkTracker, wantAwake } from './resume'
+import { LidAwake } from './lid-awake'
 import type { MenuAction } from './shell'
 import { getWatchlist, setWatchlist } from './watchlist'
 import { MarketData } from './markets/data'
@@ -2369,7 +2370,22 @@ app.whenReady().then(() => {
     alwaysOnChanged.current({ routinesPaused: paused })
   }
   const awake = new KeepAwake(powerSaveBlocker)
-  const refreshAwake = (): void => { awake.set(!HIDDEN && wantAwake(settings.get().keepAwakeWhileWorking, work.working().length)) }
+  // Lid closed too (off by default; main/lid-awake.ts): while anything runs and 5 minutes after.
+  const lid = new LidAwake({
+    marker: join(dataDir(), 'lid-awake.hold'), user: userInfo().username, pid: process.pid,
+    setting: () => !HIDDEN && settings.get().lidAwake === true, working: () => work.working().length
+  })
+  void lid.recover().then(() => lid.refresh())
+  app.on('will-quit', () => { if (lid.on) void lid.release() })
+  const refreshAwake = (): void => { awake.set(!HIDDEN && wantAwake(settings.get().keepAwakeWhileWorking, work.working().length)); void lid.refresh() }
+  handle('alwaysOn:setLidAwake', async (on: boolean) => {
+    if (on) {
+      try { await lid.grant() } catch (e) { settings.set({ lidAwake: false }); return { ok: false, error: (e as Error).message } }
+    }
+    settings.set({ lidAwake: !!on })
+    await lid.refresh()
+    return { ok: true }
+  })
   work.onChange = () => { refreshAwake(); menuBar?.refresh() }
   menuBar = new MenuBarIcon(() => ({
     working: work.working().filter((id) => db.getThread(id)).map((id): TrayItem => ({ threadId: id, label: chatLabel(id) })),

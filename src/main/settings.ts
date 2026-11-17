@@ -44,6 +44,7 @@ export const DEFAULTS: Stored = {
   menuBarIcon: true,
   openAtLogin: false,
   keepAwakeWhileWorking: true,
+  lidAwake: false,
   catchUpHours: 12,
   routinesPaused: false,
   // Local models stay loaded this long between messages (Ollama's own default is 5 minutes).
