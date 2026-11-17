@@ -169,7 +169,7 @@ function harness(models: ModelInfo[]) {
   const space = db.createSpace('SahilBot', '#000000', { isMain: true })
   const thread = (): Thread => db.createThread(space.id, 'auto', null)
   const run = async (t: Thread, text: string) => (await agent.send({ threadId: t.id, text } as never)).done
-  return { db, agent, thread, run }
+  return { db, agent, thread, run, registry }
 }
 
 describe('the brain in the agent loop', () => {
@@ -215,6 +215,27 @@ describe('the brain in the agent loop', () => {
     llm.script.push({ content: 'Done: the change is made.', delay: 0 })
     await (await h.agent.send({ threadId: t.id, text: 'Approved: Document', meta: { questionAnswer: 'q1' } } as never)).done
     expect(llm.requests.map((r) => r.model)).toEqual(['claude-opus-5-5'])
+  })
+
+  test('a cheap model that keeps failing hands the task to a stronger cloud model, with the whole conversation', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    h.registry.register({ name: 'tidy', label: 'Tidy', effect: 'read', description: 'tidy notes', parameters: { type: 'object', properties: { n: { type: 'integer' } }, required: ['n'], additionalProperties: false }, async run() { throw new Error('the notes folder is locked') } } as never)
+    const t = h.thread()
+    const bad = (i: number) => ({ toolCalls: [{ name: 'tidy', arguments: JSON.stringify({ n: i }) }, { name: 'tidy', arguments: JSON.stringify({ n: i + 1 }) }], delay: 0 })
+    llm.script.push(
+      { content: JSON.stringify(answer({ category: 'agent-tools', kind: 'agent', difficulty: 2, model: HAIKU.id, why: 'light file task' })), delay: 0 },
+      bad(1), bad(3),
+      { content: 'Done on the stronger model.', delay: 0 }
+    )
+    await h.run(t, 'Tidy the notes in my workspace into one file per topic')
+    const models = llm.requests.map((r) => r.model)
+    expect(models.slice(0, 3)).toEqual(['gpt-6-luna', 'claude-haiku-5-5', 'claude-haiku-5-5'])
+    const next = models[3]
+    expect(next).not.toBe('claude-haiku-5-5')
+    expect(ALL.find((m) => m.id === next)!.tier).toBeGreaterThan(HAIKU.tier)
+    expect(next).not.toBe(FABLE.id)
+    expect(JSON.stringify(llm.requests[3].messages)).toContain('Tidy the notes in my workspace')
   })
 
   test('school work goes where the brain sends it, at the effort it chose', async () => {

@@ -181,6 +181,33 @@ describe('self-review', () => {
     expect(answers.at(-1)?.content).toBe('Final answer.')
   })
 
+  test('a change it already looked at gets no second pass; an unchecked one does, and "✓" keeps the answer it wrote', async () => {
+    const save: ToolDef<{ v: string }> = {
+      name: 'save_note', label: 'Save', effect: 'write_local', description: 'save something',
+      parameters: { type: 'object', properties: { v: { type: 'string' } }, required: ['v'], additionalProperties: false },
+      async run({ v }) { return { text: `saved ${v}` } }
+    }
+    const reread: ToolDef<{ q: string }> = { ...look, name: 'file_read' }
+    const h = harness([model('model-a', 2)], [save, reread])
+    // Saved, then read back: confirmed during the run, so it ends on its first answer.
+    llm.script.push({ toolCalls: [call('save_note', { v: 'x' })], delay: 0 }, { toolCalls: [call('file_read', { q: 'x' })], delay: 0 }, { content: 'Saved and checked.', delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'Save a note that says x in my notes file')).toBe('finished')
+    expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /double-check/.test(m.content))).toBe(false)
+    expect(llm.requests).toHaveLength(3)
+
+    // Saved and not looked at: one check; "✓" keeps the first answer instead of writing it again.
+    llm.requests.length = 0
+    llm.script.push({ toolCalls: [call('save_note', { v: 'y' })], delay: 0 }, { content: 'Saved y to your notes.', delay: 0 }, { content: '✓', delay: 0 })
+    const t2 = h.thread()
+    expect(await h.run(t2, 'Save a note that says y in my notes file')).toBe('finished')
+    const ms = h.db.listMessages(t2.id)
+    expect(ms.filter((m) => m.meta?.hidden && /double-check/.test(m.content))).toHaveLength(1)
+    const shown = ms.filter((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)
+    expect(shown.map((m) => m.content)).toEqual(['Saved y to your notes.'])
+    expect(shown[0].meta?.keptDraft).toBe(true)
+  })
+
   test('verifyNote: self-review only for complex work', () => {
     expect(verifyNote({ changed: true, researched: false, actions: 2, complex: false })).not.toMatch(/Critique/)
     expect(verifyNote({ changed: false, researched: true, actions: 9, complex: true, goal: 'Plan my trip' })).toMatch(/Critique your draft against what the user asked for \("Plan my trip"\)/)
