@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import type { ToolCall } from '@shared/types'
 import type { ChatRequest, StreamPart, WireMessage, WireTool } from '../client'
 import { ToolBridge, type BridgeResult, type BridgeSession, type BridgeTool } from './bridge'
-import { codexEnv } from './detect'
+import { codexEnv, type McpServerOff } from './detect'
 import { codexModelOf } from './ids'
 import { chatgptPlan, type RateLimitSnapshot } from './plan'
 import { AppServer } from './rpc'
@@ -82,7 +82,7 @@ export function bridgeTools(tools: WireTool[] | undefined): BridgeTool[] {
 }
 
 /** The -c overrides every SahilBot run uses (documented config keys: developers.openai.com/codex/config-reference). */
-export function runOverrides(o: { instructionsFile: string; bridgeUrl?: string; tokenEnv?: string; disable?: string[] }): string[] {
+export function runOverrides(o: { instructionsFile: string; bridgeUrl?: string; tokenEnv?: string; disable?: Array<string | McpServerOff> }): string[] {
   const kv: Array<[string, string]> = [
     // The user's own model provider settings can't send a "ChatGPT plan" run anywhere else.
     ['model_provider', '"openai"'],
@@ -110,7 +110,14 @@ export function runOverrides(o: { instructionsFile: string; bridgeUrl?: string; 
       ['mcp_servers.sahilbot.required', 'true']
     )
   }
-  for (const name of o.disable ?? []) if (name !== 'sahilbot') kv.push([`mcp_servers.${name}.enabled`, 'false'])
+  for (const x of o.disable ?? []) {
+    const off = typeof x === 'string' ? { name: x } : x
+    if (off.name === 'sahilbot') continue
+    kv.push([`mcp_servers.${off.name}.enabled`, 'false'])
+    // A server without a command or url in the merged config is invalid, and Codex then refuses to start at all.
+    if (off.url) kv.push([`mcp_servers.${off.name}.url`, JSON.stringify(off.url)])
+    else kv.push([`mcp_servers.${off.name}.command`, JSON.stringify(off.command ?? '/usr/bin/false')])
+  }
   return kv.flatMap(([k, v]) => ['-c', `${k}=${v}`])
 }
 

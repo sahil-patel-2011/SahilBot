@@ -250,9 +250,36 @@ describe('site playbooks and smarter browsing', () => {
     // Covered by a sticky bar where it sat; scrolled to the middle and clicked.
     expect(outs[7]).toContain('Clicked button "Archive"')
     expect(outs[8]).toContain('Archived')
-    // A link that opens a new tab: reported, and the tab switch finds it by title.
-    expect(outs[10]).toMatch(/opened a new tab in the background \(tab 2/)
+    // A link that opens a new tab: the agent goes to it and sees its page in the same step; the tab switch still finds it by title.
+    expect(outs[10]).toMatch(/opened a new tab \(tab 2[^)]*\), and it's now the active tab\. Its page is below/)
     expect(outs[11]).toMatch(/Switched to tab 2[\s\S]*2\. \(active\) Widgets/)
+    await app.close()
+  })
+
+  test('a click shows what it opened, refs hold, keys close it, and an invisible CAPTCHA asks nothing', async () => {
+    const { app, page } = await launch(tempProfile(), llm.url)
+    let optRef = ''
+    llm.script.push(
+      call({ action: 'navigate', url: `${site.url}/menu` }),
+      (req) => { optRef = refFor(snapOf(req, 'Files'), 'button', 'Options'); return call({ action: 'click', ref: optRef }) },
+      // The menu's button comes back with the click: no snapshot in between.
+      (req) => call({ action: 'click', ref: refIn(String([...req.messages].reverse().find((m: any) => m.role === 'tool').content), /\*button "Rename" \[ref=(e\d+)\]/) }),
+      call({ action: 'key', keys: 'Escape' }),
+      call({ action: 'get_text' }),
+      { content: 'Done.' }
+    )
+    await send(page, 'Rename the file from the Options menu')
+    const seen = await drive(page, llm)
+    const outs = toolTexts(llm)
+    expect(outs[1]).toContain('Clicked button "Options"')
+    expect(outs[1]).toMatch(/New on the page[\s\S]*button "Rename" \[ref=e\d+\]/)
+    // The ref held from the first page still names the same button.
+    expect(outs[1]).not.toContain(`[ref=${optRef}]`)
+    expect(outs[2]).toContain('Clicked button "Rename"')
+    expect(outs[3]).toContain('Pressed Escape')
+    expect(outs[4]).toContain('Renamed')
+    expect(seen.filter((x) => /human|CAPTCHA|robot/i.test(x.text))).toEqual([])
+    expect(outs.join('\n')).not.toMatch(/reCAPTCHA|complete the check/i)
     await app.close()
   })
 

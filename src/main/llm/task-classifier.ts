@@ -317,6 +317,36 @@ const LEVEL_ORDER: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const has = (re: RegExp, t: string): boolean => re.test(t)
 const countWords = (t: string): number => t.split(/\s+/).filter(Boolean).length
 
+/** How much a request asks for, read from its shape instead of its topic words. */
+export interface RequestShape { words: number; asks: number; constraints: number; specifics: number; codeLines: number; tier: Tier; acts: boolean }
+const SEQUENCE = /\b(and then|then|after that|afterwards|also|plus|as well as|next|finally|once done|once that'?s done)\b|;/gi
+// A list of three or more things in one sentence ("web use, computer use and the UI").
+const ENUMERATION = /\b[\w'-]+(?: [\w'-]+){0,3}, [\w'-]+(?: [\w'-]+){0,3},? (?:and|or) [\w'-]+/gi
+const CONSTRAINT = /\b(must|without|only|at least|at most|no more than|exactly|make sure|ensure|never|always|don'?t|do not|has to|have to|so that|while keeping|within|under \$?\d[\d,k]*|by (monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|tonight|\d))\b/gi
+const SPECIFIC = /(https?:\/\/\S+|[~.]?\/[\w.-]+\/[\w./-]+|\b\w+\.(ts|tsx|js|py|md|pdf|docx|xlsx|csv|json|swift|java)\b|\b[a-z]+[A-Z]\w+\b|\b\w+_\w+\b|\$?\b\d[\d,.]*k?\b)/g
+// A later step done outside the reply ("…, then email it to my dad", "… and book the hotels"): agent work.
+const OUTWARD_STEP = /(?:,|;|\band\b|\bthen\b|^)\s*(?:then\s+|also\s+)?(e-?mail|send|text|message|post|book|reserve|order|buy|save|upload|schedule|open|install|run|make|create|put|turn|export|share|add)\s+(it|them|this|that|those|these|the|a|an|me|my|to|us|everything)\b/
+export function requestShape(raw: string): RequestShape {
+  const code = (raw.match(/```[\s\S]*?```/g) ?? []).join('\n')
+  const unfenced = raw.replace(/```[\s\S]*?```/g, '\n')
+  // "Edit this …:" then pasted text: the pasted part is material to work on, not more asks.
+  const lead = unfenced.match(/^([\s\S]{12,400}?):\s*\n/)
+  const text = lead && countWords(lead[1]) >= 3 ? lead[1] : unfenced
+  const words = countWords(text)
+  const lines = text.split('\n')
+  const listItems = lines.filter((l) => /^\s*([-*•]|\d+[.)])\s+\S/.test(l)).length
+  const sentences = text.split(/(?<=[.?!])\s+|\n+/).filter((x) => countWords(x) >= 3).length
+  const asks = Math.max(1, sentences, listItems) + Math.min(3, (text.match(SEQUENCE) ?? []).length) + Math.min(2, (text.match(ENUMERATION) ?? []).length)
+  const constraints = (text.match(CONSTRAINT) ?? []).length
+  const specifics = (text.match(SPECIFIC) ?? []).length
+  const codeLines = code ? code.split('\n').length : 0
+  const pts = (asks >= 5 ? 3 : asks >= 3 ? 2 : asks >= 2 ? 1 : 0) + (constraints >= 4 ? 2 : constraints >= 2 ? 1 : 0) + (words >= 120 ? 2 : words >= 40 ? 1 : 0) + (specifics >= 6 ? 1 : 0) + (codeLines >= 30 ? 2 : codeLines >= 6 ? 1 : 0)
+  const steps = normalizeRequest(text).split(/(?<=[.?!])\s+|\n+/).slice(0, 12)
+  // An outward step that isn't the request's own opening (that one the category rules already read).
+  const acts = steps.some((x, i) => { const m = x.match(OUTWARD_STEP); return !!m && (i > 0 || (m.index ?? 0) > 0) })
+  return { words, asks, constraints, specifics, codeLines, tier: (pts >= 4 ? 3 : pts >= 2 ? 2 : 1) as Tier, acts }
+}
+
 /** Role prior: what the bot's instructions say it does (a vague request inherits it). */
 function roleCategory(role?: string): TaskCategory | undefined {
   if (!role) return undefined
@@ -438,6 +468,11 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (!question && has(OPERATE, t) && words >= 3) return { category: 'agent-tools', rule: 'imperative', why: 'an operational request' }
     return { category: 'chat', rule: question ? 'chat:question' : 'chat', why: question ? 'a question' : 'conversation' }
   })()
+  // The request's shape (requestShape): read from how much is asked, not from topic words.
+  const shape = requestShape(raw)
+  const shaped = !ctx.voice && !['small-talk', 'empty', 'follow-up', 'follow-up:new'].includes(pick.rule)
+  // A conversation that also asks for something done (a table emailed, a hotel booked) is agent work with tools.
+  if (shaped && shape.acts && pick.category === 'chat' && !question) Object.assign(pick, { category: 'agent-tools', rule: 'shape:steps', why: 'several steps, one done with tools' })
   const { category } = pick
 
   // ---- difficulty (the difficulty rubric)
@@ -506,6 +541,8 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
   if (folders && difficulty < 3 && category !== 'vision') difficulty = 3
   // Agentic coding and computer use are never light work for the model, even when the words are few.
   if ((category === 'coding' || category === 'computer-use' || category === 'long-context') && difficulty < 2) difficulty = 2
+  // The request's shape: several asks, constraints, specifics or a lot to read make it harder than its words suggest.
+  if (shaped && shape.tier > difficulty) { difficulty = Math.min(3, difficulty + (shape.tier - difficulty >= 2 ? 2 : 1)) as Tier; why = `${why} · ${shape.asks > 1 ? `${shape.asks} asks` : 'a lot asked'}` }
 
   // ---- chat or agent (the kind rubric)
   const kind = ((): { kind: TaskKind; why: string } => {
@@ -517,6 +554,8 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (ctx.openPlan && words <= 20) return { kind: 'agent', why: 'a task is in progress' }
     if (pick.rule === 'follow-up') return { kind: ctx.previousKind ?? (AGENT_WORK.has(category) ? 'agent' : 'chat'), why: 'follow-up' }
     if (pick.rule === 'follow-up:new') return { kind: 'agent', why: 'follow-up that makes or sends something' }
+    // Several asks, one of them done outside the reply (a file, an email, a booking): the agent does it.
+    if (shaped && shape.acts && !question && category !== 'code-quick') return { kind: 'agent', why: 'several steps, one makes or sends something' }
     switch (category) {
       case 'coding': case 'computer-use': case 'long-context': case 'agent-tools': case 'office':
         return { kind: 'agent', why: KIND_WHY[category] ?? 'agent work' }

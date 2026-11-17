@@ -4,9 +4,10 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ToolEffect } from '@shared/types'
-import { runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec } from '../../code/proc'
+import { homeGuarded, runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec } from '../../code/proc'
 import { jobLine, jobs as defaultJobs, type JobManager, type WaitFor } from '../../jobs/manager'
 import type { ThreadState, ToolContext, ToolDef } from '../types'
+import { inForbidden, isSecretName } from '../../knowledge/ignore'
 
 // Run a terminal command. What it can do decides who must approve it:
 // - looks only (ls, cat, git status, grep…): runs freely;
@@ -717,10 +718,14 @@ export function outsidePaths(cmd: string, allowed: string[], cwd?: string): stri
   const out: string[] = []
   let dir: string | null = cwd ? realish(resolve(cwd)) : roots[0] ?? null
   const under = (list: string[], full: string): boolean => list.some((p) => full === p.replace(/\/$/, '') || full.startsWith(p))
+  const home = realish(HOME)
+  const specific = roots.filter((r) => r !== home)
   const inside = (full: string, program = false): boolean => {
     if (under(SAFE_PREFIXES, full) || (program && under(TOOL_PREFIXES, full))) return true
     const real = realish(full)
-    return within(tmp, real) || roots.some((r) => within(r, real))
+    if (within(tmp, real) || specific.some((r) => within(r, real))) return true
+    // The home folder as a root ("files anywhere"): never its system, private or secret places.
+    return roots.includes(home) && within(home, real) && !inForbidden(real) && !isSecretName(basename(real)) && !homeGuarded(real, home)
   }
   const check = (raw0: string, relativeOk: boolean, program = false): void => {
     for (const raw of raw0.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ').split(/[\s=:,]+/)) {
@@ -908,7 +913,8 @@ export function isProjectCommand(cmd: string, cwd: string, allowed: string[], o:
  */
 export function cwdFor(p: string | undefined, ctx: Pick<ToolContext, 'state' | 'workspaceDir'>): string {
   const folder = ctx.state.folder && existsSync(ctx.state.folder) && statSync(ctx.state.folder).isDirectory() ? ctx.state.folder : undefined
-  const base = folder ?? ctx.state.roots?.find((r) => existsSync(r) && statSync(r).isDirectory()) ?? ctx.workspaceDir
+  // The home folder (Files anywhere) is somewhere a command may reach, never where it starts.
+  const base = folder ?? ctx.state.roots?.find((r) => r !== homedir() && existsSync(r) && statSync(r).isDirectory()) ?? ctx.workspaceDir
   if (!p) return base
   const abs = isAbsolute(p) ? p : resolve(folder ?? ctx.workspaceDir, p)
   const real = existsSync(abs) ? realpathSync(abs) : abs

@@ -13,9 +13,14 @@ import { slotOf, windowOf, type AutoPreference, type Slot } from './routing-tabl
 // fails or answers outside the schema, and hard limits (keys, budget, vision, window, Grok, premium models)
 // are checked here before any pick is used. Every model gets the whole conversation either way.
 
-export const BRAIN_TIMEOUT_MS = 3500
-/** Cheap brains, fastest first (first-token time at low effort: Luna 1.57 s, Terra 1.96 s, Haiku 6.26 s). */
+export const BRAIN_TIMEOUT_MS = 4000
+/** Cheap brains, fastest first. The read runs without thinking (Haiku with adaptive thinking took 6.26 s to start). */
 export const BRAIN_SLOTS: Slot[] = ['luna', 'terra', 'haiku']
+/** How long the request waits for the read, by brain: a slower one gets longer instead of always losing to the rules. */
+const BRAIN_WAIT: Partial<Record<Slot, number>> = { luna: 4000, terra: 4500, haiku: 6000 }
+export const brainTimeout = (m: ModelInfo): number => BRAIN_WAIT[slotOf(m) as Slot] ?? BRAIN_TIMEOUT_MS
+/** A read that misses the wait still finishes this long, so the same request's later turns use it. */
+const BRAIN_LATE_MS = 25_000
 
 export type TeamPlan = 'solo' | 'pair' | 'plan' | 'review' | 'plan+review' | 'debate'
 const TEAMS: TeamPlan[] = ['solo', 'pair', 'plan', 'review', 'plan+review', 'debate']
@@ -103,7 +108,7 @@ Fields:
   reasoning, math, logic: GPT-6 Astra or GPT-6.1 Sol (Fable 5.2 only for the very hardest); coding: Opus 5.5 or Sonnet 5.5; see-images: Opus 5.5 or GPT-6.1 Sol; make-images: any capable model (the image tool draws); ideas and creative writing: Opus 5.5 or Sonnet 5.5; research: GPT-6 Astra or Sol; computer-use and apps: Opus 5.5 or Sonnet 5.5 (never Grok); quick: GPT-6 Luna, Haiku 5.5 or Terra.
 - category: one of ${TASK_CATEGORIES.join(', ')} (${TASK_CATEGORIES.map((c) => `${c} = ${CATEGORY_LABEL[c]}`).join('; ')}).
 - kind: "agent" if it needs tools, files, apps, the web, the screen or several steps; else "chat".
-- difficulty: 0 small talk, 1 quick answer, 2 a standard task, 3 the hardest (multi-step, high stakes, long output, big code changes).
+- difficulty: 0 small talk, 1 quick answer, 2 a standard task, 3 the hardest (multi-step, high stakes, long output, big code changes). Judge it by what the work really takes, never by the words used: how many separate things are asked, how many steps and tools, how much must be exactly right, how much there is to read, the expertise needed, and what a mistake costs. A short request can be hard ("why does this deadlock?", "prove it") and a long, chatty one easy.
 - effort: how hard the model should think: low, medium, high, xhigh or max. Low for small talk, medium for explanations, high for real tasks, xhigh/max only for the hardest.
 - study: true for school work (homework, studying, a class, a test, a school subject).
 - image: true if the user wants a picture made or edited.
@@ -118,7 +123,7 @@ Fields:
 Models:
 ${menu}${i.outcomes?.length ? `\n\nHow models did on this Mac lately:\n${i.outcomes.join('\n')}` : ''}`
   const convo = i.history.slice(-10).map((h) => `${h.role === 'user' ? 'User' : h.role === 'assistant' ? 'Assistant' : 'Step'}: ${h.text.replace(/\s+/g, ' ').slice(0, 400)}`).join('\n')
-  const user = `${i.role ? `Bot: ${i.role}\n` : ''}${convo ? `Conversation so far:\n${convo}\n\n` : ''}${i.attachments.length || i.images ? `Attached: ${[...i.attachments, ...(i.images ? [`${i.images} image(s)`] : [])].join(', ')}\n` : ''}First read by simple rules (may be wrong): ${i.rules.category}, difficulty ${i.rules.difficulty}, ${i.rules.kind}.\n\nRequest:\n${i.text.slice(0, 8000)}`
+  const user = `${i.role ? `Bot: ${i.role}\n` : ''}${convo ? `Conversation so far:\n${convo}\n\n` : ''}${i.attachments.length || i.images ? `Attached: ${[...i.attachments, ...(i.images ? [`${i.images} image(s)`] : [])].join(', ')}\n` : ''}${i.rules.contextTokens && i.rules.contextTokens > 2000 ? `To read with it: about ${Math.round(i.rules.contextTokens / 1000)}K tokens\n` : ''}\nRequest:\n${i.text.slice(0, 8000)}`
   return { system, user }
 }
 
@@ -234,12 +239,16 @@ export function teamFor(a: BrainAnswer, executor: ModelInfo, l: { allowed: Model
 /** One brain answer per message (null: asked, no usable answer). */
 export class BrainCache {
   private m = new Map<string, BrainAnswer | null>()
+  private inflight = new Map<string, Promise<BrainAnswer | null>>()
   constructor(private cap = 300) {}
   get(id: string): BrainAnswer | null | undefined { return this.m.get(id) }
   set(id: string, a: BrainAnswer | null): void {
+    this.inflight.delete(id)
     if (this.m.size >= this.cap) this.m.delete(this.m.keys().next().value as string)
     this.m.set(id, a)
   }
+  pending(id: string): Promise<BrainAnswer | null> | undefined { return this.inflight.get(id) }
+  reading(id: string, p: Promise<BrainAnswer | null>): void { this.inflight.set(id, p) }
 }
 
 export type BrainAsk = (o: { model: string; system: string; user: string; signal: AbortSignal }) => Promise<string>
@@ -248,24 +257,38 @@ export type BrainAsk = (o: { model: string; system: string; user: string; signal
  * The brain's answer for a message. Never throws and never waits past the timeout: an error, a timeout or an
  * answer outside the schema returns undefined (the rules decide).
  */
-export async function askBrain(o: { messageId: string; input: BrainInput; model: string; ask: BrainAsk; cache: BrainCache; timeoutMs?: number; signal?: AbortSignal }): Promise<{ answer?: BrainAnswer; ms: number; cached: boolean }> {
+export async function askBrain(o: { messageId: string; input: BrainInput; model: string; ask: BrainAsk; cache: BrainCache; timeoutMs?: number; lateMs?: number; signal?: AbortSignal }): Promise<{ answer?: BrainAnswer; ms: number; cached: boolean; late?: boolean }> {
   const start = Date.now()
   const hit = o.cache.get(o.messageId)
   if (hit !== undefined) return { answer: hit ?? undefined, ms: 0, cached: true }
-  const ctrl = new AbortController()
-  const stop = (): void => ctrl.abort()
-  o.signal?.addEventListener('abort', stop)
+  // Still reading this message (a turn that didn't wait for it): wait for that read instead of asking twice.
+  let read = o.cache.pending(o.messageId)
+  if (!read) {
+    const ctrl = new AbortController()
+    const late = setTimeout(() => ctrl.abort(), o.lateMs ?? BRAIN_LATE_MS)
+    const { system, user } = brainPrompt(o.input)
+    read = o.ask({ model: o.model, system, user, signal: ctrl.signal })
+      .then((reply) => parseBrain(reply, o.input.models) ?? null, () => null)
+      .then((a) => { clearTimeout(late); o.cache.set(o.messageId, a); return a })
+    o.cache.reading(o.messageId, read)
+  }
+  // The run stopping only stops the wait; the read itself is cheap and serves the next turn.
   let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<undefined>((res) => { timer = setTimeout(() => { ctrl.abort(); res(undefined) }, o.timeoutMs ?? BRAIN_TIMEOUT_MS) })
-  const { system, user } = brainPrompt(o.input)
-  const reply = await Promise.race([o.ask({ model: o.model, system, user, signal: ctrl.signal }).catch(() => undefined), timeout])
+  const stopped = new Promise<'late'>((res) => {
+    timer = setTimeout(() => res('late'), o.timeoutMs ?? BRAIN_TIMEOUT_MS)
+    o.signal?.addEventListener('abort', () => res('late'), { once: true })
+  })
+  const got = await Promise.race([read, stopped])
   if (timer) clearTimeout(timer)
-  o.signal?.removeEventListener('abort', stop)
-  const answer = reply ? parseBrain(reply, o.input.models) : undefined
-  o.cache.set(o.messageId, answer ?? null)
-  return { answer, ms: Date.now() - start, cached: false }
+  if (got === 'late') return { ms: Date.now() - start, cached: false, late: true }
+  return { answer: got ?? undefined, ms: Date.now() - start, cached: false }
 }
 
-/** Light enough that the rules alone decide: a few words of small talk with nothing attached. */
-export const skipBrain = (text: string, d: Pick<TaskClass, 'difficulty' | 'category' | 'confident'>, attachments: number): boolean =>
-  d.category === 'voice' || (attachments === 0 && d.confident && d.difficulty === 0 && text.trim().split(/\s+/).length <= 4)
+/**
+ * No read needed: a few words of small talk, or a short "yes, do it" / "continue" that carries on the request
+ * before it (the chat keeps its model and level). Nothing attached either way.
+ */
+export const skipBrain = (text: string, d: Pick<TaskClass, 'difficulty' | 'category' | 'confident'> & { rule?: string }, attachments: number): boolean => {
+  const words = text.trim().split(/\s+/).length
+  return d.category === 'voice' || (attachments === 0 && ((d.confident && d.difficulty === 0 && words <= 4) || (d.rule === 'follow-up' && words <= 5)))
+}

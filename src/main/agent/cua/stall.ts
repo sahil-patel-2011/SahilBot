@@ -44,8 +44,9 @@ export function recordOf(tool: string, argsJson: string, result: { status?: stri
   const coord = Array.isArray(a.coordinate) && a.coordinate.length === 2 ? `${Math.round(Number(a.coordinate[0]) / 8) * 8},${Math.round(Number(a.coordinate[1]) / 8) * 8}` : ''
   const target = String(a.ref ?? a.keys ?? a.path ?? a.url ?? a.app ?? a.window ?? (pt || coord) ?? '').slice(0, 120) + (a.text ? `|${String(a.text).slice(0, 40)}` : '')
   const text = `${result.display ?? ''}\n${result.text ?? ''}`
-  const noChange = /\(no change\)|No change detected|nothing changed|Nothing was copied|didn't change/i.test(text)
-  const changedWords = /\bChanged:|Now: .*›|opened|navigated|Pressed .*Changed|value .* → /i.test(text)
+  // (The browser's own words count too: "No visible change on the page", "The page changed", "Navigated to".)
+  const noChange = /\(no change\)|No change detected|nothing changed|Nothing was copied|didn't change|No visible change/i.test(text)
+  const changedWords = /\bChanged:|Now: .*›|opened|navigated|Pressed .*Changed|value .* → |The page changed|New on the page/i.test(text)
   return { tool, action, target, error: result.status !== undefined && result.status !== 'ok', changed: noChange ? false : changedWords ? true : undefined }
 }
 

@@ -20,12 +20,12 @@ export interface IdeaSignals {
 
 const GENERIC: HomeIdea[] = [
   { icon: 'globe', label: 'Plan a trip', text: 'Plan a 4-day trip to ' },
-  { icon: 'clock', label: 'Morning brief', text: 'Every weekday at 8am, give me a short morning brief: today\'s calendar and reminders, the weather where I live, and the most important news about my work and interests.' },
-  { icon: 'search', label: 'Watch a page', text: 'Every morning, check https:// and tell me only if something important changed (price, availability, new posts).' },
+  { icon: 'sparkle', label: 'Use my Mac', text: 'On my Mac, ' },
   { icon: 'cpu', label: 'Build an app', text: 'Build me a small web app that ' },
   { icon: 'file', label: 'Make a deck', text: 'Make a polished slide deck about ' },
-  { icon: 'video', label: 'Make a video', text: 'Make a 30-second avatar video about ' },
-  { icon: 'sparkle', label: 'Use my Mac', text: 'On my Mac, ' }
+  { icon: 'clock', label: 'Morning brief', text: 'Every weekday at 8am, give me a short morning brief: today\'s calendar and reminders, the weather where I live, and the most important news about my work and interests.' },
+  { icon: 'search', label: 'Watch a page', text: 'Every morning, check https:// and tell me only if something important changed (price, availability, new posts).' },
+  { icon: 'video', label: 'Make a video', text: 'Make a 30-second avatar video about ' }
 ]
 
 /** Ideas a habit suggests (category → tile). */
@@ -59,7 +59,7 @@ const BY_APP: Record<string, HomeIdea> = {
 
 /** Ideas the files made lately suggest. */
 const BY_FILE: Record<string, HomeIdea> = {
-  '.pptx': GENERIC[4],
+  '.pptx': GENERIC[3],
   '.xlsx': BY_CATEGORY.office!,
   '.pdf': { icon: 'file', label: 'Write a report', text: 'Write a polished PDF report on  with sources.' },
   '.docx': { icon: 'file', label: 'Write a document', text: 'Write a document about ' }

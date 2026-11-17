@@ -7,7 +7,9 @@ import { ResultStore, estimate } from '../../src/main/agent/context'
 import { ToolRegistry } from '../../src/main/agent/registry'
 import { coreTools } from '../../src/main/agent/tools/core'
 import { Db } from '../../src/main/db'
-import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainModel, parseBrain, skipBrain, teamFor, type BrainAnswer } from '../../src/main/llm/auto-brain'
+import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainModel, brainPrompt, brainTimeout, parseBrain, skipBrain, teamFor, type BrainAnswer } from '../../src/main/llm/auto-brain'
+import { buildClaudeRequest } from '../../src/main/llm/anthropic'
+import { quickestEffort } from '../../src/main/llm/openai-models'
 import { classifyTask } from '../../src/main/llm/task-classifier'
 import { modelHealth } from '../../src/main/llm/model-health'
 import type { ModelInfo, Settings, Thread } from '../../src/shared/types'
@@ -96,7 +98,44 @@ describe('the brain\'s decision', () => {
     const broken = await askBrain({ messageId: 'b', input, model: LUNA.id, cache: new BrainCache(), ask: async () => { throw new Error('down') } })
     expect(broken.answer).toBeUndefined()
     expect(skipBrain('thanks!', classifyTask('thanks!'), 0)).toBe(true)
+    expect(skipBrain('so, generate 1000000 digits of pi', classifyTask('so, generate 1000000 digits of pi'), 0)).toBe(false)
+    // "yes, do it" carries on the request before it; a follow-up that asks for more gets a fresh read.
+    expect(skipBrain('yes, do it', classifyTask('yes, do it', { previousCategory: 'coding', previousTier: 3 }), 0)).toBe(true)
+    expect(skipBrain('also add dark mode and a settings page with export to CSV', classifyTask('also add dark mode and a settings page with export to CSV', { previousCategory: 'coding', previousTier: 3 }), 0)).toBe(false)
     expect(skipBrain('Help me study for my chem quiz', classifyTask('Help me study for my chem quiz'), 0)).toBe(false)
+  })
+})
+
+describe('the read is reliable', () => {
+  const input = { text: 'Refactor the auth module', history: [], attachments: [], images: 0, preference: 'balanced' as const, models: ALL, rules: classifyTask('Refactor the auth module') }
+  const reply = JSON.stringify({ category: 'coding', kind: 'agent', difficulty: 3, effort: 'high', study: false, image: false, needs: ['coding'], model: OPUS.id, team: 'solo', fanout: 0, why: 'big refactor' })
+
+  test('a read that misses the wait is kept for the same request, and never asked twice', async () => {
+    const cache = new BrainCache()
+    let calls = 0
+    const ask = (): Promise<string> => { calls++; return new Promise((r) => setTimeout(() => r(reply), 120)) }
+    const first = await askBrain({ messageId: 'm', input, model: LUNA.id, cache, timeoutMs: 20, ask })
+    expect(first).toMatchObject({ late: true })
+    expect(first.answer).toBeUndefined()
+    // The next turn of the same request (still reading): waits for that read, no second call.
+    const second = await askBrain({ messageId: 'm', input, model: LUNA.id, cache, timeoutMs: 1000, ask })
+    expect(second.answer?.model).toBe(OPUS.id)
+    expect(calls).toBe(1)
+    expect((await askBrain({ messageId: 'm', input, model: LUNA.id, cache, ask })).cached).toBe(true)
+  })
+
+  test('the brain judges difficulty itself: the prompt has no keyword verdict to copy', () => {
+    const { system, user } = brainPrompt(input)
+    expect(user).not.toMatch(/rules|difficulty \d/i)
+    expect(system).toMatch(/never by the words used/)
+  })
+
+  test('a slower brain gets a longer wait; the routing call runs without thinking', () => {
+    expect(brainTimeout(HAIKU)).toBeGreaterThan(brainTimeout(LUNA))
+    const { params } = buildClaudeRequest({ baseUrl: 'https://api.anthropic.com/v1', model: HAIKU.id, messages: [{ role: 'user', content: 'x' }], sampling: { temperature: 0.2, topP: 1 } as never, maxTokens: 500, effort: 'low', noThinking: true })
+    expect(params.thinking).toBeUndefined()
+    expect(buildClaudeRequest({ baseUrl: 'https://api.anthropic.com/v1', model: HAIKU.id, messages: [{ role: 'user', content: 'x' }], sampling: { temperature: 0.2, topP: 1 } as never, maxTokens: 500, effort: 'low' }).params.thinking).toBeDefined()
+    expect(quickestEffort('gpt-6-luna')).toBe('none')
   })
 })
 
@@ -133,7 +172,7 @@ function harness(models: ModelInfo[]) {
   const space = db.createSpace('SahilBot', '#000000', { isMain: true })
   const thread = (): Thread => db.createThread(space.id, 'auto', null)
   const run = async (t: Thread, text: string) => (await agent.send({ threadId: t.id, text } as never)).done
-  return { db, agent, thread, run }
+  return { db, agent, thread, run, registry }
 }
 
 describe('the brain in the agent loop', () => {
@@ -164,6 +203,65 @@ describe('the brain in the agent loop', () => {
     expect(exec).toContain('Refactor the whole app to a plugin architecture')
     expect(JSON.stringify(llm.requests[0].messages)).toContain('Refactor the whole app to a plugin architecture')
   })
+
+  test('an approval from Needs you continues the request it belongs to: no new read, the same model', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    const t = h.thread()
+    llm.script.push(
+      { content: JSON.stringify(answer({ category: 'coding', kind: 'agent', difficulty: 3, model: OPUS.id, why: 'big refactor' })), delay: 0 },
+      { content: 'Queued the change for your approval.', delay: 0 }
+    )
+    await h.run(t, 'Refactor the auth module and move the tokens to the keychain')
+    expect(llm.requests.map((r) => r.model)).toEqual(['gpt-6-luna', 'claude-opus-5-5'])
+    llm.requests.length = 0
+    llm.script.push({ content: 'Done: the change is made.', delay: 0 })
+    await (await h.agent.send({ threadId: t.id, text: 'Approved: Document', meta: { questionAnswer: 'q1' } } as never)).done
+    expect(llm.requests.map((r) => r.model)).toEqual(['claude-opus-5-5'])
+  })
+
+  test('a cheap model that keeps failing hands the task to a stronger cloud model, with the whole conversation', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    h.registry.register({ name: 'tidy', label: 'Tidy', effect: 'read', description: 'tidy notes', parameters: { type: 'object', properties: { n: { type: 'integer' } }, required: ['n'], additionalProperties: false }, async run() { throw new Error('the notes folder is locked') } } as never)
+    const t = h.thread()
+    const bad = (i: number) => ({ toolCalls: [{ name: 'tidy', arguments: JSON.stringify({ n: i }) }, { name: 'tidy', arguments: JSON.stringify({ n: i + 1 }) }], delay: 0 })
+    llm.script.push(
+      { content: JSON.stringify(answer({ category: 'agent-tools', kind: 'agent', difficulty: 2, model: HAIKU.id, why: 'light file task' })), delay: 0 },
+      bad(1), bad(3),
+      { content: 'Done on the stronger model.', delay: 0 }
+    )
+    await h.run(t, 'Tidy the notes in my workspace into one file per topic')
+    const models = llm.requests.map((r) => r.model)
+    expect(models.slice(0, 3)).toEqual(['gpt-6-luna', 'claude-haiku-5-5', 'claude-haiku-5-5'])
+    const next = models[3]
+    expect(next).not.toBe('claude-haiku-5-5')
+    expect(ALL.find((m) => m.id === next)!.tier).toBeGreaterThan(HAIKU.tier)
+    expect(next).not.toBe(FABLE.id)
+    expect(JSON.stringify(llm.requests[3].messages)).toContain('Tidy the notes in my workspace')
+  })
+
+  test('"yes, do it" keeps the model the last read chose, without a new read', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    const t = h.thread()
+    llm.script.push({ content: JSON.stringify(answer({ model: OPUS.id, difficulty: 3, why: 'big refactor' })), delay: 0 }, { content: 'Here is the plan. Want me to start?', delay: 0 })
+    await h.run(t, 'Plan a refactor of the billing module into separate services')
+    llm.requests.length = 0
+    llm.script.push({ content: 'Started.', delay: 0 })
+    await h.run(t, 'yes, do it')
+    expect(llm.requests.map((r) => r.model)).toEqual([OPUS.id])
+  })
+
+  test('a read that lands after the wait is still saved with the message', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    const t = h.thread()
+    llm.script.push({ content: JSON.stringify(answer({ model: OPUS.id, why: 'late read' })), delay: 4600 }, { content: 'Done by the rules\' pick.', delay: 0 })
+    await h.run(t, 'Refactor the payment module and add retries with tests')
+    const user = h.db.listMessages(t.id).find((m) => m.role === 'user' && !m.meta?.hidden)!
+    await expect.poll(() => (h.db.getMessage(user.id)?.meta?.autoRead as BrainAnswer | undefined)?.why, { timeout: 3000 }).toBe('late read')
+  }, 15_000)
 
   test('school work goes where the brain sends it, at the effort it chose', async () => {
     process.env.FOREMAN_NO_VERIFY = '1'

@@ -3,7 +3,7 @@ import { lookup } from './catalog'
 import { isAnthropic, isXai } from './providers'
 import { claudeMaxTokens, listAnthropicModels, streamAnthropic } from './anthropic'
 import { streamResponses } from './openai-responses'
-import { openaiEffort, openaiInfo, openaiMaxTokens, usesResponses } from './openai-models'
+import { openaiEffort, openaiInfo, openaiMaxTokens, quickestEffort, usesResponses } from './openai-models'
 import { priceFor, tierTokens, cost } from './budget'
 import { taskScope } from '../agent/runtime/policy'
 // xAI (Grok) over its Responses API, and Fast mode (each provider's faster, pricier service tier).
@@ -68,6 +68,8 @@ export interface ChatRequest {
    * the app's Fast mode settings decide (fastHooks.resolve). Ignored by models without a fast tier.
    */
   fast?: import('@shared/types').FastTier | null
+  /** A short structured answer (Auto's routing read): no thinking where the model allows it, the least reasoning elsewhere. */
+  noThinking?: boolean
 }
 
 /**
@@ -221,7 +223,8 @@ export function buildBody(req: ChatRequest): Record<string, unknown> {
   }
   // OpenAI reasoning models: the model's own effort values (openai-models.ts), never one it rejects; models
   // the table doesn't describe keep the coarse scale.
-  if (req.effort && !isLocal(req.baseUrl) && openaiInfo(req.model)?.efforts) body.reasoning_effort = openaiEffort(req.model, req.effort)
+  if (req.noThinking && !isLocal(req.baseUrl) && openaiInfo(req.model)?.efforts) body.reasoning_effort = quickestEffort(req.model) ?? openaiEffort(req.model, 'low')
+  else if (req.effort && !isLocal(req.baseUrl) && openaiInfo(req.model)?.efforts) body.reasoning_effort = openaiEffort(req.model, req.effort)
   else if (req.effort && /^(gpt-5|o\d)/i.test(req.model) && !isLocal(req.baseUrl)) body.reasoning_effort = req.effort === 'xhigh' || req.effort === 'max' ? 'high' : req.effort
   // Fast mode on an OpenAI model over Chat Completions (older GPTs): service_tier "fast" (Ultrafast is Responses-only).
   if (req.fast && !isLocal(req.baseUrl) && fastSupport(req.model)?.provider === 'openai') body.service_tier = 'fast'

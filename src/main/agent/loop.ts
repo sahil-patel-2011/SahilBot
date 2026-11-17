@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { SkillSuggestion, SuggestOptions } from '../skills'
 import { appToolsFor, classifyTask, intentTools, likelyTools } from './intent'
@@ -40,7 +41,7 @@ import { attachmentNotes } from '../attach-process'
 import { localOff } from '@shared/local-mode'
 import { pick, routingPrefs } from '../llm/router'
 import { autoPreference, isStudy, noGrokFor, payPerUse, premiumModel, windowOf } from '../llm/routing-table'
-import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainModel, skipBrain, teamFor, type BrainAnswer } from '../llm/auto-brain'
+import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainModel, brainTimeout, skipBrain, teamFor, type BrainAnswer } from '../llm/auto-brain'
 import { autoRoute, budgetTightFor, planFallback } from '../llm/auto-route'
 import { modelHealth } from '../llm/model-health'
 import { spendingMode } from '../llm/budget'
@@ -374,10 +375,17 @@ export function teamTranscript(ms: Message[], max = 60_000): string {
 export const modelSwitchNote = (from: string, to: string): string =>
   `[From the app] Model switch: you are ${to}, taking over this conversation from ${from}. Everything above (the user's messages, every reply, tool call and result, the plan and notes) is the same conversation: continue it, keep every constraint and decision, and don't redo work that is already done. ${from}'s private reasoning isn't visible to you, so rely on what is written above.`
 
+/** Tools that only keep the run's own books: a call to them is no change for the user to double-check. */
+const BOOKKEEPING = new Set(['todo', 'memory', 'ask_user', 'agent_control', 'checkpoint', 'notify', 'consult', 'find_tools', 'project_memory'])
+/** Reads that look at the work itself (a file, a folder, a command's output, the page, the screen). */
+const LOOKS_AT_WORK = new Set(['file_read', 'list_files', 'search_files', 'run_command', 'browser', 'computer', 'screenshot', 'read_document', 'git'])
+/** The double-check's "nothing to fix" reply. */
+const KEEP_DRAFT = /^(✓|✔|✔️|ok|lgtm|all good|no changes?( needed)?)[.!]?$/i
+
 /** The hidden double-check before a real task's final answer; a complex one also critiques its draft against the goal. */
 export function verifyNote(o: { changed: boolean; researched: boolean; actions: number; complex: boolean; goal?: string }): string {
   const goal = o.goal?.replace(/\s+/g, ' ').trim().slice(0, 400)
-  return `[From the app] Before you finish, double-check your work:\n${o.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${o.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${o.complex ? `- Critique your draft against what the user asked for${goal ? ` ("${goal}")` : ''}: any requirement missed or only half done, any claim without evidence you saw, any edge case or caveat they should know. Fix what you find (a quick extra step is fine).\n` : ''}${o.actions >= 8 ? '- If this took a non-obvious procedure or several tries, save what worked with memory(action="save_skill") so next time is faster.\n' : ''}- Fix anything that's wrong.\nThen write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.`
+  return `[From the app] Before you finish, double-check your work:\n${o.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${o.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${o.complex ? `- Critique your draft against what the user asked for${goal ? ` ("${goal}")` : ''}: any requirement missed or only half done, any claim without evidence you saw, any edge case or caveat they should know. Fix what you find (a quick extra step is fine).\n` : ''}${o.actions >= 8 ? '- If this took a non-obvious procedure or several tries, save what worked with memory(action="save_skill") so next time is faster.\n' : ''}- Fix anything that's wrong.\nIf everything checks out and your answer above needs no change, reply with just ✓ and nothing else: that answer is kept as it is. Otherwise write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.`
 }
 
 /**
@@ -931,7 +939,7 @@ export class Agent {
   /** The skills that fit this request (skills.ts suggest): top few by relevance, the best one's steps on big windows. */
   private skillHints(thread: Thread, folder: string | null, query: string, compact: boolean): SkillSuggestion | undefined {
     try {
-      const dir = folder ?? this.d.db.getState(thread.id).roots?.[0] ?? null
+      const dir = folder ?? this.d.db.getState(thread.id).roots?.find((r) => r !== homedir()) ?? null
       const codeProject = !!dir && ['.git', 'package.json', 'build.gradle', 'pyproject.toml', 'Cargo.toml', 'go.mod'].some((f) => existsSync(join(dir, f)))
       return this.d.skills?.suggest?.(query, { folder: dir, codeProject, compact })
     } catch { return undefined }
@@ -1842,7 +1850,9 @@ export class Agent {
     // (Only local models: a cloud model missing from usable() is off, unaffordable or over the spending limit.)
     if (!usable.length) usable = (this.d.endpoints.last?.models ?? []).filter((m) => m.installed && !s.hiddenModels.includes(m.id) && (!isRemoteModel(m) || !!process.env.FOREMAN_BASE_URL) && (!localOff(s) || process.env.FOREMAN_BASE_URL || !providerDef(m.provider).local))
     const all = this.d.db.listMessages(thread.id)
-    const last = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    // The request being worked on: an "Approved: …" or an answer from Needs you continues the request it belongs to.
+    const shown = [...all].reverse().filter((m) => m.role === 'user' && !m.meta?.hidden)
+    const last = shown.find((m) => !m.meta?.questionAnswer) ?? shown[0]
     const files = [...((last?.meta?.files as Array<{ name: string; path: string }>) ?? []).map((f) => ({ kind: /\.(png|jpe?g|gif|webp|heic)$/i.test(f.path) ? 'image' : 'file', path: f.path, name: f.name })),
       ...((last?.meta?.folders as string[]) ?? []).map((p) => ({ kind: 'folder', path: p, name: p }))] as Attachment[]
     // What kind of task and how hard (llm/task-classifier.ts: local rules, no model call), then the routing table.
@@ -1876,10 +1886,24 @@ export class Agent {
         input: { text: last.content, history, attachments: files.map((f) => `${f.kind}: ${f.name}`), images: last.images?.length ?? 0, role: role && !role.isMain && role.kind === 'bot' ? [role.name, role.label].filter(Boolean).join(': ') : undefined, preference, models: brainPool, rules: task, outcomes, budgetTight },
         ask: async ({ model: m, system, user, signal }) => {
           const ep = this.d.endpoints.for(m)
-          return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model: m, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(m, s.sampling), maxTokens: 500, effort: 'low', signal }))
-        }
+          return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model: m, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(m, s.sampling), maxTokens: 500, effort: 'low', noThinking: true, signal }))
+        },
+        timeoutMs: brainTimeout(thinker), signal: this.runs.get(thread.id)?.ctrl.signal
       })
-      if (got.answer) { brain = got.answer; task = applyBrain(task, brain, thinker.label ?? thinker.id) }
+      if (got.answer) {
+        brain = got.answer; task = applyBrain(task, brain, thinker.label ?? thinker.id)
+        // Kept with the message, so a "yes, do it" after a restart still follows this read.
+        this.d.db.updateMessage({ ...last, meta: { ...last.meta, autoRead: brain } })
+      }
+      // A read that comes after the wait is kept with the message when it lands (a "yes, do it" uses it, even after a restart).
+      else if (got.late) void this.brainCache.pending(last.id)?.then((a) => { const m = a && this.d.db.getMessage(last.id); if (m) this.d.db.updateMessage({ ...m, meta: { ...m.meta, autoRead: a } }) })
+      if (!got.answer) task = { ...task, why: `${task.why} · ${got.late ? `${thinker.label ?? thinker.id} was still reading, so the basic rules picked` : 'basic rules (no read)'}` }
+    }
+    // "yes, do it" / "continue": the read of the request it carries on (same model, level and team).
+    if (!brain && autoNow && last && task.rule === 'follow-up') {
+      const before = shown.filter((m) => !m.meta?.questionAnswer && m !== last)[0]
+      const prior = before ? this.brainCache.get(before.id) ?? (before.meta?.autoRead as BrainAnswer | undefined) : undefined
+      if (prior) { brain = prior; this.brainCache.set(last.id, prior); task = applyBrain(task, prior, 'the last read') }
     }
     const r = { tier: task.difficulty, why: task.why }
     const prevCategory = state.lastCategory
@@ -2042,6 +2066,11 @@ export class Agent {
     const group = run.group ? db.getSpace(thread.spaceId) : undefined
     const speaker = group ? space : undefined
     const state = db.getState(thread.id)
+    // Files anywhere (Settings → Permissions, on by default): the home folder is one of this chat's folders.
+    const home = homedir()
+    const anywhere = s.advanced.filesAnywhere !== false
+    if (anywhere && !(state.roots ?? []).includes(home)) state.roots = [...(state.roots ?? []), home]
+    else if (!anywhere && state.roots?.includes(home)) state.roots = state.roots.filter((r) => r !== home)
     // Bot swarms: this bot's Swarm setting lists the swarm tool (never for helpers); a Swarm request loads it.
     applySwarmState(state, s, space, !!run.helper, () => db.listMessages(thread.id), (names) => registry.load(state, names))
     let requestedChoice = requestedModel({ thread: db.getThread(thread.id), space: group ?? space, speaker, settings: s })
@@ -2095,7 +2124,7 @@ export class Agent {
     // rest of the run moves to the next stronger usable model. The history is re-read as is.
     const tried = new Set<string>([model])
     let switches = 0
-    const switchModel = (reason: string, sideways: boolean, err?: Error): boolean => {
+    const switchModel = (reason: string, sideways: boolean, err?: Error, o: { climb?: boolean } = {}): boolean => {
       if (switches >= 2) return false
       const fromName = modelName()
       const now = settings.get()
@@ -2122,7 +2151,9 @@ export class Agent {
           localOnly: !!err && /cloud budget/i.test(err.message),
           exclude: tried,
           sideways,
-          needsVision: !!lastUser?.images?.length
+          needsVision: !!lastUser?.images?.length,
+          // Stepping up mid-task: a cloud task stays on the cloud, and premium models only with their setting.
+          ...(o.climb ? { sameKind: true, noPremium: !routingPrefs.fableForHardest } : {})
         })
       }
       if (!next) return false
@@ -2145,6 +2176,9 @@ export class Agent {
     let stepsDone = 0
     const modelName = (): string => this.d.endpoints.last?.models.find((m) => m.id === model)?.label ?? model
     let invalidStreak = 0
+    /** Steps in a row where every tool call failed, and whether Auto already stepped up a model for it. */
+    let failStreak = 0
+    let climbed = false
     let sincePlan = 0
     let planReminded = false
     // Stored plan reminders: the step of the last one, and the budget a "close to the budget" note was sent for.
@@ -2181,6 +2215,8 @@ export class Agent {
     // web: it read outside content itself, so handoffs it sends count as tainted.
     const track = {
       changed: false, researched: false,
+      // A real change (not the plan, memory or a question) that nothing has looked at since: the double-check's reason.
+      unchecked: false,
       // Research before asking: did this run look at anything yet, is it a task, was it nudged already.
       explored: false, task: false, askGated: false,
       web: history.some((m) => m.role === 'tool' && m.meta?.untrusted) || (run.seed?.untrusted.length ?? 0) > 1 || !!run.forceTaint,
@@ -2259,6 +2295,8 @@ export class Agent {
     let autonomyNudged = false
     let linkChecked = false
     let verified = false
+    /** The answer written before the double-check (kept when the check finds nothing to fix). */
+    let verifyDraft: Message | undefined
     let evidenceRounds = 0
     let previousPhase = run.meter?.phase
     let phaseSwitches = 0
@@ -2301,10 +2339,11 @@ export class Agent {
         if (phase && phase !== previousPhase && !routed?.manual && routed?.task && !run.helper && !cuaPair && phaseSwitches < 4) {
           previousPhase = phase
           const task = phaseTask(routed.task, phase)
+          // Auto's read already weighed the whole task (planning, doing and checking): its model stays for every phase.
           // A better model for the new phase is an optimization: when none can be routed, keep the current one.
           const usableNow = this.d.endpoints.usable()
           let next: { model: string } | undefined
-          try { next = usableNow.length ? autoRoute({ requested: routed.variant ?? 'auto', usable: usableNow, task, preference: autoPreference(settings.get()), previous: { model, category: routed.category } }) : undefined } catch { next = undefined }
+          try { next = usableNow.length && !routed.brain ? autoRoute({ requested: routed.variant ?? 'auto', usable: usableNow, task, preference: autoPreference(settings.get()), previous: { model, category: routed.category } }) : undefined } catch { next = undefined }
           // Avoid paying to transfer a large cached conversation for a small phase.
           const transferUsd = next ? priceOf(next.model, Math.ceil(JSON.stringify(db.listMessages(thread.id)).length / 3.5), 0) : 0
           const room = run.meter?.policy.maxUsd === undefined || transferUsd < Math.max(0, run.meter.policy.maxUsd - run.meter.spentUsd) * 0.2
@@ -2473,6 +2512,14 @@ export class Agent {
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
           }
         }
+        // The double-check found nothing to fix ("✓"): the answer already written stands, not written twice.
+        if (!assistant.toolCalls?.length && verifyDraft && KEEP_DRAFT.test(assistant.content.trim())) {
+          assistant.content = verifyDraft.content
+          assistant.meta = { ...assistant.meta, keptDraft: true, ...(verifyDraft.meta?.sources ? { sources: verifyDraft.meta.sources } : {}) }
+          db.updateMessage(assistant)
+          this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
+          verifyDraft = undefined
+        }
         if (!assistant.toolCalls?.length) {
           // Links the model cites must come from something it actually retrieved (or the user typed).
           const all = db.listMessages(thread.id)
@@ -2503,11 +2550,13 @@ export class Agent {
           // A quick answer or one search stays fast (the link check above still guards citations).
           // Complex work (the hardest tier, or 8+ actions) also gets a self-review against the user's goal, in the same single pass.
           const complex = (routed?.tier === 3 && !this.d.db.getState(thread.id).voice) || actions >= 8
-          if ((track.changed || (track.researched && (actions >= 3 || state.todos.length > 0)) || complex || !!routed?.team?.reviewer) && !verified && !run.helper && !chatRun && step < HARD_CAP && !process.env.FOREMAN_NO_VERIFY) {
+          // A change it already looked at (re-read the file, ran the tests, snapshotted the page) needs no second pass.
+          if ((track.unchecked || (track.researched && (actions >= 3 || state.todos.length > 0)) || complex || !!routed?.team?.reviewer) && !verified && !run.helper && !chatRun && step < HARD_CAP && !process.env.FOREMAN_NO_VERIFY) {
             if (run.meter) run.meter.phase = 'verify'
             if (run.record) this.runtime.phase(run.record.id, 'verify')
             budget = Math.max(budget, step + 1)
             verified = true
+            verifyDraft = assistant
             this.d.emit({ threadId: thread.id, type: 'drafting', tool: 'verify' })
             assistant.meta = { ...assistant.meta, superseded: true }
             db.updateMessage(assistant)
@@ -2608,6 +2657,13 @@ export class Agent {
         if (!effortBump) {
           const up = escalateEffort({ choice: effortPick, current: effortNow(), bumped: false, failures: runFailures, planSteps: state.todos.length, model })
           if (up) { effortBump = up.level; this.notice(thread.id, up.note, { internal: true }) }
+        }
+        // Auto steps up a model once when the work keeps failing on the one it picked (a cheap model on a task
+        // harder than it looked). The whole conversation goes along; a model you picked is never changed.
+        failStreak = ran.length && ran.every((r) => r.status === 'error' || r.status === 'invalid') ? failStreak + 1 : 0
+        if (shouldClimb({ manual: !!routed?.manual, auto: !!routed, helper: !!run.helper, chat: chatRun, failures: runFailures, streak: failStreak, climbed, budgetTight: budgetTightFor(spendingMode(settings.get()), settings.get().cloudBudgetUsd, this.d.endpoints.budgetLeft?.(), this.d.endpoints.usable()) })) {
+          climbed = true
+          if (switchModel(`${modelName()} kept hitting errors on this task`, false, undefined, { climb: true })) failStreak = 0
         }
         // Long runs keep their plan current: one reminder after 12 calls without a todo update.
         if (ran.some((r) => (r.name === 'todo' || r.name === 'propose_plan') && r.status === 'ok')) sincePlan = 0
@@ -3271,6 +3327,8 @@ export class Agent {
     // Cloud windows hold bigger results whole (resultLimit); local models keep the 2K that keeps prefill fast.
     const off = await this.d.results.maybeOffload(out.text, id, counter, tool.name === 'agents' || tool.name === 'max' ? teamShare(ctx.window) : isLocal(cep.baseUrl) ? undefined : resultLimit(ctx.window))
     if (effect !== 'read') ctx.track.changed = true
+    if (effect !== 'read' && !BOOKKEEPING.has(tool.name)) ctx.track.unchecked = true
+    else if (effect === 'read' && LOOKS_AT_WORK.has(tool.name)) ctx.track.unchecked = false
     // A tool that wrote install config or git internals: this chat's installs and pulls ask again (shell.ts).
     if (effect !== 'read' && tool.name !== 'run_command') noteTrustWrites(state, `${call.arguments}\n${out.path ?? ''}`)
     if (countsAsResearch(tool.name)) ctx.track.explored = true
@@ -3344,7 +3402,7 @@ interface ExecCtx {
   untrusted: string[]
   userText: string
   guard: LoopGuard
-  track: { changed: boolean; researched: boolean; web: boolean; sawUntrusted: boolean; explored?: boolean; task?: boolean; askGated?: boolean }
+  track: { changed: boolean; researched: boolean; unchecked?: boolean; web: boolean; sawUntrusted: boolean; explored?: boolean; task?: boolean; askGated?: boolean }
   window: number
 }
 
@@ -3426,9 +3484,12 @@ export const isRemoteModel = (m: ModelInfo): boolean => m.note === 'remote' || !
  * first when equal). `sideways` also allows an equal or weaker one when nothing stronger exists
  * (a provider outage). Cloud models only when Cloud is on and the budget isn't the problem.
  */
-export function nextStronger(models: ModelInfo[], current: string, o: { cloud: boolean; localOnly?: boolean; exclude?: Set<string>; sideways?: boolean; needsVision?: boolean }): ModelInfo | undefined {
+export function nextStronger(models: ModelInfo[], current: string, o: { cloud: boolean; localOnly?: boolean; exclude?: Set<string>; sideways?: boolean; needsVision?: boolean; sameKind?: boolean; noPremium?: boolean }): ModelInfo | undefined {
   let pool = models.filter((m) => m.id !== current && !o.exclude?.has(m.id) && m.tools !== false && m.installed !== false)
   if (!o.cloud || o.localOnly) pool = pool.filter((m) => !isRemoteModel(m))
+  if (o.noPremium) pool = pool.filter((m) => !premiumModel(m.id))
+  const curModel = models.find((m) => m.id === current)
+  if (o.sameKind && curModel) pool = pool.filter((m) => isRemoteModel(m) === isRemoteModel(curModel))
   if (o.needsVision && pool.some((m) => m.vision)) pool = pool.filter((m) => m.vision)
   const cur = models.find((m) => m.id === current)
   const tier = cur?.tier ?? 0
@@ -3439,6 +3500,11 @@ export function nextStronger(models: ModelInfo[], current: string, o: { cloud: b
   if (up.length) return up[0]
   if (!o.sideways) return undefined
   return [...pool].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0) || Number(isRemoteModel(a)) - Number(isRemoteModel(b)))[0]
+}
+
+/** Whether Auto moves a run to a stronger model: repeated failures, two steps in a row failing outright, once a run. */
+export function shouldClimb(o: { manual: boolean; auto: boolean; helper: boolean; chat: boolean; failures: number; streak: number; climbed: boolean; budgetTight: boolean }): boolean {
+  return o.auto && !o.manual && !o.helper && !o.chat && !o.climbed && !o.budgetTight && o.failures >= 4 && o.streak >= 2
 }
 
 export function citedUrls(text: string): string[] {

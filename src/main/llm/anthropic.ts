@@ -210,6 +210,7 @@ export function buildClaudeRequest(req: ChatRequest): { params: Record<string, u
   markPreviousTail(messages, cc)
   const betas = new Set<string>()
   const thinking = claudeThinking(req.model, req.effort) as { thinking?: Record<string, unknown>; output_config?: Record<string, unknown> }
+  if (req.noThinking) delete thinking.thinking
   // Preserved thinking: a history edit drops the affected thinking blocks instead of failing the request.
   if (thinking.thinking && spec?.preservedThinking) {
     thinking.thinking = { ...thinking.thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } }

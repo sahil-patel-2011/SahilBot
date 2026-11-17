@@ -109,6 +109,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'autonomy', page: 'permissions', title: 'Permissions for new chats', words: 'ask auto autonomy autonomous permission permissions mode approvals', keys: ['defaultMode', 'botModes'] },
   { anchor: 'approval-rules', page: 'permissions', title: 'Approval rules', words: 'approval approve allow ask first always automatically confirm rules', keys: ['customRules'] },
   { anchor: 'bypass', page: 'permissions', title: 'Bypass', words: 'bypass full access hard stops confirm', keys: ['advanced.allowBypass', 'advanced.hardStopsEnabled'], advanced: true },
+  { anchor: 'files-anywhere', page: 'permissions', title: 'Read and edit files anywhere', words: 'files folders anywhere full disk read edit write without asking approve documents desktop', keys: ['advanced.filesAnywhere'] },
   { anchor: 'mac-permissions', page: 'permissions', title: 'Mac permissions', words: 'accessibility screen recording microphone full disk access automation notifications system settings' },
   { anchor: 'activity', page: 'privacy', tab: 'activity', title: 'Know what I\'m working on', words: 'activity window titles browser tabs timeline context share cloud exclude apps sites' },
   { anchor: 'sensitive', page: 'privacy', tab: 'sensitive', title: 'Sensitive details', words: 'health money finance religion politics children sexuality government id sensitive categories privacy' },

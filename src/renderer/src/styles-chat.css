@@ -123,3 +123,11 @@
 /* New bot: 30 templates, searchable, in a scrolling grid. */
 .be-template-search { width: 100%; margin: 6px 0 8px; }
 .be-template-grid { max-height: 340px; overflow-y: auto; padding-right: 2px; }
+
+/* Quieter sidebar: a section's extra buttons show when you point at it (or tab to it); New chat and the open page stay. */
+.sb2 .nav-label-actions .nav-add { opacity: 0; transition: opacity .14s ease-out, background .14s ease-out, color .14s ease-out; }
+.sb2 .nav-section:hover .nav-label-actions .nav-add,
+.sb2 .nav-label-actions:focus-within .nav-add,
+.sb2 .nav-label-actions .nav-add.on,
+.sb2 .nav-label-actions .nav-add[data-testid="new-chat"] { opacity: 1; }
+@media (hover: none) { .sb2 .nav-label-actions .nav-add { opacity: 1; } }

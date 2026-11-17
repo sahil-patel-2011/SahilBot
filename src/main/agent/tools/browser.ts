@@ -16,7 +16,7 @@ import type { ToolContext, ToolDef, ToolOutput } from '../types'
 import { resolvePath } from './files'
 
 type Action = 'navigate' | 'snapshot' | 'click' | 'type' | 'select' | 'fill_secret' | 'fill_payment' | 'fill_address' | 'fill_otp' | 'wallet' | 'upload' | 'downloads' | 'wait'
-  | 'scroll' | 'screenshot' | 'get_text' | 'tabs' | 'dialog' | 'fill_form' | 'recording' | 'find' | 'extract' | 'expand' | 'next_page'
+  | 'scroll' | 'screenshot' | 'get_text' | 'tabs' | 'dialog' | 'fill_form' | 'recording' | 'find' | 'extract' | 'expand' | 'next_page' | 'key' | 'back' | 'forward' | 'hover'
   /** Internal only (never in the schema): Enter in a field whose text was already typed. */
   | 'enter'
 interface Args {
@@ -25,6 +25,8 @@ interface Args {
   ref?: string
   text?: string
   submit?: boolean
+  /** key: one or more presses, e.g. "Escape", "ArrowDown ArrowDown", "shift+Tab". */
+  keys?: string
   secret?: string
   field?: 'username' | 'password' | 'id_number'
   direction?: 'up' | 'down'
@@ -117,7 +119,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
       case 'enter': return 'write_external'
       case 'fill_secret': case 'fill_payment': case 'fill_address': case 'fill_otp': case 'upload': return 'write_external'
       case 'downloads': return a.op === 'save' ? 'write_local' : 'read'
-      case 'select': return 'write_local'
+      case 'select': case 'key': return 'write_local'
       case 'fill_form': return a.submit_ref ? clickEffect(b.refInfo(a.submit_ref)) : 'write_local'
       case 'dialog': return a.accept && b.pendingDialog?.type !== 'alert' ? 'write_external' : 'read'
       case 'tabs': return a.op === 'close' ? 'write_local' : 'read'
@@ -223,6 +225,9 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
       case 'find': return `Find "${(a.query ?? a.text ?? '').slice(0, 60)}"${on}`
       case 'extract': return `Read ${a.kind && a.kind !== 'auto' ? `the ${a.kind === 'cards' ? 'cards' : `${a.kind}s`}` : 'the data'}${on}`
       case 'expand': return `Show the rest of a collapsed list${on}`
+      case 'key': return `Press ${(a.keys ?? '').trim().slice(0, 40)}${a.ref ? ` in ${el}` : ''}${on}`
+      case 'back': case 'forward': return `Go ${a.action} a page${on}`
+      case 'hover': return `Point at ${el}${on}`
       case 'next_page': return `Find the next-page control${on}`
       default: return `${a.action}${on}`
     }
@@ -261,12 +266,15 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     untrusted: true,
     description: `Control the built-in web browser (persistent logins, visible to the user). Actions:
 - navigate {url}: open a URL (declines cookie banners when there's a reject option)
-- snapshot {full?}: page structure with element refs like e12 (call after every page change). Long pages show the visible area first; long lists show a few items and [expand=g3]; full=true shows all
+- snapshot {full?}: page structure with element refs like e12. navigate, click, type and Enter already return what they changed (new elements marked *, or the new page's start), and a ref stays the same for the same element while the page is the same, so snapshot only to read the whole page. Long pages show the visible area first; long lists show a few items and [expand=g3]; full=true shows all
 - find {query}: elements matching a description ("the search box"), with refs
 - extract {kind?: auto|table|list|cards, ref?, max?}: tables, lists, product cards as JSON, and the next page
 - expand {ref: "g3", start?}: the rest of a collapsed list
 - next_page: the next-page / Load more control's ref
 - click {ref}
+- hover {ref}: point at an element (menus that open on hover)
+- key {keys, ref?}: press keys: "Escape" closes a popup, "ArrowDown" moves in a menu or date picker, "Tab" / "shift+Tab" between fields, "cmd+a"; several as "ArrowDown ArrowDown". Enter: type with submit=true
+- back / forward: the tab's previous or next page
 - type {ref, text, submit?}: replace a field's text; submit presses Enter
 - select {ref, option}: choose an option in a dropdown (snapshot lists them)
 - dialog {accept, text?}: answer an alert/confirm/prompt the page opened
@@ -290,7 +298,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['navigate', 'snapshot', 'click', 'type', 'select', 'fill_secret', 'fill_payment', 'fill_address', 'fill_otp', 'wallet', 'upload', 'downloads', 'wait', 'scroll', 'screenshot', 'get_text', 'tabs', 'dialog', 'fill_form', 'recording', 'find', 'extract', 'expand', 'next_page'] },
+        action: { type: 'string', enum: ['navigate', 'snapshot', 'click', 'type', 'select', 'fill_secret', 'fill_payment', 'fill_address', 'fill_otp', 'wallet', 'upload', 'downloads', 'wait', 'scroll', 'screenshot', 'get_text', 'tabs', 'dialog', 'fill_form', 'recording', 'find', 'extract', 'expand', 'next_page', 'key', 'back', 'forward', 'hover'] },
         query: { type: 'string' },
         kind: { type: 'string', enum: ['auto', 'table', 'list', 'cards'] },
         max: { type: 'integer', minimum: 1, maximum: 200 },
@@ -303,6 +311,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         url: { type: 'string' },
         ref: { type: 'string', pattern: '^[eg]\\d+$' },
         text: { type: 'string' },
+        keys: { type: 'string', description: 'key: e.g. "Escape", "ArrowDown ArrowDown", "shift+Tab", "cmd+a"' },
         submit: { type: 'boolean' },
         secret: { type: 'string', description: 'Name of a saved login' },
         field: { type: 'string', enum: ['username', 'password', 'id_number'] },
@@ -922,6 +931,14 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
       case 'scroll':
         if (a.ref) return { text: await b.scrollTo(a.ref), display: 'scrolled into view' }
         return { text: await b.scroll(a.direction ?? 'down', a.amount), display: `scrolled ${a.direction ?? 'down'}` }
+      case 'key':
+        if (!a.keys?.trim()) throw new Error('key needs keys, e.g. "Escape" or "ArrowDown".')
+        return { text: await b.pressKeys(a.keys, a.ref), display: `pressed ${a.keys.trim().slice(0, 30)}` }
+      case 'back': case 'forward':
+        return { text: await b.go(a.action), display: `went ${a.action}` }
+      case 'hover':
+        if (!a.ref) throw new Error('hover needs a ref.')
+        return { text: await b.hover(a.ref), display: 'hovered' }
       case 'screenshot': {
         const img = await b.screenshot()
         return { text: `Screenshot of ${b.pageUrl()}`, images: [img], display: `screenshot of ${safeHost(b.pageUrl())}` }

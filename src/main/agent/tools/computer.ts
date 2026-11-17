@@ -973,7 +973,9 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
         const flags = clickFlags(a.modifiers)
         const label = a.action.replace('_', ' ')
         const v = await verified(ctx, () => mouse(ctx, { kind, x: p.x, y: p.y, flags }, el ? `${label} "${el.label.slice(0, 40)}"` : label), { before, timeoutMs: a.action === 'move' ? 600 : 2500 })
-        return { text: `${label} at screen point (${p.x}, ${p.y})${p.el ? ` on ${p.el.ref} "${p.el.label}"` : ''}. ${v.text}`, display: `${label} at ${p.x}, ${p.y}${v.changed || a.action === 'move' ? '' : ' (no change)'}` }
+        // Name what was under the point (from the last ui read), so a click that missed shows without a screenshot.
+        const hit = p.el ?? el
+        return { text: `${label} at screen point (${p.x}, ${p.y})${hit ? ` on ${hit.ref ? `${hit.ref} ` : ''}${short(hit.role)} "${hit.label.slice(0, 80)}"` : ' (nothing known there: take a ui read or screenshot if unsure)'}. ${v.text}`, display: `${label} at ${p.x}, ${p.y}${v.changed || a.action === 'move' ? '' : ' (no change)'}` }
       }
 
       case 'drag': {

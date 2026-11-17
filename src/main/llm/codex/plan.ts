@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { ModelInfo, Tier } from '@shared/types'
 import type { ChatgptPlanStatus, PlanLimitWindow, PlanModelEntry } from '@shared/chatgpt-plan'
 import { openaiInfo, openaiRank } from '../openai-models'
-import { codexEnv, codexVersion, findCodex, loginStatus, userMcpServers, type LoginMode } from './detect'
+import { codexEnv, codexVersion, findCodex, loginStatus, userMcpServers, type LoginMode, type McpServerOff } from './detect'
 import { CODEX_INSTALL_URL, PLAN_DEFAULT, PLAN_PROVIDER, PLAN_PROVIDER_NAME, isPlanModel, planModelId } from './ids'
 import { AppServer } from './rpc'
 
@@ -92,7 +92,7 @@ export class ChatgptPlan {
   /** Bumped by reset(): a check still running from before doesn't write its results. */
   private gen = 0
   private signIn: AppServer | null = null
-  private userServers: string[] = []
+  private userServers: McpServerOff[] = []
 
   configure(o: { dir: string; version?: string; hooks?: PlanHooks }): void {
     this.dir = o.dir
@@ -152,7 +152,7 @@ export class ChatgptPlan {
   }
 
   /** User MCP servers to switch off in SahilBot's runs (from the last check). */
-  disabledServers(): string[] {
+  disabledServers(): McpServerOff[] {
     return this.userServers
   }
 
@@ -310,7 +310,7 @@ export class ChatgptPlan {
       const st = await loginStatus(bin)
       let acct: Awaited<ReturnType<ChatgptPlan['readAccount']>> | undefined
       let problem: string | undefined
-      let servers: string[] = []
+      let servers: McpServerOff[] = []
       if (st.mode === 'chatgpt') {
         acct = await this.readAccount(bin).catch((e: Error) => { problem = `Couldn't read your plan from Codex: ${e.message}`; return undefined })
         servers = await userMcpServers(bin).catch(() => [])

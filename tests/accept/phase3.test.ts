@@ -158,9 +158,12 @@ describe('phase 3: browser pane + browser tools + vault', () => {
     // navigate returned the page inline; the onclick div got a ref; the dropdown listed its options.
     expect(outs[0]).toMatch(/clickable "Show details" \[ref=e\d+\]/)
     expect(outs[0]).toMatch(/combobox "Plan".*options: \[x\] Starter \| Team \| Enterprise/)
-    // Clicking it changed the page; the new button is marked as new.
-    expect(outs[1]).toContain('The page changed')
-    expect(outs[2]).toMatch(/- \*button "Save details"/)
+    // Clicking it changed the page, and the result shows the new button (marked new) without a snapshot.
+    expect(outs[1]).toContain('The page changed. New on the page')
+    expect(outs[1]).toMatch(/- \*button "Save details" \[ref=e\d+\]/)
+    // A snapshot right after keeps the same refs for the same elements.
+    const saveRef = outs[1].match(/\*button "Save details" \[ref=(e\d+)\]/)![1]
+    expect(outs[2]).toContain(`button "Save details" [ref=${saveRef}]`)
     expect(outs[3]).toContain('Selected "Team"')
     expect(outs[4]).toContain('No visible change')
     // The covered button wasn't clicked, and the cover was named.

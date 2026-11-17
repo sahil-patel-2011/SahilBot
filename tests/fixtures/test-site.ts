@@ -221,6 +221,13 @@ export async function startTestSite(): Promise<TestSite> {
         <script>function save(){document.getElementById('out').textContent='Draft saved'}
         setTimeout(()=>{document.getElementById('box').innerHTML='<button type="button" onclick="save()">Save draft</button>';document.getElementById('ready').textContent='Ready now'},600)</script>`)
     }
+    if (url.pathname === '/menu') {
+      // A menu that opens on click and closes on Escape; an invisible reCAPTCHA (as on many login pages) sits in the corner.
+      return html(200, 'Files', `<h1>Files</h1><button type="button" id="opt" onclick="document.getElementById('m').hidden=false">Options</button>
+        <div id="m" hidden><button type="button" onclick="document.getElementById('out').textContent='Renamed'">Rename</button><button type="button">Duplicate</button></div>
+        <p id="out"></p><div class="grecaptcha-badge"><iframe src="about:blank#recaptcha/api2/anchor?size=invisible" width="256" height="60"></iframe></div>
+        <script>addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('m').hidden = true })</script>`)
+    }
     if (url.pathname === '/sticky') {
       // A sticky bar covers the button where it first sits; scrolled to the middle, it's clickable.
       return html(200, 'Inbox', `<div style="height:300vh;position:relative"><h1>Inbox</h1>
