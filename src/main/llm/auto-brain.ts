@@ -276,7 +276,8 @@ export async function askBrain(o: { messageId: string; input: BrainInput; model:
   let timer: ReturnType<typeof setTimeout> | undefined
   const stopped = new Promise<'late'>((res) => {
     timer = setTimeout(() => res('late'), o.timeoutMs ?? BRAIN_TIMEOUT_MS)
-    o.signal?.addEventListener('abort', () => res('late'), { once: true })
+    if (o.signal?.aborted) res('late')
+    else o.signal?.addEventListener('abort', () => res('late'), { once: true })
   })
   const got = await Promise.race([read, stopped])
   if (timer) clearTimeout(timer)
