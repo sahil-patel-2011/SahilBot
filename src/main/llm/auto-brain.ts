@@ -284,6 +284,11 @@ export async function askBrain(o: { messageId: string; input: BrainInput; model:
   return { answer: got ?? undefined, ms: Date.now() - start, cached: false }
 }
 
-/** Light enough that the rules alone decide: a few words of small talk with nothing attached. */
-export const skipBrain = (text: string, d: Pick<TaskClass, 'difficulty' | 'category' | 'confident'>, attachments: number): boolean =>
-  d.category === 'voice' || (attachments === 0 && d.confident && d.difficulty === 0 && text.trim().split(/\s+/).length <= 4)
+/**
+ * No read needed: a few words of small talk, or a short "yes, do it" / "continue" that carries on the request
+ * before it (the chat keeps its model and level). Nothing attached either way.
+ */
+export const skipBrain = (text: string, d: Pick<TaskClass, 'difficulty' | 'category' | 'confident'> & { rule?: string }, attachments: number): boolean => {
+  const words = text.trim().split(/\s+/).length
+  return d.category === 'voice' || (attachments === 0 && ((d.confident && d.difficulty === 0 && words <= 4) || (d.rule === 'follow-up' && words <= 5)))
+}

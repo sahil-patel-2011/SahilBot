@@ -99,6 +99,9 @@ describe('the brain\'s decision', () => {
     expect(broken.answer).toBeUndefined()
     expect(skipBrain('thanks!', classifyTask('thanks!'), 0)).toBe(true)
     expect(skipBrain('so, generate 1000000 digits of pi', classifyTask('so, generate 1000000 digits of pi'), 0)).toBe(false)
+    // "yes, do it" carries on the request before it; a follow-up that asks for more gets a fresh read.
+    expect(skipBrain('yes, do it', classifyTask('yes, do it', { previousCategory: 'coding', previousTier: 3 }), 0)).toBe(true)
+    expect(skipBrain('also add dark mode and a settings page with export to CSV', classifyTask('also add dark mode and a settings page with export to CSV', { previousCategory: 'coding', previousTier: 3 }), 0)).toBe(false)
     expect(skipBrain('Help me study for my chem quiz', classifyTask('Help me study for my chem quiz'), 0)).toBe(false)
   })
 })
@@ -236,6 +239,18 @@ describe('the brain in the agent loop', () => {
     expect(ALL.find((m) => m.id === next)!.tier).toBeGreaterThan(HAIKU.tier)
     expect(next).not.toBe(FABLE.id)
     expect(JSON.stringify(llm.requests[3].messages)).toContain('Tidy the notes in my workspace')
+  })
+
+  test('"yes, do it" keeps the model the last read chose, without a new read', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    const t = h.thread()
+    llm.script.push({ content: JSON.stringify(answer({ model: OPUS.id, difficulty: 3, why: 'big refactor' })), delay: 0 }, { content: 'Here is the plan. Want me to start?', delay: 0 })
+    await h.run(t, 'Plan a refactor of the billing module into separate services')
+    llm.requests.length = 0
+    llm.script.push({ content: 'Started.', delay: 0 })
+    await h.run(t, 'yes, do it')
+    expect(llm.requests.map((r) => r.model)).toEqual([OPUS.id])
   })
 
   test('school work goes where the brain sends it, at the effort it chose', async () => {

@@ -1,3 +1,4 @@
+import { parseKeys } from './keys'
 import { existsSync, mkdirSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { BrowserWindow, WebContentsView, session as electronSession, systemPreferences, type Rectangle, type Session, type WebContents } from 'electron'
@@ -115,6 +116,10 @@ const DIALOG_SHIM = `(() => {
 })()`
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+/** An action's "something changed" result; withLook replaces it with what changed. */
+const PAGE_CHANGED = 'The page changed. Snapshot to see the result.'
+/** Requests an action never waits for: streams, and what only draws the page (images, fonts, media, beacons). */
+const UNAWAITED = new Set(['EventSource', 'WebSocket', 'Image', 'Media', 'Font', 'Ping', 'Manifest', 'CSPViolationReport'])
 
 /** Card fields stay dots in screenshots (a card the user typed, or one SahilBot filled). */
 const MASK_CSS = SHOT_MASK_CSS
@@ -152,6 +157,14 @@ export class BrowserManager {
   /** backendNodeIds seen in the previous snapshot of the same document, to mark new elements. */
   private prevIds = new Set<number>()
   private prevUrl = ''
+  /** Refs stay the same for the same element while the page stays the same (a held ref never lands on another element). */
+  private refOf = new Map<number, string>()
+  private refSeq = 0
+  private stableRef(backendNodeId: number): string {
+    let ref = this.refOf.get(backendNodeId)
+    if (!ref) { ref = `e${++this.refSeq}`; this.refOf.set(backendNodeId, ref) }
+    return ref
+  }
   private dialog: { type: string; message: string; defaultPrompt?: string } | null = null
   controlling = false
   takenOver = false
@@ -367,7 +380,7 @@ export class BrowserManager {
       if (sessionId) return
       if (method === 'Page.javascriptDialogOpening') this.dialog = { type: params.type ?? 'alert', message: params.message ?? '', defaultPrompt: params.defaultPrompt }
       if (method === 'Page.javascriptDialogClosed') this.dialog = null
-      if (method === 'Network.requestWillBeSent' && params.requestId && (params as { type?: string }).type !== 'EventSource' && (params as { type?: string }).type !== 'WebSocket') live.set(params.requestId, Date.now())
+      if (method === 'Network.requestWillBeSent' && params.requestId && !UNAWAITED.has((params as { type?: string }).type ?? '')) live.set(params.requestId, Date.now())
       if ((method === 'Network.loadingFinished' || method === 'Network.loadingFailed') && params.requestId) live.delete(params.requestId)
     })
     this.tabs.push(view)
@@ -763,6 +776,12 @@ export class BrowserManager {
       const i = this.tabs.length - 1
       const nw = this.tabs[i].webContents
       await this.settle(nw, 4000)
+      // One tab opened by the agent's own action (a target=_blank link): go to it, as a person would. Fills stay
+      // bound to the tab they were decided for (checkExpected), so this never moves a fill.
+      if (this.tabs.length === tabsBefore + 1) {
+        this.switchTab(i, true)
+        return `The page opened a new tab (tab ${i + 1}: ${nw.getURL() || 'loading'}), and it's now the active tab. Snapshot to see it; tabs op=switch goes back.`
+      }
       return `The page opened a new tab in the background (tab ${i + 1}: ${nw.getURL() || 'loading'}). This tab is still the active one; use tabs op=switch index=${i + 1} to look at it.`
     }
     const asked = await this.cdp<{ result: { value?: Array<{ type: string; message: string; answered?: boolean }> } }>(wc, 'Runtime.evaluate', {
@@ -779,12 +798,13 @@ export class BrowserManager {
     const afterUrl = wc.getURL()
     if (afterUrl !== beforeUrl || (beforeDoc && (await this.docId(wc)) !== beforeDoc)) {
       this.dropRefs()
+      this.refOf.clear(); this.refSeq = 0; this.prevUrl = ''
       const cookies = await this.dismissCookies(wc)
       const title = wc.getTitle()
       return `Navigated to ${afterUrl}${title ? ` ("${title.slice(0, 80)}")` : ''}. Refs are now stale: snapshot to see the new page.${cookies}`
     }
     const afterN = await this.mutations(wc)
-    return afterN > beforeN ? 'The page changed. Snapshot to see the result.' : 'No visible change on the page. If you expected one, snapshot and check the element, or try another one.'
+    return afterN > beforeN ? PAGE_CHANGED : 'No visible change on the page. If you expected one, snapshot and check the element, or try another one.'
   }
 
   get pendingDialog(): { type: string; message: string } | null {
@@ -994,6 +1014,7 @@ export class BrowserManager {
       this.dropRefs()
       const ids = new Set<number>()
       const samePage = this.prevUrl === wc.getURL()
+      if (!samePage) { this.refOf.clear(); this.refSeq = 0 }
       const lines: SnapLine[] = []
       let n = 0
       let g = 0
@@ -1051,7 +1072,7 @@ export class BrowserManager {
         let text = `- ${role}${name ? ` "${name.slice(0, 160)}"` : ''}`
         let ref: string | undefined
         if (INTERACTIVE.has(role) && node.backendDOMNodeId && !props.get('hidden')) {
-          ref = `e${++n}`
+          ref = this.stableRef(node.backendDOMNodeId); n++
           const value = node.value?.value
           const desc = String(node.description?.value ?? '').replace(/\s+/g, ' ').trim()
           this.refs.set(ref, {
@@ -1170,7 +1191,7 @@ export class BrowserManager {
       // Clickable things with no accessible role (div onclick, cursor:pointer) still get refs.
       const extra = await this.clickables(wc, ids)
       for (const x of extra) {
-        const ref = `e${++n}`
+        const ref = this.stableRef(x.id); n++
         this.refs.set(ref, { backendNodeId: x.id, role: 'clickable', name: x.name })
         ids.add(x.id)
         lines.push({ depth: 0, text: `- ${samePage && this.prevIds.size && !this.prevIds.has(x.id) ? '*' : ''}clickable "${x.name}" [ref=${ref}]`, nodeId: x.id, ref, role: 'clickable' })
@@ -1444,8 +1465,29 @@ export class BrowserManager {
     await wc.removeInsertedCSS(c.key).catch(() => undefined)
   }
 
+  /**
+   * An action's result with what it did to the page, so the next step needs no snapshot first: the elements
+   * that just appeared (a menu, a dropdown, an error), or the start of the page it went to.
+   */
+  private async withLook(p: Promise<string>, o: { quiet?: boolean } = {}): Promise<string> {
+    const head = await p
+    const changed = head.includes(PAGE_CHANGED)
+    const moved = head.includes('Refs are now stale: snapshot to see the new page.') || head.includes("it's now the active tab. Snapshot to see it")
+    if (!changed && !moved) return head
+    const snap = await this.snapshot().catch(() => '')
+    if (!snap) return head
+    const lines = snap.split('\n')
+    if (moved) {
+      const top = lines.slice(0, 60)
+      return `${head.replace('Refs are now stale: snapshot to see the new page.', 'Earlier refs are gone. The new page:').replace("Snapshot to see it; tabs", 'Its page is below; tabs')}\n${top.join('\n')}${lines.length > 60 ? `\n[… ${lines.length - 60} more lines: call snapshot for the full page]` : ''}`
+    }
+    const fresh = lines.filter((l) => /^\s*- \*/.test(l))
+    if (!fresh.length) return o.quiet ? head.replace(` ${PAGE_CHANGED}`, '') : head.replace(PAGE_CHANGED, 'The page changed (nothing new to click; snapshot to read it).')
+    return `${head.replace(PAGE_CHANGED, 'The page changed. New on the page (marked *; the refs you have still work):')}\n${fresh.slice(0, 40).join('\n')}${fresh.length > 40 ? `\n[… ${fresh.length - 40} more new: call snapshot for all]` : ''}`
+  }
+
   async click(ref: string): Promise<string> {
-    return this.control(async (wc) => {
+    return this.withLook(this.control(async (wc) => {
       const r = this.node(ref)
       let { x, y } = await this.center(wc, r.backendNodeId)
       // Don't click through an overlay: name what covers the target instead. The hit test is CDP's
@@ -1470,7 +1512,7 @@ export class BrowserManager {
         await this.cdp(wc, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
       })
       return `Clicked ${r.role} "${r.name}". ${outcome}`
-    })
+    }))
   }
 
   /** 'ok', 'disabled', or 'covered:<what>' for a click at (x, y) on the element. */
@@ -1529,25 +1571,64 @@ export class BrowserManager {
   }
 
   async type(ref: string, text: string, submit = false): Promise<string> {
-    return this.control(async (wc) => {
+    return this.withLook(this.control(async (wc) => {
       const r = this.node(ref)
       await this.showCursor(wc, r.backendNodeId, 'type')
       if (submit) {
         const outcome = await this.observe(wc, () => this.setText(wc, r.backendNodeId, text, true))
         return `Typed into ${r.role} "${r.name}" and pressed Enter. ${outcome}`
       }
-      await this.setText(wc, r.backendNodeId, text, false)
+      // Typing can open suggestions (autocomplete, a date picker): the result shows them.
+      const typed = await this.observe(wc, () => this.setText(wc, r.backendNodeId, text, false))
+      const opened = typed.startsWith(PAGE_CHANGED) ? ` ${typed}` : ''
       // Report what the field shows now (autocomplete and masks can change it).
       const { object } = await this.cdp<{ object: { objectId: string } }>(wc, 'DOM.resolveNode', { backendNodeId: r.backendNodeId })
       const v = await this.cdp<{ result: { value: string } }>(wc, 'Runtime.callFunctionOn', { objectId: object.objectId, returnByValue: true, functionDeclaration: 'function () { return String(this.value ?? this.textContent ?? "") }' }).catch(() => ({ result: { value: text } }))
       const shown = v.result.value
-      return `Typed into ${r.role} "${r.name}".${shown !== text && !r.password ? ` The field now shows "${shown.slice(0, 120)}".` : ''}`
-    })
+      return `Typed into ${r.role} "${r.name}".${shown !== text && !r.password ? ` The field now shows "${shown.slice(0, 120)}".` : ''}${opened}`
+    }), { quiet: true })
+  }
+
+  /** Presses keys on the page (Escape a modal, arrows in a menu, Tab between fields), into a ref's element when given. */
+  async pressKeys(keys: string, ref?: string): Promise<string> {
+    const presses = parseKeys(keys)
+    return this.withLook(this.control(async (wc) => {
+      if (ref) await this.cdp(wc, 'DOM.focus', { backendNodeId: this.node(ref).backendNodeId })
+      const outcome = await this.observe(wc, async () => {
+        for (const p of presses) {
+          for (const k of p.keys) {
+            await this.cdp(wc, 'Input.dispatchKeyEvent', { type: k.text ? 'keyDown' : 'rawKeyDown', modifiers: p.modifiers, ...k })
+            await this.cdp(wc, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers: p.modifiers, key: k.key, code: k.code, windowsVirtualKeyCode: k.windowsVirtualKeyCode })
+          }
+        }
+      })
+      return `Pressed ${keys.trim()}. ${outcome}`
+    }))
+  }
+
+  /** The tab's history: back or forward a page, as the agent's own step (reported like a navigation). */
+  async go(dir: 'back' | 'forward'): Promise<string> {
+    return this.withLook(this.control(async (wc) => {
+      const h = wc.navigationHistory
+      if (dir === 'back' ? !h.canGoBack() : !h.canGoForward()) return `There's no page to go ${dir} to.`
+      const outcome = await this.observe(wc, async () => { if (dir === 'back') h.goBack(); else h.goForward() })
+      return `Went ${dir}. ${outcome}`
+    }))
+  }
+
+  /** Moves the pointer over an element (menus and tooltips that open on hover). */
+  async hover(ref: string): Promise<string> {
+    return this.withLook(this.control(async (wc) => {
+      const r = this.node(ref)
+      const { x, y } = await this.center(wc, r.backendNodeId)
+      const outcome = await this.observe(wc, async () => { await this.cdp(wc, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }) })
+      return `Hovered over ${r.role} "${r.name}". ${outcome}`
+    }), { quiet: true })
   }
 
   /** Presses Enter in a field (the text is already typed): a separate step so a purchase can be checked in between. */
   async pressEnter(ref: string): Promise<string> {
-    return this.control(async (wc) => {
+    return this.withLook(this.control(async (wc) => {
       const r = this.node(ref)
       const outcome = await this.observe(wc, async () => {
         await this.cdp(wc, 'DOM.focus', { backendNodeId: r.backendNodeId })
@@ -1556,7 +1637,7 @@ export class BrowserManager {
         await this.cdp(wc, 'Input.dispatchKeyEvent', { type: 'keyUp', ...key })
       })
       return `Pressed Enter in ${r.role} "${r.name}". ${outcome}`
-    })
+    }))
   }
 
   /**
@@ -1648,7 +1729,10 @@ export class BrowserManager {
       const r = await this.cdp<{ result: { value: string | null } }>(wc, 'Runtime.evaluate', {
         returnByValue: true,
         expression: `(() => {
-          const srcs = [...document.querySelectorAll('iframe')].map((f) => f.src || '').join(' ').toLowerCase()
+          // Only frames a person can see: invisible reCAPTCHA (size=invisible, the corner badge) is on many
+          // login and checkout pages and asks nothing of anyone.
+          const shown = (f) => { const b = f.getBoundingClientRect(); const st = getComputedStyle(f); return b.width >= 30 && b.height >= 30 && st.visibility !== 'hidden' && st.display !== 'none' && Number(st.opacity) > 0.05 && !/size=invisible/i.test(f.src || '') && !f.closest('.grecaptcha-badge') }
+          const srcs = [...document.querySelectorAll('iframe')].filter(shown).map((f) => f.src || '').join(' ').toLowerCase()
           if (srcs.includes('recaptcha')) return 'reCAPTCHA'
           if (srcs.includes('hcaptcha')) return 'hCaptcha'
           if (srcs.includes('challenges.cloudflare.com') || srcs.includes('turnstile') || document.querySelector('.cf-turnstile, #challenge-form, #cf-challenge-running')) return 'Cloudflare check'

@@ -2,7 +2,8 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { outsidePath, resolvePath } from '../../src/main/agent/tools/files'
-import { outsidePaths } from '../../src/main/agent/tools/shell'
+import { cwdFor, outsidePaths } from '../../src/main/agent/tools/shell'
+import { mkdirSync } from 'node:fs'
 import { sandboxProfile } from '../../src/main/code/proc'
 
 // Files anywhere (on by default): the home folder is one of the chat's folders, so reading and editing files
@@ -13,6 +14,12 @@ const ws = join(tmpdir(), 'ws')
 const roots = [H]
 
 describe('files anywhere', () => {
+  test('commands still start in the chat\'s workspace or folder, never in the home folder', () => {
+    mkdirSync(ws, { recursive: true })
+    expect(cwdFor(undefined, { workspaceDir: ws, state: { roots: [H] } as never })).toBe(ws)
+    const proj = join(tmpdir(), 'proj-cwd'); mkdirSync(proj, { recursive: true })
+    expect(cwdFor(undefined, { workspaceDir: ws, state: { roots: [proj, H] } as never })).toBe(proj)
+  })
   test('a note in Documents is read and saved without asking', () => {
     const note = join(H, 'Documents/Obsidian Vault/Areas/School/Chemistry EP.md')
     expect(resolvePath(note, ws, roots)).toBe(note)

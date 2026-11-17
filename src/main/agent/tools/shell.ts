@@ -913,7 +913,8 @@ export function isProjectCommand(cmd: string, cwd: string, allowed: string[], o:
  */
 export function cwdFor(p: string | undefined, ctx: Pick<ToolContext, 'state' | 'workspaceDir'>): string {
   const folder = ctx.state.folder && existsSync(ctx.state.folder) && statSync(ctx.state.folder).isDirectory() ? ctx.state.folder : undefined
-  const base = folder ?? ctx.state.roots?.find((r) => existsSync(r) && statSync(r).isDirectory()) ?? ctx.workspaceDir
+  // The home folder (Files anywhere) is somewhere a command may reach, never where it starts.
+  const base = folder ?? ctx.state.roots?.find((r) => r !== homedir() && existsSync(r) && statSync(r).isDirectory()) ?? ctx.workspaceDir
   if (!p) return base
   const abs = isAbsolute(p) ? p : resolve(folder ?? ctx.workspaceDir, p)
   const real = existsSync(abs) ? realpathSync(abs) : abs

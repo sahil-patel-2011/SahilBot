@@ -939,7 +939,7 @@ export class Agent {
   /** The skills that fit this request (skills.ts suggest): top few by relevance, the best one's steps on big windows. */
   private skillHints(thread: Thread, folder: string | null, query: string, compact: boolean): SkillSuggestion | undefined {
     try {
-      const dir = folder ?? this.d.db.getState(thread.id).roots?.[0] ?? null
+      const dir = folder ?? this.d.db.getState(thread.id).roots?.find((r) => r !== homedir()) ?? null
       const codeProject = !!dir && ['.git', 'package.json', 'build.gradle', 'pyproject.toml', 'Cargo.toml', 'go.mod'].some((f) => existsSync(join(dir, f)))
       return this.d.skills?.suggest?.(query, { folder: dir, codeProject, compact })
     } catch { return undefined }
@@ -1890,8 +1890,18 @@ export class Agent {
         },
         timeoutMs: brainTimeout(thinker), signal: this.runs.get(thread.id)?.ctrl.signal
       })
-      if (got.answer) { brain = got.answer; task = applyBrain(task, brain, thinker.label ?? thinker.id) }
+      if (got.answer) {
+        brain = got.answer; task = applyBrain(task, brain, thinker.label ?? thinker.id)
+        // Kept with the message, so a "yes, do it" after a restart still follows this read.
+        this.d.db.updateMessage({ ...last, meta: { ...last.meta, autoRead: brain } })
+      }
       else task = { ...task, why: `${task.why} · ${got.late ? `${thinker.label ?? thinker.id} was still reading, so the basic rules picked` : 'basic rules (no read)'}` }
+    }
+    // "yes, do it" / "continue": the read of the request it carries on (same model, level and team).
+    if (!brain && autoNow && last && task.rule === 'follow-up') {
+      const before = shown.filter((m) => !m.meta?.questionAnswer && m !== last)[0]
+      const prior = before ? this.brainCache.get(before.id) ?? (before.meta?.autoRead as BrainAnswer | undefined) : undefined
+      if (prior) { brain = prior; this.brainCache.set(last.id, prior); task = applyBrain(task, prior, 'the last read') }
     }
     const r = { tier: task.difficulty, why: task.why }
     const prevCategory = state.lastCategory
