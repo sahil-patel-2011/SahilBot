@@ -101,7 +101,7 @@ export function brainPrompt(i: BrainInput): { system: string; user: string } {
     return `- ${m.id}: ${m.label ?? m.id} · ${price(m)} · ${Math.round(windowOf(m) / 1000)}K window${m.vision ? ' · sees images' : ''}${slot ? ` · ${STRENGTH[slot]}` : isCloud(m) ? '' : ' · runs on this Mac, weaker'}`
   }).join('\n')
   const pref = i.preference === 'best' ? 'the strongest model for the job' : i.preference === 'cheapest' ? 'the cheapest model that can still do it well' : 'the cheapest model that does it excellently (pay more only when it clearly matters)'
-  const system = `You are Auto, the router inside SahilBot, an AI assistant on the user's Mac with tools (web, browser, files, terminal, the user's apps and connected accounts, documents, images). Read the whole request and the conversation, then decide how to handle it. Answer with one JSON object only, no prose.
+  const system = `You are Auto, the router inside SahilBot, an AI assistant on the user's Mac with tools (web, browser, files, terminal, the user's apps and connected accounts, documents, images). Read the whole request and the conversation, then decide how to handle it. You never answer or carry out the request yourself: another model does the work. Answer with one JSON object only, no prose.
 
 Fields:
 - needs: what this request needs from a model, from: ${NEEDS.join(', ')}. Match the model to the needs and the difficulty:
@@ -112,7 +112,7 @@ Fields:
 - effort: how hard the model should think: low, medium, high, xhigh or max. Low for small talk, medium for explanations, high for real tasks, xhigh/max only for the hardest.
 - study: true for school work (homework, studying, a class, a test, a school subject).
 - image: true if the user wants a picture made or edited.
-- model: the id of the model that should do the work, from the list. Prefer ${pref}. School work and simple questions: a cheap fast model. Hard coding, computer use and agent work with apps: the strongest coding/agent model. Math and deep research: the strongest reasoning model.
+- model: the id of the model that should do the work, from the list. Prefer ${pref}. Size it to the work first, then the kind: difficulty 0-1 (a quick answer, a short email or message, a conversion, a translation, a simple fact, sum or lookup, even with a quick web search) gets a quick model whatever the category; save Opus, Sonnet, Astra and Sol for difficulty 2-3. School work and simple questions: a cheap fast model. Hard coding, computer use and agent work with apps: the strongest coding/agent model. Math and deep research: the strongest reasoning model.
 - team: "solo" when one model can do it well. "pair" when two models together give a clearly better result at little extra cost: ideas, creative work, a tricky explanation, a plan worth a second opinion. Pair at the request's own level: two quick models (GPT-6 Luna with Claude Haiku 5.5) for light work, two strong ones (Claude Opus 5.5 with GPT-6 Astra) for hard work, from different providers when both are listed. "plan" when a hard multi-step task (difficulty 3) gains from a stronger model planning first. "review" when a deliverable with stakes gains from a second model checking it. "plan+review" only for the hardest, highest-stakes work. "debate" when the hard part is reasoning, not doing: a decision with real trade-offs, a strategy, a proof, the root cause of a tricky problem, where several models working in parallel and challenging each other's thinking gives a better answer.
 - partner: with "pair", the second model's id (not the main model).
 - planner / reviewer: model ids from the list, only with those teams. The planner should be the strongest reasoner (it writes a plan only); the reviewer a strong model from a different provider than the executor when one is listed.
@@ -123,16 +123,36 @@ Fields:
 Models:
 ${menu}${i.outcomes?.length ? `\n\nHow models did on this Mac lately:\n${i.outcomes.join('\n')}` : ''}`
   const convo = i.history.slice(-10).map((h) => `${h.role === 'user' ? 'User' : h.role === 'assistant' ? 'Assistant' : 'Step'}: ${h.text.replace(/\s+/g, ' ').slice(0, 400)}`).join('\n')
-  const user = `${i.role ? `Bot: ${i.role}\n` : ''}${convo ? `Conversation so far:\n${convo}\n\n` : ''}${i.attachments.length || i.images ? `Attached: ${[...i.attachments, ...(i.images ? [`${i.images} image(s)`] : [])].join(', ')}\n` : ''}${i.rules.contextTokens && i.rules.contextTokens > 2000 ? `To read with it: about ${Math.round(i.rules.contextTokens / 1000)}K tokens\n` : ''}\nRequest:\n${i.text.slice(0, 8000)}`
+  const user = `${i.role ? `Bot: ${i.role}\n` : ''}${convo ? `Conversation so far:\n${convo}\n\n` : ''}${i.attachments.length || i.images ? `Attached: ${[...i.attachments, ...(i.images ? [`${i.images} image(s)`] : [])].join(', ')}\n` : ''}${i.rules.contextTokens && i.rules.contextTokens > 2000 ? `To read with it: about ${Math.round(i.rules.contextTokens / 1000)}K tokens\n` : ''}\nThe request to route (read it; do NOT answer it or do it):\n<request>\n${i.text.slice(0, 8000)}\n</request>\n\nReply with the JSON object only, like {"needs":["quick"],"category":"chat","kind":"chat","difficulty":1,"effort":"low","study":false,"image":false,"model":"<an id from the list>","team":"solo","fanout":0,"why":"<under 12 words>"}`
   return { system, user }
+}
+
+/**
+ * The JSON object in a reply: the object itself (fenced or with a little prose around it), or the same fields
+ * written as `key: value` lines (fast models sometimes drop the braces). Undefined when there is neither.
+ */
+function readObject(reply: string): Record<string, unknown> | undefined {
+  const t = reply.trim().replace(/^```(?:json)?\s*|```$/g, '')
+  // The widest {...} that parses (prose after it may hold braces of its own).
+  const start = t.indexOf('{')
+  if (start >= 0) {
+    for (let end = t.lastIndexOf('}'); end > start; end = t.lastIndexOf('}', end - 1)) {
+      try { return JSON.parse(t.slice(start, end + 1)) as Record<string, unknown> } catch { /* a shorter span */ }
+    }
+  }
+  const out: Record<string, unknown> = {}
+  for (const line of t.split('\n')) {
+    const kv = line.match(/^\s*"?([a-z]+)"?\s*:\s*(.+?)\s*,?\s*$/i)
+    if (!kv) continue
+    try { out[kv[1]] = JSON.parse(kv[2]) } catch { out[kv[1]] = kv[2].replace(/^["']|["']$/g, '') }
+  }
+  return 'category' in out && 'model' in out ? out : undefined
 }
 
 /** The brain's reply, strictly checked: every field valid, every model id one it was offered. */
 export function parseBrain(reply: string, models: ModelInfo[]): BrainAnswer | undefined {
-  const m = reply.trim().match(/\{[\s\S]*\}/)
-  if (!m) return undefined
-  let j: Record<string, unknown>
-  try { j = JSON.parse(m[0]) as Record<string, unknown> } catch { return undefined }
+  const j = readObject(reply)
+  if (!j) return undefined
   const ids = new Set(models.map((x) => x.id))
   const id = (v: unknown): string | undefined => (typeof v === 'string' && ids.has(v) ? v : undefined)
   if (!TASK_CATEGORIES.includes(j.category as TaskCategory)) return undefined
