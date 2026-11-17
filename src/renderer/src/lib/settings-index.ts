@@ -43,6 +43,7 @@ export const PAGE_TITLES: Record<SettingsPage, string> = {
 export const SETTINGS_INDEX: SettingEntry[] = [
   // General
   { anchor: 'user-name', page: 'general', title: 'Your name', words: 'name call me first name', keys: ['userName'] },
+  { anchor: 'me-contact', page: 'general', title: 'Your email and phone', words: 'me my email address phone number mobile text sms imessage trusted message without asking', keys: ['me', 'me.emails', 'me.phones'] },
   { anchor: 'workspace', page: 'general', title: 'Workspace folder', words: 'folder files save output directory', keys: ['workspaceDir'] },
   { anchor: 'theme', page: 'general', title: 'Theme', words: 'appearance dark light mode system', keys: ['theme'] },
   { anchor: 'quick-ask', page: 'general', title: 'Quick Ask shortcut', words: 'shortcut hotkey keyboard option space overlay', keys: ['quickKey'] },

@@ -1,5 +1,6 @@
 import type { BotAutonomySettings, PermissionMode, QueueQuestion, Settings, Space } from '@shared/types'
 import { hardStopText } from '../permissions'
+import { cleanTrustedList } from '../trusted'
 
 // Always-on bots: their autonomy level, "Always ask for…" exceptions, question deadline and daily digest.
 // No Electron imports: the agent loop, main and tests all use these.
@@ -37,7 +38,8 @@ export function cleanBotAutonomy(v: unknown): BotAutonomySettings {
   const n = typeof x.deadlineHours === 'number' ? x.deadlineHours : typeof x.deadlineHours === 'string' ? Number(x.deadlineHours) : NaN
   const deadlineHours = Number.isFinite(n) ? Math.min(168, Math.max(0.25, Math.round(n * 4) / 4)) : BOT_AUTONOMY_DEFAULTS.deadlineHours
   const d = (x.digest ?? {}) as Partial<BotAutonomySettings['digest']>
-  return { alwaysAsk, deadlineHours, digest: { enabled: typeof d.enabled === 'boolean' ? d.enabled : BOT_AUTONOMY_DEFAULTS.digest.enabled, time: clock(d.time) ?? BOT_AUTONOMY_DEFAULTS.digest.time } }
+  const trusted = cleanTrustedList(x.trustedRecipients)
+  return { alwaysAsk, deadlineHours, digest: { enabled: typeof d.enabled === 'boolean' ? d.enabled : BOT_AUTONOMY_DEFAULTS.digest.enabled, time: clock(d.time) ?? BOT_AUTONOMY_DEFAULTS.digest.time }, ...(trusted.length ? { trustedRecipients: trusted } : {}) }
 }
 
 /** The saved map, cleaned (at most 500 bots). */

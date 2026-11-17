@@ -152,6 +152,8 @@ export interface AgentDeps {
    * ask for…" exceptions. Without it every chat asks the usual way.
    */
   questions?: QuestionHost
+  /** Trusted recipients (agent/trusted.ts): sends to people on a bot's "Can message without asking" list run without asking. */
+  trustedSends?: import('./trusted').TrustedSends
   /** The user's answers, picks, corrections and approval clicks, remembered as decisions (learning/decisions.ts). */
   decisions?: Pick<DecisionRecorder, 'answers' | 'userMessage' | 'approval' | 'revision'>
 }
@@ -3018,6 +3020,8 @@ export class Agent {
     const alwaysOn = !run.helper && !!this.d.questions?.config(thread.id)
     // Long-term memory: a save whose wording came from (or, after reading, reads like) fetched content asks.
     const hardStop = tool.hardStop?.(args, { roots: state.roots ?? [], folder: state.folder }) ?? (tool.name === 'memory' ? memoryRisk(args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted) : null)
+    // Every recipient on this bot's trusted list (or the user): the send stop lifts (decide()), within limits.
+    const trust = effect === 'write_external' ? this.d.trustedSends?.check(run.speaker?.id ?? thread.spaceId, tool.name, args, hardStop) : undefined
     const decision = decideWithRule({
       mode,
       effect,
@@ -3033,7 +3037,9 @@ export class Agent {
       // Nobody watches an unattended run: Auto works cautiously there (decide()), except in an always-on
       // bot, whose hard stops (botStops), taint and the purchase / one-time-code gates still apply.
       unattended: run.unattended,
-      alwaysOn
+      alwaysOn,
+      trustedSend: trust?.trusted,
+      trustNote: trust?.note
     }, rule)
     return { effect, decision: this.botStops(thread, tool, effect, args, call.arguments, summary, hardStop, this.runRisks(run, tool, effect, args, ctx, decision)), summary }
   }
@@ -3047,7 +3053,7 @@ export class Agent {
     if (d.verdict !== 'allow' || !this.d.questions) return d
     const cfg = this.d.questions.config(thread.id)
     if (!cfg) return d
-    const stop = botHardStop({ tool: tool.name, effect, args, argsText, label: tool.label, summary, hardStop, alwaysAsk: cfg.alwaysAsk })
+    const stop = botHardStop({ tool: tool.name, effect, args, argsText, label: tool.label, summary, hardStop, alwaysAsk: cfg.alwaysAsk, trusted: d.trusted })
     return stop ? { verdict: 'ask', reason: `Hard stop: ${stop.reason}` } : d
   }
 
@@ -3326,6 +3332,8 @@ export class Agent {
         }
       }
       out = preparedAction.replay ?? await invoke()
+      // A send that ran without asking because its recipients are trusted counts toward the bot's hourly limit.
+      if (decision.trusted && decision.verdict === 'allow' && !preparedAction.replay) this.d.trustedSends?.record(run.speaker?.id ?? thread.spaceId)
       if (tool.outputSchema) validateOutput(tool.outputSchema, out.data)
       if (this.d.redact) out = JSON.parse(this.d.redact(JSON.stringify(out))) as ToolOutput
       this.runtime.complete(preparedAction.record.id, out)

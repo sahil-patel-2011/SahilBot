@@ -276,6 +276,13 @@ function General({ s, patch }: P) {
       <div className="set-sub">Most people never need to change anything here.</div>
       <Section>
         <Row id="user-name" title="Your name" sub="What SahilBot calls you."><Field value={s.userName} placeholder="First name" label="Your name" onSave={(v) => void patch({ userName: v })} /></Row>
+        {/* Me: bots may always email or text these without asking (agent/trusted.ts). Commas separate several. */}
+        <Row id="me-contact" title="Your email and phone" sub="Bots can always message you here without asking.">
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Field value={(s.me?.emails ?? []).join(', ')} width={200} placeholder="you@example.com" label="Your email" testId="me-emails" onSave={(v) => void patch({ me: { emails: v.split(/[,;\s]+/).filter(Boolean), phones: s.me?.phones ?? [] } })} />
+            <Field value={(s.me?.phones ?? []).join(', ')} width={150} type="tel" placeholder="+1 555 010 1234" label="Your phone" testId="me-phones" onSave={(v) => void patch({ me: { emails: s.me?.emails ?? [], phones: v.split(/[,;]+/).map((x) => x.trim()).filter(Boolean) } })} />
+          </div>
+        </Row>
         <Row id="workspace" title="Workspace folder" sub="Where SahilBot saves what it makes."><Field value={s.workspaceDir} width={280} label="Workspace folder" onSave={(v) => void patch({ workspaceDir: v })} /></Row>
         <Row id="theme" title="Theme">
           <Segmented value={s.theme} label="Theme" testIdPrefix="theme" onChange={(v) => void patch({ theme: v })} options={[{ id: 'system', label: 'System' }, { id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }]} />

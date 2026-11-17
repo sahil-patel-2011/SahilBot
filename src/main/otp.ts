@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { publicSuffix, registrableDomain } from './psl'
+import { decodeAttributedBody } from './messages/chatdb'
 
 /**
  * One-time codes for the user's OWN accounts, password-manager style: authenticator (TOTP, RFC 6238)
@@ -192,6 +193,9 @@ export function appleDate(v: number | bigint): number {
 /** Text from an attributedBody blob (an archived NSAttributedString): the readable run after NSString. */
 export function attributedText(blob: Uint8Array | null | undefined): string {
   if (!blob) return ''
+  // The exact typedstream decoder first (messages/chatdb.ts); the loose scan below is the fallback.
+  const exact = decodeAttributedBody(blob)
+  if (exact) return exact
   const s = Buffer.from(blob).toString('utf8')
   const i = s.indexOf('NSString')
   const tail = i >= 0 ? s.slice(i + 8) : s
@@ -212,9 +216,12 @@ export async function recentTexts(sinceMs: number, dbPath = join(homedir(), 'Lib
   }
   try {
     const since = BigInt(Math.floor((sinceMs - APPLE_EPOCH) * 1e6))
-    const rows = db.prepare(`SELECT m.text AS text, m.attributedBody AS body, m.date AS date, h.id AS sender
+    const st = db.prepare(`SELECT m.text AS text, m.attributedBody AS body, m.date AS date, h.id AS sender
       FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID
-      WHERE m.is_from_me = 0 AND m.date > ? ORDER BY m.date DESC LIMIT 40`).all(since) as Array<{ text: string | null; body: Uint8Array | null; date: number | bigint; sender: string | null }>
+      WHERE m.is_from_me = 0 AND m.date > ? ORDER BY m.date DESC LIMIT 40`)
+    // Dates are nanoseconds since 2001 (~8e17): past Number's exact range, so read as BigInt.
+    st.setReadBigInts(true)
+    const rows = st.all(since) as Array<{ text: string | null; body: Uint8Array | null; date: number | bigint; sender: string | null }>
     return rows.map((r) => ({ from: r.sender ?? '', text: r.text || attributedText(r.body), at: appleDate(r.date) }))
   } catch (e) {
     if (/authori|permission|not permitted|unable to open/i.test((e as Error).message)) throw new Error(FULL_DISK_HELP)

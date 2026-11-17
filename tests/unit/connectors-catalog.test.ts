@@ -4,7 +4,7 @@ import { Connectors, EFFECT_MAPS, GOOGLE_PRESETS, LOCAL_SERVERS, Oauth, PRESETS,
 import { CUSTOM_REDIRECT, SECTION_ORDER, connectBadge, isOneClick as isOneClickUi, needsSetup, recommended } from '../../src/renderer/src/lib/connect-catalog'
 
 const AUTHS = ['oauth', 'none', 'oauth-static', 'google', 'browser', 'app', 'apikey']
-const remote = PRESETS.filter((p) => p.auth !== 'app' && p.id !== 'custom' && !isLocalPreset(p))
+const remote = PRESETS.filter((p) => p.auth !== 'app' && p.id !== 'custom' && !isLocalPreset(p) && !p.url.startsWith('app:'))
 const preset = (id: string): ConnectorPreset => PRESETS.find((p) => p.id === id)!
 
 function memSecrets() {

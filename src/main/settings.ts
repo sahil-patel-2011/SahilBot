@@ -2,6 +2,7 @@ import { isEffortChoice } from './llm/auto-effort'
 import { DEFAULT_PROVIDERS, DEFS, baseUrlOf, keyName } from './llm/providers'
 import { isBroadAllow } from './agent/permissions'
 import { cleanBotAutonomyMap } from './agent/questions/policy'
+import { cleanTrustedList, normalizeRecipient } from './agent/trusted'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { Appearance, CustomRule, LearningSettings, MarketKeyProvider, MarketsSettings, McpServerSettings, PermissionMode, ProviderId, Settings } from '@shared/types'
@@ -66,6 +67,15 @@ export function cleanMcpServer(v: unknown): McpServerSettings {
   const x = (v ?? {}) as Partial<McpServerSettings>
   const port = typeof x.port === 'number' && Number.isInteger(x.port) && x.port >= 1024 && x.port <= 65535 ? x.port : 0
   return { enabled: x.enabled === true, port }
+}
+
+/** The user's own emails and phone numbers as saved: valid ones only, each kind in its own list, at most 5 of each. */
+export function cleanMe(v: unknown): { emails: string[]; phones: string[] } {
+  const x = (v ?? {}) as { emails?: unknown; phones?: unknown }
+  return {
+    emails: cleanTrustedList(x.emails, 5).filter((e) => normalizeRecipient(e)?.startsWith('e:')),
+    phones: cleanTrustedList(x.phones, 5).filter((p) => normalizeRecipient(p)?.startsWith('p:'))
+  }
 }
 
 /** Learning settings as saved: on/off (unset counts as on), cloud allowed, a daily cap of $0-$5, and which keys the user set. */
@@ -247,7 +257,8 @@ export class SettingsStore {
       voiceOutput: cleanVoiceOutput(s.voiceOutput),
       defaultMode: cleanLevel(s.defaultMode) ?? 'auto',
       botModes: cleanBotModes(s.botModes),
-      thinking: isEffortChoice(s.thinking) ? s.thinking : 'auto'
+      thinking: isEffortChoice(s.thinking) ? s.thinking : 'auto',
+      me: cleanMe(s.me)
     }
   }
 
@@ -296,6 +307,7 @@ export class SettingsStore {
       botModes: rest.botModes !== undefined ? cleanBotModes(rest.botModes) : cur.botModes,
       disabledProviders: rest.disabledProviders !== undefined ? [...new Set(rest.disabledProviders.filter((p) => DEFS.some((d) => d.id === p && !d.local)))] : cur.disabledProviders,
       botAutonomy: rest.botAutonomy !== undefined ? cleanBotAutonomyMap(rest.botAutonomy) : cur.botAutonomy,
+      me: rest.me !== undefined ? cleanMe(rest.me) : cur.me,
       learning: rest.learning !== undefined ? cleanLearning({
         ...cur.learning, ...rest.learning,
         // A switch the user flipped is theirs: later default changes leave it alone.

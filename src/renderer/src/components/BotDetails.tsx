@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import type { BotMaxSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
+import type { BotAutonomySettings, BotMaxSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
@@ -194,6 +194,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                     <span className="bd-row-value">Auto</span>
                   </div>
                 )}
+                {space.kind === 'bot' && <TrustedRow spaceId={space.id} />}
                 {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} part="behaviour" />}
                 <BotFolderRow space={space} onChanged={p.onChanged} />
                 <button className="bd-row bd-row-btn" onClick={p.onCustomize} data-testid="bot-customize">
@@ -401,6 +402,59 @@ function AutonomyRow({ space }: { space: Space }) {
         <option value="auto">Auto</option>
       </select>
     </label>
+  )
+}
+
+/** Same shape check as main (agent/trusted.ts normalizeRecipient), for feedback while typing. */
+const looksLikeRecipient = (t: string): boolean => /^[^\s@<>]+@[^\s@<>]+\.[a-z]{2,}$/i.test(t) || /^\+?[\d\s().-]{5,20}$/.test(t) && t.replace(/\D/g, '').length >= 5
+
+/**
+ * "Can message without asking": people this bot may email or text on its own (even unattended), as chips.
+ * Main checks every recipient exactly against this list plus the user's own email and phone (agent/trusted.ts).
+ */
+function TrustedRow({ spaceId }: { spaceId: string }) {
+  const [all, setAll] = useState<Record<string, Partial<BotAutonomySettings>> | null>(null)
+  const [draft, setDraft] = useState('')
+  const [bad, setBad] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void api.settings.get().then((x) => { if (alive) setAll(x.botAutonomy ?? {}) })
+    return () => { alive = false }
+  }, [spaceId])
+  if (!all) return null
+  const list = all[spaceId]?.trustedRecipients ?? []
+  const save = (next: string[]): void => {
+    const map = { ...all, [spaceId]: { ...(all[spaceId] ?? {}), trustedRecipients: next } }
+    setAll(map)
+    void api.settings.set({ botAutonomy: map }).then((s) => { setAll(s.botAutonomy ?? map); window.dispatchEvent(new Event('sahilbot:settings-changed')) })
+  }
+  const add = (): void => {
+    const items = draft.split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean)
+    if (!items.length) return
+    if (items.some((t) => !looksLikeRecipient(t))) { setBad(true); return }
+    save([...list, ...items.filter((t) => !list.some((x) => x.toLowerCase() === t.toLowerCase()))].slice(0, 50))
+    setDraft('')
+    setBad(false)
+  }
+  return (
+    <div className="bd-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }} data-testid="bot-trusted">
+      <span className="bd-row-text">Can message without asking<span className="bd-row-sub">Emails and texts to only these people (and you) send on their own. Anyone else still asks.</span></span>
+      {list.length > 0 && (
+        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {list.map((w) => (
+            <span key={w} className="ui-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} data-testid="bot-trusted-chip">
+              {w}
+              <button className="bd-icon" style={{ width: 18, height: 18 }} aria-label={`Ask again before messaging ${w}`} title="Remove" onClick={() => save(list.filter((x) => x !== w))}><I.Close size={10} /></button>
+            </span>
+          ))}
+        </span>
+      )}
+      <span style={{ display: 'flex', gap: 8 }}>
+        <span className="tk-input" style={{ flex: 1 }}><input value={draft} placeholder="Email or phone number" maxLength={400} onChange={(e) => { setDraft(e.target.value); setBad(false) }} onKeyDown={(e) => { if (e.key === 'Enter') add() }} aria-label="Add someone this bot may message without asking" data-testid="bot-trusted-input" /></span>
+        <button className="bd-btn" onClick={add} disabled={!draft.trim()} data-testid="bot-trusted-add">Add</button>
+      </span>
+      {bad && <span className="bd-row-sub" role="alert">That isn't an email address or phone number.</span>}
+    </div>
   )
 }
 

@@ -10,6 +10,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { UnauthorizedError, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import type { ConnectorApiKey, ConnectorConfig, ConnectorPreset, ConnectorSetup, ConnectorStatus, ToolEffect } from '@shared/types'
+import { RESEND_KEY_SECRET, verifyResendKey, type Fetch as ResendFetch } from './mail/resend'
 import type { ToolRegistry } from './agent/registry'
 import type { ToolDef } from './agent/types'
 import { CONSEQUENTIAL } from './agent/permissions'
@@ -178,6 +179,8 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'livestorm', name: 'Livestorm', url: 'https://mcp.livestorm.co/mcp', color: '#00B37E', category: 'Communication', domain: 'livestorm.co', auth: 'oauth', description: 'Webinars, sessions and registrants.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR mcp.livestorm.co/register
   { id: 'bird', name: 'Bird', url: 'https://mcp.bird.com/', color: '#0E5CFF', category: 'Communication', domain: 'bird.com', auth: 'oauth', description: 'Email, SMS and WhatsApp through your Bird workspace; sending always asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR platform.bird.com/v1/oauth/register
   { id: 'superhuman-mail', name: 'Superhuman Mail', url: 'https://mcp.mail.superhuman.com/mcp', color: '#6E56CF', category: 'Communication', domain: 'superhuman.com', auth: 'oauth', description: 'Search, read and draft email in Superhuman; sending always asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR mcp.auth.mail.superhuman.com/oauth2/register; URL from help.superhuman.com
+  // Native (no MCP server): SahilBot's own resend tool calls Resend's REST API with the user's key (agent/tools/resend.ts).
+  { id: 'resend', name: 'Resend', url: 'app:resend', color: '#111111', category: 'Communication', domain: 'resend.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://resend.com/api-keys', hint: 'Resend → API Keys → Create API Key ("Full access", or "Sending access" to only send).', placeholder: 're_…', pattern: '^re_[A-Za-z0-9_-]{8,}$' }, description: 'Email from your own domain: send, check delivery, list verified domains (sending asks unless every recipient is trusted).' }, // resend.com/docs/api-reference/introduction: Authorization: Bearer re_…; verified with GET /domains
   { id: 'mandrill', name: 'Mailchimp Transactional', url: 'https://mandrillapp.com/mcp', color: '#FFE01B', category: 'Communication', domain: 'mandrillapp.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://mandrillapp.com/settings', hint: 'Mandrill → Settings → API Keys → New API Key (a Transactional key, not a Marketing one).' }, description: 'Transactional email: templates, message status and sending (sending always asks).' }, // NEW 2026-11-15, swept 2026-11-15: initialize 200 with JSON-RPC error "Authorization: Bearer <api_key> required"; header from mailchimp.com/developer/transactional/guides/how-to-use-mailchimps-transactional-messaging-mcp/
   // Support
   { id: 'chatbase', name: 'Chatbase', url: 'https://mcp.chatbase.co/api/mcp', color: '#111111', category: 'Support', domain: 'chatbase.co', auth: 'oauth', description: 'Your support agents, their sources, conversations and tickets.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR chatbase.co/api/oauth/register
@@ -1156,6 +1159,31 @@ export function setupNeeded(p: Pick<ConnectorPreset, 'name' | 'setup'>): string 
 
 const keySecret = (id: string): string => `mcp:${id}:apiKey`
 
+/**
+ * API-key apps SahilBot talks to natively (its own tool, no MCP server): where the key lives and the one
+ * cheap read that verifies it. Their tile works like any API-key app's; there's no connector config.
+ */
+export const NATIVE_KEY_APPS: Record<string, { secret: string; tools: string[]; verify(key: string, f?: ResendFetch): Promise<{ ok: true } | { ok: false; error: string }> }> = {
+  resend: { secret: RESEND_KEY_SECRET, tools: ['resend'], verify: (key, f) => verifyResendKey(f ?? ((url, init) => fetch(url, { ...init, redirect: 'error' }) as never), key) }
+}
+export const isNativeKeyApp = (id: string | undefined): boolean => !!id && Object.prototype.hasOwnProperty.call(NATIVE_KEY_APPS, id)
+
+/**
+ * The API key on the clipboard, if it looks like one for this app: the whole clipboard (trimmed, quotes and a
+ * "Bearer " dropped), or the one token in it that matches the app's known prefix. Null otherwise; the
+ * clipboard's text is never echoed back.
+ */
+export function keyFromClipboard(text: string, p: Pick<ConnectorPreset, 'name' | 'apiKey'>): string | null {
+  if (!p.apiKey) return null
+  const raw = String(text ?? '').slice(0, 4096)
+  const whole = normalizeApiKey(raw, p.apiKey)
+  if (!validateApiKey(whole, p)) return whole
+  if (!p.apiKey.pattern) return null
+  const re = new RegExp(p.apiKey.pattern.replace(/^\^/, '').replace(/\$$/, ''))
+  const hits = raw.split(/[\s"'`,;]+/).filter((t) => re.test(t) && !validateApiKey(t, p))
+  return hits.length === 1 ? hits[0] : null
+}
+
 /** The error for an API-key app that has no key yet. */
 export function apiKeyNeeded(p: Pick<ConnectorPreset, 'name'>): string {
   return `${p.name} needs your ${p.name} API key: open Connect apps → ${p.name}, paste the key, and it connects.`
@@ -1608,6 +1636,8 @@ export class Connectors {
     oauthClients?: BuiltinClients
     /** A provider sent the browser back with a code: bring SahilBot to the front. */
     onSignedIn?: (name: string) => void
+    /** Verifying native API keys (tests pass a fake; default: fetch). */
+    fetch?: ResendFetch
   } = {}) {}
 
   /** The built-in client for a catalog app (its own, or Google's shared one), if SahilBot ships one. */
@@ -1632,6 +1662,7 @@ export class Connectors {
     const cfg = this.list().find((c) => c.preset === p.id)
     if (p.auth === 'oauth-static') return !!cfg?.clientId
     if (p.auth === 'google') return !!(cfg?.clientId || this.googleClient())
+    if (isNativeKeyApp(p.id)) return !!this.secrets.get(NATIVE_KEY_APPS[p.id].secret)
     if (p.auth === 'apikey') return !!(cfg && this.secrets.get(keySecret(cfg.id)))
     return false
   }
@@ -1645,7 +1676,7 @@ export class Connectors {
     const q = query.toLowerCase()
     const connected = new Set(this.list().filter((c) => this.status.get(c.id)?.state === 'connected').map((c) => c.preset))
     const words = q.split(/[^a-z0-9.]+/).filter((w) => w.length > 2)
-    const open = this.presets().filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app')
+    const open = this.presets().filter((p) => p.id !== 'custom' && !connected.has(p.id) && p.auth !== 'browser' && p.auth !== 'app' && !(isNativeKeyApp(p.id) && this.ready(p)))
     const readyNow = new Map(open.map((p) => [p.id, this.ready(p)]))
     // Only apps the request names in full AND asks to use ("my google calendar", "add it to notion"): for a
     // find_tools search that also matched built-in tools, so "calendar" still means the built-in one, "browser"
@@ -1666,6 +1697,10 @@ export class Connectors {
    */
   async connectPreset(id: string): Promise<ConnectorStatus> {
     const p = PRESETS.find((x) => x.id === id)
+    if (p && isNativeKeyApp(p.id)) {
+      if (!this.ready(p)) throw new Error(apiKeyNeeded(p))
+      return this.nativeStatus(p.id)
+    }
     if (!p || p.auth === 'browser' || p.auth === 'app' || !p.url) throw new Error('This connector needs setup in Connect apps.')
     if (p.unavailable) throw new Error(p.unavailable)
     const existing = this.list().find((c) => c.preset === id)
@@ -1729,8 +1764,9 @@ export class Connectors {
     return this.save(rest)
   }
 
-  /** Forgets the API key of an app that also signs in with OAuth ("Use an API key instead", undone). */
+  /** Forgets the API key of an app that also signs in with OAuth ("Use an API key instead", undone), or a native app's key. */
   clearApiKey(id: string): void {
+    if (isNativeKeyApp(id)) { this.secrets.set(NATIVE_KEY_APPS[id].secret, null); this.changed(); return }
     this.secrets.set(keySecret(id), null)
     this.changed()
   }
@@ -1748,6 +1784,15 @@ export class Connectors {
     const key = normalizeApiKey(raw, p.apiKey)
     const problem = validateApiKey(key, p)
     if (problem) throw new Error(problem)
+    // A native app: verify with one cheap read, then keep the key (a refused one is never saved).
+    if (isNativeKeyApp(p.id)) {
+      const app = NATIVE_KEY_APPS[p.id]
+      const v = await app.verify(key, this.opts.fetch)
+      if (!v.ok) return { id: p.id, state: 'error', tools: 0, error: redactSecret(v.error, key) }
+      this.secrets.set(app.secret, key)
+      this.changed()
+      return this.nativeStatus(p.id)
+    }
     const cfg = this.list().find((c) => c.preset === presetId) ?? this.save({ name: p.name, kind: 'remote', url: p.url, preset: p.id, enabled: true })
     this.secrets.set(keySecret(cfg.id), key)
     const st = await this.connect(cfg.id, false)
@@ -1758,9 +1803,30 @@ export class Connectors {
     return st
   }
 
-  /** Connectors with an API key saved (ids only: keys never leave main). */
+  /**
+   * "Paste key": the key on the Mac's clipboard (read in main only when the user clicks), checked against the
+   * app's key shape, then saved and verified like a pasted one. The clipboard's text never leaves main.
+   */
+  async pasteApiKey(presetId: string, readClipboard: () => string | Promise<string>): Promise<ConnectorStatus> {
+    const p = PRESETS.find((x) => x.id === presetId)
+    if (!p?.apiKey) throw new Error('This app doesn\'t sign in with an API key.')
+    const key = keyFromClipboard(await readClipboard(), p)
+    if (!key) throw new Error(`The clipboard doesn't hold a ${p.name} API key${p.apiKey.placeholder ? ` (they look like ${p.apiKey.placeholder})` : ''}. Copy the key on ${p.name}'s page, then press Paste key again.`)
+    return this.setApiKey(presetId, key)
+  }
+
+  /** A native API-key app as a connector status (it has no server to list tools from). */
+  private nativeStatus(id: string): ConnectorStatus {
+    const tools = NATIVE_KEY_APPS[id].tools
+    return { id, state: 'connected', tools: tools.length, toolNames: tools }
+  }
+
+  /** Connectors with an API key saved (ids only: keys never leave main); native apps by their preset id. */
   keyIds(): string[] {
-    return this.list().filter((c) => !!this.secrets.get(keySecret(c.id))).map((c) => c.id)
+    return [
+      ...this.list().filter((c) => !!this.secrets.get(keySecret(c.id))).map((c) => c.id),
+      ...Object.entries(NATIVE_KEY_APPS).filter(([, a]) => !!this.secrets.get(a.secret)).map(([id]) => id)
+    ]
   }
 
   private sharedGoogle(): { clientId: string; clientSecret?: string } | null {

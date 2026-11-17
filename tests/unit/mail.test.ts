@@ -202,7 +202,7 @@ describe('Mail errors and the Apple Events queue', () => {
       await r.call(fn, {})
       expect(() => new Script(scripts.at(-1)!), name).not.toThrow()
     }
-    expect(scripts).toHaveLength(8)
+    expect(scripts).toHaveLength(9)
     // Only SEND calls send().
     expect(Object.entries(SCRIPTS).filter(([, fn]) => /\.send\(\)/.test(fn)).map(([n]) => n)).toEqual(['SEND'])
   })

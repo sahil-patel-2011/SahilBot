@@ -232,6 +232,7 @@ const api: SahilBotApi = {
     checkAll: call('connectors:checkAll') as never,
     useBuiltinClient: call('connectors:useBuiltinClient') as never,
     clearApiKey: call('connectors:clearApiKey') as never,
+    pasteApiKey: call('connectors:pasteApiKey') as never,
     onIcons(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('connectors:icons', fn)
@@ -242,6 +243,10 @@ const api: SahilBotApi = {
       ipcRenderer.on('connectors:changed', fn)
       return () => ipcRenderer.removeListener('connectors:changed', fn)
     }
+  },
+  google: {
+    status: call('google:status') as never, useMail: call('google:useMail') as never, useAppPassword: call('google:useAppPassword') as never,
+    useOauth: call('google:useOauth') as never, disconnect: call('google:disconnect') as never
   },
   vault: {
     list: call('vault:list') as never, set: call('vault:set') as never, remove: call('vault:remove') as never,

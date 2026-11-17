@@ -181,7 +181,9 @@ describe.skipIf(!CLAUDE || !OPENAI)('live: Auto mode across Claude and OpenAI th
       await page.evaluate(() => window.foreman.settings.set({ setKeys: { anthropic: null, openai: null } } as never)).catch(() => undefined)
       log.consoleErrors = errors
       save()
-      await app.close()
+      // A sleeping Mac breaks the page connection: make sure the app never keeps working (and spending) on its own.
+      await app.close().catch(() => undefined)
+      try { app.process().kill() } catch { /* already gone */ }
     }
   }, 120 * 60_000)
 })

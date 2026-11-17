@@ -110,6 +110,12 @@ import { electronTouchId, electronVaultFiles, protectSender, registerVaultIpc, s
 import { PurchaseGate } from './browser/checkout'
 import { recentEmail, recentTexts, setEmailCodeSource } from './otp'
 import { mailTool } from './agent/tools/mail'
+import { resendTool, RESEND_KEY_SECRET } from './agent/tools/resend'
+import { gmailImapTool } from './agent/tools/gmail-imap'
+import { GoogleConnect } from './mail/google-connect'
+import { mailRunner } from './mail/runner'
+import { TrustedSends } from './agent/trusted'
+import { chatParticipants, withChatDb } from './messages/chatdb'
 import { gmailCodeSource } from './mail/gmail'
 import { findOllamaBinary, setupOllama, startOllama, stopOllama } from './ollama-setup'
 import { needsYouBody } from './needs-you'
@@ -734,6 +740,20 @@ app.whenReady().then(() => {
       showMain()
     }
   })
+  // Connect apps → Google: Sign in with Google (the Gmail connector), the Mac's Mail app, or an app password
+  // (Gmail over IMAP/SMTP: the gmail_imap tool). The app password stays in the Keychain (mail/google-connect.ts).
+  const googleConnect = new GoogleConnect({
+    db, secrets, runner: mailRunner(), changed: () => toWin('connectors:changed'),
+    oauth: () => {
+      const cfg = connectors.list().find((c) => c.preset === 'gmail')
+      return { builtin: !!connectors.builtin('gmail'), ownClient: !!connectors.googleClient() || !!cfg?.clientId, connected: connectors.presetConnected('gmail'), ...(cfg ? { configId: cfg.id } : {}) }
+    }
+  })
+  registry.register(
+    // Resend: transactional email with the user's own key (Connect apps → Resend), sent only to api.resend.com.
+    { ...resendTool({ key: () => secrets.get(RESEND_KEY_SECRET), workspace: () => settings.get().workspaceDir }), core: false },
+    { ...gmailImapTool({ creds: () => googleConnect.credentials() }), core: false }
+  )
   // Emailed sign-in codes: the Gmail connector when it's connected, else Mail.app (read in main, never shown to the model).
   setEmailCodeSource(gmailCodeSource((tool, args, signal) => connectors.callPresetTool('gmail', tool, args, signal)), () => connectors.presetConnected('gmail'))
 
@@ -826,6 +846,11 @@ app.whenReady().then(() => {
       ]
     },
     questions: questionHost,
+    // Trusted recipients: a bot's "Can message without asking" list plus the user's own email and phone.
+    trustedSends: new TrustedSends({
+      config: (botId) => ({ bot: botAutonomyConfig(settings.get(), botId).trustedRecipients ?? [], me: [...(settings.get().me?.emails ?? []), ...(settings.get().me?.phones ?? [])] }),
+      lookup: { chatParticipants: (guid) => { try { return withChatDb((d) => chatParticipants(d, guid)) } catch { return null } } }
+    }),
     decisions,
     cua,
     connectors,
@@ -1395,6 +1420,15 @@ app.whenReady().then(() => {
   handle('connectors:checkAll', () => connectors.checkEvery())
   handle('connectors:useBuiltinClient', (id: string) => connectors.useBuiltinClient(id))
   handle('connectors:clearApiKey', (id: string) => connectors.clearApiKey(id))
+  // "Paste key": the clipboard is read here, only when the user clicks; its text never goes back to the window.
+  handle('connectors:pasteApiKey', (presetId: string) => connectors.pasteApiKey(presetId, () => clipboard.readText()))
+  // Connect apps → Google (three ways); the app password goes straight to the Keychain, only the link comes back.
+  // Mail is asked about its accounts only from the Google panel, and never in hidden (test) runs: no Automation prompt on screen.
+  handle('google:status', (withMail?: boolean) => googleConnect.status({ mail: !!withMail && !HIDDEN }))
+  handle('google:useMail', (address: string) => googleConnect.useMail(address))
+  handle('google:useAppPassword', (address: string, password: string) => googleConnect.useAppPassword(address, password))
+  handle('google:useOauth', () => googleConnect.useOauth())
+  handle('google:disconnect', () => googleConnect.disconnect())
   void connectors.connectAll()
   // Health: a tools/list check every few minutes; dropped connections reconnect with backoff.
   connectors.startHealth()
