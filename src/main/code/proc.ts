@@ -101,6 +101,13 @@ export const HOME_GUARDED = {
   files: ['.zshrc', '.zprofile', '.zshenv', '.zlogin', '.bashrc', '.bash_profile', '.profile', '.gitconfig', '.netrc', '.npmrc']
 }
 
+/** A home-folder place the Files anywhere grant never covers (`p` and `home` real paths): changing it asks first. */
+export function homeGuarded(p: string, home: string): boolean {
+  const rel = relative(home, p)
+  if (!rel || rel.startsWith('..') || resolve(home, rel) !== resolve(p)) return false
+  return HOME_GUARDED.files.includes(rel) || HOME_GUARDED.dirs.some((d) => rel === d || rel.startsWith(`${d}/`))
+}
+
 export const SANDBOX_EXEC = '/usr/bin/sandbox-exec'
 let sandboxOk: boolean | null = null
 

@@ -253,6 +253,16 @@ describe('the brain in the agent loop', () => {
     expect(llm.requests.map((r) => r.model)).toEqual([OPUS.id])
   })
 
+  test('a read that lands after the wait is still saved with the message', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    const t = h.thread()
+    llm.script.push({ content: JSON.stringify(answer({ model: OPUS.id, why: 'late read' })), delay: 4600 }, { content: 'Done by the rules\' pick.', delay: 0 })
+    await h.run(t, 'Refactor the payment module and add retries with tests')
+    const user = h.db.listMessages(t.id).find((m) => m.role === 'user' && !m.meta?.hidden)!
+    await expect.poll(() => (h.db.getMessage(user.id)?.meta?.autoRead as BrainAnswer | undefined)?.why, { timeout: 3000 }).toBe('late read')
+  }, 15_000)
+
   test('school work goes where the brain sends it, at the effort it chose', async () => {
     process.env.FOREMAN_NO_VERIFY = '1'
     const h = harness(ALL)

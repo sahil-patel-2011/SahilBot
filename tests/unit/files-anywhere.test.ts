@@ -14,6 +14,16 @@ const ws = join(tmpdir(), 'ws')
 const roots = [H]
 
 describe('files anywhere', () => {
+  test.each(['.zshrc', '.bash_profile', '.gitconfig', '.npmrc', 'Library/LaunchAgents/com.x.plist'])('~/%s asks first (or is refused), for the file tool and for commands', (rel) => {
+    const f = join(H, rel)
+    expect(() => resolvePath(f, ws, roots)).toThrow()
+    // Startup files ask; ones that hold secrets or start programs (.npmrc, launch agents) are refused outright.
+    expect([f, null]).toContain(outsidePath(f, ws, roots))
+    if (rel === '.zshrc' || rel === '.gitconfig') expect(outsidePath(f, ws, roots)).toBe(f)
+    expect(outsidePaths(`echo 'export X=1' >> ${f}`, [ws, ...roots], ws)).toContain(f)
+    // A note next to them stays free.
+    expect(resolvePath(join(H, 'notes.md'), ws, roots)).toBe(join(H, 'notes.md'))
+  })
   test('commands still start in the chat\'s workspace or folder, never in the home folder', () => {
     mkdirSync(ws, { recursive: true })
     expect(cwdFor(undefined, { workspaceDir: ws, state: { roots: [H] } as never })).toBe(ws)

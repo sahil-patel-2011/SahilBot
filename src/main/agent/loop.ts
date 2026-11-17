@@ -1895,7 +1895,9 @@ export class Agent {
         // Kept with the message, so a "yes, do it" after a restart still follows this read.
         this.d.db.updateMessage({ ...last, meta: { ...last.meta, autoRead: brain } })
       }
-      else task = { ...task, why: `${task.why} · ${got.late ? `${thinker.label ?? thinker.id} was still reading, so the basic rules picked` : 'basic rules (no read)'}` }
+      // A read that comes after the wait is kept with the message when it lands (a "yes, do it" uses it, even after a restart).
+      else if (got.late) void this.brainCache.pending(last.id)?.then((a) => { const m = a && this.d.db.getMessage(last.id); if (m) this.d.db.updateMessage({ ...m, meta: { ...m.meta, autoRead: a } }) })
+      if (!got.answer) task = { ...task, why: `${task.why} · ${got.late ? `${thinker.label ?? thinker.id} was still reading, so the basic rules picked` : 'basic rules (no read)'}` }
     }
     // "yes, do it" / "continue": the read of the request it carries on (same model, level and team).
     if (!brain && autoNow && last && task.rule === 'follow-up') {

@@ -6,6 +6,7 @@ import { createDocument, type DocSpec } from '../../docs/create'
 import { IMAGE_EXT, mimeFor, RICH_EXT, richText } from '../../docs/read'
 import type { ToolContext, ToolDef } from '../types'
 import { inForbidden, isSecretName } from '../../knowledge/ignore'
+import { homeGuarded } from '../../code/proc'
 import { heicToJpeg } from '../../attach-process'
 
 const MAX_READ_BYTES = 2_000_000
@@ -86,12 +87,14 @@ export function resolvePath(p: string, workspace: string, roots: string[] = [], 
   // The home folder as a root ("files anywhere"): everything in it except system, private and secret places.
   const home = real(homedir())
   const specific = allowed.filter((r) => r !== home)
-  if (!specific.some((r) => within(r, fullReal)) && allowed.includes(home) && within(home, fullReal)) {
+  // Shell startup and settings files (.zshrc, .gitconfig…) and launch agents: never under the grant, so they ask.
+  const guarded = allowed.includes(home) && !specific.some((r) => within(r, fullReal)) && homeGuarded(fullReal, home)
+  if (!guarded && !specific.some((r) => within(r, fullReal)) && allowed.includes(home) && within(home, fullReal)) {
     const never = neverOutside(full)
     if (never) throw new Error(`"${p}" is ${never}.`)
     return full
   }
-  if (!allowed.some((r) => within(r, fullReal))) {
+  if (guarded || !allowed.some((r) => within(r, fullReal))) {
     const never = neverOutside(full)
     if (o.allowOutside && !never) return full
     throw new Error(`"${p}" is outside the workspace and the folders the user attached${never ? `: it's ${never}` : ''}. Ask the user to attach it with the + button${never ? '' : ' (or approve this one step)'}.`)

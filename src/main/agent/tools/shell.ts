@@ -4,7 +4,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ToolEffect } from '@shared/types'
-import { runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec } from '../../code/proc'
+import { homeGuarded, runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec } from '../../code/proc'
 import { jobLine, jobs as defaultJobs, type JobManager, type WaitFor } from '../../jobs/manager'
 import type { ThreadState, ToolContext, ToolDef } from '../types'
 import { inForbidden, isSecretName } from '../../knowledge/ignore'
@@ -725,7 +725,7 @@ export function outsidePaths(cmd: string, allowed: string[], cwd?: string): stri
     const real = realish(full)
     if (within(tmp, real) || specific.some((r) => within(r, real))) return true
     // The home folder as a root ("files anywhere"): never its system, private or secret places.
-    return roots.includes(home) && within(home, real) && !inForbidden(real) && !isSecretName(basename(real))
+    return roots.includes(home) && within(home, real) && !inForbidden(real) && !isSecretName(basename(real)) && !homeGuarded(real, home)
   }
   const check = (raw0: string, relativeOk: boolean, program = false): void => {
     for (const raw of raw0.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ').split(/[\s=:,]+/)) {
