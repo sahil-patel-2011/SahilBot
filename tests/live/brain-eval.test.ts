@@ -37,7 +37,9 @@ const CASES: Array<[string, number]> = [
   ['Refactor my Electron app to a plugin architecture end to end, with tests, and keep the public API stable.', 3],
   ['Write a comprehensive market research report on AI medical scribes for small practices: top 8 products, pricing, HIPAA, integrations, complaints, and a recommendation. Save it as a PDF.', 3],
   ['Should I lease or buy a $90k ultrasound machine for my practice? I have $40k cash and 8% loan rates.', 2],
-  ['Draft a careful reply to this patient complaint about a billing error, apologetic but not admitting liability.', 2]
+  ['Draft a careful reply to this patient complaint about a billing error, apologetic but not admitting liability.', 2],
+  ['Team: find 3 recent (2026) facts about heat pump adoption in the US with sources, then turn them into a 120-word newsletter blurb.', 2],
+  ['Research the 5 best-reviewed robot vacuums under $400 this year and give me a short table with sources.', 2]
 ]
 
 const cost = (x: ModelInfo): number => (x.price ? (3 * x.price.input + x.price.output) / 4 : 0)
@@ -63,5 +65,5 @@ describe.skipIf(!KEY)('live: the brain reads requests at the right size', () => 
       rows.push(`${want <= 1 && cost(used) > 1 ? 'OVER' : 'ok  '} want ${want} · d${a.difficulty} ${a.effort.padEnd(6)} ${a.model.padEnd(18)} → ${used.id.padEnd(18)} ${a.team}${a.fanout ? ` fan${a.fanout}` : ''} ${ms}ms · ${text.slice(0, 70)}`)
     }
     writeFileSync(process.env.EVAL_OUT ?? join(tmpdir(), "brain-eval.txt"), `\n${rows.join('\n')}\n\nquick requests on a quick model: ${quickOk}/${quickN} · oversized picks: ${over}/${CASES.length}\n`)
-  }, 300_000)
+  }, 600_000)
 })
