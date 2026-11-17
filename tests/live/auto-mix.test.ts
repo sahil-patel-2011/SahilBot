@@ -54,6 +54,10 @@ async function run(page: Page, text: string, timeoutMs: number): Promise<Run> {
       const outside = /osascript|tell application|\bopen -a\b|\bopen "|Microsoft|Finder|System Events|computer use|Click at|Type into|send (?:an )?email|Send to|post to/i.test(text)
       cards.push(`${outside ? 'DENIED' : 'approval'}: ${text.slice(0, 200)}`)
       await page.locator(outside ? '[data-testid="approve-deny"]' : '[data-testid="approve-once"]').first().click()
+    } else if (await page.locator('[data-testid="purchase-card"], [data-testid="otp-card"]').count()) {
+      // Purchases and one-time codes are always the user's: a test never approves one.
+      cards.push(`DENIED purchase/code: ${(await page.locator('[data-testid="purchase-card"], [data-testid="otp-card"]').first().innerText()).replace(/\s+/g, ' ').slice(0, 160)}`)
+      await page.locator('[data-testid="purchase-deny"], [data-testid="otp-deny"]').first().click()
     } else if (await page.locator('[data-testid="spend-card"]').count()) {
       cards.push('spend: approved')
       await page.locator('[data-testid="spend-ok"]').first().click().catch(() => undefined)
@@ -73,7 +77,7 @@ describe.skipIf(!CLAUDE || !OPENAI)('live: Auto mode across Claude and OpenAI th
   test('small stays solo, big reports team up, decisions are remembered, bots work together', async () => {
     mkdirSync(OUT, { recursive: true })
     const ws = mkdtempSync(join(tmpdir(), 'mix-ws-'))
-    const { app, page } = await launch(tempProfile(), 'https://api.anthropic.com/v1', { FOREMAN_NO_VERIFY: '', FOREMAN_NO_AUTOTITLE: '' })
+    const { app, page } = await launch(tempProfile(), '', { FOREMAN_BASE_URL: '', FOREMAN_NO_VERIFY: '', FOREMAN_NO_AUTOTITLE: '' }) // no single-server override: each model goes to its own provider
     const log: Record<string, unknown> = { workspace: ws, scenarios: {} }
     const scen = log.scenarios as Record<string, unknown>
     const save = (): void => writeFileSync(join(OUT, 'log.json'), JSON.stringify(log, null, 2))

@@ -43,6 +43,22 @@ describe('the brain\'s decision', () => {
     expect(parseBrain(ok.replace('"medium"', '"turbo"'), ALL)).toBeUndefined()
     expect(parseBrain('not json', ALL)).toBeUndefined()
   })
+  test('a fast model\'s near-misses still read: fenced JSON, prose around it, or key: value lines without braces', () => {
+    const ok = { category: 'math', kind: 'chat', difficulty: 1, effort: 'low', study: false, image: false, model: 'gpt-6-luna', team: 'solo', fanout: 0, why: 'quick sum' }
+    expect(parseBrain('```json\n' + JSON.stringify(ok) + '\n```', ALL)?.model).toBe('gpt-6-luna')
+    expect(parseBrain(`Sure. ${JSON.stringify(ok)} Hope that helps {}`, ALL)?.model).toBe('gpt-6-luna')
+    const lines = 'needs: ["quick"]\ncategory: "math"\nkind: "chat"\ndifficulty: 1\neffort: "low"\nstudy: false\nimage: false\nmodel: "gpt-6-luna"\nteam: "solo"\nfanout: 0\nwhy: "quick sum"'
+    expect(parseBrain(lines, ALL)).toMatchObject({ category: 'math', difficulty: 1, model: 'gpt-6-luna', needs: ['quick'] })
+    // The request answered instead of routed: no read (the rules decide).
+    expect(parseBrain('Assume sqrt(2) = a/b in lowest terms. Then 2b^2 = a^2, so a is even…', ALL)).toBeUndefined()
+  })
+  test('the prompt fences the request off and asks for routing only', () => {
+    const { system, user } = brainPrompt({ text: 'Prove that sqrt 2 is irrational', history: [], attachments: [], images: 0, preference: 'balanced', models: ALL, rules: classifyTask('Prove that sqrt 2 is irrational') })
+    expect(system).toMatch(/never answer or carry out the request yourself/)
+    expect(system).toMatch(/difficulty 0-1 .* gets a quick model whatever the category/)
+    expect(user).toMatch(/<request>\nProve that sqrt 2 is irrational\n<\/request>/)
+    expect(user).toMatch(/Reply with the JSON object only/)
+  })
 
   test('its read replaces the rules\' within their floors', () => {
     const rules = classifyTask('Balance this chemical equation for my homework: H2 + O2 -> H2O')

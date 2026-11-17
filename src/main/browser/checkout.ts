@@ -228,6 +228,9 @@ export function classifyPurchase(s: PurchaseSignals): { purchase: boolean; reaso
   if (label && NOT_PURCHASE.test(label) && !strong && !(price && context)) return no
   // Links get no exemption: "Buy now" is a purchase whether it's a <button> or an <a>.
   if (strong) return yes(`"${label.slice(0, 60)}" places an order or pays`)
+  // A real link to another page whose title mentions a price ("Pricing | Plans from $59/mo" in search results)
+  // only opens that page, away from any checkout: reading prices is research, not paying.
+  if (price && s.role === 'link' && s.navLink === true && !context && !finance) return no
   if (price) return yes(`"${label.slice(0, 60)}" names an amount of money`)
   if (label && CONTEXT.test(label) && (context || finance || store)) return yes(`"${label.slice(0, 60)}" on a checkout page`)
   if (label && finance && FINANCE_ACT.test(label)) return yes(`"${label.slice(0, 60)}" on a page that moves money`)

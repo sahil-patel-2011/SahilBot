@@ -34,6 +34,15 @@ describe('purchase detection', () => {
     expect(click('Buy now', { role: 'link', navLink: true })).toBe(true)
     expect(click('Buy now', { role: 'link', url: 'https://x.test/cart' })).toBe(true)
   })
+  test('a search result whose title mentions a price only opens that page (found live: a research run waited 16 min)', () => {
+    const label = 'Commure Scribe Pricing | Plans from $59/mo'
+    expect(click(label, { role: 'link', navLink: true, url: 'https://www.bing.com/search?q=commure+pricing' })).toBe(false)
+    // The same words as a button, a link that acts like one, or on a checkout page still ask.
+    expect(click(label, { url: 'https://www.bing.com/search?q=commure+pricing' })).toBe(true)
+    expect(click(label, { role: 'link', navLink: false, url: 'https://www.bing.com/search?q=x' })).toBe(true)
+    expect(click(label, { role: 'link', navLink: true, url: 'https://shop.test/checkout' })).toBe(true)
+    expect(click('Buy now for $59', { role: 'link', navLink: true, url: 'https://www.bing.com/search?q=x' })).toBe(true)
+  })
   test('filling a card, typing a card number and payment dialogs are purchase steps', () => {
     expect(classifyPurchase({ kind: 'fill_payment' }).purchase).toBe(true)
     expect(classifyPurchase({ kind: 'type_card' }).purchase).toBe(true)

@@ -240,3 +240,18 @@ describe('connecting from a chat', () => {
     expect(h.s.log.registrations).toHaveLength(0)
   }, 30_000)
 })
+
+describe('naming an app is not asking to use it', () => {
+  test('usesApp: the user\'s account or the app itself, never research about it', async () => {
+    const { usesApp } = await import('../../src/main/connectors')
+    expect(usesApp('notion', 'Notion')).toBe(true)
+    expect(usesApp('notion tools', 'Notion')).toBe(true)
+    expect(usesApp('add this to my Notion', 'Notion')).toBe(true)
+    expect(usesApp('create a page in Notion', 'Notion')).toBe(true)
+    expect(usesApp('search my notion workspace for the syllabus', 'Notion')).toBe(true)
+    expect(usesApp('web search for current official Notion and Obsidian pricing, features, offline and note-taking features', 'Notion')).toBe(false)
+    expect(usesApp('compare Notion vs Obsidian for students', 'Notion')).toBe(false)
+    expect(usesApp('google calendar', 'Google Calendar')).toBe(true)
+    expect(usesApp('reviews of google calendar alternatives for teams', 'Google Calendar')).toBe(false)
+  })
+})
