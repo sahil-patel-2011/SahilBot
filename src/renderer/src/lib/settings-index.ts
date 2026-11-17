@@ -33,6 +33,8 @@ export interface SettingEntry {
   keys?: string[]
   /** Inside a closed "Advanced" (or "More") disclosure. */
   advanced?: boolean
+  /** Only in the Mac app (not in a browser on SahilBot Server or a phone). */
+  macOnly?: boolean
 }
 
 export const PAGE_TITLES: Record<SettingsPage, string> = {
@@ -116,6 +118,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
   // Usage, server
   { anchor: 'usage', page: 'usage', title: 'Usage', words: 'usage spend cost tokens requests bots csv export history' },
+  { anchor: 'phone-access', page: 'general', title: 'Phone access', words: 'phone iphone android mobile ipad qr code pair pairing wifi home network tailscale away notifications push remote', macOnly: true },
   { anchor: 'server', page: 'server', title: 'Always-on server', words: 'server raspberry pi always on remote phone devices pairing tailscale' },
 
   // Advanced
@@ -143,7 +146,7 @@ export function searchSettings(q: string, opts: { server?: boolean } = {}): Sett
   const words = q.toLowerCase().split(/\s+/).filter(Boolean)
   if (!words.length) return []
   const hidden = opts.server ? new Set<SettingsPage>(['voice']) : new Set<SettingsPage>()
-  const scored = SETTINGS_INDEX.filter((e) => !hidden.has(e.page)).map((e) => {
+  const scored = SETTINGS_INDEX.filter((e) => !hidden.has(e.page) && !(opts.server && e.macOnly)).map((e) => {
     const title = e.title.toLowerCase()
     const hay = `${title} ${e.words} ${PAGE_TITLES[e.page].toLowerCase()} ${e.tab ?? ''}`
     if (!words.every((w) => hay.includes(w))) return null

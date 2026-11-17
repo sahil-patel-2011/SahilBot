@@ -14,7 +14,7 @@ export type ServerMsg =
   | { t: 'ret'; id: number; ok: true; v: unknown }
   | { t: 'ret'; id: number; ok: false; e: string }
   | { t: 'ev'; ch: string; args: unknown[] }
-  | { t: 'hello'; runtime: 'server'; version: string; device: { id: string; name: string }; platform: string }
+  | { t: 'hello'; runtime: 'server'; version: string; device: { id: string; name: string }; platform: string; host?: 'mac' | 'server' }
   | { t: 'bye'; reason: string }
   | { t: 'pong' }
 

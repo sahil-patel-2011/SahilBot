@@ -143,7 +143,10 @@ import { mediaTools } from './agent/tools/media'
 import { readDocumentImageTool, readReceipt } from './agent/tools/vision'
 import { BatchManager, batchTool } from './agent/tools/batch'
 import { VideoManager, publicHttps, videoTool, type VideoApp, type VideoLink } from './agent/tools/video'
-import { notifyDevices } from './notify'
+import { canNotifyDevices, notifyDevices } from './notify'
+import { PhoneAccess } from './phone'
+import { isServer } from './runtime'
+import { phoneNote } from './phone/notes'
 import type { ToolContext } from './agent/types'
 import { embeddingProvider } from './knowledge/embeddings'
 import { OPENAI_URL } from './llm/providers'
@@ -494,6 +497,30 @@ app.whenReady().then(() => {
     } else if (e.type === 'thread') refreshBadge()
   }
 
+  /** Phone access: when each chat's run started, so a long task's end reaches the phone. */
+  const runStarts = new Map<string, number>()
+  /** Paired phones hear about approvals and questions waiting in a chat, and long tasks finishing (phone/notes.ts). */
+  const toPhones = (e: ChatEvent, ownNote: boolean): void => {
+    if (e.type === 'run' && e.status === 'started') { runStarts.set(e.threadId, Date.now()); return }
+    if (e.type !== 'pending' && e.type !== 'run') return
+    const startedAt = e.type === 'run' ? runStarts.get(e.threadId) : undefined
+    if (e.type === 'run') runStarts.delete(e.threadId)
+    // SahilBot Server sends its notifications itself (its Notification goes to devices).
+    if (isServer() || !canNotifyDevices()) return
+    const thread = db.getThread(e.threadId)
+    if (!thread || thread.parentId || quickRuns.has(e.threadId) || db.getSpace(thread.spaceId)?.hidden) return
+    const n = phoneNote(e, {
+      botName: botName(thread.spaceId),
+      title: thread.title,
+      requestLine: e.type === 'pending' ? needsYouText(e.request) : undefined,
+      notify: botNotifies(thread.spaceId),
+      watchingOnMac: mainFocused() && viewingThread === e.threadId,
+      startedAt, now: Date.now(), ownNote,
+      longRunMs: HIDDEN ? Number(process.env.SAHILBOT_PHONE_LONG_RUN_MS) || undefined : undefined
+    })
+    if (n) notifyDevices('all', n)
+  }
+
   const emit = (e: ChatEvent): void => {
     toWin('chat:event', e)
     if (quick && !quick.isDestroyed()) quick.webContents.send('chat:event', e)
@@ -505,6 +532,7 @@ app.whenReady().then(() => {
     if (e.type === 'run' && e.status !== 'started' && mini?.threadId === e.threadId) exitMini()
     const fromQuick = e.type === 'run' && e.status !== 'started' && quickRuns.delete(e.threadId)
     const fromRoutine = e.type === 'run' && e.status !== 'started' && scheduledRuns.delete(e.threadId)
+    try { toPhones(e, fromQuick || fromRoutine) } catch { /* notifications are best-effort */ }
     // A chat finished while you were in another app: a quiet notification.
     if (e.type === 'run' && (e.status === 'finished' || e.status === 'error') && !fromQuick && !fromRoutine && !(quick && !quick.isDestroyed() && quick.isVisible()) &&
       !(win && !win.isDestroyed() && win.isFocused()) && !QUIET && Notification.isSupported() && botNotifies(e.spaceId ?? db.getThread(e.threadId)?.spaceId)) {
@@ -2227,6 +2255,22 @@ app.whenReady().then(() => {
     if (win && !win.isDestroyed() && ev.sender === win.webContents) { viewingThread = threadId; refreshBadge() }
     return [...chat.pending(threadId), ...purchases.pending(threadId)]
   })
+  // Phone access (Settings → General → Phone access): this Mac serves SahilBot to the user's paired phones
+  // (src/main/phone). Off by default; what a phone may do is src/main/phone/policy.ts.
+  if (!isServer()) {
+    const phone = new PhoneAccess({
+      db, secrets, dataDir: dataDir(), hidden: HIDDEN,
+      uiDir: join(__dirname, '../renderer'), bridgeFile: join(__dirname, '../web/bridge.js'),
+      version: (() => { try { return (JSON.parse(readFileSync(join(appRoot(), 'package.json'), 'utf8')) as { version: string }).version } catch { return app.getVersion() } })(),
+      pending: (threadId) => [...chat.pending(threadId), ...purchases.pending(threadId)],
+      purchaseRespond: (threadId, id, nonce, answer) => purchases.respond(threadId, id, nonce, answer),
+      fileResponse: (req) => attachments.fileResponse(req),
+      log: (l) => console.log(l)
+    })
+    phone.register()
+    void phone.resume()
+    app.on('will-quit', () => { void phone.stop() })
+  }
   handle('chat:retry', (threadId: string) => chat.retry(threadId))
   // Continue a chat cut off by SahilBot closing: a hidden note, then a normal run from the current history.
   handle('chat:resume', (threadId: string) => {

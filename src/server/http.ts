@@ -15,7 +15,7 @@ import type { AuditLog } from './audit'
 import { clearCookie, COOKIE, deviceCookie, deviceName, hostAllowed, originAllowed, parseCookies, type Device, type Devices, type HostPolicy, type PairingCodes, type RateLimiter } from './auth'
 import type { Hub } from './hub'
 import { host } from './host'
-import { ICON_SVG, MANIFEST, MOBILE_CSS, PAIR_CSS, PAIR_HTML, PAIR_JS, SERVICE_WORKER } from './pages'
+import { ICON_SVG, MANIFEST, MOBILE_CSS, PAIR_CSS, PAIR_JS, pairHtml, SERVICE_WORKER } from './pages'
 import { acceptUpgrade, isUpgrade, rejectUpgrade } from './ws'
 
 const MIME: Record<string, string> = {
@@ -43,23 +43,41 @@ export interface HttpOptions {
   status: () => unknown | Promise<unknown>
   /** WebSocket message size limit. */
   maxPayload?: number
+  /** Who serves the UI: SahilBot Server (default) or the Mac app's Phone access (its pairing page, its phone UI). */
+  host?: 'server' | 'mac'
+  /** Connections from other addresses are dropped before anything is read (Phone access: home network and tailnet only). */
+  peerAllowed?: (address: string | undefined) => boolean
+  /** The certificate in DER, offered at /sahilbot.cer so a phone can trust it (self-signed only). */
+  certDer?: Buffer
 }
 
 const isLoopback = (a: string | undefined): boolean => !!a && (a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1' || a.startsWith('127.'))
 
 export class HttpFront {
   readonly server: Server
+  /** Every listening server (one per address: Phone access listens on the Wi-Fi and the Tailscale address). */
+  private servers: Server[] = []
   private indexHtml: string | null = null
   private hostDenied = 0
+  private pairPage: string
 
   constructor(private o: HttpOptions) {
+    this.server = this.make()
+    this.pairPage = pairHtml({ host: o.host })
+  }
+
+  private make(): Server {
     const handler = (req: IncomingMessage, res: ServerResponse): void => { void this.route(req, res).catch((e) => this.fail(res, 500, (e as Error).message)) }
-    this.server = o.tls ? createHttps({ cert: o.tls.cert, key: o.tls.key, minVersion: 'TLSv1.2' }, handler) : createHttp(handler)
-    this.server.headersTimeout = 20_000
-    this.server.requestTimeout = 120_000
-    this.server.keepAliveTimeout = 5_000
-    this.server.on('upgrade', (req, socket, head) => this.upgrade(req, socket, head))
-    this.server.on('clientError', (_e, socket) => { try { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n') } catch { /* gone */ } })
+    const o = this.o
+    const server = o.tls ? createHttps({ cert: o.tls.cert, key: o.tls.key, minVersion: 'TLSv1.2' }, handler) : createHttp(handler)
+    server.headersTimeout = 20_000
+    server.requestTimeout = 120_000
+    server.keepAliveTimeout = 5_000
+    server.on('upgrade', (req, socket, head) => this.upgrade(req, socket, head))
+    server.on('clientError', (_e, socket) => { try { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n') } catch { /* gone */ } })
+    // Before TLS or HTTP: a connection from outside the allowed networks is closed unread.
+    if (o.peerAllowed) server.prependListener('connection', (socket: Duplex & { remoteAddress?: string }) => { if (!o.peerAllowed!(socket.remoteAddress)) socket.destroy() })
+    return server
   }
 
   // ---------------------------------------------------------------- who is asking
@@ -152,7 +170,12 @@ export class HttpFront {
 
     // Public: health, pairing, and what the pairing page and a home-screen icon need.
     if (path === '/healthz') return this.json(res, 200, { ok: true, ready: host.ready })
-    if (method === 'GET' && path === '/pair') return this.text(res, 'text/html; charset=utf-8', PAIR_HTML, 'no-store')
+    if (method === 'GET' && path === '/pair') return this.text(res, 'text/html; charset=utf-8', this.pairPage, 'no-store')
+    if (method === 'GET' && path === '/sahilbot.cer' && this.o.certDer) {
+      res.writeHead(200, { 'Content-Type': 'application/x-x509-ca-cert', 'Content-Disposition': 'attachment; filename="SahilBot.cer"', 'Cache-Control': 'no-store', 'Content-Length': this.o.certDer.length })
+      res.end(this.o.certDer)
+      return
+    }
     if (method === 'GET' && path === '/pair.js') return this.text(res, 'text/javascript; charset=utf-8', PAIR_JS)
     if (method === 'GET' && path === '/pair.css') return this.text(res, 'text/css; charset=utf-8', PAIR_CSS)
     if (method === 'GET' && (path === '/icon.svg' || path === '/favicon.ico')) return this.text(res, 'image/svg+xml', ICON_SVG, 'max-age=86400')
@@ -178,7 +201,7 @@ export class HttpFront {
       if (!this.o.devices.csrfOk(device.id, String(req.headers['x-sahilbot-csrf'] ?? ''))) return this.fail(res, 403, 'Missing or wrong CSRF token.')
     }
 
-    if (method === 'GET' && path === '/api/session') return this.json(res, 200, { device: { id: device.id, name: device.name }, csrf: this.o.devices.csrf(device.id), runtime: 'server', version: host.version })
+    if (method === 'GET' && path === '/api/session') return this.json(res, 200, { device: { id: device.id, name: device.name }, csrf: this.o.devices.csrf(device.id), runtime: 'server', host: this.o.host ?? 'server', version: host.version })
     if (method === 'GET' && path === '/api/status') return this.json(res, 200, await this.o.status())
     if (method === 'POST' && path === '/api/logout') {
       this.o.devices.revoke(device.id)
@@ -261,7 +284,7 @@ export class HttpFront {
         const raw = readFileSync(file, 'utf8')
         this.indexHtml = raw
           .replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/i, '')
-          .replace(/<meta charset="[^"]*"\s*\/?>/i.test(raw) ? /<meta charset="[^"]*"\s*\/?>/i : /<head>/i, (m) => `${m}\n    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n    <meta name="theme-color" content="#ff6a1a">\n    <link rel="manifest" href="/manifest.webmanifest">\n    <link rel="icon" href="/icon.svg" type="image/svg+xml">\n    <link rel="apple-touch-icon" href="/icon.svg">\n    <script src="/__sahilbot/bridge.js"></script>`)
+          .replace(/<meta charset="[^"]*"\s*\/?>/i.test(raw) ? /<meta charset="[^"]*"\s*\/?>/i : /<head>/i, (m) => `${m}\n    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n    <meta name="sahilbot-host" content="${this.o.host ?? 'server'}">\n    <meta name="apple-mobile-web-app-capable" content="yes">\n    <meta name="apple-mobile-web-app-status-bar-style" content="default">\n    <meta name="apple-mobile-web-app-title" content="SahilBot">\n    <meta name="theme-color" content="#ff6a1a">\n    <link rel="manifest" href="/manifest.webmanifest">\n    <link rel="icon" href="/icon.svg" type="image/svg+xml">\n    <link rel="apple-touch-icon" href="/icon.svg">\n    <script src="/__sahilbot/bridge.js"></script>`)
           .replace(/<\/head>/i, '  <link rel="stylesheet" href="/__sahilbot/mobile.css">\n  </head>')
       }
       return this.text(res, 'text/html; charset=utf-8', this.indexHtml, 'no-store')
@@ -290,22 +313,27 @@ export class HttpFront {
     this.o.hub.attach(ws, { id: d.id, name: d.name }, ip)
   }
 
+  /** Listens on one more address (the first call uses `server`). */
   listen(port: number, hostName: string): Promise<{ port: number }> {
+    const server = this.servers.length ? this.make() : this.server
     return new Promise((ok, fail) => {
-      this.server.once('error', fail)
-      this.server.listen(port, hostName, () => {
-        this.server.off('error', fail)
-        const a = this.server.address()
+      server.once('error', fail)
+      server.listen(port, hostName, () => {
+        server.off('error', fail)
+        this.servers.push(server)
+        const a = server.address()
         ok({ port: typeof a === 'object' && a ? a.port : port })
       })
     })
   }
 
   close(): Promise<void> {
-    return new Promise((ok) => {
-      this.server.close(() => ok())
-      this.server.closeAllConnections?.()
+    const all = this.servers.length ? this.servers : [this.server]
+    this.servers = []
+    return Promise.all(all.map((server) => new Promise<void>((ok) => {
+      server.close(() => ok())
+      server.closeAllConnections?.()
       setTimeout(ok, 2000).unref?.()
-    })
+    }))).then(() => undefined)
   }
 }

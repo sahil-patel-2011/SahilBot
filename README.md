@@ -34,6 +34,14 @@ This link always gets the newest build. Every push to `main` builds and publishe
 
 After that it opens normally. Notarized builds open with a plain double-click.
 
+## Phone access
+
+Use SahilBot from your phone: check on bots, answer approvals and questions, and chat, with notifications. Turn
+it on in **Settings → General → Phone access** and scan the QR code with your phone. The phone connects straight
+to your Mac over your Wi-Fi, or over [Tailscale](https://tailscale.com/download) when you're away. There's no
+account, no cloud relay and no port forwarding. Purchases, one-time codes and saved passwords stay on the Mac.
+See [docs/phone-access.md](docs/phone-access.md).
+
 ## Always-on server (Raspberry Pi, VM, Mac mini)
 
 SahilBot Server runs your bots 24/7: routines, goals and connectors keep working while your Mac is closed or you're traveling. You use it from your phone or any browser (the same app), or from the Mac app (Settings → Always-on server). On a **Raspberry Pi 5** (8 GB recommended, 4 GB minimum, 64-bit Raspberry Pi OS, an SSD and the active cooler), setup takes about five minutes:

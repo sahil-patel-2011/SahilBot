@@ -4,6 +4,7 @@
 
 import { emitLocal, ipcRenderer } from './electron-web'
 import '../../preload/index'
+import { layoutFor } from '../layout'
 import type { SahilBotApi, ServerApi } from '@shared/types'
 
 const api = (window as unknown as { foreman: SahilBotApi & Record<string, any> }).foreman
@@ -11,6 +12,18 @@ const call = (ch: string) => (...args: unknown[]) => ipcRenderer.invoke(ch, ...a
 
 api.runtime = 'server'
 api.remoteServer = undefined
+api.phoneAccess = undefined
+/** Who serves this page: SahilBot Server, or a Mac running SahilBot with Phone access on (http.ts puts it in a meta tag). */
+const serverHost: 'mac' | 'server' = document.querySelector('meta[name="sahilbot-host"]')?.getAttribute('content') === 'mac' ? 'mac' : 'server'
+api.serverHost = serverHost
+
+/** Signs this device out: the server forgets it and the cookie is cleared. */
+async function signOut(): Promise<void> {
+  const s = (await (await fetch('/api/session', { credentials: 'same-origin' })).json()) as { csrf?: string }
+  await fetch('/api/logout', { method: 'POST', credentials: 'same-origin', headers: { 'X-SahilBot-CSRF': s.csrf ?? '' } })
+  location.replace('/pair')
+}
+
 const server: ServerApi = {
   info: call('server:info') as never,
   devices: call('server:devices') as never,
@@ -21,10 +34,18 @@ const server: ServerApi = {
   pushKey: call('server:pushKey') as never,
   pushSubscribe: call('server:pushSubscribe') as never,
   pushUnsubscribe: call('server:pushUnsubscribe') as never,
-  pushTest: call('server:pushTest') as never
+  pushTest: call('server:pushTest') as never,
+  ...(serverHost === 'mac' ? { phoneInfo: call('server:phoneInfo') as never } : {}),
+  signOut
 }
 api.server = server
 document.documentElement.dataset.runtime = 'server'
+document.documentElement.dataset.host = serverHost
+
+// The layout the stylesheet is in (phone, tablet, desktop), for the app and tests.
+const setLayout = (): void => { document.documentElement.dataset.layout = layoutFor(window.innerWidth) }
+setLayout()
+window.addEventListener('resize', setLayout)
 
 // ------------------------------------------------------------------ files: the browser's own chooser
 
@@ -56,20 +77,45 @@ ipcRenderer.on('server:open-url', (_e, url) => {
   if (typeof url === 'string' && /^(https?:|mailto:)/i.test(url)) window.open(url, '_blank', 'noopener,noreferrer')
 })
 
+// A phone using the Mac: links in answers open in the phone's own browser, not the Mac's browser panel.
+// (Registered before the app's own listener, which then never sees the event.)
+if (serverHost === 'mac') {
+  window.addEventListener('foreman:open-link', (e) => {
+    const url = (e as CustomEvent<string>).detail
+    e.stopImmediatePropagation()
+    if (typeof url === 'string' && /^(https?:|mailto:)/i.test(url)) window.open(url, '_blank', 'noopener,noreferrer')
+  })
+}
+
 interface Note { title: string; body?: string; threadId?: string; tag?: string; missed?: boolean }
+
+/** Toasts stack in one corner (newest at the bottom) instead of covering each other. */
+function toasts(): HTMLElement {
+  let box = document.getElementById('sb-server-toasts')
+  if (!box) {
+    box = document.createElement('div')
+    box.id = 'sb-server-toasts'
+    box.className = 'sb-server-toasts'
+    box.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:min(360px,calc(100vw - 32px))'
+    document.body.appendChild(box)
+  }
+  return box
+}
 
 function toast(n: Note): void {
   const el = document.createElement('button')
   el.type = 'button'
   el.className = 'sb-server-toast'
-  el.style.cssText = 'position:fixed;right:16px;bottom:16px;max-width:min(360px,calc(100vw - 32px));z-index:2147483646;text-align:left;background:#1f1f1f;color:#fff;border:0;border-radius:14px;padding:12px 14px;font:13px/1.35 -apple-system,system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.28);cursor:pointer'
+  el.style.cssText = 'max-width:100%;text-align:left;background:#1f1f1f;color:#fff;border:0;border-radius:14px;padding:12px 14px;font:13px/1.35 -apple-system,system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.28);cursor:pointer'
   const t = document.createElement('div')
   t.style.fontWeight = '600'
   t.textContent = n.title
   el.appendChild(t)
   if (n.body) { const b = document.createElement('div'); b.style.opacity = '.85'; b.textContent = n.body; el.appendChild(b) }
   el.addEventListener('click', () => { if (n.threadId) emitLocal('open-thread', n.threadId); el.remove() })
-  document.body.appendChild(el)
+  const box = toasts()
+  box.appendChild(el)
+  while (box.children.length > 3) box.firstElementChild?.remove()
   setTimeout(() => el.remove(), 8000)
 }
 

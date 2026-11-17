@@ -141,17 +141,20 @@ export class Attachments {
    * something navigates to it). Pages run only in their own session (agent/tools/pages.ts), never via this.
    */
   registerProtocol(): void {
-    protocol.handle(SCHEME, async (req) => {
-      let p = ''
-      try { p = decodeURIComponent(new URL(req.url).pathname) } catch { /* refused below */ }
-      if (!p || !this.isAllowed(p) || !existsSync(p)) return new Response('Not allowed', { status: 403 })
-      // A <video> asks for byte ranges (seeking): passed on to the file fetch.
-      const range = req.headers.get('range')
-      const res = await net.fetch(pathToFileURL(p).toString(), range ? { headers: { range } } : undefined)
-      const headers = new Headers(res.headers)
-      for (const [k, v] of Object.entries(fileHeaders(p))) headers.set(k, v)
-      return new Response(res.body, { status: res.status, statusText: res.statusText, headers })
-    })
+    protocol.handle(SCHEME, (req) => this.fileResponse(req))
+  }
+
+  /** A foreman-file: request's answer (also what Phone access serves to paired phones, same rules). */
+  async fileResponse(req: Request): Promise<Response> {
+    let p = ''
+    try { p = decodeURIComponent(new URL(req.url).pathname) } catch { /* refused below */ }
+    if (!p || !this.isAllowed(p) || !existsSync(p)) return new Response('Not allowed', { status: 403 })
+    // A <video> asks for byte ranges (seeking): passed on to the file fetch.
+    const range = req.headers.get('range')
+    const res = await net.fetch(pathToFileURL(p).toString(), range ? { headers: { range } } : undefined)
+    const headers = new Headers(res.headers)
+    for (const [k, v] of Object.entries(fileHeaders(p))) headers.set(k, v)
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers })
   }
 
   async preview(p: string): Promise<FilePreview> {

@@ -36,6 +36,12 @@ export interface PushSender {
   has(deviceId: string): boolean
 }
 
+/**
+ * A host's own say over a call before the registry runs it (Phone access in the Mac app): refuse it with a
+ * reason, answer it here instead, or let it through (undefined).
+ */
+export type CallHook = (ch: string, args: unknown[], s: Session) => { deny: string } | { answer: () => unknown } | undefined
+
 export class Hub implements UiLink {
   readonly sessions = new Map<string, Session>()
   private offline = new Map<string, NotifyPayload[]>()
@@ -46,7 +52,7 @@ export class Hub implements UiLink {
   /** A session opened or closed, or focus changed. */
   onChange?: () => void
 
-  constructor(private o: { audit: AuditLog; version: string; onDirectSend: (ch: string, args: unknown[]) => void; heartbeatMs?: number }) {
+  constructor(private o: { audit: AuditLog; version: string; onDirectSend: (ch: string, args: unknown[]) => void; heartbeatMs?: number; hook?: CallHook; events?: (event: string) => boolean; host?: 'mac' | 'server' }) {
     const ms = o.heartbeatMs ?? 25_000
     this.beat = setInterval(() => {
       const stale = Date.now() - ms * 2.5
@@ -66,7 +72,7 @@ export class Hub implements UiLink {
     const s: Session = { id: randomBytes(8).toString('hex'), deviceId: device.id, deviceName: device.name, ip, ws, focused: false, visible: true, openedAt: Date.now(), calls: 0 }
     this.sessions.set(s.id, s)
     this.o.audit.write('session.open', { device: device.id, ip, detail: device.name })
-    this.out(s, { t: 'hello', runtime: 'server', version: this.o.version, device, platform: process.platform })
+    this.out(s, { t: 'hello', runtime: 'server', version: this.o.version, device, platform: process.platform, ...(this.o.host ? { host: this.o.host } : {}) })
     // Notifications that came while this device was away.
     const missed = this.offline.get(device.id)
     if (missed?.length) { this.offline.delete(device.id); for (const p of missed) this.out(s, { t: 'ev', ch: 'server:notify', args: [{ ...p, missed: true }] }) }
@@ -101,9 +107,15 @@ export class Hub implements UiLink {
       this.out(s, { t: 'ret', id, ok: false, e: `Error invoking remote method '${ch}': Error: ${denied}` })
       return
     }
+    const hooked = this.o.hook?.(ch, args, s)
+    if (hooked && 'deny' in hooked) {
+      this.o.audit.write('call.denied', { device: s.deviceId, ip: s.ip, detail: ch })
+      this.out(s, { t: 'ret', id, ok: false, e: `Error invoking remote method '${ch}': Error: ${hooked.deny}` })
+      return
+    }
     if (APPROVALS.has(ch)) this.o.audit.write('call.approval', { device: s.deviceId, ip: s.ip, detail: `${ch} ${String(args[0] ?? '').slice(0, 40)}` })
     try {
-      const v = await invoke(ch, { transport: 'ws', deviceId: s.deviceId, sessionId: s.id }, args)
+      const v = hooked ? await hooked.answer() : await invoke(ch, { transport: 'ws', deviceId: s.deviceId, sessionId: s.id }, args)
       this.out(s, { t: 'ret', id, ok: true, v })
     } catch (e) {
       const m = e instanceof RpcError && e.code === 'unknown-channel' ? `No handler registered for '${ch}'` : `Error invoking remote method '${ch}': ${e instanceof Error ? `${e.name === 'Error' ? 'Error' : e.name}: ${e.message}` : String(e)}`
@@ -118,7 +130,7 @@ export class Hub implements UiLink {
       const t = (args[0] as { threadId?: string } | undefined)?.threadId
       if (t) { host.noteThread = t; queueMicrotask(() => { if (host.noteThread === t) host.noteThread = undefined }) }
     }
-    if (!this.sessions.size) return
+    if (!this.sessions.size || (this.o.events && !this.o.events(event))) return
     const text = encode({ t: 'ev', ch: event, args })
     for (const s of this.sessions.values()) { try { s.ws.send(text) } catch { /* closing */ } }
   }
