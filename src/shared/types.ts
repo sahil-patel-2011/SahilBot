@@ -3088,6 +3088,10 @@ export interface ServerApi {
   pushUnsubscribe(): Promise<boolean>
   /** A test notification to this device. */
   pushTest(): Promise<{ delivered: string[]; queued: string[]; pushed: string[] }>
+  /** Phone access: the Mac this phone uses, and this phone's own entry. */
+  phoneInfo?(): Promise<PhoneHostInfo>
+  /** Signs this device out (it needs a new code to come back). */
+  signOut?(): Promise<void>
 }
 
 export interface RemoteServerStatus {
@@ -3112,13 +3116,57 @@ export interface RemoteServerApi {
   openUi(): Promise<void>
 }
 
+// ---- Phone access: the Mac app serves its own UI to the user's paired phones (src/main/phone, docs/phone-access.md)
+
+export interface PhoneAccessAddress { ip: string; kind: 'lan' | 'tailscale'; iface: string; listening: boolean }
+
+export interface PhoneAccessStatus {
+  enabled: boolean
+  /** Listening on at least one address right now. */
+  running: boolean
+  /** Why it isn't running (no Wi-Fi, the port is taken, the Keychain is locked…). */
+  error?: string
+  port: number
+  /** Which networks to answer on. */
+  lan: boolean
+  tailscale: boolean
+  addresses: PhoneAccessAddress[]
+  tailscaleInfo: { installed: boolean; connected: boolean; ip?: string; dnsName?: string }
+  /** This Mac's Bonjour name (name.local), when it has one. */
+  localName?: string
+  /** The certificate's SHA-256 fingerprint (AB:CD:…), which the QR code carries for the phone to check. */
+  fingerprint?: string
+  /** The live one-time pairing code and its link (the QR code's path, one unit per module). */
+  pairing?: { code: string; expires: number; url: string; via: 'lan' | 'lan-ip' | 'tailscale'; qr: { d: string; size: number } }
+  devices: ServerDeviceInfo[]
+}
+
+export interface PhoneAccessApi {
+  status(): Promise<PhoneAccessStatus>
+  setEnabled(on: boolean): Promise<PhoneAccessStatus>
+  setOptions(o: { lan?: boolean; tailscale?: boolean }): Promise<PhoneAccessStatus>
+  /** A new one-time code and QR link (10 minutes), for the home network (by name or by address) or Tailscale. */
+  newCode(via?: 'lan' | 'lan-ip' | 'tailscale'): Promise<PhoneAccessStatus>
+  revoke(id: string): Promise<PhoneAccessStatus>
+  rename(id: string, name: string): Promise<PhoneAccessStatus>
+  audit(limit?: number): Promise<ServerAuditEntry[]>
+  onChange(cb: () => void): () => void
+}
+
+/** What a phone connected to the Mac sees about it (Settings on the phone). */
+export interface PhoneHostInfo { mac: string; version: string; device?: ServerDeviceInfo }
+
 export interface SahilBotApi {
   /** 'server' in a browser connected to SahilBot Server; 'electron' (or missing) in the Mac app. */
   runtime?: 'electron' | 'server'
+  /** In a browser: who serves it. 'mac' = a phone using the Mac app through Phone access; 'server' = SahilBot Server. */
+  serverHost?: 'mac' | 'server'
   /** SahilBot Server only: paired devices, pairing codes, the audit log, notifications. */
   server?: ServerApi
   /** Mac app only: Settings → Always-on server. */
   remoteServer?: RemoteServerApi
+  /** Mac app only: Settings → General → Phone access. */
+  phoneAccess?: PhoneAccessApi
 }
 
 export interface ModelList {

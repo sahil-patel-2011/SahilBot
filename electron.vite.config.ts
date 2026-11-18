@@ -1,10 +1,39 @@
 import { resolve } from 'node:path'
+import { build, type Plugin } from 'vite'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+
+/**
+ * Phone access (src/main/phone) serves the renderer to paired phones with the browser bridge in front of it:
+ * the preload built against a WebSocket ipcRenderer (src/server/web). Built next to the main process as
+ * out/web/bridge.js (SahilBot Server builds its own copy: scripts/build-server.mjs).
+ */
+function phoneBridge(): Plugin {
+  return {
+    name: 'sahilbot-phone-bridge',
+    apply: 'build',
+    async closeBundle() {
+      await build({
+        configFile: false,
+        logLevel: 'warn',
+        resolve: { alias: { '@shared': resolve('src/shared'), electron: resolve('src/server/web/electron-web.ts') } },
+        build: {
+          outDir: resolve('out/web'),
+          emptyOutDir: true,
+          target: 'es2022',
+          minify: true,
+          reportCompressedSize: false,
+          lib: { entry: resolve('src/server/web/bridge.ts'), formats: ['iife'], name: 'SahilBotBridge', fileName: () => 'bridge.js' }
+        }
+      })
+    }
+  }
+}
 
 export default defineConfig({
   main: {
     resolve: { alias: { '@shared': resolve('src/shared') } },
+    plugins: [phoneBridge()],
     build: { rollupOptions: { external: ['node:sqlite'] } }
   },
   preload: {

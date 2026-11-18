@@ -16,6 +16,8 @@ let everOpened = false
 let downSince = 0
 let retry = 1000
 const status = { connected: false, device: null as null | { id: string; name: string }, version: '' }
+/** What the banners call the other end: a phone using the Mac (Phone access), or SahilBot Server. */
+const peer = typeof document !== 'undefined' && document.querySelector('meta[name="sahilbot-host"]')?.getAttribute('content') === 'mac' ? 'your Mac' : 'SahilBot Server'
 
 /** foreman-file://local/… (files the app serves to its own window) → the same file through the server. */
 function rewrite(v: unknown, depth = 0): unknown {
@@ -97,17 +99,17 @@ function connect(): void {
       downSince = 0
       window.dispatchEvent(new CustomEvent('sahilbot:server', { detail: { ...status } }))
     } else if (msg.t === 'bye') {
-      banner(msg.reason === 'server stopping' ? 'SahilBot Server is restarting…' : `Signed out: ${msg.reason}`)
+      banner(msg.reason === 'server stopping' ? (peer === 'your Mac' ? 'Phone access was turned off on your Mac.' : 'SahilBot Server is restarting…') : `Signed out: ${msg.reason}`)
     }
   }
   sock.onclose = async (e) => {
     open = false
     status.connected = false
     if (!downSince) downSince = Date.now()
-    for (const [id, p] of pending) { pending.delete(id); p.fail(new Error(`Error invoking remote method '${p.ch}': Error: Lost the connection to SahilBot Server. Try again.`)) }
+    for (const [id, p] of pending) { pending.delete(id); p.fail(new Error(`Error invoking remote method '${p.ch}': Error: Lost the connection to ${peer}. Try again.`)) }
     window.dispatchEvent(new CustomEvent('sahilbot:server', { detail: { ...status } }))
     if (e.code === 4001 || !(await signedIn())) { location.replace('/pair'); return }
-    banner('Reconnecting to SahilBot Server…')
+    banner(`Reconnecting to ${peer}…`)
     setTimeout(connect, retry)
     retry = Math.min(10_000, retry * 1.7)
   }

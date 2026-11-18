@@ -452,6 +452,21 @@ const api: SahilBotApi = {
     connect: call('remoteServer:connect') as never,
     disconnect: call('remoteServer:disconnect') as never,
     openUi: call('remoteServer:openUi') as never
+  },
+  // Settings → General → Phone access: this Mac serves SahilBot to paired phones (src/main/phone).
+  phoneAccess: {
+    status: call('phoneAccess:status') as never,
+    setEnabled: call('phoneAccess:setEnabled') as never,
+    setOptions: call('phoneAccess:setOptions') as never,
+    newCode: call('phoneAccess:newCode') as never,
+    revoke: call('phoneAccess:revoke') as never,
+    rename: call('phoneAccess:rename') as never,
+    audit: call('phoneAccess:audit') as never,
+    onChange(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('phoneAccess:changed', fn)
+      return () => ipcRenderer.removeListener('phoneAccess:changed', fn)
+    }
   }
 }
 

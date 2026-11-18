@@ -281,15 +281,19 @@ function PurchaseCard({ req }: { req: PendingRequest }) {
           {p.typed.map((t, i) => <Fragment key={i}><dt>{t.field}</dt><dd>{t.value}</dd></Fragment>)}
         </dl>
       )}
-      <div className="hint pc-note">Approves this one step only. Assistants and web pages can't approve purchases; only this button can.</div>
+      <div className="hint pc-note">{ON_PHONE ? ON_MAC_NOTE : 'Approves this one step only. Assistants and web pages can\'t approve purchases; only this button can.'}</div>
       {err && <div className="hint error">{err}</div>}
       <div className="pending-actions">
-        <button className="btn primary" disabled={!ready || busy} onClick={() => void answer('approve')} data-testid="purchase-approve">{fill ? 'Use this card' : p.total ? `Buy for ${p.total.display}` : 'Approve purchase'}</button>
+        <button className="btn primary" disabled={!ready || busy || ON_PHONE} onClick={() => void answer('approve')} data-testid="purchase-approve">{ON_PHONE ? 'Approve on your Mac' : fill ? 'Use this card' : p.total ? `Buy for ${p.total.display}` : 'Approve purchase'}</button>
         <button className="btn danger" disabled={busy} onClick={() => void answer('deny')} data-testid="purchase-deny">{fill ? "Don't use it" : "Don't buy"}</button>
       </div>
     </div>
   )
 }
+
+/** A phone using the Mac (Phone access): purchases and one-time codes are approved on the Mac; the phone can still say no. */
+const ON_PHONE = api?.serverHost === 'mac'
+const ON_MAC_NOTE = 'Approve this on your Mac: SahilBot asks there too. You can still say no from here.'
 
 const OTP_SOURCE: Record<string, string> = { authenticator: 'your saved authenticator key', email: 'your email', sms: 'your text messages' }
 
@@ -317,11 +321,11 @@ function OtpCard({ req }: { req: PendingRequest }) {
         </dl>
       )}
       {o.unverifiedSender && <div className="pc-changed" data-testid="otp-unverified">This message isn't from {o.site}'s own domain. Only allow it if you know this sender is {o.site}.</div>}
-      <div className="hint">SahilBot types the code straight into the page; the assistant never sees it.{o.source === 'sms' ? ' Reads only messages from the last 10 minutes.' : ''}</div>
+      <div className="hint">{ON_PHONE ? ON_MAC_NOTE : <>SahilBot types the code straight into the page; the assistant never sees it.{o.source === 'sms' ? ' Reads only messages from the last 10 minutes.' : ''}</>}</div>
       {err && <div className="hint error">{err}</div>}
       <div className="pending-actions">
-        <button className="btn primary" disabled={!ready} onClick={() => answer('approve')} data-testid="otp-approve">Allow in this chat</button>
-        <button className="btn" disabled={!ready} onClick={() => answer('always')} data-testid="otp-always">Always for {o.site}</button>
+        <button className="btn primary" disabled={!ready || ON_PHONE} onClick={() => answer('approve')} data-testid="otp-approve">{ON_PHONE ? 'Approve on your Mac' : 'Allow in this chat'}</button>
+        {!ON_PHONE && <button className="btn" disabled={!ready} onClick={() => answer('always')} data-testid="otp-always">Always for {o.site}</button>}
         <button className="btn danger" onClick={() => answer('deny')} data-testid="otp-deny">Deny</button>
       </div>
     </div>

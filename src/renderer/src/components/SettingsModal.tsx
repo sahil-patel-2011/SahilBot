@@ -19,7 +19,7 @@ import { ChatgptPlanSettings } from './ChatgptPlanSettings'
 // Local models are opt-in: one quiet row when they're off, no download prompts (components/LocalModels.tsx).
 import { LocalModelsRow, VoiceOutputRow, localIsOn } from './LocalModels'
 import { ActivitySettings } from './ActivitySettings'
-import { AlwaysOnServerPage, ServerPage } from './ServerSettings'
+import { AlwaysOnServerPage, PhoneAccessSection, PhonePage, ServerPage } from './ServerSettings'
 import { ClampText, Disclosure, InfoTip, Segmented, SetTabs as Tabs } from './ui'
 import { addRule, loadRules, removeRule, RULE_LIMIT, RULE_MAX_CHARS } from '../lib/approvalRules'
 import { LEGACY_PAGES, PAGE_TITLES, SETTINGS_INDEX, searchSettings, type SettingEntry, type SettingsPage } from '../lib/settings-index'
@@ -45,7 +45,9 @@ const PAGES: Array<{ id: Page; icon: ReactNode; color: string }> = [
   { id: 'server', icon: <I.Globe size={14} />, color: '#1f8a5b' },
   { id: 'advanced', icon: <I.Sliders size={14} />, color: '#af52de' }
 ]
-const pageTitle = (id: Page): string => (id === 'server' && isServerRuntime ? 'Server' : PAGE_TITLES[id])
+/** A phone using the Mac (Phone access) sees its own page where SahilBot Server's browsers see the server's. */
+const onPhone = isServerRuntime && api?.serverHost === 'mac'
+const pageTitle = (id: Page): string => (id === 'server' && isServerRuntime ? (onPhone ? 'This phone' : 'Server') : PAGE_TITLES[id])
 
 const WINDOWS: Settings['contextWindow'][] = [0, 16384, 32768, 65536, 131072]
 const SAMPLING_KEYS: Array<keyof Sampling> = ['temperature', 'top_p', 'top_k', 'min_p', 'presence_penalty', 'repeat_penalty']
@@ -249,7 +251,7 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
           {page === 'voice' && <VoicePage s={s} models={models} patch={patch} />}
           {page === 'privacy' && <PrivacySecurityPage s={s} patch={patch} tab={tabs.privacy ?? 'passwords'} onTab={setTab('privacy')} />}
           {page === 'usage' && <div data-setting="usage"><UsagePage /></div>}
-          {page === 'server' && <div data-setting="server">{isServerRuntime ? <ServerPage /> : <AlwaysOnServerPage />}</div>}
+          {page === 'server' && <div data-setting="server">{isServerRuntime ? (onPhone ? <PhonePage /> : <ServerPage />) : <AlwaysOnServerPage />}</div>}
           {page === 'advanced' && <AdvancedPage s={s} models={models} patch={patch} spaces={spaces ?? []} tab={tabs.advanced ?? 'rules'} onTab={setTab('advanced')} />}
         </div>
       </div>
@@ -300,6 +302,8 @@ function General({ s, patch }: P) {
           </>
         )}
       </Section>
+
+      {api.phoneAccess && <div data-setting="phone-access"><PhoneAccessSection /></div>}
 
       <Disclosure title="More" sub="Appearance, routines and web search" testId="general-more">
         <Section title="Appearance">
@@ -865,7 +869,9 @@ function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab:
       <h2>Privacy &amp; Security</h2>
       <div className="set-sub">Saved passwords, and what SahilBot may see and keep. What it may do on its own is under Permissions.</div>
       <Tabs value={cur} tabs={tabs} onChange={onTab} label="Privacy and security" />
-      {cur === 'passwords' && <div data-setting="passwords"><SecretVaultSettings embedded /></div>}
+      {cur === 'passwords' && <div data-setting="passwords">{onPhone
+        ? <div className="set-sub" data-testid="vault-on-mac">Saved passwords, cards and authenticator codes stay on your Mac and are never sent to this phone. Manage them in SahilBot on the Mac.</div>
+        : <SecretVaultSettings embedded />}</div>}
       {cur === 'activity' && <div data-setting="activity"><ActivitySettings /></div>}
       {cur === 'sensitive' && <SensitiveDetails />}
     </>
