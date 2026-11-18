@@ -280,9 +280,9 @@ function General({ s, patch }: P) {
         <Row id="user-name" title="Your name" sub="What SahilBot calls you."><Field value={s.userName} placeholder="First name" label="Your name" onSave={(v) => void patch({ userName: v })} /></Row>
         {/* Me: bots may always email or text these without asking (agent/trusted.ts). Commas separate several. */}
         <Row id="me-contact" title="Your email and phone" sub="Bots can always message you here without asking.">
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <Field value={(s.me?.emails ?? []).join(', ')} width={200} placeholder="you@example.com" label="Your email" testId="me-emails" onSave={(v) => void patch({ me: { emails: v.split(/[,;\s]+/).filter(Boolean), phones: s.me?.phones ?? [] } })} />
-            <Field value={(s.me?.phones ?? []).join(', ')} width={150} type="tel" placeholder="+1 555 010 1234" label="Your phone" testId="me-phones" onSave={(v) => void patch({ me: { emails: s.me?.emails ?? [], phones: v.split(/[,;]+/).map((x) => x.trim()).filter(Boolean) } })} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Field value={(s.me?.emails ?? []).join(', ')} width={220} placeholder="you@example.com" label="Your email" testId="me-emails" onSave={(v) => void patch({ me: { emails: v.split(/[,;\s]+/).filter(Boolean), phones: s.me?.phones ?? [] } })} />
+            <Field value={(s.me?.phones ?? []).join(', ')} width={220} type="tel" placeholder="+1 555 010 1234" label="Your phone" testId="me-phones" onSave={(v) => void patch({ me: { emails: s.me?.emails ?? [], phones: v.split(/[,;]+/).map((x) => x.trim()).filter(Boolean) } })} />
           </div>
         </Row>
         <Row id="workspace" title="Workspace folder" sub="Where SahilBot saves what it makes."><Field value={s.workspaceDir} width={280} label="Workspace folder" onSave={(v) => void patch({ workspaceDir: v })} /></Row>
@@ -979,7 +979,7 @@ export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what yo
                 ? <span className="perm-on" data-testid={`perm-${r.kind}-on`}><I.Check size={13} />On</span>
                 : <>
                     {asked[r.kind] && <button className="link-btn" onClick={() => void api.permissions.open(r.kind)}>Open Settings</button>}
-                    <button className="btn primary" onClick={() => allow(r.kind)} data-testid={`perm-${r.kind}-allow`}>{r.kind === 'automation' ? 'Open Settings' : r.kind === 'notifications' ? 'Turn on' : 'Allow'}</button>
+                    <button className="btn" onClick={() => allow(r.kind)} data-testid={`perm-${r.kind}-allow`}>{r.kind === 'automation' ? 'Open Settings' : r.kind === 'notifications' ? 'Turn on' : 'Allow'}</button>
                   </>}
             </Row>
           )

@@ -127,7 +127,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
   const keyed = (p: ConnectorPreset, cfg: ConnectorConfig | undefined): boolean => (isNativeKeyApp(p) ? keys.has(p.id) : !!cfg && keys.has(cfg.id))
   /** What's missing before an app can connect: its one-time setup, Google setup or API key. */
   const setupMissing = (p: ConnectorPreset | undefined, cfg: ConnectorConfig | undefined): boolean =>
-    !!p && ((p.auth === 'oauth-static' && !cfg?.clientId && !p.builtinClient) || (p.auth === 'google' && !google && !cfg?.clientId && !p.builtinClient) || (p.auth === 'apikey' && !keyed(p, cfg)))
+    // Gmail is never "needs setup": its panel also connects through the Mail app or an app password.
+    !!p && p.id !== 'gmail' && ((p.auth === 'oauth-static' && !cfg?.clientId && !p.builtinClient) || (p.auth === 'google' && !google && !cfg?.clientId && !p.builtinClient) || (p.auth === 'apikey' && !keyed(p, cfg)))
   /** SahilBot ships its own Google app: every Google app connects in one click (unless the user uses their own). */
   const googleBuiltin = useMemo(() => presets.some((p) => p.auth === 'google' && p.builtinClient), [presets])
   /** The one state an app is in (Connected, Needs sign-in again, Unavailable right now, Needs setup…). */
@@ -299,7 +300,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     const [label, tone] =
       p.id === VAULT.id ? ['Open', 'ghost'] :
       p.id === 'cursor-app' ? (cursorOn ? ['Connected', 'done'] : ['Add key', 'add']) :
-      p.id === 'gmail' && gstat?.link ? ['Connected', 'done'] :
+      p.id === 'gmail' && as !== 'reauth' ? (gstat?.link || st?.state === 'connected' ? ['Connected', 'done'] : busy ? ['Connecting…', 'ghost'] : ['Connect', 'add']) :
       isNativeKeyApp(p) ? (keys.has(p.id) ? ['Connected', 'done'] : ['Add key', 'add']) :
       p.auth === 'app' ? ['Built in', 'ok'] :
       p.auth === 'browser' ? ['Sign in', 'ghost'] :
@@ -310,7 +311,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
       p.auth === 'oauth-static' && !cfg?.clientId && !p.builtinClient ? ['Set up', 'ghost'] :
       p.auth === 'apikey' && !keyed(p, cfg) ? ['Add key', 'add'] :
       cfg ? ['Connect', 'solid'] : ['Add', 'add']
-    const badge = st?.state === 'connected' || as === 'unavailable' || (isNativeKeyApp(p) && keys.has(p.id)) || (p.id === 'gmail' && gstat?.link) ? null : connectBadge(p)
+    const badge = st?.state === 'connected' || as === 'unavailable' || (isNativeKeyApp(p) && keys.has(p.id)) || p.id === 'gmail' ? null : connectBadge(p)
     const glink = p.id === 'gmail' ? gstat?.link : null
     const act = (): void => { if (!busy) void start(p) }
     return (
@@ -321,7 +322,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
           : <AppIcon src={icons[p.id]} name={p.name} color={p.color} />}
         <span className="ca-item-text">
           <b>{p.name}{badge && <small className={`ca-badge ui-pill ${BADGE_STYLE[badge].cls}`} data-testid={`badge-${p.id}`} title={badgeTitle(badge, p)}>{badge}</small>}</b>
-          <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && !p.builtinClient && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !p.builtinClient && !cfg?.clientId ? `${p.description} One-time setup first.` : glink ? `Connected${glink.address ? ` · ${glink.address}` : ''} · via ${GOOGLE_METHOD[glink.method]}` : p.auth === 'apikey' && !keyed(p, cfg) ? `${p.description} Paste your API key once.` : p.description}</span>
+          <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && p.id !== 'gmail' && !p.builtinClient && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !p.builtinClient && !cfg?.clientId ? `${p.description} One-time setup first.` : glink ? `Connected${glink.address ? ` · ${glink.address}` : ''} · via ${GOOGLE_METHOD[glink.method]}` : p.auth === 'apikey' && !keyed(p, cfg) ? `${p.description} Paste your API key once.` : p.description}</span>
         </span>
         {tone === 'done' && onTry && (
           <button className="ca-try" onClick={(e) => { e.stopPropagation(); onClose(); onTry(`What's new in ${p.name}?`) }} data-testid={`try-app-${p.id}`} title={`Start a chat that uses ${p.name}`}>Try it</button>
@@ -856,7 +857,7 @@ export function ApiKeyPanel({ preset, hasKey, onDone, onCancel, onForget, compac
         <p className="ca-lede" style={{ marginTop: 0 }}>
           {preset.auth === 'oauth'
             ? `${preset.name} connects in one click without a key. If you'd rather use a ${preset.name} API key (a service account, say), paste it here: it's kept in your Mac's Keychain, only sent to ${preset.name}, and used instead of signing in.`
-            : `${preset.name}'s official server signs in with your own ${preset.name} API key. Paste it once: it's kept in your Mac's Keychain and only sent to ${preset.name}.`}
+            : `${preset.name} connects with your own API key. Paste it once: it's kept in your Mac's Keychain and only sent to ${preset.name}.`}
         </p>
       )}
       {/* The common case needs no typing: open the key page, copy the key there, press Paste key. */}
@@ -941,12 +942,12 @@ function GoogleConnect({ status, gmailPreset, onChanged, onSignIn, onOwnApp, onD
   const canSignIn = st.oauth.builtin || st.oauth.ownClient
   const passProblem = appPasswordUiProblem(pass)
   return (
-    <div className="conn-form" data-testid="google-connect">
+    <div className="conn-form ca-google" data-testid="google-connect">
       {err && <div className="hint error" data-testid="google-error">{err}</div>}
       <div className="field">
         <label>Sign in with Google</label>
-        <button className="btn primary" disabled={!canSignIn || !!busy} data-testid="google-signin" onClick={() => void run('oauth', onSignIn)}>{busy === 'oauth' ? 'Finish signing in in your browser…' : 'Sign in with Google'}</button>
-        {!canSignIn && <span className="hint" style={{ margin: '6px 0 0' }}>This copy of SahilBot doesn't include a Google sign-in app yet: use the Mail app or an app password below, or your own Google Cloud app (Advanced).</span>}
+        <button className={`btn${canSignIn ? ' primary' : ''}`} disabled={!canSignIn || !!busy} data-testid="google-signin" onClick={() => void run('oauth', onSignIn)}>{busy === 'oauth' ? 'Finish signing in in your browser…' : 'Sign in with Google'}</button>
+        {!canSignIn && <span className="hint" style={{ margin: 0 }}>Not in this copy of SahilBot yet. Use {st.mail.length ? 'the Mail app or ' : ''}an app password below, or your own Google Cloud app (Advanced).</span>}
         <button className="link-btn" onClick={() => setAdv((v) => !v)} aria-expanded={adv} data-testid="google-advanced">Advanced</button>
         {adv && <button className="btn" onClick={onOwnApp} data-testid="google-own-app">Use your own Google Cloud app…</button>}
       </div>

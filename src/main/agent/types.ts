@@ -9,6 +9,8 @@ export interface ToolOutput {
   verification?: { passed: boolean; criterion: string; detail: string }
   /** Text the model sees (wrapped as data before it reaches the model). */
   text: string
+  /** This result carries outside content (e.g. recalled memory saved from a web page): wrapped and tracked as untrusted. */
+  untrusted?: boolean
   /** Images the model sees on its next step (e.g. browser screenshots). */
   images?: string[]
   /** One-line summary for the tool chip, e.g. "opened example.com". */
@@ -71,6 +73,13 @@ export interface ToolContext {
    * started from a relayed message or link, or is a goal wake-up (always treated as tainted).
    */
   tainted?: boolean
+  /** The durable task memory (agent/task-memory.ts) of this chat, or of its project: the notes tool writes through and searches it. */
+  taskMemory?: {
+    note(section: import('./notes').NoteSection, text: string, o?: { tainted?: boolean }): void
+    retire(section: import('./notes').NoteSection, match?: string): number
+    recall(query: string, limit?: number): { text: string; untrusted: boolean; count: number }
+    full(): { text: string; untrusted: boolean; count: number }
+  }
   /** Tokens this call's output may use before it is cut short (set for tools that size their own output). */
   outputBudget?: number
   /** Runs helper agents in parallel and returns their reports (Team of Experts). */
@@ -183,6 +192,8 @@ export interface ThreadState {
    * user's constraints captured from their own messages. Carried verbatim in the task brief through compaction.
    */
   taskNotes?: import('./notes').TaskNotes
+  /** The durable memory's per-step recall (agent/task-memory.ts): entries already recalled since the last compaction. */
+  memoryRecall?: { boundary: string; ids: string[] }
   /** Hybrid mode: cloud consultations used in the current request. */
   consults?: number
   /**

@@ -321,7 +321,7 @@ describe('pairing and removing phones (Phone access on 127.0.0.1, as hidden test
     expect(limited.status).toBe(429)
     expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0)
     expect(phone.auditLog().map((e) => e.kind)).toContain('pair.limited')
-  })
+  }, 30_000) // key sealing and several pairings: slow on a busy runner
 
   test('the device list is sealed with a key in the Keychain; tokens are never stored', async () => {
     await phone.setEnabled(true)

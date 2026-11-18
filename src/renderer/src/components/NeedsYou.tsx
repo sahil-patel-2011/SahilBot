@@ -194,7 +194,7 @@ export function AlwaysOnRows({ spaceId, part = 'all' }: { spaceId: string; part?
   }
   const digest = (
     <div className="bd-row">
-      <span className="bd-row-text">Daily digest<span className="bd-row-sub">A short summary in this chat on days it worked.</span></span>
+      <span className="bd-row-text">Daily digest<span className="bd-row-sub">A short summary on days it worked.</span></span>
       {mine.digest.enabled && <input className="bd-select bd-num" type="time" value={mine.digest.time} onChange={(e) => { if (/^\d{2}:\d{2}$/.test(e.target.value)) save({ digest: { ...mine.digest, time: e.target.value } }) }} aria-label="Digest time" data-testid="bot-digest-time" />}
       <button role="switch" aria-checked={mine.digest.enabled} aria-label="Daily digest" className={`switch${mine.digest.enabled ? ' on' : ''}`} onClick={() => save({ digest: { ...mine.digest, enabled: !mine.digest.enabled } })} data-testid="bot-digest"><i /></button>
     </div>
@@ -216,7 +216,7 @@ export function AlwaysOnRows({ spaceId, part = 'all' }: { spaceId: string; part?
         <button className="bd-btn" onClick={add} disabled={!draft.trim()}>Add</button>
       </div>
       <label className="bd-row">
-        <span className="bd-row-text">Question deadline<span className="bd-row-sub">Then it goes with its recommended answer, when that's safe. Money, passwords, deleting and posting always wait.</span></span>
+        <span className="bd-row-text">Question deadline<span className="bd-row-sub">Then it takes the recommended answer. Money, passwords, deleting and posting always wait.</span></span>
         <select className="bd-select" value={String(mine.deadlineHours)} onChange={(e) => save({ deadlineHours: Number(e.target.value) })} data-testid="bot-question-deadline" aria-label="Question deadline">
           {[0.5, 1, 2, 4, 8, 12, 24, 48, 168].concat([0.5, 1, 2, 4, 8, 12, 24, 48, 168].includes(mine.deadlineHours) ? [] : [mine.deadlineHours]).sort((a, b) => a - b).map((h) => (
             <option key={h} value={String(h)}>{h < 1 ? `${h * 60} minutes` : h === 168 ? '1 week' : h === 1 ? '1 hour' : `${h} hours`}</option>

@@ -13,9 +13,9 @@ const DEFAULT: FastModeSettings = { providers: { anthropic: false, openai: false
 const fastOf = (s: Settings): FastModeSettings => ({ ...DEFAULT, ...s.fastMode, providers: { ...DEFAULT.providers, ...s.fastMode?.providers }, models: { ...s.fastMode?.models } })
 
 const PROVIDERS: Array<{ id: 'anthropic' | 'openai' | 'xai'; name: string; how: string; key: 'anthropic' | 'openai' | 'xai' }> = [
-  { id: 'anthropic', name: 'Anthropic', key: 'anthropic', how: 'speed "fast" on Claude Opus 5.5, Fable 5.2 and Mythos 5.2 (Opus 5 and 4.8 in preview / deprecated): up to 2.5x faster output at 2x the price. Over its own rate limit a request falls back to standard speed and price.' },
-  { id: 'openai', name: 'OpenAI', key: 'openai', how: 'service_tier "fast": up to 2.5x faster at 2x the price on most models (GPT-5.5: 2.5x); OpenAI may downgrade a request to standard speed, and it is then billed at standard. Ultrafast, OpenAI’s fastest tier (up to 4.5x on GPT-6.2), is only on GPT-6.2 Astra and Sol (3x until Feb 28, 2027, then 6x) and GPT-6 Astra and GPT-6.1 Sol (6x): choose it per model below. This switch never turns on Ultrafast.' },
-  { id: 'xai', name: 'xAI', key: 'xai', how: 'service_tier "priority": served ahead of standard traffic when capacity is free, at 2x the price, billed only when xAI confirms it. (Grok 4.7 Fast is a Cursor / Grok Build model, not on the API.)' }
+  { id: 'anthropic', name: 'Anthropic', key: 'anthropic', how: 'Up to 2.5x faster replies at 2x the price on Claude Opus 5.5, Fable 5.2 and Mythos 5.2 (Opus 5 and 4.8 in preview / deprecated). When Anthropic is busy, a request runs at normal speed and price instead.' },
+  { id: 'openai', name: 'OpenAI', key: 'openai', how: 'Up to 2.5x faster at 2x the price on most models (GPT-5.5: 2.5x); OpenAI may downgrade a request to standard speed, and it is then billed at standard. Ultrafast, OpenAI’s fastest tier (up to 4.5x on GPT-6.2), is only on GPT-6.2 Astra and Sol (3x until Feb 28, 2027, then 6x) and GPT-6 Astra and GPT-6.1 Sol (6x): choose it per model below. This switch never turns on Ultrafast.' },
+  { id: 'xai', name: 'xAI', key: 'xai', how: 'Priority: served ahead of other traffic when xAI has room, at 2x the price, billed only when xAI confirms it. (Grok 4.7 Fast is a Cursor / Grok Build model, not on the API.)' }
 ]
 
 /** Rows from an older main process (no options): the multipliers alone. */

@@ -77,7 +77,7 @@ export function HeavyCard({ board, groupId, live, embedded, title }: { board: He
         <I.Sparkle size={15} />
         <span className="plan-title">{title ?? 'Heavy'}</span>
         <span className="plan-count">{active ? JUDGE_STATUS[board.judge.status] : `${done} of ${board.attempts.length} attempts`}{board.spentUsd ? <span className="dev-only">{` · ${money(board.spentUsd)}`}</span> : null}</span>
-        <span className="plan-bar"><i style={{ width: `${progress * 100}%` }} /></span>
+        {!finished && <span className="plan-bar"><i style={{ width: `${progress * 100}%` }} /></span>}
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>
       {open && (
@@ -191,7 +191,7 @@ function SwarmHelperRow({ h, live, credited }: { h: SwarmHelperView; live: boole
       </button>
       {(h.ideas?.length || h.credit) ? (
         <div className="sw-ideas">
-          {h.credit ? <span className="sw-credit" data-testid="swarm-credit">{h.credit}× credited</span> : null}
+          {h.credit ? <span className="sw-credit" data-testid="swarm-credit">{h.credit > 1 ? `used ${h.credit}× in the answer` : 'used in the answer'}</span> : null}
           {(h.ideas ?? []).slice(0, 4).map((t, i) => <span key={i} className="sw-idea">{t}</span>)}
           {(h.ideas?.length ?? 0) > 4 && <span className="sw-idea more">+{h.ideas!.length - 4}</span>}
         </div>
@@ -221,7 +221,7 @@ export function SwarmCard({ board, live, embedded, title }: { board: SwarmBoard;
         <I.Users size={15} />
         <span className="plan-title">{title ?? (board.bot ? `${board.bot}'s swarm` : 'Swarm')}</span>
         <span className="plan-count" data-testid="swarm-count">{st.done} of {st.total} helpers{st.ideas ? ` · ${st.ideas} ideas` : ''} · {SWARM_PHASE[board.phase]}{board.spentUsd ? <span className="dev-only">{` · ${money(board.spentUsd)}`}</span> : null}</span>
-        <span className="plan-bar"><i style={{ width: `${(st.done / Math.max(1, st.total)) * 100}%` }} /></span>
+        {active && <span className="plan-bar"><i style={{ width: `${(st.done / Math.max(1, st.total)) * 100}%` }} /></span>}
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>
       {open && (
@@ -248,7 +248,7 @@ export function SwarmCard({ board, live, embedded, title }: { board: SwarmBoard;
             {board.ideas && <p className="hj-summary">{board.ideas.total} ideas from {st.done} helpers, about {board.ideas.distinct} distinct after merging duplicates.</p>}
             {board.compiled && (
               <div className="sw-compiled" data-testid="swarm-compiled">
-                {st.top.length > 0 && <div className="sw-credits">Credits: {st.top.map((c) => <span key={c.n} className="hj-tags">H{c.n}×{c.count}</span>)}</div>}
+                {st.top.length > 0 && !embedded && <div className="sw-credits">Drew on: {st.top.map((c) => <span key={c.n} className="hj-tags">H{c.n}×{c.count}</span>)}</div>}
                 <details><summary className="hint">Compiled result</summary><Markdown text={board.compiled.excerpt} /></details>
               </div>
             )}

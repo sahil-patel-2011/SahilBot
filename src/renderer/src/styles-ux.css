@@ -112,3 +112,13 @@
 /* Onboarding: the main button stays in view while the connect step scrolls. */
 .onboard-card .modal-actions { position: sticky; bottom: -24px; margin-bottom: -24px; padding: 12px 0 24px; background: linear-gradient(to bottom, transparent, var(--panel) 14px); }
 .modes-menu .mode-keys { font: inherit; font-size: 10.5px; color: var(--text-3); padding: 1px 5px; border-radius: 5px; border: 1px solid var(--surface-line); align-self: center; flex: none; }
+
+/* New bot / Customize: Create and Cancel stay in view at the bottom while the templates scroll. */
+.modal[data-testid="bot-editor"] > .modal-actions {
+  position: sticky; bottom: -24px; z-index: 2; margin: 16px -26px -24px; padding: 12px 26px 16px;
+  background: var(--panel); border-top: 1px solid var(--line);
+}
+
+/* An answer's More menu: which model answered and why (Auto's reason, teamwork, cost class). */
+.menu-note { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 6px; margin-top: 4px; border-top: 1px solid var(--card-line); font-size: 12px; color: var(--text-3); line-height: 1.4; white-space: normal; }
+.menu-note b { color: var(--text-2); font-weight: 600; }

@@ -147,14 +147,16 @@ ${R} [data-testid="dictate"],${R} [data-testid="voice-btn"],${R} [data-testid="a
 ${R} [data-testid="tab-browser"],${R} [data-testid="computer-use-row"],${R} [data-testid="computer-use-executor-row"],
 ${R} .set-row:has([data-testid="quick-key"]){display:none!important}
 ${R}:has(.settings-page) .sb-menu-btn{display:none!important}
+/* A phone using the Mac: the browser runs on the Mac's screen, so its header button has nothing to open here. */
+${R}[data-host=mac] [data-testid="toggle-browser"]{display:none!important}
 @media (max-width:${LAYOUT.tablet}px){
   ${R} .app{height:100dvh}
   ${R} .app>.right{position:fixed;inset:0;z-index:55;width:100%!important;min-width:0!important;max-width:none!important;border-left:0;padding-top:env(safe-area-inset-top)}
 }
 @media (max-width:${LAYOUT.phone}px){
   ${R} .app{position:relative;overflow:hidden;padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
-  ${R} .sidebar{position:fixed;z-index:60;left:0;top:0;bottom:0;width:min(86vw,320px);transform:translateX(-102%);transition:transform .22s ease-out;box-shadow:0 0 40px rgba(0,0,0,.25);padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
-  ${R}.sb-drawer .sidebar{transform:none}
+  ${R} .sidebar{position:fixed;z-index:60;left:0;top:0;bottom:0;width:min(86vw,320px);transform:translateX(-102%);visibility:hidden;transition:transform .22s ease-out,visibility 0s linear .22s;box-shadow:none;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+  ${R}.sb-drawer .sidebar{transform:none;visibility:visible;transition:transform .22s ease-out;box-shadow:0 0 40px rgba(0,0,0,.25)}
   ${R}.sb-drawer .sb-scrim{position:fixed;inset:0;z-index:59;background:rgba(0,0,0,.32)}
   ${R} .main{width:100%;min-width:0;flex:1 1 auto;height:100dvh}
   ${R} .main-header{padding-left:56px;padding-right:10px;padding-top:env(safe-area-inset-top);height:calc(52px + env(safe-area-inset-top))}
@@ -188,6 +190,7 @@ ${R}:has(.settings-page) .sb-menu-btn{display:none!important}
   ${R} .cards{grid-template-columns:1fr}
   ${R} .ny-card,${R} [data-testid="approval-card"],${R} .bubble{overflow-wrap:anywhere}
   ${R} .field{grid-template-columns:1fr}
-  ${R} .sb-server-toasts{bottom:calc(16px + env(safe-area-inset-bottom))!important}
+  /* Toasts sit under the header on a phone, never over the composer and its Stop button. */
+  ${R} .sb-server-toasts{top:calc(60px + env(safe-area-inset-top))!important;bottom:auto!important}
 }
 `

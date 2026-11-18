@@ -77,7 +77,7 @@ export function MaxCard({ board, live }: { board: MaxBoard; live: boolean }) {
         <span className="plan-title">Agent swarm</span>
         <span className="max-title" data-testid="max-title">{board.title}</span>
         <span className="plan-count max-status">{statusLine(board, live)}{tot.usd ? <span className="dev-only">{` · ${money(tot.usd)}`}</span> : null}</span>
-        <span className="plan-bar"><i style={{ width: `${Math.min(1, progress) * 100}%` }} /></span>
+        {board.status !== 'done' && <span className="plan-bar"><i style={{ width: `${Math.min(1, progress) * 100}%` }} /></span>}
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
       </button>
       {open && (
@@ -116,13 +116,13 @@ export function MaxCard({ board, live }: { board: MaxBoard; live: boolean }) {
           {board.result && (
             <div className="max-result" data-testid="max-result">
               <div className="hj-head"><span className="hj-title">Result</span>
-                {board.result.credits.length > 0 && <span className="max-credits" data-testid="max-credits">Credits: {[...board.result.credits].sort((a, b) => b.count - a.count).slice(0, 8).map((c) => <span key={c.tag} className="hj-tags">{c.tag}×{c.count}</span>)}</span>}
+                {board.result.credits.length > 0 && <span className="max-credits" data-testid="max-credits" title="How often the answer cites each helper or attempt">Drew on: {[...board.result.credits].sort((a, b) => b.count - a.count).slice(0, 8).map((c) => <span key={c.tag} className="hj-tags">{c.tag}×{c.count}</span>)}</span>}
               </div>
               <details><summary className="hint">The answer, as delivered</summary><Markdown text={board.result.excerpt} /></details>
             </div>
           )}
           <div className="heavy-foot">
-            <span className="max-agents">{tot.agents ? `${tot.done} of ${tot.agents} agents finished` : ''}</span>
+            <span className="max-agents">{tot.agents && board.status !== 'done' ? `${tot.done} of ${tot.agents} agents finished` : ''}</span>
             {tot.usd ? <span className="heavy-cost">{money(tot.usd)} spent</span> : null}
           </div>
         </div>

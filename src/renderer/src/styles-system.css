@@ -382,6 +382,21 @@
   border: 1px solid var(--surface-line); background: var(--surface) var(--select-chevron) no-repeat right 9px center / 11px; color: var(--text); font-size: var(--fs-sm);
 }
 .bd-select.bd-num { padding-right: 10px; background-image: none; }
+.bd-select.bd-num[type="time"] { flex: none; min-width: 112px; max-width: none; }
+/* Text boxes inside the panel (trusted recipients, always-ask): the same look as its selects. */
+.bd-row > .tk-input { flex: 1; min-width: 0; }
+.bd-row .tk-input input {
+  width: 100%; min-height: 30px; padding: 5px 10px; border-radius: var(--r-sm); border: 1px solid var(--surface-line);
+  background: var(--surface); color: var(--text); font: inherit; font-size: var(--fs-sm);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.bd-row .tk-input input::placeholder { color: var(--text-3); }
+.bd-row .tk-input input:focus { border-color: var(--field-focus); box-shadow: var(--focus-ring); outline: none; }
+.bd-row .bd-btn { flex: none; }
+/* The panel keeps room for its scrollbar, so the cards line up with the tabs above them. */
+.bd-body { scrollbar-gutter: stable; padding-right: max(4px, calc(var(--bd-pad) - 11px)); }
+.bd-row .vault-seg { flex: none; }
+.bd-row .vault-seg > button { padding: 0 10px; }
 .bd-row-value { color: var(--text-2); }
 
 /* Connect apps: badges are neutral pills next to the name. */
@@ -539,7 +554,8 @@
 .set-progress { display: inline-flex; align-items: center; gap: var(--sp-2); }
 .set-progress .meter { width: 120px; }
 .settings-page .hue-row { flex-wrap: wrap; }
-.settings-page .hue-row .set-slider { width: 150px; }
+.settings-page .hue-row { gap: 10px; }
+.settings-page .hue-row .set-slider { width: 120px; }
 .mm-add-card { margin: 0 0 var(--sp-3); padding: 0 var(--sp-4); }
 .mm-toolbar .mm-select { flex: none; }
 .settings-page .set-body > h2 + .set-sub + .set-tabs, .settings-page .set-body > .set-section + .set-tabs { margin-top: var(--sp-2); }
@@ -552,3 +568,12 @@
 }
 .set-card > .ui-disclosure:first-child { border-top: 0; }
 .set-row-title a { color: inherit; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--text) 30%, transparent); }
+
+/* Bot details → Can message without asking: each person as a readable chip with its own remove button. */
+.ui-pill.bd-chip { height: 24px; padding: 0 3px 0 10px; gap: 2px; font-size: var(--fs-xs); background: var(--tint-2); color: var(--text); }
+
+/* Settings → Monthly spending limit: a card of its own content (not rows), so it needs its own padding. */
+.settings-page .set-card.spend-card { padding: 14px var(--sp-4) 16px; }
+/* Settings → Usage: the month card and the charts are content cards too (the scale's top label needs room). */
+.settings-page .set-card.ud-month { padding: 14px var(--sp-4); }
+.settings-page .set-card.ud-card { padding: 20px 14px 12px var(--sp-4); }

@@ -838,7 +838,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title="Some acceptance checks remain unresolved">Needs checking</span>}
           {dev && m.model && (
-            <span className="routed" title={m.meta?.routed ? `Auto chose this model: ${(m.meta.routed as { why: string }).why}` : 'Picked in the model menu'} data-testid="routed">
+            <span className="routed" title={routedTitle(m)} data-testid="routed">
               {(((m.meta?.routed as { label?: string } | undefined)?.label) || m.model).split(' · ')[0]}
             </span>
           )}
@@ -881,14 +881,28 @@ function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actio
         </div>
       )}
       {menu && (
-        <div className={`menu down ${side === 'right' ? '' : 'right'}`} style={{ minWidth: 160 }}>
+        <div className={`menu down ${side === 'right' ? '' : 'right'}`} style={{ minWidth: 160, maxWidth: 320 }}>
           <button className="menu-item" onClick={() => {
             void navigator.clipboard.writeText(m.content)
             setCopied(true)
             setTimeout(() => { setCopied(false); setMenu(false) }, 700)
           }}>{copied ? <I.Check size={15} /> : <I.Copy size={15} />}Copy text</button>
+          {/* Which model answered and why (Auto's read, teamwork, cost class): one click away, without cluttering the chat. */}
+          {m.role === 'assistant' && m.model && (
+            <div className="menu-note" data-testid="why-model">
+              <b>{(((m.meta?.routed as { label?: string } | undefined)?.label) || m.model).split(' · ')[0]}</b>
+              <span>{routedTitle(m).replace(/^Why this model:\s*/, '')}</span>
+            </div>
+          )}
         </div>
       )}
     </div>
   )
+}
+
+/** The model chip's hover: Auto's "Why this model" line (main: auto-brain.ts explainPick), else its routing note. */
+export function routedTitle(m: Pick<Message, 'meta'>): string {
+  const r = m.meta?.routed as { why?: string; explain?: string } | undefined
+  if (!r) return 'Picked in the model menu'
+  return r.explain || `Auto chose this model: ${r.why ?? ''}`
 }

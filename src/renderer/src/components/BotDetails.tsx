@@ -442,7 +442,7 @@ function TrustedRow({ spaceId }: { spaceId: string }) {
       {list.length > 0 && (
         <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {list.map((w) => (
-            <span key={w} className="ui-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} data-testid="bot-trusted-chip">
+            <span key={w} className="ui-pill bd-chip" data-testid="bot-trusted-chip">
               {w}
               <button className="bd-icon" style={{ width: 18, height: 18 }} aria-label={`Ask again before messaging ${w}`} title="Remove" onClick={() => save(list.filter((x) => x !== w))}><I.Close size={10} /></button>
             </span>

@@ -287,8 +287,9 @@ export function violations(c: Check): string[] {
     if (stronger.length && !(slotOf(m) && hardest.includes(slotOf(m)!))) out.push(`best-hardest-got-light: ${m.id} (could use ${stronger[0].id})`)
   }
   // Balanced close calls: when Best result's pick differs, it is taken iff it costs at most 2x and isn't much slower.
-  // (School work routes as Cheapest, where no close call applies: routing-table.ts routeTask.)
-  if (s.preference === 'balanced' && !tight && !isStudy(task) && closeCall(task) && r.pick && r.pick.source !== 'sticky' && !pick.failed?.length) {
+  // (School work routes as Cheapest, where no close call applies; an obviously quick ask stays on the quick row:
+  // routing-table.ts routeTask.)
+  if (s.preference === 'balanced' && !tight && !isStudy(task) && !task.signals?.quick && closeCall(task) && r.pick && r.pick.source !== 'sticky' && !pick.failed?.length) {
     const best = autoRoute({ requested: 'auto', usable, task, preference: 'best', voice, health: c.health, now: c.now })
     const bm = usable.find((x) => x.id === best.model)!
     if (best.model !== r.model && !isLocal(bm) && !isLocal(m)) {
