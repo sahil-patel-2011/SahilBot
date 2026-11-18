@@ -10,7 +10,8 @@ import type { ThreadState, ToolDef } from './types'
 
 export const NOTE_SECTIONS = ['Goal', 'Constraints', 'Decisions', 'State', 'Files', 'Identifiers', 'Open questions', 'Failed attempts', 'Next steps'] as const
 export type NoteSection = typeof NOTE_SECTIONS[number]
-export interface NoteEntry { section: NoteSection; text: string; by: 'user' | 'agent'; at: number }
+/** tainted: the agent wrote it after reading outside content this turn (the durable memory keeps it as an unverified fact). */
+export interface NoteEntry { section: NoteSection; text: string; by: 'user' | 'agent'; at: number; tainted?: boolean }
 export interface TaskNotes { entries: NoteEntry[]; /** User message ids already scanned for constraints (newest 200). */ scanned?: string[] }
 
 /** One entry's most characters; a section's most entries (Constraints hold more); the whole rendering's default room. */
@@ -68,7 +69,7 @@ export function notesOf(state: Pick<ThreadState, 'taskNotes'>): TaskNotes {
  * Adds one entry (deduplicated: an entry already there, or one this new one contains, isn't kept twice).
  * A full section drops its oldest agent entry; the user's constraints are never dropped. Returns what happened.
  */
-export function addNote(state: Pick<ThreadState, 'taskNotes'>, section: NoteSection, text: string, by: 'user' | 'agent' = 'agent', known: string[] = []): { added: boolean; dropped?: string; reason?: string } {
+export function addNote(state: Pick<ThreadState, 'taskNotes'>, section: NoteSection, text: string, by: 'user' | 'agent' = 'agent', known: string[] = [], o: { tainted?: boolean } = {}): { added: boolean; dropped?: string; reason?: string } {
   const notes = notesOf(state)
   const t = clip(redactSecrets(text.replace(/\s+/g, ' ').trim(), known))
   if (!t) return { added: false, reason: 'empty' }
@@ -82,7 +83,7 @@ export function addNote(state: Pick<ThreadState, 'taskNotes'>, section: NoteSect
   }
   // A longer version of an entry replaces it (in place, so the order stays).
   const shorter = same.find((e) => k.includes(norm(e.text)) && e.by === by)
-  if (shorter) { shorter.text = t; shorter.at = Date.now(); return { added: true } }
+  if (shorter) { shorter.text = t; shorter.at = Date.now(); if (o.tainted) shorter.tainted = true; return { added: true } }
   const cap = section === 'Constraints' ? NOTE_CONSTRAINT_MAX : NOTE_SECTION_MAX
   let dropped: string | undefined
   if (same.length >= cap) {
@@ -91,7 +92,7 @@ export function addNote(state: Pick<ThreadState, 'taskNotes'>, section: NoteSect
     notes.entries.splice(notes.entries.indexOf(oldest), 1)
     dropped = oldest.text
   }
-  notes.entries.push({ section, text: t, by, at: Date.now() })
+  notes.entries.push({ section, text: t, by, at: Date.now(), ...(o.tainted ? { tainted: true } : {}) })
   return { added: true, dropped }
 }
 
@@ -174,7 +175,7 @@ export function captureConstraints(state: Pick<ThreadState, 'taskNotes'>, messag
 // The tool
 // ---------------------------------------------------------------------------------------------------
 
-type NotesArgs = { action: 'add' | 'update' | 'remove' | 'read'; section?: string; text?: string; match?: string }
+type NotesArgs = { action: 'add' | 'update' | 'remove' | 'read' | 'recall' | 'memory'; section?: string; text?: string; match?: string; query?: string }
 
 export function notesTool(): ToolDef<NotesArgs> {
   return {
@@ -182,30 +183,41 @@ export function notesTool(): ToolDef<NotesArgs> {
     label: 'Notes',
     core: true,
     effect: 'read',
-    description: `Working notes for this task: kept in this chat (not the user's files) and carried word for word whenever older messages are summarized. Record as you go, especially at milestones: decisions and why, files, exact IDs and numbers, partial results, open questions, what failed (so it isn't retried). Secret names only, never values. The user's constraints are added to Constraints automatically. Sections: ${NOTE_SECTIONS.join(', ')}. add: an entry (one per line); update: replace the section's entries containing \`match\` (no match: the whole section); remove: drop entries containing \`match\`; read: show all.`,
+    description: `Working notes for this task: kept in this chat and carried word for word whenever older messages are summarized. Everything is also saved for good in the task's memory (the project's, shared by its chats). Record as you go, especially at milestones: decisions and why, files, exact IDs and numbers, partial results, open questions, what failed (so it isn't retried). Secret names only, never values. The user's constraints are added to Constraints automatically. Sections: ${NOTE_SECTIONS.join(', ')}. add: an entry (one per line); update: replace the section's entries containing \`match\` (no match: the whole section); remove: drop entries containing \`match\`; read: show all; recall: search everything saved, older entries too (\`text\`: words, a path, an ID); memory: list everything saved.`,
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'update', 'remove', 'read'] },
+        action: { type: 'string', enum: ['add', 'update', 'remove', 'read', 'recall', 'memory'] },
         section: { type: 'string', enum: [...NOTE_SECTIONS], description: NOTE_SECTIONS.map((x) => `${x}: ${SECTION_HELP[x]}`).join('; ') },
-        text: { type: 'string', description: 'The entry (one per line for several). Exact names, paths, IDs and numbers.' },
+        text: { type: 'string', description: 'The entry (one per line for several; recall: what to look for). Exact names, paths, IDs and numbers.' },
         match: { type: 'string', description: 'update/remove: text the entries to change contain' }
       },
       required: ['action'],
       additionalProperties: false
     },
-    async run({ action, section, text, match }, ctx) {
+    async run({ action, section, text, match, query }, ctx) {
       const st = ctx.state
       const sec = sectionOf(section)
       const notes = notesOf(st)
       const show = (): string => renderNotes(st, Number.MAX_SAFE_INTEGER) || '(no notes yet)'
+      const mem = ctx.taskMemory
+      const tainted = !!ctx.tainted
       if (action === 'read') return { text: show(), display: `${notes.entries.length} notes` }
+      if (action === 'recall' || action === 'memory') {
+        if (!mem) return { text: action === 'memory' ? show() : 'Saved task memory isn\'t available here; these are the notes:\n\n' + show(), display: 'notes' }
+        const q = (query ?? text ?? match ?? '').trim()
+        if (action === 'recall' && !q) throw new Error('Give text: what to look for (words, a path, an ID).')
+        const r = action === 'recall' ? mem.recall(q, 15) : mem.full()
+        return { text: r.text, untrusted: r.untrusted, display: action === 'recall' ? `recall "${clip(q, 40)}": ${r.count}` : `${r.count} saved` }
+      }
       if (!sec) throw new Error(`Give a section: ${NOTE_SECTIONS.join(', ')}.`)
       const lines = (text ?? '').split('\n').map((l) => l.replace(/^\s*[-*•]\s*/, '').trim()).filter(Boolean)
       const userOwned = (es: NoteEntry[]): NoteEntry[] => es.filter((e) => e.by === 'user')
       if (action === 'add') {
         if (!lines.length) throw new Error('Give the text to add.')
-        const r = lines.map((l) => addNote(st, sec, l, 'agent'))
+        const r = lines.map((l) => addNote(st, sec, l, 'agent', [], { tainted }))
+        // Written through to the durable memory as well (deduplicated there; nothing is dropped from it).
+        for (const l of lines) mem?.note(sec, l, { tainted })
         const dropped = r.map((x) => x.dropped).filter(Boolean)
         const skipped = r.filter((x) => !x.added).map((x) => x.reason)
         return { text: `${r.filter((x) => x.added).length} added to ${sec}.${dropped.length ? ` ${sec} was full; dropped the oldest: ${dropped.map((d) => `"${d}"`).join(', ')}.` : ''}${skipped.length ? ` Skipped: ${[...new Set(skipped)].join('; ')}.` : ''}\n\n${show()}`, display: `${sec}: ${clip(lines[0], 60)}` }
@@ -218,6 +230,8 @@ export function notesTool(): ToolDef<NotesArgs> {
         if (!match) throw new Error('Give match: text the entries to remove contain.')
         if (!mine.length) throw new Error(`No ${sec} entry contains "${match}".`)
         notes.entries = notes.entries.filter((e) => !mine.includes(e))
+        // In the durable memory the removed entries become history (superseded, not deleted).
+        for (const e of mine) mem?.retire(sec, e.text)
         return { text: `Removed ${mine.length} from ${sec}.\n\n${show()}`, display: `${sec}: removed ${mine.length}` }
       }
       // update
@@ -225,9 +239,11 @@ export function notesTool(): ToolDef<NotesArgs> {
       const at = mine.length ? notes.entries.indexOf(mine[0]) : -1
       notes.entries = notes.entries.filter((e) => !mine.includes(e))
       const fresh: NoteEntry[] = []
+      for (const e of mine) mem?.retire(sec, e.text)
       for (const l of lines) {
         const before = notes.entries.length
-        if (addNote(st, sec, l, 'agent').added && notes.entries.length > before) fresh.push(notes.entries.pop()!)
+        if (addNote(st, sec, l, 'agent', [], { tainted }).added && notes.entries.length > before) fresh.push(notes.entries.pop()!)
+        mem?.note(sec, l, { tainted })
       }
       if (at >= 0) notes.entries.splice(Math.min(at, notes.entries.length), 0, ...fresh)
       else notes.entries.push(...fresh)

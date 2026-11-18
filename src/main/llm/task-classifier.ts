@@ -101,6 +101,11 @@ export interface TaskSignals {
   followUp: boolean
   /** School work: homework, studying, a class or a school subject. Routed to fast, low-cost models. */
   study?: boolean
+  /**
+   * An obviously quick ask (quickAsk): a sum, a unit conversion, a translation of a short sentence, a typo fix of
+   * a short text. Routed to the instant row (a quick model), and Auto's brain may skip its read for it.
+   */
+  quick?: QuickAsk
 }
 
 export interface TaskClass {
@@ -230,6 +235,8 @@ export function normalizeRequest(text: string): string {
 // ---------------------------------------------------------------------------------------------------
 
 const GREETING = /^(hi|hey|hello|yo|sup|hiya|howdy|thanks|thank you|thx|ty|ok|okay|k|cool|nice|great|awesome|perfect|lol|lmao|haha|good (morning|afternoon|evening|night)|gm|gn|bye|see you|how are you|how'?s it going|what'?s up|got it|sounds good|no worries|np|hello again|tudo bem)\b/
+/** A thank-you or a pleasantry on its own ("thanks so much, that was really helpful!"): nothing else asked. */
+const THANKS_ONLY = /^((ok(ay)?|great|perfect|awesome|cool|nice)[,!. ]+)*(thanks|thank you|thx|ty|cheers|much appreciated)( (so|very) much| a (lot|ton|bunch)| again)?([,.!]*\s*(that|this|it|you)('s| was| were| is| are)? ((really|super|very|so|incredibly) )?(helpful|great|perfect|useful|awesome|amazing|clear|kind|the best|a big help|exactly what i needed))?[\s!.:)]*$/
 const FOLLOW_UP = /^(yes|yeah|yep|yup|sure|ok(ay)?|do it|go ahead|go for it|continue|keep going|carry on|proceed|try again|again|retry|redo|next|more|one more|fix (it|that|this)|that'?s (wrong|not (it|right))|not quite|no[,.]? |make it \w+|make (them|this) \w+|now (make|turn|do|put|convert|send|add|write|email)|also\b|and (also|then)|send it|ship it|explain (it|that) again|same (thing|again)|shorter|longer|simpler|perfect,|great,|thanks,|looks good|lgtm|(do|same) (the same|it|that|this) (for|with|again)|the same for|same for\b)/
 const QUESTION = /^(¿|what|which|why|how|when|who|whom|where|is|are|was|were|does|do|did|should|would|will|can i|could i|whats|what's|hows|how's|who's|tell me (about|what|why|how)|explain|describe|define|quick q)/
 const POLITE_DO = /\b(for me|can you|could you|would you|please|i need you to|i want you to|help me (to )?(make|build|create|write|set|fix|organi[sz]e|clean))\b/
@@ -347,6 +354,72 @@ export function requestShape(raw: string): RequestShape {
   return { words, asks, constraints, specifics, codeLines, tier: (pts >= 4 ? 3 : pts >= 2 ? 2 : 1) as Tier, acts }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Obviously quick asks. Strict, anchored shapes only: the whole message is the ask (nothing before or after it),
+// and the material is short and literal. Anything that names a document, a file, code or more than a sentence or
+// two is left to the other rules (and Auto's brain). tests/unit/auto-latency.test.ts checks that no labelled
+// request of difficulty 2+ (tests/fixtures/routing-eval.json) reads as quick.
+// ---------------------------------------------------------------------------------------------------
+
+export type QuickAsk = 'sum' | 'conversion' | 'translation' | 'typo-fix'
+
+const LANGS = '(?:english|spanish|french|german|italian|portuguese|dutch|swedish|norwegian|danish|finnish|polish|czech|russian|ukrainian|greek|turkish|arabic|hebrew|hindi|urdu|bengali|punjabi|tamil|telugu|gujarati|marathi|chinese|mandarin|cantonese|japanese|korean|vietnamese|thai|indonesian|malay|filipino|tagalog|swahili|latin|persian|farsi|romanian|hungarian|irish|welsh|catalan|croatian|serbian|bulgarian|slovak|slovenian|lithuanian|latvian|estonian|icelandic)'
+const UNIT = '(?:mm|cm|km|m|meters?|metres?|kilometers?|kilometres?|centimeters?|centimetres?|millimeters?|millimetres?|inch(?:es)?|ft|feet|foot|yards?|yd|miles?|mi|mg|g|grams?|kg|kilograms?|kilos?|lbs?|pounds?|oz|ounces?|stones?|tons?|tonnes?|ml|milliliters?|millilitres?|l|liters?|litres?|cups?|tablespoons?|tbsp|teaspoons?|tsp|quarts?|qt|pints?|pt|gallons?|gal|fl oz|fluid ounces?|°\s?[cf]|degrees? (?:c|f|celsius|fahrenheit)|[cf]|celsius|fahrenheit|kelvin|seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|kb|mb|gb|tb|kilobytes?|megabytes?|gigabytes?|terabytes?|mph|km/h|kph|m/s|knots?|acres?|hectares?|sq ?ft|square (?:feet|foot|meters?|metres?|miles?|kilometers?|kilometres?)|calories|kcal|kj|joules?|kw|kwh|psi|radians?)'
+const NUM = '-?\\d[\\d,]*(?:\\.\\d+)?'
+const CONVERT = [
+  new RegExp(`^(?:(?:please |quick:? )?(?:convert|what(?:'s| is)|how much is|how many \\S+ (?:is|are))\\s+)?${NUM}\\s*${UNIT}\\s+(?:to|in|into|in terms of)\\s+${UNIT}\\s*\\??$`),
+  new RegExp(`^how many ${UNIT} (?:are )?(?:in|per) (?:a |an |one |${NUM} )?${UNIT}\\s*\\??$`)
+]
+const ARITH = /^(?:(?:what(?:'s| is)|calculate|compute|how much is|quick:?)\s+)?\(?\s*-?\d[\d,]*(?:\.\d+)?(?:\s*(?:[-+*/×÷^]|\bx\b|\btimes\b|\bplus\b|\bminus\b|\bdivided by\b)\s*\(?\s*-?\d[\d,]*(?:\.\d+)?\s*\)?)+\s*(?:=\s*)?\??$/
+const PERCENT = /^(?:(?:what(?:'s| is)|calculate|compute|how much is)\s+)?\d[\d,]*(?:\.\d+)?\s*(?:%|percent) of \$?\d[\d,]*(?:\.\d+)?\s*\??$/
+const TRANSLATE = [
+  new RegExp(`^(?:please |can you |could you )?translate\\s+(.+?)\\s+(?:in)?to\\s+${LANGS}\\s*[.!?]?$`),
+  new RegExp(`^(?:please |can you |could you )?translate (?:in)?to ${LANGS}\\s*[:\\-–]\\s*(.+)$`),
+  new RegExp(`^how (?:do|would|can) (?:you|i|we) say\\s+(.+?)\\s+in\\s+${LANGS}\\s*\\??$`)
+]
+const TYPO = /^(?:please |can you |could you )?(?:fix|correct|check)\s+(?:the |any |my )?(?:typos?|spelling|grammar|punctuation)(?:\s+(?:and|&)\s+(?:typos?|spelling|grammar|punctuation))?(?:\s+(?:mistakes?|errors?))?(?:\s+(?:in|of|on))?(?:\s+(?:this|the|my))?(?:\s+(?:sentence|text|line|phrase|message|caption|title|tweet|reply|note))?\s*[:\-–]\s*(.+)$/s
+/** Material that is more than a short literal piece: a document, a file, code, a page. */
+const NOT_LITERAL = /\b(document|doc|docx|file|files|pdf|page|pages|website|site|app|apps|code|function|script|class|article|book|chapter|manual|essay|report|paragraphs|slides?|deck|spreadsheet|readme|docs|ui|strings|repo|email thread|attachment|folder)\b/
+const BARE_REF = /^(this|that|it|these|those|them|everything|all of (it|this)|the (text|above|following|rest)|my (text|message|notes))$/
+const CODEY = /```|`|[{};<>]|=>|\b[\w/-]+\.(ts|tsx|js|jsx|py|rs|go|swift|java|kt|cpp|rb|php|sql|sh|css|html|json|md)\b/
+
+const sentences = (s: string): number => s.split(/(?<=[.!?。！？])\s+(?=\S)/).filter((x) => x.trim()).length
+const unquote = (s: string): { text: string; quoted: boolean } => {
+  const m = s.trim().match(/^["“'‘«](.+)["”'’»]$/s)
+  return m ? { text: m[1], quoted: true } : { text: s.trim(), quoted: false }
+}
+
+/**
+ * The ask, when the whole message is one obviously quick thing: a sum or a percentage, a unit conversion, a
+ * translation of a short sentence (up to 25 words, one sentence), or a typo fix of a short text (up to 60 words,
+ * two sentences, one paragraph). Undefined for anything else, including anything that names a document, a file,
+ * code, or carries more than that.
+ */
+export function quickAsk(text: string): QuickAsk | undefined {
+  const raw = (text ?? '').trim()
+  if (!raw || raw.length > 600) return undefined
+  const t = raw.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, ' ')
+  if (raw.length <= 120 && (ARITH.test(t) || PERCENT.test(t))) return 'sum'
+  if (raw.length <= 120 && CONVERT.some((re) => re.test(t))) return 'conversion'
+  if (!/\n/.test(raw.trim())) {
+    for (const re of TRANSLATE) {
+      const m = t.match(re)
+      if (!m) continue
+      const p = unquote(m[1])
+      if (!p.text || countWords(p.text) > 25 || sentences(p.text) > 1 || CODEY.test(p.text) || BARE_REF.test(p.text)) return undefined
+      if (!p.quoted && NOT_LITERAL.test(p.text)) return undefined
+      return 'translation'
+    }
+  }
+  const typo = t.match(TYPO)
+  if (typo) {
+    const p = unquote(typo[1])
+    if (!p.text || /\n\s*\n/.test(raw) || countWords(p.text) > 60 || sentences(p.text) > 2 || CODEY.test(p.text) || BARE_REF.test(p.text)) return undefined
+    return 'typo-fix'
+  }
+  return undefined
+}
+
 /** Role prior: what the bot's instructions say it does (a vague request inherits it). */
 function roleCategory(role?: string): TaskCategory | undefined {
   if (!role) return undefined
@@ -425,7 +498,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     }
     if (ctx.deepResearch) return { category: 'research', rule: 'deep-research', why: 'Deep Research' }
     if (!raw || /^[^\p{L}\p{N}]*$/u.test(raw) || (words === 1 && raw.length <= 2)) return { category: images ? 'vision' : 'chat', rule: images ? 'vision' : 'empty', why: images ? 'looks at an image' : 'nothing to do yet' }
-    if ((has(GREETING, t) && words <= 4) || /^(please )?just say (hi|hello)\b/.test(t) || /^tell me a joke\b/.test(t)) return { category: 'chat', rule: 'small-talk', why: 'small talk' }
+    if ((has(GREETING, t) && words <= 4) || (words <= 12 && has(THANKS_ONLY, t)) || /^(please )?just say (hi|hello)\b/.test(t) || /^tell me a joke\b/.test(t)) return { category: 'chat', rule: 'small-talk', why: 'small talk' }
     if (has(INCIDENT, t) && has(/\b(deploy\w*|site|server|app|api|production)\b/, t)) return { category: 'coding', rule: 'incident', why: 'a production incident' }
     if (!question && has(URL_OPEN, t)) return { category: 'computer-use', rule: 'computer-use:url', why: 'opens a page' }
     if (!question && has(COMPUTER, t) && !(has(CODE_STRONG, t) && !/\b(safari|chrome|browser|screen|click)\b/.test(t))) return { category: 'computer-use', rule: 'computer-use', why: 'uses the screen' }
@@ -543,6 +616,14 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
   if ((category === 'coding' || category === 'computer-use' || category === 'long-context') && difficulty < 2) difficulty = 2
   // The request's shape: several asks, constraints, specifics or a lot to read make it harder than its words suggest.
   if (shaped && shape.tier > difficulty) { difficulty = Math.min(3, difficulty + (shape.tier - difficulty >= 2 ? 2 : 1)) as Tier; why = `${why} · ${shape.asks > 1 ? `${shape.asks} asks` : 'a lot asked'}` }
+  // An obviously quick ask (quickAsk: a sum, a conversion, a translation of a sentence, a typo fix): light work
+  // whatever the words in its material say ("I'll be late tomorrow" is not live news). Only in a fresh chat or
+  // math request with nothing attached, no level asked for in words, never voice, a follow-up or a mode.
+  const quickKind = !ctx.voice && !files && !folders && !images && !ctx.heavy && !ctx.team && !ctx.deepResearch && !ctx.planFirst && !ctx.council &&
+    (category === 'chat' || category === 'math' || category === 'writing') && !['follow-up', 'follow-up:new'].includes(pick.rule) && !has(EXPLICIT_MAX, t) && !has(EXPLICIT_HIGH, t)
+    ? quickAsk(raw) : undefined
+  if (quickKind && difficulty > 1) difficulty = 1
+  if (quickKind) why = `${why} · a quick ${quickKind.replace('-', ' ')}`
 
   // ---- chat or agent (the kind rubric)
   const kind = ((): { kind: TaskKind; why: string } => {
@@ -571,7 +652,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
   const explicit: Effort | undefined = has(EXPLICIT_MAX, t) ? 'max' : has(EXPLICIT_HIGH, t) ? 'high' : undefined
   const deliverable = kind.kind === 'agent' && (category === 'coding' || category === 'office' || category === 'cad' || officeDeliverable)
   const toolDepth = kind.kind === 'chat' ? (has(LIVE, t) || category === 'research' ? 1 : 0) : multi || folders || difficulty >= 3 ? 3 : 2
-  const signals: TaskSignals = { stakes, deliverable, longOutput, toolDepth, ...(explicit ? { explicit } : {}), followUp: pick.rule === 'follow-up', ...(study ? { study } : {}) }
+  const signals: TaskSignals = { stakes, deliverable, longOutput, toolDepth, ...(explicit ? { explicit } : {}), followUp: pick.rule === 'follow-up', ...(study ? { study } : {}), ...(quickKind ? { quick: quickKind } : {}) }
   let effort = pick.rule === 'follow-up' && ctx.previousEffort && !ctx.voice
     ? ctx.previousEffort
     : autoEffort({ category, difficulty, voice: !!ctx.voice, heavy: !!ctx.heavy, council: !!ctx.council, task: kind.kind === 'agent' && difficulty >= 2, stakes: stakes && category !== 'chat' ? true : stakes && difficulty >= 3, deliverable, longOutput, toolDepth: category === 'chat' ? 0 : toolDepth, explicit })

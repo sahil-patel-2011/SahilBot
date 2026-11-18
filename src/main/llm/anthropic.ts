@@ -6,6 +6,8 @@ import { retryAfterFrom } from './retry'
 import { priceFor } from './budget'
 import { CACHE_WRITE_1H_FACTOR, CACHE_WRITE_FACTOR, cacheReadFactor, claudeInfo, claudeThinking } from './claude-models'
 import { nativePlan, serverFindings, serverToolUsd, type NativePlan } from './claude-native'
+import { FETCH_MAX_USES, SEARCH_MAX_USES } from './claude-native/server'
+import { RequestGuard, capError, requestLimits } from './request-guard'
 import { fastSupport } from './fast-mode'
 
 export { forClaude } from './claude-native'
@@ -322,6 +324,18 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
   const baseMessages = params.messages as Param[]
   /** Fast mode was asked for (the reply's usage.speed says whether it ran; a 429 / 529 falls back to standard). */
   const askedFast = !!params.speed
+  // Idle and wall-clock limits for the whole request, continuations included (request-guard.ts).
+  const guard = new RequestGuard(req.signal)
+  const hasServerTools = ((params.tools as Array<{ type?: string }> | undefined) ?? []).some((t) => /^web_(search|fetch)_/.test(String(t.type ?? '')))
+  try {
+    yield* claudeAttempts(req, params, plan, baseMessages, askedFast, guard, hasServerTools)
+  } finally {
+    guard.done()
+  }
+}
+
+async function* claudeAttempts(req: ChatRequest, params: ReturnType<typeof buildClaudeRequest>['params'], plan: NativePlan, baseMessages: Param[], askedFast: boolean, guard: RequestGuard, hasServerTools: boolean): AsyncGenerator<StreamPart> {
+  const who = req.model
 
   for (let attempt = 0; ; attempt++) {
     let streamed = false
@@ -332,6 +346,9 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
     let output = 0
     let prompt = 0
     let searches = 0
+    let fetches = 0
+    /** The turn stopped before the server finished it (its search budget or the clock): said in the reply. */
+    let capped: 'searches' | 'time' | undefined
     let cachedRead = 0
     let cacheWrite = 0
     let speed: string | undefined
@@ -341,9 +358,10 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
         const messages = content.length ? [...baseMessages, { role: 'assistant' as const, content: content as unknown as Block[] }] : baseMessages
         // The SDK's own retries are off here: streamChat retries transient failures (with a reset when
         // something already streamed), so a failure is never retried twice over.
-        const stream = (await client(req.apiKey)).beta.messages.stream({ ...params, messages } as unknown as Anthropic.Beta.Messages.MessageCreateParamsStreaming, { signal: req.signal, maxRetries: 0 })
+        const stream = (await client(req.apiKey!)).beta.messages.stream({ ...params, messages } as unknown as Anthropic.Beta.Messages.MessageCreateParamsStreaming, { signal: guard.signal, maxRetries: 0 })
         stream.on('text', () => undefined)
         for await (const ev of stream) {
+          guard.touch()
           if (ev.type === 'content_block_start') {
             const name = pendingName(plan, ev.content_block as { type: string; name?: string; toolset_name?: string })
             if (name) yield { type: 'tool_pending', name }
@@ -357,6 +375,7 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
         content = [...content, ...final.content]
         const f = serverFindings(final.content, final.usage as Usage)
         searches += f.searches
+        fetches += f.fetches
         const b = billedUsage(final.model ?? req.model, final.usage as Usage)
         input += b.input
         output += b.output
@@ -368,8 +387,15 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
         // usage.speed: "fast" or "standard" (fast mode page "Checking which speed was used").
         speed = (u as { speed?: string }).speed ?? speed
         if (final.stop_reason !== 'pause_turn' || cont >= MAX_CONTINUATIONS || req.signal?.aborted) break
+        // A paused server-tool turn goes on only within the turn's budget: another continuation may use up to its
+        // max_uses again (the tools stay as they are: changing them would rewrite the cached prompt), and not when
+        // most of the request's time is gone. Otherwise the turn ends here with what it found.
+        if (searches + SEARCH_MAX_USES > requestLimits.turnSearches || fetches + FETCH_MAX_USES > requestLimits.turnFetches) { capped = 'searches'; break }
+        if (guard.nearWall()) { capped = 'time'; break }
       }
     } catch (e) {
+      // A limit stopped it (request-guard.ts): a clear message, never retried (the same request would run as long).
+      if (guard.stopped) throw capError(guard.stopped, { who: `${who}${hasServerTools ? ' (with web search)' : ''}`, searches })
       // A tool input that couldn't be parsed at all: re-issue the turn (at most twice). API errors propagate, readably.
       if (e instanceof Anthropic.APIError) {
         const body = e.error as { error?: { message?: string; type?: string }; type?: string } | undefined
@@ -398,6 +424,13 @@ export async function* streamAnthropic(req: ChatRequest): AsyncGenerator<StreamP
       continue
     }
     if (!final) throw new Error('Claude returned no message.')
+    // Ended at a pause by the turn's budget: the reply says so (a server tool call still waiting for its result is
+    // dropped, so the stored turn replays cleanly).
+    if (capped && final.stop_reason === 'pause_turn') {
+      content = droppedWhenCut(content as Array<{ type?: string; id?: string; tool_use_id?: string }>) as typeof content
+      yield { type: 'content', text: capped === 'searches' ? `\n\n_(Stopped searching here: this reply used ${searches} web searches${fetches ? ` and ${fetches} page reads` : ''}, its limit for one reply. Say "continue" to keep researching.)_` : '\n\n_(Stopped here: this reply ran close to its time limit. Say "continue" to pick up from here.)_' }
+      final = { ...final, stop_reason: 'end_turn' }
+    }
     const served = final.model ?? req.model
 
     // Billing-equivalent input: cache writes 1.25x (1h: 2x), reads 0.1x (0.05x Opus 5.5, 0.025x Fable 5.1),

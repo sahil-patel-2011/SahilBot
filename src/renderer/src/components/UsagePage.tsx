@@ -99,7 +99,7 @@ export function UsagePage() {
         <div className="set-label">This month</div>
         <div className="set-card ud-month">
           <SpendBar spent={d.limit.spent} cap={d.limit.cap} mode={d.limit.mode} testId="usage-spend" />
-          <div className="ud-note">{d.limit.mode === 'amount' ? 'Requests that could go past the monthly limit are refused before anything is sent.' : d.limit.mode === 'unlimited' ? 'No monthly limit is set.' : 'Pay-per-use API spending is off: only your ChatGPT plan and local models run.'} Change it in General.</div>
+          <div className="ud-note">{d.limit.mode === 'amount' ? 'Requests that could go past the monthly limit are refused before anything is sent.' : d.limit.mode === 'unlimited' ? 'No monthly limit is set.' : 'Pay-per-use API spending is off: only your ChatGPT plan and local models run.'} Change it in Models &amp; Keys.</div>
         </div>
       </section>
 

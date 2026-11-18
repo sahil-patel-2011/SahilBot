@@ -24,7 +24,7 @@ const TABS: Array<{ id: Tab; label: string; type?: VaultItemType }> = [
   { id: 'notes', label: 'Notes', type: 'note' },
   { id: 'addresses', label: 'Addresses', type: 'address' },
   { id: 'security', label: 'Security' },
-  { id: 'activity', label: 'Activity' }
+  { id: 'activity', label: 'History' }
 ]
 const NOUN: Record<VaultItemType, string> = { login: 'login', card: 'card', identity: 'ID', note: 'secure note', address: 'address' }
 const ID_KINDS = [['passport', 'Passport'], ['driver_license', "Driver's license"], ['national_id', 'National ID'], ['other', 'Other']] as const

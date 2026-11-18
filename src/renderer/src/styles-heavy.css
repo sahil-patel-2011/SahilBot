@@ -189,3 +189,7 @@
 .max-why .sw-pill { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: var(--fs-2xs); color: var(--text-2); background: var(--tint); margin-left: 0; padding: 1px 8px; border-radius: var(--r-pill); }
 /* The Max entry in the Modes menu explains itself in full (two lines). */
 .modes-menu .menu-item[data-testid="max-toggle"] .sub { white-space: normal; display: block; overflow: visible; }
+
+/* A finished card drops its progress bar; the chevron still sits at the far right. */
+.heavy-card > .plan-head > svg:last-child { margin-left: auto; }
+.heavy-card > .plan-head > .plan-bar + svg:last-child { margin-left: 0; }

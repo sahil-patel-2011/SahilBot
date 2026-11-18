@@ -136,6 +136,7 @@ import { vaultTool } from './agent/tools/vault'
 import { apiRequestTool } from './agent/tools/api-request'
 import { chatHistoryTool } from './agent/tools/chat-history'
 import { VaultService } from './vault/service'
+import { workingMemoryPage } from './vault/working-memory'
 import { ContextEngine } from './context-engine/service'
 import { aboutTool } from './agent/tools/about'
 import { activityLearningAllowed, activityTimelineForLearning } from './activity'
@@ -790,6 +791,7 @@ app.whenReady().then(() => {
   // The knowledge vault (set up with the knowledge base below): each run's context gets its most relevant
   // notes, sized to the model's window (a cloud model's own window, else what fits on this Mac).
   const notesVaultRef: { current?: VaultService } = {}
+  const workingMemoryRef: { current?: ReturnType<typeof workingMemoryPage> } = {}
   const notesVaultWindow = (model?: string): number => {
     if (!model) return 32_768
     const m = endpoints.last?.models.find((x) => x.id === model)
@@ -888,9 +890,13 @@ app.whenReady().then(() => {
     // Any saved value that still shows up in a tool result or error is masked before the model reads it.
     redact: (text) => vault.redact(text),
     onUnattendedAsk: (threadId, info) => goalHooks.ask?.(threadId, info),
+    // A project's durable task memory is also a page in its vault area (vault/working-memory.ts), editable there.
+    workingMemoryPage: () => { const v = notesVaultRef.current; if (!v) return undefined; return (workingMemoryRef.current ??= workingMemoryPage(v, db)) },
     vaultContext: (o) => notesVaultRef.current?.context({ spaceId: o.spaceId, query: o.query, local: o.local, window: notesVaultWindow(o.model) }) ?? null,
     // One "About the user and their world" section: memories + vault notes + people/places cards (src/main/context-engine).
-    worldContext: (o) => worldRef.current?.context({ threadId: o.threadId, spaceId: o.spaceId, query: o.query, window: notesVaultWindow(o.model), local: o.local, memories: o.memories, vault: o.vault, openerId: o.openerId }) ?? null
+    worldContext: (o) => worldRef.current?.context({ threadId: o.threadId, spaceId: o.spaceId, query: o.query, window: notesVaultWindow(o.model), local: o.local, memories: o.memories, vault: o.vault, openerId: o.openerId }) ?? null,
+    // What the two above size their sections by: context prepared while Auto's brain reads is reused when it matches.
+    contextWindow: notesVaultWindow
   })
   chatRef.current = chat
   // Bot-to-bot handoffs need the agent itself (to start or steer the other bot's run).
@@ -1227,6 +1233,8 @@ app.whenReady().then(() => {
   handle('threads:react', (messageId: string, emoji: string | null) => {
     const m = db.react(messageId, 'user', emoji)
     emit({ threadId: m.threadId, type: 'message', message: m })
+    // A thumbs-down or thumbs-up on an Auto answer teaches Auto about that model on that kind of task (outcome-router.ts).
+    chat.feedback(messageId, emoji)
     return m
   })
 

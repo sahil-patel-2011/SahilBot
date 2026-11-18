@@ -312,11 +312,57 @@ export async function askBrain(o: { messageId: string; input: BrainInput; model:
   return { answer: got ?? undefined, ms: Date.now() - start, cached: false }
 }
 
+/** The quick, cheap models (the instant row's slots): what an obviously quick ask should land on. */
+export const QUICK_SLOTS: ReadonlySet<Slot> = new Set<Slot>(['luna', 'haiku', 'terra'])
+export const isQuickModel = (m: ModelInfo | undefined): boolean => !!m && (QUICK_SLOTS.has(slotOf(m) as Slot) || (!isCloud(m) && m.tier <= 1))
+
 /**
- * No read needed: a few words of small talk, or a short "yes, do it" / "continue" that carries on the request
- * before it (the chat keeps its model and level). Nothing attached either way.
+ * No read needed (the rules' pick stands):
+ *   - voice (replies must start at once);
+ *   - small talk the rules read with confidence ("thanks so much, that was really helpful!", "hi", "tell me a
+ *     joke"), or any confident instant request of a few words;
+ *   - a short "yes, do it" / "continue" that carries on the request before it (the chat keeps its model and level);
+ *   - an obviously quick ask (task-classifier.ts quickAsk: a sum, a unit conversion, a sentence to translate, a
+ *     typo fix) when the rules already route it to a quick model (`quickPick`): the read could only confirm it.
+ * Never with something attached.
  */
-export const skipBrain = (text: string, d: Pick<TaskClass, 'difficulty' | 'category' | 'confident'> & { rule?: string }, attachments: number): boolean => {
+export const skipBrain = (text: string, d: Pick<TaskClass, 'difficulty' | 'category' | 'confident'> & { rule?: string; signals?: Pick<TaskClass['signals'], 'quick' | 'explicit'> }, attachments: number, o: { quickPick?: boolean } = {}): boolean => {
   const words = text.trim().split(/\s+/).length
-  return d.category === 'voice' || (attachments === 0 && ((d.confident && d.difficulty === 0 && words <= 4) || (d.rule === 'follow-up' && words <= 5)))
+  if (d.category === 'voice') return true
+  if (attachments !== 0) return false
+  if (d.confident && d.difficulty === 0 && (words <= 4 || d.rule === 'small-talk' || d.rule === 'empty')) return true
+  if (d.rule === 'follow-up' && words <= 5) return true
+  return !!d.signals?.quick && !d.signals.explicit && d.difficulty <= 1 && !!o.quickPick
+}
+
+/** How much a model costs to run, in one word, for the "Why this model" line. */
+export type CostClass = 'quick' | 'standard' | 'premium'
+const PREMIUM_SLOTS: ReadonlySet<Slot> = new Set<Slot>(['fable', 'opus', 'astra'])
+export function costClass(m: ModelInfo | undefined): CostClass {
+  if (!m) return 'standard'
+  const slot = slotOf(m) as Slot | undefined
+  if (slot) return QUICK_SLOTS.has(slot) ? 'quick' : PREMIUM_SLOTS.has(slot) ? 'premium' : 'standard'
+  if (!isCloud(m)) return 'quick'
+  const c = cost(m)
+  return c <= 1 ? 'quick' : c >= 7 ? 'premium' : 'standard'
+}
+
+/** Who worked with the run's model on this request (Routed.team in agent/loop.ts). */
+export interface TeamIds { planner?: string; reviewer?: string; fanout?: { n: number; helper: string }; debate?: boolean; partner?: string }
+
+/**
+ * The "Why this model" line shown on the model chip's hover: why Auto picked it (the brain's read, or the rule
+ * that decided), who it teamed up with, and what it costs to run (quick / standard / premium). Short: one line.
+ */
+export function explainPick(o: { model?: ModelInfo; reason: string; team?: TeamIds; labelOf: (id: string) => string }): string {
+  const t = o.team
+  const parts = t ? [
+    t.partner ? `with ${o.labelOf(t.partner)}` : '',
+    t.planner ? `${o.labelOf(t.planner)} plans` : '',
+    t.reviewer ? `${o.labelOf(t.reviewer)} reviews` : '',
+    t.fanout ? `${t.fanout.n} helpers on ${o.labelOf(t.fanout.helper)}` : '',
+    t.debate ? 'several models reason it out together' : ''
+  ].filter(Boolean) : []
+  const reason = o.reason.replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '').slice(0, 140)
+  return `Why this model: ${reason || 'the best fit Auto could find'}${parts.length ? ` · teamed up: ${parts.join(', ')}` : ''} · cost: ${costClass(o.model)}`
 }

@@ -50,7 +50,8 @@ describe('bot swarms, council and ask_bot', () => {
     expect(await card.locator('[data-testid="swarm-count"]').innerText()).toMatch(/10 of 10 helpers · 20 ideas/)
     // Credits from the compiled answer.
     expect(await card.locator('[data-testid="swarm-credit"]').count()).toBe(3)
-    expect(await card.locator('[data-testid="swarm-compiled"]').innerText()).toMatch(/H2×1/)
+    // Inside the Max card the credits show once, on its result (not again on the swarm's compile).
+    await expect.poll(() => max.locator('[data-testid="max-credits"]').innerText(), { timeout: 15_000 }).toMatch(/H2×1/)
     // Ten distinct briefs went out; every result reached the compile.
     const helpers = llm.requests.filter((r) => sys(r).includes('# You are a temporary swarm helper'))
     expect(new Set(helpers.map((r) => /## Your angle[^\n]*\n(.+)/.exec(lastUser(r))?.[1])).size).toBe(10)

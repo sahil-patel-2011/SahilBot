@@ -4,6 +4,7 @@ import { retryAfterFrom } from './retry'
 import { openaiCompactAt, openaiEffort, openaiInfo, quickestEffort, openaiMaxTokens, openaiWindow, usesResponses, writeFactors, type ContextStrategy } from './openai-models'
 import { claudeWindow } from './claude-models'
 import { fastSupport } from './fast-mode'
+import { RequestGuard, capError, requestLimits } from './request-guard'
 
 // OpenAI over the Responses API (POST /v1/responses), for every OpenAI-hosted model that uses it
 // (openai-models.ts). Request and event shapes follow OpenAI's reference and guides, read 2026-11-15:
@@ -412,6 +413,20 @@ const EVENT_STATUS: Record<string, number> = { rate_limit_exceeded: 429, server_
 
 export async function* streamResponses(req: ChatRequest): AsyncGenerator<StreamPart> {
   if (!req.apiKey) throw new Error('Add your OpenAI API key in Settings → Models to use GPT models.')
+  // Idle and wall-clock limits for the whole request, and a cap on built-in tool calls when the account won't
+  // take max_tool_calls (request-guard.ts).
+  const guard = new RequestGuard(req.signal)
+  try {
+    yield* responsesAttempt(req, guard)
+  } catch (e) {
+    if (guard.stopped) throw capError(guard.stopped, { who: `${req.model} (with web search)`, searches: guard.serverCalls, limit: requestLimits.openaiServerCalls })
+    throw e
+  } finally {
+    guard.done()
+  }
+}
+
+async function* responsesAttempt(req: ChatRequest, guard: RequestGuard): AsyncGenerator<StreamPart> {
   const drop = dropped.get(req.model) ?? new Set<Optional>()
   let res: Response
   let built: ReturnType<typeof buildResponsesRequest>
@@ -421,7 +436,7 @@ export async function* streamResponses(req: ChatRequest): AsyncGenerator<StreamP
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${req.apiKey}` },
       body: JSON.stringify(built.body),
-      signal: req.signal
+      signal: guard.signal
     })
     if (res.ok && res.body) break
     const text = await res.text().catch(() => '')
@@ -438,12 +453,19 @@ export async function* streamResponses(req: ChatRequest): AsyncGenerator<StreamP
   let lastTextItem: unknown
   let lastSummary: string | undefined
   let reasoned = false
+  // Built-in tool calls so far: past the cap (only reachable when max_tool_calls was dropped), the request stops.
+  const capCalls = built.body.max_tool_calls ? Infinity : requestLimits.openaiServerCalls
+  guard.serverCalls = 0
   for await (const ev of sse(res.body!)) {
+    guard.touch()
     const type = ev.type as string | undefined
     if (type === 'response.output_item.added') {
       const it = ev.item as Item | undefined
       if (it?.type === 'function_call' && typeof it.name === 'string') yield { type: 'tool_pending', name: it.name }
-      else if (it?.type === 'web_search_call') yield { type: 'tool_pending', name: 'web_search' }
+      else if (it?.type === 'web_search_call') {
+        if (++guard.serverCalls > capCalls) { guard.trip('searches'); throw capError('searches', { who: `${req.model} (with web search)`, searches: guard.serverCalls, limit: capCalls }) }
+        yield { type: 'tool_pending', name: 'web_search' }
+      }
     } else if (type === 'response.output_text.delta' || type === 'response.refusal.delta') {
       const delta = String(ev.delta ?? '')
       if (!delta) continue
@@ -477,7 +499,8 @@ export async function* streamResponses(req: ChatRequest): AsyncGenerator<StreamP
       throw openaiError(status, { message: String(e.message ?? 'OpenAI stream error'), code, param: (e.param as string | null) ?? null }, undefined, req.model)
     }
   }
-  // The stream ended without a final event: the connection dropped. Worth another try.
+  // The stream ended without a final event: the connection dropped (or a limit stopped it). Worth another try.
+  if (guard.stopped) throw capError(guard.stopped, { who: `${req.model} (with web search)`, searches: guard.serverCalls, limit: requestLimits.openaiServerCalls })
   if (!final) throw Object.assign(new Error('The connection to OpenAI closed before the reply finished.'), { network: true })
 
   const output = (final.output ?? []).filter((it): it is Item => !!it && typeof it === 'object')

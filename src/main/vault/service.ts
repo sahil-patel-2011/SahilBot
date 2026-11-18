@@ -179,7 +179,8 @@ export class VaultService {
       if (!this.botEnabled(o.spaceId) || !o.query.trim()) return null
       const level = this.levelFor(o.spaceId)
       // Activity digests (other apps' window titles) never go to a cloud model from here.
-      const skip = o.local === false ? (n: VaultNoteMeta): boolean => n.tags.includes('sahilbot/activity') : undefined
+      // A project's working memory page is in the run's context already (its core) and recalled step by step.
+      const skip = (n: VaultNoteMeta): boolean => n.tags.includes('sahilbot/working-memory') || (o.local === false && n.tags.includes('sahilbot/activity'))
       const picked = retrieve(this.store, { query: o.query.slice(0, 4000), sections: this.sectionsFor(o.spaceId), window: o.window, level, keyword: this.keywordFor(), skip })
       const lines = vaultLines(picked, vaultBudget(o.window, level))
       return lines.length ? { title: VAULT_TITLE, lines } : null

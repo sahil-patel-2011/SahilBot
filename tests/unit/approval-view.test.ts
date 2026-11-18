@@ -43,7 +43,7 @@ describe('plain sidebar rows and quick paths', () => {
     const b = { kind: 'bot' as const, members: [] as string[] }
     expect(rowSubtitle({ ...b, lastPreview: 'Q3 spend was $12,400, mostly ads.' })).toBe('Q3 spend was $12,400, mostly ads.')
     expect(rowSubtitle({ ...b, lastPreview: 'local', label: 'Research helper' })).toBe('Research helper')
-    expect(rowSubtitle({ ...b })).toBe('New: click to start')
+    expect(rowSubtitle({ ...b })).toBe('No messages yet')
     expect(rowSubtitle({ ...b, lastPreview: 'local', lastAt: Date.now() - 2 * 3_600_000 })).toBe('Active 2h ago')
     expect(rowSubtitle({ kind: 'group', members: ['a', 'b'] })).toBe('2 bots')
   })

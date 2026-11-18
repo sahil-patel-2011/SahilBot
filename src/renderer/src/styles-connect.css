@@ -176,3 +176,12 @@
 .modal.ca .conn-form { margin-top: 16px; padding: 18px 20px; border-radius: 16px; background: var(--bubble-ai); }
 .modal.ca .conn-form h3 { margin: 0 0 6px; font-size: 15px; font-weight: 650; color: var(--text); text-transform: none; letter-spacing: 0; }
 .modal.ca .conn-form .field input { background: var(--panel); }
+
+/* Connect Google and API-key panels: one column (heading, then its controls), buttons at their own width. */
+.modal.ca .conn-form:is(.ca-key, .ca-google) .field { grid-template-columns: 1fr; gap: 8px; margin: 0 0 18px; }
+.modal.ca .conn-form:is(.ca-key, .ca-google) .field:last-of-type { margin-bottom: 10px; }
+.modal.ca .conn-form:is(.ca-key, .ca-google) .field > label { font-size: var(--fs-sm, 13px); font-weight: 600; color: var(--text); }
+.modal.ca .conn-form:is(.ca-key, .ca-google) .field > :is(.btn, .link-btn) { justify-self: start; }
+.modal.ca .conn-form:is(.ca-key, .ca-google) .field > .hint { margin: 0; }
+.modal.ca .conn-form.ca-key .modal-actions { margin-top: 4px; }
+.modal.ca .conn-form.ca-key > .ca-lede { margin: 0 0 14px; }

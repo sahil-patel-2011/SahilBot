@@ -385,7 +385,7 @@ function ChangesView({ onOpen }: { onOpen: (path: string) => void }) {
 
 // ------------------------------------------------------------------ settings pieces
 
-const LEVELS: Array<{ v: VaultLevel; label: string }> = [{ v: 'normal', label: 'Normal' }, { v: 'aggressive', label: 'Aggressive' }]
+const LEVELS: Array<{ v: VaultLevel; label: string }> = [{ v: 'normal', label: 'Normal' }, { v: 'aggressive', label: 'More' }]
 
 function openVault(path?: string): void {
   window.dispatchEvent(new CustomEvent('sahilbot:open-vault', { detail: { path: path ?? null } }))
@@ -419,7 +419,7 @@ export function VaultSettings() {
         <div className="set-row">
           <div className="set-row-text">
             <div className="set-row-title">How much to remember</div>
-            <ClampText>Aggressive compiles every finished chat and gives bots more notes (most with big cloud models). Normal is lighter. Each bot can have its own in its details panel.</ClampText>
+            <ClampText>More saves notes from every finished chat and gives bots more of them (best with big cloud models). Normal is lighter. Each bot can have its own in its details panel.</ClampText>
           </div>
           <div className="set-row-ctl">
             <div className="vault-seg" role="radiogroup" aria-label="How much to remember">

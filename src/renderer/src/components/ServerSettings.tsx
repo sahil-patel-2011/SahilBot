@@ -143,7 +143,7 @@ export function AlwaysOnServerPage() {
   return (
     <div data-testid="always-on-settings">
       <h2>Always-on server</h2>
-      <Section title="SahilBot Server" sub="Run your bots around the clock on a Raspberry Pi 5, a small VM or a Mac mini, and reach them from this Mac or your phone, even while traveling. Setup takes about five minutes: see docs/server.md.">
+      <Section title="SahilBot Server" sub="Run your bots around the clock on a Raspberry Pi 5, a small VM or a Mac mini, and reach them from this Mac or your phone, even while traveling. Setting one up takes about five minutes.">
         {st?.linked ? <>
           <Row title={st.url} sub={st.online === false ? `Can’t reach it right now${st.error ? `: ${st.error}` : ''}.` : st.info ? `Online · SahilBot ${st.info.version} on ${st.info.platform} ${st.info.arch} · up ${uptime(st.info.uptime)} · ${st.info.bots} bots, ${st.info.routines} routines · ${st.info.running} running${st.info.queued ? `, ${st.info.queued} waiting` : ''} · ${st.info.rssMB} MB` : 'Checking…'} testId="remote-status">
             <span className={`conn ${st.online === false ? 'bad' : 'ok'}`}>{st.online === false ? 'Offline' : 'Linked'}</span>
@@ -217,7 +217,7 @@ export function PhoneAccessSection() {
   const listening = st.addresses.filter((a) => a.listening)
   const where = listening.length ? listening.map((a) => `${a.kind === 'lan' ? 'home Wi-Fi' : 'Tailscale'} (${a.ip})`).join(' and ') : ''
   const line = !st.enabled ? 'Check on bots, answer questions and approvals, and chat from your phone. It connects straight to this Mac: no account, no cloud relay.'
-    : st.error ? st.error : st.running ? ['On', where, `port ${st.port}`].filter(Boolean).join(' · ') : 'Starting…'
+    : st.error ? st.error : st.running ? ['On', where].filter(Boolean).join(' · ') : 'Starting…'
   const p = st.pairing && st.pairing.expires > Date.now() ? st.pairing : undefined
   const phones = st.devices.filter((x) => !x.revokedAt)
   return (
@@ -225,7 +225,7 @@ export function PhoneAccessSection() {
       <div className="set-label">Phone access</div>
       <div className="set-card">
         <div className="set-row" data-testid="phone-access-row">
-          <div className="set-row-text"><div className="set-row-title">Use SahilBot from your phone</div><div className={`set-row-sub${st.enabled && st.error ? ' phone-err' : ''}`} data-testid="phone-access-status">{line}</div></div>
+          <div className="set-row-text"><div className="set-row-title">Use SahilBot from your phone</div><div className={`set-row-sub${st.enabled && st.error ? ' phone-err' : ''}`} data-testid="phone-access-status" title={st.running ? `Port ${st.port}` : undefined}>{line}</div></div>
           <div className="set-row-ctl"><Toggle on={st.enabled} disabled={busy} onChange={(v) => void run(() => phone.setEnabled(v))} label="Phone access" testId="phone-access-toggle" /></div>
         </div>
         {st.enabled && <>

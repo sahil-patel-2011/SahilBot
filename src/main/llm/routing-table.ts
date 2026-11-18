@@ -466,12 +466,16 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
     }
   }
 
-  const tier = study && task.difficulty >= 3 && !tight ? 2 : routeTier(task.category, task.difficulty, preference)
+  // An obviously quick ask (a sum, a conversion, a sentence to translate, a typo fix: task-classifier.ts quickAsk) goes
+  // to the instant row on Balanced and Cheapest: a quick model answers in seconds (live, 2026-11-17: Luna / Haiku).
+  // Best result keeps its one-tier lift.
+  const quick = asked !== 'best' && !!task.signals?.quick && task.difficulty <= 1
+  const tier = quick ? 0 : study && task.difficulty >= 3 && !tight ? 2 : routeTier(task.category, task.difficulty, preference)
   const cat = CATEGORY_LABEL[task.category]
   const result = (model: ModelInfo, source: RoutePick['source'], note?: string): RoutePick => ({
     model, category: task.category, difficulty: task.difficulty, tier, preference, source,
     label: `${name(model)} · ${cat}`,
-    why: [task.why, note, ...notes, study ? 'school work' : preference !== 'best' ? PREFERENCE_LABEL[preference].toLowerCase() : undefined, tight ? 'little of the monthly limit left' : undefined].filter(Boolean).join(' · ')
+    why: [task.why, note, ...notes, quick ? 'a quick model' : undefined, study ? 'school work' : preference !== 'best' ? PREFERENCE_LABEL[preference].toLowerCase() : undefined, tight ? 'little of the monthly limit left' : undefined].filter(Boolean).join(' · ')
   })
 
   const cloud = pool.filter(remote)
@@ -521,7 +525,7 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
   }
 
   // Balanced, close call: Best result's pick when it costs at most 2x and isn't much slower (closeCall).
-  if (preference === 'balanced' && !study && !o.noCloseCall && closeCall(task) && remote(fresh.model)) {
+  if (preference === 'balanced' && !study && !quick && !o.noCloseCall && closeCall(task) && remote(fresh.model)) {
     const best = routeTask(pool, task, { ...o, preference: 'best', budgetTight: false, previous: undefined, noCloseCall: true })
     const bs = best && remote(best.model) ? slotOf(best.model) : undefined
     const fs = slotOf(fresh.model)

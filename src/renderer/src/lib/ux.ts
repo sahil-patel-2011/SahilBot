@@ -18,7 +18,7 @@ export function rowSubtitle(s: Pick<Space, 'kind' | 'members' | 'lastPreview' | 
   if (preview.length >= 12 || preview.split(' ').length >= 3) return preview
   if (s.label?.trim()) return s.label.trim()
   if (s.kind === 'group') return `${s.members.length} bots`
-  if (!preview) return 'New: click to start'
+  if (!preview) return 'No messages yet'
   return s.lastAt ? `Active ${since(s.lastAt)}` : 'Open the chat'
 }
 
