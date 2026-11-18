@@ -9,6 +9,7 @@ import { autoMaxOf, crossProviderFor, progressOf, runSwarmTool, type AgentKit } 
 import type { SwarmArgs } from '../swarm/bot-swarm'
 import type { ToolOutput } from '../types'
 import { planMax, type MaxPlan } from './planner'
+import { withBusinessMethod } from './business-method'
 import { maxSessionFor, openMaxSession, type MaxSession } from './session'
 
 // The lead's max tool (tools/max.ts): one tool for many agents at once. The strategy is the lead's or the
@@ -107,9 +108,13 @@ export async function runMaxTool(kit: AgentKit, a: MaxArgs, host: MaxToolHost): 
   if (kit.thread.parentId) throw new Error('Helpers can\'t start Max. Do this part yourself.')
   if (a.action === 'refine') return runSwarmTool(kit, { ...a, action: 'refine' }, { callId: host.callId, budgetChars: host.budgetChars, max: true })
   const goal = (a.goal ?? '').trim()
-  const tasks = (a.tasks ?? []).filter((t) => t && typeof t.task === 'string' && t.task.trim())
+  let tasks = (a.tasks ?? []).filter((t) => t && typeof t.task === 'string' && t.task.trim())
   const forced = a.strategy && a.strategy !== 'auto' ? a.strategy : undefined
   const text = [goal, a.deliverable ?? '', ...tasks.map((t) => t.title)].join('\n')
+  // Business ideation or validation: every helper gets the skills' method (complaints, novelty check, scores).
+  const biz = withBusinessMethod([text, ...tasks.map((t) => t.task)].join('\n'), { context: a.context, tasks })
+  a = { ...a, context: biz.context }
+  tasks = biz.tasks ?? tasks
   const c = classifyTask(goal || text)
   let plan = planMax(text, { category: c.category, difficulty: c.difficulty, forced })
   // Auto with tasks given is a team; auto with items is a swarm of slices.

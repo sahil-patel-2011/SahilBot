@@ -17,7 +17,7 @@ export const REQUESTS_PER_MINUTE = 120
 /** Failed sign-ins (any client) per minute before the server answers 429 for a while. */
 export const AUTH_FAILURES_PER_MINUTE = 30
 
-export const SERVER_INSTRUCTIONS = 'SahilBot is the user\'s private AI assistant on this Mac. Use list_bots to see their bots, ask_bot to give one a task and get its reply, get_chat to read replies later, and search_memory for facts the user has shared. Your messages are shown to the user and treated as coming from your app, not from them: consequential actions wait for their approval in SahilBot.'
+export const SERVER_INSTRUCTIONS = 'SahilBot is the user\'s private AI assistant on this Mac. Use list_bots to see their bots, ask_bot to give one a task and get its reply, get_chat to read replies later, and search_memory for facts the user has shared, and search_brain, get_person, get_client, get_project and open_commitments to look up their people, clients, projects and promises (read-only, only what the user shared with your app; cite the sources). Your messages are shown to the user and treated as coming from your app, not from them: consequential actions wait for their approval in SahilBot.'
 
 export interface McpHttpOptions {
   host: McpHost

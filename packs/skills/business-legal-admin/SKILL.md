@@ -27,7 +27,7 @@ Trademark: protects brand names/logos; search USPTO (or national office) and the
 Privacy policy must match what you actually collect and share; laws include GDPR (EU/UK), state privacy laws (e.g. California CCPA/CPRA), COPPA for children, HIPAA for covered health entities. Terms of service: acceptable use, payments, refunds, liability limits. Cookie consent where required.
 
 ## Deliverables
-Checklists, comparison tables, plain-language summaries of a contract the user attaches (file_read), draft templates clearly marked "draft for attorney review".
+Checklists, comparison tables, plain-language summaries of a contract the user attaches (file_read), draft templates clearly marked "draft for attorney review". For "what did we agree with this client?", use business-contract-scope (cited clauses, signed doc vs later emails).
 
 ## Pitfalls
 Copying another company's terms; misclassifying workers as contractors; operating without required licenses; personal guarantees missed in leases and loans. When in doubt: consult a lawyer.

@@ -5,6 +5,7 @@ import { toast } from '../lib/toast'
 import { Toggle } from './Toggle'
 import { Segmented } from './ui'
 import '../styles-phone.css'
+import { TeamSection } from './TeamSettings'
 
 // Settings → Server (in a browser connected to SahilBot Server), Settings → Always-on server (Mac app),
 // Settings → General → Phone access (Mac app) and Settings → This phone (a phone using the Mac).
@@ -290,6 +291,7 @@ export function PhoneAccessSection() {
         </>}
       </div>
       {st.enabled && <div className="set-sub phone-foot">Purchases, one-time codes and saved passwords still need you here on the Mac. SahilBot needs to be open (it can run hidden in the menu bar) and the Mac awake.</div>}
+      {st.enabled && <TeamSection />}
     </section>
   )
 }

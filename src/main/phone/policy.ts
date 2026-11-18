@@ -22,6 +22,8 @@ const DENIED: Record<string, string> = {
   'notesVault:openInObsidian': 'Obsidian opens on your Mac.',
   'notesVault:reveal': 'Files are shown in Finder on your Mac.',
   'notesVault:exportZip': 'Exports are saved on your Mac.',
+  'notesVault:obsidianPick': 'Choose your Obsidian vault on your Mac.',
+  'notesVault:obsidianCopyExisting': 'Copy notes into your Obsidian vault on your Mac.',
   'bots:importPick': 'Import bots on your Mac.',
   'bots:export': 'Export bots on your Mac.',
   'chat:export': 'Export chats on your Mac.',
@@ -56,7 +58,9 @@ const DENIED_PREFIX: Array<[string, string]> = [
   ['mcp:', 'Apps that use SahilBot are managed on your Mac.'],
   ['remoteServer:', 'An always-on server is linked on your Mac.'],
   // The phone can't change who may connect, or turn Phone access off and lock itself out.
-  ['phoneAccess:', 'Phone access is managed on your Mac: Settings → General → Phone access.']
+  ['phoneAccess:', 'Phone access is managed on your Mac: Settings → General → Phone access.'],
+  // Who may ask the brain (teammates and their scopes) is decided only on the Mac.
+  ['team:', 'Your team is managed on your Mac: Settings → General → Phone access → Team.']
 ]
 
 /** What the app shell asks at startup about the Mac-only parts, answered for a phone without them (no Mac browser tabs). */
@@ -81,5 +85,5 @@ export function purchaseAnswerAllowed(answer: unknown): boolean {
 
 /** Events that only matter to the Mac's own window (its browser panel, voice, mini window, the vault dialog): not sent to phones. */
 export function phoneGetsEvent(event: string): boolean {
-  return !/^(browser:|voice:|quick:|vault:|phoneAccess:|mini$|attach:scan$|docs:flush$)/.test(event)
+  return !/^(browser:|voice:|quick:|vault:|phoneAccess:|team:|mini$|attach:scan$|docs:flush$)/.test(event)
 }

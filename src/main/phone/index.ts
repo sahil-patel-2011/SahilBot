@@ -27,6 +27,9 @@ import { HttpFront } from '../../server/http'
 import { Hub, type CallHook } from '../../server/hub'
 import { WebPush } from '../../server/push'
 import { loadTls, type TlsFiles } from '../../server/tls'
+import { TeamStore, type TeamMemberRecord } from '../../server/team'
+import type { TeamFront } from '../../server/http'
+import { cleanBrainScope, type BrainSourceRef, type TeamQuestion, type TeamStatus } from '@shared/brain-access'
 import { setDeviceNotifier } from '../notify'
 import { addAdapter, broadcast, registerHandler, type RpcContext } from '../rpc'
 import { bindPlan, detectTailscale, peerAllowed, phoneAddresses, type PhoneAddress, type TailscaleInfo } from './net'
@@ -58,6 +61,12 @@ export interface PhoneDeps {
   /** Hidden test runs: SAHILBOT_PHONE_* overrides apply (loopback, port, push sink). */
   hidden: boolean
   log?: (line: string) => void
+  /** Team access: a teammate's question answered within their scope (brain-access/team-ask.ts). */
+  teamAsk?: (member: TeamMemberRecord, question: string) => Promise<{ answer: string; chips: BrainSourceRef[]; status: TeamQuestion['status'] }>
+  /** The brain couldn't answer: ask the owner in Needs you. */
+  teamRoute?: (member: TeamMemberRecord, q: TeamQuestion) => Promise<void> | void
+  /** The owner's name, shown to teammates. */
+  ownerName?: () => string
 }
 
 /** The Mac's Bonjour name (scutil's LocalHostName), which phones on the same Wi-Fi resolve as name.local. */
@@ -107,6 +116,8 @@ export class PhoneAccess {
   private starting: Promise<void> | null = null
   private changeTimer: ReturnType<typeof setTimeout> | null = null
   private readonly limiter = new RateLimiter({ perKey: 5, total: 20, windowMs: 15 * 60_000 })
+  private teamStore: TeamStore | null = null
+  private invite: TeamStatus['invite'] | undefined
 
   constructor(private d: PhoneDeps) {
     this.dir = join(d.dataDir, 'phone-access')
@@ -223,7 +234,8 @@ export class PhoneAccess {
       devices: this.devices!, codes: this.codes!, limiter: this.limiter, audit: this.audit!, hub: this.hub!,
       policy: { allowHosts: [this.bonjour ? `${this.bonjour}.local` : '', this.ts.dnsName ?? ''].filter(Boolean) },
       peerAllowed,
-      status: () => ({ version: this.d.version, phones: this.devices!.active().length })
+      status: () => ({ version: this.d.version, phones: this.devices!.active().length }),
+      team: this.teamFront()
     })
     this.listening = []
     this.error = plan.length ? undefined : this.noNetwork()
@@ -306,6 +318,91 @@ export class PhoneAccess {
     }
   }
 
+  // ---------------------------------------------------------------- Team access (teammates ask the brain)
+
+  /** The teammate list (sealed with the same Keychain key as the devices). */
+  private team(): TeamStore {
+    if (!this.teamStore) {
+      mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+      this.teamStore = new TeamStore(this.dir, this.masterKey())
+    }
+    return this.teamStore
+  }
+
+  private teamFront(): TeamFront | undefined {
+    const ask = this.d.teamAsk
+    if (!ask) return undefined
+    return {
+      store: this.team(),
+      ask: (m, q) => ask(m, q),
+      route: (m, q) => this.d.teamRoute?.(m, q),
+      owner: () => (this.d.ownerName?.() ?? '').split(/\s+/)[0] || 'the owner',
+      onChange: () => this.changed()
+    }
+  }
+
+  /** The owner's answer to a routed question: it shows in the teammate's chat. */
+  teamOwnerAnswer(questionId: string, text: string): void {
+    const q = this.team().ownerAnswer(questionId, text)
+    if (q) this.audit?.write('team.ask', { device: `team:${q.memberId}`, detail: `${q.member}: answered by the owner` })
+    this.changed()
+  }
+
+  private teamInviteFor(member: TeamMemberRecord, code: string, expires: number): NonNullable<TeamStatus['invite']> {
+    if (!this.front || !this.tls) throw new Error('Turn on Phone access first: teammates reach this Mac the same way your phone does.')
+    const addrs = this.addresses()
+    const listening = new Set(this.listening)
+    const tsIp = addrs.find((a) => a.kind === 'tailscale' && listening.has(a.ip))?.ip
+    const lanIp = addrs.find((a) => a.kind === 'lan' && listening.has(a.ip))?.ip
+    const test = this.listening[0] === '127.0.0.1' ? '127.0.0.1' : undefined
+    const hostName = test ?? tsIp ?? (this.bonjour ? `${this.bonjour}.local` : lanIp)
+    if (!hostName) throw new Error(this.error ?? 'Phone access isn’t listening on any network right now.')
+    const url = pairingUrl(hostName, this.port, code, this.tls.fingerprint).replace('/pair#', '/team#')
+    return { member: this.team().info(member), code: formatCode(code), expires, url, qr: qrPath(makeQr(url)) }
+  }
+
+  teamStatus(): TeamStatus {
+    const available = !!this.front && this.listening.length > 0
+    if (this.invite && this.invite.expires < Date.now()) this.invite = undefined
+    let members: TeamStatus['members'] = []
+    let questions: TeamStatus['questions'] = []
+    try { const t = this.team(); members = t.members().filter((m) => !m.revokedAt).map((m) => t.info(m)); questions = t.questions({ limit: 100 }) } catch { /* Keychain locked */ }
+    return { available, ...(available ? {} : { why: 'Turn on Phone access above: teammates reach this Mac on your home Wi-Fi or Tailscale, like your phone.' }), members, questions, ...(this.invite ? { invite: this.invite } : {}) }
+  }
+
+  teamInvite(o: { name?: unknown; role?: unknown; scope?: unknown }): TeamStatus {
+    const r = this.team().invite({ name: o.name, role: o.role, scope: o.scope })
+    try { this.invite = this.teamInviteFor(r.member, r.code, r.expires) } catch (e) { this.invite = undefined; this.audit?.write('team.invite', { device: `team:${r.member.id}`, detail: `${r.member.name} (${r.member.role}), no link: ${(e as Error).message}` }); this.changed(); throw e }
+    this.audit?.write('team.invite', { device: `team:${r.member.id}`, detail: `${r.member.name} (${r.member.role})` })
+    this.changed()
+    return this.teamStatus()
+  }
+
+  teamReinvite(id: string): TeamStatus {
+    const m = this.team().get(id)
+    if (!m || m.revokedAt) throw new Error('That teammate was removed.')
+    const c = this.team().newCode(id)
+    this.invite = this.teamInviteFor(m, c.code, c.expires)
+    this.audit?.write('team.invite', { device: `team:${id}`, detail: `${m.name}: new code` })
+    this.changed()
+    return this.teamStatus()
+  }
+
+  teamSetScope(id: string, scope: unknown): TeamStatus {
+    const m = this.team().setScope(id, cleanBrainScope(scope, this.team().get(id)?.scope))
+    this.audit?.write('team.scope', { device: `team:${id}`, detail: `${m.name}: ${m.scope.sources.length} sources, ${m.scope.entities === 'shared' ? 'shared' : `${m.scope.entities.length}`} entities` })
+    this.changed()
+    return this.teamStatus()
+  }
+
+  teamRevoke(id: string): TeamStatus {
+    const m = this.team().get(id)
+    if (this.team().revoke(id)) this.audit?.write('team.revoke', { device: `team:${id}`, detail: m?.name })
+    if (this.invite?.member.id === id) this.invite = undefined
+    this.changed()
+    return this.teamStatus()
+  }
+
   // ---------------------------------------------------------------- pairing and devices
 
   private async tailscale(fresh = false): Promise<TailscaleInfo> {
@@ -382,7 +479,7 @@ export class PhoneAccess {
   /** Tells the Mac window (Settings) something changed; a burst of changes sends one event. */
   private changed(): void {
     if (this.changeTimer) return
-    this.changeTimer = setTimeout(() => { this.changeTimer = null; broadcast('phoneAccess:changed') }, 150)
+    this.changeTimer = setTimeout(() => { this.changeTimer = null; broadcast('phoneAccess:changed'); broadcast('team:changed') }, 150)
     this.changeTimer.unref?.()
   }
 
@@ -396,6 +493,11 @@ export class PhoneAccess {
     registerHandler('phoneAccess:revoke', (ctx, id) => { mac(ctx); return this.revoke(String(id ?? '')) })
     registerHandler('phoneAccess:rename', (ctx, id, name) => { mac(ctx); return this.rename(String(id ?? ''), String(name ?? '')) })
     registerHandler('phoneAccess:audit', (ctx, limit) => { mac(ctx); return this.auditLog(Number(limit) || 200) })
+    registerHandler('team:status', (ctx) => { mac(ctx); return this.teamStatus() })
+    registerHandler('team:invite', (ctx, o) => { mac(ctx); return this.teamInvite((o ?? {}) as Record<string, unknown>) })
+    registerHandler('team:reinvite', (ctx, id) => { mac(ctx); return this.teamReinvite(String(id ?? '')) })
+    registerHandler('team:setScope', (ctx, id, scope) => { mac(ctx); return this.teamSetScope(String(id ?? ''), scope) })
+    registerHandler('team:revoke', (ctx, id) => { mac(ctx); return this.teamRevoke(String(id ?? '')) })
   }
 }
 

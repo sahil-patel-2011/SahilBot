@@ -7,17 +7,20 @@ import { ConnectedIcons } from './ConnectedIcons'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { duplicateBot, importBot, shareBot } from './BotShare'
 import { Target, useGoalsNeedingYou } from './TasksView'
+import { BrainIcon } from './BrainView'
 import { openUsageGlance } from './UsagePage'
 import { money, useSpend } from './SpendingLimit'
 import { countLabel } from '@shared/read-state'
 import { rowSubtitle } from '../lib/ux'
 import { useDevMode } from '../lib/dev-mode'
 import { UpdateButton } from './UpdateButton'
+import { sidebarStatusText } from './FunctionBots'
+import { useBotStatus } from '../lib/bot-status'
 
 /** The profile menu's usage line: "Usage · $3.20 of $200 this month". */
 const spendLabel = (b: ReturnType<typeof useSpend>): string => !b ? 'Usage' : b.mode === 'amount' ? `Usage · ${money(b.spent)} of ${money(b.cap)} this month` : `Usage · ${money(b.spent)} this month`
 
-export type MainView = 'home' | 'projects' | 'files' | 'tasks'
+export type MainView = 'home' | 'projects' | 'files' | 'tasks' | 'brain'
 
 const Star = ({ size = 10 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2.8 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 16.8l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z" fill="currentColor" /></svg>
@@ -59,6 +62,7 @@ export function Sidebar(p: {
   needSpaces?: Set<string>
 }) {
   const dev = useDevMode()
+  const botStatus = useBotStatus()
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [dragging, setDragging] = useState<{ kind: 'space' | 'chat'; id: string } | null>(null)
@@ -257,7 +261,11 @@ export function Sidebar(p: {
           <span className="br-avatar">{avatar(s, 40)}</span>
           <span className="br-text">
             <span className={`br-name${runName(working(s), needs(s))}`}>{s.name}</span>
-            <span className="br-preview">{rowSubtitle(s)}</span>
+            {(() => {
+              // Working / Pulling context in place of the preview while it runs; nothing extra when Idle or Done.
+              const st = s.isMain || needs(s) ? null : sidebarStatusText(botStatus[s.id], !!s.unread)
+              return st ? <span className="br-preview br-status" data-testid={`sidebar-bot-status-${s.id}`}>{st}</span> : <span className="br-preview">{rowSubtitle(s)}</span>
+            })()}
           </span>
           {status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}
         </button>
@@ -317,6 +325,7 @@ export function Sidebar(p: {
           aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
           <I.Inbox size={17} />{goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
         </button>
+        <button className={`sb-circle${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="Your brain: what SahilBot knows from your connected accounts, and Agent mode" aria-label="Your brain" data-testid="nav-brain"><BrainIcon size={17} /></button>
         <button className="sb-circle" onClick={p.onNewBot} title="New bot: a teammate with its own job and chat" aria-label="New bot" data-testid="new-bot"><I.Plus size={18} /></button>
       </div>
 

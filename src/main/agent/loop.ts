@@ -676,7 +676,7 @@ export class Agent {
       // Auto's plan carries its size (a team of 4 for a medium report); the composer's Max keeps the wide minimum.
       const { min, max } = maxPlan.helpers ? { min: maxPlan.helpers, max: maxPlan.helpers + 2 } : this.teamSize(thread)
       const helpers = botMaxConfig(this.d.settings.get(), sp0?.id).maxHelpers
-      notes.push(maxNote(maxPlan, { teamMin: Math.min(min, helpers), teamMax: Math.min(max, helpers), maxHelpers: helpers, unattended: opts.unattended, budgetUsd: opts.unattended ? maxBudget({ settings: this.d.settings.get(), space: sp0 }) : undefined }))
+      notes.push(maxNote(maxPlan, { teamMin: Math.min(min, helpers), teamMax: Math.min(max, helpers), maxHelpers: helpers, unattended: opts.unattended, budgetUsd: opts.unattended ? maxBudget({ settings: this.d.settings.get(), space: sp0 }) : undefined, text: input.text }))
     } else if (mx.hint && !input.swarm) notes.push(mx.hint)
     if (input.team && !maxPlan) {
       const { min, max } = this.teamSize(thread)

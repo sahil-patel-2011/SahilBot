@@ -316,6 +316,9 @@ const api: SahilBotApi = {
     trash: call('notesVault:trash') as never, graph: call('notesVault:graph') as never, changes: call('notesVault:changes') as never,
     undo: call('notesVault:undo') as never, openInObsidian: call('notesVault:openInObsidian') as never, reveal: call('notesVault:reveal') as never,
     exportZip: call('notesVault:exportZip') as never, compileNow: call('notesVault:compileNow') as never,
+    obsidianDetect: call('notesVault:obsidianDetect') as never, obsidianPick: call('notesVault:obsidianPick') as never,
+    obsidianNotes: call('notesVault:obsidianNotes') as never, obsidianCopyExisting: call('notesVault:obsidianCopyExisting') as never,
+    obsidianRescan: call('notesVault:obsidianRescan') as never,
     onChanged(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('notesVault:changed', fn)
@@ -334,6 +337,18 @@ const api: SahilBotApi = {
       return () => { ipcRenderer.removeListener('people:changed', fn) }
     }
   },
+  // Your brain (src/main/brain): the Brain page, Agent mode's prompts, the brain's settings.
+  brain: {
+    status: call('brain:status') as never, setSettings: call('brain:setSettings') as never, refresh: call('brain:refresh') as never,
+    briefs: call('brain:briefs') as never, correct: call('brain:correct') as never, forget: call('brain:forget') as never, undo: call('brain:undo') as never,
+    backfill: call('brain:backfill') as never, forgetSource: call('brain:forgetSource') as never, openChip: call('brain:openChip') as never,
+    prompts: call('brain:prompts') as never,
+    onChanged(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('brain:changed', fn)
+      return () => { ipcRenderer.removeListener('brain:changed', fn) }
+    }
+  },
   // Settings → Memory → Learned.
   learning: {
     status: call('learning:status') as never, list: call('learning:list') as never, undo: call('learning:undo') as never,
@@ -346,7 +361,7 @@ const api: SahilBotApi = {
     }
   },
   templates: { list: call('templates:list') as never, add: call('templates:add') as never },
-  bots: { exportFile: call('bots:export') as never, importPick: call('bots:importPick') as never, importConfirm: call('bots:importConfirm') as never, duplicate: call('bots:duplicate') as never },
+  bots: { exportFile: call('bots:export') as never, importPick: call('bots:importPick') as never, importConfirm: call('bots:importConfirm') as never, duplicate: call('bots:duplicate') as never, status: call('bots:status') as never },
   // Always-on bots: the Needs-you inbox (questions and approvals across all bots) and each bot's autonomy level.
   needsYou: {
     list: call('needsYou:list') as never,
@@ -405,6 +420,7 @@ const api: SahilBotApi = {
   mcp: {
     status: call('mcp:status') as never, setEnabled: call('mcp:setEnabled') as never,
     createClient: call('mcp:createClient') as never, revokeClient: call('mcp:revokeClient') as never,
+    setScope: call('mcp:setScope') as never, brainNames: call('mcp:brainNames') as never,
     onChange(cb) {
       const fn = (): void => cb()
       ipcRenderer.on('mcp:changed', fn)
@@ -466,6 +482,16 @@ const api: SahilBotApi = {
       const fn = (): void => cb()
       ipcRenderer.on('phoneAccess:changed', fn)
       return () => ipcRenderer.removeListener('phoneAccess:changed', fn)
+    }
+  },
+  // Team access: teammates ask the owner's brain within the scope the owner set (src/server/team.ts).
+  team: {
+    status: call('team:status') as never, invite: call('team:invite') as never, reinvite: call('team:reinvite') as never,
+    setScope: call('team:setScope') as never, revoke: call('team:revoke') as never,
+    onChanged(cb) {
+      const fn = (): void => cb()
+      ipcRenderer.on('team:changed', fn)
+      return () => ipcRenderer.removeListener('team:changed', fn)
     }
   }
 }

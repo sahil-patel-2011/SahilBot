@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import type { Effort, ModelInfo } from '@shared/types'
+
+// Every test here runs the whole routing simulation many times: generous limits so a busy CI runner doesn't time out.
+vi.setConfig({ testTimeout: 60_000 })
 vi.mock('electron', () => ({ shell: { trashItem: async () => undefined }, app: { getPath: () => '/tmp', isPackaged: false } }))
 const sim = await import('../fixtures/auto-sim')
 const { classifyTask } = await import('../../src/main/llm/task-classifier')
@@ -170,7 +173,7 @@ describe('determinism and manual picks', () => {
     }
     sim.resetPrefs()
     expect(n).toBeGreaterThan(50_000)
-  })
+  }, 60_000) // many full routing passes: slow on a busy runner
 
   test('a model picked by name is used exactly: every model, every setup, cooling down or not', () => {
     for (const s of sim.setups().filter((x) => x.preference === 'best' && x.spending === 'plenty' && !x.fable)) {

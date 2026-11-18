@@ -10,6 +10,15 @@ import type { Db } from './db'
 /** The bot (and chat) a model request is made for, carried through the whole run. */
 export const usageScope = new AsyncLocalStorage<{ spaceId: string | null; threadId: string | null }>()
 
+/**
+ * Background jobs that aren't a bot's run record their requests under a reserved tag in the bot column, so
+ * Settings → Usage shows them on their own line: the brain's syncs (src/main/brain) are "Brain sync".
+ */
+export const BRAIN_USAGE_SCOPE = 'job:brain'
+const JOB_NAMES: Record<string, string> = { [BRAIN_USAGE_SCOPE]: 'Brain sync' }
+/** A usage row's line name for a job tag, or undefined for a bot (or none). */
+export const jobName = (spaceId: string | null | undefined): string | undefined => (spaceId ? JOB_NAMES[spaceId] : undefined)
+
 const DAY = 86_400_000
 
 /** Local midnight `days - 1` days before `now`: the first day of a `days`-long window ending today. */
@@ -69,10 +78,11 @@ export function aggregateUsage(rows: UsageRow[], spaces: Array<Pick<Space, 'id' 
     m.requests += r.requests; m.input += r.input; m.output += r.output; m.usd += r.usd
     byModel.set(`${r.where}:${r.model}`, m)
     const sp = r.spaceId ? spaces.find((s) => s.id === r.spaceId) : undefined
-    const key = r.spaceId && sp ? r.spaceId : r.spaceId ? 'deleted' : 'none'
+    const job = jobName(r.spaceId)
+    const key = r.spaceId && sp ? r.spaceId : job ? r.spaceId! : r.spaceId ? 'deleted' : 'none'
     const b = byBot.get(key) ?? {
       spaceId: sp ? sp.id : null,
-      name: sp ? sp.name : r.spaceId ? 'Deleted bots' : 'Not from a bot',
+      name: sp ? sp.name : job ?? (r.spaceId ? 'Deleted bots' : 'Not from a bot'),
       color: sp?.color ?? null,
       cloudRequests: 0, localRequests: 0, input: 0, output: 0, usd: 0
     }
@@ -224,9 +234,10 @@ export function usageDashboard(db: Db, o: DashboardOptions): import('@shared/typ
   const monthTotals = { usd: 0, requests: 0, tokens: 0 }
   const bot = (spaceId: string | null): import('@shared/types').UsageDashboard['byBot'][number] => {
     const sp = spaceId ? o.spaces.find((x) => x.id === spaceId) : undefined
-    const key = sp ? sp.id : spaceId ? 'deleted' : 'none'
+    const job = jobName(spaceId)
+    const key = sp ? sp.id : job ? spaceId! : spaceId ? 'deleted' : 'none'
     let b = byBot.get(key)
-    if (!b) { b = { spaceId: sp?.id ?? null, name: sp ? sp.name : spaceId ? 'Deleted bots' : 'Not from a bot', color: sp?.color ?? null, requests: 0, tokens: 0, usd: 0, share: 0 }; byBot.set(key, b) }
+    if (!b) { b = { spaceId: sp?.id ?? null, name: sp ? sp.name : job ?? (spaceId ? 'Deleted bots' : 'Not from a bot'), color: sp?.color ?? null, requests: 0, tokens: 0, usd: 0, share: 0 }; byBot.set(key, b) }
     return b
   }
   const add = (t: import('@shared/types').UsageTokens, x: { input: number; cached: number; cacheWrite: number; output: number; reasoning: number }, usd: number): void => {
@@ -323,7 +334,7 @@ export function usageDetailCsv(db: Db, spaceName: (id: string | null) => string)
     const x = rowTokens(r)
     const d = new Date(r.at)
     const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-    return [dayKey(r.at), time, spaceName(r.spaceId ?? null), PROVIDER_NAMES[providerOf(r.model, r.host, r.provider)] ?? 'Other', r.model, x.input, x.cached, x.cacheWrite, x.output, x.reasoning, r.tier ?? 'standard', r.webCalls ?? 0, Math.round(r.usd * 1e6) / 1e6].map(csvCell).join(',')
+    return [dayKey(r.at), time, jobName(r.spaceId) ?? spaceName(r.spaceId ?? null), PROVIDER_NAMES[providerOf(r.model, r.host, r.provider)] ?? 'Other', r.model, x.input, x.cached, x.cacheWrite, x.output, x.reasoning, r.tier ?? 'standard', r.webCalls ?? 0, Math.round(r.usd * 1e6) / 1e6].map(csvCell).join(',')
   })
   return [head.join(','), ...lines].join('\n') + '\n'
 }

@@ -120,3 +120,10 @@
   .vault { grid-template-columns: 1fr; }
   .vault-side { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
 }
+
+/* Use my Obsidian vault (Settings → Memory → Knowledge vault) */
+.vault-tag.obsidian { background: color-mix(in srgb, #7c3aed 14%, transparent); color: var(--text); }
+.vault-obs-choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.vault-obs-warn { margin-top: 8px; padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.45; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text); }
+.vault-obs-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+.vault-obs-exclude { width: 220px; min-height: 56px; resize: vertical; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }

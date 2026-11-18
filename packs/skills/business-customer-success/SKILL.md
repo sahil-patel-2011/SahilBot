@@ -24,7 +24,7 @@ Acknowledge feelings and the specific problem, apologize for the experience (wit
 - Renewals and expansion: start 90 days before renewal; business review showing value delivered (numbers).
 
 ## Feedback loop
-Monthly: top 5 ticket drivers, top feature requests with counts and revenue attached, churn reasons. Send to product owner. Close the loop with customers when things ship.
+Monthly: top 5 ticket drivers, top feature requests with counts and revenue attached, churn reasons. Send to product owner. Add what customers say in public (reviews, Reddit, app stores) with business-complaint-mining. Close the loop with customers when things ship.
 
 ## Metrics
 CSAT (% satisfied), NPS (promoters - detractors; use for trends, not as gospel), gross and net revenue retention, logo churn, time to first value, ticket volume per 100 customers.

@@ -96,6 +96,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'learned', page: 'memory', tab: 'learned', title: 'What SahilBot learned', words: 'learned undo approve dismiss skills lessons log' },
   { anchor: 'knowledge-vault', page: 'memory', tab: 'vault', title: 'Knowledge vault', words: 'vault obsidian notes markdown compile digest aggressive normal folder' },
   { anchor: 'people-places', page: 'memory', title: 'People & Places', words: 'people places contacts entities world context engine' },
+  { anchor: 'brain-settings', page: 'memory', tab: 'brain', title: 'Your brain and Agent mode', words: 'brain agent mode reaches out proactive prompts quiet hours daily brain budget sync refresh sources gmail calendar slack hubspot texts backfill draft without asking chatgpt plan pause' },
   { anchor: 'memory-enabled', page: 'memory', title: 'Use memory', words: 'memory off disable turn off', advanced: true },
   { anchor: 'learning-cloud', page: 'memory', title: 'Use cloud models for learning', words: 'cloud learning daily cap budget', keys: ['learning.cloudAllowed', 'learning.dailyUsd'], advanced: true },
 

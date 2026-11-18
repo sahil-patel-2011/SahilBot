@@ -14,6 +14,7 @@ import type { GoalPatch, MemoryItem } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 // Cloud first, local opt-in (shared/local-mode.ts); attached folders are counted and indexed (knowledge/folder-scan.ts).
 import { localOff, localOn } from '@shared/local-mode'
+import { botState, runPhase, runsOnLabel, type BotStatus, type BotStatusMap } from '@shared/bot-status'
 import { hasLocalModels } from './local-detect'
 import { scanFolder } from './knowledge/folder-scan'
 import { OpenAITtsEngine } from './voice/tts'
@@ -138,12 +139,18 @@ import { chatHistoryTool } from './agent/tools/chat-history'
 import { VaultService } from './vault/service'
 import { workingMemoryPage } from './vault/working-memory'
 import { ContextEngine } from './context-engine/service'
+import { BrainService } from './brain/service'
+import { liveIO } from './brain/io'
+import { fixtureConnectors } from './brain/fixture'
+import { readPower, type PowerState } from './brain/power'
 import { aboutTool } from './agent/tools/about'
 import { activityLearningAllowed, activityTimelineForLearning } from './activity'
 import { GoalManager, withGoalsOverview } from './goals'
 import { opensDirectly } from './knowledge/ignore'
 import { followUpTool, goalTool } from './agent/tools/goals'
 import { captureOpenUrls, registerProtocolClient, setupMcpServer, urlHandler } from './mcp-server/app'
+import { brainReader } from './brain-access/wire'
+import { TeamAsk } from './brain-access/team-ask'
 import { setupActivity } from './activity/app'
 // Media, vision and batch tools on the user's own OpenAI / Anthropic keys (src/main/apis).
 import { apiAccess } from './apis/keys'
@@ -645,6 +652,9 @@ app.whenReady().then(() => {
   const registry = new ToolRegistry()
   // The context engine (People & Places), set up with the knowledge vault below; the memory tool's "about" uses it.
   const worldRef: { current?: ContextEngine } = {}
+  /** Your brain (src/main/brain), set up after the context engine; Needs you lists its prompts. */
+  const brainRef: { current?: BrainService } = {}
+  const brainPowerTimer: { current?: ReturnType<typeof setInterval> } = {}
   /** Gets speech recognition ready in the background (set once the voice service exists). */
   const voicePrepRef: { current: (why: 'auto' | 'mic' | 'user') => void } = { current: () => undefined }
   registry.register(
@@ -805,6 +815,8 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------- always-on bots: the question queue (agent/questions)
   // A bot's questions and approvals don't stop it: they wait in Needs you (persisted), the user hears on the
   // Mac and paired devices, and a later answer resumes the bot. Deadlines go ahead with safe defaults only.
+  /** Team access: the owner answered a routed teammate question (set once Phone access is set up). */
+  const teamOwnerRef: { current?: (questionId: string, text: string) => void } = {}
   const questionStore = new QuestionStore(db)
   const learner = new Learner(questionStore, memory)
   // The user's decisions (answers, picks, corrections, approval patterns) as memories the agent acts on.
@@ -832,6 +844,17 @@ app.whenReady().then(() => {
       showNote(new Notification({ title: o.title, body, silent: false }), item.threadId)
     },
     resume: async (item, msg) => {
+      // A teammate's question the brain couldn't answer (Team access): the owner's answer goes back to the
+      // teammate, and no bot run starts. A deadline's default never answers for the owner.
+      const teamQ = (db.getSetting<Record<string, string>>('team:items') ?? {})[item.id]
+      if (teamQ) {
+        if (item.answeredBy === 'user' && item.answers[0]?.trim()) {
+          teamOwnerRef.current?.(teamQ, item.answers[0])
+          const m = db.insertMessage({ threadId: item.threadId, role: 'assistant', content: 'Sent your answer to your teammate.', kind: 'notice', status: 'done' })
+          emit({ threadId: item.threadId, type: 'message', message: m })
+        }
+        return
+      }
       const c = chatRef.current
       if (!c) throw new Error('SahilBot is still starting')
       const meta = { ...msg.meta, ...(msg.hidden ? { hidden: true } : {}) }
@@ -1594,7 +1617,7 @@ app.whenReady().then(() => {
       const made = scheduler.create(input)
       if (made.enabled) scheduler.update(made.id, { enabled: false })
     },
-    postAssistant: (threadId, text) => { db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done' }) },
+    postAssistant: (threadId, text, meta) => { db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done', ...(meta ? { meta } : {}) }) },
     changed: () => emit({ threadId: '', type: 'spaces' })
   }
   handle('templates:list', () => loadTemplates(templatesDir))
@@ -1652,6 +1675,39 @@ app.whenReady().then(() => {
     })
     openThread(made.threadId)
     return made
+  })
+
+  // Each bot's status for its row and card (shared/bot-status.ts): running → Pulling context / Working (from
+  // the turn's tool calls so far), an unread reply → Done, else Idle; plus the model its last reply ran on.
+  handle('bots:status', () => {
+    const out: BotStatusMap = {}
+    const running = new Set(chat.runningThreads())
+    const recent = db.sql.prepare(`SELECT data, created_at AS at FROM messages WHERE thread_id = ? AND role = 'assistant' AND kind = 'normal' ORDER BY seq DESC LIMIT 25`)
+    for (const s of db.listSpaces()) {
+      if (s.kind === 'project') continue
+      const threads = db.listThreads(s.id)
+      const live = threads.filter((t) => running.has(t.id))
+      const phase = live.length ? (live.some((t) => runPhase(db.listMessages(t.id).slice(-80)) === 'working') ? 'working' : 'context') : undefined
+      const st: BotStatus = { state: botState({ running: live.length > 0, phase, unread: !!s.unread }) }
+      // The newest reply that names its model, from the bot's most recently active chats.
+      let found: { model: string; label?: string; at: number } | null = null
+      for (const t of [...threads].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4)) {
+        for (const r of recent.all(t.id) as Array<{ data: string; at: number }>) {
+          try {
+            const d = JSON.parse(r.data) as { model?: string; meta?: { routed?: { label?: string } } }
+            if (d.model && (!found || r.at > found.at)) { found = { model: d.model, label: d.meta?.routed?.label, at: r.at }; break }
+            if (d.model) break
+          } catch { /* skip */ }
+        }
+      }
+      if (found) {
+        let provider: string | undefined
+        try { provider = endpoints.for(found.model).provider } catch { provider = undefined }
+        Object.assign(st, { model: found.model, provider, runsOn: runsOnLabel(provider, found.model, found.label), at: found.at })
+      }
+      out[s.id] = st
+    }
+    return out
   })
 
   // ---------------------------------------------------------------- morning check-in and usage
@@ -1760,9 +1816,21 @@ app.whenReady().then(() => {
     }
     return out
   }
-  handle('needsYou:list', () => [...liveNeedsYou(), ...questions.inbox()])
+  /** The main bot, which Agent mode's prompts belong to. */
+  const mainBot = (): { id: string; name: string } => { const m = db.listSpaces().find((x) => x.isMain); return { id: m?.id ?? '', name: m?.name ?? 'SahilBot' } }
+  handle('needsYou:list', () => [...liveNeedsYou(), ...(brainRef.current?.needsYou(mainBot()) ?? []), ...questions.inbox()])
   handle('needsYou:answer', async (id: string, answer: string[] | 'approve' | 'always' | 'deny') => {
     const ref = String(id ?? '')
+    // Agent mode's prompts: [action, typed answer?] (Draft it starts a normal chat run; nothing is ever sent on its own).
+    if (ref.startsWith('brain:')) {
+      const b = brainRef.current
+      if (!b) throw new Error('SahilBot is still starting.')
+      const [action, text] = Array.isArray(answer) ? answer.map((a) => String(a ?? '')) : [answer === 'deny' ? 'dismiss' : 'draft']
+      if (!['draft', 'remind', 'dismiss', 'answer', 'open'].includes(action)) throw new Error('Unknown action.')
+      const r = await b.act(ref.slice('brain:'.length), action as 'draft', text)
+      if (r.threadId && (action === 'draft' || action === 'open')) openThread(r.threadId)
+      return null
+    }
     if (ref.startsWith('live:')) {
       const [, threadId, reqId] = ref.split(':')
       const r = chat.pending(threadId).find((x) => x.id === reqId)
@@ -1954,7 +2022,8 @@ app.whenReady().then(() => {
     isRunning: (id) => chat.isRunning(id),
     isAppThread: (id) => appThreadRef.current?.(id) ?? false,
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
-    onChange: () => { if (!worldNotify) worldNotify = setTimeout(() => { worldNotify = null; toWin('people:changed') }, 400) }
+    onChange: () => { if (!worldNotify) worldNotify = setTimeout(() => { worldNotify = null; toWin('people:changed') }, 400) },
+    metaCovered: (preset) => brainRef.current?.covers(preset) ?? false
   })
   worldRef.current = world
   registry.register(aboutTool({ engine: world, db }))
@@ -1995,13 +2064,27 @@ app.whenReady().then(() => {
       if (!HIDDEN) await shell.openExternal(notesVault.obsidianUrl(rel))
       return 'obsidian'
     }
-    if (!HIDDEN) shell.showItemInFolder(rel ? notesVault.store.abs(rel) : notesVault.store.root)
+    if (!HIDDEN) shell.showItemInFolder(rel ? notesVault.absOf(rel) : notesVault.store.root)
     return 'finder'
   })
   handle('notesVault:reveal', (path?: string) => {
     notesVault.store.ensure()
-    if (!HIDDEN) shell.showItemInFolder(typeof path === 'string' && path ? notesVault.store.abs(path) : notesVault.store.root)
+    if (!HIDDEN) shell.showItemInFolder(typeof path === 'string' && path ? notesVault.absOf(path) : notesVault.store.root)
   })
+  // "Use my Obsidian vault" (src/main/vault/obsidian.ts): pick the vault, read the user's own notes, copy SahilBot's notes in.
+  handle('notesVault:obsidianDetect', () => notesVault.detectObsidian())
+  handle('notesVault:obsidianPick', async () => {
+    const r = win ? await dialog.showOpenDialog(win, { title: 'Choose your Obsidian vault', properties: ['openDirectory'] }) : { canceled: true, filePaths: [] }
+    if (r.canceled || !r.filePaths[0]) return null
+    return notesVault.allowObsidianFolder(r.filePaths[0])
+  })
+  handle('notesVault:obsidianNotes', () => notesVault.obsidianNotes())
+  handle('notesVault:obsidianCopyExisting', () => notesVault.copyExisting())
+  handle('notesVault:obsidianRescan', () => { notesVault.obsidianSync.rescan(); return notesVault.status() })
+  // Edits made in Obsidian: a watcher, a timer, and a look whenever SahilBot's window gets focus.
+  notesVault.startSync()
+  app.on('browser-window-focus', () => notesVault.obsidianSync.poke())
+  app.on('before-quit', () => notesVault.stopSync())
   handle('notesVault:exportZip', () => {
     const out = notesVault.exportZip(join(settings.get().workspaceDir, 'exports'))
     if (!HIDDEN) shell.showItemInFolder(out)
@@ -2039,7 +2122,8 @@ app.whenReady().then(() => {
   for (const w of BrowserWindow.getAllWindows()) watchInput(w)
   app.on('browser-window-created', (_e, w) => watchInput(w))
   powerMonitor.on('suspend', () => learning.activity('run'))
-  app.on('before-quit', () => learning.dispose())
+  // (The brain, set up below, stops with it: one listener for both.)
+  app.on('before-quit', () => { learning.dispose(); brainRef.current?.dispose(); clearInterval(brainPowerTimer.current) })
   handle('learning:status', () => learning.status())
   handle('learning:list', (limit?: number) => learning.list(typeof limit === 'number' ? limit : 200))
   handle('learning:undo', (id: string) => learning.undo(String(id ?? '')))
@@ -2050,6 +2134,84 @@ app.whenReady().then(() => {
   // People & Places → "Learn now": the same pass (its vault job runs the context engine too).
   handle('people:learnNow', async () => { await learning.runNow({ vaultOnly: true }); return world.status() })
   handle('learning:openChat', (threadId: string) => { if (db.getThread(String(threadId ?? ''))) openThread(String(threadId)) })
+
+  // ---------------------------------------------------------------- your brain (src/main/brain)
+  // Reads new items from the user's connected accounts on a schedule (only while SahilBot is open and the
+  // Mac awake, ~15 min while active, hourly when idle, paused on a low battery / Low Power Mode / a tight
+  // budget), extracts facts on the cheapest capable model into the entity graph, writes "Written for you"
+  // briefs, and in Agent mode reaches out with a few prompts in Needs you. Tests (dev builds) can stand in
+  // fake connected apps with SAHILBOT_BRAIN_FIXTURE.
+  const brainFixture = !isPackaged() && process.env.SAHILBOT_BRAIN_FIXTURE ? fixtureConnectors(process.env.SAHILBOT_BRAIN_FIXTURE) : null
+  const brainIO = brainFixture ? { connectors: brainFixture } : liveIO({
+    connectors,
+    gmailCreds: () => { try { return googleConnect.credentials() } catch { return null } },
+    mail: mailRunner(),
+    mailConfigured: () => connectors.list().some((c) => c.preset === 'apple-mail')
+  })
+  let brainNotify: ReturnType<typeof setTimeout> | null = null
+  let power: PowerState = { onBattery: false }
+  const refreshPower = (): void => { void readPower(() => { try { return powerMonitor.isOnBatteryPower() } catch { return false } }).then((p) => { power = p }).catch(() => undefined) }
+  refreshPower()
+  brainPowerTimer.current = setInterval(refreshPower, 5 * 60_000)
+  brainPowerTimer.current.unref?.()
+  const brain = new BrainService({
+    db, world, memory, vault: () => notesVault,
+    io: () => brainIO,
+    models: () => endpoints.usable(),
+    endpoint: (m) => endpoints.for(m),
+    isLocal: (m) => isLocal(endpoints.for(m).baseUrl),
+    app: () => { const s = settings.get(); const b = budget.summary(); return { localAllowed: localOn(s), me: [...(s.me?.emails ?? [])], mode: b.mode, cap: b.cap, spent: b.spent } },
+    power: () => power,
+    idleMs: () => { try { return powerMonitor.getSystemIdleTime() * 1000 } catch { return 0 } },
+    secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+    // Draft it: a new chat with the main bot at its usual level (Auto by default), the user's click as the request.
+    startRun: async (o) => {
+      const main = db.listSpaces().find((x) => x.isMain)
+      if (!main) throw new Error('No main bot.')
+      const s = settings.get()
+      const m = s.botModes?.[main.id] ?? s.defaultMode
+      const t = db.createThread(main.id, isPermissionMode(m) && m !== 'bypass' ? m : 'auto', null)
+      emit({ threadId: t.id, type: 'thread', thread: db.updateThread(t.id, { title: o.title }) })
+      await chat.send({ threadId: t.id, text: o.text, note: o.note, meta: { brainPrompt: o.promptId } })
+      return { threadId: t.id }
+    },
+    notify: (p) => {
+      const title = p.kind === 'gap' ? 'SahilBot has a question' : 'SahilBot can help'
+      const body = p.text.replace(/\s+/g, ' ').slice(0, 160)
+      notifyQuestionDevices({ kind: 'question', title, body, botId: mainBot().id, itemId: `brain:${p.id}` })
+      if (QUIET || !Notification.isSupported() || mainFocused()) return
+      const n = new Notification({ title, body, silent: false })
+      n.on('click', () => { showMain(); toWin('menu', 'needs-you') })
+      notes.push(n)
+      if (notes.length > 30) notes.shift()
+      n.show()
+    },
+    openLink: (link) => {
+      if (HIDDEN) return
+      const t = /^sahilbot:\/\/thread\/([\w-]+)$/.exec(link)
+      if (t) { if (db.getThread(t[1])) openThread(t[1]); return }
+      void shell.openExternal(link)
+    },
+    onChange: () => {
+      if (brainNotify) return
+      brainNotify = setTimeout(() => { brainNotify = null; toWin('brain:changed'); toWin('needsYou:changed') }, 250)
+    }
+  })
+  brainRef.current = brain
+  if (process.env.SAHILBOT_BRAIN !== '0' && (!HIDDEN || process.env.SAHILBOT_BRAIN === '1')) brain.start()
+  powerMonitor.on('suspend', () => brain.sleep(true))
+  powerMonitor.on('resume', () => brain.sleep(false))
+  handle('brain:status', () => brain.status())
+  handle('brain:setSettings', (patch: Record<string, unknown>) => { brain.setSettings((patch ?? {}) as never); return brain.status() })
+  handle('brain:refresh', () => brain.refresh())
+  handle('brain:briefs', (o?: { query?: string; filter?: string }) => brain.briefs({ query: typeof o?.query === 'string' ? o.query.slice(0, 200) : undefined, filter: o?.filter === 'clients' || o?.filter === 'people' || o?.filter === 'projects' ? o.filter : 'all' }))
+  handle('brain:correct', (id: string, text: string) => brain.correct(String(id ?? ''), String(text ?? '')))
+  handle('brain:forget', (id: string) => brain.forget(String(id ?? '')))
+  handle('brain:undo', (trashId: string) => brain.undo(String(trashId ?? '')))
+  handle('brain:backfill', (id: string, ok: boolean) => brain.backfill(String(id ?? ''), ok === true))
+  handle('brain:forgetSource', (id: string) => brain.forgetSource(String(id ?? '')))
+  handle('brain:openChip', (chip: { link?: string }) => brain.openChip(chip as never))
+  handle('brain:prompts', () => brain.prompts())
   handle('knowledge:status', () => knowledge.status())
   // Folders are added only through the picker here, or from folders already attached to a chat.
   handle('knowledge:addFolder', async () => {
@@ -2298,9 +2460,24 @@ app.whenReady().then(() => {
     if (win && !win.isDestroyed() && ev.sender === win.webContents) { viewingThread = threadId; refreshBadge() }
     return [...chat.pending(threadId), ...purchases.pending(threadId)]
   })
+  // The user's brain, read-only, for connected apps (MCP brain tools) and teammates (Team access): brain-access/.
+  const brainAccess = brainReader({ db, world: () => worldRef.current, vault: () => notesVaultRef.current ?? undefined, memory, secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()] })
   // Phone access (Settings → General → Phone access): this Mac serves SahilBot to the user's paired phones
   // (src/main/phone). Off by default; what a phone may do is src/main/phone/policy.ts.
   if (!isServer()) {
+    const teamAsk = new TeamAsk({
+      reader: brainAccess,
+      secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+      owner: () => (settings.get().userName ?? '').split(/\s+/)[0] ?? '',
+      compose: () => {
+        const c = learning.choose()
+        if ('blocked' in c) return undefined
+        return (system, user, maxTokens) => {
+          const ep = endpoints.for(c.model)
+          return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model: c.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: { ...samplingFor(c.model, settings.get().sampling), temperature: 0.2 }, maxTokens, effort: 'low', signal: AbortSignal.timeout(45_000) }))
+        }
+      }
+    })
     const phone = new PhoneAccess({
       db, secrets, dataDir: dataDir(), hidden: HIDDEN,
       uiDir: join(__dirname, '../renderer'), bridgeFile: join(__dirname, '../web/bridge.js'),
@@ -2308,8 +2485,26 @@ app.whenReady().then(() => {
       pending: (threadId) => [...chat.pending(threadId), ...purchases.pending(threadId)],
       purchaseRespond: (threadId, id, nonce, answer) => purchases.respond(threadId, id, nonce, answer),
       fileResponse: (req) => attachments.fileResponse(req),
-      log: (l) => console.log(l)
+      log: (l) => console.log(l),
+      // Team access: answers only from the teammate's scope; the wording on the learning model (local first,
+      // within its rules), or the facts themselves when there's no model.
+      teamAsk: (member, question) => teamAsk.ask(member, question),
+      teamRoute: (member, q) => {
+        const main = db.listSpaces().find((x) => x.isMain)
+        if (!main) return
+        let threadId = db.getSetting<string>('team:thread')
+        if (!threadId || !db.getThread(threadId)) {
+          const t = db.updateThread(db.createThread(main.id, 'ask', null).id, { title: 'Team questions' })
+          threadId = t.id
+          db.setSetting('team:thread', threadId)
+          emit({ threadId, type: 'thread', thread: t })
+        }
+        const { item } = questions.postQuestions({ botId: main.id, threadId, deadlineMs: 7 * 86_400_000, tainted: true, questions: [{ question: `${member.name} (${member.role}) asked your brain: “${q.question.slice(0, 300)}”. It couldn’t answer from what you shared. Your reply goes back to ${member.name}.` }] })
+        db.setSetting('team:items', { ...(db.getSetting<Record<string, string>>('team:items') ?? {}), [item.id]: q.id })
+      },
+      ownerName: () => settings.get().userName ?? ''
     })
+    teamOwnerRef.current = (id, text) => phone.teamOwnerAnswer(id, text)
     phone.register()
     void phone.resume()
     app.on('will-quit', () => { void phone.stop() })
@@ -2576,7 +2771,7 @@ app.whenReady().then(() => {
   const mcp = setupMcpServer({
     db, settings, dir: sub('mcp-server'), hidden: HIDDEN, mainWindow: () => win,
     host: {
-      db, memory, emit, secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+      db, memory, emit, secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()], brain: brainAccess,
       agent: {
         isRunning: (t) => chat.isRunning(t),
         pending: (t) => [...chat.pending(t), ...purchases.pending(t)],

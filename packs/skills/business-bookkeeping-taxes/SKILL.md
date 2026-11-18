@@ -14,7 +14,7 @@ General education, not tax or accounting advice. Tax rules change yearly and by 
 1. Pull transactions: QuickBooks or Xero (find_tools), bank feeds, Stripe/Square/PayPal payouts (note payouts are net of fees and refunds: book gross sales, fees as expense).
 2. Categorize to a simple chart of accounts: income by type; COGS; operating expenses (rent, software, marketing, contractors, payroll, travel, meals, insurance, professional fees); owner draws/contributions (not expenses); loans (principal is not an expense).
 3. Reconcile every bank and card account to statements; investigate differences; no unexplained "uncategorized" left.
-4. Review receivables (chase overdue invoices) and payables.
+4. Review receivables (chase overdue invoices with business-invoice-collections) and payables.
 5. Produce P&L, balance sheet, cash flow; compare to last month and budget. Use create_document for an .xlsx pack.
 Never move money, pay bills or file anything yourself: prepare and let the user act.
 

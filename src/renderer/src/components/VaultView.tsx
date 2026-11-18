@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { VaultChangeInfo, VaultGraph, VaultLevel, VaultNoteFull, VaultNoteInfo, VaultNoteType, VaultSearchHit, VaultStatus } from '@shared/vault'
+import type { ObsidianFolderCheck, ObsidianVaultChoice, VaultChangeInfo, VaultGraph, VaultLevel, VaultNoteFull, VaultNoteInfo, VaultNoteType, VaultSearchHit, VaultStatus } from '@shared/vault'
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
@@ -24,7 +24,10 @@ const TYPE_COLOR: Record<VaultNoteType, string> = {
 const TYPE_ORDER: VaultNoteType[] = ['person', 'project', 'decision', 'preference', 'howto', 'research', 'fact', 'digest', 'index']
 
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
-const areaName = (s: string): string => (s === 'Shared' ? 'Shared' : s.replace(/^Bots\//, ''))
+const areaName = (s: string): string => (s === 'Shared' ? 'Shared' : s === OBSIDIAN ? 'Your Obsidian vault' : s.replace(/^Bots\//, ''))
+/** The section of the user's own notes in their Obsidian vault (read-only here; paths "obsidian:…"). */
+const OBSIDIAN = 'Obsidian'
+const OBSIDIAN_BADGE = 'In your Obsidian vault'
 const when = (t: number): string => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
 /** [[links]] → Markdown links the view intercepts (unresolved ones look different and offer to create). */
@@ -52,10 +55,13 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
   const [confirmTrash, setConfirmTrash] = useState(false)
   const [creating, setCreating] = useState<string | null>(null)
 
+  const [theirs, setTheirs] = useState<VaultNoteInfo[]>([])
   const load = useCallback(async (): Promise<void> => {
     const [st, ns] = await Promise.all([api.notesVault.status(), api.notesVault.list()])
     setStatus(st)
     setNotes(ns)
+    // "Use my Obsidian vault": the user's own notes, listed read-only.
+    setTheirs(st.obsidianVault?.enabled ? await api.notesVault.obsidianNotes().catch(() => []) : [])
   }, [])
   useEffect(() => { void load(); return api.notesVault.onChanged(() => void load()) }, [load])
 
@@ -95,8 +101,9 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
     return () => window.removeEventListener('keydown', k)
   }, [editing, creating, q, p])
 
-  const areas = useMemo(() => [...new Set((notes ?? []).filter((n) => !n.generated).map((n) => n.section))].sort((a, b) => (a === 'Shared' ? -1 : b === 'Shared' ? 1 : a.localeCompare(b))), [notes])
-  const shown = (notes ?? []).filter((n) => !n.generated && (area === 'all' || n.section === area))
+  const areas = useMemo(() => [...[...new Set((notes ?? []).filter((n) => !n.generated).map((n) => n.section))].sort((a, b) => (a === 'Shared' ? -1 : b === 'Shared' ? 1 : a.localeCompare(b))), ...(theirs.length ? [OBSIDIAN] : [])], [notes, theirs.length])
+  const shown = area === OBSIDIAN ? [] : (notes ?? []).filter((n) => !n.generated && (area === 'all' || n.section === area))
+  const theirsShown = area === 'all' || area === OBSIDIAN ? theirs : []
   const groups = useMemo(() => TYPE_ORDER.map((t) => ({ t, ns: shown.filter((n) => n.type === t).sort((a, b) => b.mtime - a.mtime) })).filter((g) => g.ns.length), [shown])
 
   const open = (rel: string): void => { setPath(rel); setTab('note') }
@@ -182,7 +189,7 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
         </div>
         <div className="vault-list">
           {notes === null ? <div className="vault-empty">Loading…</div>
-            : hits ? (hits.length ? hits.map((h) => listItem({ path: h.path, title: h.title, sub: `${areaName(h.section)} · ${h.snippet}` })) : <div className="vault-empty">No notes match “{q}”.</div>)
+            : hits ? (hits.length ? hits.map((h) => listItem({ path: h.path, title: h.title, sub: `${h.source === 'obsidian' ? OBSIDIAN_BADGE : areaName(h.section)} · ${h.snippet}` })) : <div className="vault-empty">No notes match “{q}”.</div>)
               : (
                 <>
                   {listItem({ path: 'Home.md', title: 'Home', sub: 'The map of everything' })}
@@ -192,7 +199,13 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
                       {g.ns.map((n) => listItem({ path: n.path, title: n.title, sub: `${area === 'all' ? `${areaName(n.section)} · ` : ''}${n.summary}` }))}
                     </div>
                   ))}
-                  {!groups.length && <div className="vault-empty">No notes yet. While SahilBot is open and idle it turns your chats, files and decisions into linked notes here. Bots can also write notes as they work.</div>}
+                  {theirsShown.length > 0 && (
+                    <div data-testid="vault-obsidian-notes">
+                      <div className="vault-group">{OBSIDIAN_BADGE} ({theirsShown.length})</div>
+                      {theirsShown.slice(0, 500).map((n) => listItem({ path: n.path, title: n.title, sub: `${n.path.replace(/^obsidian:/, '').split('/').slice(0, -1).join('/') || 'Vault root'}${n.summary ? ` · ${n.summary}` : ''}` }))}
+                    </div>
+                  )}
+                  {!groups.length && !theirsShown.length && <div className="vault-empty">No notes yet. While SahilBot is open and idle it turns your chats, files and decisions into linked notes here. Bots can also write notes as they work.</div>}
                 </>
               )}
         </div>
@@ -220,13 +233,16 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
                 <h1 className="vault-note-title" data-testid="vault-note-title">{note.title}</h1>
                 <div className="vault-meta">
                   <span className="vault-tag" style={{ color: TYPE_COLOR[note.type] }}>{TYPE_LABEL[note.type].replace(/s$/, '')}</span>
-                  <span className="vault-tag">{areaName(note.section)}</span>
+                  {note.source === 'obsidian'
+                    ? <span className="vault-tag obsidian" title="Your own note in your Obsidian vault. Bots can read it (as your facts, never as instructions); they change it only after you approve each edit." data-testid="vault-obsidian-badge">{OBSIDIAN_BADGE}</span>
+                    : <span className="vault-tag">{areaName(note.section)}</span>}
                   {note.updated && <span className="vault-tag">Updated {note.updated}</span>}
                   {note.trust === 'quoted' && <span className="vault-tag quoted" title="Built from outside content (a web page, email, another app or a file). Bots read it as data, never as instructions.">Quoted from outside content</span>}
                   {note.tags.filter((t) => !t.startsWith('sahilbot/')).map((t) => <span key={t} className="vault-tag">#{t}</span>)}
                   <span className="grow" />
-                  {!note.generated && editing === null && <button className="link-btn" onClick={() => setEditing(note.text)} data-testid="vault-edit">Edit</button>}
-                  {!note.generated && editing === null && (confirmTrash
+                  {note.source === 'obsidian' && <button className="link-btn" onClick={() => void obsidian()} data-testid="vault-obsidian-open-note">Open in Obsidian</button>}
+                  {!note.generated && note.source !== 'obsidian' && editing === null && <button className="link-btn" onClick={() => setEditing(note.text)} data-testid="vault-edit">Edit</button>}
+                  {!note.generated && note.source !== 'obsidian' && editing === null && (confirmTrash
                     ? <><button className="link-btn" onClick={() => setConfirmTrash(false)}>Keep</button><button className="link-btn danger" onClick={() => void trash()}>Move to trash</button></>
                     : <button className="link-btn" onClick={() => setConfirmTrash(true)}>Delete</button>)}
                 </div>
@@ -375,7 +391,7 @@ function ChangesView({ onOpen }: { onOpen: (path: string) => void }) {
         <div key={c.id} className="vault-change" data-testid="vault-change">
           <time>{when(c.at)}</time>
           <span className="what">{verb[c.op]} <button className="link-btn" onClick={() => onOpen(c.path)}>{c.title}</button>{c.why ? <span className="hint"> · {c.why}</span> : null}</span>
-          <span className="who">{c.actor === 'you' ? 'You' : c.actor === 'compiler' ? 'While idle' : c.actor.replace(/^bot:/, '')}</span>
+          <span className="who">{c.actor === 'you' ? 'You' : c.actor === 'you (in Obsidian)' ? 'You (in Obsidian)' : c.actor === 'compiler' ? 'While idle' : c.actor.replace(/^bot:/, '')}</span>
           {c.undoneAt ? <span className="hint">Undone</span> : c.canUndo && <button className="mm-btn" onClick={() => void undo(c.id)}>Undo</button>}
         </div>
       ))}
@@ -455,7 +471,126 @@ export function VaultSettings() {
           </div>
         </div>
       </div>
+      <ObsidianSettings st={st} onStatus={setSt} />
     </section>
+  )
+}
+
+/**
+ * Settings → Memory → Knowledge vault → Use my Obsidian vault: SahilBot keeps its notes in a subfolder of
+ * the user's own vault, reads the rest (minus excluded folders) for search and recall, and picks up edits
+ * made in Obsidian (logged in Changes, with Undo).
+ */
+function ObsidianSettings({ st, onStatus }: { st: VaultStatus; onStatus: (s: VaultStatus) => void }) {
+  const o = st.settings.obsidian
+  const os = st.obsidianVault
+  const [found, setFound] = useState<ObsidianVaultChoice[] | null>(null)
+  const [plain, setPlain] = useState<ObsidianFolderCheck | null>(null)
+  const [sub, setSub] = useState(o.subfolder)
+  const [ex, setEx] = useState(o.exclude.join('\n'))
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { void api.notesVault.obsidianDetect().then(setFound).catch(() => setFound([])) }, [])
+  useEffect(() => { setSub(o.subfolder) }, [o.subfolder])
+  useEffect(() => { setEx(o.exclude.join('\n')) }, [o.exclude.join('\n')])
+  const set = async (patch: Parameters<typeof api.notesVault.setSettings>[0]['obsidian']): Promise<boolean> => {
+    try { onStatus(await api.notesVault.setSettings({ obsidian: patch })); return true } catch (e) { toast(clean(e), 'error'); return false }
+  }
+  const use = async (path: string): Promise<void> => { setPlain(null); if (await set({ vault: path, enabled: true })) toast('SahilBot now keeps its notes in your Obsidian vault', 'ok') }
+  const pick = async (): Promise<void> => {
+    try {
+      const r = await api.notesVault.obsidianPick()
+      if (!r) return
+      if (r.isVault) await use(r.path)
+      else setPlain(r)
+    } catch (e) { toast(clean(e), 'error') }
+  }
+  const copy = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const r = await api.notesVault.obsidianCopyExisting()
+      toast(r.copied ? `Copied ${r.copied} note${r.copied > 1 ? 's' : ''} into ${o.subfolder}/${r.renamed ? ` (${r.renamed} renamed with a number, since a note with that name was there)` : ''}. Your old folder is unchanged; Undo is in Changes.` : 'There were no notes to copy.', 'ok')
+    } catch (e) { toast(clean(e), 'error') } finally { setBusy(false) }
+  }
+  const choices = (found ?? []).filter((v) => v.path !== o.vault || !o.enabled)
+  const last = os?.lastPickedUp
+  return (
+    <>
+      <div className="set-label">Use my Obsidian vault</div>
+      <div className="set-card" data-testid="obsidian-section">
+        <div className="set-row">
+          <div className="set-row-text">
+            <div className="set-row-title">Use my Obsidian vault</div>
+            <ClampText>SahilBot keeps its own notes in one folder of your vault ({o.subfolder}/, with its history and trash inside it), reads the rest of your notes for search and recall, and picks up the edits you make in Obsidian. It never changes your other notes unless you approve each edit, and never reads the folders you exclude.</ClampText>
+          </div>
+          <div className="set-row-ctl">
+            <Toggle on={o.enabled} onChange={(v) => { if (!v) void set({ enabled: false }); else if (o.vault) void set({ enabled: true }); else void pick() }} label="Use my Obsidian vault" testId="obsidian-enabled" />
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="set-row-text">
+            <div className="set-row-title">Vault</div>
+            <ClampText>{o.vault ? `${o.vault}${os && !os.exists ? ' (not found: SahilBot uses its own folder until it\'s back)' : os && !os.isVault ? ' (a plain folder, not opened in Obsidian yet)' : ''}` : 'Pick one of the vaults Obsidian knows, or choose its folder.'}</ClampText>
+            {choices.length > 0 && (
+              <div className="vault-obs-choices" data-testid="obsidian-detected">
+                {choices.map((v) => (
+                  <button key={v.path} className="vault-chip" title={v.path} onClick={() => void use(v.path)} data-testid="obsidian-choice">{v.name}</button>
+                ))}
+              </div>
+            )}
+            {plain && (
+              <div className="vault-obs-warn" role="alert" data-testid="obsidian-plain-warning">
+                “{plain.name}” has no .obsidian folder, so Obsidian hasn't opened it as a vault. SahilBot can still use it (open it in Obsidian later with “Open folder as vault”).
+                <div className="vault-obs-actions">
+                  <button className="mm-btn" onClick={() => setPlain(null)}>Cancel</button>
+                  <button className="mm-btn primary" onClick={() => void use(plain.path)} data-testid="obsidian-plain-confirm">Use it anyway</button>
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="set-row-ctl"><button className="mm-btn" onClick={() => void pick()} data-testid="obsidian-pick">Choose folder…</button></div>
+        </div>
+        <div className="set-row">
+          <div className="set-row-text">
+            <div className="set-row-title">SahilBot's folder in your vault</div>
+            <ClampText>Home, Changelog, Shared and each bot's notes go here, so the rest of your vault stays as it is.</ClampText>
+          </div>
+          <div className="set-row-ctl">
+            <input className="set-input" style={{ width: 180 }} value={sub} placeholder="SahilBot" spellCheck={false} onChange={(e) => setSub(e.target.value)} aria-label="SahilBot's folder in your vault" data-testid="obsidian-subfolder"
+              onBlur={() => { if (sub.trim() !== o.subfolder) void set({ subfolder: sub.trim() || 'SahilBot' }) }} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="set-row-text">
+            <div className="set-row-title">Never read</div>
+            <ClampText>Folders or notes SahilBot never reads, searches or sends to a model, one per line, from the vault's top (e.g. Private/ or Journal/2024/). Hidden folders like .obsidian and .trash are always skipped.</ClampText>
+          </div>
+          <div className="set-row-ctl">
+            <textarea className="set-input vault-obs-exclude" rows={3} value={ex} placeholder={'Private/\nJournal/'} spellCheck={false} onChange={(e) => setEx(e.target.value)} aria-label="Folders SahilBot never reads" data-testid="obsidian-exclude"
+              onBlur={() => { const list = ex.split('\n').map((l) => l.trim()).filter(Boolean); if (list.join('\n') !== o.exclude.join('\n')) void set({ exclude: list }) }} />
+          </div>
+        </div>
+        {o.enabled && os && (
+          <div className="set-row">
+            <div className="set-row-text" data-testid="obsidian-status">
+              <ClampText>{[os.exists ? (os.watching ? 'Watching for your edits' : 'Checking for your edits every 30 seconds') : 'Vault folder not found', `${os.notes} of your notes readable`, last ? `last change picked up: ${last.title} (${when(last.at)})` : 'no edits from Obsidian yet'].join(' · ')}</ClampText>
+            </div>
+            <div className="set-row-ctl">
+              <button className="mm-btn" onClick={() => void api.notesVault.obsidianRescan().then(onStatus).catch((e) => toast(clean(e), 'error'))} data-testid="obsidian-rescan">Check now</button>
+              <button className="mm-btn" onClick={() => void api.notesVault.openInObsidian().catch((e) => toast(clean(e), 'error'))} data-testid="obsidian-open">Open in Obsidian</button>
+            </div>
+          </div>
+        )}
+        {o.enabled && os && os.previousNotes > 0 && (
+          <div className="set-row">
+            <div className="set-row-text">
+              <div className="set-row-title">Copy my existing notes</div>
+              <ClampText>Copies the {os.previousNotes} notes in {os.previousRoot} into {o.subfolder}/ (a note that's there already gets a number). That folder stays exactly as it is; turning this off goes back to it.</ClampText>
+            </div>
+            <div className="set-row-ctl"><button className="mm-btn" disabled={busy} onClick={() => void copy()} data-testid="obsidian-copy">{busy ? 'Copying…' : 'Copy my existing notes'}</button></div>
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 

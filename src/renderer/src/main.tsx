@@ -38,6 +38,8 @@ import './styles-system.css'
 import './styles-ux.css'
 // The chat itself (bubbles, the working line, quiet results) and the newest pages decide last.
 import './styles-chat.css'
+// Your brain (BrainView) and Agent mode's prompts.
+import './styles-brain.css'
 
 // The same page serves the main window and the Quick Ask bar (#quick).
 const quick = location.hash === '#quick'

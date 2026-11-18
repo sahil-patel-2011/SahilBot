@@ -7,6 +7,7 @@ import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
 import { FilesView, Home, ProjectsView } from './components/Home'
 import { TasksView } from './components/TasksView'
+import { BrainView } from './components/BrainView'
 import { RightPanel, type PanelTab } from './components/RightPanel'
 import { JobsChip, RunSummary } from './components/JobsPanel'
 import { Sidebar, type MainView } from './components/Sidebar'
@@ -336,6 +337,8 @@ export function App() {
     else if (a === 'connect') setShowConnect(true)
     else if (a === 'toggle-panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
     else if (a === 'search') setPalette(true)
+    else if (a === 'needs-you') { setVaultOpen(null); setThread(null); setView('tasks') }
+    else if (a === 'brain') { setVaultOpen(null); setThread(null); setView('brain') }
     else if (a === 'export' && threadRef.current) void api.chat.exportThread(threadRef.current).then((p) => p && toast(`Saved to ${p.split('/').pop()}`, 'ok'))
   }), [])
 
@@ -477,7 +480,7 @@ export function App() {
     else if (a.kind === 'new-group') setEditor({ space: null, mode: 'group' })
     else if (a.kind === 'new-project') setEditor({ space: null, mode: 'project' })
     else if (a.kind === 'scheduled') setShowScheduled(true)
-    else if (a.kind === 'projects' || a.kind === 'files' || a.kind === 'tasks') { setView(a.kind); setThread(null) }
+    else if (a.kind === 'projects' || a.kind === 'files' || a.kind === 'tasks' || a.kind === 'brain') { setView(a.kind); setThread(null) }
     else if (a.kind === 'connect') setShowConnect(true)
     else if (a.kind === 'settings') setShowSettings(true)
     else if (a.kind === 'panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
@@ -856,6 +859,8 @@ export function App() {
           <Lazy><VaultView initialPath={vaultOpen.path} initialTab={vaultOpen.tab} onClose={() => setVaultOpen(null)} /></Lazy>
         ) : view === 'tasks' && !thread ? (
           <TasksView spaces={spaces} onOpenChat={(threadId) => void openAnyChat(threadId)} />
+        ) : view === 'brain' && !thread ? (
+          <BrainView onConnect={() => setShowConnect(true)} onNeedsYou={() => setView('tasks')} onOpenChat={(threadId) => void openAnyChat(threadId)} />
         ) : view === 'files' && !thread ? (
           <FilesView onOpenFile={openFile} onOpenChat={(id) => void openAnyChat(id)} />
         ) : view === 'projects' && !thread ? (

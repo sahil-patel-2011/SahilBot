@@ -6,6 +6,7 @@ import { botMaxConfig, canSwarm } from '../swarm/bot-config'
 import { swarmConfig } from '../swarm/config'
 import { teamworkFit, type TeamworkFit } from './auto-teamwork'
 import { planMax, strategyTitle, type MaxPlan } from './planner'
+import { businessNote } from './business-method'
 
 // Whether Max runs for a message, with which plan, and the note the lead gets (Agent.send in loop.ts).
 //   - the composer's Max toggle (or a forced strategy): on, the planner picks;
@@ -68,14 +69,14 @@ export function maxDecision(o: {
   const p = f.plan
   const n = f.helpers ?? 3
   const how = p.strategy === 'team' ? `strategy "team" with about ${n} tasks` : p.strategy === 'swarm' ? `strategy "swarm" (pattern "${p.pattern ?? 'ideate'}", about ${n} helpers)` : p.strategy === 'heavy' ? 'strategy "heavy"' : 'strategy "hybrid"'
-  return { auto: f, hint: `[Max could help here (${f.why}): many agents at once, ${p.title}. Call the max tool (${how}) only if it clearly beats doing it yourself; most requests don't need it.${o.unattended ? ` This runs unattended: Max must fit ${bot ? 'this bot\'s routine' : 'the unattended'} budget and never asks.` : ''}]` }
+  return { auto: f, hint: `[Max could help here (${f.why}): many agents at once, ${p.title}. Call the max tool (${how}) only if it clearly beats doing it yourself; most requests don't need it.${businessNote(o.text)}${o.unattended ? ` This runs unattended: Max must fit ${bot ? 'this bot\'s routine' : 'the unattended'} budget and never asks.` : ''}]` }
 }
 
 /** The lead's note for the first phase of a Max run (judged attempts alone need none: they run directly). */
-export function maxNote(p: MaxPlan, o: { teamMin: number; teamMax: number; maxHelpers: number; unattended?: boolean; budgetUsd?: number }): string {
+export function maxNote(p: MaxPlan, o: { teamMin: number; teamMax: number; maxHelpers: number; unattended?: boolean; budgetUsd?: number; text?: string }): string {
   const hybrid = p.strategy === 'hybrid'
   const head = `[Max is on for this request: ${p.title} (${p.helpers ? `Auto teamed up: ${p.why}` : p.why}).${hybrid ? ' Phase 1 of 2.' : ''}`
-  const budget = o.unattended ? ` This runs unattended: everything must fit $${(o.budgetUsd ?? 0).toFixed(2)} and nothing asks; it shrinks or is skipped if over.` : ''
+  const budget = (o.text ? businessNote(o.text) : '') + (o.unattended ? ` This runs unattended: everything must fit $${(o.budgetUsd ?? 0).toFixed(2)} and nothing asks; it shrinks or is skipped if over.` : '')
   const after = hybrid
     ? ` Then reply with a complete working brief built from the results (the strongest findings or ideas, with sources and [H#] credits, and open questions): NOT the final deliverable. Phase 2 runs judged attempts that write the final ${p.phases[0] === 'swarm' ? 'draft' : 'write-up'} from your brief.`
     : ''

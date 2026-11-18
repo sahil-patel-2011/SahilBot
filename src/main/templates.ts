@@ -51,6 +51,16 @@ export function templateProblems(t: unknown, skillNames?: string[]): string[] {
     if (!Array.isArray(x.skills) || !x.skills.every((s) => typeof s === 'string')) out.push('skills must be names')
     else if (skillNames) for (const s of x.skills) if (!skillNames.includes(s)) out.push(`unknown skill ${s}`)
   }
+  const list = (k: 'sources' | 'starterTasks', max: number, len: number): void => {
+    const v = x[k]
+    if (v === undefined) return
+    if (!Array.isArray(v) || !v.length || v.length > max || !v.every((s) => typeof s === 'string' && s.trim().length > 0 && s.length <= len)) out.push(`${k} must be 1-${max} short strings`)
+    else if (new Set(v.map((s) => s.toLowerCase())).size !== v.length) out.push(`${k} has duplicates`)
+  }
+  list('sources', 6, 40)
+  list('starterTasks', 6, 80)
+  if (x.group !== undefined && x.group !== 'function') out.push('group must be "function"')
+  if (x.group === 'function' && (!x.sources || !x.starterTasks)) out.push('function bots need sources and starterTasks')
   return out
 }
 
@@ -75,6 +85,7 @@ export function templatePrompt(t: BotTemplate): string {
     for (const r of t.routines) parts.push(`- ${r.title}`)
   }
   if (t.skills?.length) parts.push('', '# Skills that help with this job', `Load these when they fit: ${t.skills.join(', ')}.`)
+  if (t.sources?.length) parts.push('', '# Apps this job uses', `Suggested apps: ${t.sources.join(', ')}. Use the ones that are connected; if one you need isn't, say so and suggest connecting it in Connect apps (don't guess its data).`)
   return parts.join('\n') + '\n'
 }
 
@@ -82,7 +93,8 @@ export interface TemplateDeps {
   createBot(name: string, color: string, shape: BotShape): { spaceId: string; threadId: string }
   setPrompt(spaceId: string, text: string): void
   createRoutine(r: { title: string; prompt: string; schedule: Schedule; spaceId: string }): void
-  postAssistant(threadId: string, text: string): void
+  /** meta.suggestions: starter tasks shown as chips under the message (they fill the chat box). */
+  postAssistant(threadId: string, text: string, meta?: Record<string, unknown>): void
   changed(): void
 }
 
@@ -93,7 +105,8 @@ export function addTemplate(t: BotTemplate, d: TemplateDeps): { spaceId: string;
   for (const r of t.routines) {
     try { d.createRoutine({ title: r.title, prompt: r.prompt, schedule: r.schedule, spaceId }) } catch { /* a bad routine never blocks the bot */ }
   }
-  d.postAssistant(threadId, t.starterMessage.trim())
+  if (t.starterTasks?.length) d.postAssistant(threadId, t.starterMessage.trim(), { suggestions: t.starterTasks })
+  else d.postAssistant(threadId, t.starterMessage.trim())
   d.changed()
   return { spaceId, threadId }
 }
