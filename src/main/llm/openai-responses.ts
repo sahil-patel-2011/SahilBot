@@ -162,7 +162,8 @@ export function toResponsesInput(wire: WireMessage[], model: string, o: InputOpt
 
 /**
  * Fast mode's service_tier (guides/fast-mode, /ultrafast-mode): "fast" ("priority" behaves the same), or
- * "ultrafast" on gpt-6-astra / gpt-6.1-sol only. undefined: standard.
+ * "ultrafast" where OpenAI offers it (gpt-6.2-astra, gpt-6.2-sol, gpt-6-astra, gpt-6.1-sol; Responses API only, so
+ * only this request builder ever sends it). undefined: standard.
  */
 export function openaiServiceTier(req: Pick<ChatRequest, 'model' | 'fast'>): 'fast' | 'ultrafast' | undefined {
   const s = req.fast ? fastSupport(req.model) : undefined
@@ -494,8 +495,9 @@ export async function* streamResponses(req: ChatRequest): AsyncGenerator<StreamP
   if (final.usage) {
     const c = responsesCost(served, final.usage, web.searches + web.fetches)
     // Billing-equivalent tokens at the standard rate; the real prompt size picks the price tier (budget.tierTokens).
-    // The tier that ran, when fast mode was asked for (a downgraded request says "default": standard price).
-    const ran = built.body.service_tier ? servedTier(final.service_tier) ?? (built.body.service_tier as 'fast' | 'ultrafast') : undefined
+    // The tier that ran, when fast mode was asked for (a downgraded request says "default": standard price; a
+    // service_tier the account or model refused was dropped and resent, so it ran at standard).
+    const ran = built.body.service_tier ? servedTier(final.service_tier) ?? (built.body.service_tier as 'fast' | 'ultrafast') : req.fast ? 'standard' as const : undefined
     yield { type: 'usage', promptTokens: c.billedInput, completionTokens: c.output, prompt: c.prompt, extraUsd: c.extraUsd, cachedTokens: c.cached, cacheWriteTokens: c.written, reasoningTokens: c.reasoning, webCalls: web.searches + web.fetches, ...(ran ? { serviceTier: ran } : {}) }
   }
   if (web.searches || web.fetches || web.found.length || web.read.length) yield { type: 'server_tools', ...web }

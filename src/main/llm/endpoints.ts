@@ -315,7 +315,7 @@ export class Endpoints {
     const cloud = (this.last?.models ?? []).filter((m) => m.note === 'remote' && m.installed && this.isOn(m, hidden, shown))
     const best = (ms: ModelInfo[]): string | undefined => [...ms].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id
     const family = (pref || 'opus').toLowerCase()
-    // An OpenAI role by name (astra, sol…); with no Claude key, '' / 'opus' means GPT-6.1 Sol's tier (near-Astra, a fifth of the price).
+    // An OpenAI role by name (astra, sol…); with no Claude key, '' / 'opus' means GPT Sol's tier (GPT-6.2 Sol: near Astra at a quarter of the price).
     const gpt = (m: ModelInfo): boolean => !!openaiInfo(m.id) && !claudeFamily(m.id) && !openaiInfo(m.id)!.premium
     return best(cloud.filter((m) => claudeFamily(m.id) === family)) ?? best(cloud.filter((m) => gpt(m) && openaiInfo(m.id)!.role === family))
       ?? (family === 'opus' ? best(cloud.filter((m) => gpt(m) && openaiInfo(m.id)!.role === 'sol')) : undefined)

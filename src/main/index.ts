@@ -24,7 +24,7 @@ import { INTRO, autoMemoryOn, setAutoMemory } from './agent/prompt'
 import { updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
-import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff } from './llm/fast-mode'
+import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff, speedOptions } from './llm/fast-mode'
 import { isAuto } from './llm/router'
 import { automationStatus, fileProbe, permissionsStatus, settingsUrl } from './permissions-center'
 import { collectText, isLocal, spendHooks, streamChat, usageDetails } from './llm/client'
@@ -1845,7 +1845,7 @@ app.whenReady().then(() => {
   handle('fast:catalog', () => (endpoints.last?.models ?? []).filter((m) => m.installed && m.note === 'remote').flatMap((m) => {
     const sup = fastSupport(m.id)
     if (!sup || sup.id !== m.id.toLowerCase()) return []
-    return [{ id: m.id, label: m.label || m.id, provider: sup.provider, factor: sup.factor, ...(sup.ultrafast ? { ultrafast: sup.ultrafast } : {}), tradeoff: fastTradeoff(m.id) ?? '', ...(sup.note ? { note: sup.note } : {}) }]
+    return [{ id: m.id, label: m.label || m.id, provider: sup.provider, factor: sup.factor, ...(sup.ultrafast ? { ultrafast: sup.ultrafast } : {}), tradeoff: fastTradeoff(m.id) ?? '', options: speedOptions(m.id) ?? [], enabled: m.enabled !== false, ...(sup.note ? { note: sup.note } : {}) }]
   }))
   handle('usage:glance', () => usageGlance(dashboard()))
   // The end-of-run line under the last reply: tokens (and cloud cost) of one run, helpers included.

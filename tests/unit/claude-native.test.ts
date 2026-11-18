@@ -78,7 +78,8 @@ describe('model table (shared/models.md, model-migration.md)', () => {
   })
   test('prices incl. cache reads, cache writes and Haiku 5.5\'s long-context rate card', () => {
     expect(priceFor('claude-opus-5-5')).toMatchObject({ input: 4, output: 20, cacheRead: 0.2, known: true })
-    expect(priceFor('claude-sonnet-5-5')).toMatchObject({ input: 2, output: 10, cacheRead: 0.2, known: true })
+    expect(priceFor('claude-sonnet-5-5')).toMatchObject({ input: 2, output: 10, cacheRead: 0.1, known: true })
+    expect(priceFor('claude-mythos-5-2')).toMatchObject({ input: 8, output: 40, cacheRead: 0.2, known: true })
     expect(priceFor('claude-fable-5-1')).toMatchObject({ input: 10, output: 50, cacheRead: 0.25, known: true })
     expect(priceFor('claude-haiku-5-5', 100_000)).toMatchObject({ input: 0.1, output: 0.5 })
     expect(priceFor('claude-haiku-5-5', 100_001)).toMatchObject({ input: 0.5, output: 2.5, cacheRead: 0.05 })
@@ -103,7 +104,7 @@ describe('model table (shared/models.md, model-migration.md)', () => {
     expect(claudeSpec('claude-opus-5-5')!.fallback).toBe(true)
   })
   test('Fable 5.2 is known at its published price; a newer id is family-inferred, highest family prices, marked estimated', () => {
-    expect(priceFor('claude-fable-5-2')).toMatchObject({ input: 8, output: 40, cacheRead: 0.8, known: true })
+    expect(priceFor('claude-fable-5-2')).toMatchObject({ input: 8, output: 40, cacheRead: 0.2, known: true })
     expect(claudeSpec('claude-fable-5-2')).toMatchObject({ computer: 'toolset', thinking: 'adaptive', contextTokens: 1_000_000 })
     // A version suffix is a different model, not a dated snapshot of Fable 5.
     expect(claudeSpec('claude-fable-5-3')).toBeUndefined()

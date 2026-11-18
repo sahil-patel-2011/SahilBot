@@ -61,6 +61,47 @@ describe('configuration matrix', () => {
   test('the whole matrix runs in well under a minute', () => expect(ms).toBeLessThan(45_000))
 })
 
+describe('GPT-6.2: Sol for routine research and reasoning, Astra only for the hardest work', () => {
+  // Every research and math item of the eval set, on every key setup with an OpenAI key, Best result and Balanced,
+  // with and without local models and Fable (plenty of budget, an account with credit).
+  const base = sim.setups().filter((s) => sim.hasOpenAIKey(s.keys) && !s.keys.startsWith('plan') && s.spending === 'plenty' && !s.noCredit && s.preference !== 'cheapest')
+  const reasoning = ITEMS.filter((it) => ['research', 'math'].includes(TASKS.get(it.id)!.category) && !TASKS.get(it.id)!.signals.study)
+  const routed = (s: (typeof base)[number], it: (typeof ITEMS)[number]): string | undefined => {
+    sim.applyPrefs(s)
+    try { return sim.pickFor(s, TASKS.get(it.id)!, { voice: !!it.ctx?.voice, health: new ModelHealth(), now: NOW }).result?.model } finally { sim.resetPrefs() }
+  }
+  test('the eval set has routine and hardest research and math to check', () => {
+    expect(reasoning.filter((it) => TASKS.get(it.id)!.difficulty === 2).length).toBeGreaterThanOrEqual(3)
+    expect(reasoning.filter((it) => TASKS.get(it.id)!.difficulty === 3).length).toBeGreaterThanOrEqual(1)
+  })
+  test('routine (difficulty 0-2) research and math never go to GPT-6.2 Astra; difficulty 2 goes to GPT-6.2 Sol when GPT is the pick', () => {
+    let n = 0
+    for (const s of base) for (const it of reasoning) {
+      const d = TASKS.get(it.id)!.difficulty
+      if (d >= 3) continue
+      const m = routed(s, it)
+      expect(m, `${sim.setupName(s)} | ${it.id} "${it.text.slice(0, 60)}"`).not.toBe('gpt-6.2-astra')
+      if (d === 2 && m?.startsWith('gpt-')) expect(m, `${sim.setupName(s)} | ${it.id}`).toBe('gpt-6.2-sol')
+      n++
+    }
+    expect(n).toBeGreaterThan(100)
+  })
+  test('the hardest research and math (difficulty 3) get GPT-6.2 Astra on Best result with an OpenAI key and no Fable', () => {
+    const hard = reasoning.filter((it) => TASKS.get(it.id)!.difficulty === 3 && !TASKS.get(it.id)!.needsVision)
+    for (const s of base.filter((x) => x.preference === 'best' && !x.fable && x.keys === 'openai')) for (const it of hard) expect(routed(s, it), `${sim.setupName(s)} | ${it.id}`).toBe('gpt-6.2-astra')
+  })
+  test('superseded GPT-6 Astra / GPT-6.1 Sol are never Auto\'s pick when the 6.2 models are on', () => {
+    // The older two switched on by hand next to the 6.2 lineup (as the Models page lists them, rank 2 + gen / 100).
+    const gpt = sim.usableFor(base.find((s) => s.keys === 'openai')!)
+    const older = [['gpt-6-astra', 'gpt-6.2-astra', 2.06], ['gpt-6.1-sol', 'gpt-6.2-sol', 2.061]] as const
+    const both = [...sim.usableFor(base[0]), ...older.map(([id, newer, rank]) => ({ ...gpt.find((m) => m.id === newer)!, id, rank }))]
+    for (const it of ITEMS) {
+      const m = autoRoute({ requested: 'auto', usable: both, task: TASKS.get(it.id)!, preference: 'best', voice: !!it.ctx?.voice, health: new ModelHealth(), now: NOW }).model
+      expect(['gpt-6-astra', 'gpt-6.1-sol']).not.toContain(m)
+    }
+  })
+})
+
 describe('stability across a conversation', () => {
   /** Provider and model switches between consecutive turns that continue the same work. */
   function flipRate(stable: boolean): { turns: number; pairs: number; providerFlips: number; modelFlips: number; flips: Map<string, number> } {
@@ -299,15 +340,15 @@ describe('failures: Auto falls back, remembers, says so once, never loops', () =
     })
     vi.stubGlobal('fetch', fetchStub)
     try {
-      const req = { baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-test', model: 'gpt-6.1-sol', messages: [{ role: 'user' as const, content: 'hi' }], sampling: {} as never, maxTokens: 1000, effort: 'high' as const }
+      const req = { baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-test', model: 'gpt-6.2-sol', messages: [{ role: 'user' as const, content: 'hi' }], sampling: {} as never, maxTokens: 1000, effort: 'high' as const }
       let caught: unknown
       try { for await (const _ of withRetries(() => streamResponses(req))) void _ } catch (e) { caught = e }
       expect(opens).toBe(1)
       expect((caught as { status?: number }).status).toBe(402)
       expect(failureKind(caught)).toBe('quota')
-      expect(fallbackNotice('GPT-6.1 Sol', 'GPT-6.1 Terra', caught as Error, { rest: true })).toBe('GPT-6.1 Sol is unavailable (out of API credit); used GPT-6.1 Terra for the rest of this task.')
+      expect(fallbackNotice('GPT-6.2 Sol', 'GPT-6.1 Terra', caught as Error, { rest: true })).toBe('GPT-6.2 Sol is unavailable (out of API credit); used GPT-6.1 Terra for the rest of this task.')
       // HTTP-level billing limits (429 insufficient_quota) are 402 too.
-      expect(retryInfo(openaiError(429, { code: 'insufficient_quota', message: 'quota' }, undefined, 'gpt-6.1-sol')).retry).toBe(false)
+      expect(retryInfo(openaiError(429, { code: 'insufficient_quota', message: 'quota' }, undefined, 'gpt-6.2-sol')).retry).toBe(false)
     } finally {
       vi.unstubAllGlobals()
       Object.assign(retryPolicy, saved)
@@ -401,7 +442,7 @@ describe('effort', () => {
       { name: 'both, then a fallback model', steps: [[2, 6], [2, 10], [0, 11], [3, 11], [0, 11], [1, 12]], switchAt: 2 },
       { name: 'failures after the bump', steps: [[3, 2], [3, 2], [3, 2], [3, 9], [3, 12]] }
     ]
-    const NEXT: Record<string, string> = { 'claude-opus-5-5': 'claude-sonnet-5-5', 'gpt-6-astra': 'gpt-6.1-sol', 'gpt-6.1-sol': 'gpt-6.1-terra', 'grok-4.7': 'gpt-6.1-sol', 'claude-haiku-5-5': 'gpt-6-luna', 'gpt-5.4': 'gpt-5.4-mini' }
+    const NEXT: Record<string, string> = { 'claude-opus-5-5': 'claude-sonnet-5-5', 'gpt-6.2-astra': 'gpt-6.2-sol', 'gpt-6.2-sol': 'gpt-6.1-terra', 'grok-4.7': 'gpt-6.2-sol', 'claude-haiku-5-5': 'gpt-6-luna', 'gpt-5.4': 'gpt-5.4-mini' }
     let runs = 0
     for (const first of ALL_MODELS) for (const start of LV) for (const choice of ['auto', 'high', 'max'] as const) for (const sc of SCRIPTS) {
       let model = first

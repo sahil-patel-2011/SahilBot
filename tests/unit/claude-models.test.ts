@@ -72,7 +72,7 @@ describe('thinking and effort', () => {
 describe('prices and the budget estimator', () => {
   test('per-model rates ($ per 1M tokens)', () => {
     expect(priceFor('claude-opus-5-5')).toMatchObject({ input: 4, output: 20, cacheRead: 0.2, known: true })
-    expect(priceFor('claude-sonnet-5-5')).toMatchObject({ input: 2, output: 10, cacheRead: 0.2 })
+    expect(priceFor('claude-sonnet-5-5')).toMatchObject({ input: 2, output: 10, cacheRead: 0.1 })
     expect(priceFor('claude-haiku-5-5')).toMatchObject({ input: 0.1, output: 0.5 })
     expect(priceFor('claude-haiku-5-5', 150_000)).toMatchObject({ input: 0.5, output: 2.5 })
     expect(priceFor('claude-fable-5-1')).toMatchObject({ input: 10, output: 50, cacheRead: 0.25 })
@@ -86,12 +86,15 @@ describe('prices and the budget estimator', () => {
   test('cached input is billed at the model\'s cache-read rate', () => {
     expect(cacheReadFactor('claude-opus-5-5')).toBeCloseTo(0.05)
     expect(cacheReadFactor('claude-fable-5-1')).toBeCloseTo(0.025)
-    expect(cacheReadFactor('claude-sonnet-5-5')).toBeCloseTo(0.1)
+    // Anthropic's pricing page: cache hits on Opus 5.5 and Sonnet 5.5 are 0.05x, on Fable / Mythos 5.x 0.025x.
+    expect(cacheReadFactor('claude-sonnet-5-5')).toBeCloseTo(0.05)
+    expect(cacheReadFactor('claude-fable-5-2')).toBeCloseTo(0.025)
+    expect(cacheReadFactor('claude-mythos-5-2')).toBeCloseTo(0.025)
     expect(cacheReadFactor('claude-haiku-5-5')).toBeCloseTo(0.1)
     const u = { input_tokens: 1000, cache_creation_input_tokens: 2000, cache_read_input_tokens: 100_000 }
     expect(billedInput('claude-opus-5-5', u)).toBe(1000 + 2500 + 5000)
     expect(billedInput('claude-fable-5-1', u)).toBe(1000 + 2500 + 2500)
-    expect(billedInput('claude-sonnet-5-5', u)).toBe(1000 + 2500 + 10_000)
+    expect(billedInput('claude-sonnet-5-5', u)).toBe(1000 + 2500 + 5000)
   })
   test('refusals say why when the API gives a category', () => {
     expect(refusalNote({ category: 'cyber', explanation: null })).toMatch(/declined this request \(cyber\)/)

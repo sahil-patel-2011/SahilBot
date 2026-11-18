@@ -7,7 +7,7 @@ import { OPENAI as OPENAI_SPECS, isPremiumOpenAI } from '../../src/main/llm/open
 import { xaiInfo, xaiRank } from '../../src/main/llm/xai-models'
 import { PLAN_PROVIDER, planModelId, isPlanModel } from '../../src/main/llm/codex/ids'
 import { routingPrefs } from '../../src/main/llm/router'
-import { ROUTING_TABLE, payPerUse, routeTier, slotOf, slotsFor, spendingPrefs, windowOf, type AutoPreference } from '../../src/main/llm/routing-table'
+import { ROUTING_TABLE, isStudy, payPerUse, routeTier, slotOf, slotsFor, spendingPrefs, windowOf, type AutoPreference } from '../../src/main/llm/routing-table'
 import { classifyTask, type TaskCategory, type TaskClass, type TaskContext } from '../../src/main/llm/task-classifier'
 import { autoRoute, budgetTightFor, closeCall, slotPrice, slotTtft, type AutoRouteResult } from '../../src/main/llm/auto-route'
 import { resolveEffort } from '../../src/main/llm/auto-effort'
@@ -27,7 +27,7 @@ import { openaiError } from '../../src/main/llm/openai-responses'
 
 const LABEL: Record<string, string> = {
   'claude-haiku-5-5': 'Claude Haiku 5.5', 'claude-sonnet-5-5': 'Claude Sonnet 5.5', 'claude-opus-5-5': 'Claude Opus 5.5', 'claude-fable-5-2': 'Claude Fable 5.2',
-  'gpt-6-luna': 'GPT-6 Luna', 'gpt-6.1-terra': 'GPT-6.1 Terra', 'gpt-6.1-sol': 'GPT-6.1 Sol', 'gpt-6-astra': 'GPT-6 Astra', 'gpt-5.5-pro': 'GPT-5.5 Pro', 'grok-4.7': 'Grok 4.7'
+  'gpt-6-luna': 'GPT-6 Luna', 'gpt-6.1-terra': 'GPT-6.1 Terra', 'gpt-6.2-sol': 'GPT-6.2 Sol', 'gpt-6.2-astra': 'GPT-6.2 Astra', 'gpt-5.5-pro': 'GPT-5.5 Pro', 'grok-4.7': 'Grok 4.7'
 }
 
 function claude(id: string): ModelInfo {
@@ -49,9 +49,9 @@ function plan(codexId: string): ModelInfo {
 const local = (id: string, tier: Tier, o: Partial<ModelInfo>): ModelInfo => ({ id, provider: 'ollama', providerName: 'Ollama', enabled: true, installed: true, tier, rank: rankOf(id), vision: false, tools: true, requiredGB: 8, maxFittingWindow: 65536, fits: true, label: id, ...o })
 
 export const CLAUDE_MODELS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-2'].map(claude)
-export const OPENAI_MODELS = ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.5-pro'].map(gpt)
+export const OPENAI_MODELS = ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-5.5-pro'].map(gpt)
 export const GROK_MODELS = [grok('grok-4.7')]
-export const PLAN_MODELS = ['gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra'].map(plan)
+export const PLAN_MODELS = ['gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6.2-astra'].map(plan)
 export const LOCAL_MODELS = [local('lfm3:1.7b', 0, {}), local('gemma4:12b', 1, { vision: true }), local('qwen3.8:27b', 2, { vision: true, maxFittingWindow: 131072 })]
 
 // ---------------------------------------------------------------------------------------------------
@@ -287,12 +287,13 @@ export function violations(c: Check): string[] {
     if (stronger.length && !(slotOf(m) && hardest.includes(slotOf(m)!))) out.push(`best-hardest-got-light: ${m.id} (could use ${stronger[0].id})`)
   }
   // Balanced close calls: when Best result's pick differs, it is taken iff it costs at most 2x and isn't much slower.
-  if (s.preference === 'balanced' && !tight && closeCall(task) && r.pick && r.pick.source !== 'sticky' && !pick.failed?.length) {
+  // (School work routes as Cheapest, where no close call applies: routing-table.ts routeTask.)
+  if (s.preference === 'balanced' && !tight && !isStudy(task) && closeCall(task) && r.pick && r.pick.source !== 'sticky' && !pick.failed?.length) {
     const best = autoRoute({ requested: 'auto', usable, task, preference: 'best', voice, health: c.health, now: c.now })
     const bm = usable.find((x) => x.id === best.model)!
     if (best.model !== r.model && !isLocal(bm) && !isLocal(m)) {
       const sb = slotOf(bm), sm = slotOf(m)
-      if (sb && sm && slotPrice(bm) <= 2 * slotPrice(m) + 1e-9 && slotTtft(sb) <= slotTtft(sm) + (SPEED_SENSITIVE.has(task.category) || voice ? 1 : 3)) out.push(`balanced-close-call-not-upgraded: ${m.id} (Best: ${bm.id})`)
+      if (sb && sm && slotPrice(bm, task.contextTokens) <= 2 * slotPrice(m, task.contextTokens) + 1e-9 && slotTtft(sb) <= slotTtft(sm) + (SPEED_SENSITIVE.has(task.category) || voice ? 1 : 3)) out.push(`balanced-close-call-not-upgraded: ${m.id} (Best: ${bm.id})`)
     }
   }
   return out

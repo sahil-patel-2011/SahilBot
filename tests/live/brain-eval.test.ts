@@ -14,7 +14,7 @@ const KEY = process.env.OPENAI_LIVE_KEY
 
 const m = (id: string, provider: string, tier: 0 | 1 | 2 | 3, input: number, output: number): ModelInfo => ({ id, label: id, provider, providerName: provider, enabled: true, installed: true, vision: true, tools: true, tier, requiredGB: 0, maxFittingWindow: 1_000_000, contextTokens: 1_000_000, fits: true, note: 'remote', price: { input, output } }) as ModelInfo
 const MODELS = [
-  m('gpt-6-luna', 'openai', 0, 0.1, 0.5), m('gpt-6.1-terra', 'openai', 1, 1, 5), m('gpt-6.1-sol', 'openai', 2, 2, 10), m('gpt-6-astra', 'openai', 3, 10, 50),
+  m('gpt-6-luna', 'openai', 0, 0.1, 0.5), m('gpt-6.1-terra', 'openai', 1, 1, 5), m('gpt-6.2-sol', 'openai', 2, 2, 10), m('gpt-6.2-astra', 'openai', 3, 8, 40),
   m('claude-haiku-5-5', 'anthropic', 1, 0.1, 0.5), m('claude-sonnet-5-5', 'anthropic', 2, 2, 10), m('claude-opus-5-5', 'anthropic', 3, 4, 20), m('claude-fable-5-2', 'anthropic', 3, 8, 40)
 ]
 

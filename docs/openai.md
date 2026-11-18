@@ -9,17 +9,20 @@ keep using Chat Completions. Code: `src/main/llm/openai-models.ts` (model table)
 
 | Model | Auto uses it for | Context / max input / max output | $ per 1M (input / cached / output) |
 |---|---|---|---|
-| GPT-6 Astra | the hardest work (tier 3) | 1.05M / 922K / 128K | 10 / 1 / 50 |
-| GPT-6.1 Sol | tasks (tier 2) | 1.05M / 922K / 128K | 2 / 0.10 / 10 |
+| GPT-6.2 Astra | the hardest work (difficulty 3; tier 3) | 1.05M / 922K / 128K | 8 / 0.40 / 40 |
+| GPT-6.2 Sol | tasks, routine research and reasoning (tier 2) | 1.05M / 922K / 128K | 2 / 0.10 / 10 |
 | GPT-6.1 Terra | quick questions (tier 1) | 1.05M / 922K / 128K | 1 / 0.05 / 5 |
 | GPT-6 Luna | small talk (tier 0) | 1.05M / 922K / 128K | 0.10 / 0.01 / 0.50 |
 
-Only these four models are on by default. Older models (GPT-6 Sol, GPT-5.6, GPT-5.5, GPT-5.4 and earlier)
-and pro models are listed on the Models page but start off. Auto never picks a pro model on its own. If
+Only these four models are on by default. GPT-6.2 Astra and Sol (Nov 17, 2026) supersede GPT-6 Astra
+($10 / $1 / $50) and GPT-6.1 Sol. Older models (GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol, GPT-5.6, GPT-5.5, GPT-5.4 and
+earlier) and pro models are listed on the Models page but start off; picked by name they work as before. Speed
+tiers (Fast, and Ultrafast on GPT-6.2 Astra / Sol, GPT-6 Astra and GPT-6.1 Sol) are in
+[model-routing.md "Fast mode"](model-routing.md#fast-mode). Auto never picks a pro model on its own. If
 Claude models are on too, Claude keeps its tiers (Haiku, Sonnet, Opus). A saved OpenAI key makes Auto try
 cloud models first, as a Claude key does, unless Settings → Models says Local first.
 
-A GPT id the table doesn't know yet (say `gpt-6.2-sol`) is treated like the newest model of its role. It
+A GPT id the table doesn't know yet (say `gpt-6.3-sol`) is treated like the newest model of its role. It
 is priced at that role's highest known rates and its price is marked as an estimate.
 
 ## Long chats
