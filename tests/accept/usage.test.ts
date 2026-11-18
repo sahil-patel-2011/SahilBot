@@ -69,4 +69,49 @@ describe('usage dashboard', () => {
       await app.close()
     }
   }, 90_000)
+
+  test('Fast mode: a Standard / Fast / Ultrafast choice per model, each with its penalty, saved per model', async () => {
+    const prev = llm.models
+    llm.models = ['claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-terra']
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_FORCE_PAID: '1' })
+    try {
+      await page.evaluate(() => window.foreman.settings.set({ setKeys: { anthropic: 'sk-ant-api-test', openai: 'sk-test' } }))
+      await page.evaluate(() => window.foreman.models.list())
+      await page.keyboard.press('Meta+,')
+      await page.waitForSelector('[data-testid="settings"]')
+      await page.click('[data-testid="settings-models"]')
+      // Fast mode lives under the Models page's Advanced section.
+      await page.click('[data-testid="models-advanced"] > summary')
+      await page.waitForSelector('[data-testid="fast-mode"]')
+      const astra = '[data-testid="fast-model-gpt-6.2-astra"]'
+      await page.locator(astra).waitFor()
+      // Every option names its speed and its price, in multiples and dollars per million tokens.
+      // (Shown under the option's own name; the full line is its tooltip.)
+      await expect.poll(() => page.locator('[data-testid="fast-penalty-gpt-6.2-astra-ultrafast"]').textContent()).toMatch(/^up to 4\.5x faster · (3x price \(\$24 \/ \$120 per M\) until Feb 28, 2027, then 6x \(\$48 \/ \$240\)|6x price \(\$48 \/ \$240 per M\))$/)
+      expect(await page.locator('[data-testid="fast-penalty-gpt-6.2-astra-ultrafast"]').getAttribute('title')).toMatch(/^Ultrafast · up to 4\.5x faster · /)
+      expect(await page.locator('[data-testid="fast-penalty-gpt-6.2-astra-fast"]').textContent()).toBe('up to 2.5x faster · 2x price ($16 / $80 per M)')
+      expect(await page.locator('[data-testid="fast-penalty-gpt-6.2-astra-standard"]').textContent()).toBe('normal speed · 1x price ($8 / $40 per M)')
+      expect(await page.locator(astra).innerText()).toMatch(/Separate rate limits from Standard and Fast · Responses API only · US data residency only/)
+      expect(await page.locator('[data-testid="fast-penalty-gpt-6.2-sol-ultrafast"]').textContent()).toMatch(/\$6 \/ \$30 per M|\$12 \/ \$60 per M/)
+      // No Ultrafast where OpenAI doesn't offer it; Claude has Standard and Fast.
+      expect(await page.locator('[data-testid="fast-speed-gpt-6.1-terra-ultrafast"]').count()).toBe(0)
+      expect(await page.locator('[data-testid="fast-penalty-claude-opus-5-5-fast"]').textContent()).toBe('up to 2.5x faster output · 2x price ($8 / $40 per M)')
+      // Off unless switched on: every model follows its provider's switch, which is off.
+      expect(await page.locator('[data-testid="fast-speed-gpt-6.2-astra-inherit"]').isChecked()).toBe(true)
+      // Choosing Ultrafast for one model saves it for that model only.
+      await page.click('[data-testid="fast-speed-gpt-6.2-astra-ultrafast"]')
+      await expect.poll(() => page.evaluate(() => window.foreman.settings.get().then((x) => x.fastMode?.models))).toEqual({ 'gpt-6.2-astra': 'ultrafast' })
+      await page.click('[data-testid="fast-speed-gpt-6.2-sol-standard"]')
+      await expect.poll(() => page.evaluate(() => window.foreman.settings.get().then((x) => x.fastMode?.models))).toEqual({ 'gpt-6.2-astra': 'ultrafast', 'gpt-6.2-sol': 'off' })
+      expect(await page.evaluate(() => window.foreman.settings.get().then((x) => x.fastMode?.providers))).toEqual({ anthropic: false, openai: false, xai: false })
+      if (process.env.SHOTS_DIR) {
+        await page.setViewportSize({ width: 1280, height: 900 })
+        await page.locator(astra).scrollIntoViewIfNeeded()
+        await page.screenshot({ path: `${process.env.SHOTS_DIR}/fast-mode-speeds.png` })
+      }
+    } finally {
+      llm.models = prev
+      await app.close()
+    }
+  }, 90_000)
 })

@@ -1,18 +1,18 @@
 # How Auto picks a model
 
 **Auto's brain** (`src/main/llm/auto-brain.ts`). Before each request, the fastest cheap model you have (GPT-6 Luna, then GPT-6.1 Terra, then Claude Haiku 5.5) reads the whole request, the conversation so far, the attachments, the bot's role, your Auto preference and how each model did on this Mac lately. It answers in strict JSON: the kind of task, its difficulty, how hard to think, the model that should do it, and whether models should work together:
-It also names what the request **needs** (reasoning, coding, seeing images, making images, ideas, writing, research, computer use, apps, quick) and matches the model to the needs and the difficulty: Astra or Sol for reasoning and research (Fable 5.2 only for the very hardest), Opus or Sonnet for coding, computer use, apps, ideas and creative writing, Opus or Sol for images, Luna, Haiku or Terra for quick things. Seeing images is a hard rule (only models that see them); making images or using the screen makes it agent work.
+It also names what the request **needs** (reasoning, coding, seeing images, making images, ideas, writing, research, computer use, apps, quick) and matches the model to the needs and the difficulty: GPT-6.2 Sol for routine reasoning, math and research, GPT-6.2 Astra only at difficulty 3 (Fable 5.2 only for the very hardest), Sonnet for routine coding and Opus for hard multi-file or agentic coding, Opus or Sonnet for computer use, apps, ideas and creative writing, Opus or GPT-6.2 Sol for images, Luna, Haiku or Terra for quick things. Each model's one-line strength in the brain's menu (`STRENGTH` in auto-brain.ts) comes from the evidence below and from this app's live runs of 2026-11-17 (quick requests on Luna / Haiku; Astra had been overused for routine research; Sonnet handled routine coding well; Opus for hard agentic coding and computer use; Sol for routine research and reasoning). Seeing images is a hard rule (only models that see them); making images or using the screen makes it agent work.
 
 How models work together:
 - **solo**: one model does it well;
-- **pair**: two models at the request's own level (GPT-6 Luna with Claude Haiku 5.5 for light work, Claude Opus 5.5 with GPT-6 Astra for hard work, from different providers when both are on): the partner gives its own take first, and the main model builds on the best of both;
+- **pair**: two models at the request's own level (GPT-6 Luna with Claude Haiku 5.5 for light work, Claude Opus 5.5 with GPT-6.2 Astra for hard work, from different providers when both are on): the partner gives its own take first, and the main model builds on the best of both;
 - **debate**: for reasoning-heavy problems (a decision with trade-offs, a strategy, a proof, a tricky root cause), a Council: several models reason in parallel and challenge each other;
 - **fan-out**: a big job that splits (a game's systems, an app's screens) goes to 2-8 parallel helpers on a fast model while the main model builds the shared parts and integrates;
-- **plan**: for the hardest multi-step work, a stronger model (Fable 5.2, Opus 5.5, GPT-6 Astra) writes the plan first, and the run's model carries it out with the whole conversation and the plan;
+- **plan**: for the hardest multi-step work, a stronger model (Fable 5.2, Opus 5.5, GPT-6.2 Astra) writes the plan first, and the run's model carries it out with the whole conversation and the plan;
 - **review**: a second model, from another provider when there is one, reviews the draft before you see it, and the run's model fixes what holds up;
 - **plan+review**: both, for the hardest high-stakes work.
 
-The brain's read replaces the rules' within their hard floors (agent work never becomes a chat, coding and computer use are never light, attached folders and modes keep their tier). Its model is used only when it passes every hard rule below (keys, budget, images, window, Grok, cooldowns), is never a premium model without the Fable setting, never costs over 4x the table's pick for a light request, and on Cheapest never costs more than it. Teams only form for agent work at difficulty 2 or more (planning at 3), never on a tight budget. The read runs without thinking (it's a short JSON answer; Haiku 5.5 with adaptive thinking took about 6 s to start), and each brain gets a wait that fits its speed: Luna 4 s, Terra 4.5 s, Haiku 6 s. A read that misses the wait still finishes and is stored with the message when it lands: a retry of the same request and a "yes, do it" after it use it (the run already under way keeps the rules' pick). A timeout, an error or an answer outside the schema leaves the rules' decision (below). The brain judges difficulty by what the work takes (separate asks, steps and tools, what must be exactly right, how much there is to read, what a mistake costs), never by the words used, and it isn't shown the rules' guess. Small talk and voice skip it, and so does a short follow-up ("yes, do it", "continue"), which keeps the read of the request it carries on. An "Approved: …" or an answer from Needs you also continues its request: same read, same model.
+The brain's read replaces the rules' within their hard floors (agent work never becomes a chat, coding and computer use are never light, attached folders and modes keep their tier). Its model is used only when it passes every hard rule below (keys, budget, images, window, Grok, cooldowns), is never a premium model without the Fable setting, is never GPT Astra below difficulty 3 unless the table picked Astra itself (live, 2026-11-17: a 120-word newsletter blurb ran 33 Astra requests, $5.72), never costs over 4x the table's pick for a light request, and on Cheapest never costs more than it. Teams only form for agent work at difficulty 2 or more (planning at 3), never on a tight budget. The read runs without thinking (it's a short JSON answer; Haiku 5.5 with adaptive thinking took about 6 s to start), and each brain gets a wait that fits its speed: Luna 4 s, Terra 4.5 s, Haiku 6 s. A read that misses the wait still finishes and is stored with the message when it lands: a retry of the same request and a "yes, do it" after it use it (the run already under way keeps the rules' pick). A timeout, an error or an answer outside the schema leaves the rules' decision (below). The brain judges difficulty by what the work takes (separate asks, steps and tools, what must be exactly right, how much there is to read, what a mistake costs), never by the words used, and it isn't shown the rules' guess. Small talk and voice skip it, and so does a short follow-up ("yes, do it", "continue"), which keeps the read of the request it carries on. An "Approved: …" or an answer from Needs you also continues its request: same read, same model.
 
 During a run the brain's model holds through planning, doing and checking (rule-routed runs may still change model between phases). If the work keeps failing on it (four failed calls, two steps in a row where every call failed), Auto moves once to the next stronger model of the same kind (cloud stays cloud, Fable only with its setting), with the whole conversation; a model you picked is never changed.
 
@@ -31,8 +31,8 @@ The "routed" label on each reply names the model and the reason, for example "Cl
 
 | Option | What it does |
 |---|---|
-| **Best result** | Routes one tier above the request's difficulty, so each kind of task gets the strongest model. Chat stops at tier 2 and voice at tier 1, so both stay quick. |
-| **Balanced** (default) | Routes at the request's own difficulty: the cheapest model that is strong enough. Where GPT-6 Astra would lead the hardest row, its near-equal GPT-6.1 Sol leads instead, at a fifth of the price. On a [close call](#balanced-close-calls) it takes Best result's pick when that costs at most 2x and isn't much slower. |
+| **Best result** | Routes one tier above the request's difficulty, so each kind of task gets the strongest model. Chat stops at tier 2 and voice at tier 1, so both stay quick. Research and math stop at tier 2 below difficulty 3: routine research and reasoning get GPT-6.2 Sol (it nearly matches Astra at a quarter of the price), and GPT-6.2 Astra leads only difficulty-3 work. |
+| **Balanced** (default) | Routes at the request's own difficulty: the cheapest model that is strong enough. Where GPT-6.2 Astra would lead the hardest row, its near-equal GPT-6.2 Sol leads instead, at a quarter of the price. On a [close call](#balanced-close-calls) it takes Best result's pick when that costs at most 2x and isn't much slower. |
 | **Cheapest** | Routes one tier lower. Within a row, the cheapest model comes first. A free local model is used first whenever one is strong enough. |
 
 These settings and conditions still apply on top of the preference:
@@ -46,14 +46,14 @@ These settings and conditions still apply on top of the preference:
 | Monthly spending limit (a specific amount) | A model the limit can't pay for is skipped. With less than 10% of it left, Auto routes as if Cheapest were chosen, but only while a pay-per-use model could still be picked: when only the ChatGPT plan and local models are left (they cost nothing per token), the preference stands. |
 | Monthly spending limit: Unlimited | No cap. Spend is still recorded and shown on the Usage page. |
 | Monthly spending limit: None | No pay-per-use API model is used. Auto routes only to your ChatGPT plan (via Codex) and local models, at the chosen preference (never as Cheapest: nothing is being spent), and says why when neither is available. A model picked by name is refused before anything is sent. |
-| Fast mode | Auto uses a provider's fast tier only where Settings → Models → Fast mode allows it. By default that is only for speed-sensitive requests: voice, small talk and quick code questions. See [Fast mode](#fast-mode). |
+| Fast mode | Auto never turns Fast or Ultrafast on by itself: it uses a provider's fast tier only where Settings → Models → Fast mode allows it for that model (Ultrafast only where it was chosen for that model). By default that is only for speed-sensitive requests: voice, small talk and quick code questions. See [Fast mode](#fast-mode). |
 | Images in the request | Only models that can see images are considered. |
 | Context window | The model's window must fit the prompt. If none fits, Auto uses the model with the biggest window. |
 | Computer use and voice | Never Grok (no computer-use result on any board; about 10 s to its first token). With only Grok on, Auto says so and suggests a fix; Grok picked by name still works. |
 | Computer use on the ChatGPT plan | Codex passes the screenshots tools return back to the model as text only ([chatgpt-plan.md](chatgpt-plan.md)), so the plan's models are used for computer use only when no other model can see the screen, and the label says they work from page text. The planner + executor pair never uses them. |
 | Premium models | Fable only with "Use Fable for the hardest tasks"; GPT Pro models never (picked by name only). |
 | A follow-up in the same chat | Keeps the chat's previous model when it is still as good a choice ([Stability](#stability-across-a-conversation)); a light turn never stays on a model costing over 2x the fresh pick. |
-| School work (homework, studying, a quiz or test, a school subject such as chemistry or algebra) | On Balanced and Cheapest: the cheapest strong-enough model (Haiku 5.5, GPT-6 Luna or Terra), and for the biggest assignments (a long paper) a mid-tier one (Sonnet 5.5, GPT-6.1 Sol), never Opus, Astra or Fable. A "Best result" chosen in Settings is kept. "Mole" in school work is chemistry, not a medical stake. Code, computer use and CAD are never school work. |
+| School work (homework, studying, a quiz or test, a school subject such as chemistry or algebra) | On Balanced and Cheapest: the cheapest strong-enough model (Haiku 5.5, GPT-6 Luna or Terra), and for the biggest assignments (a long paper) a mid-tier one (Sonnet 5.5, GPT-6.2 Sol), never Opus, Astra or Fable. A "Best result" chosen in Settings is kept. "Mole" in school work is chemistry, not a medical stake. Code, computer use and CAD are never school work. |
 | A request for a picture ("draw…", "make a logo…", "an image of…") | Runs as agent work with the image tool (GPT image models, on an OpenAI key) loaded, and the picture shows in the chat. |
 | A model that failed recently | Skipped until its cooldown ends ([Failures](#failures-and-fallbacks)). |
 
@@ -67,10 +67,10 @@ These settings and conditions still apply on top of the preference:
 
 A request is a **close call** when the classifier isn't sure of it (confidence below `CONFIDENT`, so it may well be a tier harder) or it has stakes (legal, medical, money, production) at difficulty 1 or more. On Balanced, a close call compares Balanced's pick with Best result's pick (one tier up). It takes Best result's pick only when both hold:
 
-- **Price:** at most 2x Balanced's pick, blended at 3 input : 1 output tokens per 1M (the ChatGPT plan and local models count as $0).
-- **Latency:** its first answer token at most 1 s later for speed-sensitive requests (chat, quick code questions, voice), or 3 s later for everything else, by the AA time-to-first-token figures at low effort (Luna 1.57 s, Terra 1.96 s, Sonnet 2.50 s, Sol 3.22 s, Astra 3.82 s, Opus 5.32 s, Haiku 6.26 s, Grok 9.9 s; Fable has no figure and counts as Opus).
+- **Price:** at most 2x Balanced's pick, blended at 3 input : 1 output tokens per 1M at the rates the request's prompt size pays (past 272K GPT bills 2x input and 1.5x output, Haiku 5.5 its long-context rate past 100K; Opus and Sonnet stay flat), with the ChatGPT plan and local models at $0.
+- **Latency:** its first answer token at most 1 s later for speed-sensitive requests (chat, quick code questions, voice), or 3 s later for everything else, by the AA time-to-first-token figures at low effort (Luna 1.57 s, Terra 1.96 s, GPT-6.2 Sol 2.03 s, Sonnet 2.50 s, GPT-6.2 Astra 2.82 s, Opus 5.32 s, Haiku 6.26 s, Grok 9.9 s; Fable has no figure and counts as Opus).
 
-So Sonnet → Opus (2.0x, +2.8 s) passes for an unsure coding or computer-use request, and Sol → Astra (5x) never does. Code: `routing-table.ts` `closeCall`, `CLOSE_CALL_PRICE`, `TTFT_S`.
+So Sonnet → Opus (2.0x, +2.8 s) passes for an unsure coding or computer-use request, and Sol → Astra (4x) never does. A 600K-token document stays on Opus: GPT-6.2 Astra is exactly 2x Opus at short-context rates, but past 272K it costs $16 / $60 against Opus's flat $4 / $20. Code: `routing-table.ts` `closeCall`, `CLOSE_CALL_PRICE`, `TTFT_S`.
 
 ### Stability across a conversation
 
@@ -278,7 +278,7 @@ What the app does with each manual choice in a regular chat (SahilBot's own chat
 | Plan first, Max, Deep Research | Sent as chosen. Each makes the run full agent work, and each sets a difficulty floor. Deep Research turns on its team. Max is one mode for many agents: its strategy planner (`src/main/agent/max/planner.ts`, local rules plus the task classifier, no model call) picks a research team, an idea swarm, competing attempts with a judge, or a hybrid (explore first, then judged attempts on the deliverable), and one live card shows the choice and why. It replaces the older Team of Experts, Swarm and Heavy toggles. |
 | Council | Exclusive in the composer: turning it on turns Max off (and the other way round), and the main process enforces the same if a message arrives with both. |
 | Permission mode | The chat's mode is left as chosen. It is only ever made stricter, for a handoff from a stricter bot or untrusted relayed content (security). |
-| Fast mode | A per-model "on" / "off" / "ultrafast" is honored exactly. Auto's "only where speed matters" rule applies only to models Auto picked. |
+| Fast mode | A per-model Standard / Fast / Ultrafast choice is honored exactly ("Use the provider setting" follows the provider's switch, which never means Ultrafast). Auto's "only where speed matters" rule applies only to models Auto picked. |
 | Bots: model and effort | A bot chooses by itself (Auto model, Auto thinking) until you pick a model or a thinking level in its chat; then that pick is used exactly, and you can go back to Auto any time. Stored `Space.model` / `Space.effort` from older installs are ignored. The app default's Auto variant still applies to a bot chat with nothing picked (Auto (local) stays local, Auto (cloud) stays cloud); a concrete default model doesn't. Helpers keep the model their orchestrator assigned. |
 | Thinking with Auto | Thinking is picked independently of the model: a level picked while the model is Auto is sent exactly with whatever model Auto routes to. |
 | A model switch (Auto, a pick, a fallback) | The new model gets the whole conversation, every reply, tool call and result, and a hidden note that it is taking over from the previous model, once per switch (`loop.ts` `modelSwitchNote`). |
@@ -326,22 +326,23 @@ Found by the simulation and fixed (48,090 invariant violations before, 0 after):
 
 **Found in the audit and left to the owners:** Council and swarm merge / final steps (`loop.ts` swarm and council `final` callbacks) send effort `'high'` regardless of the chat's picked level.
 
-Evidence below was read on **2026-11-15**. VR means vendor-reported, from the Anthropic or OpenAI announcement or docs. IND means independent. Each number links to its source in [Sources](#sources).
+Evidence below was read on **2026-11-15** (GPT-6.2 Astra and Sol, and the fast-mode pages, on **2026-11-18**). VR means vendor-reported, from the Anthropic or OpenAI announcement or docs. IND means independent. Each number links to its source in [Sources](#sources).
 
 ## The models
 
-| | Claude Fable 5.2 | Claude Opus 5.5 | Claude Sonnet 5.5 | Claude Haiku 5.5 | GPT-6 Astra | GPT-6.1 Sol | GPT-6.1 Terra | GPT-6 Luna |
+| | Claude Fable 5.2 | Claude Opus 5.5 | Claude Sonnet 5.5 | Claude Haiku 5.5 | GPT-6.2 Astra | GPT-6.2 Sol | GPT-6.1 Terra | GPT-6 Luna |
 |---|---|---|---|---|---|---|---|---|
-| Released | Nov 9 | Sep 22 | Sep 28 | Oct 7 | Sep 3 | Sep 29 | Oct 26 | Sep 22 |
-| $ per 1M tokens, in / out [A1][O1] | 8 / 40 | 4 / 20 | 2 / 10 | 0.10 / 0.50 (≤100K tokens), then 0.50 / 2.50 | 10 / 50 | 2 / 10 | 1 / 5 | 0.10 / 0.50 |
+| Released | Nov 9 | Sep 22 | Sep 28 | Oct 7 | Nov 17 | Nov 17 | Oct 26 | Sep 22 |
+| $ per 1M tokens, in / out [A1][O1][O6] | 8 / 40 | 4 / 20 | 2 / 10 | 0.10 / 0.50 (≤100K tokens), then 0.50 / 2.50 | 8 / 40 (cached 0.40) | 2 / 10 (cached 0.10) | 1 / 5 | 0.10 / 0.50 |
 | Over 272K input [O1] | standard rates | standard rates | standard rates | as above | 2x input, 1.5x output | same as Astra | same as Astra | same as Astra |
 | Context / max output | 1M / 128K | 1M / 128K | 1M / 128K | 1M / 128K | 1.05M (922K input) / 128K | same as Astra | same as Astra | same as Astra |
-| AA Intelligence Index, max effort (IND) [I1] | **65** | 59 | 55 | 36 | 57 | 55 | 51 | 28 |
-| Output tokens/s (IND) [I1] | 102 | 114 | 143 | **255** | 40 | 49 | 71 | 103 |
-| Time to first answer token at low effort (IND) [I1] | n/a | 5.32 s | 2.50 s | 6.26 s | 3.82 s | 3.22 s | 1.96 s (no reasoning) | **1.57 s** (no reasoning) |
-| AA cost per Index task (IND) [I1] | $26.54 | $10.04 | $10.02 | $0.41 | $6.24 | $1.27 | $0.96 | $0.15 |
+| AA Intelligence Index, max effort (IND) [I1][I10] | **65** | 59 | 55 | 36 | 62 | 57 | 51 | 28 |
+| Output tokens/s (IND) [I1][I10] | 102 | 114 | 143 | **255** | 53 | 85 | 71 | 103 |
+| Time to first answer token at low effort (IND) [I1][I10] | n/a | 5.32 s | 2.50 s | 6.26 s | 2.82 s | 2.03 s | 1.96 s (no reasoning) | **1.57 s** (no reasoning) |
+| AA cost per Index task (IND) [I1][I10] | $26.54 | $10.04 | $10.02 | $0.41 | $4.00 | $1.01 | $0.96 | $0.15 |
 
 Notes on the table:
+- **GPT-6.2 Astra and Sol supersede GPT-6 Astra ($10 / $50; AA 57, 40 tok/s, 3.82 s, $6.24 per task) and GPT-6.1 Sol ($2 / $10; AA 55, 49 tok/s, 3.22 s, $1.27 per task).** The older two stay listed, start switched off, and work when picked by name or switched on. The per-category numbers under [Routing by task](#routing-by-task) were measured on GPT-6 Astra and GPT-6.1 Sol; the astra and sol slots now resolve to 6.2. OpenAI's own guidance: "Use GPT-6.2 Astra for the most demanding tasks, or GPT-6.2 Sol for complex work at lower cost" [O6]; its launch post: Sol "nearly matches Astra on merge-ready changes to real codebases at about one-fifth the cost" (FrontierCode 2.0, VR) [O7]. AA at max effort (IND) [I10]: Astra 62 (#3 of 92), Sol 57; per Index task $4.00 vs $1.01.
 - Fable 5.1 (Sep 1, $10 / $50) is now Legacy. Each Fable model also has a restricted twin, Mythos, with the same specs [A1].
 - Every model above takes images and supports computer use: Claude through `computer_toolset_20260801` [A2], GPT through the Responses `computer` tool [O3].
 - Auto treats Fable as premium. It is used only with the Fable setting on, or when picked by name.
@@ -360,6 +361,8 @@ Full figures and sources are in [docs/grok.md](grok.md). The columns match the t
 Grok is routed like every other model, by category: it leads no row. In office work it comes right after Opus / Sonnet and ahead of GPT. Elsewhere it is a later fallback. It isn't used for computer use (no data) or voice (slow first token).
 
 ## Routing by task
+
+"Astra" and "Sol" in the tables below are the astra and sol slots: GPT-6.2 Astra and GPT-6.2 Sol now. The deciding numbers were measured on GPT-6 Astra and GPT-6.1 Sol before 6.2 came out (Nov 17, 2026); no independent per-category board has 6.2 yet.
 
 Each table shows three choices:
 - **First**: the first choice on Best result.
@@ -426,7 +429,7 @@ Evidence re-checked on **2026-11-15** (details and every link in [docs/computer-
 
 | First | Runner-up | Cheap / fast |
 |---|---|---|
-| GPT-6 Astra; GPT-6.1 Sol on Balanced | Claude Opus 5.5 | Claude Sonnet 5.5, GPT-6.1 Terra |
+| GPT-6.2 Astra at difficulty 3 (Best result); GPT-6.2 Sol for everything else, and on Balanced | Claude Opus 5.5 | Claude Sonnet 5.5, GPT-6.1 Terra |
 
 - **arena Search, IND [I2]:** Astra 1231, 6.1 Sol 1230, Opus 5.5 1213.
 - **BrowseComp, VR [O2]:** Astra 91.5. No Claude 5.5 figure was published, and no independent BrowseComp exists.
@@ -437,6 +440,7 @@ Evidence re-checked on **2026-11-15** (details and every link in [docs/computer-
 - **GDPval-AA, IND [I1]:** Opus 5.5 is #1. That board measures synthesis-heavy knowledge work.
 - **Factual errors, VR [O2]:** Sol's error rate is 7.7%.
 - This category is close. Astra edges ahead on search. Opus edges ahead on synthesis.
+- **Routine research is Sol's, on every preference.** Best result lifts research only to tier 2 below difficulty 3 (`maxTier: 2`), so Astra leads only difficulty-3 research. Live, 2026-11-17: a 120-word newsletter blurb from two bots ran 33 GPT-6 Astra requests ($5.72); 6.2 Sol is within a few points of Astra (AA 57 vs 62) at a quarter of the price.
 
 - **Grok 4.7:** it is not on arena Search; Grok 4.5 is #13 at 1216 [I2]. It scores 56% on SimpleQA Verified [I4] and has a 29% AA-Omniscience hallucination rate [G2]. It is the last fallback.
 
@@ -444,13 +448,13 @@ Evidence re-checked on **2026-11-15** (details and every link in [docs/computer-
 
 | First | Runner-up | Cheap / fast |
 |---|---|---|
-| GPT-6 Astra; on Balanced Claude Sonnet 5.5, or Claude Opus 5.5 for the hardest | Claude Opus 5.5 / GPT-6.1 Sol | Claude Sonnet 5.5, Claude Haiku 5.5 |
+| GPT-6.2 Astra; on Balanced Claude Sonnet 5.5, or Claude Opus 5.5 for the hardest | Claude Opus 5.5 / GPT-6.2 Sol | Claude Sonnet 5.5, Claude Haiku 5.5 |
 
 - **MRCR v2 8-needle at 512K to 1M, VR [O2]:** Astra 96.3.
 - **No Claude 5.5 long-context figure was published.** The independent AA-LCR board shows neither family [I1].
 - **Price at 600K tokens in:**
   - Claude bills its whole 1M window at standard rates: Sonnet $2 per M, Opus $4 per M, Haiku $0.50 per M past 100K.
-  - OpenAI doubles the input rate past 272K: Sol $4 per M, Astra $20 per M.
+  - OpenAI doubles the input rate past 272K: GPT-6.2 Sol $4 per M, GPT-6.2 Astra $16 per M (output 1.5x: $15 and $60).
   - So Balanced uses Sonnet for routine reads and Opus for the hardest ones.
 
 - **Grok 4.7:** its window is 500K, half the others'. Its AA-LCR score fell 3.7 points from Grok 4.6, and no absolute figure was published [G2]. It is the last fallback at tiers 2 and 3. Requests above about 480K go elsewhere because of the window check.
@@ -492,7 +496,7 @@ Opus ranks above every Fable on this board, so Fable is not used for writing eve
 
 | First | Runner-up | Cheap / fast |
 |---|---|---|
-| GPT-6 Astra; GPT-6.1 Sol on Balanced | Claude Opus 5.5 | GPT-6.1 Terra |
+| GPT-6.2 Astra at difficulty 3 (Best result); GPT-6.2 Sol for routine math and reasoning, and on Balanced | Claude Opus 5.5 | GPT-6.1 Terra |
 
 - **ARC-AGI-2, IND [I7]:** Astra 95.0, Sol 94.2, Fable 5.2 93.8, Opus 5.5 93.3.
 - **ARC-AGI-3, IND [I7]:** Fable 5.2 81.2, Astra 62.7.
@@ -502,6 +506,7 @@ Opus ranks above every Fable on this board, so Fable is not used for writing eve
 - **Vals, IND [I6]:** Opus 5.5 scores 100% on ProofBench and 95% on IOI.
 - With the Fable setting on, Fable leads the hardest row. It is ahead on ARC-AGI-3 and Humanity's Last Exam.
 - AIME is not reported by either vendor for these models.
+- **Routine math is Sol's, on every preference** (Best result lifts math only to tier 2 below difficulty 3): ARC-AGI-2 put 6.1 Sol within a point of Astra, and 6.2 Sol is "for complex work at lower cost" [O6].
 
 - **Grok 4.7:** ARC-AGI-2 61.4 (Haiku 61.3) and ARC-AGI-3 1.8 [I7]; FrontierMath Tier 4 17% [I4]; Vals ProofBench 26% [G3]. It is the last fallback.
 
@@ -576,34 +581,60 @@ Grok isn't used for voice: its first token takes 9.9 s at low effort [G1].
 
 ## Fast mode
 
-Fast mode is in **Settings → Models → Fast mode**. Each provider has a switch, off by default, and each model can be set to inherit, on, off, or (OpenAI Astra and 6.1 Sol only) Ultrafast. A fast request is priced at its real multiplier: in the monthly limit's worst-case check, in what is recorded, and in each step's cost chip. If the provider reports that a request ran at standard speed, it is recorded at the standard price. Read on 2026-11-15:
+Fast mode is in **Settings → Models → Advanced → Fast mode**. Each provider has a switch, off by default, and each model has its own speed choice: **Use the provider setting** (the default), **Standard**, **Fast** and, where OpenAI offers it for that model, **Ultrafast**. A provider's switch only ever means Fast; Ultrafast runs only on a model it was chosen for. Next to each choice the app shows its penalty: the speed, the price multiplier and what it means in dollars per million tokens for that model, and the other trade-offs the provider documents (`fast-mode.ts` `speedOptions`). On GPT-6.2 Astra today (Nov 18, 2026) they read:
 
-| Provider | Mechanism | Speed | Price | Models |
-|---|---|---|---|---|
-| Anthropic [F1] | `speed: "fast"` on the Messages request; `usage.speed` reports `fast` or `standard` | "up to 2.5x higher output tokens per second" (output speed, not time to first token) | 2x: Opus 5.5 $8 / $40, Fable / Mythos 5.2 $16 / $80, Opus 5 / 4.8 $10 / $50. Caching multipliers apply on top. | Fable 5.2, Mythos 5.2, Opus 5.5. Opus 5 is a research preview and Opus 4.8 is deprecated (removal Nov 30, 2026); both need the `fast-mode-2026-02-01` beta header. |
-| OpenAI [F2][F3][F4] | `service_tier: "fast"` (Priority was renamed Fast mode on Jul 30, 2026; `"priority"` works the same); `service_tier: "ultrafast"` | Fast: "up to 2.5x faster". Ultrafast: "the fastest service tier in the OpenAI API". | Fast: 2x on the GPT-6 / 5.6 / 5.4 lineups (gpt-5.5 2.5x; older models 1.67x to 1.8x). Ultrafast: 6x (Astra $60 / $300, Sol $12 / $60). | Fast on most models; Ultrafast only on gpt-6-astra and gpt-6.1-sol (Responses API) |
-| xAI [X2][X9] | `service_tier: "priority"` (`"fast"` is the same tier) | Scheduled ahead of standard traffic when priority capacity is free | 2x, billed only when the response confirms `priority` | Grok chat models (Grok 4.7 Fast is Cursor / Grok Build only) |
+| Choice | Penalty text |
+|---|---|
+| Standard | Standard · normal speed · 1x price ($8 / $40 per M) |
+| Fast | Fast · up to 2.5x faster · 2x price ($16 / $80 per M) · Counts against the same rate limits as Standard · OpenAI may downgrade it to standard speed, billed at the standard price |
+| Ultrafast | Ultrafast · up to 4.5x faster · 3x price ($24 / $120 per M) until Feb 28, 2027, then 6x ($48 / $240) · Separate rate limits from Standard and Fast · Responses API only · US data residency only |
+
+GPT-6.2 Sol: $2 / $10, Fast $4 / $20, Ultrafast $6 / $30 until Feb 28, 2027, then $12 / $60. GPT-6 Astra and GPT-6.1 Sol: Ultrafast 6x ("OpenAI's fastest tier": OpenAI gives no API speed figure for them). Claude Opus 5.5: Fast · up to 2.5x faster output · 2x price ($8 / $40 per M) · its own rate limit (over it, SahilBot resends at standard speed and price, a prompt-cache miss) · not with the Batch API.
+
+A fast request is priced at its real multiplier, including the date it runs on (GPT-6.2 Ultrafast is 3x through Feb 28, 2027 Pacific time and 6x from Mar 1, 2027): in the monthly limit's worst-case check, in what is recorded, and in each step's cost chip. The usage ledger records the tier that actually ran, from the response (OpenAI `service_tier`, Anthropic `usage.speed`, xAI `service_tier`), and prices that: a request OpenAI downgraded (`service_tier: "default"`) is recorded and billed at standard. `service_tier: "ultrafast"` is only ever sent on the Responses API; over Chat Completions an Ultrafast choice runs at Fast.
+
+### Verified facts (official pages, read 2026-11-18)
+
+| Fact | Official statement | Source |
+|---|---|---|
+| Model ids | `gpt-6.2-astra`, `gpt-6.2-sol` (no dated snapshots listed); released Nov 17, 2026 | [O6], changelog [O1] |
+| Windows | 1,050,000 context, 922,000 max input, 128,000 max output (both) | [O6] |
+| Knowledge cutoff | Astra May 18, 2026; Sol Jun 1, 2026 | [O6] |
+| Reasoning effort | "The API rejects requests that set reasoning effort to `none`" (both). No full list and no default is documented; the launch post cites Astra at `xhigh`. SahilBot sends low…max, never none, and no `reasoning.context` (all_turns isn't documented for 6.2). | [O6], reasoning guide |
+| API | Chat Completions and Responses, but "tool calling requires Responses" | [O6] Using GPT-6.2, changelog |
+| Standard prices | Astra $8 in / $0.40 cached / $40 out (cache writes $10 for 30 min, $20 for 12 h); Sol $2 / $0.10 / $10 ($2.50 / $5) | [O6], [F4] |
+| Long prompts | Confirmed: above 272K input tokens "input and cache rates double and output costs 1.5 times the short-context rate for the full request" (Astra $16 / $0.80 / $60, Sol $4 / $0.20 / $15) | [O6], [F4] |
+| Fast mode | `service_tier: "fast"` (or `"priority"`), "up to 2.5x faster speeds", "2x Standard for the same context length" on both 6.2 models; same rate limits as Standard; "the system may downgrade some Fast mode requests to standard speeds and charge standard rates" (the response says `service_tier: "default"`); Responses and Chat Completions | [F2], [O6] |
+| Ultrafast availability | GPT-6.2 Astra, GPT-6.2 Sol, GPT-6 Astra, GPT-6.1 Sol | [F3], [F4] |
+| Ultrafast price | GPT-6.2: "Ultrafast costs 3 times the Standard rate through February 28, 2027, and 6 times the Standard rate starting March 1, 2027 (Pacific time)" (Astra $24 / $1.20 / $120 promotion, $48 / $2.40 / $240 list; Sol $6 / $0.30 / $30, $12 / $0.60 / $60). GPT-6 Astra and GPT-6.1 Sol: 6x. The 3x-now / 6x-from-March statement is on both the model pages and the pricing page, so reports of "6x now" don't match OpenAI's own API pricing (a search summary attributed 6x to legacy billing; the pages read here don't mention that). | [F4], [O6] |
+| Ultrafast speed | "Ultrafast generates tokens at up to 4.5 times the speed of Standard" on GPT-6.2 Astra and Sol (OpenAI's Codex speed page). The API Ultrafast guide itself gives no figure. | [F5], [F3] |
+| Ultrafast API and limits | `service_tier: "ultrafast"`; every example and changelog entry is the Responses API (WebSockets "strongly recommended"); "Ultrafast has separate rate limits from Standard and Fast modes"; GPT-6.2 Ultrafast is US data residency only. Downgrades and the response's `service_tier` aren't documented for Ultrafast. | [F3], changelog |
+| Anthropic | Fast mode (`speed: "fast"`, "up to 2.5x higher output tokens per second") on Fable 5.2, Mythos 5.2 and Opus 5.5 (Opus 5 preview, Opus 4.8 deprecated, removal Nov 30, 2026), 2x: Opus 5.5 $8 / $40, Fable / Mythos 5.2 $16 / $80; a dedicated rate limit; not with the Batch API; `usage.speed` reports the speed that ran. **No "ultra" or sixfold tier exists** on the fast-mode or pricing pages: the news item claiming one is rejected. | [F1], [A1] |
+
+Not verifiable from official pages: Fast mode's speed on GPT-6.2 specifically (the API guide's "up to 2.5x" is general; OpenAI's Codex page says Fast runs "about 1.5 times the speed of Standard" on GPT-6.2 Astra in Codex), Ultrafast downgrade behavior, GPT-6.2 Ultrafast's default rate limits ("check your organization's limits"), and any official benchmark table for 6.2 (openai.com returned 403; the numbers above are from OpenAI's developer-forum announcement and Artificial Analysis).
 
 Notes on fast mode:
 - **Anthropic over its fast rate limit (429 / 529).** SahilBot follows Anthropic's documented fallback: it sends the same request once more at standard speed, which also misses the prompt cache.
-- **OpenAI downgrades.** OpenAI may downgrade a fast request ("charge standard rates"); the response then says `default`.
-- **When Auto may use fast mode.** Only where fast mode is allowed for the model. There are three choices: *Only where speed matters* (the default: voice, small talk, quick code questions), *Whenever allowed*, and *Never*.
+- **OpenAI downgrades.** OpenAI may downgrade a fast request ("charge standard rates"); the response then says `default`, and the ledger records it at standard.
+- **When Auto may use fast mode.** Never by itself: only where fast mode is allowed for the model (its own choice, else its provider's switch). There are three choices for Auto's picks: *Only where speed matters* (the default: voice, small talk, quick code questions), *Whenever allowed*, and *Never*.
 
-## What's uncertain## What's uncertain
+## What's uncertain
 - **Mostly vendor-reported numbers.** Both vendors moved to newer benchmarks (Terminal-Bench 4.0, OSWorld 2.x, FrontierCode, GDPval-AA, AutomationBench). Independent coverage exists for coding (Terminal-Bench 4.0, arena), knowledge work (GDPval-AA), arena boards, ARC and composite indexes. It is thin for computer use, long context and tool use.
 - **Vendor numbers vary by page.** The same model's score can differ between vendor pages; for example Opus 5.5 on OSWorld 2.1 is 81.8 on its own page and 87.2 on the Fable 5.2 page.
 - **Some secondary sources had misaligned columns.** OpenAI's HLE row as relayed by the-decoder is one example. Those rows were not used.
 - **Fable 5.2 is new.** It came out on Nov 9, and many boards list only Fable 5.1. SahilBot's price table now has Fable 5.2 at $8 / $40.
+- **GPT-6.2 is a day old.** Its per-category numbers (arena, Terminal-Bench, OSWorld, MMMU) aren't out; Auto routes it by OpenAI's positioning, the AA Index and the 6 Astra / 6.1 Sol numbers it supersedes, and this Mac's measured outcomes (the outcome router, per model id) take over as they accumulate.
 - **First-token times include reasoning.** They come from Artificial Analysis at low effort. SahilBot sends low effort in voice, but the real first-token time depends on prompt size and network.
 
 ## Sources
+
 **Grok and fast mode (read 2026-11-15; more in [docs/grok.md](grok.md)):**
 - X2: [xAI pricing](https://docs.x.ai/docs/pricing); X9: [xAI priority processing](https://docs.x.ai/developers/advanced-api-usage/priority-processing)
 - G1 (IND): [Artificial Analysis, Grok 4.7](https://artificialanalysis.ai/models/grok-4-7)
 - G2 (IND): [Artificial Analysis, "Benchmarking Grok 4.7"](https://artificialanalysis.ai/articles/benchmarking-grok-4-7) (Sep 21, 2026)
 - G3 (IND): [Vals, Grok 4.7](https://www.vals.ai/models/grok_grok-4.7)
 - F1: [Anthropic fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode)
-- F2: [OpenAI fast mode](https://developers.openai.com/api/docs/guides/fast-mode); F3: [OpenAI Ultrafast mode](https://developers.openai.com/api/docs/guides/ultrafast-mode); F4: [OpenAI pricing](https://developers.openai.com/api/docs/pricing) (Fast and Ultrafast tables)
+- F2: [OpenAI fast mode](https://developers.openai.com/api/docs/guides/fast-mode); F3: [OpenAI Ultrafast mode](https://developers.openai.com/api/docs/guides/ultrafast-mode); F4: [OpenAI pricing](https://developers.openai.com/api/docs/pricing) (Fast and Ultrafast tables); F5: [OpenAI Codex: Fast and Ultrafast modes](https://learn.chatgpt.com/docs/agent-configuration/speed) (redirected from developers.openai.com/codex/speed). All read again 2026-11-18.
 
 **Anthropic (VR):**
 - A1: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview) and [Pricing](https://platform.claude.com/docs/en/about-claude/pricing)
@@ -619,6 +650,8 @@ Notes on fast mode:
 - O3 (VR): [Computer use guide](https://developers.openai.com/api/docs/guides/tools-computer-use)
 - O4 (IND): [The Batch, Sep 11, 2026](https://www.deeplearning.ai/the-batch/gpt-6-astra-is-a-star)
 - O5 (VR): [gpt-live-1](https://developers.openai.com/api/docs/models/gpt-live-1.md)
+- O6 (VR, read 2026-11-18): [GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra), [GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol), [Using GPT-6.2](https://developers.openai.com/api/docs/guides/latest-model), [Reasoning](https://developers.openai.com/api/docs/guides/reasoning)
+- O7 (VR, read 2026-11-18): ["GPT-6.2 Astra and Sol are now available"](https://community.openai.com/t/gpt-6-2-astra-and-sol-are-now-available/1417531), OpenAI Developer Community announcement (Nov 17, 2026); openai.com/index/introducing-gpt-6-2-astra-sol returned 403 to the fetcher
 
 **Independent:**
 - I1: Artificial Analysis model pages: [Opus 5.5](https://artificialanalysis.ai/models/claude-opus-5-5), [Sonnet 5.5](https://artificialanalysis.ai/models/claude-sonnet-5-5), [Haiku 5.5](https://artificialanalysis.ai/models/claude-haiku-5-5), [Fable 5.2](https://artificialanalysis.ai/models/claude-fable-5-2), [Astra](https://artificialanalysis.ai/models/gpt-6-astra), [6.1 Sol](https://artificialanalysis.ai/models/gpt-6-1-sol), [6.1 Terra](https://artificialanalysis.ai/models/gpt-6-1-terra), [Luna](https://artificialanalysis.ai/models/gpt-6-luna)
@@ -631,3 +664,4 @@ Notes on fast mode:
 - I7: [ARC Prize leaderboard](https://arcprize.org/leaderboard)
 - I8: [OSWorld 2.0 official results](https://osworld-v2.xlang.ai/static/data/leaderboard/official-results.json) (Nov 14, 2026)
 - I9: [tau-bench](https://taubench.com/)
+- I10: Artificial Analysis, [GPT-6.2 Astra](https://artificialanalysis.ai/models/gpt-6-2-astra) and [GPT-6.2 Sol](https://artificialanalysis.ai/models/gpt-6-2-sol) (read 2026-11-18)

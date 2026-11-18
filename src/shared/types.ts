@@ -2760,15 +2760,37 @@ export interface SahilBotApi {
 }
 
 /** Settings → Models → Fast mode: one supported model the user has (llm/fast-mode.ts). */
+/** One speed a model can run at, with its penalty (Settings → Models → Fast mode). */
+export interface FastSpeedOption {
+  tier: 'standard' | FastTier
+  /** "Standard", "Fast", "Ultrafast" (xAI: "Priority"). */
+  title: string
+  /** "up to 4.5x faster" */
+  speed: string
+  /** Price multiplier on the standard rate, in force now. */
+  factor: number
+  /** A dated price: the last day `factor` applies (Pacific time) and the multiplier after it. */
+  until?: string
+  then?: number
+  /** "Ultrafast · up to 4.5x faster · 3x price ($24 / $120 per M) until Feb 28, 2027, then 6x ($48 / $240)" */
+  line: string
+  /** The other costs the provider's docs state (rate limits, downgrades, API, residency). */
+  tradeoffs: string[]
+}
+
 export interface FastCatalogRow {
   id: string
   label: string
   provider: 'anthropic' | 'openai' | 'xai'
-  /** Price multiplier at Fast (and Ultrafast, where offered). */
+  /** Price multiplier at Fast (and Ultrafast, where offered: today's multiplier). */
   factor: number
   ultrafast?: number
-  /** "Up to 2.5x faster output, 2x price" */
+  /** The Fast (and Ultrafast) penalty lines, joined. */
   tradeoff: string
+  /** Standard, Fast and (where offered) Ultrafast, each with its penalty. */
+  options: FastSpeedOption[]
+  /** Switched on in the picker (older, superseded models are listed but start off). */
+  enabled?: boolean
   note?: string
 }
 

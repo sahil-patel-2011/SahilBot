@@ -123,7 +123,7 @@ export function councilEstimate(h: Pick<CouncilHost, 'members' | 'critics' | 'ro
 export async function runCouncil(h: CouncilHost): Promise<'finished' | 'stopped' | 'error'> {
   const K = h.members.length
   if (K < 2) {
-    h.notice('Council needs at least two cloud models (for example Claude Opus and GPT-6 Astra). Add the keys in Settings, or send it without Council.')
+    h.notice('Council needs at least two cloud models (for example Claude Opus and GPT-6.2 Astra). Add the keys in Settings, or send it without Council.')
     return 'error'
   }
   const cap = h.swarm.maxUsd

@@ -226,7 +226,8 @@ export function buildBody(req: ChatRequest): Record<string, unknown> {
   if (req.noThinking && !isLocal(req.baseUrl) && openaiInfo(req.model)?.efforts) body.reasoning_effort = quickestEffort(req.model) ?? openaiEffort(req.model, 'low')
   else if (req.effort && !isLocal(req.baseUrl) && openaiInfo(req.model)?.efforts) body.reasoning_effort = openaiEffort(req.model, req.effort)
   else if (req.effort && /^(gpt-5|o\d)/i.test(req.model) && !isLocal(req.baseUrl)) body.reasoning_effort = req.effort === 'xhigh' || req.effort === 'max' ? 'high' : req.effort
-  // Fast mode on an OpenAI model over Chat Completions (older GPTs): service_tier "fast" (Ultrafast is Responses-only).
+  // Fast mode on an OpenAI model over Chat Completions (older GPTs): service_tier "fast". Ultrafast is Responses-only,
+  // so an Ultrafast choice runs at Fast here (and is recorded at the tier the response reports).
   if (req.fast && !isLocal(req.baseUrl) && fastSupport(req.model)?.provider === 'openai') body.service_tier = 'fast'
   return body
 }

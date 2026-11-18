@@ -1,5 +1,5 @@
 import type { ModelInfo, Tier } from '@shared/types'
-import { CLAUDE, claudeFamily, isPremiumClaude } from './claude-models'
+import { CLAUDE, claudeFamily, claudeInfo, isPremiumClaude } from './claude-models'
 import { OPENAI, isPremiumOpenAI, openaiInfo } from './openai-models'
 import { type AutoVariant, autoPool, pick, routingPrefs } from './router'
 import { CATEGORY_LABEL, type TaskCategory, type TaskClass } from './task-classifier'
@@ -8,7 +8,8 @@ import { isPlanModel } from './codex/ids'
 
 // Auto's routing table: for each kind of request (task-classifier.ts) and difficulty, the cloud models to try
 // in order, across Anthropic, OpenAI and xAI (Grok: docs/grok.md; placed by its measured strengths per category). The evidence behind each row is in docs/model-routing.md (vendor
-// announcements and docs, plus independent leaderboards, read 2026-11-15); the comment on each row names
+// announcements and docs, plus independent leaderboards, read 2026-11-15; GPT-6.2 Astra and Sol, released 2026-11-17,
+// read 2026-11-18); the comment on each row names
 // the deciding numbers. A row names model *slots* (Claude family or GPT role), resolved to the newest model
 // of that slot the user has on, so a newer Opus or Sol takes over its row without a table change.
 //
@@ -39,7 +40,7 @@ export interface CategoryRoute {
   maxTier?: Tier
   /**
    * The hardest row on Balanced, where Best result's first choice costs several times a near-equal runner-up
-   * (GPT-6 Astra at $10 / $50 against GPT-6.1 Sol at $2 / $10).
+   * (GPT-6.2 Astra at $8 / $40 against GPT-6.2 Sol at $2 / $10).
    */
   balancedHardest?: Slot[]
   /**
@@ -53,8 +54,18 @@ export interface CategoryRoute {
  * The table. Sources and dates: docs/model-routing.md. VR = vendor-reported (Anthropic / OpenAI announcements
  * and docs), IND = independent (Artificial Analysis "AA", arena.ai, Snorkel Terminal-Bench 4.0 "TB4", Vals,
  * Scale Labs, ARC Prize, Epoch), all read 2026-11-15. Speed (AA): output tok/s Haiku 5.5 255, Sonnet 5.5 143,
- * Opus 5.5 114, Luna 103, Terra 71, Sol 49, Astra 40; first answer token at low effort Luna 1.57s (no
- * reasoning), Terra 1.96s, Sonnet 2.50s, Sol 3.22s, Astra 3.82s, Opus 5.32s, Haiku 6.26s.
+ * Opus 5.5 114, Luna 103, 6.2 Sol 85, Terra 71, 6.2 Astra 53; first answer token at low effort Luna 1.57s (no
+ * reasoning), Terra 1.96s, 6.2 Sol 2.03s, Sonnet 2.50s, 6.2 Astra 2.82s, Opus 5.32s, Haiku 6.26s.
+ *
+ * The astra and sol slots are GPT-6.2 Astra and GPT-6.2 Sol now (released 2026-11-17; the row numbers below were
+ * measured on GPT-6 Astra and GPT-6.1 Sol, which they supersede). What's known of 6.2 (read 2026-11-18): OpenAI,
+ * "Use GPT-6.2 Astra for the most demanding tasks, or GPT-6.2 Sol for complex work at lower cost"; FrontierCode 2.0
+ * (VR): Sol "nearly matches Astra on merge-ready changes to real codebases at about one-fifth the cost"; AA
+ * Intelligence Index at max effort (IND): 6.2 Astra 62 (#3), 6.2 Sol 57 (6 Astra 57, 6.1 Sol 55, Opus 5.5 59, Fable
+ * 5.2 65), $4.00 vs $1.01 per Index task. And this app's own live runs (2026-11-17): Astra was overused for routine
+ * research (a 120-word blurb ran 33 Astra requests, $5.72), so research and math lift to Astra only at difficulty 3
+ * (maxTier 2 on Best result); Sol does the routine research and reasoning; quick requests go to Luna / Haiku;
+ * Sonnet handles routine coding, Opus the hard agentic coding and computer use.
  */
 export const ROUTING_TABLE: Record<TaskCategory, CategoryRoute> = {
   // Agentic, multi-file coding. TB4 (IND): Opus 5.5 64.8, Sonnet 5.5 61.8, Astra 58.2, 6.1 Sol 58.2, Terra 51.8,
@@ -88,13 +99,15 @@ export const ROUTING_TABLE: Record<TaskCategory, CategoryRoute> = {
     // OSWorld 2.1 gaps of a few points are within its noise (Epoch: "Flawed"): Opus 87.2 / Sonnet 83.9, Astra 80.9 / Sol 78.0.
     ties: [['opus', 'sonnet'], ['astra', 'sol']]
   },
-  // Deep research with citations. arena Search (IND): Astra 1231, 6.1 Sol 1230, Opus 5.5 1213. BrowseComp (VR):
+  // Deep research with citations. Best result lifts no further than tier 2 here: routine research (difficulty 2) is
+  // Sol's (live: Astra was overused for it); Astra leads only difficulty-3 research. arena Search (IND): Astra 1231, 6.1 Sol 1230, Opus 5.5 1213. BrowseComp (VR):
   // Astra 91.5 (no Claude 5.5 figure). HLE: Fable 5.2 74.3 (AA, IND), Scale HLE Astra 60.6 > Opus 55.0 (IND); HLE
   // with tools (VR) Opus 67.7. GDPval-AA (IND, synthesis-heavy knowledge work): Opus #1. Sol: $1.27 per AA task.
   // Grok 4.7: not on arena Search (only Grok 4.5, #13 1216), SimpleQA Verified 56% (Epoch, IND), AA-Omniscience
   // hallucination 29% (AA launch article) → last fallback.
   research: {
     tiers: [['haiku', 'terra', 'luna'], ['sonnet', 'sol', 'terra', 'haiku', 'grok'], ['sol', 'opus', 'sonnet', 'astra', 'grok'], ['astra', 'opus', 'sol', 'sonnet', 'grok']],
+    maxTier: 2,
     // arena Search: Sol 1230 vs Astra 1231, at a fifth of the price.
     balancedHardest: ['sol', 'opus', 'astra', 'sonnet', 'grok'],
     fable: true,
@@ -131,7 +144,8 @@ export const ROUTING_TABLE: Record<TaskCategory, CategoryRoute> = {
     // GDPval-AA v2.1: 6.1 Sol 1607, Astra 1587.
     ties: [['astra', 'sol']]
   },
-  // Math and careful reasoning. ARC-AGI-2 (IND, ARC Prize): Astra 95.0, 6.1 Sol 94.2, Fable 5.2 93.8, Opus 93.3;
+  // Math and careful reasoning. Best result lifts no further than tier 2: routine reasoning is Sol's, Astra only at
+  // difficulty 3 (6.2: Astra "for the most demanding tasks", Sol "for complex work at lower cost"). ARC-AGI-2 (IND, ARC Prize): Astra 95.0, 6.1 Sol 94.2, Fable 5.2 93.8, Opus 93.3;
   // ARC-AGI-3: Fable 5.2 81.2, Astra 62.7, Sol 52.7. GPQA Diamond: Astra 96.3 (IND, The Batch); FrontierMath Tier 4
   // (VR): Astra 97.6; FrontierMath Erdős (IND, Epoch): 6.1 Sol leads. Sol: near-Astra at a fifth of the price.
   // Grok 4.7: ARC-AGI-2 61.4 (Haiku 61.3, Sol 94.2), ARC-AGI-3 1.8, FrontierMath Tier 4 17% (Epoch), Vals ProofBench
@@ -139,6 +153,7 @@ export const ROUTING_TABLE: Record<TaskCategory, CategoryRoute> = {
   math: {
     // Standard math (worked steps) needs Sol or Sonnet, not the most expensive models: those lead the hardest row.
     tiers: [['terra', 'haiku', 'luna'], ['sol', 'terra', 'sonnet', 'haiku', 'grok'], ['sol', 'sonnet', 'astra', 'opus', 'grok'], ['astra', 'sol', 'opus', 'sonnet', 'grok']],
+    maxTier: 2,
     // ARC-AGI-2: Sol 94.2 vs Astra 95.0, at a fifth of the price.
     balancedHardest: ['sol', 'astra', 'opus', 'sonnet', 'grok'],
     fable: true,
@@ -325,7 +340,7 @@ const PLAN_BLIND = 'the ChatGPT plan can\'t pass screenshots back to the model, 
  * A close call: the classifier isn't sure of the request (confidence below CONFIDENT: it may well be a tier
  * harder), or it has stakes (legal, medical, money, production) at difficulty 1 or more. On Balanced, a close
  * call takes Best result's pick when that costs at most CLOSE_CALL_PRICE (2x) as much, blended at 3 input : 1
- * output tokens, and its first token comes at most 1 s later for speed-sensitive requests (chat, quick code
+ * output tokens at the rates the request's prompt size pays, and its first token comes at most 1 s later for speed-sensitive requests (chat, quick code
  * questions, voice) or 3 s later for everything else (TTFT_S below). Otherwise Balanced keeps its own pick.
  */
 export const closeCall = (t: Pick<TaskClass, 'confident' | 'difficulty' | 'signals'>): boolean => !t.confident || (!!t.signals?.stakes && t.difficulty >= 1)
@@ -333,15 +348,29 @@ export const CLOSE_CALL_PRICE = 2
 export const closeCallLatency = (speedSensitive: boolean): number => (speedSensitive ? 1 : 3)
 const SPEEDY = new Set<TaskCategory>(['chat', 'code-quick', 'voice'])
 
-/** Seconds to the first answer token at low effort (AA, IND, read 2026-11-15; Fable has no figure: Opus's). */
-export const TTFT_S: Record<Slot, number> = { luna: 1.57, terra: 1.96, sonnet: 2.5, sol: 3.22, astra: 3.82, opus: 5.32, fable: 5.32, haiku: 6.26, grok: 9.9 }
+/**
+ * Seconds to the first answer token at low effort (AA, IND, read 2026-11-15; GPT-6.2 Sol and Astra read 2026-11-18,
+ * 2.03 s and 2.82 s, against 3.22 s and 3.82 s for 6.1 Sol and 6 Astra; Fable has no figure: Opus's).
+ */
+export const TTFT_S: Record<Slot, number> = { luna: 1.57, terra: 1.96, sonnet: 2.5, sol: 2.03, astra: 2.82, opus: 5.32, fable: 5.32, haiku: 6.26, grok: 9.9 }
 export const slotTtft = (s: Slot): number => TTFT_S[s]
 
-/** $ per 1M tokens, blended 3 input : 1 output (the ChatGPT plan and local models: 0). */
-export function slotPrice(m: ModelInfo): number {
+/**
+ * $ per 1M tokens, blended 3 input : 1 output (the ChatGPT plan and local models: 0), at the rates a prompt of
+ * `promptTokens` pays: OpenAI bills a prompt over 272K at 2x input and 1.5x output (GPT-6.2 Astra $16 / $60), Claude
+ * Haiku 5.5 over 100K and Grok from 200K at their long-context rates; Opus and Sonnet stay flat across 1M.
+ */
+export function slotPrice(m: ModelInfo, promptTokens = 0): number {
   if (!payPerUse(m)) return 0
   const p = m.price ?? priceOfSlot(slotOf(m))
-  return p ? (3 * p.input + p.output) / 4 : Infinity
+  if (!p) return Infinity
+  let { input, output } = p
+  const id = bareId(m.id)
+  const o = openaiInfo(id)?.longContext, c = claudeInfo(id)?.longContext, x = xaiInfo(id)?.longContext
+  if (o && promptTokens > o.above) { input *= o.input; output *= o.output }
+  else if (c && promptTokens > c.above) { input = c.input; output = c.output }
+  else if (x && promptTokens >= x.atLeast) { input = x.input; output = x.output }
+  return (3 * input + output) / 4
 }
 function priceOfSlot(slot: Slot | undefined): { input: number; output: number } | undefined {
   if (!slot) return undefined
@@ -496,7 +525,8 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
     const best = routeTask(pool, task, { ...o, preference: 'best', budgetTight: false, previous: undefined, noCloseCall: true })
     const bs = best && remote(best.model) ? slotOf(best.model) : undefined
     const fs = slotOf(fresh.model)
-    if (best && bs && fs && best.model.id !== fresh.model.id && slotPrice(best.model) <= CLOSE_CALL_PRICE * slotPrice(fresh.model) + 1e-9 &&
+    // Priced at the request's own prompt size (past 272K GPT doubles its input rate; Opus stays flat).
+    if (best && bs && fs && best.model.id !== fresh.model.id && slotPrice(best.model, task.contextTokens) <= CLOSE_CALL_PRICE * slotPrice(fresh.model, task.contextTokens) + 1e-9 &&
       slotTtft(bs) <= slotTtft(fs) + closeCallLatency(SPEEDY.has(task.category) || !!task.lowLatency)) {
       return result(best.model, 'close-call', `close call: the stronger model for at most ${CLOSE_CALL_PRICE}x the price`)
     }

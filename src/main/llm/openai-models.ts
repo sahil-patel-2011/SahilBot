@@ -3,7 +3,9 @@ import { isOpenAI } from './providers'
 
 // What SahilBot knows about each OpenAI model: windows, prices (incl. cached input, cache writes and the
 // >272K long-context rule), reasoning efforts, which API its tool calls need, and the built-in tools it
-// documents. Facts come from OpenAI's docs, read 2026-11-15:
+// documents. Facts come from OpenAI's docs, read 2026-11-15 (GPT-6.2 Astra and Sol: read 2026-11-18, released
+// 2026-11-17: models/gpt-6.2-astra and /gpt-6.2-sol, pricing, guides/latest-model "Using GPT-6.2", guides/reasoning
+// "rejects none"; GPT-6.2 Astra "for the most demanding tasks", GPT-6.2 Sol "for complex work at lower cost"):
 //   developers.openai.com/api/docs/models/<id>.md (gpt-6-astra, gpt-6.1-sol, gpt-6-luna, gpt-6-sol,
 //     gpt-5.6-sol, gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2): windows, efforts, endpoints, built-in tools;
 //   /api/docs/pricing.md: Standard rates (short and long context, cached input, 30m / 12h cache writes);
@@ -13,7 +15,7 @@ import { isOpenAI } from './providers'
 //   /api/docs/guides/prompt-caching.md: GPT-5.6 and later take prompt_cache_options (ttl 30m / 12h), report
 //     cache_write_tokens and bill writes at 1.25x (30m) / 2.5x (12h) of input; earlier models have no write charge;
 //   /api/docs/guides/reasoning.md: reasoning.context all_turns (GPT-5.6 family default; GPT-6.1 Sol supports it).
-// A GPT id newer than this table (gpt-6.2-sol, gpt-7…) gets the facts of its role's newest model and the
+// A GPT id newer than this table (gpt-6.3-sol, gpt-7…) gets the facts of its role's newest model and the
 // role's highest known prices, flagged estimated (openaiInfo), until it is added here.
 
 export type OpenAIRole = 'astra' | 'sol' | 'terra' | 'luna' | 'base' | 'mini' | 'nano' | 'pro'
@@ -52,7 +54,7 @@ export interface OpenAISpec {
   defaultEffort?: OpenAIEffort
   /** Which API SahilBot uses: 'responses' (function tools, encrypted reasoning) or 'chat' (Chat Completions). */
   api: 'responses' | 'chat'
-  /** Tool calling needs the Responses API (6-astra, 6.1-sol, 6.1-terra); Chat tools only with effort none (6-sol, 6-luna). */
+  /** Tool calling needs the Responses API (6.2-astra, 6.2-sol, 6-astra, 6.1-sol, 6.1-terra); Chat tools only with effort none (6-sol, 6-luna). */
   tools: 'responses-only' | 'chat-with-none' | 'both'
   /** GPT-5.6+: prompt_cache_options / prompt_cache_breakpoint, cache writes reported and billed. */
   cacheOptions?: boolean
@@ -87,11 +89,18 @@ const MODERN = { api: 'responses' as const, cacheOptions: true, compaction: true
 const LEGACY = { api: 'chat' as const, tools: 'both' as const }
 
 export const OPENAI: OpenAISpec[] = [
-  // The current lineup (pricing.md "Standard pricing data", model pages).
-  { id: 'gpt-6-astra', gen: 6, role: 'astra', label: 'GPT-6 Astra', tier: 3, current: true, ...BIG, price: { input: 10, cacheRead: 1, output: 50, write30m: 12.5, write12h: 25 }, longContext: LONG, efforts: NO_NONE, tools: 'responses-only', ...MODERN },
-  { id: 'gpt-6.1-sol', gen: 6.1, role: 'sol', label: 'GPT-6.1 Sol', tier: 2, current: true, ...BIG, price: { input: 2, cacheRead: 0.1, output: 10, write30m: 2.5, write12h: 5 }, longContext: LONG, efforts: NO_NONE, defaultEffort: 'medium', tools: 'responses-only', allTurns: true, ...MODERN },
+  // The current lineup (pricing.md "Standard pricing data", model pages). GPT-6.2 Astra and Sol (2026-11-17): 1.05M
+  // context, 922K input, 128K output; $8 / $0.40 / $40 and $2 / $0.10 / $10 (cache writes $10 / $20 and $2.50 / $5);
+  // over 272K input "input and cache rates double and output costs 1.5 times"; "The API rejects requests that set
+  // reasoning effort to none"; Chat Completions works, but "tool calling requires Responses". Neither page documents
+  // reasoning.context all_turns, so it isn't sent.
+  { id: 'gpt-6.2-astra', gen: 6.2, role: 'astra', label: 'GPT-6.2 Astra', tier: 3, current: true, ...BIG, price: { input: 8, cacheRead: 0.4, output: 40, write30m: 10, write12h: 20 }, longContext: LONG, efforts: NO_NONE, tools: 'responses-only', ...MODERN },
+  { id: 'gpt-6.2-sol', gen: 6.2, role: 'sol', label: 'GPT-6.2 Sol', tier: 2, current: true, ...BIG, price: { input: 2, cacheRead: 0.1, output: 10, write30m: 2.5, write12h: 5 }, longContext: LONG, efforts: NO_NONE, tools: 'responses-only', ...MODERN },
   { id: 'gpt-6.1-terra', gen: 6.1, role: 'terra', label: 'GPT-6.1 Terra', tier: 1, current: true, ...BIG, price: { input: 1, cacheRead: 0.05, output: 5, write30m: 1.25, write12h: 2.5 }, longContext: LONG, efforts: ALL6, defaultEffort: 'medium', tools: 'responses-only', ...MODERN },
   { id: 'gpt-6-luna', gen: 6, role: 'luna', label: 'GPT-6 Luna', tier: 0, current: true, ...BIG, price: { input: 0.1, cacheRead: 0.01, output: 0.5, write30m: 0.125, write12h: 0.25 }, longContext: LONG, efforts: ALL6, defaultEffort: 'medium', tools: 'chat-with-none', ...MODERN },
+  // Superseded by GPT-6.2 Astra and Sol (listed, off by default; picked by name they work as before).
+  { id: 'gpt-6-astra', gen: 6, role: 'astra', label: 'GPT-6 Astra', tier: 3, supersededBy: 'gpt-6.2-astra', ...BIG, price: { input: 10, cacheRead: 1, output: 50, write30m: 12.5, write12h: 25 }, longContext: LONG, efforts: NO_NONE, tools: 'responses-only', ...MODERN },
+  { id: 'gpt-6.1-sol', gen: 6.1, role: 'sol', label: 'GPT-6.1 Sol', tier: 2, supersededBy: 'gpt-6.2-sol', ...BIG, price: { input: 2, cacheRead: 0.1, output: 10, write30m: 2.5, write12h: 5 }, longContext: LONG, efforts: NO_NONE, defaultEffort: 'medium', tools: 'responses-only', allTurns: true, ...MODERN },
   // Superseded by 6.1 Sol.
   { id: 'gpt-6-sol', gen: 6, role: 'sol', label: 'GPT-6 Sol', tier: 2, supersededBy: 'gpt-6.1-sol', ...BIG, price: { input: 2, cacheRead: 0.2, output: 10, write30m: 2.5, write12h: 5 }, longContext: LONG, efforts: ALL6, defaultEffort: 'medium', tools: 'chat-with-none', ...MODERN },
   // GPT-5.6 (alias gpt-5.6 → Sol). Sol's $4 / $20 is promotional until 2026-11-30.
@@ -134,7 +143,7 @@ export function openaiSpec(model: string): OpenAISpec | undefined {
 /** Not chat models (images, audio, realtime, search-only, open weights, specialized): never inferred. */
 const NOT_CHAT = /image|realtime|audio|transcribe|tts|whisper|live|search|embed|oss|moderation|cyber|rosalind|sora/i
 
-/** `gpt-6.2-sol` → { gen: 6.2, role: 'sol' }. undefined: not a GPT chat id this table can reason about. */
+/** `gpt-6.3-sol` → { gen: 6.3, role: 'sol' }. undefined: not a GPT chat id this table can reason about. */
 export function parseGpt(model: string): { gen: number; role: OpenAIRole } | undefined {
   const id = model.toLowerCase()
   if (NOT_CHAT.test(id)) return undefined
@@ -160,7 +169,7 @@ function highest(role: OpenAIRole): OpenAISpec['price'] {
 
 /**
  * Everything SahilBot assumes about an OpenAI model: the table's entry, or, for a GPT id the table doesn't
- * know (gpt-6.2-sol, gpt-7, gpt-5.3-codex), the newest known model of its role (Astra for an unknown role)
+ * know (gpt-6.3-sol, gpt-7, gpt-5.3-codex), the newest known model of its role (Astra for an unknown role)
  * with the role's highest prices, marked estimated. Only GPT-5 and later are inferred (Responses-era models);
  * anything else is undefined (priced pessimistically by the budget, served over Chat Completions).
  */

@@ -57,7 +57,7 @@ const item = {
       type: 'object',
       properties: {
         text: { type: 'string' },
-        role: { type: 'string', enum: ['breadth', 'solid', 'hard', 'review'], description: 'Sets the model: breadth = cheap and fast (Haiku, GPT-6 Luna/Terra), solid (Sonnet, GPT-6.1 Sol), hard = the most important or hardest (Opus, GPT-6 Astra), review = a critic, from another provider when one is connected' },
+        role: { type: 'string', enum: ['breadth', 'solid', 'hard', 'review'], description: 'Sets the model: breadth = cheap and fast (Haiku, GPT-6 Luna/Terra), solid (Sonnet, GPT-6.2 Sol), hard = the most important or hardest (Opus, GPT-6.2 Astra), review = a critic, from another provider when one is connected' },
         model: { type: 'string', description: 'A specific model id, only when it truly matters' }
       },
       required: ['text'],

@@ -157,7 +157,7 @@ export function councilMembers(setting: 'auto' | string[], usable: ModelInfo[], 
     if (other) return { members: order([picks[0].id, other.id]), critics: [] }
   }
   if (ranked.length >= 2) return { members: [ranked[0].id, ranked[1].id], critics: [], note: 'Only one cloud provider is connected, so both members come from it. Add another provider\'s key for a cross-provider council.' }
-  return { members: [], critics: [], note: 'Council needs at least two cloud models (for example Claude Opus and GPT-6 Astra). Add an Anthropic and an OpenAI key in Settings.' }
+  return { members: [], critics: [], note: 'Council needs at least two cloud models (for example Claude Opus and GPT-6.2 Astra). Add an Anthropic and an OpenAI key in Settings.' }
 }
 
 /** A second opinion for a council: the strongest model from a provider none of the members come from. */

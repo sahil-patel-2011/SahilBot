@@ -6,7 +6,7 @@ import { slotOf, windowOf, type AutoPreference, type Slot } from './routing-tabl
 // Haiku 5.5) reads the whole request with the conversation so far and decides what it is, how hard it is, how
 // much to think, which model does it best for what it costs, and whether models should work on it together:
 //   solo           one model does it;
-//   plan           a strong planner (Fable, Opus, Astra) writes the plan, the executor carries it out;
+//   plan           a strong planner (Fable, Opus, GPT-6.2 Astra) writes the plan, the executor carries it out;
 //   review         the executor works, a second model reviews the draft before the user sees it;
 //   plan+review    both.
 // The rules (task-classifier.ts) stay the safety net: their decision is the fallback when the brain is slow,
@@ -51,14 +51,19 @@ export interface BrainAnswer {
   why: string
 }
 
-/** What each model is for, in a line (the brain picks from these; the evidence is in docs/model-routing.md). */
+/**
+ * What each model is for, in a line (the brain picks from these; the evidence is in docs/model-routing.md "The
+ * models" and "Routing by task", plus this app's live runs of 2026-11-17: quick requests on Luna / Haiku, Astra
+ * kept for the hardest work, Sonnet for routine coding, Opus for hard agentic coding and computer use, Sol for
+ * routine research and reasoning).
+ */
 const STRENGTH: Record<Slot, string> = {
   fable: 'the strongest model: hardest reasoning, research synthesis and planning; premium price',
-  opus: 'best at agentic coding, computer use, tool-heavy work with apps, writing and office documents',
-  sonnet: 'fast flagship: strong coding, writing and everyday agent work at half Opus\' price',
+  opus: 'best at hard agentic coding, computer use, tool-heavy work with apps, writing and office documents',
+  sonnet: 'fast flagship: routine coding, writing and everyday agent work at half Opus\' price',
   haiku: 'cheap and quick: school help, explanations, simple questions, light tool use',
-  astra: 'best at hard math, deep research and very long documents; expensive',
-  sol: 'strong math, research and images at a fifth of Astra\'s price',
+  astra: 'OpenAI\'s strongest: only the hardest math, deep high-stakes research and very long documents (difficulty 3); 4x Sol\'s price',
+  sol: 'everyday research, reasoning, math and images, near Astra on code at a quarter of its price',
   terra: 'quick and cheap: simple code questions, short writing, light tasks',
   luna: 'cheapest and fastest: small talk, quick facts, simple school questions',
   grok: 'documents and finance; slow to start, not for computer use or voice'
@@ -105,7 +110,7 @@ export function brainPrompt(i: BrainInput): { system: string; user: string } {
 
 Fields:
 - needs: what this request needs from a model, from: ${NEEDS.join(', ')}. Match the model to the needs and the difficulty:
-  reasoning, math, logic: GPT-6.1 Sol (GPT-6 Astra only at difficulty 3, Fable 5.2 only for the very hardest); coding: Opus 5.5 or Sonnet 5.5; see-images: Opus 5.5 or GPT-6.1 Sol; make-images: any capable model (the image tool draws); ideas and creative writing: Opus 5.5 or Sonnet 5.5; research: GPT-6.1 Sol or Sonnet 5.5 (GPT-6 Astra only for deep, high-stakes research at difficulty 3); computer-use and apps: Opus 5.5 or Sonnet 5.5 (never Grok); quick: GPT-6 Luna, Haiku 5.5 or Terra.
+  reasoning, math, logic: GPT-6.2 Sol (GPT-6.2 Astra only at difficulty 3, Fable 5.2 only for the very hardest); coding: Sonnet 5.5 for routine work, Opus 5.5 for hard multi-file or agentic work; see-images: Opus 5.5 or GPT-6.2 Sol; make-images: any capable model (the image tool draws); ideas and creative writing: Opus 5.5 or Sonnet 5.5; research: GPT-6.2 Sol or Sonnet 5.5 (GPT-6.2 Astra only for deep, high-stakes research at difficulty 3); computer-use and apps: Opus 5.5 or Sonnet 5.5 (never Grok); quick: GPT-6 Luna, Haiku 5.5 or Terra.
 - category: one of ${TASK_CATEGORIES.join(', ')} (${TASK_CATEGORIES.map((c) => `${c} = ${CATEGORY_LABEL[c]}`).join('; ')}).
 - kind: "agent" if it needs tools, files, apps, the web, the screen or several steps; else "chat".
 - difficulty: 0 small talk, 1 quick answer, 2 a standard task, 3 the hardest (multi-step, high stakes, long output, big code changes). Judge it by what the work really takes, never by the words used: how many separate things are asked, how many steps and tools, how much must be exactly right, how much there is to read, the expertise needed, and what a mistake costs. A short request can be hard ("why does this deadlock?", "prove it") and a long, chatty one easy.
@@ -113,11 +118,11 @@ Fields:
 - study: true for school work (homework, studying, a class, a test, a school subject).
 - image: true if the user wants a picture made or edited.
 - model: the id of the model that should do the work, from the list. Prefer ${pref}. Size it to the work first, then the kind: difficulty 0-1 (a quick answer, a short email or message, a conversion, a translation, a simple fact, sum or lookup, even with a quick web search) gets a quick model whatever the category; save Opus, Sonnet, Astra and Sol for difficulty 2-3. School work and simple questions: a cheap fast model. Hard coding, computer use and agent work with apps: the strongest coding/agent model. Math and deep research: the strongest reasoning model.
-- team: "solo" when one model can do it well. "pair" when two models together give a clearly better result at little extra cost: ideas, creative work, a tricky explanation, a plan worth a second opinion. Pair at the request's own level: two quick models (GPT-6 Luna with Claude Haiku 5.5) for light work, two strong ones (Claude Opus 5.5 with GPT-6 Astra) for hard work, from different providers when both are listed. "plan" when a hard multi-step task (difficulty 3) gains from a stronger model planning first. "review" when a deliverable with stakes gains from a second model checking it. "plan+review" only for the hardest, highest-stakes work. "debate" when the hard part is reasoning, not doing: a decision with real trade-offs, a strategy, a proof, the root cause of a tricky problem, where several models working in parallel and challenging each other's thinking gives a better answer.
+- team: "solo" when one model can do it well. "pair" when two models together give a clearly better result at little extra cost: ideas, creative work, a tricky explanation, a plan worth a second opinion. Pair at the request's own level: two quick models (GPT-6 Luna with Claude Haiku 5.5) for light work, two strong ones (Claude Opus 5.5 with GPT-6.2 Astra) for hard work, from different providers when both are listed. "plan" when a hard multi-step task (difficulty 3) gains from a stronger model planning first. "review" when a deliverable with stakes gains from a second model checking it. "plan+review" only for the hardest, highest-stakes work. "debate" when the hard part is reasoning, not doing: a decision with real trade-offs, a strategy, a proof, the root cause of a tricky problem, where several models working in parallel and challenging each other's thinking gives a better answer.
 - partner: with "pair", the second model's id (not the main model).
 - planner / reviewer: model ids from the list, only with those teams. The planner should be the strongest reasoner (it writes a plan only); the reviewer a strong model from a different provider than the executor when one is listed.
 - fanout: 0 for almost everything. For a big job that splits into independent parts that can be built or researched at the same time (a whole game, an app with several screens or systems, a report with several sections, comparing many options), the number of parallel helper agents, 2 to 8.
-- helper: with fanout, the model id the helpers run on: a fast, capable model (Sonnet 5.5, GPT-6.1 Sol or Terra) unless the parts are hard.
+- helper: with fanout, the model id the helpers run on: a fast, capable model (Sonnet 5.5, GPT-6.2 Sol or Terra) unless the parts are hard.
 - why: under 12 words.${i.budgetTight ? '\nLittle of the monthly budget is left: prefer cheaper models and "solo".' : ''}
 
 Models:
@@ -216,13 +221,15 @@ const cost = (m: ModelInfo): number => (m.price ? (3 * m.price.input + m.price.o
 
 /**
  * Whether the brain's model is used instead of the table's: it must pass every hard rule, never be a premium
- * model without the Fable setting, never cost over 4x the table's pick for a light request (difficulty 0-1),
- * and on Cheapest never cost more than the table's pick.
+ * model without the Fable setting, never be GPT Astra below difficulty 3 unless the table picked Astra itself (live,
+ * 2026-11-17: a 120-word blurb ran 33 Astra requests), never cost over 4x the table's pick for a light request
+ * (difficulty 0-1), and on Cheapest never cost more than the table's pick.
  */
 export function acceptBrainModel(id: string, l: PickLimits): ModelInfo | undefined {
   const m = l.allowed.find((x) => x.id === id)
   if (!m) return undefined
   if (slotOf(m) === 'fable' && !l.fableOn && slotOf(l.tablePick) !== 'fable') return undefined
+  if (slotOf(m) === 'astra' && l.difficulty < 3 && slotOf(l.tablePick) !== 'astra') return undefined
   if (l.difficulty <= 1 && cost(m) > 4 * Math.max(cost(l.tablePick), 0.05)) return undefined
   if (l.preference === 'cheapest' && cost(m) > cost(l.tablePick) + 1e-9) return undefined
   return m

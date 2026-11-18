@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 import type { ModelInfo, Tier } from '@shared/types'
 import { rankOf, tierOf } from '../../src/main/llm/catalog'
 import { routingPrefs } from '../../src/main/llm/router'
-import { ROUTING_TABLE, autoPreference, routeTask, routeTier, slotOf, slotsFor, type RouteOptions } from '../../src/main/llm/routing-table'
+import { ROUTING_TABLE, autoPreference, routeTask, routeTier, slotOf, slotPrice, slotsFor, type RouteOptions } from '../../src/main/llm/routing-table'
 import { TASK_CATEGORIES, classifyTask, estimateFileTokens, isChatTask, type TaskCategory, type TaskContext } from '../../src/main/llm/task-classifier'
 
 // Auto's evidence-based routing (docs/model-routing.md): classify the request (local rules), then the
@@ -20,7 +20,7 @@ const localModel = (id: string, tier: Tier, o: Partial<ModelInfo> = {}): ModelIn
 
 const CLAUDE = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'].map((id) => cloudModel(id))
 const FABLE = cloudModel('claude-fable-5-1')
-const GPT = ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra'].map((id) => cloudModel(id))
+const GPT = ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6.2-astra'].map((id) => cloudModel(id))
 const LOCAL = [localModel('lfm3:1.7b', 0), localModel('gemma4:12b', 1, { vision: true }), localModel('qwen3.8:27b', 2, { vision: true })]
 
 const SETUPS: Record<string, ModelInfo[]> = {
@@ -157,8 +157,8 @@ describe('the routing table', () => {
     expect(slotOf('claude-opus-5-5')).toBe('opus')
     expect(slotOf('claude-fable-5-2')).toBe('fable')
     expect(slotOf('claude-mythos-5-1')).toBe('fable')
-    expect(slotOf('gpt-6.1-sol')).toBe('sol')
-    expect(slotOf('gpt-6-astra')).toBe('astra')
+    expect(slotOf('gpt-6.2-sol')).toBe('sol')
+    expect(slotOf('gpt-6.2-astra')).toBe('astra')
     expect(slotOf('openai/gpt-6.1-terra')).toBe('terra')
     expect(slotOf('anthropic/claude-sonnet-5.5')).toBe('sonnet')
     expect(slotOf('gpt-5.5-pro')).toBeUndefined()
@@ -198,8 +198,8 @@ describe('routeTask: Claude and OpenAI keys', () => {
     // A refactor that also updates the tests is the hardest tier (the difficulty rubric): Opus even on Balanced.
     expect(routed('Refactor the payment service to support refunds and update the unit tests', 'both', {}, { preference: 'balanced' })).toBe('claude-opus-5-5')
     expect(routed(coding, 'claude')).toBe('claude-opus-5-5')
-    expect(routed(coding, 'openai')).toBe('gpt-6-astra')
-    expect(routed(coding, 'openai', {}, { preference: 'balanced' })).toBe('gpt-6.1-sol')
+    expect(routed(coding, 'openai')).toBe('gpt-6.2-astra')
+    expect(routed(coding, 'openai', {}, { preference: 'balanced' })).toBe('gpt-6.2-sol')
   })
   test('quick code questions: fast models', () => {
     expect(routed('What does git rebase do?', 'both')).toBe('claude-sonnet-5-5')
@@ -212,13 +212,25 @@ describe('routeTask: Claude and OpenAI keys', () => {
     // A bank site has stakes: a Balanced close call takes Best result's pick (Opus at 2x Sonnet's price, +2.8 s to
     // the first token, within the 3 s allowance); on GPT, Astra is 5x Sol's price, so Sol stays.
     expect(routed('Open Safari and log in to my bank site', 'both', {}, { preference: 'balanced' })).toBe('claude-opus-5-5')
-    expect(routed('Open Safari and log in to my bank site', 'openai', {}, { preference: 'balanced' })).toBe('gpt-6.1-sol')
+    expect(routed('Open Safari and log in to my bank site', 'openai', {}, { preference: 'balanced' })).toBe('gpt-6.2-sol')
   })
-  test('research: Astra at the top, Sol for everyday research, Opus with only Claude', () => {
+  test('research: GPT-6.2 Sol for everyday research (even on Best result), GPT-6.2 Astra only for the hardest, Opus with only Claude', () => {
     const text = 'Research the best CRM tools for small clinics with sources'
-    expect(routed(text, 'both')).toBe('gpt-6-astra')
-    expect(routed(text, 'both', {}, { preference: 'balanced' })).toBe('gpt-6.1-sol')
+    expect(classifyTask(text).difficulty).toBe(2)
+    expect(routed(text, 'both')).toBe('gpt-6.2-sol')
+    expect(routed(text, 'both', {}, { preference: 'balanced' })).toBe('gpt-6.2-sol')
+    expect(routed(text, 'openai')).toBe('gpt-6.2-sol')
     expect(routed(text, 'claude')).toBe('claude-opus-5-5')
+    // Difficulty 3: Astra on Best result; Balanced keeps Sol (a quarter of the price).
+    const deep = 'Do a deep dive on solid-state battery startups and cite your sources'
+    expect(classifyTask(deep).difficulty).toBe(3)
+    expect(routed(deep, 'both')).toBe('gpt-6.2-astra')
+    expect(routed(deep, 'both', {}, { preference: 'balanced' })).toBe('gpt-6.2-sol')
+    // Best result lifts research and math to tier 2 at most: Astra's row only at difficulty 3.
+    expect(routeTier('research', 2, 'best')).toBe(2)
+    expect(routeTier('math', 2, 'best')).toBe(2)
+    expect(routeTier('research', 3, 'best')).toBe(3)
+    expect(routeTier('research', 1, 'best')).toBe(2)
   })
   test('writing and office work: Claude', () => {
     expect(routed('Write a cover letter for a product manager role at a startup', 'both')).toMatch(/^claude-(opus|sonnet)-5-5$/)
@@ -226,17 +238,19 @@ describe('routeTask: Claude and OpenAI keys', () => {
     expect(routed('Make a spreadsheet tracking my monthly budget with formulas', 'both')).toBe('claude-opus-5-5')
     expect(routed('Make a spreadsheet tracking my monthly budget with formulas', 'both', {}, { preference: 'balanced' })).toBe('claude-sonnet-5-5')
   })
-  test('math and reasoning: GPT (Astra on Best result, Sol on Balanced); Claude-only gets Opus', () => {
-    expect(routed('Prove that there are infinitely many primes', 'both')).toBe('gpt-6-astra')
-    expect(routed('What is the probability of getting two sixes in three dice rolls?', 'both', {}, { preference: 'balanced' })).toBe('gpt-6.1-sol')
+  test('math and reasoning: GPT (Astra on Best result for the hardest, Sol for the rest); Claude-only gets Opus', () => {
+    expect(routed('Prove that there are infinitely many primes', 'both')).toBe('gpt-6.2-astra')
+    // Routine math (difficulty 2) is Sol's on Best result too.
+    expect(routed('Solve for x: 3x^2 + 5x - 2 = 0 and explain each step', 'both')).toBe('gpt-6.2-sol')
+    expect(routed('What is the probability of getting two sixes in three dice rolls?', 'both', {}, { preference: 'balanced' })).toBe('gpt-6.2-sol')
     expect(routed('Prove that there are infinitely many primes', 'claude')).toBe('claude-opus-5-5')
   })
   test('images: GPT-6.1 Sol / Terra or Opus', () => {
     // Analysing an image is standard work (difficulty 2); describing one is light (1).
     expect(routed("What's wrong with my wiring here?", 'both', { images: 1 })).toBe('claude-opus-5-5')
-    expect(routed("What's wrong with my wiring here?", 'both', { images: 1 }, { preference: 'balanced' })).toBe('gpt-6.1-sol')
+    expect(routed("What's wrong with my wiring here?", 'both', { images: 1 }, { preference: 'balanced' })).toBe('gpt-6.2-sol')
     expect(routed("What's wrong with my wiring here?", 'claude', { images: 1 }, { preference: 'balanced' })).toBe('claude-opus-5-5')
-    expect(routed("What's wrong with my wiring here?", 'openai', { images: 1 })).toBe('gpt-6.1-sol')
+    expect(routed("What's wrong with my wiring here?", 'openai', { images: 1 })).toBe('gpt-6.2-sol')
     expect(routed('what is in this picture?', 'both', { images: 1 }, { preference: 'balanced' })).toBe('gpt-6.1-terra')
   })
   test('tool-heavy connector work: Claude', () => {
@@ -307,14 +321,23 @@ describe('routeTask: constraints and fallbacks', () => {
     const models = [...LOCAL.map((m) => ({ ...m, vision: false })), localModel('qwen3.5:9b', 1, { vision: true })]
     expect(routed('what is in this picture?', models, { images: 1 })).toBe('qwen3.5:9b')
   })
+  test('a close call is priced at the prompt\'s own size: GPT past 272K, Haiku past 100K; Opus flat', () => {
+    const astra = cloudModel('gpt-6.2-astra'), opus = cloudModel('claude-opus-5-5'), haiku = cloudModel('claude-haiku-5-5')
+    expect(slotPrice(astra)).toBe((3 * 8 + 40) / 4)
+    expect(slotPrice(astra, 272_000)).toBe((3 * 8 + 40) / 4)
+    expect(slotPrice(astra, 600_000)).toBe((3 * 16 + 60) / 4)
+    expect(slotPrice(opus, 600_000)).toBe(slotPrice(opus))
+    expect(slotPrice(haiku, 150_000)).toBe((3 * 0.5 + 2.5) / 4)
+  })
   test('a huge prompt needs a window that fits it', () => {
     const small = cloudModel('claude-sonnet-5-5', { contextTokens: 200_000 })
-    expect(routed('Summarize the key risks in this contract', [small, ...GPT], { inputTokens: 600_000 })).toBe('gpt-6-astra')
+    expect(routed('Summarize the key risks in this contract', [small, ...GPT], { inputTokens: 600_000 })).toBe('gpt-6.2-astra')
     // A long document is the hardest tier (the difficulty rubric): Balanced takes the table's hardest row (Opus, else Astra).
-    expect(routed('Summarize the key risks in this contract', [small, ...GPT], { inputTokens: 600_000 }, { preference: 'balanced' })).toBe('gpt-6-astra')
+    expect(routed('Summarize the key risks in this contract', [small, ...GPT], { inputTokens: 600_000 }, { preference: 'balanced' })).toBe('gpt-6.2-astra')
+    // Balanced keeps Opus: past 272K GPT-6.2 Astra bills $16 / $60 per M against Opus's flat $4 / $20, far over a close call's 2x.
     expect(routed('Summarize the key risks in this contract', SETUPS.both, { inputTokens: 600_000 }, { preference: 'balanced' })).toBe('claude-opus-5-5')
     // Local windows (64K here) can't take it: a cloud model, even on Local first.
-    expect(routed('Summarize the key risks in this contract', 'all', { inputTokens: 600_000 }, { preferCloud: false })).toBe('gpt-6-astra')
+    expect(routed('Summarize the key risks in this contract', 'all', { inputTokens: 600_000 }, { preferCloud: false })).toBe('gpt-6.2-astra')
     // Nothing fits: the biggest window there is.
     expect(routed('Summarize this', [...LOCAL, localModel('big:32b', 2, { maxFittingWindow: 131072 })], { inputTokens: 600_000 })).toBe('big:32b')
   })
@@ -325,7 +348,7 @@ describe('routeTask: constraints and fallbacks', () => {
     expect(p.source).toBe('fallback')
   })
   test('OpenRouter ids of Claude and GPT fill their slots', () => {
-    const or = [cloudModel('anthropic/claude-opus-5.5', { provider: 'openrouter', tier: 3 }), cloudModel('openai/gpt-6-astra', { provider: 'openrouter', tier: 3 })]
+    const or = [cloudModel('anthropic/claude-opus-5.5', { provider: 'openrouter', tier: 3 }), cloudModel('openai/gpt-6.2-astra', { provider: 'openrouter', tier: 3 })]
     expect(routed('Refactor the whole app architecture to a plugin system, end to end', or)).toBe('anthropic/claude-opus-5.5')
   })
   test('nothing to route to', () => {

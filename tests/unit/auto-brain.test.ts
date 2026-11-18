@@ -24,7 +24,8 @@ const HAIKU = cloud('claude-haiku-5-5', 1, 0.1, 0.5)
 const SONNET = cloud('claude-sonnet-5-5', 2, 2, 10)
 const OPUS = cloud('claude-opus-5-5', 3, 4, 20)
 const FABLE = cloud('claude-fable-5-2', 3, 8, 40)
-const ASTRA = cloud('gpt-6-astra', 3, 10, 50)
+const ASTRA = cloud('gpt-6.2-astra', 3, 8, 40)
+const SOL = cloud('gpt-6.2-sol', 2, 2, 10)
 const ALL = [LUNA, HAIKU, SONNET, OPUS, FABLE, ASTRA]
 
 const answer = (p: Partial<BrainAnswer> = {}): BrainAnswer => ({ category: 'coding', kind: 'agent', difficulty: 3, effort: 'xhigh', study: false, image: false, model: OPUS.id, team: 'solo', needs: [], fanout: 0, why: '', ...p })
@@ -94,6 +95,34 @@ describe('the brain\'s decision', () => {
     expect(acceptBrainModel(ASTRA.id, { ...l, tablePick: LUNA, difficulty: 1 })).toBeUndefined()
     // Cheapest never pays more than the table's pick.
     expect(acceptBrainModel(OPUS.id, { ...l, preference: 'cheapest' })).toBeUndefined()
+  })
+
+  test('GPT-6.2 Astra only for the hardest work: below difficulty 3 the brain\'s Astra gives way to the table\'s pick', () => {
+    // Live, 2026-11-17: a 120-word newsletter blurb ran 33 Astra requests ($5.72).
+    const l = { allowed: [...ALL, SOL], tablePick: SOL, preference: 'best' as const, difficulty: 2 as const, fableOn: false }
+    expect(acceptBrainModel(ASTRA.id, l)).toBeUndefined()
+    expect(acceptBrainModel(ASTRA.id, { ...l, difficulty: 3 })?.id).toBe(ASTRA.id)
+    // When the table itself picked Astra (GPT-only hard coding on Best result), the brain may keep it.
+    expect(acceptBrainModel(ASTRA.id, { ...l, tablePick: ASTRA })?.id).toBe(ASTRA.id)
+    // Sol for routine research and reasoning is always fine.
+    expect(acceptBrainModel(SOL.id, { ...l, tablePick: OPUS })?.id).toBe(SOL.id)
+  })
+
+  test('the prompt names the 6.2 models for each need and each model\'s strength', () => {
+    const { system } = brainPrompt({ text: 'Research heat pumps', history: [], attachments: [], images: 0, preference: 'balanced', models: [...ALL, SOL], rules: classifyTask('Research heat pumps') })
+    expect(system).toMatch(/reasoning, math, logic: GPT-6\.2 Sol \(GPT-6\.2 Astra only at difficulty 3/)
+    expect(system).toMatch(/research: GPT-6\.2 Sol or Sonnet 5\.5 \(GPT-6\.2 Astra only for deep, high-stakes research at difficulty 3\)/)
+    expect(system).toMatch(/coding: Sonnet 5\.5 for routine work, Opus 5\.5 for hard multi-file or agentic work/)
+    expect(system).toMatch(/quick: GPT-6 Luna, Haiku 5\.5 or Terra/)
+    expect(system).not.toMatch(/GPT-6\.1 Sol|GPT-6 Astra/)
+    // The model menu: each slot's strength line.
+    expect(system).toMatch(/- gpt-6\.2-astra: .*only the hardest math, deep high-stakes research and very long documents \(difficulty 3\)/)
+    expect(system).toMatch(/- gpt-6\.2-sol: .*everyday research, reasoning, math and images/)
+    expect(system).toMatch(/- claude-sonnet-5-5: .*routine coding/)
+    expect(system).toMatch(/- claude-opus-5-5: .*hard agentic coding, computer use/)
+    // This Mac's measured outcomes still reach the brain.
+    const withOutcomes = brainPrompt({ text: 'Research heat pumps', history: [], attachments: [], images: 0, preference: 'balanced', models: [...ALL, SOL], rules: classifyTask('Research heat pumps'), outcomes: ['- gpt-6.2-sol: 9/10 done well (7 checked) on Research'] }).system
+    expect(withOutcomes).toMatch(/How models did on this Mac lately:\n- gpt-6\.2-sol: 9\/10 done well/)
   })
 
   test('teams only for real agent work, never on a tight budget', () => {
@@ -312,8 +341,8 @@ describe('the brain in the agent loop', () => {
       { content: 'Final: fixed it.', delay: 0 }
     )
     await h.run(t, 'Fix the off-by-one bug in the pager component')
-    expect(llm.requests.map((r) => r.model).slice(0, 3)).toEqual(['gpt-6-luna', 'claude-opus-5-5', 'gpt-6-astra'])
-    expect(JSON.stringify(llm.requests[3].messages)).toContain('A second model (gpt-6-astra) reviewed your draft')
+    expect(llm.requests.map((r) => r.model).slice(0, 3)).toEqual(['gpt-6-luna', 'claude-opus-5-5', 'gpt-6.2-astra'])
+    expect(JSON.stringify(llm.requests[3].messages)).toContain('A second model (gpt-6.2-astra) reviewed your draft')
   })
 })
 
@@ -376,7 +405,7 @@ describe('reasoning together', () => {
     h.agent.stop(t.id)
     await done
     expect(llm.requests[0].model).toBe('gpt-6-luna')
-    expect(new Set(llm.requests.slice(1).map((r) => r.model))).toEqual(new Set(['gpt-6-astra', 'claude-opus-5-5']))
+    expect(new Set(llm.requests.slice(1).map((r) => r.model))).toEqual(new Set(['gpt-6.2-astra', 'claude-opus-5-5']))
     expect(h.db.listMessages(t.id).some((m) => m.kind === 'notice' && /reasoning this out together/.test(m.content))).toBe(true)
     expect(llm.requests.filter((r) => JSON.stringify(r.messages).includes('You are Auto, the router')).length).toBe(1)
   }, 30_000)

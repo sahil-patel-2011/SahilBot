@@ -70,7 +70,7 @@ beforeAll(async () => {
     req.on('end', async () => {
       if (req.method === 'GET' && req.url?.endsWith('/models')) {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ data: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.4-mini-2026-03-17', 'gpt-6.2-sol', 'gpt-image-2', 'sora-2'].map((id) => ({ id })) }))
+        res.end(JSON.stringify({ data: ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.4-mini-2026-03-17', 'gpt-6.3-sol', 'gpt-image-2', 'sora-2'].map((id) => ({ id })) }))
         return
       }
       seen.push({ path: req.url ?? '', auth: req.headers.authorization, body: JSON.parse(raw || '{}') })
@@ -104,10 +104,23 @@ const tool = (name: string) => ({ type: 'function' as const, function: { name, d
 
 describe('model table', () => {
   test('the current lineup: windows, prices, efforts and which API tools need', () => {
-    const astra = models.openaiInfo('gpt-6-astra')!
-    expect(astra).toMatchObject({ tier: 3, current: true, contextTokens: 1_050_000, maxInput: 922_000, maxOutput: 128_000, price: { input: 10, cacheRead: 1, output: 50, write30m: 12.5, write12h: 25 }, tools: 'responses-only', api: 'responses' })
+    // GPT-6.2 Astra and Sol (models/gpt-6.2-astra, /gpt-6.2-sol and pricing, read 2026-11-18).
+    const astra = models.openaiInfo('gpt-6.2-astra')!
+    expect(astra).toMatchObject({ gen: 6.2, role: 'astra', label: 'GPT-6.2 Astra', tier: 3, current: true, contextTokens: 1_050_000, maxInput: 922_000, maxOutput: 128_000, price: { input: 8, cacheRead: 0.4, output: 40, write30m: 10, write12h: 20 }, longContext: { above: 272_000, input: 2, output: 1.5 }, tools: 'responses-only', api: 'responses', cacheOptions: true })
     expect(astra.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
-    expect(models.openaiInfo('gpt-6.1-sol')).toMatchObject({ tier: 2, price: { input: 2, cacheRead: 0.1, output: 10 }, allTurns: true, defaultEffort: 'medium' })
+    expect(astra.estimated).toBeUndefined()
+    const sol = models.openaiInfo('gpt-6.2-sol')!
+    expect(sol).toMatchObject({ gen: 6.2, role: 'sol', label: 'GPT-6.2 Sol', tier: 2, current: true, contextTokens: 1_050_000, maxInput: 922_000, maxOutput: 128_000, price: { input: 2, cacheRead: 0.1, output: 10, write30m: 2.5, write12h: 5 }, tools: 'responses-only', api: 'responses' })
+    expect(sol.efforts).not.toContain('none')
+    // Not documented for 6.2: reasoning.context all_turns isn't sent.
+    expect(sol.allTurns).toBeUndefined()
+    // Long context (>272K): Astra $16 / $0.80 / $60, Sol $4 / $0.20 / $15.
+    expect(budget.priceFor('gpt-6.2-astra', 300_000)).toMatchObject({ input: 16, output: 60, cacheRead: 0.8, known: true })
+    expect(budget.priceFor('gpt-6.2-sol', 300_000)).toMatchObject({ input: 4, output: 15, cacheRead: 0.2 })
+    // Superseded by 6.2 (listed, off by default, priced as before).
+    expect(models.openaiInfo('gpt-6-astra')).toMatchObject({ tier: 3, supersededBy: 'gpt-6.2-astra', price: { input: 10, cacheRead: 1, output: 50, write30m: 12.5, write12h: 25 }, tools: 'responses-only' })
+    expect(models.openaiInfo('gpt-6-astra')!.current).toBeUndefined()
+    expect(models.openaiInfo('gpt-6.1-sol')).toMatchObject({ tier: 2, supersededBy: 'gpt-6.2-sol', price: { input: 2, cacheRead: 0.1, output: 10 }, allTurns: true, defaultEffort: 'medium' })
     expect(models.openaiInfo('gpt-6.1-terra')).toMatchObject({ tier: 1, price: { input: 1, cacheRead: 0.05, output: 5 } })
     expect(models.openaiInfo('gpt-6-luna')).toMatchObject({ tier: 0, price: { input: 0.1, cacheRead: 0.01, output: 0.5 }, tools: 'chat-with-none' })
     expect(models.openaiInfo('gpt-6-luna')!.efforts).toContain('none')
@@ -124,11 +137,13 @@ describe('model table', () => {
     expect(models.openaiSpec('gpt-5.4-mini-2026-03-17')!.id).toBe('gpt-5.4-mini')
     expect(models.openaiSpec('gpt-4o-mini')!.id).toBe('gpt-4o-mini')
     expect(models.gptLabel('gpt-6.1-sol')).toBe('GPT-6.1 Sol')
+    expect(models.gptLabel('gpt-6.2-astra')).toBe('GPT-6.2 Astra')
+    expect(models.openaiSpec('gpt-6.2-sol-2026-11-17')!.id).toBe('gpt-6.2-sol')
     expect(models.gptLabel('gpt-5.4-mini-2026-03-17')).toBe('GPT-5.4 mini (2026-03-17)')
   })
   test('an unknown newer GPT is inferred from its role at the role\'s highest prices, marked estimated', () => {
-    const next = models.openaiInfo('gpt-6.2-sol')!
-    expect(next).toMatchObject({ estimated: true, tier: 2, role: 'sol', api: 'responses', contextTokens: 1_050_000, label: 'GPT-6.2 Sol' })
+    const next = models.openaiInfo('gpt-6.3-sol')!
+    expect(next).toMatchObject({ estimated: true, tier: 2, role: 'sol', api: 'responses', contextTokens: 1_050_000, label: 'GPT-6.3 Sol' })
     expect(next.price).toMatchObject({ input: 4, output: 20, cacheRead: 0.4 })
     expect(models.openaiInfo('gpt-7')).toMatchObject({ estimated: true, tier: 3, price: { input: 10, output: 50 } })
     expect(budget.priceFor('gpt-7')).toMatchObject({ known: false, estimated: true, input: 10 })
@@ -138,8 +153,9 @@ describe('model table', () => {
     expect(models.openaiInfo('gpt-realtime-2')).toBeUndefined()
   })
   test('older models start switched off; the lineup and newer ids stay on', () => {
-    const off = models.olderOpenAI(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6', 'gpt-5.5', 'gpt-5.4-mini-2026-03-17', 'gpt-6.2-sol', 'gpt-4o', 'o3', 'dall-e-3'])
-    expect([...off].sort()).toEqual(['dall-e-3', 'gpt-4o', 'gpt-5.4-mini-2026-03-17', 'gpt-5.5', 'gpt-5.6', 'gpt-6-sol', 'o3'])
+    const off = models.olderOpenAI(['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6', 'gpt-5.5', 'gpt-5.4-mini-2026-03-17', 'gpt-6.3-sol', 'gpt-4o', 'o3', 'dall-e-3'])
+    // GPT-6 Astra and 6.1 Sol, superseded by 6.2, start off with the rest of the older models.
+    expect([...off].sort()).toEqual(['dall-e-3', 'gpt-4o', 'gpt-5.4-mini-2026-03-17', 'gpt-5.5', 'gpt-5.6', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6.1-sol', 'o3'])
   })
   test('effort mapping: the level when supported, else the nearest below, never none', () => {
     expect(models.openaiEffort('gpt-6-astra', 'low')).toBe('low')
@@ -404,10 +420,13 @@ describe('streaming against the fake Responses server', () => {
 const info = (id: string, provider: 'openai' | 'anthropic' = 'openai'): ModelInfo => ({ id, provider, providerName: provider, enabled: true, installed: true, vision: true, tools: true, tier: provider === 'openai' ? models.openaiInfo(id)!.tier : /opus/.test(id) ? 3 : /sonnet/.test(id) ? 2 : 1, rank: provider === 'openai' ? models.openaiRank(id) : /opus/.test(id) ? 5.055 : /sonnet/.test(id) ? 4.055 : 3.055, requiredGB: 0, maxFittingWindow: 131072, fits: true, note: 'remote' } as ModelInfo)
 
 describe('Auto with an OpenAI key', () => {
-  const gpt = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-5.5-pro'].map((id) => info(id))
+  const gpt = ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-5.5-pro'].map((id) => info(id))
   test('Luna for small talk, Terra for quick questions, Sol for tasks, Astra for the hardest; pro never', () => {
-    expect([0, 1, 2, 3].map((t) => pick(gpt, t as 0 | 1 | 2 | 3, { preferCloud: true })?.id)).toEqual(['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra'])
-    expect(pick(gpt.filter((m) => m.id !== 'gpt-6-astra'), 3, { preferCloud: true })?.id).toBe('gpt-6.1-sol')
+    expect([0, 1, 2, 3].map((t) => pick(gpt, t as 0 | 1 | 2 | 3, { preferCloud: true })?.id)).toEqual(['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6.2-astra'])
+    expect(pick(gpt.filter((m) => m.id !== 'gpt-6.2-astra'), 3, { preferCloud: true })?.id).toBe('gpt-6.2-sol')
+    // With the superseded models switched on too, the newer generation wins its tier.
+    expect(pick([...gpt, info('gpt-6-astra'), info('gpt-6.1-sol')], 3, { preferCloud: true })?.id).toBe('gpt-6.2-astra')
+    expect(pick([...gpt, info('gpt-6-astra'), info('gpt-6.1-sol')], 2, { preferCloud: true })?.id).toBe('gpt-6.2-sol')
   })
   test('with a Claude key too, Claude keeps its tiers', () => {
     const both = [...gpt, info('claude-haiku-5-5', 'anthropic'), info('claude-sonnet-5-5', 'anthropic'), info('claude-opus-5-5', 'anthropic')]
@@ -419,22 +438,26 @@ describe('Auto with an OpenAI key', () => {
     try {
       const s = { providers: { ollama: { enabled: false, baseUrl: '' }, lmstudio: { enabled: false, baseUrl: '' }, custom: { enabled: false, baseUrl: '' }, openai: { baseUrl: '' } }, keys: { openai: true }, cloud: { enabled: true, hybrid: false, advisorModel: '', maxConsultsPerRequest: 0 }, customModels: [], hiddenModels: [], shownModels: [], contextWindow: 0, baseUrl: '' }
       const ep = new Endpoints({ get: () => s, keyFor: () => 'sk-test', apiKey: () => 'sk-test' } as never)
-      expect(ep.for('gpt-6-astra')).toMatchObject({ provider: 'openai', baseUrl: BASE })
+      expect(ep.for('gpt-6.2-astra')).toMatchObject({ provider: 'openai', baseUrl: BASE })
       const list = await ep.list()
       const by = new Map(list.models.map((m) => [m.id, m]))
       expect(list.providers?.[0]).toMatchObject({ id: 'openai', name: 'OpenAI', ok: true })
-      expect(by.get('gpt-6-astra')).toMatchObject({ provider: 'openai', label: 'GPT-6 Astra', tier: 3, contextTokens: 1_050_000, maxOutputTokens: 128_000, vision: true, tools: true, enabled: true, price: { input: 10, output: 50, cacheRead: 1 } })
+      expect(by.get('gpt-6.2-astra')).toMatchObject({ provider: 'openai', label: 'GPT-6.2 Astra', tier: 3, contextTokens: 1_050_000, maxOutputTokens: 128_000, vision: true, tools: true, enabled: true, price: { input: 8, output: 40, cacheRead: 0.4 } })
+      expect(by.get('gpt-6.2-sol')).toMatchObject({ label: 'GPT-6.2 Sol', tier: 2, enabled: true, price: { input: 2, output: 10, cacheRead: 0.1 } })
+      expect(by.get('gpt-6.2-sol')?.priceEstimated).toBeFalsy()
       expect(by.get('gpt-6-luna')).toMatchObject({ tier: 0, enabled: true })
-      expect(by.get('gpt-6.2-sol')).toMatchObject({ priceEstimated: true, enabled: true })
-      for (const off of ['gpt-6-sol', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini-2026-03-17']) expect(by.get(off)?.enabled, off).toBe(false)
+      expect(by.get('gpt-6.3-sol')).toMatchObject({ priceEstimated: true, enabled: true })
+      // Superseded by 6.2: listed (pick them by name or switch them on), off by default.
+      for (const off of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini-2026-03-17']) expect(by.get(off)?.enabled, off).toBe(false)
+      expect(by.get('gpt-6-astra')).toMatchObject({ label: 'GPT-6 Astra', price: { input: 10, output: 50, cacheRead: 1 } })
       expect(by.has('gpt-image-2')).toBe(false)
       expect(by.has('sora-2')).toBe(false)
       // Auto (cloud) with only an OpenAI key routes over the lineup, cloud first.
-      // (A newer Sol the table doesn't know yet ranks above 6.1 Sol, as a newer Claude would.)
+      // (A newer Sol the table doesn't know yet ranks above 6.2 Sol, as a newer Claude would.)
       const usable = ep.usable()
-      expect(pick(usable, 2)?.id).toBe('gpt-6.2-sol')
-      expect(pick(usable.filter((m) => m.id !== 'gpt-6.2-sol'), 2)?.id).toBe('gpt-6.1-sol')
-      expect(pick(usable, 3)?.id).toBe('gpt-6-astra')
+      expect(pick(usable, 2)?.id).toBe('gpt-6.3-sol')
+      expect(pick(usable.filter((m) => m.id !== 'gpt-6.3-sol'), 2)?.id).toBe('gpt-6.2-sol')
+      expect(pick(usable, 3)?.id).toBe('gpt-6.2-astra')
     } finally {
       if (prev === undefined) delete process.env.FOREMAN_BASE_URL
       else process.env.FOREMAN_BASE_URL = prev

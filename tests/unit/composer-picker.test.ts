@@ -14,7 +14,8 @@ const opus = model('claude-opus-5-5', { label: 'Claude Opus 5.5', tier: 3, rank:
 const fable = model('claude-fable-5-2', { label: 'Claude Fable 5.2', tier: 3, rank: 6.052 })
 const sonnet = model('claude-sonnet-5-5', { label: 'Claude Sonnet 5.5', tier: 2, rank: 4.055 })
 const haiku = model('claude-haiku-5-5', { label: 'Claude Haiku 5.5', tier: 1, rank: 3.055 })
-const astra = model('gpt-6-astra', { label: 'GPT-6 Astra', provider: 'openai', providerName: 'OpenAI', tier: 3, rank: 2.06 })
+const astra = model('gpt-6.2-astra', { label: 'GPT-6.2 Astra', provider: 'openai', providerName: 'OpenAI', tier: 3, rank: 2.062 })
+const oldAstra = model('gpt-6-astra', { label: 'GPT-6 Astra', provider: 'openai', providerName: 'OpenAI', tier: 3, rank: 2.06 })
 const qwen = model('qwen3.8:27b', { label: 'Qwen3.8 27B', provider: 'ollama', providerName: 'Ollama', note: undefined, requiredGB: 22, tier: 2, rank: 3.1 })
 
 describe('picker label', () => {
@@ -39,7 +40,7 @@ describe('picker label', () => {
   })
   test('short names drop the "Claude" prefix', () => {
     expect(shortModelName('claude-sonnet-5-5', sonnet)).toBe('Sonnet 5.5')
-    expect(shortModelName('gpt-6-astra', astra)).toBe('GPT-6 Astra')
+    expect(shortModelName('gpt-6.2-astra', astra)).toBe('GPT-6.2 Astra')
     expect(shortModelName('auto:local')).toBe('Auto (local)')
   })
 })
@@ -52,8 +53,12 @@ describe('top models', () => {
   })
   test('the rest go to More models, in their original order', () => {
     const { top, more } = splitModels([qwen, haiku, sonnet, astra, fable, opus])
-    expect(top.map((m) => m.id)).toEqual(['claude-opus-5-5', 'claude-fable-5-2', 'gpt-6-astra', 'claude-sonnet-5-5'])
+    expect(top.map((m) => m.id)).toEqual(['claude-opus-5-5', 'claude-fable-5-2', 'gpt-6.2-astra', 'claude-sonnet-5-5'])
     expect(more.map((m) => m.id)).toEqual(['qwen3.8:27b', 'claude-haiku-5-5'])
+  })
+  test('GPT-6.2 Astra is listed above the GPT-6 Astra it supersedes when both are on', () => {
+    const { top } = splitModels([oldAstra, astra, sonnet], 2)
+    expect(top.map((m) => m.id)).toEqual(['gpt-6.2-astra', 'gpt-6-astra'])
   })
   test('a model too big for this Mac stays out of the top; one that fits at a smaller window is in', () => {
     const tooBig = model('huge:400b', { provider: 'ollama', providerName: 'Ollama', note: 'Too big for this Mac', tier: 3, rank: 9, fits: false, maxFittingWindow: 0 })

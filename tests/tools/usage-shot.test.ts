@@ -9,7 +9,7 @@ import { launch, tempProfile } from '../accept/app'
 test('usage dashboard screenshots', async () => {
   const out = process.env.SHOTS_DIR ?? tmpdir()
   const llm = await startMockLlm()
-  llm.models = ['claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-6-astra', 'gpt-6.1-sol', 'grok-4.7']
+  llm.models = ['claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-6.2-astra', 'gpt-6.2-sol', 'grok-4.7']
   for (const theme of ['light', 'dark'] as const) {
     const dir = tempProfile()
     seedUsage(dir)
@@ -18,7 +18,7 @@ test('usage dashboard screenshots', async () => {
       await page.setViewportSize({ width: 1280, height: 900 })
       // The app follows the system appearance (prefers-color-scheme); emulate it for the dark pass.
       await page.emulateMedia({ colorScheme: theme })
-      await page.evaluate((t) => window.foreman.settings.set({ theme: t, setKeys: { anthropic: 'sk-ant-api-test', openai: 'sk-test', xai: 'xai-test' }, fastMode: { providers: { anthropic: true, openai: false, xai: false }, models: { 'gpt-6-astra': 'ultrafast' }, auto: 'speed' } }), theme)
+      await page.evaluate((t) => window.foreman.settings.set({ theme: t, setKeys: { anthropic: 'sk-ant-api-test', openai: 'sk-test', xai: 'xai-test' }, fastMode: { providers: { anthropic: true, openai: false, xai: false }, models: { 'gpt-6.2-astra': 'ultrafast' }, auto: 'speed' } }), theme)
       await page.evaluate(() => window.foreman.models.list())
       await page.waitForTimeout(400)
       await page.keyboard.press('Meta+,')
@@ -38,6 +38,7 @@ test('usage dashboard screenshots', async () => {
       await page.waitForTimeout(200)
       await page.screenshot({ path: `${out}/usage-${theme}-limit.png` })
       await page.click('[data-testid="settings-models"]')
+      await page.click('[data-testid="models-advanced"] > summary')
       await page.waitForSelector('[data-testid="fast-mode"]')
       await page.locator('[data-testid="xai-section"]').scrollIntoViewIfNeeded()
       await page.waitForTimeout(300)
