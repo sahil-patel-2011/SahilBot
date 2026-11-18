@@ -6,6 +6,7 @@ import * as I from '../icons'
 import { importBot } from './BotShare'
 import { Disclosure } from './ui'
 import { nameFromJob } from '../lib/ux'
+import { FunctionBots } from './FunctionBots'
 
 
 /**
@@ -139,6 +140,8 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
               </div>
               <div className="hint bot-auto-note" data-testid="editor-auto-model"><I.Sparkle size={12} /> It opens in its own chat with this job ready to send. Leave it empty and the bot introduces itself.</div>
               <Disclosure title="Appearance and instructions" sub="Optional" testId="bot-editor-more">{look}{instructions}</Disclosure>
+              <FunctionBots templates={templates.filter((t) => t.group === 'function')} adding={adding} onAdd={(t) => void addTemplate(t)}
+                onConnect={() => { onClose(); window.dispatchEvent(new Event('sahilbot:open-connect')) }} />
               {templates.length > 0 && (
                 <div className="be-templates" data-testid="bot-templates-list">
                   <div className="be-templates-head"><span>Or start from a template</span><button className="link-btn" onClick={() => void importBot(onClose)} data-testid="template-import">Import from file…</button></div>
@@ -146,7 +149,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
                     <input className="set-input be-template-search" value={tq} onChange={(e) => setTq(e.target.value)} placeholder={`Search ${templates.length} templates: engineering, ideas, school…`} aria-label="Search templates" data-testid="template-search" />
                   )}
                   <div className="be-template-grid">
-                    {templates.filter((t) => !tq.trim() || `${t.name} ${t.description}`.toLowerCase().includes(tq.trim().toLowerCase())).map((t) => (
+                    {templates.filter((t) => t.group !== 'function' && (!tq.trim() || `${t.name} ${t.description}`.toLowerCase().includes(tq.trim().toLowerCase()))).map((t) => (
                       <button key={t.id} className="be-template" disabled={!!adding} onClick={() => void addTemplate(t)} data-testid={`template-${t.id}`} title={t.description}>
                         <SpaceAvatar color={t.color} shape={t.shape} size={30} />
                         <span className="be-template-text"><b>{adding === t.id ? 'Adding…' : t.name}</b><span>{t.description}</span></span>

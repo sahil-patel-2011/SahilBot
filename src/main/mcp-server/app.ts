@@ -101,6 +101,15 @@ export function setupMcpServer(d: McpAppDeps): McpApp {
     changed()
     return { client: publicClient(client), token, snippets: snippets(server.url, token, shimPath) }
   })
+  ipcMain.handle('mcp:setScope', (ev, id: unknown, scope: unknown) => {
+    if (!fromMainWindow(ev, d.mainWindow())) refuse()
+    const c = typeof id === 'string' ? store.setScope(id, scope) : undefined
+    if (c) store.log({ clientId: c.id, client: c.name, tool: 'scope changed', ok: true })
+    changed()
+    return status()
+  })
+  // Names for the scope picker (the window shows these anyway in People & Places).
+  ipcMain.handle('mcp:brainNames', () => d.host.brain?.names({ sources: ['email'], entities: 'shared', topics: [], sensitive: [], bots: [] }, 300) ?? [])
   ipcMain.handle('mcp:revokeClient', (ev, id: unknown) => {
     if (!fromMainWindow(ev, d.mainWindow())) refuse()
     const c = typeof id === 'string' ? store.get(id) : undefined

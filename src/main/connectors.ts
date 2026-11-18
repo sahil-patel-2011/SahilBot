@@ -2200,6 +2200,22 @@ export class Connectors {
     return this.list().filter((c) => c.preset === preset && this.status.get(c.id)?.state === 'connected').flatMap((c) => this.live.get(c.id)?.tools ?? [])
   }
 
+  /** The server's own tool names of a live connector made from this catalog entry (tools the user switched off left out). */
+  presetServerTools(preset: string): string[] {
+    const c = this.list().find((x) => x.preset === preset && this.live.has(x.id))
+    if (!c) return []
+    return (this.live.get(c.id)?.all ?? []).map((t) => t.name).filter((n) => !c.disabledTools?.includes(n))
+  }
+
+  /** connected (live), needs_auth (set up but not live: its sign-in expired or never finished) or absent. */
+  presetState(preset: string): 'connected' | 'needs_auth' | 'absent' {
+    const cs = this.list().filter((x) => x.preset === preset)
+    if (!cs.length) return 'absent'
+    if (cs.some((x) => this.live.has(x.id))) return 'connected'
+    // Set up but not live (signed out, expired, or still connecting): it needs the user to sign in again.
+    return 'needs_auth'
+  }
+
   /** True when a connector made from this catalog entry is live. */
   presetConnected(preset: string): boolean {
     return this.list().some((c) => c.preset === preset && this.live.has(c.id))

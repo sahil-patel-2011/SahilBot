@@ -22,7 +22,7 @@ Lead → Qualified (fits ICP + has pain; use BANT or MEDDICC-lite: budget, autho
 Build a list of 50-100 ICP accounts with web research (and Apollo/Crunchbase connectors when connected). Personalize the first line to a real trigger; one clear ask (15-minute call). Sequence: 3-5 touches over ~2-3 weeks across email/LinkedIn/phone. Follow anti-spam rules (CAN-SPAM, GDPR/PECR where relevant): honest subject, opt-out, real address. Draft with the email skills; never send without the user's approval.
 
 ## Discovery call (talk ~30%, listen ~70%)
-Current situation, pain and its cost, what they've tried, impact if unsolved, decision process and timeline, budget range, next step with a date. Summarize back what you heard.
+Current situation, pain and its cost, what they've tried, impact if unsolved, decision process and timeline, budget range, next step with a date. Summarize back what you heard. Before each call, build a brief with business-meeting-prep (brain first: `about` for the account and contacts, then CRM and email).
 
 ## Objections
 Acknowledge, clarify ("When you say too expensive, compared to what?"), respond with proof, confirm. Price objections are often value objections: return to the quantified cost of the problem.

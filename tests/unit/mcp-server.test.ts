@@ -368,7 +368,7 @@ describe('MCP server over HTTP', () => {
     const { client, token } = h.store.create('Cursor')
     const okRes = await raw(h.port, { headers: { authorization: `Bearer ${token}` } })
     expect(okRes.status).toBe(200)
-    expect(JSON.parse(okRes.body).result.tools.map((t: { name: string }) => t.name)).toEqual(['list_bots', 'ask_bot', 'get_chat', 'search_memory'])
+    expect(JSON.parse(okRes.body).result.tools.map((t: { name: string }) => t.name)).toEqual(['list_bots', 'ask_bot', 'get_chat', 'search_memory', 'search_brain', 'get_person', 'get_client', 'get_project', 'open_commitments'])
     h.store.revoke(client.id)
     expect((await raw(h.port, { headers: { authorization: `Bearer ${token}` } })).status).toBe(401)
     const fails = h.store.activity().filter((a) => a.tool === 'connect' && !a.ok)

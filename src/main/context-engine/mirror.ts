@@ -25,6 +25,12 @@ const REL_WORD: Record<string, [string, string]> = {
   member_of: ['Member of', 'Members'], family_of: ['Family of', 'Family'], attended: ['Going to', 'Going']
 }
 
+/**
+ * Extra lines a card carries from outside the graph: the brain's "Written for you" brief (src/main/brain).
+ * Set once at startup; null or absent for entities without one.
+ */
+export const cardExtras: { brief?: (entityId: string) => { text: string; sources: string[]; edited?: boolean } | null } = {}
+
 /** The managed block for one entity: facts with their sources, relations as [[links]], recent interactions. */
 export function cardBlock(store: GraphStore, id: string): string | null {
   const e = store.entity(id)
@@ -38,6 +44,12 @@ export function cardBlock(store: GraphStore, id: string): string | null {
     if (r.otherName === 'You' || store.entity(r.otherId)?.isUser) continue
     const [out, inc] = REL_WORD[r.rel] ?? ['Related to', 'Related']
     lines.push(`- ${r.outgoing ? out : inc}: [[${r.otherName}]]${r.note ? ` (${r.note})` : ''} (${who(r.trust)}, ${iso(r.at)})`)
+  }
+  let brief: ReturnType<NonNullable<typeof cardExtras.brief>> = null
+  try { brief = cardExtras.brief?.(id) ?? null } catch { brief = null }
+  if (brief?.text) {
+    lines.push('', `### Written for you${brief.edited ? ' (your words)' : ''}`, brief.text)
+    if (brief.sources.length) lines.push(`Sources: ${brief.sources.join(' · ')}`)
   }
   const ms = store.mentions(id, 8).filter((m) => m.scope === null)
   if (ms.length) {

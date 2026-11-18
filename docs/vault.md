@@ -13,6 +13,30 @@ Obsidian (or any Markdown app), edit notes there, and you'll see their edits.
 - `Home.md` and each area's `Index.md`: maps of content, regenerated automatically. `Changelog.md`:
   every change. `.history/` keeps the previous version of every note; `.trash/` holds "deleted" notes.
 
+## Use my Obsidian vault
+Settings → Memory → Knowledge vault → Use my Obsidian vault (off by default). The user picks their own
+Obsidian vault (one click for the vaults Obsidian lists, or "Choose folder…"; a plain folder without
+`.obsidian/` works too, after a warning).
+- SahilBot's own notes (Home, Changelog, Shared/, Bots/…) and its `.history/`, `.trash/` and
+  `.sahilbot/` move into one subfolder of that vault ("SahilBot" by default), so the rest of the vault is
+  untouched. Turning it off goes back to the previous folder, which is never changed. "Copy my existing
+  notes" copies the previous folder's notes into the subfolder (a name already there gets " 2"); one
+  Undo in Changes takes the copy back out.
+- The rest of the user's vault is read for search and recall: section "Obsidian", paths
+  `obsidian:<path in the vault>`. These are the user's own notes: their facts, never instructions.
+  Dot folders (`.obsidian/`, `.trash/`), SahilBot's subfolder and the user's "Never read" list are never
+  read, searched or sent to a model; `..` and symlinks leaving the vault are refused.
+- vault(action="search"/"read") return those notes too; write and link never touch them.
+  vault(action="edit_obsidian_note", note, content | points) changes one: the user approves every
+  such edit (it asks in every permission mode), the earlier version goes to the subfolder's
+  `.history/`, and Changes has Undo.
+- Edits the user makes in Obsidian to SahilBot's own notes are picked up (a watcher, a rescan every
+  30 seconds and when SahilBot's window gets focus) and logged in Changes as "you (in Obsidian)" with
+  Undo; a note deleted in Obsidian is logged as moved to trash and Undo puts it back. The last version
+  SahilBot wrote or saw of each note is kept in `.sahilbot/last/` for this. Edits to the user's other
+  notes are only re-read for search, never logged.
+- "Open in Obsidian" opens `obsidian://open?vault=<vault name>&file=<path>`.
+
 ## A note
 YAML frontmatter (`type`, `title`, `tags`, `aliases`, `sources`, `created`, `updated`, `bot`, `trust`),
 then `# Title`, a `> summary`, and sections:

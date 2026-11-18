@@ -1,0 +1,40 @@
+/* "What it can see" (BrainScopeEditor) and Team access (TeamSection) */
+.scope { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 4%, var(--panel)); }
+.scope-sec { display: flex; flex-direction: column; gap: 7px; }
+.scope-h { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.scope-h .hint { font-weight: 400; }
+.scope-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.scope-chip { padding: 4px 10px; border-radius: var(--r-pill, 999px); border: 1px solid var(--line); font-size: 12.5px; color: var(--text-2); background: var(--bg); }
+.scope-chip:hover { background: var(--hover); }
+.scope-chip.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.scope-chip.on.warn { background: var(--danger); border-color: var(--danger); color: #fff; }
+.scope-chip.private:not(.on) { border-style: dashed; }
+.scope-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; align-self: flex-start; }
+.scope-seg button { padding: 5px 12px; font-size: 12.5px; color: var(--text-2); }
+.scope-seg button.on { background: var(--text); color: var(--bg); }
+.scope-pick { display: flex; flex-direction: column; gap: 6px; }
+.scope-names { display: flex; flex-wrap: wrap; gap: 4px 14px; max-height: 150px; overflow: auto; padding: 4px 2px; }
+.scope-name { font-size: 13px; color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
+.scope-never { line-height: 1.4; }
+.scope-sum { color: var(--text-3); }
+
+.team { margin-top: 8px; }
+.team-invite { padding: 16px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 148px 1fr; gap: 16px; align-items: start; background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+.team-invite svg { width: 148px; height: 148px; background: #fff; border-radius: 10px; padding: 6px; }
+.team-invite .code { font-family: var(--mono); font-size: 20px; letter-spacing: .08em; color: var(--text); }
+.team-invite .url { font-family: var(--mono); font-size: 11.5px; word-break: break-all; color: var(--text-2); }
+.team-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.team-form .set-input { width: auto; flex: 1; min-width: 120px; }
+.team-roles { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.team-q { padding: 10px 16px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.team-q:first-child { border-top: 0; }
+.team-q-head { display: flex; gap: 8px; color: var(--text-3); font-size: 12px; }
+.team-q-head b { color: var(--text); font-weight: 600; }
+.team-q-text { color: var(--text); font-weight: 500; }
+.team-q-ans { color: var(--text-2); white-space: pre-wrap; }
+.team-q-status { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--hover); color: var(--text-2); }
+.team-q-status.routed { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent-text); }
+.team-q-status.owner { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok-text); }
+.team-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.team-chip { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--hover); color: var(--text-2); }
+@media (max-width: 640px) { .team-invite { grid-template-columns: 1fr; } }

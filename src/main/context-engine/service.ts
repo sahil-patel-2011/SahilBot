@@ -139,6 +139,8 @@ export interface ContextEngineDeps {
   secretValues?: () => string[]
   onChange?: () => void
   now?: () => number
+  /** Connected apps the brain already reads (their scheduled metadata read is skipped). */
+  metaCovered?: (preset: string) => boolean
 }
 
 export interface ContextRequest {
@@ -263,7 +265,8 @@ export class ContextEngine {
   private dueConnectors(now: number): string[] {
     const s = this.settings()
     const st = this.state()
-    return META_SOURCES.filter((m) => connectorOn(s, m.id) && this.d.connectors?.connected(m.id) && now - (st.connectors[m.id] ?? 0) >= m.everyMs).map((m) => m.id)
+    // A source the brain reads in full (src/main/brain) needs no separate metadata read.
+    return META_SOURCES.filter((m) => connectorOn(s, m.id) && this.d.connectors?.connected(m.id) && !this.d.metaCovered?.(m.id) && now - (st.connectors[m.id] ?? 0) >= m.everyMs).map((m) => m.id)
   }
 
   /** There's something to read (the learning pass then runs even with learning itself off). */
@@ -361,21 +364,54 @@ export class ContextEngine {
     }
 
     // Mirror what changed into the vault.
-    const vault = this.d.vault?.()
-    if (vault && this.dirty.size) {
-      let n = 0
-      for (const id of [...this.dirty]) {
-        if (n >= PER_PASS.mirrors) break
-        try { mirrorEntity(vault, this.store, id) } catch { /* the vault folder may be unwritable: the graph is still right */ }
-        this.dirty.delete(id)
-        n++
-      }
-      try { vault.store.rebuildIndexes(); vault.changed() } catch { /* same */ }
-    }
+    this.mirrorDirty(PER_PASS.mirrors)
     this.patch({ lastRunAt: now, lastSummary: facts ? `${facts} ${facts === 1 ? 'fact' : 'facts'} about people, places and things` : 'Nothing new about people or places' })
     this.cache.clear()
     this.changed()
     return facts
+  }
+
+  /** Writes the vault notes of entities whose facts changed since the last mirror (at most `limit`). */
+  mirrorDirty(limit = PER_PASS.mirrors): number {
+    const vault = this.d.vault?.()
+    if (!vault || !this.dirty.size) return 0
+    let n = 0
+    for (const id of [...this.dirty]) {
+      if (n >= limit) break
+      try { mirrorEntity(vault, this.store, id) } catch { /* the vault folder may be unwritable: the graph is still right */ }
+      this.dirty.delete(id)
+      n++
+    }
+    try { vault.store.rebuildIndexes(); vault.changed() } catch { /* same */ }
+    return n
+  }
+
+  /** Rewrites these entities' vault notes now (their brief changed). */
+  refreshMirrors(ids: string[]): void {
+    for (const id of ids) this.dirty.add(id)
+    this.mirrorDirty(Math.max(ids.length, 1))
+    this.cache.clear()
+    this.changed()
+  }
+
+  /**
+   * "Forget everything from <source>" (the brain's sources): every fact, relation and mention whose ref is
+   * under `prefix` goes, entities left with nothing go too (their vault notes to the vault's trash), and
+   * the rest have their notes rewritten. Nothing is marked rejected: reconnecting the source later may
+   * learn the same things again.
+   */
+  forgetSourcePrefix(prefix: string): { removed: number; entities: number } {
+    const ids = this.store.entitiesFromPrefix('connector', prefix)
+    const before = new Map(ids.map((id) => [id, this.store.entity(id)?.vaultPath ?? null]))
+    const removed = this.store.purgeSourcePrefix('connector', prefix)
+    const gone = this.store.pruneEmpty(ids)
+    const vault = this.d.vault?.()
+    if (vault) for (const id of gone) { try { forgetMirror(vault, before.get(id) ?? null, id) } catch { /* the graph is still right */ } }
+    for (const id of ids) if (!gone.includes(id)) this.dirty.add(id)
+    this.mirrorDirty(ids.length + 1)
+    this.cache.clear()
+    this.changed()
+    return { removed, entities: gone.length }
   }
 
   private async fromChat(t: { id: string; title: string; spaceId: string }, msgs: Message[], since: number, ask: (s: string, u: string, n: number) => Promise<string | null>): Promise<number> {

@@ -457,6 +457,14 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
               <button className="chip-btn" onClick={stable.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>
             </div>
           )}
+          {/* A template bot's starter tasks, under its first message until you ask something: a tap fills the chat box. */}
+          {!running && tailText?.kind === 'text' && Array.isArray(tailText.m.meta?.suggestions) && !messages.some((m) => m.role === 'user') && (
+            <div className="starter-chips" data-testid="starter-tasks">
+              {(tailText.m.meta.suggestions as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 6).map((q) => (
+                <button key={q} className="chip-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:compose', { detail: q }))} data-testid="starter-task">{q}</button>
+              ))}
+            </div>
+          )}
         </div>
         {/* Pinned to the bottom of the visible thread, just above the composer (whatever its height). */}
         {!atBottom && (

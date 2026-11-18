@@ -311,11 +311,11 @@ export function BotGoals({ spaceId }: { spaceId: string }) {
 /** Goals waiting on the user (for the sidebar's Tasks button dot). */
 export function useGoalsNeedingYou(): number {
   const [n, setN] = useState(0)
-  // Bots' questions and approvals waiting in the Needs-you inbox count too.
+  // Bots' questions and approvals waiting in the Needs-you inbox count too, and Agent mode's prompts.
   const [q, setQ] = useState(0)
   useEffect(() => {
     const load = (): void => { void api.goals.list().then((gs) => setN(gs.filter((g) => goalColumn(g) === 'needs').length)).catch(() => undefined) }
-    const loadQ = (): void => { void api.needsYou?.list().then((xs) => setQ(xs.filter((x) => x.source === 'queue' && x.status === 'open').length)).catch(() => undefined) }
+    const loadQ = (): void => { void api.needsYou?.list().then((xs) => setQ(xs.filter((x) => (x.source === 'queue' || x.source === 'brain') && x.status === 'open').length)).catch(() => undefined) }
     load()
     loadQ()
     const off = api.goals.onChange(load)

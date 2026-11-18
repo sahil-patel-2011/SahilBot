@@ -9,6 +9,7 @@ import { BotGoals } from './TasksView'
 import { VaultBotRows } from './VaultView'
 import { BotFolderRow } from './Attachments'
 import { AlwaysOnRows } from './NeedsYou'
+import { BotStatusLine } from './FunctionBots'
 
 type Tab = 'details' | 'library'
 type Filter = 'all' | 'file' | 'link'
@@ -135,6 +136,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
               onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setName(space.name); e.stopPropagation(); e.currentTarget.blur() } }} />
             <input className="bd-label" value={label} onChange={(e) => setLabel(e.target.value)} onBlur={commitLabel} placeholder="Add a label" maxLength={80} aria-label="Label" data-testid="bot-label"
               onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setLabel(space.label ?? ''); e.stopPropagation(); e.currentTarget.blur() } }} />
+            {space.kind !== 'project' && <BotStatusLine space={space} />}
           </div>
 
           <div className="bd-tabs" role="tablist">

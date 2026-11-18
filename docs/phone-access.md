@@ -103,6 +103,34 @@ sleeping on power adapter when the display is off" in System Settings → Batter
   sessions, approvals made from a phone, refused calls and removals. It never contains codes, tokens or what
   you typed.
 
+## Team: teammates ask your brain
+
+Under Phone access, **Team** lets the people you work with (Sales, Ops, an assistant, Finance, Support,
+Marketing) ask your brain instead of asking you: "What did we promise Partner B?" → "Net 30, per the Oct 14
+email", with source chips.
+
+1. Turn on Phone access, then Team → **Invite**: a name, a role, and **what they can see** (sources such as
+   Email, Calendar, Meeting notes, CRM, Docs, Accounting; everyone shared or only the people and clients you
+   pick; optional topics; bots' own knowledge; sensitive categories, all off by default).
+2. They scan the QR code or open the link on your Wi-Fi or Tailscale and enter the one-time code (10
+   minutes, works once). They get a simple **Ask** page at `/team`, nothing else.
+3. Every question and answer shows in **Team questions**. What the brain can't answer comes to you in
+   **Needs you**; your reply goes back to them. **Remove** signs them out at once.
+
+Security model:
+- **A separate role.** Teammates have their own cookie (`sb_team`, HttpOnly, SameSite=Strict, path `/team`)
+  and their own sealed token store (`team.enc`, the Keychain key). A teammate token is never a device
+  token: it can't load the app, open the WebSocket or call anything outside `/team/api/*`, and a device
+  token can't sign in as a teammate.
+- **Scopes are enforced on the Mac, per question** (src/main/brain-access/reader.ts): only allowed
+  sources, entities, topics and bots; never texts unless allowed, never sensitive categories unless
+  allowed, never activity, never secrets (vault values and token-shaped strings are dropped and redacted).
+  The answer is written only from those facts (a model sees nothing else; with no model, the facts are the
+  answer). A question can't widen the scope.
+- **Read-only.** No actions on your accounts, no private notes, no secrets vault, no other teammate's
+  questions. Same-origin and CSRF checks on every POST; 20 questions per 10 minutes and 150 per day per
+  teammate; every question is in the access log (`team.ask`).
+
 ## Troubleshooting
 
 - **The phone can't open the link.** Make sure it's on the same Wi-Fi as the Mac and not on a guest network

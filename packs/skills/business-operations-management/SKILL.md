@@ -21,7 +21,7 @@ Employment law (classification of contractors vs employees, discrimination, inte
 Weekly 1:1s owned by the report (their agenda first), clear expectations in writing, feedback that is specific and timely (situation, behavior, impact), recognition in public, correction in private. Underperformance: clarify expectations, document, support, set a timeline; involve HR/legal before termination.
 
 ## Meetings
-Every meeting has an owner, purpose, agenda and decision log; default 25 or 50 minutes; end with actions (owner + date). Replace status meetings with written updates. Use meeting-notes for summaries.
+Every meeting has an owner, purpose, agenda and decision log; default 25 or 50 minutes; end with actions (owner + date). Replace status meetings with written updates (business-weekly-newsletter drafts one from what shipped). Prep with business-meeting-prep; use meeting-notes for summaries.
 
 ## Delegation
 Delegate outcomes, not tasks. Levels: do as told → research and recommend → decide and inform → full ownership. State the level, the deadline, the check-in points and what "done" means.

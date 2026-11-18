@@ -17,6 +17,9 @@ import type { Hub } from './hub'
 import { host } from './host'
 import { ICON_SVG, MANIFEST, MOBILE_CSS, PAIR_CSS, PAIR_JS, pairHtml, SERVICE_WORKER } from './pages'
 import { acceptUpgrade, isUpgrade, rejectUpgrade } from './ws'
+import { cleanText, clearTeamCookie, MAX_QUESTION_CHARS, TEAM_COOKIE, teamCookie, type TeamMemberRecord, type TeamStore } from './team'
+import { TEAM_CSS, TEAM_JS, teamHtml } from './team-pages'
+import type { BrainSourceRef, TeamQuestion } from '@shared/brain-access'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -49,6 +52,19 @@ export interface HttpOptions {
   peerAllowed?: (address: string | undefined) => boolean
   /** The certificate in DER, offered at /sahilbot.cer so a phone can trust it (self-signed only). */
   certDer?: Buffer
+  /** Team access (/team): teammates ask the owner's brain within their scope (team.ts). Absent: /team is 404. */
+  team?: TeamFront
+}
+
+export interface TeamFront {
+  store: TeamStore
+  /** The answer, written only from the teammate's scope (on the Mac: brain-access/team-ask.ts). */
+  ask(member: TeamMemberRecord, question: string): Promise<{ answer: string; chips: BrainSourceRef[]; status: TeamQuestion['status'] }>
+  /** The brain couldn't answer: the owner is asked (Needs you). */
+  route?(member: TeamMemberRecord, q: TeamQuestion): Promise<void> | void
+  /** The owner's first name, shown to teammates ("asking Sahil's brain"). */
+  owner(): string
+  onChange?(): void
 }
 
 const isLoopback = (a: string | undefined): boolean => !!a && (a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1' || a.startsWith('127.'))
@@ -182,6 +198,8 @@ export class HttpFront {
     if (method === 'GET' && path === '/manifest.webmanifest') return this.text(res, 'application/manifest+json', MANIFEST, 'max-age=3600')
     if (method === 'GET' && path === '/sw.js') { res.setHeader('Service-Worker-Allowed', '/'); return this.text(res, 'text/javascript; charset=utf-8', SERVICE_WORKER) }
     if (method === 'POST' && path === '/api/pair') return this.pair(req, res, ip, secure)
+    // Team access: its own cookie and token store, never a device's (team.ts). Nothing below accepts it.
+    if (path === '/team' || path.startsWith('/team/')) return this.teamRoute(req, res, path, method, ip, secure)
 
     const who = this.device(req)
     if (!who) {
@@ -248,6 +266,72 @@ export class HttpFront {
     this.o.audit.write('pair.ok', { ip, device: device.id, detail: name })
     if (tokenMode) return this.json(res, 200, { token, device: { id: device.id, name: device.name } })
     return this.json(res, 200, { ok: true, device: { id: device.id, name: device.name } }, { 'Set-Cookie': deviceCookie(token, secure) })
+  }
+
+  // ---------------------------------------------------------------- Team access (/team)
+
+  private async teamRoute(req: IncomingMessage, res: ServerResponse, path: string, method: string, ip: string, secure: boolean): Promise<void> {
+    const t = this.o.team
+    if (!t) return this.fail(res, 404, 'Not found')
+    if (method === 'GET' && path === '/team') return this.text(res, 'text/html; charset=utf-8', teamHtml(), 'no-store')
+    if (method === 'GET' && path === '/team/app.js') return this.text(res, 'text/javascript; charset=utf-8', TEAM_JS)
+    if (method === 'GET' && path === '/team/app.css') return this.text(res, 'text/css; charset=utf-8', TEAM_CSS)
+    if (!path.startsWith('/team/api/')) return this.fail(res, 404, 'Not found')
+    // Every state change from a page: same origin (and, once signed in, the CSRF token).
+    if (method !== 'GET' && !this.sameOrigin(req)) {
+      this.o.audit.write('origin.denied', { ip, detail: `team ${path.slice(0, 40)} from ${String(req.headers.origin ?? 'none').slice(0, 60)}` })
+      return this.fail(res, 403, 'Cross-origin request refused.')
+    }
+    if (method === 'POST' && path === '/team/api/join') {
+      const wait = this.o.limiter.retryAfter(ip)
+      if (wait > 0) { this.o.audit.write('pair.limited', { ip, detail: 'team' }); return this.json(res, 429, { error: 'Too many tries.', retryAfter: Math.ceil(wait / 1000) }, { 'Retry-After': String(Math.ceil(wait / 1000)) }) }
+      let body: { code?: string }
+      try { body = (await this.body(req, 4096)) as typeof body } catch (e) { return this.fail(res, (e as { status?: number }).status ?? 400, (e as Error).message) }
+      const r = t.store.redeem(String(body.code ?? ''))
+      if (!r) { this.o.limiter.fail(ip); this.o.audit.write('pair.fail', { ip, detail: 'team' }); return this.fail(res, 401, 'That code didn’t work. Codes work once and expire after 10 minutes. Ask for a new one.') }
+      this.o.limiter.reset(ip)
+      this.o.audit.write('team.join', { ip, device: `team:${r.member.id}`, detail: `${r.member.name} (${r.member.role})` })
+      t.onChange?.()
+      return this.json(res, 200, { ok: true }, { 'Set-Cookie': teamCookie(r.token, secure) })
+    }
+    // Teammates sign in with their cookie only (no bearer tokens: nothing but this page uses the API).
+    const token = parseCookies(req.headers.cookie)[TEAM_COOKIE]
+    const member = t.store.check(token)
+    if (!member) {
+      if (token) this.o.audit.write('auth.fail', { ip, detail: `team ${method} ${path.slice(0, 40)}` })
+      return this.json(res, 401, { error: 'Join with an invite code first.' }, token ? { 'Set-Cookie': clearTeamCookie(secure) } : {})
+    }
+    t.store.seen(member.id)
+    if (method !== 'GET' && !t.store.csrfOk(member.id, String(req.headers['x-sahilbot-csrf'] ?? ''))) return this.fail(res, 403, 'Missing or wrong CSRF token.')
+    if (method === 'GET' && path === '/team/api/session') return this.json(res, 200, { member: { name: member.name, role: member.role }, owner: t.owner(), csrf: t.store.csrf(member.id) })
+    if (method === 'GET' && path === '/team/api/history') {
+      // Only their own questions: never another teammate's.
+      const questions = t.store.questions({ memberId: member.id, limit: 50 }).map((q) => ({ id: q.id, at: q.at, question: q.question, answer: q.answer, chips: q.chips, status: q.status, ...(q.ownerAnswer ? { ownerAnswer: q.ownerAnswer, ownerAnsweredAt: q.ownerAnsweredAt } : {}) }))
+      return this.json(res, 200, { questions })
+    }
+    if (method === 'POST' && path === '/team/api/logout') {
+      if (token) t.store.signOut(token)
+      t.onChange?.()
+      return this.json(res, 200, { ok: true }, { 'Set-Cookie': clearTeamCookie(secure) })
+    }
+    if (method === 'POST' && path === '/team/api/ask') {
+      let body: { question?: string }
+      try { body = (await this.body(req, 8192)) as typeof body } catch (e) { return this.fail(res, (e as { status?: number }).status ?? 400, (e as Error).message) }
+      const question = cleanText(body.question, MAX_QUESTION_CHARS)
+      if (question.length < 2) return this.fail(res, 400, 'Ask a question.')
+      const rate = t.store.take(member.id)
+      if (!rate.ok) { this.o.audit.write('team.denied', { ip, device: `team:${member.id}`, detail: `${member.name}: rate limited` }); return this.json(res, 429, { error: `That’s a lot of questions. Try again in ${Math.ceil(rate.retryInS / 60)} min.` }, { 'Retry-After': String(rate.retryInS) }) }
+      let r: Awaited<ReturnType<TeamFront['ask']>>
+      try { r = await t.ask(member, question) } catch { r = { answer: 'The brain couldn’t answer right now. Try again in a minute.', chips: [], status: 'refused' } }
+      // Removed while the answer was being written: nothing goes back.
+      if (!t.store.check(token)) return this.json(res, 401, { error: 'Your access was removed.' }, { 'Set-Cookie': clearTeamCookie(secure) })
+      const entry = t.store.logQuestion({ memberId: member.id, member: member.name, role: member.role, question, answer: r.answer, chips: r.chips, status: r.status })
+      this.o.audit.write('team.ask', { ip, device: `team:${member.id}`, detail: `${member.name} (${r.status}): ${question.slice(0, 160)}` })
+      if (r.status === 'routed') { try { await t.route?.(member, entry) } catch { /* the question is still in Team questions */ } }
+      t.onChange?.()
+      return this.json(res, 200, { id: entry.id, answer: entry.answer, chips: entry.chips, status: entry.status })
+    }
+    return this.fail(res, 404, 'Not found')
   }
 
   /** Files the app shows (attachments, previews), through the app's own foreman-file: handler and its access rules. */

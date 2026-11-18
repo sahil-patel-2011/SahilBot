@@ -424,6 +424,41 @@ export class GraphStore {
     return n
   }
 
+  /** Every source item under a ref prefix (all of one connected app's items: "brain:gmail:"): the entities its facts are on. */
+  entitiesFromPrefix(kind: SourceKind, prefix: string): string[] {
+    const like = `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+    const ids = new Set<string>()
+    for (const r of this.db.sql.prepare("SELECT entity_id AS id FROM ce_attributes WHERE source_kind = ? AND source_ref LIKE ? ESCAPE '\\' UNION SELECT entity_id AS id FROM ce_mentions WHERE source_kind = ? AND source_ref LIKE ? ESCAPE '\\'").all(kind, like, kind, like) as Row[]) ids.add(r.id as string)
+    for (const r of this.db.sql.prepare("SELECT from_id, to_id FROM ce_relations WHERE source_kind = ? AND source_ref LIKE ? ESCAPE '\\'").all(kind, like) as Row[]) { ids.add(r.from_id as string); ids.add(r.to_id as string) }
+    return [...ids]
+  }
+
+  /** Facts, relations and mentions from every item under a ref prefix (a whole source). */
+  purgeSourcePrefix(kind: SourceKind, prefix: string): number {
+    const like = `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+    const n = Number(this.db.sql.prepare("DELETE FROM ce_attributes WHERE source_kind = ? AND source_ref LIKE ? ESCAPE '\\' AND corrected = 0").run(kind, like).changes)
+      + Number(this.db.sql.prepare("DELETE FROM ce_relations WHERE source_kind = ? AND source_ref LIKE ? ESCAPE '\\'").run(kind, like).changes)
+      + Number(this.db.sql.prepare("DELETE FROM ce_mentions WHERE source_kind = ? AND source_ref LIKE ? ESCAPE '\\'").run(kind, like).changes)
+      + Number(this.db.sql.prepare("DELETE FROM ce_attribute_history WHERE json_extract(snapshot, '$.source.kind')=? AND json_extract(snapshot, '$.source.ref') LIKE ? ESCAPE '\\'").run(kind, like).changes)
+    if (n) this.touch()
+    return n
+  }
+
+  /** Of these entities, the ones left with nothing (no facts, relations or mentions) and not the user's own go. Returns those removed. */
+  pruneEmpty(ids: string[]): string[] {
+    const gone: string[] = []
+    for (const id of ids) {
+      const e = this.entity(id)
+      if (!e || e.isUser || e.trust === 'user') continue
+      const has = this.db.sql.prepare('SELECT 1 FROM ce_attributes WHERE entity_id = ? UNION SELECT 1 FROM ce_relations WHERE from_id = ? OR to_id = ? UNION SELECT 1 FROM ce_mentions WHERE entity_id = ? LIMIT 1').get(id, id, id, id)
+      if (has) continue
+      this.purge(id)
+      gone.push(id)
+    }
+    if (gone.length) this.touch()
+    return gone
+  }
+
   // ---------------------------------------------------------------- relations
 
   relations(entityId: string): StoredRelation[] {

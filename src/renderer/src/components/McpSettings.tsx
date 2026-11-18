@@ -5,6 +5,7 @@ import * as I from '../icons'
 import { toast } from '../lib/toast'
 import '../styles-mcp.css'
 import { ClampText } from './ui'
+import { BrainScopeEditor, scopeLine, useBrainNames } from './BrainScopeEditor'
 
 // Settings → Connected apps → Let apps on this Mac use SahilBot: let Cursor, Claude Code, Claude Desktop and
 // Shortcuts use your bots through a local server. Off by default; one revocable token per app.
@@ -57,7 +58,9 @@ const TABS = [
   { id: 'cursor', label: 'Cursor', hint: <>Paste into <code>~/.cursor/mcp.json</code> (or merge into its <code>mcpServers</code>), then reload Cursor.</> },
   { id: 'claudeCode', label: 'Claude Code', hint: <>Run this in Terminal. Add <code>--scope user</code> to use it in every project.</> },
   { id: 'claudeDesktop', label: 'Claude Desktop', hint: <>Claude → Settings → Developer → Edit Config, merge into <code>claude_desktop_config.json</code>, then restart Claude. It uses SahilBot's small bridge command.</> },
-  { id: 'curl', label: 'Shortcuts & scripts', hint: <>For Shortcuts, use "Get Contents of URL" with method POST, these headers and this JSON body. The reply is in <code>result.content[0].text</code>.</> }
+  { id: 'codex', label: 'Codex CLI', hint: <>Add to <code>~/.codex/config.toml</code>, then restart Codex. It uses SahilBot's small bridge command.</> },
+  { id: 'curl', label: 'Shortcuts & scripts', hint: <>For Shortcuts, use "Get Contents of URL" with method POST, these headers and this JSON body. The reply is in <code>result.content[0].text</code>.</> },
+  { id: 'chatgpt', label: 'ChatGPT', hint: <>Why ChatGPT isn't on this list yet.</> }
 ] as const
 
 /** The token, shown once, with configs for each app. */
@@ -82,8 +85,8 @@ function NewClient({ created, onDone }: { created: McpNewClient; onDone: () => v
       </div>
       <div className="hint mcp-tab-hint">{cur.hint}</div>
       <div className="mcp-snippet">
-        <pre data-testid={`mcp-snippet-${tab}`}>{created.snippets[tab]}</pre>
-        <CopyBtn text={created.snippets[tab]} />
+        <pre data-testid={`mcp-snippet-${tab}`}>{created.snippets[tab] ?? ''}</pre>
+        {tab !== 'chatgpt' && <CopyBtn text={created.snippets[tab] ?? ''} />}
       </div>
       <div className="mcp-new-foot">
         <span className="hint">Treat the token like a password: anyone with it can ask your bots (what they do still needs your OK).</span>
@@ -112,6 +115,8 @@ export function McpSettings() {
   const [confirm, setConfirm] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)
   const [filter, setFilter] = useState<string | null>(null)
+  const [scopeOpen, setScopeOpen] = useState<string | null>(null)
+  const names = useBrainNames()
   const refresh = useCallback((): void => { void api.mcp.status().then(setSt).catch(() => undefined) }, [])
   useEffect(() => {
     refresh()
@@ -135,12 +140,15 @@ export function McpSettings() {
   const revoke = async (id: string): Promise<void> => {
     try { setSt(await api.mcp.revokeClient(id)); setConfirm(null); toast('Revoked. That app can no longer connect.') } catch (e) { toast(clean(e), 'error') }
   }
+  const setScope = async (id: string, patch: Parameters<typeof api.mcp.setScope>[1]): Promise<void> => {
+    try { setSt(await api.mcp.setScope(id, patch)) } catch (e) { toast(clean(e), 'error') }
+  }
   const activity = st.activity.filter((a) => !filter || a.clientId === filter)
   const shown = showAll ? activity : activity.slice(0, 12)
 
   return (
     <div className="mcp" data-testid="mcp-settings">
-      <Block title="Connected apps (MCP)" sub={<>Let apps on this Mac, like Cursor, Claude Code and Claude Desktop, ask your bots and search your shared memories. Each app gets its own token. What an app sends is treated as coming from that app, not from you: bots work in Ask mode for it, and anything consequential, or any look at your private data (files, commands, screen, mail, signed-in websites, knowledge base, memories), waits for your approval here. Public web searches, web pages and market data don't ask. Saved passwords and token-like secrets are removed from what goes back to the app.</>}>
+      <Block title="Connected apps (MCP)" sub={<>Let apps on this Mac, like Claude Desktop, Claude Code, Cursor and Codex, ask your bots and search your brain (people, clients, projects, deals, meetings and promises, with sources), only as much of it as you share with each app. Each app gets its own token. What an app sends is treated as coming from that app, not from you: bots work in Ask mode for it, and anything consequential, or any look at your private data (files, commands, screen, mail, signed-in websites, knowledge base, memories), waits for your approval here. Public web searches, web pages and market data don't ask. Saved passwords and token-like secrets are removed from what goes back to the app.</>}>
         <Line title="Allow apps to connect" testId="mcp-enabled-row"
           sub={st.running && st.url ? <>Listening on <code>{st.url}</code> (this Mac only)</> : st.error ? <span className="mcp-err">{st.error}</span> : 'Off. Nothing can connect.'}>
           <button role="switch" aria-checked={st.enabled} aria-label="Allow apps to connect" disabled={busy} className={`switch${st.enabled ? ' on' : ''}`} onClick={() => void toggle(!st.enabled)} data-testid="mcp-enabled"><i /></button>
@@ -165,15 +173,17 @@ export function McpSettings() {
 
       {st.clients.length > 0 && (
         <Block title="Apps">
-          {st.clients.map((c) => (
-            <Line key={c.id} testId={`mcp-client-${c.name}`} title={c.name}
-              sub={<>Last used {ago(c.lastUsedAt)} · connected {new Date(c.createdAt).toLocaleDateString()}{c.bots ? ` · ${c.bots} ${c.bots === 1 ? 'bot chat' : 'bot chats'}` : ''}</>}>
+          {st.clients.map((c) => (<div key={c.id}>
+            <Line testId={`mcp-client-${c.name}`} title={c.name}
+              sub={<>Last used {ago(c.lastUsedAt)} · connected {new Date(c.createdAt).toLocaleDateString()}{c.bots ? ` · ${c.bots} ${c.bots === 1 ? 'bot chat' : 'bot chats'}` : ''}{c.scope ? <><br /><span className="scope-sum" data-testid={`mcp-scope-sum-${c.name}`}>Sees: {scopeLine(c.scope, names)}</span></> : null}</>}>
+              <button className="link-btn" onClick={() => setScopeOpen(scopeOpen === c.id ? null : c.id)} data-testid={`mcp-scope-${c.name}`}>{scopeOpen === c.id ? 'Done' : 'What it can see'}</button>
               <button className="link-btn" onClick={() => { setFilter(filter === c.id ? null : c.id); setShowAll(false) }}>{filter === c.id ? 'All activity' : 'Activity'}</button>
               {confirm === c.id
                 ? <><button className="btn danger" onClick={() => void revoke(c.id)} data-testid={`mcp-revoke-confirm-${c.name}`}>Revoke now</button><button className="link-btn" onClick={() => setConfirm(null)}>Cancel</button></>
                 : <button className="btn" onClick={() => setConfirm(c.id)} data-testid={`mcp-revoke-${c.name}`}>Revoke</button>}
             </Line>
-          ))}
+            {scopeOpen === c.id && c.scope && <BrainScopeEditor scope={c.scope} onChange={(p) => void setScope(c.id, p)} testId={`mcp-scope-editor`} />}
+          </div>))}
         </Block>
       )}
 

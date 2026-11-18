@@ -1,35 +1,51 @@
 ---
 name: ideas-new-business
-description: Generate business, startup and side-hustle ideas from real problems, trends and the founder's strengths, then shortlist them.
+description: Generate novel business and startup ideas from real complaints, check each one against existing products and keep only real gaps.
 source: you
 uses: 0
 category: Ideas
-triggers: business ideas, startup ideas, side hustle, what business should i start, new business idea, ideas for a company, make money ideas, saas ideas, small business ideas
+triggers: business ideas, startup ideas, side hustle, what business should i start, new business idea, ideas for a company, make money ideas, saas ideas, small business ideas, novel ideas, nobody has built, original startup idea, untapped market, gap in the market
 ---
 
-## Start from the founder (ask once, or check memory)
-Skills and credentials, unfair access (an industry, a community, a customer list), budget, time per week, risk appetite, income goal and timeline, what they refuse to do. Founder-market fit beats a "hot" market.
+## 1. Start from the founder (check the brain, ask once)
+Look up the user first: memory search, `about` lookup "me", `vault` search for past idea lists. Then fill gaps: skills and credentials, unfair access (an industry, a community, a customer list), budget, hours per week, risk appetite, income goal and timeline, what they refuse to do. Founder-market fit beats a "hot" market.
 
-## Idea sources (generate 20-40 raw ideas across several)
-1. Problems you or a community complain about: Reddit, forums, app store and Amazon 1-3 star reviews, G2/Capterra reviews of incumbents ("I wish it...").
-2. Your job's annoying workflows: spreadsheets, manual re-entry, compliance chores (often the best B2B ideas). For a clinician: prior authorization, patient follow-ups, documentation.
-3. Trends and "why now": new regulation, new technology (AI, APIs), demographic shifts, platform changes. Cite sources and dates.
-4. Unbundling: one feature of a big platform done 10x better for one niche.
-5. Rebundling or services-first: sell the outcome as a service, then productize what you repeat.
-6. Copy-and-localize: a model proven elsewhere, adapted to a region, language or vertical.
-7. Picks-and-shovels: tools for people riding a boom.
-8. Boring businesses with steady cash flow: B2B services, maintenance, niche distribution, acquiring an existing small business.
+## 2. Mine real pain before inventing anything
+Run business-complaint-mining on 3-5 spaces the founder knows (their job, their community, a trend). Collect 20-40 raw pain points, each with a short quoted complaint, link and date. No quote, no idea: an idea without a real complaint behind it is a guess and must be labeled one.
 
-## Shortlist with a scorecard (1-5 each, show the table)
-Pain severity and frequency, customer can pay (budget exists), reachability (can you find 100 buyers this month?), founder fit, competition gap, time to first dollar, capital needed, scalability, the user's excitement. Drop anything scoring 1 on pain or reachability.
+## 3. Turn pains into candidate ideas (10-20)
+For each strong pain cluster, try several shapes:
+- Unbundle: one feature of a big platform done 10x better for one niche.
+- Vertical: a horizontal tool rebuilt for one industry's workflow and vocabulary.
+- Services-first: sell the outcome done by hand, then productize what repeats.
+- Why now: new regulation, new tech (AI, APIs), a platform change, a demographic shift (cite source and date).
+- Copy-and-localize: a proven model for a new region, language or vertical.
+- Picks-and-shovels, or a boring cash-flow business (B2B service, niche distribution, buying a small business).
+For a clinician: prior authorization, follow-ups, documentation and billing chores are rich veins.
 
-## Output
-Top 3-5 ideas, each with: one-line pitch, target customer, the painful problem, how they solve it today, business model and rough price, first 10 customers plan, biggest risk, a 2-week cheap test. Then hand off to ideas-validate-business for the chosen one. Save the shortlist to memory if the user wants.
+## 4. Novelty check every candidate (never skip)
+Run ideas-novelty-check on each one: web search, Product Hunt, App Store / Google Play, G2/Capterra categories, Crunchbase-style listings, GitHub, Chrome Web Store / Shopify apps, Google Patents, YC / Indie Hackers launches, as relevant. Use agents in parallel when there are many. Then:
+- Exists as-is (same customer, same job, similar price, decent reviews): drop it, or reshape it (narrower niche, different buyer, 10x cheaper, a missing integration, a service wrapper) and re-check the reshaped version.
+- Exists but reviews show the gap: keep it as "Underserved niche" and name the gap.
+- Nothing found after the full search: "New", with a confidence label; absence of evidence is not proof.
+
+## 5. Score the survivors (1-5, show the table)
+Pain severity, frequency, willingness to pay, competition gap (from the novelty check), reachability (can you find 100 buyers this month?), founder fit, time to first dollar, capital needed. Drop anything scoring 1 on pain or reachability. Put the evidence in the cells, not just numbers.
+
+## Output (top 3-5 ideas)
+For each:
+- One-line pitch, target customer, the painful problem with 1-2 quoted complaints (link, date).
+- What's already out there: product names with links and prices.
+- The gap: what they miss, for whom, at what price.
+- Novelty verdict: New / Underserved niche / Crowded → reshaped / Dropped (plus confidence: high, medium, low).
+- Business model and rough price, first 10 customers plan, biggest risk, a 2-week cheap test.
+Also list the dropped ideas in one line each with the product that already does it, so the user sees the work. Hand the chosen idea to ideas-validate-business. Save the shortlist to the vault if the user wants.
 
 ## Pitfalls
-- Solutions looking for problems; "an app for everyone".
-- Markets where buyers have no budget (students, hobbyists) unless consumer scale is realistic.
-- Ideas needing licenses, inventory or regulation the user didn't plan for (food, health, finance, childcare): flag them and suggest consulting a lawyer or the local licensing office.
+- Solutions looking for problems; "an app for everyone"; ideas from your head instead of from complaints.
+- Calling something new because the first search page was empty.
+- Buyers with no budget (students, hobbyists) unless consumer scale is realistic.
+- Ideas needing licenses, inventory or regulation (food, health, finance, childcare, kids' data): flag them and consult a lawyer or the local licensing office early.
 
 ## Verify
-Every market or trend claim has a source URL and date; label guesses. Re-read the founder constraints and drop ideas that break them.
+Every complaint, competitor and trend claim has a link and date; nothing is invented. Re-read the founder constraints and drop ideas that break them.

@@ -7,6 +7,7 @@ import { LearningLog } from './LearningLog'
 import { ImportMemoryDialog } from './ImportMemoryDialog'
 import { VaultSettings } from './VaultView'
 import { Toggle } from './Toggle'
+import { BrainSettings } from './BrainSettings'
 import { ClampText, Disclosure, InfoTip, SetTabs } from './ui'
 
 // Settings → Memory: one switch ("Remember things automatically": bots save what you tell them and SahilBot
@@ -77,7 +78,8 @@ export function MemoryPage({ spaces, tab, onTab }: { spaces: Space[]; tab: strin
   const tabs = [
     { id: 'memories', label: 'Memories' },
     { id: 'learned', label: <>Learned{waiting > 0 && <span className="set-tab-badge" title="Waiting for your OK">{waiting}</span>}</> },
-    { id: 'vault', label: 'Knowledge vault' }
+    { id: 'vault', label: 'Knowledge vault' },
+    { id: 'brain', label: 'Your brain' }
   ]
   const cur = tabs.some((t) => t.id === tab) ? tab : 'memories'
   return (
@@ -102,6 +104,7 @@ export function MemoryPage({ spaces, tab, onTab }: { spaces: Space[]; tab: strin
       {cur === 'memories' && <MemoryList spaces={spaces} />}
       {cur === 'learned' && <div data-setting="learned"><LearningLog spaces={spaces} /></div>}
       {cur === 'vault' && <div data-setting="knowledge-vault"><VaultSettings /></div>}
+      {cur === 'brain' && <div data-setting="brain-settings"><BrainSettings /></div>}
       <MemoryAdvanced learn={learn} setLearning={setLearning} />
     </>
   )

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { McpActivity, McpClientInfo } from '@shared/types'
+import { cleanBrainScope, DEFAULT_BRAIN_SCOPE, type BrainScope } from '@shared/brain-access'
 import { hashToken, newToken, sameHash } from './auth'
 
 // Connected apps and what they did. Kept in the settings table (opaque JSON). Tokens are never stored,
@@ -18,7 +19,12 @@ export interface McpClientRecord {
   lastUsedAt: number | null
   /** bot id → the chat this app uses with that bot. */
   threads: Record<string, string>
+  /** What of the user's brain this app may read (the brain tools); absent = the default scope. */
+  scope?: BrainScope
 }
+
+/** An app's brain scope (the default for apps connected before scopes existed). */
+export const scopeOf = (c: Pick<McpClientRecord, 'scope'>): BrainScope => cleanBrainScope(c.scope ?? DEFAULT_BRAIN_SCOPE)
 
 export interface KeyValue {
   getSetting<T>(key: string): T | undefined
@@ -32,7 +38,7 @@ export function cleanClientName(name: unknown): string {
 }
 
 export const publicClient = (c: McpClientRecord): McpClientInfo =>
-  ({ id: c.id, name: c.name, createdAt: c.createdAt, lastUsedAt: c.lastUsedAt, bots: Object.keys(c.threads ?? {}).length })
+  ({ id: c.id, name: c.name, createdAt: c.createdAt, lastUsedAt: c.lastUsedAt, bots: Object.keys(c.threads ?? {}).length, scope: scopeOf(c) })
 
 export class McpClientStore {
   constructor(private kv: KeyValue, private now: () => number = Date.now) {}
@@ -65,6 +71,16 @@ export class McpClientStore {
     const client: McpClientRecord = { id: randomUUID(), name, tokenHash: hashToken(token), createdAt: this.now(), lastUsedAt: null, threads: {} }
     this.save([...list, client])
     return { client, token }
+  }
+
+  /** Sets what of the brain an app may read. */
+  setScope(id: string, scope: unknown): McpClientRecord | undefined {
+    const list = this.all()
+    const c = list.find((x) => x.id === id)
+    if (!c) return undefined
+    c.scope = cleanBrainScope({ ...scopeOf(c), ...(scope && typeof scope === 'object' ? scope : {}) })
+    this.save(list)
+    return c
   }
 
   revoke(id: string): boolean {

@@ -1085,6 +1085,12 @@ export interface BotTemplate {
   routines: Array<{ title: string; prompt: string; schedule: Schedule }>
   /** Names of built-in skills (packs/skills) this bot leans on. */
   skills?: string[]
+  /** Apps it reads (connector preset ids, e.g. "gmail", "hubspot"; a name when there's no preset yet). */
+  sources?: string[]
+  /** Things to ask it first: shown on its card and as suggestion chips under its first message. */
+  starterTasks?: string[]
+  /** "function": a business-function bot wired to your brain (Accounting, Marketing…), shown as its own group. */
+  group?: 'function'
 }
 
 /** How Google is connected (Connect apps → Google): no secrets, just the way and the address. */
@@ -1510,6 +1516,8 @@ export interface SahilBotApi {
     importConfirm(token: string): Promise<{ spaceId: string; threadId: string }>
     /** Copies a bot's name, look, label, instructions and routines (paused); not its chats or memories. */
     duplicate(spaceId: string): Promise<{ spaceId: string; threadId: string }>
+    /** Each bot's status (Working / Pulling context / Done / Idle) and the model its last reply ran on. */
+    status(): Promise<import('./bot-status').BotStatusMap>
   }
   /** The morning check-in routine on the main bot (off by default). */
   checkin: {
@@ -1890,6 +1898,8 @@ export interface McpClientInfo {
   lastUsedAt: number | null
   /** Bots this app has chatted with (each in its own chat). */
   bots: number
+  /** What of the user's brain it may read (the brain tools). */
+  scope: import('./brain-access').BrainScope
 }
 
 /** One call to the MCP server (message text is never logged). */
@@ -1922,7 +1932,7 @@ export interface McpStatus {
 export interface McpNewClient {
   client: McpClientInfo
   token: string
-  snippets: { cursor: string; claudeCode: string; claudeDesktop: string; curl: string }
+  snippets: { cursor: string; claudeCode: string; claudeDesktop: string; curl: string; codex?: string; chatgpt?: string }
 }
 
 export interface SahilBotApi {
@@ -1933,6 +1943,10 @@ export interface SahilBotApi {
     setEnabled(on: boolean, opts?: { newPort?: boolean }): Promise<McpStatus>
     createClient(name: string): Promise<McpNewClient>
     revokeClient(id: string): Promise<McpStatus>
+    /** What of the user's brain an app may read (sources, people and clients, topics, sensitive categories). */
+    setScope(id: string, scope: Partial<import('./brain-access').BrainScope>): Promise<McpStatus>
+    /** People, clients and projects the scope pickers can list. */
+    brainNames(): Promise<Array<{ id: string; name: string; type: string; role: string }>>
     /** Fires when the server starts or stops, a client is added or removed, or an app makes a call. */
     onChange(cb: () => void): () => void
   }
@@ -2729,7 +2743,7 @@ export interface SahilBotApi {
   /** The knowledge vault: Obsidian-style notes your bots keep (Vault view, Settings → Memory). Not the password vault (`vault`). */
   notesVault: {
     status(): Promise<import('./vault').VaultStatus>
-    setSettings(patch: Partial<Omit<import('./vault').VaultSettings, 'bots'>>): Promise<import('./vault').VaultStatus>
+    setSettings(patch: import('./vault').VaultSettingsPatch): Promise<import('./vault').VaultStatus>
     /** One bot's vault setting (on/off, how much to remember); null fields go back to the default. */
     setBot(spaceId: string, patch: { enabled?: boolean | null; level?: import('./vault').VaultLevel | null }): Promise<import('./vault').VaultStatus>
     list(): Promise<import('./vault').VaultNoteInfo[]>
@@ -2753,10 +2767,22 @@ export interface SahilBotApi {
     exportZip(): Promise<string>
     /** Compiles now (a learning pass) unless one is running or a chat is working. */
     compileNow(): Promise<import('./vault').VaultStatus>
+    /** "Use my Obsidian vault": the vaults Obsidian lists (folder exists, has .obsidian/), newest first. */
+    obsidianDetect(): Promise<import('./vault').ObsidianVaultChoice[]>
+    /** A folder picker for the vault; null when cancelled. `isVault: false` = no .obsidian/ folder (allowed, with a warning). */
+    obsidianPick(): Promise<import('./vault').ObsidianFolderCheck | null>
+    /** The user's own notes in their Obsidian vault (read-only; paths "obsidian:…"). */
+    obsidianNotes(): Promise<import('./vault').VaultNoteInfo[]>
+    /** Copies the notes in SahilBot's previous folder into the vault's SahilBot subfolder (the old folder is left as it was). */
+    obsidianCopyExisting(): Promise<{ copied: number; renamed: number; from: string; to: string }>
+    /** Looks for edits made in Obsidian now. */
+    obsidianRescan(): Promise<import('./vault').VaultStatus>
     onChanged(cb: () => void): () => void
   }
   /** People & Places: the context engine's entity graph (src/main/context-engine; Vault view → People & Places). */
   people: import('./context-engine').PeopleApi
+  /** Your brain: scheduled reading of connected accounts, "Written for you" briefs, Agent mode (src/main/brain). */
+  brain: import('./brain').BrainApi
 }
 
 /** Settings → Models → Fast mode: one supported model the user has (llm/fast-mode.ts). */
@@ -3010,12 +3036,14 @@ export interface QueueQuestion {
 /** A pending question or approval across all bots (the "Needs you" inbox). */
 export interface NeedsYouItem {
   id: string
-  /** 'queue': persisted, the bot kept working. 'live': a card open in a running chat right now. */
-  source: 'queue' | 'live'
+  /** 'queue': persisted, the bot kept working. 'live': a card open in a running chat right now. 'brain': Agent mode reaching out (src/main/brain). */
+  source: 'queue' | 'live' | 'brain'
   botId: string
   botName: string
   threadId: string
-  kind: 'question' | 'approval' | 'other'
+  kind: 'question' | 'approval' | 'other' | 'prompt'
+  /** A brain prompt ("Sarah Lee asked for the revised proposal by Friday. Draft it?"): its actions and sources. */
+  prompt?: { text: string; detail?: string; actions: import('./brain').BrainPromptAction[]; chips: import('./brain').SourceChip[]; question?: boolean; placeholder?: string; auto?: boolean }
   questions?: QueueQuestion[]
   approval?: { tool: string; label: string; summary?: string; reason?: string; folder?: string }
   status: 'open' | 'answered' | 'defaulted' | 'cancelled'
@@ -3041,7 +3069,7 @@ export interface SahilBotApi {
   /** The "Needs you" inbox: pending questions and approvals across all bots (main: agent/questions). */
   needsYou: {
     list(): Promise<NeedsYouItem[]>
-    /** Answers a question (one answer per question), or 'approve' / 'deny' for an approval. A later answer resumes the bot. */
+    /** Answers a question (one answer per question), or 'approve' / 'deny' for an approval. A later answer resumes the bot. A brain prompt: [action id, typed answer?]. */
     answer(id: string, answer: string[] | 'approve' | 'always' | 'deny'): Promise<NeedsYouItem | null>
     /** "Looks good" on an assumption the bot made: it leaves the review list. */
     reviewed(id: string): Promise<void>
@@ -3189,6 +3217,8 @@ export interface SahilBotApi {
   remoteServer?: RemoteServerApi
   /** Mac app only: Settings → General → Phone access. */
   phoneAccess?: PhoneAccessApi
+  /** Mac app only: Team access (teammates ask your brain), under Phone access. */
+  team?: import('./brain-access').TeamApi
 }
 
 export interface ModelList {

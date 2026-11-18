@@ -72,7 +72,56 @@ function Head({ item, bot, chip }: { item: NeedsYouItem; bot?: Space; chip: stri
   )
 }
 
+/**
+ * A prompt from Agent mode (src/main/brain): SahilBot reaching out ("Sarah Lee asked for the revised proposal
+ * by Friday. Draft it now?") with one-click actions, or a question whose answer becomes your own fact.
+ * Nothing happens until you click; Draft it starts a normal chat under the usual permissions.
+ */
+function PromptCard({ item: x, bot, onDone }: { item: NeedsYouItem; bot?: Space; onDone: () => void }) {
+  const p = x.prompt!
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const act = (id: string): void => {
+    if (id === 'answer' && !text.trim()) return
+    setBusy(true)
+    void api.needsYou.answer(x.id, id === 'answer' ? [id, text.trim()] : [id])
+      .then(() => toast(id === 'draft' ? 'Drafting it in a new chat' : id === 'remind' ? 'I’ll bring it back then' : id === 'answer' ? 'Saved as your own fact' : id === 'dismiss' ? 'Okay, dropped it' : 'Opening the draft', 'ok'))
+      .catch((e: Error) => toast(e.message, 'error'))
+      .finally(() => { setBusy(false); onDone() })
+  }
+  const style = { '--bot': bot?.color ?? 'var(--accent)' } as React.CSSProperties
+  return (
+    <article className="tk-card ny-card ny-prompt" data-testid="needs-you-item" data-kind="prompt" data-id={x.id} style={style}>
+      <Head item={x} bot={bot} chip={p.question ? 'Question' : p.auto ? 'Drafted for you' : 'Suggestion'} />
+      <p className="tk-title"><b>{p.text}</b></p>
+      {p.detail && <p className="tk-reason ny-why">{p.detail}</p>}
+      {p.chips.length > 0 && (
+        <div className="ny-chips">
+          {p.chips.map((c, i) => c.link
+            ? <button key={i} className="brain-chip link" onClick={() => void api.brain.openChip(c).catch((e: Error) => toast(e.message, 'error'))} title={c.title}><span>{c.label}</span><I.External size={10} /></button>
+            : <span key={i} className="brain-chip" title={c.title}><span>{c.label}</span></span>)}
+        </div>
+      )}
+      {p.question && (
+        <div className="ny-own">
+          <input value={text} placeholder={p.placeholder ?? 'Type your answer'} disabled={busy} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') act('answer') }} aria-label={p.text} data-testid="needs-you-prompt-input" />
+        </div>
+      )}
+      <div className="tk-actions ny-actions">
+        {p.actions.map((a) => (
+          <button key={a.id} className={`bd-btn${a.primary ? ' primary' : ''}`} disabled={busy || (a.id === 'answer' && !text.trim())} onClick={() => act(a.id)} data-testid={`needs-you-prompt-${a.id}`}>{a.label}</button>
+        ))}
+      </div>
+    </article>
+  )
+}
+
 function NeedsYouCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bot?: Space; onOpen: () => void; onDone: () => void }) {
+  if (x.kind === 'prompt' && x.prompt) return <PromptCard item={x} bot={bot} onDone={onDone} />
+  return <NeedsYouQuestionCard item={x} bot={bot} onOpen={onOpen} onDone={onDone} />
+}
+
+function NeedsYouQuestionCard({ item: x, bot, onOpen, onDone }: { item: NeedsYouItem; bot?: Space; onOpen: () => void; onDone: () => void }) {
   const qs = x.questions ?? []
   // Questions already answered by a reply in the chat start filled in.
   const [answers, setAnswers] = useState<string[]>(() => qs.map((_q, i) => x.answers?.[i] ?? ''))
