@@ -37,7 +37,7 @@ export const DEFAULTS: Stored = {
   userName: '',
   workspaceDir: join(homedir(), 'SahilBot'),
   search: { provider: 'auto', searxngUrl: '' },
-  advanced: { hardStopsEnabled: true },
+  advanced: { hardStopsEnabled: true, showBotModelThinking: false },
   onboarded: false,
   cloudBudgetUsd: 200,
   customRules: [],

@@ -1,5 +1,5 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { HeavyBoard, Message, PendingRequest, TeamMember } from '@shared/types'
+import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember } from '@shared/types'
 import { firstUnread } from '@shared/read-state'
 import { api } from '../api'
 import { ChatVaultOffers } from './VaultOffer'
@@ -18,7 +18,8 @@ import { AskBotCard, CouncilCard, HeavyCard, MemberRow, SpendCard, SwarmCard } f
 import { CuaCard, cuaOf } from './CuaCard'
 import { askBotOf, councilOf, groupMembers, heavyOf, isCardNotice, maxOf, maxTeamCalls, money, swarmOf, teamTotals, tokenCount, unfinished } from '../lib/swarm-view'
 import { MaxCard } from './MaxCard'
-import { useDevMode } from '../lib/dev-mode'
+import { useDevMode, useModelDetails } from '../lib/dev-mode'
+import { THINKING_LABEL } from '../lib/picker'
 import { elapsed, galleryFromSteps, hasQuietContent, internalNotice, quietActions, turnStart } from '../lib/quiet'
 
 type Block =
@@ -322,11 +323,15 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     divider.current = f && unreadAfter != null ? { id: f.id, createdAt: f.createdAt, after: unreadAfter } : null
   }
   const dev = useDevMode()
+  const { show: modelDetails, botChat } = useModelDetails()
   const hasDocs = !!actions.onOpenDoc
   const all = useMemo(() => blocks(messages), [messages])
   // The quiet chat leaves out the plan, compaction markers, notes about models, and runs that left nothing to
   // show; Developer mode shows everything.
-  const bs = useMemo(() => (dev ? all : all.filter((b) => quietVisible(b, hasDocs))), [all, dev, hasDocs])
+  const bs = useMemo(() => all.filter((b) => {
+    if (b.kind === 'notice' && internalNotice(b.m)) return botChat ? modelDetails : dev
+    return dev || (modelDetails && b.kind === 'text' && !!b.m.reasoning) || quietVisible(b, hasDocs)
+  }), [all, botChat, dev, hasDocs, modelDetails])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
   // Long chats mount their latest WINDOW blocks; an older first unread grows the window to include it.
   const limit = windowLimit(win.threadId === threadId ? win.limit : WINDOW, bs.length, dividerAt)
@@ -724,6 +729,7 @@ const MORE = ['🔥', '🎉', '🙏', '👀', '🤔', '😂', '😮', '💯', '�
 
 function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' } | { kind: 'heavy' }>; actions: ThreadActions; editable?: boolean; cont?: boolean; dev?: boolean; retry?: boolean }) {
   const m = b.m
+  const { show: modelDetails, botChat } = useModelDetails()
   const [editing, setEditing] = useState<string | null>(null)
   if (b.kind === 'compacted') {
     const before = m.meta?.before as number | undefined, after = m.meta?.after as number | undefined
@@ -744,7 +750,9 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
     )
     // Planner ⇄ Executor computer use: its live timeline card rides on a notice (CuaCard.tsx).
     if (cuaOf(m)) return <CuaCard m={m} />
-    return <div className="notice sys-line" role="status">{m.content}</div>
+    if (Array.isArray(m.meta?.collaboration)) return <CollaborationCard steps={m.meta.collaboration as CollaborationStep[]} interrupted={m.status === 'stopped'} />
+    const message = botChat && !modelDetails && typeof m.meta?.publicText === 'string' ? m.meta.publicText : m.content
+    return <div className="notice sys-line" role="status">{message}</div>
   }
   const reactions = (m.meta?.reactions ?? {}) as { user?: string; bot?: string }
 
@@ -792,6 +800,8 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
 
   const streaming = m.status === 'streaming'
   const error = m.status === 'error' ? String(m.meta?.error ?? 'Something went wrong') : null
+  const visibleError = botChat && !modelDetails && m.model ? (m.meta?.publicError as string | undefined) ?? 'The bot could not finish this reply.' : error
+  const effort = m.meta?.effort as Effort | undefined
   const speaker = m.meta?.botName as string | undefined
   // The speaker's name in their colour, nudged toward the text colour until it reads (4.5:1) on the light and dark backgrounds.
   const spColor = m.meta?.botColor as string | undefined
@@ -801,7 +811,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
       <div className="bubble-wrap ai-col">
         {speaker && !cont && <div className={`speaker${spStyle ? ' spk-c' : ''}`} style={spStyle}>{speaker}</div>}
         <div className={`bubble ai${error ? ' err' : ''}`} data-testid="assistant-bubble" data-status={m.status}>
-          {dev && m.reasoning && (
+          {modelDetails && m.reasoning && (
             <details className="reasoning" open={streaming && !m.content}>
               <summary><I.Sparkle size={14} />{streaming && !m.content ? 'Thinking…' : 'Thought process'}</summary>
               <pre>{m.reasoning.trim()}</pre>
@@ -809,7 +819,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
           )}
           {m.content && <Markdown text={m.content} streaming={streaming} />}
           {m.status === 'stopped' && <div className="hint">Stopped</div>}
-          {error && <div>{error}</div>}
+          {error && <div>{visibleError}</div>}
           {error && (() => {
             const fix = errorFix(error)
             return fix && <button className="chip-btn err-fix" onClick={fix.run} data-testid="error-fix">{fix.label}</button>
@@ -838,6 +848,12 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
         {reactions.user && (
           <button className="reaction" onClick={() => actions.onReact(m.id, null)} title="Remove reaction" data-testid="user-reaction">{reactions.user}</button>
         )}
+        {modelDetails && m.model && m.content && !streaming && (
+          <div className="reply-model-details" title={routedTitle(m)} data-testid="routed">
+            {(((m.meta?.routed as { label?: string } | undefined)?.label) || m.model).split(' · ')[0]}
+            {effort && THINKING_LABEL[effort] ? ` · ${THINKING_LABEL[effort]} thinking` : ''}
+          </div>
+        )}
       </div>
       {/* Beside the bubble (so stacked replies stay close): react, copy, read aloud, more; shown on hover. */}
       {m.content && !streaming && (
@@ -845,14 +861,43 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
           <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} />
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title="Some acceptance checks remain unresolved">Needs checking</span>}
-          {dev && m.model && (
-            <span className="routed" title={routedTitle(m)} data-testid="routed">
-              {(((m.meta?.routed as { label?: string } | undefined)?.label) || m.model).split(' · ')[0]}
-            </span>
-          )}
         </div>
       )}
     </div>
+  )
+}
+
+const COLLABORATION_ROLE: Record<CollaborationRole, string> = { lead: 'Lead agent', planner: 'Planner', partner: 'Second perspective', reviewer: 'Reviewer', specialist: 'Specialist' }
+const COLLABORATION_STATUS: Record<CollaborationStatus, string> = { queued: 'Up next', working: 'Working', done: 'Done', unavailable: 'Unavailable', stopped: 'Stopped' }
+
+function CollaborationCard({ steps, interrupted }: { steps: CollaborationStep[]; interrupted: boolean }) {
+  const { show } = useModelDetails()
+  const active = !interrupted && steps.some((s) => s.status === 'working' || s.status === 'queued')
+  const finished = steps.filter((s) => s.status === 'done').length
+  const outcome = active ? 'In progress' : interrupted || steps.some((s) => s.status === 'stopped') ? 'Stopped'
+    : finished < steps.length ? `${finished} of ${steps.length} finished` : 'Complete'
+  return (
+    <details className="collaboration-card" open data-testid="collaboration-card">
+      <summary className="plan-head">
+        <I.Users size={16} aria-hidden />
+        <span className="plan-title">Agents collaborating</span>
+        <span className="plan-count" role="status">{outcome}</span>
+        <I.Chevron size={13} className="collaboration-chevron" aria-hidden />
+      </summary>
+      <ul className="collaboration-steps">
+        {steps.map((s) => {
+          const status = interrupted && (s.status === 'working' || s.status === 'queued') ? 'stopped' : s.status
+          return (
+            <li key={s.id} className={`collaboration-step is-${status}`}>
+              <span className="collaboration-dot" aria-hidden />
+              <span className="collaboration-role">{COLLABORATION_ROLE[s.role]}{s.role === 'specialist' ? ` ${Number(s.id.slice('specialist-'.length)) + 1}` : ''}</span>
+              {show && <span className="collaboration-model" title={s.model}>{s.model}</span>}
+              <span className="collaboration-status">{COLLABORATION_STATUS[status]}</span>
+            </li>
+          )
+        })}
+      </ul>
+    </details>
   )
 }
 

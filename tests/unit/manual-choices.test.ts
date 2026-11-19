@@ -137,9 +137,9 @@ describe('model', () => {
     const h = harness([model('model-a', 1), model('model-b', 2), model('model-c', 3)])
     // A value an older install could have stored on the bot itself: ignored.
     const bot = h.db.updateSpace(h.bot.id, { model: 'model-a', effort: 'low' })
-    llm.script.push({ content: 'one', delay: 0 }, { content: 'two', delay: 0 })
+    llm.script.push({ content: 'invalid routing response', delay: 0 }, { content: 'one', delay: 0 }, { content: 'two', delay: 0 })
     await h.run(h.thread(null, bot.id), 'Refactor the whole codebase, end to end, with tests')
-    expect(llm.requests[0].model).not.toBe('model-a')
+    expect(h.steps[0].model).not.toBe('model-a')
     expect(h.steps[0].effort).not.toBe('low')
     // Picked in the bot's chat: that model and that level, exactly.
     const t = h.thread('model-a', bot.id)

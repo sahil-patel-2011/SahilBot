@@ -169,6 +169,7 @@ describe('research and resource-aware Auto', () => {
   test.each([
     ['Use a swarm of agents to compare these products', 'swarm'], ['plan first before implementing this', 'plan'],
     ['Run deep research on battery materials', 'research'], ['What is council mode?', 'agent'],
-    ['Do not use a swarm for this task', 'agent'], ['Explain this code: ```use swarm agents```', 'agent'], ['Hello', 'agent']
+    ['Do not use a swarm for this task', 'agent'], ['Explain this code: ```use swarm agents```', 'agent'],
+    ['Summarize the article about swarm agents', 'agent'], ["Explain the phrase 'plan first' to a new user", 'agent'], ['Hello', 'agent']
   ])('strategy follows the request: %s', (text, kind) => expect(requestStrategy(text).kind).toBe(kind))
 })

@@ -97,8 +97,9 @@ export const Composer = forwardRef<ComposerHandle, {
   threadId?: string
   /** The bot's or project's folder, the working folder when the chat doesn't pick one. */
   inheritedFolder?: string | null
-  /** A bot or group chat: the picker shows model and thinking as chosen automatically (permissions stay editable). */
+  /** Model controls are optional in bot and group chats. */
   autoBot?: boolean
+  showModelThinking?: boolean
 }>(function Composer(p, ref) {
   const dev = useDevMode()
   const [dictating, setDictating] = useState(false)
@@ -353,8 +354,8 @@ export const Composer = forwardRef<ComposerHandle, {
             <span className="bypass-dot" aria-hidden />Bypass on
           </span>
         )}
-        <ComposerPicker models={p.models} model={p.model} onModel={p.onModel} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
-          thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} />
+        <ComposerPicker key={p.showModelThinking === false ? 'permissions' : 'full'} models={p.models} model={p.model} onModel={p.onModel} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
+          thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} showModelThinking={p.showModelThinking} />
       </div>
       {dev && p.running && !p.answering && (
         <div className="steer-hint" data-testid="steer-hint">
