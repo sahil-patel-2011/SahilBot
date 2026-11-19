@@ -37,6 +37,8 @@ export function maxDecision(o: {
   cloud?: boolean
   /** What is left of the monthly cloud limit (undefined: no limit). */
   budgetLeftUsd?: number
+  /** Let the semantic router decide automatic teamwork after it reads the conversation. */
+  semanticAuto?: boolean
 }): MaxDecision {
   if (o.council) return {}
   const bot = canSwarm(o.space)
@@ -57,7 +59,7 @@ export function maxDecision(o: {
     if (c.category === 'chat' && c.difficulty === 0 && o.text.trim().length < 80) return {}
     return { plan: fit(planMax(o.text, ctx)), source: 'bot' }
   }
-  if (o.heavy || o.team || o.swarm || o.deepResearch) return {}
+  if (o.semanticAuto || o.heavy || o.team || o.swarm || o.deepResearch) return {}
   const s = o.settings
   const left = o.budgetLeftUsd
   const f = teamworkFit(o.text, {

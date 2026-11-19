@@ -7,3 +7,6 @@ import { createContext, useContext } from 'react'
 export const DevMode = createContext(false)
 
 export const useDevMode = (): boolean => useContext(DevMode)
+
+export const ModelDetails = createContext({ show: false, botChat: false })
+export const useModelDetails = () => useContext(ModelDetails)

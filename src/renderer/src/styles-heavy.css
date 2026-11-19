@@ -27,6 +27,19 @@
 .tr-cancel-space { width: 18px; }
 .team-card.big .team-rows { max-height: 320px; overflow-y: auto; }
 @container (max-width: 560px) { .team-row { grid-template-columns: 10px minmax(0, 1fr) auto 20px; } .team-row .tr-detail, .team-row .tr-num:first-of-type { display: none; } }
+.collaboration-card { max-width: 520px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.collaboration-card summary { list-style: none; cursor: pointer; flex-wrap: wrap; }
+.collaboration-card summary::-webkit-details-marker { display: none; }
+.collaboration-card .plan-count { margin-left: auto; }
+.collaboration-card[open] .collaboration-chevron { transform: rotate(180deg); }
+.collaboration-steps { list-style: none; margin: 0; padding: 0 14px 10px; }
+.collaboration-step { display: flex; gap: 8px; align-items: center; padding: 5px 0; font-size: 12.5px; }
+.collaboration-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-3); }
+.collaboration-step.is-working .collaboration-dot { background: var(--accent); }
+.collaboration-step.is-done .collaboration-dot { background: var(--ok); }
+.collaboration-role { flex: 0 1 auto; min-width: 0; }
+.collaboration-model { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.collaboration-status { margin-left: auto; color: var(--text-2); white-space: nowrap; }
 
 /* ---- Heavy card ---- */
 .heavy-card { border: 1px solid var(--card-line, var(--line)); border-radius: 14px; background: var(--card, var(--panel)); overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.03); }

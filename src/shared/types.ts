@@ -149,6 +149,15 @@ export interface CustomRule {
   action: 'allow' | 'ask'
 }
 
+export type CollaborationStatus = 'queued' | 'working' | 'done' | 'unavailable' | 'stopped'
+export type CollaborationRole = 'lead' | 'planner' | 'partner' | 'reviewer' | 'specialist'
+export interface CollaborationStep {
+  id: string
+  role: CollaborationRole
+  model: string
+  status: CollaborationStatus
+}
+
 export interface Settings {
   /** Fallback endpoint for models no provider claims (and the legacy single-server setting). */
   baseUrl: string
@@ -224,6 +233,8 @@ export interface Settings {
     sandboxCommands?: boolean
     /** Developer mode: the chat shows the model behind each reply, thinking, every step, tokens and cost (default off). */
     devMode?: boolean
+    /** Reveal model choices and thinking in bot and group chats. */
+    showBotModelThinking?: boolean
     /** Files anywhere: SahilBot reads and edits files anywhere in your home folder without asking (default on). Deleting still asks; system, private and secret places stay off limits. */
     filesAnywhere?: boolean
   }

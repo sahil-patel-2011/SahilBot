@@ -20,6 +20,52 @@ const shot = async (page: Page, name: string): Promise<void> => {
 }
 
 describe('quiet chat', () => {
+  test('Bots show teammate roles by default and reveal model details on opt-in', async () => {
+    llm.models = ['qwen3.8:27b', 'gemma4:12b']
+    const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_QUIET: '1', FOREMAN_NO_BRAIN: '', FOREMAN_RAM_GB: '64' })
+    try {
+      await page.evaluate(() => window.foreman.spaces.create({ name: 'Review Bot', intro: false }))
+      await page.reload()
+      await page.getByTestId('space-item').filter({ hasText: 'Review Bot' }).click()
+      await page.getByTestId('bot-permissions-picker').click()
+      expect(await page.getByTestId('picker-menu').getByTestId('model-option').count()).toBe(0)
+      expect(await page.getByTestId('mode-auto').getAttribute('aria-checked')).toBe('true')
+      await page.keyboard.press('Escape')
+      llm.script.push(
+        { content: JSON.stringify({
+          assessment: { goal: 'Suggest a name', work: 'answer', complexity: 'direct', impact: 'routine', deliverable: false, parts: [] },
+          category: 'writing', kind: 'chat', difficulty: 1, effort: 'low', model: 'gemma4:12b', team: 'pair',
+          partner: 'qwen3.8:27b', needs: ['ideas'], fanout: 0, why: 'Two perspectives on naming'
+        }), delay: 0 },
+        { content: 'Try Hearth and Grain.', delay: 0 },
+        { content: 'I would choose Hearth and Grain.', reasoning: 'Compare memorable names.', delay: 0 }
+      )
+      await page.getByTestId('composer-input').fill('What would you call a shop that sells sourdough in the morning?')
+      await page.keyboard.press('Enter')
+      const card = page.getByTestId('collaboration-card')
+      await expect.poll(() => card.innerText(), { timeout: 25_000 }).toContain('Complete')
+      expect(await card.innerText()).toContain('Second perspective')
+      expect(await card.locator('.collaboration-model').count()).toBe(0)
+      expect(await page.locator('details.reasoning').count()).toBe(0)
+      await shot(page, '4-bot-collaboration')
+
+      await page.getByTestId('profile').click()
+      await page.getByText('Models & Keys', { exact: true }).click()
+      await page.getByTestId('show-bot-model-thinking').click()
+      await page.keyboard.press('Escape')
+      await expect.poll(() => card.locator('.collaboration-model').count()).toBe(2)
+      expect(new Set(await card.locator('.collaboration-model').allTextContents()).size).toBe(2)
+      expect(await page.getByTestId('model-picker').count()).toBe(1)
+      expect(await page.locator('details.reasoning').count()).toBeGreaterThan(0)
+      expect(await page.getByTestId('routed').innerText()).toMatch(/\bthinking\b/)
+      await shot(page, '5-bot-model-details')
+    } finally {
+      await app.close()
+      llm.script.length = 0
+      llm.models = ['qwen3.8:27b', 'llama3.3:70b']
+    }
+  })
+
   test('a task reads like a conversation: a short note, quiet work, the result', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_QUIET: '1' })
     await page.setViewportSize({ width: 1100, height: 760 })

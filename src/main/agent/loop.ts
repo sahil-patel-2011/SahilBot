@@ -6,7 +6,7 @@ import type { SkillSuggestion, SuggestOptions } from '../skills'
 import { appToolsFor, classifyTask, intentTools, likelyTools } from './intent'
 import { grantableFolder } from './tools/files'
 import { usageScope } from '../usage'
-import type { ApprovalAnswer, Attachment, ChatEvent, Effort, TeamMember, Message, ModelInfo, PendingRequest, PermissionMode, QueueQuestion, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
+import type { ApprovalAnswer, Attachment, ChatEvent, CollaborationStep, Effort, TeamMember, Message, ModelInfo, PendingRequest, PermissionMode, QueueQuestion, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
 import type { Db } from '../db'
 import type { MemoryStore } from '../memory'
 import type { SettingsStore } from '../settings'
@@ -41,14 +41,14 @@ import { attachmentNotes } from '../attach-process'
 import { localOff } from '@shared/local-mode'
 import { pick, routingPrefs } from '../llm/router'
 import { autoPreference, isStudy, noGrokFor, payPerUse, premiumModel, windowOf } from '../llm/routing-table'
-import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainModel, brainTimeout, explainPick, isQuickModel, skipBrain, teamFor, type BrainAnswer } from '../llm/auto-brain'
+import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainTimeout, explainPick, isQuickModel, semanticReader, skipBrain, teamFor, type BrainAnswer, type TeamIds } from '../llm/auto-brain'
 import { autoRoute, budgetTightFor, planFallback } from '../llm/auto-route'
-import { modelHealth } from '../llm/model-health'
+import { KIND_WORDS, failureKind, modelHealth } from '../llm/model-health'
 import { spendingMode } from '../llm/budget'
 import { escalateEffort, resolveEffort } from '../llm/auto-effort'
 import { fallbackNotice, mayReplaceForInvalidCalls, requestedEffort, requestedModel } from './choices'
 // Model routing's classifier (category + difficulty); agent/intent.ts classifyTask is the chat-mode one.
-import { CATEGORY_LABEL, classifyTask as classifyRoute, requestTokens, type TaskClass as RouteClass } from '../llm/task-classifier'
+import { CATEGORY_LABEL, classifyTask as classifyRoute, LONG_CONTEXT_TOKENS, requestTokens, type TaskClass as RouteClass } from '../llm/task-classifier'
 import { isPremiumClaude } from '../llm/claude-models'
 // Claude long context, native tools and Auto variants (llm/claude-models, llm/claude-native, llm/router).
 import { claudeInfo, claudeOptions, compactionTrigger } from '../llm/claude-models'
@@ -173,6 +173,8 @@ interface Pending {
 }
 
 interface Run {
+  collaboration?: { message: Message; steps: CollaborationStep[] }
+  collaborationSpend?: SwarmLedger
   planFirst?: boolean
   planApproved?: boolean
   replay?: Map<string, ToolOutput[]>
@@ -395,8 +397,9 @@ Otherwise list up to 6 specific problems (missed requirements, wrong facts or nu
 export function teamTranscript(ms: Message[], max = 60_000): string {
   const lines = ms.filter((m) => !m.meta?.hidden && (m.role === 'user' || (m.role === 'assistant' && m.kind === 'normal' && m.content) || m.role === 'tool'))
     .map((m) => (m.role === 'tool' ? `[step] ${m.toolName}: ${String(m.meta?.display ?? m.meta?.status ?? '')}` : `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`))
-  let out = ''
-  for (let i = lines.length - 1; i >= 0 && out.length + lines[i].length < max; i--) out = `${lines[i]}\n\n${out}`
+  const latest = lines.pop() ?? ''
+  let out = latest.length > max ? `${latest.slice(0, max * 0.75)}\n[…]\n${latest.slice(-(max * 0.25 - 5))}` : latest
+  for (let i = lines.length - 1; i >= 0 && out.length + lines[i].length + 2 <= max; i--) out = `${lines[i]}\n\n${out}`
   return out.trim()
 }
 
@@ -448,7 +451,7 @@ const breathe = (first = false): Promise<void> => new Promise((r) => (first ? se
 type Routed = {
   tier: Tier; why: string; label?: string; manual?: boolean; variant?: 'auto' | 'auto:local' | 'auto:cloud'; category?: RouteClass['category']; reason?: string; task?: RouteClass
   /** Models working with the run's model on this request (Auto's brain): a planner first, parallel helpers, a reviewer at the end. */
-  team?: { planner?: string; reviewer?: string; fanout?: { n: number; helper: string }; debate?: boolean; partner?: string }
+  team?: TeamIds
   /** Auto's brain read the request (llm/auto-brain.ts). */
   brain?: boolean
   /** The "Why this model" line for the model chip (auto-brain.ts explainPick). */
@@ -636,8 +639,11 @@ export class Agent {
     const sp0 = this.d.db.getSpace(thread.spaceId)
     // Auto (max/auto-teamwork.ts) teams up only for big work, on a cloud model, within the monthly limit.
     const want0 = requestedModel({ thread, space: sp0, settings: this.d.settings.get() })
-    const cloud0 = autoVariant(want0) ? autoVariant(want0) !== 'auto:local' && this.d.endpoints.usable().some((m) => isCloudInfo(m)) : this.cloudModel(want0)
-    const mx = maxDecision({ settings: this.d.settings.get(), space: sp0, text: input.text, attachments: input.attachments?.length, unattended: opts.unattended, max: input.max, strategy: input.maxStrategy, council: input.council, deepResearch: input.deepResearch, group: sp0?.kind === 'group', heavy: input.heavy, team: input.team, swarm: input.swarm, planFirst: input.planFirst, cloud: cloud0, budgetLeftUsd: this.d.endpoints.budgetLeft?.() })
+    const variant0 = autoVariant(want0)
+    const usable0 = this.d.endpoints.usable()
+    const cloud0 = variant0 ? variant0 !== 'auto:local' && usable0.some(isCloudInfo) : this.cloudModel(want0)
+    const semanticAuto = !!variant0 && !isRelayed({ meta: input.meta }) && !input.voice && !this.d.db.getState(thread.id).voice && !process.env.FOREMAN_NO_BRAIN
+    const mx = maxDecision({ settings: this.d.settings.get(), space: sp0, text: input.text, attachments: input.attachments?.length, unattended: opts.unattended, max: input.max, strategy: input.maxStrategy, council: input.council, deepResearch: input.deepResearch, group: sp0?.kind === 'group', heavy: input.heavy, team: input.team, swarm: input.swarm, planFirst: input.planFirst, cloud: cloud0, budgetLeftUsd: this.d.endpoints.budgetLeft?.(), semanticAuto })
     const maxPlan = mx.plan
     if (maxPlan) {
       const first = maxPlan.phases[0]
@@ -684,7 +690,7 @@ export class Agent {
     }
 
     // Bot swarms: the composer's Swarm toggle or the bot's Always turn it on; Auto hints when the request fits.
-    const sw = input.heavy || input.council || maxPlan || (mx.hint && !input.swarm) ? {} : swarmNote(this.d.settings.get(), this.d.db.getSpace(thread.spaceId), input.text, { swarm: input.swarm, attachments: input.attachments?.length, unattended: opts.unattended })
+    const sw = input.heavy || input.council || maxPlan || ((semanticAuto || mx.hint) && !input.swarm) ? {} : swarmNote(this.d.settings.get(), this.d.db.getSpace(thread.spaceId), input.text, { swarm: input.swarm, attachments: input.attachments?.length, unattended: opts.unattended })
     if (sw.note) notes.push(sw.note)
 
     if (input.voice) {
@@ -895,7 +901,7 @@ export class Agent {
     try {
       const mxs = this.maxStart(thread, run)
       if (!space || space.kind !== 'group') {
-        status = mxs?.board.strategy === 'hybrid' ? await this.maxHybrid(thread, run, space, mxs) : this.heavyWanted(thread, run) ? await this.heavy(thread, run, space) : this.councilWanted(thread, run) || await this.autoCouncil(thread, run, space) ? await this.council(thread, run, space) : await this.loop(thread, run, space)
+        status = mxs?.board.strategy === 'hybrid' ? await this.maxHybrid(thread, run, space, mxs) : this.heavyWanted(thread, run) ? await this.heavy(thread, run, space) : this.councilWanted(thread, run) ? await this.council(thread, run, space) : await this.loop(thread, run, space)
       } else {
         const members = space.members.map((id) => this.d.db.getSpace(id)).filter((b): b is Space => !!b)
         if (!members.length) throw new Error('This group has no bots. Add some in its settings.')
@@ -916,10 +922,14 @@ export class Agent {
         }
       }
     } catch (e) {
-      status = 'error'
-      error = (e as Error).message
-      if (!(e as { shown?: boolean }).shown) this.notice(thread.id, `Something went wrong: ${error}`)
+      status = run.ctrl.signal.aborted ? 'stopped' : 'error'
+      if (status === 'error') {
+        error = (e as Error).message
+        if (!(e as { shown?: boolean }).shown) this.notice(thread.id, `Something went wrong: ${error}`)
+      }
     }
+    this.finishCollaboration(run, status)
+    this.fanoutHelper.delete(thread.id)
     // Swarm cards: the run's last answer is the compiled result (credits), and their sessions close.
     const finalAnswer = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.maxBrief && !m.meta?.superseded)?.content ?? ''
     finishSwarms(thread.id, finalAnswer, status)
@@ -1635,25 +1645,6 @@ export class Agent {
     return !!opener?.meta?.council && !isRelayed(opener)
   }
 
-  /**
-   * Auto's brain asked for several models to reason this one out together (team "debate"): a Council for this
-   * request, when nothing else was asked for and someone is here. Its decision is cached, so the run reuses it.
-   */
-  private async autoCouncil(thread: Thread, run: Run, space: Space | undefined): Promise<boolean> {
-    if (run.unattended || run.helper || run.intro || run.group || process.env.FOREMAN_NO_BRAIN) return false
-    const { db } = this.d
-    const opener = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
-    if (!opener || isRelayed(opener) || opener.meta?.max || opener.meta?.team || opener.meta?.planFirst || opener.meta?.deepResearch || opener.meta?.heavy) return false
-    const requested = requestedModel({ thread: db.getThread(thread.id), space, settings: this.d.settings.get() })
-    if (!autoVariant(requested)) return false
-    const state = db.getState(thread.id)
-    const chosen = await this.chooseModel(requested, thread, state, this.warmFor(thread, run, state)).catch(() => undefined)
-    db.setState(thread.id, state)
-    if (!chosen?.routed?.team?.debate) return false
-    this.notice(thread.id, 'Team: several models are reasoning this out together.', { internal: true })
-    return true
-  }
-
   /** Council mode for this request (swarm/council.ts): plans, critiques, a merged plan, execution and reviews. */
   private async council(thread: Thread, run: Run, space: Space | undefined): Promise<'finished' | 'stopped' | 'error'> {
     const { db } = this.d
@@ -1841,8 +1832,8 @@ export class Agent {
   }
 
   /** A line in the chat. internal: about models or thinking, shown only in Developer mode. */
-  private notice(threadId: string, text: string, o: { internal?: boolean } = {}): void {
-    const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', ...(o.internal ? { meta: { internal: true } } : {}) })
+  private notice(threadId: string, text: string, o: { internal?: boolean; publicText?: string } = {}): void {
+    const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', ...(o.internal || o.publicText ? { meta: { internal: o.internal, publicText: o.publicText } } : {}) })
     this.d.emit({ threadId, type: 'message', message: m })
   }
 
@@ -1979,6 +1970,11 @@ export class Agent {
   /** Auto's brain chose fan-out: the helpers' model, by root chat. */
   private fanoutHelper = new Map<string, string>()
 
+  private routeReader(pool: ModelInfo[], cheapest: boolean): ModelInfo | undefined {
+    const healthy = pool.filter((m) => !modelHealth.blocked(m))
+    return semanticReader(healthy, cheapest || !routingPrefs.preferCloud)
+  }
+
   /**
    * Resolve "auto" (or a model that's gone) to a concrete model. Auto routes by how hard the request
    * is; voice conversations use the voice model setting when one is chosen.
@@ -2003,7 +1999,7 @@ export class Agent {
     // What kind of task and how hard (llm/task-classifier.ts: local rules, no model call), then the routing table.
     const folder = this.d.db.getSpace(thread.spaceId)?.folder ?? null
     const cut = state.compaction ? all.findIndex((m) => m.id === state.compaction!.boundaryId) + 1 : 0
-    let task = classifyRoute(last?.content ?? '', {
+    const routeContext = {
       attachments: files, images: last?.images?.length ?? 0, previousTier: state.lastTier, previousCategory: state.lastCategory,
       voice: !!state.voice, openPlan: state.todos.some((t) => t.status !== 'done'),
       codeProject: !!folder && ['.git', 'package.json', 'build.gradle', 'pyproject.toml', 'Cargo.toml', 'go.mod'].some((f) => existsSync(join(folder, f))),
@@ -2011,7 +2007,13 @@ export class Agent {
       previousKind: state.lastKind, previousEffort: state.lastEffort, previousStudy: state.lastStudy,
       role: ((sp) => (sp && !sp.isMain && sp.kind === 'bot' ? [sp.name, sp.label].filter(Boolean).join(': ') : undefined))(this.d.db.getSpace(thread.spaceId)),
       ...requestTokens({ text: last?.content ?? '', files, history: all.slice(Math.max(0, cut)).filter((m) => m !== last) })
-    })
+    }
+    let task = classifyRoute(last?.content ?? '', routeContext)
+    const modeFloor = routeContext.heavy || routeContext.council ? 3 : routeContext.team || routeContext.deepResearch || routeContext.planFirst ? 2 : 0
+    const constraints = {
+      agent: !!modeFloor || routeContext.openPlan || files.some((f) => f.kind !== 'image'),
+      tier: (routeContext.inputTokens >= LONG_CONTEXT_TOKENS || files.some((f) => f.kind === 'folder') ? 3 : modeFloor) as Tier
+    }
     // Auto's brain (llm/auto-brain.ts): a fast cheap model reads the whole request and the conversation and
     // decides the kind of task, how hard it is, how much to think, the model and any teamwork. The rules above
     // are the fallback (and keep their hard floors).
@@ -2025,9 +2027,12 @@ export class Agent {
       try { return autoRoute({ requested, usable, task, preference, budgetTight, voice: !!state.voice, previous: state.lastAutoModel ? { model: state.lastAutoModel, category: state.lastCategory } : undefined }).model } catch { return undefined }
     })() : undefined
     const quickPick = isQuickModel(usable.find((m) => m.id === rulesPick))
-    const skipRead = !last || skipBrain(last.content, task, files.length, { quickPick })
+    const skipRead = !last || skipBrain(last.content, task, files.length + (last.images?.length ?? 0), { quickPick })
     if (autoNow && last && skipRead && task.signals.quick && quickPick) task = { ...task, why: `${task.why} · no read needed` }
-    const thinker = autoNow && last && !thread.parentId && !state.voice && !process.env.FOREMAN_NO_BRAIN && spendingMode(s) !== 'none' && (this.d.endpoints.budgetLeft?.() ?? 1) > 0 && !skipRead ? brainModel(brainPool) : undefined
+    const paidRead = spendingMode(s) !== 'none' && (this.d.endpoints.budgetLeft?.() ?? 1) > 0
+    const explicitComputerPair = s.computerUse?.mode === 'pair' && !!s.computerUse.planner && task.category === 'computer-use'
+    const thinker = autoNow && last && !isRelayed(last) && !thread.parentId && !this.runs.get(thread.id)?.group && !state.voice && !explicitComputerPair && !process.env.FOREMAN_NO_BRAIN && !skipRead
+      ? this.routeReader(paidRead ? brainPool : brainPool.filter((m) => !payPerUse(m)), preference === 'cheapest') : undefined
     let brain: BrainAnswer | undefined
     if (thinker && last) {
       const role = this.d.db.getSpace(thread.spaceId)
@@ -2039,17 +2044,18 @@ export class Agent {
       // A read still to come (not cached): the request's context is prepared at the same time (warmContext), so
       // the read overlaps that work instead of adding to it.
       const reading = this.brainCache.get(last.id) === undefined
+      const timeoutMs = isCloudInfo(thinker) ? brainTimeout(thinker) : 6000
       const [got] = await Promise.all([askBrain({
         messageId: last.id, model: thinker.id, cache: this.brainCache,
         input: { text: last.content, history, attachments: files.map((f) => `${f.kind}: ${f.name}`), images: last.images?.length ?? 0, role: role && !role.isMain && role.kind === 'bot' ? [role.name, role.label].filter(Boolean).join(': ') : undefined, preference, models: brainPool, rules: task, outcomes, budgetTight },
         ask: async ({ model: m, system, user, signal }) => {
           const ep = this.d.endpoints.for(m)
-          return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model: m, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(m, s.sampling), maxTokens: 500, effort: 'low', noThinking: true, signal }))
+          return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model: m, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(m, s.sampling), maxTokens: 950, effort: 'low', noThinking: true, signal }))
         },
-        timeoutMs: brainTimeout(thinker), signal: this.runs.get(thread.id)?.ctrl.signal
+        timeoutMs, ...(!isCloudInfo(thinker) ? { lateMs: timeoutMs } : {}), signal: this.runs.get(thread.id)?.ctrl.signal
       }), reading && warm ? warm({ model: rulesPick, kind: task.kind }) : undefined])
       if (got.answer) {
-        brain = got.answer; task = applyBrain(task, brain, thinker.label ?? thinker.id)
+        brain = got.answer; task = applyBrain(task, brain, thinker.label ?? thinker.id, constraints)
         // Kept with the message, so a "yes, do it" after a restart still follows this read.
         this.d.db.updateMessage({ ...last, meta: { ...last.meta, autoRead: brain } })
       }
@@ -2058,10 +2064,14 @@ export class Agent {
       if (!got.answer) task = { ...task, why: `${task.why} · ${got.late ? `${thinker.label ?? thinker.id} was still reading, so the basic rules picked` : 'basic rules (no read)'}` }
     }
     // "yes, do it" / "continue": the read of the request it carries on (same model, level and team).
-    if (!brain && autoNow && last && task.rule === 'follow-up') {
+    if (!brain && autoNow && last && !isRelayed(last) && task.rule === 'follow-up') {
       const before = shown.filter((m) => !m.meta?.questionAnswer && m !== last)[0]
       const prior = before ? this.brainCache.get(before.id) ?? (before.meta?.autoRead as BrainAnswer | undefined) : undefined
-      if (prior) { brain = prior; this.brainCache.set(last.id, prior); task = applyBrain(task, prior, 'the last read') }
+      if (prior) {
+        // Carry over the intent, without rerunning an already completed team on a short confirmation.
+        brain = { ...prior, team: 'solo', fanout: 0 }
+        task = applyBrain(task, brain, 'the last read', constraints)
+      }
     }
     const r = { tier: task.difficulty, why: task.why }
     const prevCategory = state.lastCategory
@@ -2105,8 +2115,14 @@ export class Agent {
       const executor = brainPick ?? base
       brainChose = !!brainPick
       if (brainPick && brainPick.id !== base.id) { routed.model = brainPick.id; routed.label = `${brainPick.label ?? brainPick.id} · ${CATEGORY_LABEL[task.category]}`; routed.why = `${task.why} · Auto picked ${brainPick.label ?? brainPick.id} for this request` }
-      const t = teamFor(brain, executor, { allowed, difficulty: task.difficulty, kind: task.kind, budgetTight, fableOn: routingPrefs.fableForHardest })
-      if (t.planner || t.reviewer || t.fanout || t.debate || t.partner) team = { ...(t.partner ? { partner: t.partner.id } : {}), ...(t.planner ? { planner: t.planner.id } : {}), ...(t.reviewer ? { reviewer: t.reviewer.id } : {}), ...(t.fanout ? { fanout: { n: t.fanout.n, helper: t.fanout.helper.id } } : {}), ...(t.debate ? { debate: true } : {}) }
+      const allowTeam = botMaxConfig(s, thread.spaceId).mode !== 'off' && !last?.meta?.planFirst
+      const policy = brain.assessment && preference === 'cheapest' ? allowed.filter((m) => !payPerUse(m)) : allowed
+      const t = allowTeam ? teamFor(brain, executor, { allowed: policy, difficulty: task.difficulty, kind: task.kind, budgetTight, fableOn: routingPrefs.fableForHardest }) : {}
+      if (t.planner || t.reviewer || t.fanout || t.partner) team = {
+        ...(t.partner ? { partner: t.partner.id } : {}), ...(t.planner ? { planner: t.planner.id } : {}),
+        ...(t.reviewer ? { reviewer: t.reviewer.id } : {}),
+        ...(t.fanout ? { fanout: { n: t.fanout.n, helper: t.fanout.helper.id, parts: brain.assessment?.parts } } : {})
+      }
     }
     const measured = base && !brain && !isStudy(task) ? this.outcomes.pick(base, pool.filter((m) => (!task.needsVision || m.vision) && (!task.contextTokens || (m.contextTokens ?? m.maxFittingWindow ?? 0) >= task.contextTokens + 4096) && !modelHealth.blocked(m) && (!premiumModel(m.id) || premiumModel(base.id)) && (task.category !== 'computer-use' && task.category !== 'voice' || m.provider !== 'xai') && (task.category !== 'computer-use' || base.provider === 'chatgpt' || m.provider !== 'chatgpt')), task.category, preference) : undefined
     if (measured) { routed.model = measured.model.id; routed.why += ` · ${measured.why}`; routed.label = `${measured.model.label ?? measured.model.id} · ${CATEGORY_LABEL[task.category]}` }
@@ -2143,7 +2159,7 @@ export class Agent {
         skip: !opener || !!(run.helper || run.group || run.intro || run.sampling || state.voice)
       })
       if (!r) return undefined
-      if ('fallback' in r) { this.notice(thread.id, r.fallback); return undefined }
+      if ('fallback' in r) { this.notice(thread.id, r.fallback, { publicText: 'The bot is continuing without a separate planner.' }); return undefined }
       this.d.registry.load(state, ['checkpoint'])
       this.d.db.setState(thread.id, state)
       return r
@@ -2174,16 +2190,18 @@ export class Agent {
     const key = `${thread.id}\n${model}`
     if (!this.goneNoticed.has(key)) {
       this.goneNoticed.add(key)
-      this.notice(thread.id, `${name} can't be used any more (${why}), so ${who} Auto now. Pick another model in the model menu any time.`)
+      this.notice(thread.id, `${name} can't be used any more (${why}), so ${who} Auto now. Pick another model in the model menu any time.`, { publicText: 'The previous selection is unavailable. This chat switched to Auto.' })
     }
     return true
   }
 
   /** One call to a teammate model, no tools. Its failure never stops the run (undefined: carry on without it). */
   private async teammate(model: string, system: string, user: string, run: Run, effort: Effort, maxTokens: number): Promise<string | undefined> {
-    const ep = this.d.endpoints.for(model)
     try {
-      const text = await collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, this.d.settings.get().sampling), maxTokens, effort, signal: run.ctrl.signal }))
+      run.ctrl.signal.throwIfAborted()
+      const ep = this.d.endpoints.for(model)
+      const signal = AbortSignal.any([run.ctrl.signal, AbortSignal.timeout(60_000)])
+      const text = await collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, this.d.settings.get().sampling), maxTokens, effort, signal }))
       return text.trim() || undefined
     } catch (e) {
       if (run.ctrl.signal.aborted) throw e
@@ -2191,25 +2209,91 @@ export class Agent {
     }
   }
 
-  /** The planner's plan, stored as a hidden note the run's model works from (said in Developer mode). */
+  private publishCollaboration(threadId: string, run: Run, steps: CollaborationStep[]): void {
+    const meta = { collaboration: steps }
+    const status = steps.some((step) => step.status === 'working' || step.status === 'queued') ? 'streaming' : 'done'
+    const previous = run.collaboration?.message
+    const message: Message = previous ? { ...previous, status, meta }
+      : this.d.db.insertMessage({ threadId, role: 'assistant', kind: 'notice', status, content: 'Agents collaborating', meta })
+    if (previous) this.d.db.updateMessage(message)
+    run.collaboration = { message, steps }
+    this.d.emit({ threadId, type: 'message', message })
+  }
+
+  private finishCollaboration(run: Run, status: 'finished' | 'stopped' | 'error'): void {
+    if (!run.collaboration) return
+    const { message, steps } = run.collaboration
+    this.publishCollaboration(message.threadId, run, steps.map((step) => step.status === 'working' || step.status === 'queued'
+      ? { ...step, status: status === 'stopped' ? 'stopped' : step.role === 'lead' && status === 'finished' ? 'done' : 'unavailable' }
+      : step))
+    run.collaboration = undefined
+  }
+
+  private async collaborate(thread: Thread, run: Run, lead: string, step: Pick<CollaborationStep, 'id' | 'role' | 'model'>, ask: () => Promise<string | undefined>): Promise<string | undefined> {
+    const update = (status: CollaborationStep['status']): void => {
+      const steps = run.collaboration?.steps ?? [{ id: 'lead', role: 'lead', model: this.modelLabel(lead), status: 'working' }]
+      const next = { ...step, model: this.modelLabel(step.model), status }
+      this.publishCollaboration(thread.id, run, steps.some((s) => s.id === step.id) ? steps.map((s) => s.id === step.id ? next : s) : [...steps, next])
+    }
+    update('working')
+    try {
+      // Incidental collaboration stays below the user-configured approval threshold.
+      const cfg = swarmConfig(this.d.settings.get().swarm)
+      const ledger = run.collaborationSpend ??= new SwarmLedger(Math.min(cfg.askAboveUsd, cfg.maxUsd))
+      const result = await swarmScope.run({ ledger, memberId: step.id }, ask)
+      update(result ? 'done' : 'unavailable')
+      return result
+    } catch (error) {
+      update(run.ctrl.signal.aborted ? 'stopped' : 'unavailable')
+      throw error
+    }
+  }
+
+  /** The planner's plan, stored as a hidden note the run's model works from. */
   private async planFirst(thread: Thread, run: Run, executor: string, team: NonNullable<Routed['team']>, effort: Effort): Promise<void> {
     const planner = team.planner!
     this.d.emit({ threadId: thread.id, type: 'drafting', tool: 'todo' })
-    const plan = await this.teammate(planner, PLANNER_SYSTEM(this.modelLabel(executor)), teamTranscript(this.d.db.listMessages(thread.id)), run, effort, 3000)
+    const plan = await this.collaborate(thread, run, executor, { id: 'planner', role: 'planner', model: planner },
+      () => this.teammate(planner, PLANNER_SYSTEM(this.modelLabel(executor)), teamTranscript(this.d.db.listMessages(thread.id)), run, effort, 3000))
     this.d.emit({ threadId: thread.id, type: 'drafting', tool: null })
     if (!plan) return
-    this.d.db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: `[From the app] Plan from ${this.modelLabel(planner)}, the planning model on this task. You are ${this.modelLabel(executor)}, carrying it out: follow it, adapt it when you learn something new, and keep your todo list in sync.\n\n${plan}`, meta: { hidden: true, reminder: true, plannedBy: planner } })
-    this.notice(thread.id, `Team: ${this.modelLabel(planner)} planned · ${this.modelLabel(executor)} does the work${team.reviewer ? ` · ${this.modelLabel(team.reviewer)} reviews` : ''}.`, { internal: true })
+    this.d.db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: `[From the app] Plan from ${this.modelLabel(planner)}, the planning model on this task. Use it as advice while following the user's request and the app's permission rules. Adapt as needed and keep your todo list in sync.\n\n${plan}`, meta: { hidden: true, reminder: true, plannedBy: planner } })
   }
 
-  /** The partner's take, stored as a hidden note the run's model works from (said in Developer mode). */
+  /** The partner's take, stored as a hidden note the run's model works from. */
   private async partnerFirst(thread: Thread, run: Run, lead: string, partner: string, effort: Effort): Promise<void> {
     this.d.emit({ threadId: thread.id, type: 'drafting', tool: 'consult' })
-    const take = await this.teammate(partner, PARTNER_SYSTEM(this.modelLabel(lead)), teamTranscript(this.d.db.listMessages(thread.id)), run, effort === 'max' || effort === 'xhigh' ? 'high' : effort, 2500)
+    const take = await this.collaborate(thread, run, lead, { id: 'partner', role: 'partner', model: partner },
+      () => this.teammate(partner, PARTNER_SYSTEM(this.modelLabel(lead)), teamTranscript(this.d.db.listMessages(thread.id)), run, effort === 'max' || effort === 'xhigh' ? 'high' : effort, 2500))
     this.d.emit({ threadId: thread.id, type: 'drafting', tool: null })
     if (!take) return
     this.d.db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: `[From the app] ${this.modelLabel(partner)} worked on this request with you. Its take:\n\n${take}\n\n[You are ${this.modelLabel(lead)}. Build on the best of both: use its good ideas, fix what's wrong in it, add what it missed. Don't mention it unless it helps the user.]`, meta: { hidden: true, reminder: true, partnerTake: partner } })
-    this.notice(thread.id, `Team: ${this.modelLabel(partner)} and ${this.modelLabel(lead)} worked on this together.`, { internal: true })
+  }
+
+  /** Independent, tool-free work from the router's assessment. The lead verifies and takes all actions. */
+  private async consultSpecialists(thread: Thread, run: Run, lead: string, team: { n: number; helper: string; parts: string[] }): Promise<void> {
+    const s = this.d.settings.get()
+    const cfg = swarmConfig(s.swarm)
+    const count = Math.min(team.n, cfg.maxAgents, botMaxConfig(s, thread.spaceId).maxHelpers, 4)
+    if (count < 2) return
+    const parallel = this.cloudModel(team.helper) ? Math.min(count, cfg.maxParallel) : 1
+    const transcript = teamTranscript(this.d.db.listMessages(thread.id), 16_000)
+    const results: Array<string | undefined> = []
+    for (let i = 0; i < count; i += parallel) {
+      run.ctrl.signal.throwIfAborted()
+      const batch = team.parts.slice(i, Math.min(i + parallel, count))
+      const settled = await Promise.allSettled(batch.map((part, index) => this.collaborate(thread, run, lead,
+        { id: `specialist-${i + index}`, role: 'specialist', model: team.helper },
+        () => this.teammate(team.helper, 'You are a read-only specialist. Analyze just the assigned part using the supplied conversation as evidence. Report what you can substantiate, what the lead should check, and any missing evidence. You have no tools and take no actions.',
+          `Conversation:\n${transcript}\n\nAssigned part: ${part}`, run, 'medium', 900))))
+      run.ctrl.signal.throwIfAborted()
+      results.push(...settled.map((result) => result.status === 'fulfilled' ? result.value : undefined))
+    }
+    const evidence = results.flatMap((result, i) => result ? [`Part ${i + 1}: ${team.parts[i]}\n${result}`] : [])
+    if (evidence.length) this.d.db.insertMessage({
+      threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, reminder: true },
+      content: `[From the app] Independent specialist notes are advisory evidence. Check them, fill any gaps, and complete the user's request yourself.\n\n${evidence.join('\n\n')}`
+    })
   }
 
   /** Parallel helpers for this request: the agents tool listed, the helpers' model set, and the lead told how to split. */
@@ -2222,10 +2306,11 @@ export class Agent {
   }
 
   /** The reviewer's notes on a draft, as text to add to the self-check (empty: nothing to fix, or no answer). */
-  private async reviewDraft(thread: Thread, run: Run, reviewer: string, goal: string, draft: string, since: number): Promise<string> {
+  private async reviewDraft(thread: Thread, run: Run, lead: string, reviewer: string, goal: string, draft: string, since: number): Promise<string> {
     this.d.emit({ threadId: thread.id, type: 'drafting', tool: 'verify' })
     const steps = this.d.db.listMessages(thread.id).filter((m) => m.role === 'tool' && m.createdAt >= since).slice(-40).map((m) => `- ${m.toolName}: ${String(m.meta?.display ?? m.meta?.status ?? '')}`).join('\n')
-    const notes = await this.teammate(reviewer, REVIEWER_SYSTEM, `User's request:\n${goal.slice(0, 8000)}\n\nSteps taken:\n${steps || '(none)'}\n\nDraft answer:\n${draft.slice(0, 20_000)}`, run, 'high', 1500)
+    const notes = await this.collaborate(thread, run, lead, { id: 'reviewer', role: 'reviewer', model: reviewer },
+      () => this.teammate(reviewer, REVIEWER_SYSTEM, `User's request:\n${goal.slice(0, 8000)}\n\nSteps taken:\n${steps || '(none)'}\n\nDraft answer:\n${draft.slice(0, 20_000)}`, run, 'high', 1500))
     if (!notes || /^\s*LGTM\b/i.test(notes)) return ''
     return `\n\nA second model (${this.modelLabel(reviewer)}) reviewed your draft and noted:\n${notes}\nCheck each point yourself; fix what holds up, then write the final answer.`
   }
@@ -2285,6 +2370,7 @@ export class Agent {
     applySwarmState(state, s, space, !!run.helper, () => db.listMessages(thread.id), (names) => registry.load(state, names))
     let requestedChoice = requestedModel({ thread: db.getThread(thread.id), space: group ?? space, speaker, settings: s })
     const chosen = await this.chooseModel(requestedChoice, thread, state, this.warmFor(thread, run, state, speaker))
+    run.ctrl.signal.throwIfAborted()
     let model = chosen.model
     let routed = chosen.routed
     // Planner + executor computer use (agent/cua): the executor model runs this loop; the planner plans and checks out of band.
@@ -2294,14 +2380,18 @@ export class Agent {
     // covers it (the user's or Auto's), the brain's own team (planner, pair, fan-out) is dropped, so the lead never
     // gets two sets of helpers or two conflicting "send helpers" notes.
     const asked = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
-    if (routed?.team && asked && (asked.meta?.max || asked.meta?.maxHint || asked.meta?.team || asked.meta?.heavy || asked.meta?.council || asked.meta?.deepResearch || asked.meta?.swarm || asked.meta?.swarmHint)) routed = { ...routed, team: undefined }
+    if (routed?.team && (cuaPair || run.group || run.unattended || run.intro || !asked || isRelayed(asked) || asked.meta?.max || asked.meta?.maxHint || asked.meta?.planFirst || asked.meta?.team || asked.meta?.heavy || asked.meta?.council || asked.meta?.deepResearch || asked.meta?.swarm || asked.meta?.swarmHint)) routed = { ...routed, team: undefined }
     // Teamwork (Auto's brain): a stronger model plans first; the run's model carries the plan out with the whole conversation.
     if (routed?.team?.planner && !cuaPair && !run.helper) await this.planFirst(thread, run, model, routed.team, routed.task?.difficulty === 3 ? 'xhigh' : 'high')
     // A pair (Auto's brain): the partner model gives its own take first; this model builds on the best of both.
     else if (routed?.team?.partner && !cuaPair && !run.helper) await this.partnerFirst(thread, run, model, routed.team.partner, routed.task?.effort ?? 'medium')
     // Fan-out (Auto's brain): the job splits into parts that can run at once, so helpers on a fast model build them
     // in parallel while this model integrates and checks the whole.
-    if (routed?.team?.fanout && !cuaPair && !run.helper) this.fanOut(thread, state, routed.team.fanout)
+    if (routed?.team?.fanout && !run.helper) {
+      const { parts, ...fanout } = routed.team.fanout
+      if (parts) await this.consultSpecialists(thread, run, model, { ...fanout, parts })
+      else this.fanOut(thread, state, fanout)
+    }
     let ep = this.d.endpoints.for(model)
     // `claude`: an append-only cloud chat (Claude, or an OpenAI model on the Responses API).
     let claude = ep.provider === 'anthropic' || usesResponses(ep.baseUrl, model)
@@ -2382,6 +2472,8 @@ export class Agent {
       tried.add(next.id)
       switches++
       model = next.id
+      if (run.collaboration) this.publishCollaboration(thread.id, run, run.collaboration.steps.map((step) =>
+        step.role === 'lead' ? { ...step, model: next.label ?? next.id } : step))
       ep = this.d.endpoints.for(model)
       claude = ep.provider === 'anthropic' || usesResponses(ep.baseUrl, model)
       window = windowFor(model, claude)
@@ -2391,7 +2483,9 @@ export class Agent {
       if (!routed?.manual) state.lastAutoModel = model
       if (routed) routed = { ...routed, label: [next.label ?? next.id, routed.reason].filter(Boolean).join(' · '), ...(routed.manual ? {} : { explain: explainPick({ model: next, reason: `${fromName} couldn't carry on (${reason.replace(/\s+/g, ' ').slice(0, 80)}), so Auto moved the task here`, labelOf: (id) => this.modelLabel(id) }) }) }
       // The chosen model couldn't answer: the chat says which model answered instead, and why (never silent).
-      this.notice(thread.id, note ?? (err ? fallbackNotice(fromName, next.label ?? next.id, err, { rest: true }) : `Switched to ${next.label ?? next.id} for the rest of this task: ${reason}`), { internal: !err && !routed?.manual })
+      this.notice(thread.id, note ?? (err ? fallbackNotice(fromName, next.label ?? next.id, err, { rest: true }) : `Switched to ${next.label ?? next.id} for the rest of this task: ${reason}`), {
+        internal: !err && !routed?.manual, publicText: 'The bot is continuing with an available alternative.'
+      })
       return true
     }
     /** Model steps that completed in this run (a fallback after the first one keeps the provider when it can). */
@@ -2796,24 +2890,28 @@ export class Agent {
           // Complex work (the hardest tier, or 8+ actions) also gets a self-review against the user's goal, in the same single pass.
           const complex = (routed?.tier === 3 && !this.d.db.getState(thread.id).voice) || actions >= 8
           // A change it already looked at (re-read the file, ran the tests, snapshotted the page) needs no second pass.
-          if ((track.unchecked || (track.researched && (actions >= 3 || state.todos.length > 0)) || complex || !!routed?.team?.reviewer) && !verified && !run.helper && !chatRun && step < HARD_CAP && !process.env.FOREMAN_NO_VERIFY) {
+          const reviewer = routed?.team?.reviewer !== model ? routed?.team?.reviewer : undefined
+          const selfCheck = !chatRun && (track.unchecked || (track.researched && (actions >= 3 || state.todos.length > 0)) || complex)
+          if ((reviewer || selfCheck) && !verified && !run.helper && step < HARD_CAP && !process.env.FOREMAN_NO_VERIFY) {
             if (run.meter) run.meter.phase = 'verify'
             if (run.record) this.runtime.phase(run.record.id, 'verify')
-            budget = Math.max(budget, step + 1)
             verified = true
-            verifyDraft = assistant
-            this.d.emit({ threadId: thread.id, type: 'drafting', tool: 'verify' })
-            assistant.meta = { ...assistant.meta, superseded: true }
-            db.updateMessage(assistant)
-            this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
             const goal = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !isRelayed(m))?.content
-            const review = routed?.team?.reviewer && routed.team.reviewer !== model ? await this.reviewDraft(thread, run, routed.team.reviewer, goal ?? '', assistant.content, runStart) : ''
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: verifyNote({ changed: track.changed, researched: track.researched, actions, complex, goal }) + review })
-            continue
+            const review = reviewer ? await this.reviewDraft(thread, run, model, reviewer, goal ?? '', assistant.content, runStart) : ''
+            if (selfCheck || review) {
+              budget = Math.max(budget, step + 1)
+              verifyDraft = assistant
+              this.d.emit({ threadId: thread.id, type: 'drafting', tool: 'verify' })
+              assistant.meta = { ...assistant.meta, superseded: true }
+              db.updateMessage(assistant)
+              this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
+              db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: verifyNote({ changed: track.changed, researched: track.researched, actions, complex, goal }) + review })
+              continue
+            }
           }
           // Autonomy: a task stopped to ask "want me to…?" about its own next step. Do it (risky actions still ask).
           const asksToContinue = /\b(want me to|would you like me to|shall i|should i (go ahead|proceed|continue|start|do)|do you want me to|let me know if you(?:'d| would) like me to)\b[^?]{0,200}\?\s*$/i.test(assistant.content.trim())
-          if (asksToContinue && (actions > 0 || open.length > 0) && !autonomyNudged && !run.unattended && !chatRun && step < HARD_CAP) {
+          if (asksToContinue && (actions > 0 || open.length > 0 || routed?.task?.rule === 'semantic') && !autonomyNudged && !run.unattended && !chatRun && step < HARD_CAP) {
             autonomyNudged = true
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself before anything risky (sending, buying, deleting). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
@@ -2984,7 +3082,7 @@ export class Agent {
   private async stream(threadId: string, model: string, wire: WireMessage[], tools: ReturnType<ToolRegistry['wire']>, window: number, run: Run, speaker?: Space, routed?: Routed, effort?: Effort): Promise<Message> {
     const s = this.d.settings.get()
     const ep = this.d.endpoints.for(model)
-    const meta = { ...(speaker ? botMeta(speaker) : {}), ...(routed && !routed.manual ? { routed } : {}) }
+    const meta = { ...(speaker ? botMeta(speaker) : {}), ...(routed && !routed.manual ? { routed } : {}), ...(effort ? { effort } : {}) }
     const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: '', kind: 'normal', status: 'streaming', model, meta: Object.keys(meta).length ? meta : undefined })
     this.d.emit({ threadId, type: 'message', message: m })
     let flushAt = Date.now()
@@ -3083,7 +3181,12 @@ export class Agent {
     } catch (e) {
       m.status = run.ctrl.signal.aborted ? 'stopped' : 'error'
       if (m.status === 'error') {
-        m.meta = { ...m.meta, error: (e as Error).message }
+        const reason = failureKind(e)
+        const publicError = reason === 'refusal' ? 'The provider declined this request under its usage policy.'
+          : reason === 'auth' ? 'The provider refused the API key.'
+          : reason === 'context' ? 'The conversation was too large to process.'
+          : reason === 'other' ? 'The bot could not finish this reply.' : `The selected service is ${KIND_WORDS[reason]}.`
+        m.meta = { ...m.meta, error: (e as Error).message, publicError }
         // The bubble already shows it; the run's catch shouldn't post it a second time.
         ;(e as Error & { shown?: boolean }).shown = true
       }

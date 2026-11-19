@@ -1,4 +1,4 @@
-import { lazy, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { autoLabel, isAutoModel } from '@shared/model-picker'
 import type { BrowserState, ChatEvent, EffortChoice, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
 import { api } from './api'
@@ -20,7 +20,7 @@ import { toast, Toasts } from './lib/toast'
 import { VaultAuthDialog } from './components/VaultAuthDialog'
 import { Speaker } from './lib/audio'
 import { useAttention } from './lib/attention'
-import { DevMode } from './lib/dev-mode'
+import { DevMode, ModelDetails } from './lib/dev-mode'
 import { dividerKind, newestAt, newestReplyAt } from '@shared/read-state'
 // Split chunks (src/renderer/src/lazy.tsx): loaded on idle after the first paint, opened from there.
 import { BotDetails, BotEditor, ConnectApps, Lazy, Onboarding, preloadSurfaces, Scheduled, SettingsModal, VoiceMode } from './lazy'
@@ -596,14 +596,17 @@ export function App() {
     }, 0))
   }, [painted])
 
+  const isBot = !!space && !space.isMain && space.kind !== 'project'
+  const dev = !!settings?.advanced.devMode
+  const showModelThinking = isBot ? settings?.advanced.showBotModelThinking === true : dev
+  const modelDetails = useMemo(() => ({ show: showModelThinking, botChat: isBot }), [showModelThinking, isBot])
   if (!settings) return null
 
   // A bot chat with nothing picked routes as Auto (the app default only when that is an Auto variant).
-  const model = thread?.model ?? draft.model ?? (space && !space.isMain && space.kind !== 'project' && !isAutoModel(settings.defaultModel) ? 'auto' : settings.defaultModel)
+  const model = thread?.model ?? draft.model ?? (isBot && !isAutoModel(settings.defaultModel) ? 'auto' : settings.defaultModel)
   const mode: PermissionMode = thread?.permissionMode ?? draft.mode ?? (space && settings.botModes?.[space.id]) ?? settings.defaultMode ?? 'auto'
   const isRunning = !!thread && running.has(thread.id)
   const question = pending.find((p) => p.kind === 'question' || p.kind === 'questions' || p.kind === 'plan')
-  const isBot = !!space && !space.isMain && space.kind !== 'project'
   const isProject = space?.kind === 'project'
   /** Whose chat this is: the bot, group or project; plain chats belong to SahilBot itself. */
   const chatBot = isBot || isProject ? space : main
@@ -691,6 +694,7 @@ export function App() {
       mode={mode}
       allowBypass={!!settings.advanced.allowBypass}
       autoBot={isBot}
+      showModelThinking={!isBot || showModelThinking}
       onMode={(m) => {
         const apply = (): void => { if (thread) void patchThread({ permissionMode: m }).catch((e: Error) => toast(e.message, 'error')); else setDraft((d) => ({ ...d, mode: m })) }
         // Bypass asks once (the dialog below saves the answer); after that it's one click like the others.
@@ -742,10 +746,10 @@ export function App() {
   const needThreads = new Set(Object.keys(needs))
   const needSpaces = new Set([...Object.keys(needs).map((t) => runSpaces[t] ?? (t === thread?.id ? thread.spaceId : chats.find((c) => c.id === t)?.spaceId ?? needSpaceOf[t] ?? '')).filter(Boolean), ...queuedBots])
 
-  const dev = !!settings.advanced.devMode
   return (
     <DevMode.Provider value={dev}>
-    <div className={`app${dev ? ' dev' : ''}`}>
+    <ModelDetails.Provider value={modelDetails}>
+    <div className={`app${dev ? ' dev' : ''}${showModelThinking ? ' model-details' : ''}`}>
       <Toasts />
       {/* The secrets vault's unlock / confirm dialog: main asks, this only shows it. */}
       <VaultAuthDialog />
@@ -763,7 +767,7 @@ export function App() {
         onSearch={() => setPalette(true)}
         view={view}
         onView={(v) => { setView(v); setThread(null) }}
-        modelLabel={`${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}`}
+        modelLabel={showModelThinking ? `${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}` : undefined}
         onCustomize={(s) => setEditor({ space: s, mode: s.kind })}
         onChanged={() => void refreshSpaces().then((sp) => {
           if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain()
@@ -910,7 +914,7 @@ export function App() {
       ) : panel && panel !== 'details' && (
         <RightPanel tab={panel} onTab={setPanel} hidden={modal} messages={messages} file={file}
           onOpenFile={openFile} browserState={browser} onClose={() => setPanel(null)} threadId={thread?.id ?? null}
-          running={isRunning} progress={prog ? { used: prog.used, window: prog.window, model: (prog.routed as { label?: string } | undefined)?.label ?? prog.model, actions: prog.actions } : undefined}
+          running={isRunning} progress={prog ? { used: prog.used, window: prog.window, model: !isBot || showModelThinking ? (prog.routed as { label?: string } | undefined)?.label ?? prog.model : undefined, actions: prog.actions } : undefined}
           stocks={!!chatBot && !chatBot.isMain && /stock|market|invest|portfolio/i.test(chatBot.name)}
           docId={docId} onDocId={setDocId} botColor={botColor} botName={chatBot?.name}
           onAsk={(text, title) => { composer.current?.insert(`About this part of “${title}”:\n> ${text.replace(/\s+/g, ' ').slice(0, 800)}\n`); composer.current?.focus() }} />
@@ -960,6 +964,7 @@ export function App() {
         </Lazy>
       )}
     </div>
+    </ModelDetails.Provider>
     </DevMode.Provider>
   )
 }

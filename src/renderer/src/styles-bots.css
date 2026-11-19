@@ -191,8 +191,7 @@
 .chat-root .row.ai:hover .ai-foot .msg-actions,
 .chat-root .row.ai .ai-foot .msg-actions:focus-within,
 .chat-root .row.ai .ai-foot .msg-actions.pinned { opacity: 1; }
-.chat-root .ai-foot .routed { margin: 0 0 0 2px; opacity: 0; transition: opacity .14s ease-out; white-space: nowrap; }
-.chat-root .row.ai:hover .ai-foot .routed { opacity: 1; }
+.reply-model-details { margin: 4px 12px 0; font-size: 11.5px; color: var(--text-2); overflow-wrap: anywhere; }
 .chat-root .ai-foot .icon-btn { width: 28px; height: 28px; border-radius: 50%; }
 .chat-root .row.me .msg-actions .icon-btn { width: 28px; height: 28px; border-radius: 50%; color: var(--text-3); }
 .chat-root .row.me .msg-actions .icon-btn:hover { color: var(--text); }

@@ -149,12 +149,12 @@ describe('model fallback', () => {
   test('three invalid tool calls in a row from a local model Auto picked hand the run to a stronger model', async () => {
     const h = harness([model('model-a', 2), model('model-b', 3)])
     const bad = { toolCalls: [call('zzqqxx_nothing', {})], delay: 0 }
-    llm.script.push(bad, bad, bad, { content: 'Done properly.', delay: 0 })
+    llm.script.push({ content: 'invalid routing response', delay: 0 }, bad, bad, bad, { content: 'Done properly.', delay: 0 })
     // Auto's own pick (a model picked by name is never swapped for this: tests/unit/manual-choices.test.ts).
     h.settings.defaultModel = 'auto'
     const t = h.thread(undefined, null)
     expect(await h.run(t, 'do it')).toBe('finished')
-    expect(llm.requests.map((r) => r.model)).toEqual(['model-a', 'model-a', 'model-a', 'model-b'])
+    expect(llm.requests.map((r) => r.model)).toEqual(['model-a', 'model-a', 'model-a', 'model-a', 'model-b'])
     expect(h.db.listMessages(t.id).find((m) => m.kind === 'notice')?.content).toMatch(/MODEL-A kept making invalid tool calls/)
   })
 

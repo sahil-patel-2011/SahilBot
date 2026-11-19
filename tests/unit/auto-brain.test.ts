@@ -227,9 +227,67 @@ describe('the brain in the agent loop', () => {
     const h = harness([...ALL, local])
     const t = h.thread()
     h.db.updateThread(t.id, { model: 'auto:local' })
-    llm.script.push({ content: 'Local answer.', delay: 0 })
+    llm.script.push(
+      { content: JSON.stringify(answer({ model: local.id, category: 'chat', kind: 'chat', difficulty: 2,
+        assessment: { goal: 'Explain the architecture', work: 'answer', complexity: 'multi-step', impact: 'routine', deliverable: false, parts: [] } })), delay: 0 },
+      { content: 'Local answer.', delay: 0 }
+    )
     expect(await h.run(t, 'Explain this private project architecture and suggest improvements')).toBe('finished')
-    expect(llm.requests.map((r) => r.model)).toEqual([local.id])
+    expect(llm.requests.map((r) => r.model)).toEqual([local.id, local.id])
+  })
+
+  test('a semantic reading overrules incidental action words and keeps the reply solo', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness(ALL)
+    const t = h.thread()
+    llm.script.push(
+      { content: JSON.stringify(answer({ model: HAIKU.id, category: 'writing', kind: 'chat', difficulty: 1, effort: 'low',
+        assessment: { goal: 'Explain the meaning of a sentence', work: 'answer', complexity: 'direct', impact: 'routine', deliverable: false, parts: [] } })), delay: 0 },
+      { content: 'It asks someone to remove a directory.', delay: 0 }
+    )
+    expect(await h.run(t, 'What does the phrase "delete the project folder and rebuild the app" mean?')).toBe('finished')
+    expect(llm.requests.map((r) => r.model)).toEqual([LUNA.id, HAIKU.id])
+    const reply = h.db.listMessages(t.id).find((m) => m.role === 'assistant' && m.kind === 'normal')
+    expect(reply?.meta?.routed).toMatchObject({ task: { kind: 'chat', difficulty: 1, rule: 'semantic' } })
+  })
+
+  test('Bots automatically dispatch independent specialists and finish with their evidence', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness([...ALL, SOL])
+    const bot = h.db.createSpace('Operations', '#000000')
+    const t = h.db.createThread(bot.id, 'auto', null)
+    llm.script.push(
+      { content: JSON.stringify(answer({ model: OPUS.id, category: 'agent-tools', fanout: 2, helper: SOL.id,
+        assessment: { goal: 'Prepare a handover', work: 'workflow', complexity: 'complex', impact: 'routine', deliverable: true, parts: ['Check the timeline', 'Check ongoing obligations'] } })), delay: 0 },
+      { content: 'Timeline evidence.', delay: 0 },
+      { content: 'Obligations evidence.', delay: 0 },
+      { content: 'The handover is ready.', delay: 0 }
+    )
+    expect(await h.run(t, 'Put together what the next person needs to take over these commitments.')).toBe('finished')
+    expect(llm.requests.map((r) => r.model)).toEqual([LUNA.id, SOL.id, SOL.id, OPUS.id])
+    expect(JSON.stringify(llm.requests.at(-1)?.messages)).toContain('Timeline evidence.')
+    expect(JSON.stringify(llm.requests.at(-1)?.messages)).toContain('Obligations evidence.')
+    const steps = h.db.listMessages(t.id).find((m) => m.meta?.collaboration)?.meta?.collaboration
+    expect(steps).toMatchObject([{ role: 'lead', status: 'done' }, { role: 'specialist', status: 'done' }, { role: 'specialist', status: 'done' }])
+  })
+
+  test('the lead finishes if a different-provider collaborator is unavailable', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const lead = { ...HAIKU, provider: 'anthropic' as const }
+    const peer = { ...LUNA, provider: 'openai' as const }
+    const h = harness([lead, peer])
+    const t = h.thread()
+    llm.script.push(
+      { content: JSON.stringify(answer({ model: lead.id, category: 'writing', kind: 'chat', difficulty: 1, effort: 'low', team: 'pair', partner: lead.id,
+        assessment: { goal: 'Suggest a name', work: 'answer', complexity: 'direct', impact: 'routine', deliverable: false, parts: [] } })), delay: 0 },
+      { status: 400, errorMessage: 'Temporarily unavailable' },
+      { content: 'Try Hearth and Grain.', delay: 0 }
+    )
+    expect(await h.run(t, 'What would you call a shop that sells sourdough in the morning?')).toBe('finished')
+    expect(llm.requests.map((r) => r.model)).toEqual([peer.id, peer.id, lead.id])
+    expect(h.db.listMessages(t.id).find((m) => m.meta?.collaboration)?.meta?.collaboration).toMatchObject([
+      { model: lead.id, status: 'done' }, { model: peer.id, status: 'unavailable' }
+    ])
   })
   test('Luna reads the request, Fable plans, Opus does the work with the plan and the whole conversation', async () => {
     process.env.FOREMAN_NO_VERIFY = '1'
@@ -302,7 +360,8 @@ describe('the brain in the agent loop', () => {
     process.env.FOREMAN_NO_VERIFY = '1'
     const h = harness(ALL)
     const t = h.thread()
-    llm.script.push({ content: JSON.stringify(answer({ model: OPUS.id, why: 'late read' })), delay: 4600 }, { content: 'Done by the rules\' pick.', delay: 0 })
+    const read = JSON.stringify(answer({ model: OPUS.id, why: 'late read' })).replace('late read', 'late\\u0020read')
+    llm.script.push({ content: read, delay: 4600 }, { content: 'Done by the rules\' pick.', delay: 0 })
     await h.run(t, 'Refactor the payment module and add retries with tests')
     const user = h.db.listMessages(t.id).find((m) => m.role === 'user' && !m.meta?.hidden)!
     await expect.poll(() => (h.db.getMessage(user.id)?.meta?.autoRead as BrainAnswer | undefined)?.why, { timeout: 3000 }).toBe('late read')
@@ -388,27 +447,27 @@ describe('fan-out', () => {
 describe('reasoning together', () => {
   test('debate only for hard thinking, with two models to sit, never on a tight budget', () => {
     const l = { allowed: ALL, difficulty: 3 as const, kind: 'chat' as const, fableOn: false }
-    expect(teamFor(answer({ team: 'debate' }), OPUS, l)).toEqual({ debate: true })
+    expect(teamFor(answer({ team: 'debate', partner: ASTRA.id }), OPUS, l)).toEqual({ partner: ASTRA })
     expect(teamFor(answer({ team: 'debate' }), OPUS, { ...l, difficulty: 1 })).toEqual({})
     expect(teamFor(answer({ team: 'debate' }), OPUS, { ...l, allowed: [OPUS] })).toEqual({})
     expect(teamFor(answer({ team: 'debate' }), OPUS, { ...l, budgetTight: true })).toEqual({})
   })
 
-  test('in the app: the brain asks for a debate and a Council of models reasons it out', async () => {
+  test('the auto debate gets an independent view and finishes without opening Council', async () => {
     process.env.FOREMAN_NO_VERIFY = '1'
     const h = harness(ALL)
     const t = h.thread()
-    llm.script.push({ content: JSON.stringify(answer({ category: 'chat', kind: 'chat', difficulty: 3, effort: 'high', team: 'debate', why: 'a real trade-off' })), delay: 0 })
-    const done = h.run(t, 'Should my startup build on Postgres or DynamoDB for the next 3 years? Think through the trade-offs.')
-    // The council's members from two providers take part (this fixture can't script a whole council: stop it there).
-    await expect.poll(() => new Set(llm.requests.slice(1).map((r) => r.model)).size, { timeout: 10_000 }).toBeGreaterThanOrEqual(2)
-    h.agent.stop(t.id)
-    await done
-    expect(llm.requests[0].model).toBe('gpt-6-luna')
-    expect(new Set(llm.requests.slice(1).map((r) => r.model))).toEqual(new Set(['gpt-6.2-astra', 'claude-opus-5-5']))
-    expect(h.db.listMessages(t.id).some((m) => m.kind === 'notice' && /reasoning this out together/.test(m.content))).toBe(true)
-    expect(llm.requests.filter((r) => JSON.stringify(r.messages).includes('You are Auto, the router')).length).toBe(1)
-  }, 30_000)
+    llm.script.push(
+      { content: JSON.stringify(answer({ category: 'chat', kind: 'chat', difficulty: 3, effort: 'high', team: 'debate', partner: ASTRA.id, why: 'a real trade-off' })), delay: 0 },
+      { content: 'Consider access patterns and operational overhead.', delay: 0 },
+      { content: 'I would start with Postgres given these constraints.', delay: 0 }
+    )
+    expect(await h.run(t, 'Should my startup build on Postgres or DynamoDB for the next 3 years? Think through the trade-offs.')).toBe('finished')
+    expect(llm.requests.map((r) => r.model)).toEqual([LUNA.id, ASTRA.id, OPUS.id])
+    expect(h.db.listMessages(t.id).find((m) => m.meta?.collaboration)?.meta?.collaboration).toMatchObject([
+      { model: OPUS.id, status: 'done' }, { model: ASTRA.id, status: 'done' }
+    ])
+  })
 })
 
 describe('pairs at every level', () => {

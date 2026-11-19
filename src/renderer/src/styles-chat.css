@@ -64,8 +64,9 @@
 .gallery-item img { display: block; max-width: 320px; max-height: 320px; object-fit: cover; }
 .gallery-wait { display: block; width: 240px; height: 240px; }
 
-/* Costs, tokens and model names: Developer mode only. */
-.app:not(.dev) .dev-only, .app:not(.dev) .tr-num, .app:not(.dev) .tr-model, .app:not(.dev) .heavy-cost { display: none !important; }
+/* Model names can be shown separately from developer diagnostics. */
+.app:not(.dev) .dev-only, .app:not(.dev) .tr-num, .app:not(.dev) .heavy-cost,
+.app:not(.model-details) .tr-model { display: none !important; }
 
 /* The composer: one rounded box. */
 .chat-root .composer { border-radius: 24px; }

@@ -48,6 +48,7 @@ export interface PickerProps {
   allowBypass?: boolean
   /** A bot or group chat: Auto reads "chosen by the bot" (still overridable). */
   autoBot?: boolean
+  showModelThinking?: boolean
 }
 
 const ITEMS = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
@@ -80,10 +81,12 @@ export function ComposerPicker(p: PickerProps) {
   const modes = MODES
   const mode = MODES.find((m) => m.id === (p.mode === 'autonomous' ? 'auto' : p.mode)) ?? MODES[1]
   // Model and thinking are independent: either can be Auto or picked, and changed back at any time.
-  const hasThinking = !!(p.thinking && p.onThinking)
+  const permissionsOnly = p.autoBot && p.showModelThinking === false
+  const hasThinking = !permissionsOnly && !!(p.thinking && p.onThinking)
   const levels = thinkingLevels(p.model)
   const thinkingShown = THINKING.filter((t) => levels.includes(t.id) || t.id === p.thinking)
-  const label = pickerLabel({ model: p.model, models: usable, thinking: hasThinking ? p.thinking : undefined, mode: p.mode })
+  const label = permissionsOnly ? mode.id === 'auto' ? 'Autonomous' : `Permissions · ${mode.label}`
+    : pickerLabel({ model: p.model, models: usable, thinking: hasThinking ? p.thinking : undefined, mode: p.mode })
   const autoVariants = AUTO_ENTRIES.filter((e) => e.id !== 'auto' && (e.id !== 'auto:local' || !list?.localOff))
   const inMore = p.model !== 'auto' && (more.some((m) => m.id === p.model) || autoVariants.some((e) => e.id === p.model))
   const toGet = toDownload(list).length
@@ -152,7 +155,7 @@ export function ComposerPicker(p: PickerProps) {
       items[next].focus()
       return
     }
-    if (/^[1-4]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (!permissionsOnly && /^[1-4]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) {
       const m = top[Number(e.key) - 1]
       if (m && runnable(m)) { e.preventDefault(); pickModel(m.id, true) }
     }
@@ -229,8 +232,8 @@ export function ComposerPicker(p: PickerProps) {
   const check = (on: boolean): ReactNode => <span className="check cpick-check" aria-hidden>{on && <I.Check size={14} />}</span>
 
   const autoWhy = autoUnavailableReason('auto', list)
-  const flyout = (): ReactNode => {
-    if (sub === 'thinking') return (
+  const flyout = (section = sub): ReactNode => {
+    if (section === 'thinking') return (
       <>
         <div className="menu-head">Thinking · a level you pick is used as is</div>
         {thinkingShown.map((t) => (
@@ -243,20 +246,20 @@ export function ComposerPicker(p: PickerProps) {
         {levels.length < THINKING.length && <div className="menu-foot">This model offers {levels.length > 1 ? 'only these levels' : 'no thinking levels'}.</div>}
       </>
     )
-    if (sub === 'perm') return (
+    if (section === 'perm') return (
       <>
         <div className="menu-head">Permissions · this chat</div>
         {modes.map((m) => (
-          <button key={m.id} className="menu-item cpick-row" role="menuitemradio" aria-checked={m.id === p.mode}
+          <button key={m.id} className="menu-item cpick-row" role="menuitemradio" aria-checked={m.id === mode.id}
             onClick={(e) => { p.onMode(m.id); close(e.detail === 0) }} data-testid={`mode-${m.id}`}>
-            {check(m.id === p.mode)}
+            {check(m.id === mode.id)}
             <span className="cpick-text">{m.id === 'bypass' ? <span className="ui-text-danger">{m.label}</span> : m.label}<span className="sub">{m.sub}</span></span>
           </button>
         ))}
         <div className="menu-foot">Purchases, passwords and one-time codes always need you, at every level.</div>
       </>
     )
-    if (sub === 'more') {
+    if (section === 'more') {
       if (!list) return <div className="menu-head">Loading models…</div>
       const groups = [...new Set(more.map((m) => m.providerName))]
       return (
@@ -310,8 +313,8 @@ export function ComposerPicker(p: PickerProps) {
 
   return (
     <div ref={wrap} className={`pick under-pick cpick${p.mode === 'bypass' ? ' bypass' : ''}${open ? ' is-open' : ''}`}>
-      <button ref={btn} className="cpick-btn" data-testid="model-picker" aria-haspopup="menu" aria-expanded={open}
-        title={`${label} · model${hasThinking ? ', thinking' : ''} and permissions for this chat`}
+      <button ref={btn} className="cpick-btn" data-testid={permissionsOnly ? 'bot-permissions-picker' : 'model-picker'} aria-haspopup="menu" aria-expanded={open}
+        title={permissionsOnly ? 'Permissions for this bot chat' : `${label} · model${hasThinking ? ', thinking' : ''} and permissions for this chat`}
         onClick={(e) => {
           if (open) { close(); return }
           pendingFocus.current = e.detail === 0 ? 'item' : 'menu'
@@ -322,8 +325,8 @@ export function ComposerPicker(p: PickerProps) {
       </button>
       {open && (
         <div ref={menu} className="menu right cpick-menu model-menu" tabIndex={-1} data-testid="picker-menu">
-          <div ref={main} className="cpick-main" role="menu" aria-label="Model, thinking and permissions">
-            <>
+          <div ref={main} className="cpick-main" role="menu" aria-label={permissionsOnly ? 'Permissions' : 'Model, thinking and permissions'}>
+            {!permissionsOnly && <>
                 <button className={`menu-item cpick-row cpick-model${autoWhy ? ' unavailable' : ''}`} role="menuitemradio" aria-checked={p.model === 'auto'}
                   onMouseEnter={plainHover} onClick={(e) => pickModel('auto', e.detail === 0)} data-testid="model-option" data-auto="auto">
                   {check(p.model === 'auto')}
@@ -354,9 +357,9 @@ export function ComposerPicker(p: PickerProps) {
                 )}
                 <div className="menu-sep" />
                 {subRow('more', { testId: 'more-models', icon: <I.Cpu size={14} />, label: 'More models', value: inMore ? shortModelName(p.model, current) : undefined })}
-            </>
-            <div className="menu-sep" />
-            {subRow('perm', {
+                <div className="menu-sep" />
+            </>}
+            {permissionsOnly ? flyout('perm') : subRow('perm', {
               testId: 'mode-picker', icon: permIcon, label: 'Permissions',
               value: <span className={p.mode === 'bypass' ? 'ui-text-danger' : undefined}>{mode.label}</span>,
               title: 'Permissions: how much SahilBot does without asking'

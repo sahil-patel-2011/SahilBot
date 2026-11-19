@@ -113,7 +113,7 @@ export function autoVariant(id: string | null | undefined): AutoVariant | undefi
 }
 export const isAuto = (id: string | null | undefined): boolean => autoVariant(id) !== undefined
 
-const remoteModel = (m: ModelInfo): boolean => m.note === 'remote' || m.note === 'added by you' || m.provider === 'anthropic' || m.provider === 'openai' || m.provider === 'openrouter'
+const remoteModel = (m: ModelInfo): boolean => m.note === 'remote' || m.note === 'added by you' || m.provider === 'anthropic' || m.provider === 'openai' || m.provider === 'openrouter' || m.provider === 'chatgpt' || m.provider === 'xai'
 
 /** The models a variant may route among (from what Auto may use right now). */
 export function autoPool(variant: AutoVariant, usable: ModelInfo[]): ModelInfo[] {

@@ -71,6 +71,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'provider-switches', page: 'models', title: 'Turn a provider off (keeps its key)', words: 'provider off disable pause claude anthropic openai gpt grok xai switch toggle slider keep key', keys: ['disabledProviders'] },
   { anchor: 'chatgpt-plan', page: 'models', title: 'ChatGPT plan (via Codex)', words: 'chatgpt plan subscription codex sign in plus pro' },
   { anchor: 'auto-prefers', page: 'models', title: 'Auto prefers', words: 'auto routing best balanced cheapest cost quality', keys: ['cloud.autoPrefers'] },
+  { anchor: 'show-bot-model-thinking', page: 'models', title: 'Show model and thinking', words: 'bots group chat hide show model reasoning effort collaboration names', keys: ['advanced.showBotModelThinking'] },
   { anchor: 'monthly-limit', page: 'models', title: 'Monthly spending limit', words: 'budget cap spend spending limit money cost unlimited none dollars', keys: ['cloudBudgetUsd', 'spendingMode'] },
   { anchor: 'local-models', page: 'models', title: 'Local models', words: 'ollama lm studio local offline private download free', keys: ['local.enabled'] },
   { anchor: 'default-model', page: 'models', title: 'Model for new chats', words: 'default model auto picker', keys: ['defaultModel'], advanced: true },
