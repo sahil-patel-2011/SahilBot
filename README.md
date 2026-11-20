@@ -2,6 +2,24 @@
 
 A private, local-first AI assistant for your Mac. SahilBot chats, works as an agent with tools (files, documents, the built-in browser, your Mac's apps, connectors), talks with you by voice, and runs on models on your own Mac through Ollama or LM Studio. You can also add Claude, ChatGPT or OpenRouter with your own API key.
 
+## Quick install
+
+Open **Terminal** on your Mac (⌘-Space, type *Terminal*, press Return), paste this, and press Return:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sahil-patel-2011/SahilBot/main/install.sh | bash
+```
+
+That's it. It downloads the newest SahilBot, puts it in Applications, and opens it, with no "can't be opened" warning and no password. Paste the same command again any time to update. You can [read the script](install.sh) first.
+
+**Already downloaded the DMG?** Drag SahilBot to Applications, then paste this in Terminal once, and it opens normally from then on:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/SahilBot.app
+```
+
+(Put it in the Applications folder inside your home folder? Use `~/Applications/SahilBot.app` instead.)
+
 ## Download
 
 <p>
@@ -26,7 +44,7 @@ This link always gets the newest build. Every push to `main` builds and publishe
    - No admin rights? Drag it to the **Applications** folder inside your home folder (`~/Applications`; create it if it isn't there). Spotlight and Launchpad find it there too.
 2. Open SahilBot.
 
-**First launch, when the build isn't notarized.** Builds made without an Apple Developer ID are signed ad hoc, so macOS blocks the first open. The release notes say which kind each build is. To open it:
+**First launch, when the build isn't notarized.** Builds made without an Apple Developer ID are signed ad hoc, so macOS blocks the first open of a DMG or zip downloaded in a browser. The release notes say which kind each build is. The [Quick install](#quick-install) command avoids this. Otherwise, to open it:
 
 - macOS 13–14: right-click (or Control-click) SahilBot in Applications → **Open** → **Open**.
 - macOS 15 or later: double-click it once, close the warning, then go to System Settings → Privacy & Security and click **Open Anyway** next to SahilBot.
