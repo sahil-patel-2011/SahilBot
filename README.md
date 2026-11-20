@@ -12,7 +12,7 @@ https://github.com/sahil-patel-2011/SahilBot/releases/latest/download/SahilBot-m
 
 This link always gets the newest build. Every push to `main` builds and publishes one ([Releases](https://github.com/sahil-patel-2011/SahilBot/releases) keeps every earlier build). A `.zip` of the app is there too: [SahilBot-mac-arm64.zip](https://github.com/sahil-patel-2011/SahilBot/releases/latest/download/SahilBot-mac-arm64.zip).
 
-> **The repository is private.** Only people added as collaborators can download, and they need to be signed in to GitHub in the browser. To share the app more widely, make the repository public or attach the DMG somewhere else.
+> **Anyone can download it.** The repository is public, so the link works without a GitHub account or sign-in. Share it with anyone who has an Apple Silicon Mac.
 
 ## Requirements
 
