@@ -4,9 +4,10 @@ import { join } from 'node:path'
 import type { ModelInfo, Tier } from '@shared/types'
 import type { ChatgptPlanStatus, PlanLimitWindow, PlanModelEntry } from '@shared/chatgpt-plan'
 import { openaiInfo, openaiRank } from '../openai-models'
-import { codexEnv, codexVersion, run, findCodex, loginStatus, userMcpServers, type LoginMode, type McpServerOff } from './detect'
+import { candidatePaths, codexEnv, codexVersion, run, findCodex, loginStatus, userMcpServers, type LoginMode, type McpServerOff } from './detect'
 import { CODEX_INSTALL_URL, PLAN_DEFAULT, PLAN_PROVIDER, PLAN_PROVIDER_NAME, isPlanModel, planModelId } from './ids'
 import { AppServer } from './rpc'
+import { INSTALL_COMMANDS, installScript, openInTerminal, shellQuote } from '../cli-install'
 
 // The ChatGPT plan provider's state: whether Codex is installed and signed in with ChatGPT, the models
 // Codex offers that plan, its usage limits, and the user's two choices (on/off, "use my plan first").
@@ -453,6 +454,20 @@ export class ChatgptPlan {
     } catch (e) {
       return { ok: false, error: (e as Error).message }
     }
+  }
+
+  /**
+   * Opens Terminal: installs Codex with OpenAI's official installer (if it isn't here), then runs
+   * `codex login`, OpenAI's own ChatGPT sign-in. Settings checks again while it waits.
+   */
+  async installInTerminal(): Promise<{ ok: boolean; error?: string }> {
+    if (!this.bin) await this.refresh()
+    this.setPrefs({ enabled: true })
+    const find = this.bin ? `BIN=${shellQuote(this.bin)}`
+      : `export PATH="$HOME/.local/bin:$PATH"; BIN=""; for c in ${candidatePaths().map(shellQuote).join(' ')}; do [ -x "$c" ] && { BIN="$c"; break; }; done; [ -n "$BIN" ] || BIN="$(command -v codex)"`
+    return openInTerminal(this.dir || '/tmp', 'codex-install.command', installScript({
+      name: 'Codex', install: this.bin ? undefined : INSTALL_COMMANDS.codex, find, signIn: '"$BIN" login'
+    }))
   }
 
   disconnect(): void {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
@@ -9,7 +9,7 @@ let authenticated = false
 const lines = createInterface({ input: process.stdin })
 for await (const line of lines) {
   const { id, method, params, jsonrpc } = JSON.parse(line)
-  appendFileSync(join(process.env.GROK_HOME, 'requests.ndjson'), JSON.stringify({ method, sessionId: params?.sessionId }) + '\n')
+  appendFileSync(join(process.env.GROK_HOME, 'requests.ndjson'), JSON.stringify({ method, sessionId: params?.sessionId, prompt: params?.prompt?.[0]?.text }) + '\n')
   const error = (message) => send({ id, error: { code: -32000, message } })
   const result = (value) => send({ id, result: value })
   if (jsonrpc !== '2.0' || process.env.XAI_API_KEY || process.env.GROK_DEPLOYMENT_KEY || !process.argv.includes('strict') || !process.argv.includes('--disable-web-search')) {
@@ -20,9 +20,14 @@ for await (const line of lines) {
     authenticated = true
     result({})
   } else if (method === 'session/new') {
-    if (authenticated && !params.mcpServers.length) result({ sessionId: 'isolated' })
+    // Each new session gets its own ID, as the real CLI's do; the IDs issued so far persist across processes.
+    const issued = join(process.env.GROK_HOME, 'sessions.json')
+    const ids = existsSync(issued) ? JSON.parse(readFileSync(issued, 'utf8')) : []
+    const sessionId = ids.length ? `isolated-${ids.length + 1}` : 'isolated'
+    writeFileSync(issued, JSON.stringify([...ids, sessionId]))
+    if (authenticated && !params.mcpServers.length) result({ sessionId })
     else error('Authentication required')
-  } else if (method === 'session/load' && authenticated && params.sessionId === 'isolated') {
+  } else if (method === 'session/load' && authenticated && existsSync(join(process.env.GROK_HOME, 'sessions.json')) && JSON.parse(readFileSync(join(process.env.GROK_HOME, 'sessions.json'), 'utf8')).includes(params.sessionId)) {
     send({ method: 'session/update', params: { update: { sessionUpdate: 'tool_call' } } })
     result({})
   } else if (method === 'session/prompt') {

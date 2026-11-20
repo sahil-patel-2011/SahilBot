@@ -16,5 +16,9 @@ export interface GrokPlanApi {
   status(refresh?: boolean): Promise<GrokPlanStatus>
   configure(patch: { enabled?: boolean; preferSubscriptions?: boolean }): Promise<GrokPlanStatus>
   signIn(): Promise<void>
+  /** Opens Terminal: xAI's official installer (when Grok Build isn't here), then Grok Build's sign-in. */
+  installInTerminal(): Promise<{ ok: boolean; error?: string }>
+  /** Sends one real message through the subscription (setup's last check). */
+  testChat(): Promise<{ ok: boolean; reply?: string; error?: string }>
   openInstallGuide(): Promise<void>
 }

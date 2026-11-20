@@ -210,6 +210,39 @@ describe('streaming through Codex', () => {
     expect(resumed).not.toContain('Internal reference alpha')
   })
 
+  test('after a model switch, the resumed Codex thread gets the other model\'s replies, not just the user\'s messages', async () => {
+    await connect()
+    const first: WireMessage[] = [{ role: 'system', content: 'You are SahilBot.' }, { role: 'user', content: 'Plan the launch for Acme' }]
+    await collect(streamChat(req(first, { conversationKey: 'S' })))
+    await closeAll()
+    const switched: WireMessage[] = [...first, { role: 'assistant', content: 'Hello from Codex: Plan the launch for Acme' }, { role: 'user', content: 'What budget fits?' },
+      { role: 'assistant', content: 'A budget of 5000 dollars fits (from Grok).' }, { role: 'user', content: 'What is the next step?' }]
+    await collect(streamChat(req(switched, { conversationKey: 'S' })))
+    expect(logs().filter((x) => x.event === 'thread_resume')).toHaveLength(1)
+    const resumed = logs().filter((x) => x.event === 'turn_start').at(-1)!.text as string
+    expect(resumed).toContain('A budget of 5000 dollars fits (from Grok).')
+    expect(resumed).toContain('What budget fits?')
+    expect(resumed).toMatch(/latest message:\nWhat is the next step\?$/)
+    expect(resumed).not.toContain('Plan the launch for Acme')
+  })
+
+  test('a compacted history starts a new Codex thread instead of appending the whole chat to the old one', async () => {
+    await connect()
+    const first: WireMessage[] = [{ role: 'system', content: 'You are SahilBot.' }, { role: 'user', content: 'Old detail zeta' }]
+    await collect(streamChat(req(first, { conversationKey: 'D' })))
+    const compacted: WireMessage[] = [first[0], { role: 'user', content: 'Summary of the earlier chat' }, { role: 'user', content: 'Continue' }]
+    await collect(streamChat(req(compacted, { conversationKey: 'D' })))
+    await closeAll()
+    await collect(streamChat(req([...compacted, { role: 'assistant', content: 'Hello from Codex: Continue' }, { role: 'user', content: 'More' }], { conversationKey: 'D' })))
+    // Two threads: the original and the one started from the compacted record. The third request resumes the second.
+    expect(logs().filter((x) => x.event === 'thread_start')).toHaveLength(2)
+    expect(logs().filter((x) => x.event === 'thread_resume')).toHaveLength(1)
+    const [, fresh, last] = logs().filter((x) => x.event === 'turn_start').map((x) => x.text as string)
+    expect(fresh).toContain('Summary of the earlier chat')
+    expect(fresh).not.toContain('Old detail zeta')
+    expect(last).toBe('More')
+  })
+
   test('a Codex shell command is declined', async () => {
     await connect()
     const ps = await collect(streamChat(req([{ role: 'user', content: 'SHELL please' }])))

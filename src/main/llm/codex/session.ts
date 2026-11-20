@@ -137,8 +137,10 @@ export function codexEffort(effort: ChatRequest['effort'], supported: string[]):
   return want.find((e) => supported.includes(e))
 }
 
-/** The conversation so far as one message, for a fresh Codex thread. */
-export function renderTranscript(ms: WireMessage[]): string {
+const SINCE_LAST_TURN = 'Since your last turn, this SahilBot chat continued (another model may have answered; "You" is the assistant):\n\n'
+
+/** The conversation so far as one message, for a fresh Codex thread (or, with `head`, the part a thread missed). */
+export function renderTranscript(ms: WireMessage[], head = 'Here is the conversation so far (SahilBot\'s record of it; you are the assistant, continuing it):\n\n'): string {
   const body = ms.filter((m, i) => !(m.role === 'system' && i === 0))
   const lastUser = body.length && body[body.length - 1].role === 'user' ? body[body.length - 1] : undefined
   const earlier = lastUser ? body.slice(0, -1) : body
@@ -153,7 +155,6 @@ export function renderTranscript(ms: WireMessage[]): string {
       for (const c of m.tool_calls ?? []) lines.push(`(You called the tool ${c.function.name} with ${c.function.arguments.slice(0, 600)})`)
     } else if (m.role === 'tool') lines.push(`Tool result${m.name ? ` (${m.name})` : ''}: ${t.length > 6000 ? `${t.slice(0, 6000)}… [cut]` : t}`)
   }
-  const head = 'Here is the conversation so far (SahilBot\'s record of it; you are the assistant, continuing it):\n\n'
   return lastUser ? `${head}${lines.join('\n\n')}\n\n---\nThe user's latest message:\n${textOf(lastUser.content)}` : `${head}${lines.join('\n\n')}\n\n---\nContinue from here.`
 }
 
@@ -268,7 +269,9 @@ export class CodexSession implements BridgeSession {
     const config = window ? { model_context_window: window, model_auto_compact_token_limit: Math.floor(window * 0.8) } : undefined
     const common = { config, cwd: this.dir, approvalPolicy: 'on-request', sandbox: 'read-only', baseInstructions: system || 'You are SahilBot.' }
     let r: Started | undefined
-    if (this.binding?.id) {
+    // A thread whose history no longer matches SahilBot's record (compaction, edits) starts over from the
+    // full record instead: appending the record to the old thread would hold the chat twice.
+    if (this.binding?.continues(req.messages)) {
       try {
         r = await this.server.request<Started>('thread/resume', { ...common, threadId: this.binding.id, ...(this.model ? { model: this.model } : {}) }, 60_000)
         this.restored = true
@@ -467,7 +470,7 @@ export class CodexSession implements BridgeSession {
   /** An idle thread that already holds this request's conversation up to its new messages. */
   canResume(req: ChatRequest): boolean {
     if (!this.belongs(req) || this.window !== req.contextWindow) return false
-    if (this.owner && this.state === 'idle' && !this.yielded.size && !!req.tools?.length === !!this.toolList.length && this.model === codexModelOf(req.model)) return true
+    if (this.owner && this.state === 'idle' && !this.yielded.size && !!req.tools?.length === !!this.toolList.length && this.model === codexModelOf(req.model)) return !this.binding || this.binding.continues(req.messages)
     if (this.state !== 'idle' || !this.prefixLen || this.yielded.size || codexModelOf(req.model) !== this.model) return false
     if (req.messages.length <= this.prefixLen) return false
     if (!!req.tools?.length !== !!this.toolList.length) return false
@@ -486,7 +489,7 @@ export class CodexSession implements BridgeSession {
     let input: Array<Record<string, unknown>>
     if (this.binding && (this.restored || resume)) {
       const delta = this.binding.delta(req.messages)
-      if (delta && !delta.some((message) => message.role === 'tool')) input = this.newInput(delta)
+      if (delta) input = this.deltaInput(delta)
       else {
         input = this.freshInput(req.messages)
         if (req.messages[0]?.role === 'system') input.unshift({ type: 'text', text: '[Current SahilBot instructions] ' + textOf(req.messages[0].content) })
@@ -540,6 +543,17 @@ export class CodexSession implements BridgeSession {
   private freshInput(ms: WireMessage[]): Array<Record<string, unknown>> {
     const last = ms[ms.length - 1]
     return [{ type: 'text', text: renderTranscript(ms) }, ...this.images(last?.role === 'user' ? last : undefined)]
+  }
+
+  /**
+   * What a provider thread hasn't seen yet. Replies and tool results from other models (a model switch
+   * mid-chat) go in as a transcript, so Codex knows everything that happened since its last turn.
+   */
+  private deltaInput(ms: WireMessage[]): Array<Record<string, unknown>> {
+    if (!ms.some((m) => m.role === 'assistant' || m.role === 'tool')) return this.newInput(ms)
+    const system = ms[0]?.role === 'system' ? `[Current SahilBot instructions] ${textOf(ms[0].content)}\n\n` : ''
+    const last = ms[ms.length - 1]
+    return [{ type: 'text', text: system + renderTranscript(ms, SINCE_LAST_TURN) }, ...this.images(last?.role === 'user' ? last : undefined)]
   }
 
   private newInput(ms: WireMessage[]): Array<Record<string, unknown>> {

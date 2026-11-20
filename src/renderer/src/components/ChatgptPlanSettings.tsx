@@ -4,6 +4,7 @@ import { api } from '../api'
 import { toast } from '../lib/toast'
 import { Toggle } from './Toggle'
 import { ClampText } from './ui'
+import { SubscriptionTestChat, usePollWhile } from './SubscriptionTest'
 
 // Settings → Models → "ChatGPT plan (via Codex)": use the user's ChatGPT subscription through their own
 // Codex install. Signing in happens in OpenAI's Codex sign-in; SahilBot only asks Codex for its status.
@@ -24,6 +25,10 @@ export function ChatgptPlanSettings({ onRefresh, embedded }: { onRefresh?: () =>
   const load = useCallback((refresh = false) => api.chatgptPlan.status(refresh).then(setSt).catch(() => undefined), [])
   useEffect(() => { void load() }, [load])
   useEffect(() => api.chatgptPlan.onChanged(() => { void load() }), [load])
+  // Terminal is installing Codex and running `codex login`: check until it's connected.
+  const [waiting, setWaiting] = useState(false)
+  useEffect(() => { if (st?.connected) { setWaiting(false); onRefresh?.() } }, [st?.connected]) // eslint-disable-line react-hooks/exhaustive-deps
+  usePollWhile(waiting, () => { void load(true) })
   // While a sign-in waits for the browser, check now and then.
   useEffect(() => {
     if (!st?.signingIn && !(st?.enabled && st.installed && st.login !== 'chatgpt')) return
@@ -37,6 +42,7 @@ export function ChatgptPlanSettings({ onRefresh, embedded }: { onRefresh?: () =>
   }
 
   const status = !st ? 'Checking…'
+    : waiting && !st.connected ? 'Finish the install and sign-in in Terminal. SahilBot checks again on its own…'
     : !st.installed ? 'Codex isn\'t installed on this Mac'
     : st.connected ? `Connected${st.planType ? ` · ${st.planType[0].toUpperCase()}${st.planType.slice(1)} plan` : ''}${st.email ? ` · ${st.email}` : ''}`
     : st.signingIn ? 'Waiting for you to finish signing in in the browser…'
@@ -64,7 +70,11 @@ export function ChatgptPlanSettings({ onRefresh, embedded }: { onRefresh?: () =>
             {st?.problem && st.enabled && !st.connected && st.installed && st.login !== 'none' && <div className="set-row-sub ui-text-danger">{st.problem}</div>}
           </div>
           <div className="set-row-ctl" style={{ gap: 6, display: 'flex' }}>
-            {!st?.installed && st && <button className="btn" onClick={() => void api.chatgptPlan.openInstallGuide()} data-testid="chatgpt-plan-install">Install guide</button>}
+            {!st?.installed && st && <>
+              <button className="btn primary" disabled={!!busy} title="Opens Terminal and runs OpenAI's official installer, then codex login" data-testid="chatgpt-plan-install-terminal"
+                onClick={() => void act('install', async () => { const r = await api.chatgptPlan.installInTerminal(); if (!r.ok) throw new Error(r.error ?? 'Couldn\'t open Terminal.'); setWaiting(true) })}>Install in Terminal</button>
+              <button className="btn" onClick={() => void api.chatgptPlan.openInstallGuide()} data-testid="chatgpt-plan-install">Install guide</button>
+            </>}
             {st?.installed && !st.connected && (
               <button className="btn primary" disabled={!!busy || st.signingIn} onClick={() => void act('connect', () => api.chatgptPlan.connect({ signIn: st.enabled && st.login !== 'chatgpt' }))} data-testid="chatgpt-plan-connect">
                 {busy === 'connect' ? 'Connecting…' : st.login === 'chatgpt' ? 'Connect' : 'Sign in with ChatGPT'}
@@ -81,12 +91,13 @@ export function ChatgptPlanSettings({ onRefresh, embedded }: { onRefresh?: () =>
               <div className="set-row-title">Sign in in Terminal instead</div>
               <ClampText>Opens Terminal running <code>codex login</code>, OpenAI's own sign-in. Come back here when it says you're logged in.</ClampText>
             </div>
-            <div className="set-row-ctl"><button className="btn" onClick={() => void api.chatgptPlan.loginInTerminal().then((r) => { if (!r.ok) toast(r.error ?? 'Couldn\'t open Terminal', 'error') })} data-testid="chatgpt-plan-terminal">Open Terminal</button></div>
+            <div className="set-row-ctl"><button className="btn" onClick={() => void api.chatgptPlan.loginInTerminal().then((r) => { if (!r.ok) toast(r.error ?? 'Couldn\'t open Terminal', 'error'); else setWaiting(true) })} data-testid="chatgpt-plan-terminal">Open Terminal</button></div>
           </div>
         )}
 
         {st?.connected && (
           <>
+            <SubscriptionTestChat run={() => api.chatgptPlan.testChat()} auto={embedded} testId="chatgpt-plan-test" />
             <div className="set-row">
               <div className="set-row-text">
                 <div className="set-row-title">Use my ChatGPT plan first</div>
