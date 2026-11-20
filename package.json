@@ -5,6 +5,7 @@
   "description": "SahilBot: a private, local-first AI assistant for your Mac",
   "main": "out/main/index.js",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "predev": "node scripts/brand-dev.mjs",
     "dev": "electron-vite dev",

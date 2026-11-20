@@ -119,3 +119,7 @@ Signing: add the repository secrets `CSC_LINK` (Developer ID Application certifi
 | `tests/` | `unit/`, `accept/` (Playwright + Electron), `fixtures/` (mock model, test site) |
 
 Research notes on other agents (OpenClaw, Hermes Agent, Goose, OpenHands, Cline, opencode, browser-use, Letta, smolagents, Aider, Jan) are in `research/`; credits are in `THIRD_PARTY_NOTICES.md`.
+
+## License
+
+SahilBot is released under the [MIT License](LICENSE): anyone may use, copy, change and share it. Third-party code it builds on is credited in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
