@@ -221,7 +221,7 @@ export const isSubscription = (m: ModelInfo): boolean => isPlanModel(m.id) || m.
 export const payPerUse = (m: ModelInfo): boolean => remote(m) && !isSubscription(m)
 
 /** A model id without an OpenRouter-style vendor prefix, Claude dots as dashes ("anthropic/claude-sonnet-5.5"). */
-function bareId(id: string): string {
+export function bareId(id: string): string {
   const bare = id.replace(/^[\w-]+\//, '').toLowerCase()
   return /^claude-/.test(bare) ? bare.replace(/\./g, '-') : bare
 }

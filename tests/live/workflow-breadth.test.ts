@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
+import type { CollaborationStep } from '../../src/shared/types'
 import { launch } from '../accept/app'
 
 const path = process.env.SAHILBOT_CODEX_PATH
@@ -16,6 +17,14 @@ const cases = [
     },
     prompt: 'In this synthetic workspace, repair price.py so total_cents rounds half up to the nearest cent using integer arithmetic. Preserve the function name and arguments. Read and run the existing check.py without editing it. Save test_summary.json with only {"checks_passed":3,"rounding":"half_up"} if the checks succeed, and return the same JSON in chat. Use only the workspace and no connected apps.',
     expected: { checks_passed: 3, rounding: 'half_up' }
+  },
+  {
+    name: 'release review',
+    output: 'release.json',
+    team: true,
+    page: '<h1>Release review</h1><p>Cursor marked its implementation complete on PR 17. The current head is c013bad. At previous revision e12cafe all checks passed. For c013bad formatting passed and the required integration check is queued.</p><p>The architecture requires one database migration per deployment. The proposed single migration preserves the existing column. A rollback owner has signed off.</p>',
+    prompt: 'Our deployment owner needs a go or hold decision on a Cursor change to a shared database. Use the browser to read the supplied release evidence at {url}. We need an independent review of both migration compatibility and whether CI covers the candidate revision before we rely on your call. Save release.json and return the same JSON with exactly decision (go or hold), head, previous_head, and pending_check (short check name). Limit the exercise to this fixture and workspace. Do not deploy or contact anyone.',
+    expected: { decision: 'hold', head: 'c013bad', previous_head: 'e12cafe', pending_check: 'integration' }
   },
   {
     name: 'office',
@@ -83,6 +92,7 @@ describe.skipIf(!process.env.SAHILBOT_LIVE_WORKFLOWS || !path)('cloud workflow b
         return {
           status,
           answer: messages.findLast((message) => message.role === 'assistant' && message.content && !message.meta?.superseded)?.content ?? '',
+          collaborators: messages.flatMap((m) => (m.meta?.collaboration ?? []) as CollaborationStep[]).filter((s) => s.status === 'done').map((s) => s.model),
           tools: messages.filter((message) => message.role === 'tool' && message.meta?.status === 'ok').map((message) => message.toolName)
         }
       }, [workspace, prompt])
@@ -94,6 +104,7 @@ describe.skipIf(!process.env.SAHILBOT_LIVE_WORKFLOWS || !path)('cloud workflow b
         expect(readFileSync(join(workspace, 'check.py'), 'utf8')).toBe(scenario.seed['check.py'])
         expect(result.tools).toContain('run_command')
       }
+      if (scenario.team) expect(new Set(result.collaborators).size).toBeGreaterThanOrEqual(2)
       if (scenario.page) expect(result.tools).toContain('browser')
     } finally {
       await app?.close()

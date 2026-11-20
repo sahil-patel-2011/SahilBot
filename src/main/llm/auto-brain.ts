@@ -1,6 +1,6 @@
 import type { Effort, ModelInfo, Tier } from '@shared/types'
 import { CATEGORY_LABEL, TASK_CATEGORIES, type TaskCategory, type TaskClass, type TaskKind } from './task-classifier'
-import { premiumModel, slotOf, windowOf, type AutoPreference, type Slot } from './routing-table'
+import { bareId, premiumModel, slotOf, windowOf, type AutoPreference, type Slot } from './routing-table'
 
 // Auto's brain: before each request, the fastest cheap model the user has (GPT-6 Luna, GPT-6.1 Terra or Claude
 // Haiku 5.5) reads the whole request with the conversation so far and decides what it is, how hard it is, how
@@ -59,6 +59,7 @@ export interface BrainAnswer {
   fanout: number
   /** The model the helpers run on. */
   helper?: string
+  assignments?: Array<{ part: string; model: string }>
   why: string
 }
 
@@ -147,7 +148,8 @@ Fields:
 - partner: with "pair" or "debate", the second model's id (not the main model).
 - planner / reviewer: model ids from the list, only with those teams. The planner should be the strongest reasoner (it writes a plan only); the reviewer a strong model from a different provider than the executor when one is listed.
 - fanout: 0 for almost everything. For a big job that splits into independent parts that can be built or researched at the same time (a whole game, an app with several screens or systems, a report with several sections, comparing many options), the number of parallel helper agents, 2 to 8.
-- helper: with fanout, the model id the helpers run on: a fast, capable model (Sonnet 5.5, GPT-6.2 Sol or Terra) unless the parts are hard.
+- helper: a capable default model for unassigned parts.
+- assignments: with fanout, an array of {"part":"exact text of an assessment part","model":"model id from the menu"}. Match expertise to each part. For a project handoff one specialist might examine architecture constraints while another designs acceptance checks. Helpers work before tools run. They can reason over supplied material and design checks. Only the final reviewer receives results from tools. The lead owns Cursor sessions, GitHub changes, browser and desktop actions, collects the actual results, and reconciles disagreements. For consequential workflows have a reviewer check the final state.
 - why: under 12 words.${i.budgetTight ? '\nLittle of the monthly budget is left: prefer cheaper models and "solo".' : ''}
 
 Models:
@@ -202,6 +204,14 @@ export function parseBrain(reply: string, models: ModelInfo[]): BrainAnswer | un
     (raw.complexity === 'direct' || raw.complexity === 'multi-step' || raw.complexity === 'complex') &&
     (raw.impact === 'routine' || raw.impact === 'consequential') && typeof raw.deliverable === 'boolean'
     ? { goal, work: raw.work, complexity: raw.complexity, impact: raw.impact, deliverable: raw.deliverable, ...(raw.deliverable && raw.work === 'workflow' && files.length ? { files } : {}), parts } : undefined
+  const assignments: NonNullable<BrainAnswer['assignments']> = []
+  if (assessment && Array.isArray(j.assignments)) {
+    for (const entry of j.assignments.slice(0, 12)) {
+      const model = id(entry?.model)
+      const part = typeof entry?.part === 'string' ? entry.part.trim() : ''
+      if (model && parts.includes(part) && !assignments.some((item) => item.part === part)) assignments.push({ part, model })
+    }
+  }
   if (!model && !assessment) return undefined
   return {
     ...(assessment ? { assessment } : {}),
@@ -213,6 +223,7 @@ export function parseBrain(reply: string, models: ModelInfo[]): BrainAnswer | un
     partner: team === 'pair' || team === 'debate' ? id(j.partner) : undefined,
     fanout: Number.isInteger(j.fanout) && (j.fanout as number) >= 2 ? Math.min(8, j.fanout as number) : 0,
     helper: id(j.helper),
+    ...(assignments.length ? { assignments } : {}),
     why: typeof j.why === 'string' ? j.why.replace(/\s+/g, ' ').trim().slice(0, 120) : ''
   }
 }
@@ -292,7 +303,21 @@ export function acceptBrainModel(id: string, l: PickLimits): ModelInfo | undefin
   return m
 }
 
-export interface TeamPick { planner?: ModelInfo; reviewer?: ModelInfo; fanout?: { n: number; helper: ModelInfo }; partner?: ModelInfo }
+export interface TeamPick { planner?: ModelInfo; reviewer?: ModelInfo; fanout?: { n: number; helper: ModelInfo; models?: string[] }; partner?: ModelInfo }
+
+/** A subscription and an API route may serve the same model. Opaque plan defaults
+ * can only be independent of a model from a different vendor. */
+function vendor(m: ModelInfo): string {
+  const id = bareId(m.id)
+  if (id.startsWith('gpt-') || m.provider === 'chatgpt') return 'openai'
+  if (id.startsWith('grok-') || m.provider === 'grok-plan') return 'xai'
+  if (id.startsWith('claude-')) return 'anthropic'
+  return m.provider
+}
+function independent(a: ModelInfo, b: ModelInfo): boolean {
+  const opaque = (m: ModelInfo) => m.id === 'chatgpt-plan/default' || m.id === 'grok-plan/grok-build'
+  return bareId(a.id) !== bareId(b.id) && (vendor(a) !== vendor(b) || (!opaque(a) && !opaque(b)))
+}
 
 /**
  * The helpers a team gets: only for agent work at difficulty 2+ (planning at 3), never on a tight budget, never
@@ -302,23 +327,29 @@ export function teamFor(a: BrainAnswer, executor: ModelInfo, l: { allowed: Model
   if (l.budgetTight) return {}
   if (a.assessment) {
     if (l.difficulty === 0) return {}
-    const peers = l.allowed.filter((m) => m.id !== executor.id && isCloud(m) === isCloud(executor) &&
+    const peers = l.allowed.filter((m) => independent(m, executor) && isCloud(m) === isCloud(executor) &&
       (slotOf(m) !== 'astra' || l.difficulty === 3) &&
       (!premiumModel(m.id) || (slotOf(m) === 'fable' && l.fableOn && l.difficulty === 3)) &&
       m.tier >= Math.max(0, Math.min(executor.tier, l.difficulty) - 1))
     const peer = (id?: string, minTier = 0): ModelInfo | undefined => {
       const eligible = peers.filter((m) => m.tier >= minTier)
-      return eligible.find((m) => m.id === id && m.provider !== executor.provider) ??
-        eligible.find((m) => m.provider !== executor.provider) ??
-        eligible.find((m) => m.id === id) ?? eligible[0]
+      return eligible.find((m) => m.id === id) ??
+        eligible.find((m) => vendor(m) !== vendor(executor)) ?? eligible[0]
     }
     const pair = a.team === 'pair' || a.team === 'debate'
     const planner = a.team.includes('plan') && l.kind === 'agent' && l.difficulty === 3 ? peer(a.planner, executor.tier) : undefined
-    const reviewer = a.team.includes('review') && l.difficulty >= 2 ? peer(a.reviewer) : undefined
+    const needsReview = a.assessment.work === 'workflow' && a.assessment.complexity !== 'direct' && a.assessment.impact === 'consequential'
+    const reviewer = (a.team.includes('review') || needsReview) && l.difficulty >= 2 ? peer(a.reviewer) : undefined
     const partner = pair && (a.team !== 'debate' || l.difficulty >= 2) ? peer(a.partner) : undefined
     const parts = l.kind === 'agent' && l.difficulty >= 2 ? a.assessment.parts : []
     const helper = parts.length >= 2 && a.fanout >= 2 && !pair ? peer(a.helper) : undefined
-    return { planner, reviewer, partner, ...(helper ? { fanout: { n: Math.min(a.fanout, parts.length), helper } } : {}) }
+    if (!helper) return { planner, reviewer, partner }
+    const n = Math.min(a.fanout, parts.length)
+    const models = parts.slice(0, n).map((part) => {
+      const assigned = a.assignments?.find((item) => item.part === part)
+      return peers.find((m) => m.id === assigned?.model)?.id ?? helper.id
+    })
+    return { planner, reviewer, partner, fanout: { n, helper, models } }
   }
   // A pair works at any level above small talk: Luna with Haiku for light work, Opus with Astra for hard work.
   if (a.team === 'pair') {
@@ -430,7 +461,7 @@ export function costClass(m: ModelInfo | undefined): CostClass {
 }
 
 /** Who worked with the run's model on this request (Routed.team in agent/loop.ts). */
-export interface TeamIds { planner?: string; reviewer?: string; fanout?: { n: number; helper: string; parts?: string[] }; partner?: string }
+export interface TeamIds { planner?: string; reviewer?: string; fanout?: { n: number; helper: string; models?: string[]; parts?: string[] }; partner?: string }
 
 /**
  * The "Why this model" line shown on the model chip's hover: why Auto picked it (the brain's read, or the rule
@@ -442,7 +473,7 @@ export function explainPick(o: { model?: ModelInfo; reason: string; team?: TeamI
     t.partner ? `with ${o.labelOf(t.partner)}` : '',
     t.planner ? `${o.labelOf(t.planner)} plans` : '',
     t.reviewer ? `${o.labelOf(t.reviewer)} reviews` : '',
-    t.fanout ? `${t.fanout.n} helpers on ${o.labelOf(t.fanout.helper)}` : ''
+    t.fanout ? `${t.fanout.n} helpers on ${[...new Set(t.fanout.models ?? [t.fanout.helper])].map(o.labelOf).join(', ')}` : ''
   ].filter(Boolean) : []
   const reason = o.reason.replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '').slice(0, 140)
   return `Why this model: ${reason || 'the best fit Auto could find'}${parts.length ? ` · teamed up: ${parts.join(', ')}` : ''} · cost: ${costClass(o.model)}`

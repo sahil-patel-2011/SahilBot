@@ -257,18 +257,71 @@ describe('the brain in the agent loop', () => {
     const bot = h.db.createSpace('Operations', '#000000')
     const t = h.db.createThread(bot.id, 'auto', null)
     llm.script.push(
-      { content: JSON.stringify(answer({ model: OPUS.id, category: 'agent-tools', fanout: 2, helper: SOL.id,
+      { content: JSON.stringify(answer({ model: OPUS.id, category: 'agent-tools', fanout: 2, helper: SOL.id, assignments: [{ part: 'Check ongoing obligations', model: SONNET.id }],
         assessment: { goal: 'Prepare a handover', work: 'workflow', complexity: 'complex', impact: 'routine', deliverable: true, parts: ['Check the timeline', 'Check ongoing obligations'] } })), delay: 0 },
       { content: 'Timeline evidence.', delay: 0 },
       { content: 'Obligations evidence.', delay: 0 },
       { content: 'The handover is ready.', delay: 0 }
     )
     expect(await h.run(t, 'Put together what the next person needs to take over these commitments.')).toBe('finished')
-    expect(llm.requests.map((r) => r.model)).toEqual([LUNA.id, SOL.id, SOL.id, OPUS.id])
+    expect(llm.requests.map((r) => r.model)).toEqual([LUNA.id, SOL.id, SONNET.id, OPUS.id])
     expect(JSON.stringify(llm.requests.at(-1)?.messages)).toContain('Timeline evidence.')
     expect(JSON.stringify(llm.requests.at(-1)?.messages)).toContain('Obligations evidence.')
     const steps = h.db.listMessages(t.id).find((m) => m.meta?.collaboration)?.meta?.collaboration
     expect(steps).toMatchObject([{ role: 'lead', status: 'done' }, { role: 'specialist', status: 'done' }, { role: 'specialist', status: 'done' }])
+  })
+
+  test('Auto reviews consequential work using the actual check result, even when the router proposes solo', async () => {
+    const h = harness([...ALL, SOL])
+    const t = h.thread()
+    h.registry.register({ name: 'git', label: 'Review revision', effect: 'read', description: 'Inspect this fixture revision',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      async run() { return { display: 'read PR', text: 'Head f00baa. token=fixturecredential', verification: { criterion: 'PR checks at f00baa', passed: false, detail: 'The required build is queued.' } } }
+    } as never)
+    llm.script.push(
+      { content: JSON.stringify(answer({ model: OPUS.id, assessment: { goal: 'Decide whether to release', work: 'workflow', complexity: 'multi-step', impact: 'consequential', deliverable: false, parts: [] } })), delay: 0 },
+      { toolCalls: [{ name: 'git', arguments: '{}' }], delay: 0 },
+      { content: 'The release is ready.', delay: 0 },
+      { content: 'LGTM except the required build is queued. Correct the release status.', delay: 0 },
+      { content: 'Hold the release. The required build is queued.', delay: 0 }
+    )
+    await h.run(t, 'Inspect the candidate and decide whether the release should go ahead.')
+    const review = llm.requests.find((r) => JSON.stringify(r.messages[0]).includes('You review an AI assistant'))
+    expect(review?.model).not.toBe(OPUS.id)
+    expect(review?.tools ?? []).toHaveLength(0)
+    const packet = JSON.parse(review!.messages[1].content)
+    expect(packet.observations[0].excerpt).toContain('Head f00baa.')
+    expect(packet.observations[0].excerpt).not.toContain('fixturecredential')
+    expect(packet.checks).toContainEqual({ criterion: 'PR checks at f00baa', passed: false, detail: 'The required build is queued.' })
+    expect(JSON.stringify(llm.requests.at(-1)?.messages)).toContain('Correct the release status.')
+  })
+
+  test.each([true, false])('unattended bots only dispatch subscription advisers (subscription available: %s)', async (subscribed) => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const lead = { ...SOL, provider: 'chatgpt' as const }
+    const second = { ...SONNET, provider: subscribed ? 'chatgpt' as const : 'anthropic' as const }
+    const h = harness([LUNA, lead, second])
+    const t = h.thread()
+    llm.script.push({ content: JSON.stringify(answer({ model: lead.id, partner: second.id, team: 'pair', category: 'writing', difficulty: 2,
+      assessment: { goal: 'Compare the two proposals', work: 'answer', complexity: 'multi-step', impact: 'routine', deliverable: false, parts: [] } })), delay: 0 })
+    if (subscribed) llm.script.push({ content: 'Consider the staffing conflict.', delay: 0 })
+    llm.script.push({ content: 'Proposal B covers the shift.', delay: 0 })
+    await (await h.agent.send({ threadId: t.id, text: 'Compare these coverage proposals: A leaves an overlap; B separates the shifts.' }, { unattended: true })).done
+    const helpers = llm.requests.filter((r) => r.model === second.id)
+    expect(helpers).toHaveLength(subscribed ? 1 : 0)
+    if (subscribed) expect(JSON.stringify(llm.requests.at(-1)?.messages)).toContain('Consider the staffing conflict.')
+  })
+
+  test('collaboration respects model identity, allowed models, and valid assignment parts', () => {
+    const plan = { ...SOL, id: 'chatgpt-plan/' + SOL.id, provider: 'chatgpt' as const }
+    const opaque = { ...plan, id: 'chatgpt-plan/default' }
+    const assessment = { goal: 'Review the change', work: 'workflow', complexity: 'complex', impact: 'consequential', deliverable: true, parts: ['scope', 'checks'] } as const
+    const raw = { ...answer(), assessment, fanout: 2, assignments: [null, { part: 'other', model: SONNET.id }, { part: 'scope', model: 'unknown' }, { part: 'scope', model: SONNET.id }] }
+    const a = parseBrain(JSON.stringify(raw), [plan, SOL, SONNET, opaque])!
+    expect(a.assignments).toEqual([{ part: 'scope', model: SONNET.id }])
+    const limits = { allowed: [SOL, opaque], difficulty: 3 as const, kind: 'agent' as const, fableOn: false }
+    expect(teamFor(a, plan, limits).reviewer).toBeUndefined()
+    expect(teamFor(a, plan, { ...limits, allowed: [...limits.allowed, SONNET] }).reviewer).toBe(SONNET)
   })
 
   test('the lead finishes if a different-provider collaborator is unavailable', async () => {
