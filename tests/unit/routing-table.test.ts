@@ -183,9 +183,9 @@ describe('the routing table', () => {
     expect(slotsFor('coding', 3, 'cheapest', true)).not.toContain('fable')
   })
   test('the setting: Balanced by default', () => {
-    expect(autoPreference({})).toBe('balanced')
+    expect(autoPreference({})).toBe('best')
     expect(autoPreference({ cloud: { autoPrefers: 'best' } })).toBe('best')
-    expect(autoPreference({ cloud: { autoPrefers: 'nonsense' } })).toBe('balanced')
+    expect(autoPreference({ cloud: { autoPrefers: 'nonsense' } })).toBe('best')
   })
 })
 

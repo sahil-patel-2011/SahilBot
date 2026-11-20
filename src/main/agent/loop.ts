@@ -2116,7 +2116,7 @@ export class Agent {
       const keyed = Object.entries(s.keys ?? {}).some(([id, on]) => on && (id === 'anthropic' || id === 'openai' || id === 'openrouter'))
       throw new Error(`${variant === 'auto:local' ? 'Auto (local)' : 'Auto (cloud)'} has no model to use: ${autoUnavailable(variant, usable, { enabled: s.cloud.enabled, keyed })}.`)
     }
-    // Auto prefers (Settings → Models): Balanced (default) / Best result / Cheapest; a nearly spent budget routes as
+    // Auto prefers (Settings → Models): Best result (default) / Balanced / Cheapest; a nearly spent budget routes as
     // Cheapest; models cooling down after a failure are skipped; a follow-up keeps the chat's model when it is as
     // good a choice (llm/auto-route.ts autoRoute: the same decision the simulator checks).
     const routed = autoRoute({

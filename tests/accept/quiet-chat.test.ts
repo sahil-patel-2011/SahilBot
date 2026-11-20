@@ -54,8 +54,9 @@ describe('quiet chat', () => {
       await shot(page, '4-bot-collaboration')
 
       await page.getByTestId('profile').click()
-      await page.getByText('Models & Keys', { exact: true }).click()
-      await page.getByTestId('show-bot-model-thinking').click()
+      await page.getByTestId('settings-search').fill('developer mode')
+      await page.getByTestId('settings-result-dev-mode').click()
+      await page.getByTestId('dev-mode').click()
       await page.keyboard.press('Escape')
       await expect.poll(() => card.locator('.collaboration-model').count()).toBe(2)
       expect(new Set(await card.locator('.collaboration-model').allTextContents()).size).toBe(2)

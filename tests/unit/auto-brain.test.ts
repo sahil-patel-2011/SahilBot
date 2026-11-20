@@ -108,16 +108,13 @@ describe('the brain\'s decision', () => {
     expect(acceptBrainModel(SOL.id, { ...l, tablePick: OPUS })?.id).toBe(SOL.id)
   })
 
-  test('the prompt names the 6.2 models for each need and each model\'s strength', () => {
-    const { system } = brainPrompt({ text: 'Research heat pumps', history: [], attachments: [], images: 0, preference: 'balanced', models: [...ALL, SOL], rules: classifyTask('Research heat pumps') })
-    expect(system).toMatch(/reasoning, math, logic: GPT-6\.2 Sol \(GPT-6\.2 Astra only at difficulty 3/)
-    expect(system).toMatch(/research: GPT-6\.2 Sol or Sonnet 5\.5 \(GPT-6\.2 Astra only for deep, high-stakes research at difficulty 3\)/)
-    expect(system).toMatch(/coding: Sonnet 5\.5 for routine work, Opus 5\.5 for hard multi-file or agentic work/)
-    expect(system).toMatch(/quick: GPT-6 Luna, Haiku 5\.5 or Terra/)
-    expect(system).not.toMatch(/GPT-6\.1 Sol|GPT-6 Astra/)
-    // The model menu: each slot's strength line.
-    expect(system).toMatch(/- gpt-6\.2-astra: .*only the hardest math, deep high-stakes research and very long documents \(difficulty 3\)/)
-    expect(system).toMatch(/- gpt-6\.2-sol: .*everyday research, reasoning, math and images/)
+  test('the router sees capability profiles for available models and quality leads by default', () => {
+    const custom = { ...SOL, id: 'workspace-editor', blurb: 'Spreadsheet reconciliation', tools: false, vision: false }
+    const { system } = brainPrompt({ text: 'Research heat pumps', history: [], attachments: [], images: 0, preference: 'best', models: [...ALL, SOL, custom], rules: classifyTask('Research heat pumps') })
+    expect(system).toContain('Price breaks a close quality tie')
+    expect(system).toMatch(/- workspace-editor: .*Spreadsheet reconciliation.*text adviser only.*no image input/)
+    expect(system).toMatch(/- gpt-6\.2-astra: .*independent verification/)
+    expect(system).toMatch(/- gpt-6\.2-sol: .*implementation planning/)
     expect(system).toMatch(/- claude-sonnet-5-5: .*routine coding/)
     expect(system).toMatch(/- claude-opus-5-5: .*hard agentic coding, computer use/)
     // This Mac's measured outcomes still reach the brain.

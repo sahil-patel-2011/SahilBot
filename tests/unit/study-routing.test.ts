@@ -15,7 +15,7 @@ const MID = new Set([...LIGHT, 'claude-sonnet-5-5', 'gpt-6.1-sol'])
 
 const route = (text: string, usable = ALL, previousStudy = false) => {
   const task = classifyTask(text, { previousStudy, previousCategory: previousStudy ? 'chat' : undefined })
-  return { task, pick: autoRoute({ requested: 'auto', usable, task, preference: autoPreference({}), budgetTight: false, voice: false }) }
+  return { task, pick: autoRoute({ requested: 'auto', usable, task, preference: 'balanced', budgetTight: false, voice: false }) }
 }
 
 describe('school work', () => {
@@ -66,8 +66,9 @@ describe('school work', () => {
     expect(isStudy(route(text).task), text).toBe(false)
   })
 
-  test('Auto prefers Balanced unless the user chose otherwise', () => {
-    expect(autoPreference({})).toBe('balanced')
+  test('Auto defaults to quality and preserves an explicit balanced preference', () => {
+    expect(autoPreference({})).toBe('best')
+    expect(autoPreference({ cloud: { autoPrefers: 'balanced' } })).toBe('balanced')
     expect(autoPreference({ cloud: { autoPrefers: 'best' } })).toBe('best')
   })
 })

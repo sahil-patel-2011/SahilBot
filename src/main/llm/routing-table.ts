@@ -552,10 +552,10 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
 /** Whether a model is one Auto treats as premium (priced well above the rest). */
 export const premiumModel = (id: string): boolean => isPremiumClaude(bareId(id)) || isPremiumOpenAI(bareId(id))
 
-/** The Auto prefers setting (Settings → Models), Balanced by default: the cheapest model strong enough for the request. */
+/** The Auto prefers setting (Settings → Models), Quality first by default. Explicit cost preferences still apply. */
 export function autoPreference(s: { cloud?: { autoPrefers?: string } }): AutoPreference {
   const v = s.cloud?.autoPrefers
-  return v === 'best' || v === 'cheapest' ? v : 'balanced'
+  return v === 'balanced' || v === 'cheapest' ? v : 'best'
 }
 
 /** The most expensive models, never needed for school work (the table falls through to the next slot). */

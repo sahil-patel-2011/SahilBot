@@ -35,8 +35,8 @@ The "routed" label on each reply names the model and the reason, for example "Cl
 
 | Option | What it does |
 |---|---|
-| **Best result** | Routes one tier above the request's difficulty, so each kind of task gets the strongest model. Chat stops at tier 2 and voice at tier 1, so both stay quick. Research and math stop at tier 2 below difficulty 3: routine research and reasoning get GPT-6.2 Sol (it nearly matches Astra at a quarter of the price), and GPT-6.2 Astra leads only difficulty-3 work. |
-| **Balanced** (default) | Routes at the request's own difficulty: the cheapest model that is strong enough. Where GPT-6.2 Astra would lead the hardest row, its near-equal GPT-6.2 Sol leads instead, at a quarter of the price. On a [close call](#balanced-close-calls) it takes Best result's pick when that costs at most 2x and isn't much slower. |
+| **Best result** (default) | Routes one tier above the request's difficulty, so each kind of task gets the strongest model. Chat stops at tier 2 and voice at tier 1, so both stay quick. Research and math stop at tier 2 below difficulty 3: routine research and reasoning get GPT-6.2 Sol (it nearly matches Astra at a quarter of the price), and GPT-6.2 Astra leads only difficulty-3 work. |
+| **Balanced** | Routes at the request's own difficulty: the cheapest model that is strong enough. Where GPT-6.2 Astra would lead the hardest row, its near-equal GPT-6.2 Sol leads instead, at a quarter of the price. On a [close call](#balanced-close-calls) it takes Best result's pick when that costs at most 2x and isn't much slower. |
 | **Cheapest** | Routes one tier lower. Within a row, the cheapest model comes first. A free local model is used first whenever one is strong enough. |
 
 These settings and conditions still apply on top of the preference:

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Message } from '@shared/types'
 import * as I from '../icons'
-import { useModelDetails } from '../lib/dev-mode'
+import { useDevMode } from '../lib/dev-mode'
 import '../styles-cua.css'
 
 // "Planner ⇄ Executor" card (src/main/agent/cua): the planner's plan with its checkpoints, and a compact timeline
@@ -23,16 +23,16 @@ const STATUS: Record<string, string> = { done: 'Done', stopped: 'Stopped', asked
 export function CuaCard({ m }: { m: Message }) {
   const d = cuaOf(m)
   const [open, setOpen] = useState(true)
-  const { show, botChat } = useModelDetails()
+  const show = useDevMode()
   if (!d) return null
   const done = d.checkpoints.filter((c) => c.status === 'done').length
   const state = d.active ? 'Working' : STATUS[d.finished ?? ''] ?? 'Ended'
   return (
-    <div className={`cua-card${d.active ? ' live' : ''}`} data-testid="cua-card" title={show || !botChat ? d.why : undefined}>
+    <div className={`cua-card${d.active ? ' live' : ''}`} data-testid="cua-card" title={show ? d.why : undefined}>
       <button className="cua-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <I.Sparkle size={15} />
         <span className="cua-title">Planner ⇄ Executor</span>
-        {(show || !botChat) && <span className="cua-models"><b>{d.planner}</b> plans · <b>{d.executor}</b> executes</span>}
+        {show && <span className="cua-models"><b>{d.planner}</b> plans · <b>{d.executor}</b> executes</span>}
         <span className="cua-state" data-testid="cua-state">{state} · {done} of {d.checkpoints.length}</span>
         <I.Chevron size={13} style={{ transform: open ? 'rotate(180deg)' : undefined, transition: 'transform .15s' }} />
       </button>
