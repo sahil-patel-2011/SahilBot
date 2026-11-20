@@ -936,6 +936,7 @@ const PERM_SHORT: Partial<Record<PermissionKind, string>> = {
 
 /** What macOS lets SahilBot use: one Allow button each, macOS's own prompt where it has one. */
 /** "Allow all": macOS's own prompt for each one in turn (the ones that need System Settings open it last). */
+const NOTE_ASKING = 'macOS is asking: in the notification at the top right of your screen, click Allow (or Options → Allow).'
 const ALLOW_ALL_ORDER: PermissionKind[] = ['notifications', 'microphone', 'automation', 'accessibility', 'screen', 'fullDisk']
 
 export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what you want SahilBot to use. You can change these any time.' }: { title?: string; sub?: string } = {}) {
@@ -950,9 +951,15 @@ export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what yo
     return () => window.removeEventListener('focus', refresh)
   }, [])
   const allow = (kind: PermissionKind): void => {
+    if (kind === 'notifications') setAsked((a) => ({ ...a, notifications: NOTE_ASKING }))
     void api.permissions.request(kind).then((r) => {
-      setAsked((a) => ({ ...a, [kind]: r === 'opened' ? 'Turn on SahilBot in the window that opened, then come back.' : r === 'denied' ? 'macOS said no. Use Open Settings to change it.' : '' }))
+      const note = kind === 'notifications'
+        ? (r === 'granted' ? '' : r === 'denied' ? 'macOS has notifications off for SahilBot. Use Open Settings, choose SahilBot and turn on Allow notifications.' : r === 'prompted' ? NOTE_ASKING : '')
+        : ''
+      setAsked((a) => ({ ...a, [kind]: note || (r === 'opened' ? 'Turn on SahilBot in the window that opened, then come back.' : r === 'denied' ? 'macOS said no. Use Open Settings to change it.' : '') }))
       setTimeout(refresh, 800)
+      // macOS's question is still open: check again while the user answers it.
+      if (kind === 'notifications' && r === 'prompted') for (const ms of [3000, 8000, 15000, 30000, 60000]) setTimeout(refresh, ms)
     }).catch((e) => toast(clean(e), 'error'))
   }
   const sorted = (rows ?? []).slice().sort((a, b) => PERM_ORDER.indexOf(a.kind) - PERM_ORDER.indexOf(b.kind))

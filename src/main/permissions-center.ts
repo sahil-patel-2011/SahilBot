@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
-import { closeSync, openSync } from 'node:fs'
-import { join } from 'node:path'
+import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { PermissionKind, PermissionRow, PermissionState } from '@shared/types'
 
 // Settings → Privacy & Security: which macOS permissions SahilBot has, what each one enables, and a
@@ -59,6 +59,8 @@ export interface Probes {
   media(kind: 'screen' | 'microphone'): string
   /** Notification.isSupported(). */
   notificationsSupported(): boolean
+  /** What macOS last did with one of SahilBot's notifications (NotificationPermission.get): apps can't read the setting itself. */
+  notifications?(): PermissionState
   /** Opens a file read-only without reading it: 'ok', 'denied' (EPERM/EACCES), or 'missing'. */
   open(path: string): 'ok' | 'denied' | 'missing'
   home: string
@@ -93,14 +95,15 @@ const row = (kind: PermissionKind, state: PermissionState, detail?: string): Per
 /** Every permission's status (no prompts). Automation is per app: see automationStatus. */
 export function permissionsStatus(p: Probes): PermissionRow[] {
   let notes: PermissionState = 'unknown'
-  try { notes = p.notificationsSupported() ? 'unknown' : 'restricted' } catch { /* stays unknown */ }
+  try { notes = p.notificationsSupported() ? (p.notifications?.() ?? 'unknown') : 'restricted' } catch { /* stays unknown */ }
   return [
     row('accessibility', safe(() => (p.accessibility() ? 'granted' : 'denied'))),
     row('screen', safe(() => media(p.media('screen'))), 'macOS only applies a change after SahilBot is reopened.'),
     row('microphone', safe(() => media(p.media('microphone')))),
     row('fullDisk', safe(() => fullDiskState(p))),
     row('automation', 'unknown', 'Checked per app: use "Check" next to an app.'),
-    row('notifications', notes, notes === 'unknown' ? 'macOS doesn\'t let apps read this setting; open Notifications settings to check.' : undefined)
+    row('notifications', notes, notes === 'unknown' ? 'macOS doesn\'t let apps read this setting: Turn on sends one notification and macOS asks.'
+      : notes === 'denied' ? 'macOS didn\'t show SahilBot\'s last notification: turn SahilBot on in System Settings → Notifications.' : undefined)
   ]
 }
 
@@ -132,6 +135,67 @@ export function automationStatus(app: string, run: (args: string[]) => Promise<{
 
 function osascript(args: string[]): Promise<{ out: string; err: string }> {
   return new Promise((ok) => execFile('osascript', args, { timeout: 15_000 }, (e, out, err) => ok({ out: e ? '' : String(out), err: e ? String(err || e.message) : '' })))
+}
+
+/** The parts of Electron's Notification this needs (a fake in tests). */
+export interface NoteLike {
+  on(event: 'show', listener: () => void): unknown
+  on(event: 'failed', listener: (event: unknown, error: string) => void): unknown
+  show(): void
+}
+
+/**
+ * Whether macOS shows SahilBot's notifications. macOS has no way for an app to read the setting, so this
+ * remembers what macOS last did with a notification: shown ("granted") or refused ("denied"). The
+ * first notification is what makes macOS ask. A notification is kept referenced until macOS answers:
+ * Electron removes an unreferenced one from Notification Center when it's garbage collected.
+ */
+export class NotificationPermission {
+  private state: PermissionState = 'unknown'
+  private pending = new Set<NoteLike>()
+
+  constructor(private file?: string) {
+    try {
+      const saved = file ? JSON.parse(readFileSync(file, 'utf8')).state : undefined
+      if (saved === 'granted' || saved === 'denied') this.state = saved
+    } catch { /* never asked yet */ }
+  }
+
+  get(): PermissionState { return this.state }
+
+  private set(state: 'granted' | 'denied'): void {
+    if (state === this.state) return
+    this.state = state
+    if (!this.file) return
+    try { mkdirSync(dirname(this.file), { recursive: true }); writeFileSync(this.file, JSON.stringify({ state, at: Date.now() })) } catch { /* kept in memory */ }
+  }
+
+  /** Every notification SahilBot shows keeps this up to date (a user can change the setting any time). */
+  observe(n: NoteLike): void {
+    n.on('show', () => this.set('granted'))
+    n.on('failed', () => this.set('denied'))
+  }
+
+  /**
+   * Shows one notification and waits for macOS: 'granted' once it's shown, 'denied' if macOS refuses
+   * it, 'prompted' while macOS's question is still open after `waitMs` (the answer is recorded later).
+   */
+  request(n: NoteLike, waitMs = 20_000): Promise<'granted' | 'denied' | 'prompted'> {
+    this.pending.add(n)
+    return new Promise((done) => {
+      const timer = setTimeout(() => done('prompted'), waitMs)
+      const finish = (state: 'granted' | 'denied'): void => {
+        this.set(state)
+        clearTimeout(timer)
+        // Keep it a little longer so it stays in Notification Center for the user to see.
+        setTimeout(() => this.pending.delete(n), 60_000).unref?.()
+        done(state)
+      }
+      n.on('show', () => finish('granted'))
+      n.on('failed', () => finish('denied'))
+      try { n.show() } catch { finish('denied') }
+    })
+  }
 }
 
 /** The System Settings pane for a permission (only these exact URLs are ever opened). */
