@@ -44,6 +44,7 @@ const pendingServer = new Map()
 const askClient = (method, params) => new Promise((ok) => { const id = nextServerId++; pendingServer.set(id, ok); send({ id, method, params }) })
 
 let turnSeq = 0
+let dynamicTools = []
 const turns = new Map()
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const now = () => Math.floor(Date.now() / 1000)
@@ -82,13 +83,20 @@ async function runTurn(turn, text) {
   notify('item/reasoning/summaryTextDelta', { threadId: 'thr_1', turnId: turn.id, itemId: `r_${turn.id}`, delta: 'Thinking about it.' })
   const tool = /TOOL:([a-z_]+):(\{.*?\})(?:\s|$)/.exec(text)
   if (tool) {
-    const list = await mcp('tools/list', {})
-    log({ event: 'tools', names: list.tools.map((t) => t.name) })
-    notify('item/started', { threadId: 'thr_1', turnId: turn.id, item: { id: `m_${turn.id}`, type: 'mcpToolCall', server: 'sahilbot', tool: tool[1], status: 'inProgress', arguments: JSON.parse(tool[2]) } })
-    const out = await mcp('tools/call', { name: tool[1], arguments: JSON.parse(tool[2]) }).catch((e) => ({ content: [{ type: 'text', text: `error: ${e.message}` }], isError: true }))
-    const said = out.content?.map((c) => c.text).join('') ?? ''
-    log({ event: 'tool_result', text: said, isError: !!out.isError })
-    notify('item/completed', { threadId: 'thr_1', turnId: turn.id, item: { id: `m_${turn.id}`, type: 'mcpToolCall', server: 'sahilbot', tool: tool[1], status: 'completed' } })
+    const args = JSON.parse(tool[2])
+    const direct = dynamicTools.length > 0
+    const names = direct ? dynamicTools : (await mcp('tools/list', {})).tools
+    log({ event: 'tools', names: names.map((t) => t.name) })
+    const item = { id: `m_${turn.id}`, type: direct ? 'dynamicToolCall' : 'mcpToolCall', server: 'sahilbot', tool: tool[1], status: 'inProgress', arguments: args }
+    notify('item/started', { threadId: 'thr_1', turnId: turn.id, item })
+    const nativeName = `sb_${tool[1]}`
+    const listed = dynamicTools.some((entry) => entry.name === nativeName)
+    const out = direct
+      ? await askClient('item/tool/call', { threadId: 'thr_1', turnId: turn.id, callId: item.id, tool: listed ? nativeName : 'sb_sahilbot_call', arguments: listed ? args : { tool: tool[1], arguments: args } })
+      : await mcp('tools/call', { name: tool[1], arguments: args }).catch((e) => ({ content: [{ type: 'text', text: `error: ${e.message}` }], isError: true }))
+    const said = (direct ? out.contentItems : out.content)?.map((c) => c.text).join('') ?? ''
+    log({ event: 'tool_result', text: said, isError: direct ? !out.success : !!out.isError })
+    notify('item/completed', { threadId: 'thr_1', turnId: turn.id, item: { ...item, status: 'completed' } })
     await deltas(turn, `a_${turn.id}`, `Tool said: ${said.slice(0, 200)}`)
     return finish(turn, 'completed')
   }
@@ -121,7 +129,14 @@ const handlers = {
     setTimeout(() => { if (STATE) writeFileSync(STATE, 'chatgpt'); notify('account/login/completed', { loginId: 'L1', success: true, error: null }) }, 50)
     return { type: 'chatgpt', loginId: 'L1', authUrl: 'https://auth.openai.com/oauth/authorize?client=codex&fake=1' }
   },
-  'thread/start': (p) => { log({ event: 'thread_start', params: p }); notify('thread/started', { thread: { id: 'thr_1' } }); return { thread: { id: 'thr_1', sessionId: 's1' } } },
+  'thread/resume': (p) => {
+    log({ event: 'thread_resume', params: p }); return { thread: { id: p.threadId } }
+  },
+  'thread/start': (p) => {
+    if (process.env.FAKE_CODEX_LEGACY && p.dynamicTools?.length) throw new Error('dynamicTools are unsupported')
+    dynamicTools = p.dynamicTools ?? []
+    log({ event: 'thread_start', params: p }); notify('thread/started', { thread: { id: 'thr_1' } }); return { thread: { id: 'thr_1', sessionId: 's1' } }
+  },
   'turn/start': (p) => {
     const id = `turn_${++turnSeq}`
     const text = (p.input ?? []).filter((x) => x.type === 'text').map((x) => x.text).join('\n')

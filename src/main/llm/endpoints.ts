@@ -11,6 +11,8 @@ import { olderOpenAI, openaiInfo } from './openai-models'
 import { olderXai, xaiInfo, xaiRank } from './xai-models'
 import { spendingMode } from './budget'
 import { payPerUse, spendingPrefs } from './routing-table'
+import { GROK_PLAN_URL, isGrokPlanModel } from '@shared/grok-plan'
+import { grokPlan } from './grok/plan'
 // ChatGPT plan (via Codex): its models are listed while it's connected (llm/codex/plan.ts).
 import { chatgptPlan } from './codex/plan'
 import { CODEX_URL, PLAN_PROVIDER, isPlanModel } from './codex/ids'
@@ -73,7 +75,7 @@ export function pickable(m: ModelInfo, s: Pick<Settings, 'keys' | 'cloud'>): boo
   if (!m.installed) return false
   if (def(m.provider).local) return true
   // ChatGPT plan models are listed only while the plan is connected; no API key involved.
-  if (m.provider === PLAN_PROVIDER) return !!s.cloud?.enabled
+  if (m.provider === PLAN_PROVIDER || m.provider === 'grok-plan') return !!s.cloud?.enabled
   // No key info (a partial settings object): trust the listing, which only has keyed providers.
   return s.cloud.enabled && (s.keys ? !!s.keys[m.provider] : true)
 }
@@ -86,6 +88,7 @@ export function pickable(m: ModelInfo, s: Pick<Settings, 'keys' | 'cloud'>): boo
 export function missingReason(id: string, list: ModelList | null, s: Pick<Settings, 'keys' | 'cloud'>): string | undefined {
   if (isAuto(id) || !list) return undefined
   const m = list.models.find((x) => x.id === id)
+  if (isGrokPlanModel(id)) return !s.cloud?.enabled ? 'cloud models are switched off' : !m?.installed ? 'the Grok subscription is not connected' : undefined
   // ChatGPT plan: off in Settings, or connected without this model. While it's being checked or signing in, no telling.
   if (isPlanModel(id)) {
     if (m?.installed) return s.cloud?.enabled ? undefined : 'cloud models are switched off'
@@ -130,6 +133,7 @@ export class Endpoints {
     if (o) return { provider: providerForUrl(o), baseUrl: o, apiKey: this.settings.keyFor(o) }
     // ChatGPT plan models run through Codex, never through an API key.
     if (isPlanModel(model)) return { provider: PLAN_PROVIDER, baseUrl: CODEX_URL }
+    if (isGrokPlanModel(model)) return { provider: 'grok-plan', baseUrl: GROK_PLAN_URL }
     const at = (provider: ProviderId): Endpoint => {
       const baseUrl = baseUrlOf(provider, s.providers)
       return { provider, baseUrl, apiKey: this.settings.keyFor(baseUrl) }
@@ -160,8 +164,12 @@ export class Endpoints {
     const seen = new Set<string>()
     for (const { r } of results) for (const m of r.models) if (!seen.has(m.id)) { seen.add(m.id); models.push(m) }
     // ChatGPT plan (via Codex), when switched on: its models while connected and cloud models are allowed.
-    const plan = !o && chatgptPlan.prefs().enabled ? await chatgptPlan.refreshIfStale().catch(() => chatgptPlan.status()) : undefined
+    const [plan, grok] = await Promise.all([
+      !o && chatgptPlan.prefs().enabled ? chatgptPlan.refreshIfStale().catch(() => chatgptPlan.status()) : undefined,
+      !o && s.cloud.enabled && s.grokPlan?.enabled ? grokPlan.refresh().catch(() => grokPlan.status()) : undefined
+    ])
     if (plan && s.cloud.enabled) for (const m of chatgptPlan.models()) if (!seen.has(m.id)) { seen.add(m.id); models.push(m) }
+    if (grok) for (const m of grokPlan.models()) if (!seen.has(m.id)) { seen.add(m.id); models.push(m) }
 
     // Models added by name (an OpenRouter or newer Claude model the list doesn't show).
     // Only ones a keyed cloud provider claims can be picked; the rest are listed (not installed) with why.
@@ -206,6 +214,7 @@ export class Endpoints {
     // Cloud models: real context window, output cap and the price the budget charges.
     for (const m of models) {
       if (m.note !== 'remote' && m.provider !== 'anthropic') continue
+      if (m.provider === 'grok-plan' || m.provider === 'chatgpt') continue
       // xAI (xai-models.ts): window, output cap, tier, label, vision and price; a newer grok id is estimated.
       const grok = m.provider === 'xai' || /^grok-/i.test(m.id) ? xaiInfo(m.id) : undefined
       if (grok) {
@@ -235,12 +244,12 @@ export class Endpoints {
       }
       // A Claude id newer than SahilBot's table gets its family's facts; its price is then an estimate.
       const spec = claudeInfo(m.id)
-      if (spec?.contextTokens) m.contextTokens = spec.contextTokens
-      if (spec?.maxOutput) m.maxOutputTokens = spec.maxOutput
+      if (spec?.contextTokens) m.contextTokens ??= spec.contextTokens
+      if (spec?.maxOutput) m.maxOutputTokens ??= spec.maxOutput
       const p = priceFor(m.id)
       if (p.known || p.estimated) m.price = { input: p.input, output: p.output, ...(p.cacheRead !== undefined ? { cacheRead: p.cacheRead } : {}) }
       if (!p.known) m.priceEstimated = true
-      if (claudeFamily(m.id)) { m.vision = true; m.tools ??= true }
+      if (claudeFamily(m.id)) { if (m.note !== 'remote') m.vision = true; m.tools ??= true }
     }
     // Older models start off: earlier Claude of each family, and every OpenAI model but the current lineup.
     this.older = new Set([...olderClaude(models.filter((m) => m.provider === 'anthropic').map((m) => m.id)), ...olderOpenAI(models.filter((m) => m.provider === 'openai').map((m) => m.id)), ...olderXai(models.filter((m) => m.provider === 'xai').map((m) => m.id))].filter((id) => !s.customModels.includes(id)))
@@ -259,10 +268,11 @@ export class Endpoints {
     this.index = new Map(models.filter((m) => m.installed).map((m) => [m.id, m.provider]))
     const providers = results.map(({ t, r }) => ({ id: t.id, name: t.name, ok: r.ok, error: r.error, count: r.models.length }))
     if (plan) providers.push({ id: PLAN_PROVIDER, name: def(PLAN_PROVIDER).name, ok: plan.connected, error: plan.connected ? undefined : plan.problem, count: plan.connected ? plan.models.length : 0 })
+    if (grok) providers.push({ id: 'grok-plan', name: def('grok-plan').name, ok: grok.connected, error: grok.error, count: grokPlan.models().length })
     const ok = results.some(({ r }) => r.ok)
     const off = !o && !localOn(s)
     // Cloud only (local off): a ChatGPT plan that's connected counts as answering.
-    const okAll = ok || (off && !!plan?.connected)
+    const okAll = ok || !!grok?.connected || (off && !!plan?.connected)
     this.last = { ok: okAll, error: okAll ? undefined : results.map(({ t, r }) => `${t.name}: ${r.error}`).join(' · ') || (off ? 'No cloud model is connected yet. Add a Claude, OpenAI or Grok key, or your ChatGPT plan, in Settings → Models.' : 'No model server is set up.'), models, budgetGB, totalGB, providers, ...(off ? { localOff: true } : {}) }
     return this.last
   }
@@ -333,7 +343,8 @@ export class Endpoints {
     // A saved OpenAI or xAI key, or a connected ChatGPT plan, makes Auto cloud-first too, unless Settings say Local
     // first (same rule as Claude's key). With local models off there's nothing local to prefer: cloud first.
     routingPrefs.localOn = localOn(s)
-    routingPrefs.preferCloud = s.cloud.enabled && (o.preferCloud || (s.cloud.prefer === undefined && (!!s.keys?.openai || !!s.keys?.xai || chatgptPlan.available())) || !localOn(s))
+    routingPrefs.preferSubscriptions = s.cloud.enabled && s.grokPlan?.enabled === true && s.grokPlan.preferSubscriptions
+    routingPrefs.preferCloud = s.cloud.enabled && (o.preferCloud || (s.cloud.prefer === undefined && (!!s.keys?.openai || !!s.keys?.xai || chatgptPlan.available() || grokPlan.available())) || !localOn(s))
     routingPrefs.fableForHardest = s.cloud.enabled && o.fableForHardest
     // Monthly spending limit: None keeps Auto on the ChatGPT plan and local models (routing-table.ts).
     spendingPrefs.mode = spendingMode(s)
@@ -345,6 +356,7 @@ export class Endpoints {
       (this.override() ? m.note !== 'remote' || s.cloud.enabled : pickable(m, s)) && (m.note !== 'remote' || this.affordable(m)) &&
       // ChatGPT plan: its models only while it can take requests (not over its limit); "Use my ChatGPT plan first" keeps the pay-per-token OpenAI API out.
       chatgptPlan.allows(m) &&
+      (m.provider !== 'grok-plan' || grokPlan.available()) &&
       // Monthly limit None: no pay-per-use model (only the ChatGPT plan and local models).
       (spendingPrefs.mode !== 'none' || !payPerUse(m)))
   }

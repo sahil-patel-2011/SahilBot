@@ -8,7 +8,7 @@ import { priceFor, tierTokens, cost } from './budget'
 import { taskScope } from '../agent/runtime/policy'
 // xAI (Grok) over its Responses API, and Fast mode (each provider's faster, pricier service tier).
 import { streamXai } from './xai-client'
-import { xaiMaxTokens } from './xai-models'
+import { updateXaiCatalog, xaiMaxTokens } from './xai-models'
 import { currentFastTier, fastFactor, fastSupport } from './fast-mode'
 import { httpError, retryInfo, withRetries } from './retry'
 import { timer } from './timing'
@@ -16,6 +16,8 @@ import { toolTurnSampling, withToolPrimer } from './local-tools'
 // ChatGPT plan (via Codex): chatgpt-plan/… models run through the user's own Codex (llm/codex).
 import { isCodexUrl } from './codex/ids'
 import { streamCodex } from './codex/session'
+import { GROK_PLAN_URL } from '@shared/grok-plan'
+import { grokPlan } from './grok/plan'
 
 export { backoffMs, httpError, parseRetryAfter, retryAfterFrom, retryInfo, retryPolicy, withRetries } from './retry'
 
@@ -42,6 +44,9 @@ export interface WireTool {
 }
 
 export interface ChatRequest {
+  /** Primary chat only. Background routing and verification are ephemeral. */
+  conversationKey?: string
+  conversationTitle?: string
   baseUrl: string
   apiKey?: string
   model: string
@@ -175,7 +180,8 @@ export async function listModels(baseUrl: string, apiKey?: string, signal?: Abor
   }
   const res = await fetch(`${trim(baseUrl)}/models`, { headers: headers(apiKey, baseUrl), signal })
   if (!res.ok) throw new Error(`GET /models -> ${res.status} ${await res.text().catch(() => '')}`.trim())
-  const body = (await res.json()) as { data?: Array<{ id: string }> }
+  const body = (await res.json()) as { data?: Array<{ id: string } & Record<string, unknown>> }
+  if (isXai(baseUrl)) updateXaiCatalog(body.data ?? [])
   return (body.data ?? []).map((m) => m.id).sort()
 }
 
@@ -461,6 +467,10 @@ async function* route(req: ChatRequest, stats: ServerStats): AsyncGenerator<Stre
     yield* planAttempt(req)
     return
   }
+  if (req.baseUrl === GROK_PLAN_URL) {
+    yield* planAttempt(req, grokPlan.stream(req))
+    return
+  }
   if (await isOllama(req.baseUrl)) {
     yield* withRetries(() => streamOllama(req, stats), req.signal)
     return
@@ -474,11 +484,11 @@ async function* route(req: ChatRequest, stats: ServerStats): AsyncGenerator<Stre
 }
 
 /** A ChatGPT-plan step: recorded (as plan usage, $0: budget.priceFor) but never priced against the cap. */
-async function* planAttempt(req: ChatRequest): AsyncGenerator<StreamPart> {
+async function* planAttempt(req: ChatRequest, parts = streamCodex(req)): AsyncGenerator<StreamPart> {
   let input = 0
   let output = 0
   try {
-    for await (const part of streamCodex(req)) {
+    for await (const part of parts) {
       if (part.type === 'usage') { input += part.promptTokens; output += part.completionTokens }
       yield part
     }

@@ -16,6 +16,7 @@ import { SpendingLimitSection } from './SpendingLimit'
 import { FastModeSection } from './FastModeSettings'
 import { McpSettings } from './McpSettings'
 import { ChatgptPlanSettings } from './ChatgptPlanSettings'
+import { GrokPlanSettings } from './GrokPlanSettings'
 // Local models are opt-in: one quiet row when they're off, no download prompts (components/LocalModels.tsx).
 import { LocalModelsRow, VoiceOutputRow, localIsOn } from './LocalModels'
 import { ActivitySettings } from './ActivitySettings'
@@ -444,6 +445,7 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
         </Row>
       </Section>
       <div data-setting="chatgpt-plan"><ChatgptPlanSettings onRefresh={onRefresh} /></div>
+      {api.runtime !== 'server' && <GrokPlanSettings onRefresh={onRefresh} />}
 
       <Section title="How models are used">
         <Row id="show-bot-model-thinking" title="Show model and thinking" sub="Reveal model choices, thinking, and model names in bot and group chats.">
@@ -519,13 +521,13 @@ function CloudRouting({ s, patch, installed }: P & { installed: ModelInfo[] }) {
               <option value="local">Local first</option><option value="cloud">Cloud first</option>
             </select>
           </Row>
-          {s.keys.anthropic && (
-            <>
-              <Row title="Claude context" info="How much of Claude's 1M-token window a chat uses before older turns are summarized. More remembers more but costs more per step.">
-                <select className="set-select" value={s.cloud.contextStrategy ?? 'balanced'} aria-label="Claude context" onChange={(e) => void patch({ cloud: { ...s.cloud, contextStrategy: e.target.value as 'max' | 'balanced' | 'economy' } })} data-testid="claude-context-strategy">
+          <Row title="Cloud context" info="Maximum uses up to one million tokens when the provider supports it. Older turns are summarized as the conversation approaches its limit.">
+                <select className="set-select" value={s.cloud.contextStrategy ?? 'max'} aria-label="Cloud context" onChange={(e) => void patch({ cloud: { ...s.cloud, contextStrategy: e.target.value as 'max' | 'balanced' | 'economy' } })} data-testid="claude-context-strategy">
                   <option value="max">Maximum (1M)</option><option value="balanced">Balanced (400K)</option><option value="economy">Economy (128K)</option>
                 </select>
               </Row>
+          {s.keys.anthropic && (
+            <>
               <Row title="Claude's native tools" info="Claude's own computer-use, editor, terminal and web search tools, through SahilBot's same approvals. Web search then runs on Anthropic's servers ($10 per 1,000 searches).">
                 <Toggle on={s.cloud.nativeTools !== false} onChange={(v) => void patch({ cloud: { ...s.cloud, nativeTools: v } })} label="Claude's native tools" testId="claude-native-tools" />
               </Row>
@@ -802,7 +804,7 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
       if (e.kind === 'whisper') setDl({ progress: e.progress, error: e.error })
       if (e.done || e.error || e.kind !== 'whisper') load()
     })
-  }, [s.voiceOutput?.openai, s.local?.enabled, s.voiceInput?.model, s.voiceInput?.local])
+  }, [s.voiceOutput?.provider, s.keys.openai, s.keys.xai, s.voiceOutput?.openai, s.local?.enabled, s.voiceInput?.model, s.voiceInput?.local])
   const sp = voice?.speech
   const usable = (models?.models ?? []).filter((m) => m.installed && m.enabled)
   const progress = dl && !dl.error ? dl.progress : sp?.progress
@@ -821,11 +823,11 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
       <h2>Voice</h2>
       <div className="set-sub">Dictate with ⌘⇧D, talk with ⌘⇧V, Esc stops speaking.</div>
       <Section>
-        <Row id="speech-model" testId="voice-speech-model" title={sp ? <>{sp.label} <span className="hint" data-testid="voice-speech-reason">· {sp.reason}</span></> : 'Speech recognition'} sub={speechSub} info={sp?.why}>
+        {localIsOn(s) && <Row id="speech-model" testId="voice-speech-model" title={sp ? <>{sp.label} <span className="hint" data-testid="voice-speech-reason">· {sp.reason}</span></> : 'Speech recognition'} sub={speechSub} info={sp?.why}>
           {state}
-        </Row>
+        </Row>}
         <Row id="read-aloud" title="Read replies aloud" sub="Or press the speaker on any message."><Toggle on={s.speakReplies} onChange={(v) => void patch({ speakReplies: v })} label="Read replies aloud" testId="speak-replies" /></Row>
-        <div data-setting="voice-openai"><VoiceOutputRow s={s} patch={patch} output={voice?.output} /></div>
+        <div data-setting="voice-openai"><VoiceOutputRow s={s} patch={patch} /></div>
         {voice && localIsOn(s) && (
           <Row id="speaking-voice" title="Voice" sub={voice.kokoro ? 'Kokoro, on this Mac.' : 'Kokoro (92 MB) downloads when you try it.'}>
             <div className="key-edit">
@@ -839,21 +841,22 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
       </Section>
       <Disclosure title="Advanced" sub="Speech model, local transcription and the voice model" testId="voice-advanced">
         <Section>
-          <Row id="transcribe-local" title="Transcribe on this Mac" sub="Off: OpenAI transcribes, when allowed above.">
-            <Toggle on={s.voiceInput?.local !== false} onChange={(v) => void patch({ voiceInput: { ...s.voiceInput, local: v } })} label="Transcribe on this Mac" testId="voice-local" />
+          {localIsOn(s) && <><Row id="transcribe-local" title="Transcribe on this Mac" sub="Off: OpenAI transcribes, when allowed above.">
+            <Toggle on={s.voiceInput?.local === true} onChange={(v) => void patch({ voiceInput: { ...s.voiceInput, local: v } })} label="Transcribe on this Mac" testId="voice-local" />
           </Row>
           <Row id="whisper-model" title="Speech model" info="Auto: Whisper small on Macs under 16 GB, large-v3-turbo (5-bit) on 16–31 GB if a quick test says it's fast enough, large-v3-turbo (8-bit) on 32 GB and up. Models come from whisper.cpp's official repository and are checked against its checksums.">
             <select className="set-select" value={s.voiceInput?.model ?? 'auto'} aria-label="Speech model" onChange={(e) => void patch({ voiceInput: { ...s.voiceInput, model: e.target.value } })} data-testid="voice-whisper-model">
               {WHISPER_CHOICES.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
             </select>
           </Row>
+          </>}
           <Row id="voice-model" title="Model for voice conversations" sub="A light model answers faster.">
             <select className="set-select" value={s.taskModels.voice} aria-label="Model for voice conversations" onChange={(e) => void patch({ taskModels: { ...s.taskModels, voice: e.target.value } })} data-testid="voice-model">
               <option value="">Same as chat (Auto)</option>
               {usable.map((m) => <option key={m.id} value={m.id}>{m.label || m.id} · {TIER[m.tier]}</option>)}
             </select>
           </Row>
-          {voice && !voice.binary && <Row title="Speech recognition isn't built" sub="Run scripts/voice-setup.sh once." />}
+          {voice && localIsOn(s) && !voice.binary && <Row title="Speech recognition isn't built" sub="Run scripts/voice-setup.sh once." />}
         </Section>
       </Disclosure>
     </>

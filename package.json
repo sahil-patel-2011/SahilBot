@@ -81,7 +81,7 @@
         }
       ],
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "SahilBot uses the microphone for dictation and voice mode. Audio is processed on this Mac and never sent anywhere.",
+        "NSMicrophoneUsageDescription": "SahilBot uses the microphone for dictation and voice mode. Your selected speech provider processes your audio.",
         "NSAppleEventsUsageDescription": "SahilBot controls apps like Notes, Reminders, Calendar and System Events when you ask it to use your Mac.",
         "NSScreenCaptureUsageDescription": "SahilBot looks at your screen only while you have it use your computer for a task."
       },

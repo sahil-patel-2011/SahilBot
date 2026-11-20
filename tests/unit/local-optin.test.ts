@@ -171,7 +171,7 @@ describe('speech input', () => {
     expect(chooseStt({ ...base, localOn: false, openaiKey: false })).toEqual({ kind: 'none', note: NO_VOICE_INPUT })
     expect(chooseStt({ ...base, localOn: false, spendingNone: true })).toEqual({ kind: 'none', note: NO_VOICE_INPUT })
     expect(chooseStt({ ...base, localOn: false, cloudOn: false })).toEqual({ kind: 'none', note: NO_VOICE_INPUT })
-    expect(NO_VOICE_INPUT).toBe('Voice input needs speech recognition on this Mac or an OpenAI key (Settings → Voice).')
+    expect(NO_VOICE_INPUT).toMatch(/speech provider.*Settings → Voice/)
     // Not ready yet and no OpenAI: what's happening (it downloads itself; never a prompt).
     expect(chooseStt({ localOn: true, whisperReady: false, openaiKey: false, openaiAllowed: false })).toMatchObject({ kind: 'none', note: expect.stringMatching(/Getting speech recognition ready on this Mac/) })
   })

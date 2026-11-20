@@ -8,7 +8,7 @@ import { LEGACY_PAGES, NOT_IN_SETTINGS, PAGE_TITLES, SETTINGS_INDEX, searchSetti
 // Settings search finds every setting: each index entry points at a row that exists (its data-setting anchor),
 // every anchored row is in the index, and every saved setting has a row someone can search for.
 
-const SOURCES = ['SettingsModal.tsx', 'MemoryManager.tsx', 'ServerSettings.tsx'].map((f) => readFileSync(resolve('src/renderer/src/components', f), 'utf8')).join('\n')
+const SOURCES = ['SettingsModal.tsx', 'MemoryManager.tsx', 'ServerSettings.tsx', 'GrokPlanSettings.tsx'].map((f) => readFileSync(resolve('src/renderer/src/components', f), 'utf8')).join('\n')
 const anchors = new Set([...SOURCES.matchAll(/<Row\b[^>]*?\sid="([a-z0-9-]+)"/g), ...SOURCES.matchAll(/data-setting="([a-z0-9-]+)"/g)].map((m) => m[1]))
 
 const secrets = { get: () => undefined, set: () => undefined, has: () => false } as never

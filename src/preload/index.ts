@@ -35,6 +35,12 @@ const api: SahilBotApi = {
       return () => { ipcRenderer.removeListener('chatgptPlan:changed', h) }
     }
   },
+  grokPlan: {
+    status: call('grokPlan:status') as never,
+    configure: call('grokPlan:configure') as never,
+    signIn: call('grokPlan:signIn') as never,
+    openInstallGuide: call('grokPlan:openInstallGuide') as never
+  },
   spaces: {
     list: call('spaces:list') as never,
     create: call('spaces:create') as never,
@@ -198,6 +204,7 @@ const api: SahilBotApi = {
     }
   },
   voice: {
+    openNative: call('voice:openNative') as never,
     status: call('voice:status') as never,
     download: call('voice:download') as never,
     setVoice: call('voice:setVoice') as never,

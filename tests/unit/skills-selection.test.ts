@@ -77,7 +77,9 @@ const CASES: Array<[string, string, { codeProject?: boolean; first?: boolean }?]
   ['my blood pressure is high, what should I eat', 'medical-chronic-conditions'],
   ['I feel stressed and burned out', 'health-mental-health-support', { first: true }],
   ['draft a reply to this email', 'email-drafting', { first: true }],
-  ['plan a trip to japan', 'plan-a-trip']
+  ['plan a trip to japan', 'plan-a-trip'],
+  ['read recent restaurant reviews and compare dinner spots for wheelchair access', 'restaurant-review-research'],
+  ['source parts for this bill of materials, check the manufacturer part numbers and compare distributor lead times', 'parts-procurement']
 ]
 
 describe('skill selection', () => {

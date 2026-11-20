@@ -61,6 +61,8 @@ import { Db } from './db'
 import { machine, providerModels, root, teamCapacity, wiredLimitMB } from './llm/models'
 import { Endpoints } from './llm/endpoints'
 import { chatgptPlan, closeAll as closeCodexRuns, CODEX_INSTALL_URL } from './llm/codex'
+import { grokPlan } from './llm/grok/plan'
+import { GROK_INSTALL_GUIDE } from '@shared/grok-plan'
 import { autoWindow, samplingFor } from './llm/catalog'
 import { Warmup, lastUsedModel, warmupAllowed } from './llm/warmup'
 import { MemoryStore, similar, type ImportItemIn } from './memory'
@@ -165,7 +167,9 @@ import { isServer } from './runtime'
 import { phoneNote } from './phone/notes'
 import type { ToolContext } from './agent/types'
 import { embeddingProvider } from './knowledge/embeddings'
-import { OPENAI_URL } from './llm/providers'
+import { grokSpeech } from './voice/grok'
+import { connectedVoice, nativeVoiceSite, voicePreference } from '@shared/voice-provider'
+import { OPENAI_URL, XAI_URL } from './llm/providers'
 import { fromWav } from './voice/audio'
 import { swarmSpend } from './agent/swarm/ledger'
 import { mark, TIMING } from './timing'
@@ -986,7 +990,8 @@ app.whenReady().then(() => {
     // "Remember things automatically" (Settings → Memory): the prompts' memory guidance follows it.
     if (patch.learning !== undefined) setAutoMemory(s.learning?.enabled !== false)
     // Set up (onboarding just finished) or the speech model changed: get speech recognition ready.
-    if (patch.onboarded === true || patch.voiceInput !== undefined) voicePrepRef.current('auto')
+    if (patch.local || patch.voiceInput || patch.voiceOutput || patch.cloud || patch.disabledProviders || patch.setKeys) voice.resetEngines()
+    if (patch.onboarded === true || patch.voiceInput !== undefined || patch.local !== undefined) voicePrepRef.current('auto')
     alwaysOnChanged.current(patch)
     return s
   })
@@ -1073,6 +1078,25 @@ app.whenReady().then(() => {
   app.on('before-quit', () => { void closeCodexRuns() })
   // Check in the background at start when it's switched on (the model list waits for a stale check anyway).
   if (chatgptPlan.prefs().enabled) void chatgptPlan.refresh().then(() => endpoints.list()).catch(() => undefined)
+
+  const grokPreferences = () => settings.get().grokPlan ?? { enabled: false, preferSubscriptions: true }
+  grokPlan.configure(sub('grok-plan'), grokPreferences)
+  const refreshGrok = async (force: boolean) => {
+    const status = await grokPlan.refresh(force)
+    if (force) await endpoints.list().catch(() => undefined)
+    return status
+  }
+  handle('grokPlan:status', (refresh?: boolean) => refreshGrok(refresh === true))
+  handle('grokPlan:configure', async (patch?: { enabled?: boolean; preferSubscriptions?: boolean }) => {
+    const prefs = grokPreferences()
+    settings.set({ grokPlan: {
+      enabled: typeof patch?.enabled === 'boolean' ? patch.enabled : prefs.enabled,
+      preferSubscriptions: typeof patch?.preferSubscriptions === 'boolean' ? patch.preferSubscriptions : prefs.preferSubscriptions
+    } })
+    return refreshGrok(true)
+  })
+  handle('grokPlan:signIn', () => grokPlan.signIn())
+  handle('grokPlan:openInstallGuide', () => shell.openExternal(GROK_INSTALL_GUIDE))
   handle('models:setupPicks', async () => { await endpoints.list().catch(() => undefined); return endpoints.setupPicks() })
   // Let the GPU use up to 90% of memory (macOS caps it at about 75%). macOS asks for an admin password;
   // it lasts until restart unless kept with a small LaunchDaemon (also only with the user's password).
@@ -2280,17 +2304,23 @@ app.whenReady().then(() => {
     guard: (seconds) => hookSpend.beforeUsd(OPENAI_URL, DEFAULT_TRANSCRIBE_MODEL, transcribeUsd(DEFAULT_TRANSCRIBE_MODEL, undefined, seconds) * 1.5),
     charged: (seconds, t) => hookSpend.afterUsd(OPENAI_URL, DEFAULT_TRANSCRIBE_MODEL, transcribeUsd(DEFAULT_TRANSCRIBE_MODEL, t as never, seconds))
   })
+  const grokAudio = grokSpeech({
+    credentials: () => apiAccess(settings).xai(),
+    before: (model, usd) => hookSpend.beforeUsd(XAI_URL, model, usd),
+    after: (model, usd) => hookSpend.afterUsd(XAI_URL, model, usd)
+  })
   const voice = new VoiceService({
     output: () => {
       const s = settings.get()
-      const openaiOk = !!s.voiceOutput?.openai && !!apiAccess(settings).openai()
-      return { localOn: localOn(s), openai: openaiOk ? openaiVoice : null, openaiStt: openaiOk ? openaiEars : null, spendingNone: spendingMode(s) === 'none' }
+      const keys = apiAccess(settings)
+      const selected = connectedVoice(voicePreference(s), { openai: !!keys.openai(), xai: !!keys.xai() })
+      const openaiOk = selected === 'openai'
+      return { localOn: localOn(s) && !selected, xai: selected === 'xai' ? grokAudio : undefined, openai: openaiOk ? openaiVoice : null, openaiStt: openaiOk ? openaiEars : null, spendingNone: spendingMode(s) === 'none' }
     },
-    // Speech recognition runs on this Mac by default (voice is the exception to local-models opt-in):
-    // the Whisper model is picked for this Mac's memory and chip (voice/models.ts).
+    // Local speech needs both switches. A selected cloud voice never starts Whisper.
     input: () => {
       const v = settings.get().voiceInput
-      return { local: v?.local !== false, choice: v?.model ?? 'auto', bench: (v?.bench as never) ?? null, hw: { ramGB: Number(process.env.FOREMAN_RAM_GB) || totalmem() / 1024 ** 3, appleSilicon: process.arch === 'arm64' } }
+      return { local: localOn(settings.get()) && v?.local === true && voicePreference(settings.get()) === 'off', choice: v?.model ?? 'auto', bench: (v?.bench as never) ?? null, hw: { ramGB: Number(process.env.FOREMAN_RAM_GB) || totalmem() / 1024 ** 3, appleSilicon: process.arch === 'arm64' } }
     },
     saveBench: (b) => { settings.set({ voiceInput: { ...settings.get().voiceInput, bench: b } }) },
     // The one-time benchmark's sentence, in the Mac's own voice (no download).
@@ -2321,20 +2351,23 @@ app.whenReady().then(() => {
   // Speech recognition downloads itself in the background once set up (never in test runs: 'stub').
   voicePrepRef.current = (why) => void voice.prepare(why)
   if (settings.get().onboarded) setTimeout(() => voicePrepRef.current('auto'), HIDDEN ? 300 : 20_000).unref?.()
+  handle('voice:openNative', async () => {
+    const site = nativeVoiceSite(voicePreference(settings.get()))
+    if (!site) return false
+    await shell.openExternal(site)
+    return true
+  })
   handle('voice:status', () => voice.status())
   handle('voice:download', (kind: 'whisper' | 'vad' | 'kokoro') => voice.download(kind))
   handle('voice:setVoice', (v: string) => voice.setVoice(v))
   handle('voice:start', async (threadId: string | null, spaceId: string) => {
+    await voice.startVoice()
     if (!threadId) {
       const t = db.createThread(spaceId, 'auto', null)
       db.updateThread(t.id, { title: `Voice chat · ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` })
       threadId = t.id
     }
-    const st = db.getState(threadId)
-    st.voice = true
-    db.setState(threadId, st)
     voiceThread = threadId
-    await voice.startVoice()
     return threadId
   })
   handle('voice:stop', () => { voice.stop(); voiceThread = null })

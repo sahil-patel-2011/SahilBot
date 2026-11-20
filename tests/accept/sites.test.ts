@@ -1,4 +1,7 @@
 import type { Page } from 'playwright'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { launch, tempProfile } from './app'
 import { refFor, startMockLlm, type MockLlm } from '../fixtures/mock-llm'
@@ -166,6 +169,8 @@ describe('site playbooks and smarter browsing', () => {
 
   test('find, extract, expand, next_page and collapsed snapshots on a catalog', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
+    const workspace = mkdtempSync(join(tmpdir(), 'sahilbot-download-check-'))
+    await page.evaluate((folder) => window.foreman.settings.set({ workspaceDir: folder }), workspace)
     llm.script.push(
       call({ action: 'navigate', url: `${site.url}/catalog` }),
       call({ action: 'snapshot' }),
@@ -178,10 +183,12 @@ describe('site playbooks and smarter browsing', () => {
       (req) => { const t = String(req.messages.filter((m: any) => m.role === 'tool').at(-1).content); return call({ action: 'click', ref: refIn(t, /Next page: link "Next ›" \[ref=(e\d+)\]/) }) },
       call({ action: 'find', query: 'export csv' }),
       (req) => { const t = String(req.messages.filter((m: any) => m.role === 'tool').at(-1).content); return call({ action: 'click', ref: refIn(t, /1\. button "Export CSV" \[ref=(e\d+)\]/) }) },
+      call({ action: 'downloads', op: 'list' }),
+      call({ action: 'downloads', op: 'save', index: 1 }),
       { content: 'Done.' }
     )
-    await send(page, 'Look through the tea shop catalog')
-    await drive(page, llm)
+    await send(page, 'Look through the tea shop catalog and save its CSV export')
+    const approvals = await drive(page, llm)
     const outs = toolTexts(llm)
     // The snapshot: long list and table collapsed with expand refs; the cards and controls are there.
     const snap = outs[1]
@@ -207,8 +214,12 @@ describe('site playbooks and smarter browsing', () => {
     // next_page, then clicking it goes on.
     expect(outs[7]).toMatch(/Next page: link "Next ›" \[ref=e\d+\] \(the page marks it as rel=next\)\. Page 1 of 3\./)
     expect(outs[8]).toMatch(/Navigated to http:\/\/127\.0\.0\.1:\d+\/catalog\?page=2/)
-    // The export offers a file: nothing is saved without the user.
+    // The download offer is shown before the test approves saving the HTTP fixture.
     expect(outs[10]).toContain('The page offered a download: "catalog.csv"')
+    expect(outs[11]).toContain('catalog.csv')
+    expect(approvals.some((item) => item.kind === 'approval' && item.text.includes('catalog.csv'))).toBe(true)
+    expect(outs[12]).toContain('Saved to')
+    expect(readFileSync(join(workspace, 'Downloads', 'catalog.csv'), 'utf8')).toBe('item,price\nMug 1,11.00\n')
     // The run's playbook learned the export tip.
     const pb = await playbook(page, (x) => x?.pitfalls?.some((p: any) => /export/i.test(p.text)))
     expect(pb.pitfalls.map((p: any) => p.text).join('\n')).toContain('Has an export: button "Export CSV" offers a file')

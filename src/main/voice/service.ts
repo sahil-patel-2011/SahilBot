@@ -16,9 +16,7 @@ import { WHISPER_MODELS, pickWhisper, whisperUrl, type Hardware, type WhisperBen
 
 // Electron side of voice: model files, the whisper-server process, and one pipeline that
 // either dictates into the composer or runs a hands-free voice conversation.
-// Speech recognition is local by default: the Whisper model voice/models.ts picks for this Mac downloads
-// itself in the background (after onboarding, or on first mic use), checked against the official
-// SHA-256, with progress in Settings → Voice. In test runs (download: 'stub') nothing is ever fetched.
+// Local speech preparation follows both the global local-model switch and the voice input preference.
 
 export const MODELS_DIR = process.env.FOREMAN_MODELS_DIR || join(homedir(), 'Library/Application Support/Foreman/models')
 
@@ -43,7 +41,7 @@ export interface VoiceHooks {
    * How replies may be spoken (llm-free): local voices allowed (local models on), and OpenAI's voice when
    * the user allowed it with a key saved (null otherwise). Without it: Kokoro when downloaded, else say.
    */
-  output?(): { localOn: boolean; openai: TtsEngine | null; spendingNone?: boolean; openaiStt?: SpeechToText | null }
+  output?(): { localOn: boolean; openai: TtsEngine | null; spendingNone?: boolean; openaiStt?: SpeechToText | null; xai?: { ears: SpeechToText; voice: TtsEngine } }
   /**
    * Speech recognition preferences (Settings → Voice): transcribe on this Mac (default on, whatever
    * local models say), the model ('auto' or a pinned id), the one-time benchmark, and this Mac.
@@ -88,11 +86,12 @@ export class VoiceService {
   /** The voice replies are spoken with right now (tts.ts chooseTts). */
   private outputChoice(): TtsChoice {
     const o = this.hooks.output?.()
-    return chooseTts({ localOn: o?.localOn ?? true, kokoroInstalled: this.kokoroInstalled(), openaiKey: !!o?.openai, openaiAllowed: !!o?.openai, spendingNone: o?.spendingNone })
+    if (o?.xai && !o.spendingNone) return 'xai'
+    return chooseTts({ localOn: o?.localOn ?? false, kokoroInstalled: this.kokoroInstalled(), openaiKey: !!o?.openai, openaiAllowed: !!o?.openai, spendingNone: o?.spendingNone })
   }
 
   private inputPrefs(): { local: boolean; choice: string; bench?: WhisperBench | null; hw: Hardware } {
-    return this.hooks.input?.() ?? { local: true, choice: 'auto', hw: { ramGB: 16, appleSilicon: process.arch === 'arm64' } }
+    return this.hooks.input?.() ?? { local: false, choice: 'auto', hw: { ramGB: 16, appleSilicon: process.arch === 'arm64' } }
   }
 
   /** The Whisper model picked for this Mac (voice/models.ts). */
@@ -118,6 +117,7 @@ export class VoiceService {
     const o = this.hooks.output?.()
     const p = this.inputPrefs()
     const st = this.files()
+    if (o?.xai && !o.spendingNone) return { kind: 'xai' }
     return chooseStt({
       localOn: p.local, whisperReady: st.binary && !!this.activeModel(), openaiKey: !!o?.openaiStt, openaiAllowed: !!o?.openaiStt, spendingNone: o?.spendingNone,
       preparing: this.prep ? { label: this.prep.label, progress: this.prep.progress, error: this.prep.error } : { label: this.pick().model.label }
@@ -131,10 +131,10 @@ export class VoiceService {
 
   private engine(): TtsEngine {
     const want = this.outputChoice()
-    const have: TtsChoice | null = this.tts instanceof KokoroEngine ? 'kokoro' : this.tts instanceof SayEngine ? 'say' : this.tts ? 'openai' : null
+    const have: TtsChoice | null = this.tts instanceof KokoroEngine ? 'kokoro' : this.tts instanceof SayEngine ? 'say' : this.tts?.name === 'Grok voice' ? 'xai' : this.tts ? 'openai' : null
     // A conversation in progress keeps its voice; the next one picks again.
     if (this.tts && (have === want || this.active !== 'off')) return this.tts
-    this.tts = want === 'kokoro' ? new KokoroEngine(join(this.dir, 'hf'), this.kokoroVoice) : want === 'openai' ? this.hooks.output?.()?.openai ?? new SayEngine() : new SayEngine()
+    this.tts = want === 'xai' ? this.hooks.output!().xai!.voice : want === 'kokoro' ? new KokoroEngine(join(this.dir, 'hf'), this.kokoroVoice) : want === 'openai' ? this.hooks.output?.()?.openai ?? new SayEngine() : new SayEngine()
     // The pipeline holds its voice: a new one is made with the new engine.
     this.pipe = null
     return this.tts
@@ -186,7 +186,7 @@ export class VoiceService {
    */
   async prepare(why: 'auto' | 'mic' | 'user' = 'auto'): Promise<void> {
     const prefs = this.inputPrefs()
-    if (!prefs.local && why !== 'user') return
+    if (!prefs.local) return
     const m = this.pick().model
     if (this.ready(m)) { if (!this.files().vad) await this.fetchVad().catch(() => undefined); return this.benchmark() }
     if (this.prep?.running && (this.prep.model === m.id || this.opts.download !== 'stub')) return
@@ -266,11 +266,11 @@ export class VoiceService {
    */
   private async benchmark(): Promise<void> {
     const pick = this.pick()
-    if (!pick.benchmark || this.benching || !this.hooks.saveBench || !this.files().binary || this.opts.download === 'stub') return
+    if (!this.inputPrefs().local || !pick.benchmark || this.benching || !this.hooks.saveBench || !this.files().binary || this.opts.download === 'stub') return
     this.benching = true
     try {
       const sample = await this.hooks.speechSample?.()
-      if (!sample) return
+      if (!sample || !this.inputPrefs().local) return
       const server = this.server(pick.model)
       await server.start()
       const t0 = performance.now()
@@ -292,6 +292,7 @@ export class VoiceService {
 
   /** Model download from Settings → Voice: Whisper (retry or a pinned model), Silero, or Kokoro (local voices only). */
   async download(kind: 'whisper' | 'vad' | 'kokoro'): Promise<void> {
+    if (this.hooks.output?.().localOn === false) throw new Error('Local model downloads are off in Settings.')
     if (kind === 'whisper') return this.prepare('user')
     try {
       if (kind === 'kokoro') {
@@ -323,6 +324,8 @@ export class VoiceService {
     let stt: SpeechToText
     if (choice.kind === 'whisper') {
       stt = this.server(this.activeModel()!)
+    } else if (choice.kind === 'xai') {
+      stt = this.hooks.output!().xai!.ears
     } else if (choice.kind === 'openai') {
       stt = this.hooks.output!().openaiStt!
     } else {
@@ -330,7 +333,7 @@ export class VoiceService {
       throw new Error(choice.note)
     }
     // Voice detection: Silero when it's on this Mac; otherwise the built-in one (nothing to download).
-    this.vad ??= st.vad ? await SileroVad.load(join(this.dir, VAD.file)) : new EnergyVad()
+    this.vad ??= this.inputPrefs().local && st.vad ? await SileroVad.load(join(this.dir, VAD.file)) : new EnergyVad()
     if (this.pipeStt !== choice.kind) { this.pipe = null; this.pipeStt = choice.kind }
     const tts = this.engine()
     await Promise.all([stt.start(), tts.warm()])
@@ -391,6 +394,17 @@ export class VoiceService {
 
   frame(samples: Float32Array): void {
     if (this.active !== 'off') void this.pipe?.feed(samples)
+  }
+
+  resetEngines(): void {
+    this.stop()
+    this.stopSpeaking()
+    this.whisper?.stop()
+    this.whisper = null
+    this.vad = null
+    this.tts = null
+    this.pipe = null
+    this.pipeStt = null
   }
 
   dispose(): void {

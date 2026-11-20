@@ -195,6 +195,21 @@ describe('streaming through Codex', () => {
     expect(start.config['features.shell_tool']).toBe('false')
   })
 
+  test('a restart resumes the saved provider thread with updated instructions and isolates identical chats', async () => {
+    await connect()
+    const messages: WireMessage[] = [{ role: 'system', content: 'Original constraints' }, { role: 'user', content: 'Internal reference alpha' }]
+    await collect(streamChat(req(messages, { conversationKey: 'A' })))
+    await closeAll()
+    const next: WireMessage[] = [{ role: 'system', content: 'Updated constraints' }, messages[1], { role: 'assistant', content: 'OK' }, { role: 'user', content: 'Continue' }]
+    await collect(streamChat(req(next, { conversationKey: 'A' })))
+    await collect(streamChat(req(next, { conversationKey: 'B' })))
+    expect(logs().filter((x) => x.event === 'thread_start')).toHaveLength(2)
+    expect(logs().filter((x) => x.event === 'thread_resume')).toHaveLength(1)
+    const resumed = logs().filter((x) => x.event === 'turn_start')[1].text
+    expect(resumed).toContain('Updated constraints')
+    expect(resumed).not.toContain('Internal reference alpha')
+  })
+
   test('a Codex shell command is declined', async () => {
     await connect()
     const ps = await collect(streamChat(req([{ role: 'user', content: 'SHELL please' }])))
@@ -299,7 +314,7 @@ function postTool() {
 }
 
 describe('bots on the ChatGPT plan keep SahilBot\'s tools and approvals', () => {
-  test('Codex calls a SahilBot tool over the bridge; it waits for the user\'s approval, runs in SahilBot, and the result goes back to Codex', async () => {
+  test('Codex calls a SahilBot function; it waits for the user\'s approval, runs in SahilBot, and returns the result', async () => {
     await connect()
     const p = postTool()
     const h = harness([p.tool])
@@ -315,13 +330,27 @@ describe('bots on the ChatGPT plan keep SahilBot\'s tools and approvals', () => 
     expect(final?.content).toContain('Tool said:')
     expect(final?.content).toContain('sent to team')
     expect(final?.model).toBe(MODEL)
-    // The reply streamed into the chat, and Codex saw SahilBot's tools (and only through the bridge).
+    // The reply streamed into the chat, and Codex saw SahilBot's functions without a loopback server.
     expect(h.events.some((e) => e.type === 'delta')).toBe(true)
     const l = logs()
-    // The step's tools (lean mode offers find_tools first) plus sahilbot_call for tools loaded later; a call by name still runs through the loop.
-    expect((l.find((x) => x.event === 'tools')?.names as string[])).toContain('sahilbot_call')
-    expect(l.find((x) => x.event === 'start' && (x.config as Record<string, string>)['mcp_servers.sahilbot.url'])).toMatchObject({ tokenInArgs: false, tokenInEnv: true })
+    expect((l.find((x) => x.event === 'tools')?.names as string[])).toContain('sb_sahilbot_call')
+    expect(l.find((x) => x.event === 'start' && (x.config as Record<string, string>)['mcp_servers.sahilbot.url'])).toBeUndefined()
     expect(l.find((x) => x.event === 'tool_result')).toMatchObject({ isError: false })
+  })
+
+  test('older app servers can still call SahilBot through the loopback bridge', async () => {
+    await connect()
+    process.env.FAKE_CODEX_LEGACY = '1'
+    try {
+      const p = postTool()
+      const h = harness([p.tool])
+      const t = h.thread('ask')
+      const { done } = await h.agent.send({ threadId: t.id, text: 'TOOL:post_thing:{"to":"team"}' })
+      await answerNext(h.agent, t.id, 'allow')
+      expect(await done).toBe('finished')
+      expect(p.ran).toEqual(['team'])
+      expect(logs().find((x) => x.event === 'start' && (x.config as Record<string, string>)['mcp_servers.sahilbot.url'])).toMatchObject({ tokenInArgs: false, tokenInEnv: true })
+    } finally { delete process.env.FAKE_CODEX_LEGACY }
   })
 
   test('a denied call never runs, and Codex is told', async () => {

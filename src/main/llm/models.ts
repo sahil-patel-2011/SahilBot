@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { totalmem } from 'node:os'
 import type { ModelInfo, ProviderId } from '@shared/types'
 import { estimateMemory, gpuBudgetGB, lookup, paramsFromName, prettyName, tierOf } from './catalog'
+import { anthropicModelCatalog } from './anthropic'
 import { isLocal, listModels } from './client'
 
 interface OllamaFacts {
@@ -78,6 +79,15 @@ export async function providerModels(provider: ProviderId, providerName: string,
   const { budgetGB } = machine()
   let ids: string[]
   try {
+    if (provider === 'anthropic' && apiKey) {
+      const catalog = await anthropicModelCatalog(apiKey)
+      return { ok: true, models: catalog.map((m) => ({
+        id: m.id, label: m.display_name, provider, providerName, enabled: true, installed: true, fits: true,
+        tier: tierOf(m.id), vision: m.capabilities?.image_input?.supported ?? true, tools: true, requiredGB: 0,
+        maxFittingWindow: m.max_input_tokens ?? 131072, contextTokens: m.max_input_tokens ?? undefined,
+        maxOutputTokens: m.max_tokens ?? undefined, note: 'remote'
+      })) }
+    }
     ids = await listModels(baseUrl, apiKey, AbortSignal.timeout(5000))
   } catch (e) {
     return { ok: false, error: (e as Error).message, models: [] }

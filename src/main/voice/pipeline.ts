@@ -38,6 +38,8 @@ export class VoicePipeline {
   private speech: Float32Array[] = []
   private chain: Promise<void> = Promise.resolve()
   private reply: AbortController | null = null
+  private generation = 0
+  private stopped = 0
   private audioUntil = 0
   private lastVoiceAt = 0
   private speculative: { frames: number; text: Promise<string> } | null = null
@@ -59,7 +61,8 @@ export class VoicePipeline {
 
   /** Feed one 512-sample frame of 16 kHz mono audio. Frames are processed in order. */
   feed(frame: Float32Array): Promise<void> {
-    this.chain = this.chain.then(() => this.process(frame)).catch((e) => this.d.emit({ type: 'error', message: (e as Error).message }))
+    const stopped = this.stopped
+    this.chain = this.chain.then(() => stopped === this.stopped ? this.process(frame) : undefined).catch((e) => this.d.emit({ type: 'error', message: (e as Error).message }))
     return this.chain
   }
 
@@ -72,7 +75,10 @@ export class VoicePipeline {
       onStart: () => {
         this.speech = [...this.ring]
         this.speculative = null
-        if (this.mode === 'voice' && this.busy) this.bargeIn()
+        if (this.mode === 'voice') {
+          if (this.busy) this.bargeIn()
+          else this.generation++
+        }
         this.d.emit({ type: 'state', state: 'hearing' })
       },
       onEnd: () => {
@@ -99,6 +105,7 @@ export class VoicePipeline {
   }
 
   private bargeIn(): void {
+    this.generation++
     this.reply?.abort()
     this.reply = null
     this.audioUntil = 0
@@ -110,9 +117,16 @@ export class VoicePipeline {
     const t0 = this.now()
     const spec = this.speculative
     this.speculative = null
-    const text = spec ? await spec.text : await this.d.whisper.transcribe(concat(this.speech))
-    this.d.emit({ type: 'metric', name: 'stt_ms', ms: this.now() - t0 })
+    const generation = this.generation
+    const audio = concat(this.speech)
     this.speech = []
+    let text: string
+    try { text = spec ? await spec.text : await this.d.whisper.transcribe(audio) } catch (error) {
+      if (this.generation === generation) this.d.emit({ type: 'error', message: (error as Error).message })
+      return
+    }
+    if (generation !== this.generation) return
+    this.d.emit({ type: 'metric', name: 'stt_ms', ms: this.now() - t0 })
     if (!text || /^[\s.,!?-]*$/.test(text)) {
       this.d.emit({ type: 'state', state: 'listening' })
       return
@@ -174,6 +188,7 @@ export class VoicePipeline {
   }
 
   stop(): void {
+    this.stopped++
     this.bargeIn()
     this.d.vad.reset()
     this.speech = []

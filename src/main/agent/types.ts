@@ -147,6 +147,7 @@ export interface TodoItem {
 }
 
 export interface ThreadState {
+  subscriptionRevision?: number
   workerFolder?: string
   taskPolicy?: import('./runtime/store').TaskPolicy
   acceptance?: Array<{ criterion: string; tool: string; args: Record<string, unknown>; pointer?: string; equals?: unknown; contains?: string }>

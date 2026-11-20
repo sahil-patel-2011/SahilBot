@@ -124,16 +124,15 @@ The code lives in `src/main/llm/codex/session.ts`. **Codex is the model; SahilBo
    - `sandbox_mode="read-only"`, `approval_policy="on-request"`;
    - `project_doc_max_bytes=0`, `history.persistence="none"`, `model_reasoning_summary="auto"`;
    - `model_instructions_file=<the chat's SahilBot system prompt>`, which carries the bot's instructions, memory, rules and context;
-   - SahilBot's **tool bridge** as `mcp_servers.sahilbot` (url, `bearer_token_env_var`, `tool_timeout_sec=3600`, `required=true`);
    - each of the user's own Codex MCP servers (from `codex mcp list --json`) set to `enabled=false`.
 
    The run's working folder is an empty private temporary folder.
-3. **Tool bridge.** The bridge (`codex/bridge.ts`) is a loopback-only, stateless MCP server. It rejects web-page Origins and unexpected Host headers. Each run gets a random `sbr_…` token in the child's environment, never on disk or in arguments. The token is revoked when the run ends. The bridge lists that step's SahilBot tools, plus `sahilbot_call` for tools loaded later with `find_tools`.
-4. **Tool calls.** When Codex calls a tool, the bridge holds the MCP request open. The call is handed to SahilBot's loop as this step's tool call. The loop runs it exactly as for any model:
+3. **Tool registration.** SahilBot registers its tools as app-server functions at thread startup. The model gets instructions to use the workspace tools and check their results before reporting completion. `sb_sahilbot_call` is available for tools loaded later with `find_tools`. Older versions that reject function registration use the loopback MCP bridge. It rejects web-page origins and unexpected Host headers. Its per-run token lives in the child process environment and is revoked when the run ends.
+4. **Tool calls.** When Codex calls a tool, SahilBot holds the request open and hands the call to its agent loop. The loop runs it exactly as for any model:
    - the chat's permission mode, approval cards, hard stops and taint checks;
    - the purchase, secret and vault guards and goal and swarm limits.
 
-   The loop stores the result and asks for the next step. That request carries the result: the bridge returns it to Codex, and Codex's turn continues. Parallel calls within 40 ms become one step.
+   The loop stores the result and asks for the next step. SahilBot returns the result to Codex, and its turn continues. Parallel calls within 40 ms become one step.
 5. **Codex's own actions.** Any Codex command-execution or file-change approval request is declined, with a note in the reasoning. Approval requests for SahilBot's own bridge tools are accepted, because SahilBot asks the user itself.
 6. **Streaming.** These events stream into the chat:
    - `item/agentMessage/delta` becomes the reply text;
@@ -141,9 +140,9 @@ The code lives in `src/main/llm/codex/session.ts`. **Codex is the model; SahilBo
    - token usage from `thread/tokenUsage/updated`.
 
    SahilBot's own tool-call bubbles show the tools.
-7. **Follow-ups.** A follow-up message reuses the same Codex thread when the conversation prefix matches (a fingerprint), and sends only the new message. Otherwise, for example after compaction or an edit, a fresh thread gets SahilBot's transcript as one message. User steering during a run goes in with `turn/steer`.
+7. **Follow-ups.** Each SahilBot chat saves its Codex thread ID in the app profile. A follow-up resumes that thread after an idle timeout or an app restart. Matching histories send only new input. After compaction, SahilBot supplies the current summary and recent turns. Editing or retrying a previous message starts a separate history. Background routing checks run in ephemeral threads.
 8. **Stop.** Stop calls `turn/interrupt`, refuses waiting calls, and ends the process.
-9. **Cleanup.** Idle threads close after 10 minutes. A step waiting on an approval gives up after 30 minutes. At most 6 Codex processes run at once; Team and Heavy helpers beyond that queue.
+9. **Cleanup.** Idle processes close after 10 minutes. The thread ID remains available for the next turn. A step waiting on an approval gives up after 30 minutes. At most 6 Codex processes run at once; Team and Heavy helpers beyond that queue.
 10. **Limit reached.** On `usageLimitExceeded`:
     - the step fails with a clear message ("…limit is reached in Codex. It resets …");
     - plan models drop out of Auto until the reset;
@@ -229,3 +228,10 @@ Submit OpenAI's Sign in with ChatGPT interest form for SahilBot (a paid, locally
 
 - `tests/unit/chatgpt-plan.test.ts`.
 - `tests/fixtures/fake-codex.mjs`: a fake `codex` speaking the documented commands and app-server protocol.
+
+
+## Voice and context
+
+In Settings → Voice, select OpenAI voice, Grok voice, or Auto to use a connected speech API key. The transcript goes to the current SahilBot chat, where the selected model can work with its tools and Cursor agents. API speech counts toward the spending limit. Choosing ChatGPT in browser or Grok in browser opens the provider's website for its own voice experience and conversation history.
+
+Maximum cloud context uses the selected provider's advertised capacity up to one million tokens. The Codex CLI catalog can report a different limit from the OpenAI API for the same model. SahilBot keeps conversation records locally and uses summaries and recent messages when a prompt approaches its budget.

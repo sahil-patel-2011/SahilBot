@@ -115,7 +115,7 @@ export function cleanVoiceInput(v: unknown): VoiceInputSettings {
   const x = (v ?? {}) as Partial<VoiceInputSettings>
   const b = x.bench
   const bench = b && typeof b.model === 'string' && isWhisperId(b.model) && Number.isFinite(b.ms) && b.ms >= 0 && Number.isFinite(b.at) ? { model: b.model, ms: Math.round(b.ms), at: b.at } : undefined
-  return { local: x.local !== false, model: isWhisperId(x.model) ? x.model : 'auto', ...(bench ? { bench } : {}) }
+  return { local: x.local === true, model: isWhisperId(x.model) ? x.model : 'auto', ...(bench ? { bench } : {}) }
 }
 
 /** The local-models choice as saved (undefined: not decided yet, which counts as off). */
@@ -128,7 +128,7 @@ export function cleanLocal(v: unknown): LocalSettings | undefined {
 /** Speech output settings as saved. */
 export function cleanVoiceOutput(v: unknown): VoiceOutputSettings {
   const x = (v ?? {}) as Partial<VoiceOutputSettings>
-  return { openai: x.openai === true }
+  return { openai: x.openai === true, ...(['auto', 'openai', 'xai', 'off', 'chatgpt-app', 'grok-app'].includes(x.provider ?? '') ? { provider: x.provider } : {}) }
 }
 
 export const MARKET_KEY_PROVIDERS: MarketKeyProvider[] = ['tiingo', 'polygon', 'alphavantage', 'finnhub']
@@ -306,6 +306,7 @@ export class SettingsStore {
       defaultMode: rest.defaultMode !== undefined ? cleanLevel(rest.defaultMode) ?? cur.defaultMode : cur.defaultMode,
       botModes: rest.botModes !== undefined ? cleanBotModes(rest.botModes) : cur.botModes,
       disabledProviders: rest.disabledProviders !== undefined ? [...new Set(rest.disabledProviders.filter((p) => DEFS.some((d) => d.id === p && !d.local)))] : cur.disabledProviders,
+      grokPlan: rest.grokPlan ? { enabled: rest.grokPlan.enabled === true, preferSubscriptions: rest.grokPlan.preferSubscriptions !== false } : cur.grokPlan,
       botAutonomy: rest.botAutonomy !== undefined ? cleanBotAutonomyMap(rest.botAutonomy) : cur.botAutonomy,
       me: rest.me !== undefined ? cleanMe(rest.me) : cur.me,
       learning: rest.learning !== undefined ? cleanLearning({

@@ -111,7 +111,7 @@ export interface Sampling {
 }
 
 /** Model servers that can be on at the same time; each model is routed to the one that serves it. */
-export type ProviderId = 'ollama' | 'lmstudio' | 'custom' | 'anthropic' | 'openai' | 'openrouter' | 'chatgpt' | 'xai'
+export type ProviderId = 'ollama' | 'lmstudio' | 'custom' | 'anthropic' | 'openai' | 'openrouter' | 'chatgpt' | 'xai' | 'grok-plan'
 
 export interface ProviderSettings {
   ollama: { enabled: boolean; baseUrl: string }
@@ -167,11 +167,12 @@ export interface Settings {
   hasApiKey: boolean
   providers: ProviderSettings
   /** Which providers can be used: a key saved in the Keychain and the provider not switched off. */
-  keys: Record<Exclude<ProviderId, 'chatgpt' | 'xai'>, boolean> & { chatgpt?: boolean; xai?: boolean }
+  keys: Record<Exclude<ProviderId, 'chatgpt' | 'xai' | 'grok-plan'>, boolean> & Partial<Record<'chatgpt' | 'xai' | 'grok-plan', boolean>>
   /** Which providers have a key saved, switched on or off (Settings → Models & Keys shows these as saved). */
   keysSaved?: Partial<Record<ProviderId, boolean>>
   /** Cloud providers switched off in Settings: their models aren't used, and their keys stay saved. */
   disabledProviders?: ProviderId[]
+  grokPlan?: { enabled: boolean; preferSubscriptions: boolean }
   /** A Cursor API key is saved: Cursor is connected (Cloud Agents). */
   hasCursorKey: boolean
   /** Also run Cursor's agent through its CLI on this Mac (off by default: Cursor connects by API key, for Cloud Agents). */
@@ -1214,7 +1215,7 @@ export interface SendInput {
   meta?: Record<string, unknown>
   /** Files and folders picked or dropped by the user; they become readable/editable for this thread. */
   attachments?: Attachment[]
-  /** Sent from voice mode: short spoken-style answers, 16k window. */
+  /** Sent from voice mode for short spoken-style answers. */
   voice?: boolean
   /** Team of Experts: the agent splits the work across many helper agents, then finishes the task. */
   team?: boolean
@@ -1239,6 +1240,7 @@ export interface SahilBotApi {
   system: { info(): Promise<SystemInfo> }
   /** ChatGPT plan (via Codex): Settings → Models. */
   chatgptPlan: import('./chatgpt-plan').ChatgptPlanApi & { onChanged(cb: () => void): () => void }
+  grokPlan: import('./grok-plan').GrokPlanApi
   settings: {
     get(): Promise<Settings>
     set(patch: Partial<Settings> & { apiKey?: string | null; braveKey?: string | null; cursorKey?: string | null; tbaKey?: string | null; setKeys?: Partial<Record<ProviderId, string | null>> }): Promise<Settings>
@@ -1353,6 +1355,7 @@ export interface SahilBotApi {
   }
   pickFolder(): Promise<string | null>
   voice: {
+    openNative(): Promise<boolean>
     status(): Promise<VoiceStatus>
     download(kind: 'whisper' | 'vad' | 'kokoro'): Promise<void>
     setVoice(v: string): Promise<void>
@@ -2925,6 +2928,7 @@ export interface LocalSettings {
 
 /** Speech output when local voices are off: OpenAI's TTS (needs a key and this switch) or the Mac's own voice. */
 export interface VoiceOutputSettings {
+  provider?: import('./voice-provider').CloudSpeechProvider
   /** Use OpenAI text-to-speech when an OpenAI key is saved (paid, priced against the monthly cap). Default off. */
   openai?: boolean
 }
@@ -2942,9 +2946,9 @@ export interface KnowledgeStatus {
 
 export interface VoiceStatus {
   /** The engine replies are spoken with: 'kokoro' (local), 'openai' (OpenAI TTS) or 'say' (the Mac's voice). */
-  output?: 'kokoro' | 'openai' | 'say'
+  output?: 'kokoro' | 'openai' | 'xai' | 'say'
   /** Speech recognition for voice input: 'whisper' (this Mac), 'openai' (OpenAI transcription) or 'none' (inputNote says what it needs). */
-  input?: 'whisper' | 'openai' | 'none'
+  input?: 'whisper' | 'openai' | 'xai' | 'none'
   inputNote?: string
   /** Speech recognition on this Mac (src/main/voice/models.ts): the Whisper model picked for it and its download. */
   speech?: VoiceSpeechStatus
@@ -2981,7 +2985,7 @@ export interface VoiceSpeechStatus {
 
 /** Speech recognition preferences (Settings → Voice → Advanced). */
 export interface VoiceInputSettings {
-  /** Transcribe on this Mac with Whisper (default on, independent of local models). */
+  /** Transcribe with Whisper when local models and local speech are both enabled. */
   local?: boolean
   /** 'auto' (default: picked for this Mac) or a Whisper model id. */
   model?: string

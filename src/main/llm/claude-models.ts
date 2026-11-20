@@ -251,7 +251,7 @@ export function claudeOptions(s: { cloud?: Partial<Settings['cloud']>; keys?: Pa
   const c = s.cloud ?? {}
   const strategy = c.contextStrategy
   return {
-    contextStrategy: strategy === 'max' || strategy === 'economy' ? strategy : 'balanced',
+    contextStrategy: strategy === 'balanced' || strategy === 'economy' ? strategy : 'max',
     nativeTools: c.nativeTools !== false,
     fableForHardest: c.fableForHardest === true,
     preferCloud: c.enabled !== false && (c.prefer === 'cloud' || (c.prefer === undefined && !!s.keys?.anthropic))

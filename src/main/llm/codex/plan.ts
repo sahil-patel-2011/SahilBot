@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { ModelInfo, Tier } from '@shared/types'
 import type { ChatgptPlanStatus, PlanLimitWindow, PlanModelEntry } from '@shared/chatgpt-plan'
 import { openaiInfo, openaiRank } from '../openai-models'
-import { codexEnv, codexVersion, findCodex, loginStatus, userMcpServers, type LoginMode, type McpServerOff } from './detect'
+import { codexEnv, codexVersion, run, findCodex, loginStatus, userMcpServers, type LoginMode, type McpServerOff } from './detect'
 import { CODEX_INSTALL_URL, PLAN_DEFAULT, PLAN_PROVIDER, PLAN_PROVIDER_NAME, isPlanModel, planModelId } from './ids'
 import { AppServer } from './rpc'
 
@@ -83,6 +83,7 @@ export class ChatgptPlan {
   private email?: string
   private planType?: string
   private codexModels: CodexModel[] = []
+  private windows = new Map<string, number>()
   private rate?: RateLimitSnapshot
   private limitedUntil?: number
   private limitMessage?: string
@@ -249,6 +250,11 @@ export class ChatgptPlan {
     })
   }
 
+  windowFor(id?: string): number | undefined {
+    const entry = id || this.codexModels.find((m) => m.isDefault)?.model
+    return entry ? this.windows.get(entry) : undefined
+  }
+
   /** The plan's models for the model list (only when connected and cloud models are allowed). */
   models(): ModelInfo[] {
     if (!this.connected()) return []
@@ -268,10 +274,10 @@ export class ChatgptPlan {
         vision: cm?.inputModalities ? cm.inputModalities.includes('image') : true,
         tools: true,
         requiredGB: 0,
-        maxFittingWindow: 131072,
+        maxFittingWindow: this.windowFor(e.codexId) ?? 131072,
         fits: true,
         note: 'remote',
-        contextTokens: info?.contextTokens ?? 272_000,
+        contextTokens: this.windowFor(e.codexId) ?? 272_000,
         ...(info?.maxOutput ? { maxOutputTokens: info.maxOutput } : {}),
         price: { input: 0, output: 0 }
       } satisfies ModelInfo
@@ -311,8 +317,17 @@ export class ChatgptPlan {
       let acct: Awaited<ReturnType<ChatgptPlan['readAccount']>> | undefined
       let problem: string | undefined
       let servers: McpServerOff[] = []
+      const windows = new Map<string, number>()
       if (st.mode === 'chatgpt') {
         acct = await this.readAccount(bin).catch((e: Error) => { problem = `Couldn't read your plan from Codex: ${e.message}`; return undefined })
+        // The CLI and API can give the same model different limits. Read the installed CLI's catalog.
+        const raw = await run(bin, ['debug', 'models'], { timeoutMs: 8000 })
+        if (!raw.code) try {
+          for (const row of JSON.parse(raw.stdout).models ?? []) {
+            const cap = row.max_context_window ?? row.context_window
+            if (typeof row.slug === 'string' && Number.isSafeInteger(cap) && cap > 0) windows.set(row.slug, cap)
+          }
+        } catch { /* Older CLI. Use the conservative plan window. */ }
         servers = await userMcpServers(bin).catch(() => [])
       }
       commit(() => {
@@ -322,6 +337,7 @@ export class ChatgptPlan {
         this.loginText = st.text
         this.problem = problem
         this.userServers = servers
+        this.windows = windows
         if (acct) {
           this.email = acct.email
           this.planType = acct.planType
@@ -354,8 +370,16 @@ export class ChatgptPlan {
       }
       const rl = await srv.request<{ rateLimits?: RateLimitSnapshot }>('account/rateLimits/read', {}, 15_000).catch(() => undefined)
       if (rl?.rateLimits) out.rate = rl.rateLimits
-      const ml = await srv.request<{ data?: CodexModel[] }>('model/list', {}, 15_000).catch(() => undefined)
-      if (ml?.data?.length) out.models = ml.data
+      const seen = new Set<string>()
+      let cursor: string | null = null
+      do {
+        type Page = { data?: CodexModel[]; nextCursor?: string }
+        const ml: Page | undefined = await srv.request<Page>('model/list', cursor ? { cursor } : {}, 15_000).catch(() => undefined)
+        if (ml?.data?.length) (out.models ??= []).push(...ml.data)
+        cursor = ml?.nextCursor ?? null
+        if (!cursor || seen.has(cursor)) break
+        seen.add(cursor)
+      } while (true)
       return out
     } finally {
       srv.close()
