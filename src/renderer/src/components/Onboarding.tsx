@@ -4,6 +4,7 @@ import { api, isServerRuntime } from '../api'
 import { Mascot } from '../brand'
 import * as I from '../icons'
 import { ChatgptPlanSettings } from './ChatgptPlanSettings'
+import { GrokPlanSettings } from './GrokPlanSettings'
 import '../styles-attachments.css'
 import { MacPermissions } from './SettingsModal'
 
@@ -11,7 +12,7 @@ type Pick = Awaited<ReturnType<typeof api.models.setupPicks>>[number]
 
 /**
  * First run, cloud first, two short steps: your name; then connect Claude, OpenAI or Grok with an API key,
- * or your ChatGPT plan (Codex), with one question, "Also use free local models on this Mac?" (Not now is
+ * or your ChatGPT plan (Codex) or Grok subscription (Grok Build), each installed in Terminal and checked with a test chat, with one question, "Also use free local models on this Mac?" (Not now is
  * the default), and where files go (one line, changeable). Only a yes runs the local setup (Ollama, model
  * downloads) as one extra step. Importing what another AI knows is an optional link that opens after setup.
  */
@@ -155,6 +156,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
   const [workspace, setWorkspace] = useState(settings.workspaceDir)
   const [keys, setKeys] = useState(settings.keys)
   const [plan, setPlan] = useState(false)
+  const [grok, setGrok] = useState(false)
   // "Also use free local models on this Mac?" Not now is the default.
   const [wantLocal, setWantLocal] = useState(false)
   const refreshKeys = (): void => { void api.settings.get().then((s) => setKeys(s.keys)).catch(() => undefined) }
@@ -201,6 +203,12 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
                 {!plan && <button className="btn" onClick={() => setPlan(true)} data-testid="onboarding-chatgpt-plan">Set up</button>}
               </div>
               {plan && <ChatgptPlanSettings embedded />}
+              <div className="connect-row" data-testid="onboarding-connect-grok-plan">
+                <div className="connect-text"><b>Use my Grok subscription (Grok Build)</b><div className="hint">Your Grok plan through xAI's official Grok Build app, within your plan's limits. No API charges.</div></div>
+                {!grok && <button className="btn" onClick={() => setGrok(true)} data-testid="onboarding-grok-plan">Set up</button>}
+              </div>
+              {grok && <GrokPlanSettings embedded />}
+              {(plan || grok) && <div className="hint" data-testid="onboarding-plan-steps">Install in Terminal runs the vendor's official installer, then its sign-in. When you're signed in, SahilBot sends one test message here to show the connection works.</div>}
             </div>
             <div className="onboard-local" data-testid="onboarding-local">
               <b>Also use free local models on this Mac?</b> <span className="hint">(optional, downloads ~5–20 GB)</span>
@@ -214,7 +222,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
               <I.Folder size={14} /><span>Files SahilBot makes go to <b title={workspace}>{workspace.replace(/^\/Users\/[^/]+/, '~')}</b></span>
               <button className="link-btn" onClick={() => void pickWorkspace()} data-testid="onboarding-workspace-change">Change…</button>
             </div>
-            {connected === 0 && !plan && !wantLocal && <div className="hint onboard-nokey" data-testid="onboarding-no-key">No AI connected yet. You can start anyway and add a key later: SahilBot shows where when you send your first message.</div>}
+            {connected === 0 && !plan && !grok && !wantLocal && <div className="hint onboard-nokey" data-testid="onboarding-no-key">No AI connected yet. You can start anyway and add a key later: SahilBot shows where when you send your first message.</div>}
             <label className="onboard-import"><input type="checkbox" checked={importAfter} onChange={(e) => setImportAfter(e.target.checked)} data-testid="onboarding-import" /> Afterwards, bring in what ChatGPT, Claude or Gemini already knows about me (you review it first)</label>
             <div className="modal-actions">
               <button className="btn" onClick={() => setStep(0)}>Back</button>

@@ -60,9 +60,9 @@ import { webTools } from './agent/tools/web'
 import { Db } from './db'
 import { machine, providerModels, root, teamCapacity, wiredLimitMB } from './llm/models'
 import { Endpoints } from './llm/endpoints'
-import { chatgptPlan, closeAll as closeCodexRuns, CODEX_INSTALL_URL } from './llm/codex'
+import { chatgptPlan, closeAll as closeCodexRuns, CODEX_INSTALL_URL, CODEX_URL, PLAN_DEFAULT } from './llm/codex'
 import { grokPlan } from './llm/grok/plan'
-import { GROK_INSTALL_GUIDE } from '@shared/grok-plan'
+import { GROK_INSTALL_GUIDE, GROK_PLAN_MODEL, GROK_PLAN_URL } from '@shared/grok-plan'
 import { autoWindow, samplingFor } from './llm/catalog'
 import { Warmup, lastUsedModel, warmupAllowed } from './llm/warmup'
 import { MemoryStore, similar, type ImportItemIn } from './memory'
@@ -1063,6 +1063,21 @@ app.whenReady().then(() => {
   handle('chatgptPlan:status', async (refresh?: boolean) => (refresh ? chatgptPlan.refresh() : chatgptPlan.refreshIfStale()))
   handle('chatgptPlan:connect', async (o?: { signIn?: boolean }) => { await chatgptPlan.connect({ signIn: o?.signIn === true }); return planChanged() })
   handle('chatgptPlan:loginInTerminal', () => chatgptPlan.loginInTerminal())
+  handle('chatgptPlan:installInTerminal', () => chatgptPlan.installInTerminal())
+  // Setup's last check: one real chat through the subscription, so "Connected" means a message works.
+  const testSubscription = async (baseUrl: string, model: string): Promise<{ ok: boolean; reply?: string; error?: string }> => {
+    try {
+      const reply = (await collectText(streamChat({
+        baseUrl, model, maxTokens: 256, sampling: samplingFor(model, {}), signal: AbortSignal.timeout(180_000),
+        messages: [{ role: 'system', content: 'You are SahilBot. This is a one-message connection check during setup.' },
+          { role: 'user', content: 'Say hello in one short sentence so I know you are connected.' }]
+      }))).trim()
+      return reply ? { ok: true, reply: reply.slice(0, 400) } : { ok: false, error: 'The model sent back an empty reply.' }
+    } catch (e) {
+      return { ok: false, error: (e as Error).name === 'TimeoutError' ? 'No reply after 3 minutes.' : (e as Error).message }
+    }
+  }
+  handle('chatgptPlan:testChat', () => testSubscription(CODEX_URL, PLAN_DEFAULT))
   handle('chatgptPlan:disconnect', async () => { chatgptPlan.disconnect(); return planChanged() })
   handle('chatgptPlan:setPrefs', async (patch: { preferPlan?: boolean; codexPath?: string | null }) => {
     const p = patch && typeof patch === 'object' ? patch : {}
@@ -1096,6 +1111,12 @@ app.whenReady().then(() => {
     return refreshGrok(true)
   })
   handle('grokPlan:signIn', () => grokPlan.signIn())
+  handle('grokPlan:installInTerminal', async () => {
+    const prefs = grokPreferences()
+    if (!prefs.enabled) settings.set({ grokPlan: { ...prefs, enabled: true } })
+    return grokPlan.installInTerminal()
+  })
+  handle('grokPlan:testChat', async () => { await grokPlan.refresh(true); return testSubscription(GROK_PLAN_URL, GROK_PLAN_MODEL) })
   handle('grokPlan:openInstallGuide', () => shell.openExternal(GROK_INSTALL_GUIDE))
   handle('models:setupPicks', async () => { await endpoints.list().catch(() => undefined); return endpoints.setupPicks() })
   // Let the GPU use up to 90% of memory (macOS caps it at about 75%). macOS asks for an admin password;

@@ -50,12 +50,19 @@ export interface ChatgptPlanStatus {
   installUrl: string
 }
 
+/** One real message through a subscription connection. */
+export interface SubscriptionTest { ok: boolean; reply?: string; error?: string }
+
 export interface ChatgptPlanApi {
   status(refresh?: boolean): Promise<ChatgptPlanStatus>
   /** Turns the provider on; signs in through Codex's own ChatGPT login when needed (signIn: even over an API-key login). */
   connect(o?: { signIn?: boolean }): Promise<ChatgptPlanStatus>
   /** Opens Terminal running `codex login` (OpenAI's own sign-in, outside SahilBot). */
   loginInTerminal(): Promise<{ ok: boolean; error?: string }>
+  /** Opens Terminal: OpenAI's official installer (when Codex isn't here), then `codex login`. */
+  installInTerminal(): Promise<{ ok: boolean; error?: string }>
+  /** Sends one real message through the plan (setup's last check). */
+  testChat(): Promise<SubscriptionTest>
   disconnect(): Promise<ChatgptPlanStatus>
   setPrefs(patch: { preferPlan?: boolean; codexPath?: string | null }): Promise<ChatgptPlanStatus>
   openInstallGuide(): Promise<void>

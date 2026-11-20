@@ -103,9 +103,11 @@ SahilBot drives the user's **own, locally installed, official Codex**:
 
 SahilBot only talks to Codex through its documented CLI commands and app-server protocol.
 
-### Setup (Settings → Models → "ChatGPT plan (via Codex)")
+### Setup (first-run setup, or Settings → Models → "ChatGPT plan (via Codex)")
 
-1. **Find Codex.** SahilBot looks in the usual install locations: Homebrew, npm, `~/.local/bin`, `Codex.app`, then the login shell's `command -v codex`. If Codex is missing, it shows **Install guide**, which links to `developers.openai.com/codex/cli`.
+1. **Find Codex.** SahilBot looks in the usual install locations: Homebrew, npm, `~/.local/bin`, `Codex.app`, then the login shell's `command -v codex`. If Codex is missing:
+   - **Install in Terminal** opens Terminal and runs OpenAI's official installer, `curl -fsSL https://chatgpt.com/codex/install.sh | sh` (from the [Codex README](https://github.com/openai/codex)). In the same window it then runs `codex login`, OpenAI's own ChatGPT sign-in. SahilBot checks again every few seconds while Terminal runs. SahilBot never runs the installer itself or sees the credentials.
+   - **Install guide** links to `developers.openai.com/codex/cli` instead.
 2. **Check sign-in.** SahilBot runs `codex login status` and reads its words, never a credential. If signed in with ChatGPT, it also reads `account/read` (email, plan type), `account/rateLimits/read` and `model/list` from a short-lived app-server.
 3. **Connect.**
    - If Codex isn't signed in, Connect starts Codex's own sign-in (`account/login/start`, type `chatgpt`). SahilBot opens the returned `https://` page in the browser. Codex receives the result and stores it its own way. SahilBot waits for `account/login/completed` and checks status again.
@@ -113,6 +115,9 @@ SahilBot only talks to Codex through its documented CLI commands and app-server 
    - An API-key login is reported as "bills per token, not your plan" and is not treated as the plan.
 4. **Use my ChatGPT plan first** (toggle). While the plan has room, Auto leaves the pay-per-token OpenAI API out of its pool, so GPT work goes to the plan.
 5. **Usage.** The 5-hour and weekly windows show "% used" and "resets at". Codex updates them during runs (`account/rateLimits/updated`).
+6. **Test chat.** Once connected, first-run setup sends one short message through the plan and shows the reply, so "Connected" means a chat really works. Settings has the same **Send a test message** button.
+
+Switching models mid-chat keeps the context: a resumed Codex thread gets everything other models said and did since its last turn, and a compacted or edited history starts a new thread instead of being appended. See docs/grok.md, "Context across model switches".
 
 ### Running a step
 

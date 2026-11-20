@@ -40,14 +40,27 @@ export class SubscriptionThread {
     this.save()
   }
 
-  /** Compacted, edited or otherwise divergent input must supply the authoritative local snapshot. */
+  /**
+   * The messages the provider thread hasn't seen yet, or undefined when SahilBot's record no longer
+   * extends what the thread holds (compacted, edited or offloaded history). Callers must then start a
+   * new provider thread from the full record: appending it to the old thread would hold the chat twice.
+   * Messages from other models (a mid-chat model switch) are part of the delta, so every provider
+   * sees the whole conversation.
+   */
   delta(messages: WireMessage[]): WireMessage[] | undefined {
     const c = this.cursor
     if (!c || c.length >= messages.length || digest(messages.slice(0, c.length).filter((m, i) => i || m.role !== 'system')) !== c.body) return undefined
     const next = messages.slice(c.length)
+    // The provider's own answer to the last request is already in its thread (advance() runs only after
+    // it answered, so the message right after the cursor is that answer). Tool-call steps stay: their
+    // call IDs are SahilBot's, and the results that follow refer to them.
+    if (next[0]?.role === 'assistant' && !next[0].tool_calls?.length && next.length > 1) next.shift()
     if (messages[0]?.role === 'system' && digest(messages[0]) !== c.system) next.unshift(messages[0])
     return next
   }
+
+  /** Whether the provider thread can be resumed with only the new messages. */
+  continues(messages: WireMessage[]): boolean { return !!this.id && this.delta(messages) !== undefined }
 }
 
 export const missingSubscriptionThread = (error: unknown): boolean =>

@@ -6,11 +6,27 @@ SahilBot supports Grok through a subscription or an xAI API key. The API model a
 
 ## Grok subscription
 
-Install [Grok Build](https://docs.x.ai/build/overview), then open **Settings → Models & Keys → Grok subscription**. Choose **Sign in** and use the Grok account that has your subscription. Back in SahilBot, choose **Check connection**. The CLI keeps its sign-in in a separate SahilBot profile. Turn the connection off at any time with **Use Grok subscription**. Connection checks authenticate without opening a chat. Each SahilBot conversation remembers its Grok session ID and resumes it through the CLI. The model picker reads available models and context limits from the installed CLI.
+Set it up in first-run setup (**Use my Grok subscription (Grok Build)** → **Set up**) or in **Settings → Models & Keys → Grok subscription**:
+
+1. **Install in Terminal** opens Terminal and runs xAI's official installer, `curl -fsSL https://x.ai/cli/install.sh | bash` ([docs](https://docs.x.ai/build/overview)), unless Grok Build is already installed. In the same window it then runs Grok Build's own sign-in (`grok login --oauth`) into a separate SahilBot profile. Sign in with the Grok account that has your subscription. **Install guide** opens xAI's page instead.
+2. SahilBot checks the connection every few seconds while Terminal runs, so there's nothing to click when it finishes.
+3. Once connected, setup sends **one test message** through the subscription and shows the reply. Settings has the same **Send a test message** button. **Check connection** on its own only signs in; it doesn't open a chat.
+
+Turn the connection off at any time with **Use Grok subscription**. Each SahilBot conversation remembers its Grok session ID and resumes it through the CLI (see [Context across model switches](#context-across-model-switches)). The model picker reads available models and context limits from the installed CLI.
 
 With **Use subscriptions first** enabled, Auto prefers eligible subscription models, including a connected ChatGPT plan. Other enabled models can take over when a subscription cannot handle the request or reaches its limit. API usage follows SahilBot’s spending limit. Grok manages its own plan allowance and extra credits. [Plan usage](https://docs.x.ai/grok/faq)
 
 The subscription connection uses Grok Build’s [Agent Client Protocol](https://docs.x.ai/build/cli/headless-scripting). It handles text and returns tool requests to SahilBot. SahilBot’s existing file, browser, connector, and approval tools carry out those requests. An API key and a subscription can be enabled independently.
+
+## Context across model switches
+
+SahilBot keeps the chat's transcript; Grok's and Codex's own sessions are caches of it.
+- **First use in a chat.** The provider gets the whole conversation.
+- **Later turns.** It gets only what it hasn't seen: the user's new messages and everything other models said or did in between (their replies, tool calls and tool results). So switching Grok → Claude → Grok mid-chat loses nothing. Its own last answer isn't sent back.
+- **History changed.** When SahilBot compacts the chat, offloads an old tool result or the user edits a message, the provider's session no longer matches. SahilBot then starts a **new** provider session from its full record instead of appending it, so the provider never holds the conversation twice.
+- **Limits.** Each vendor counts tokens differently and has its own window, so a switch to a smaller window can trigger compaction. Grok's encrypted reasoning isn't carried between turns.
+
+The code is `src/main/llm/subscription-thread.ts`; the tests are `tests/unit/subscription-thread.test.ts`, `grok-plan.test.ts` and `chatgpt-plan.test.ts`.
 
 ## xAI API key
 

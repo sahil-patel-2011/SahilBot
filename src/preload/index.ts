@@ -26,6 +26,8 @@ const api: SahilBotApi = {
     status: call('chatgptPlan:status') as never,
     connect: call('chatgptPlan:connect') as never,
     loginInTerminal: call('chatgptPlan:loginInTerminal') as never,
+    installInTerminal: call('chatgptPlan:installInTerminal') as never,
+    testChat: call('chatgptPlan:testChat') as never,
     disconnect: call('chatgptPlan:disconnect') as never,
     setPrefs: call('chatgptPlan:setPrefs') as never,
     openInstallGuide: call('chatgptPlan:openInstallGuide') as never,
@@ -39,6 +41,8 @@ const api: SahilBotApi = {
     status: call('grokPlan:status') as never,
     configure: call('grokPlan:configure') as never,
     signIn: call('grokPlan:signIn') as never,
+    installInTerminal: call('grokPlan:installInTerminal') as never,
+    testChat: call('grokPlan:testChat') as never,
     openInstallGuide: call('grokPlan:openInstallGuide') as never
   },
   spaces: {

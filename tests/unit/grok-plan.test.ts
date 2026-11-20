@@ -67,6 +67,43 @@ test('subscription mode signs in with the CLI, routes approved tool requests thr
   }
 })
 
+test('a model switch hands Grok everything it missed, and a changed history starts a new Grok session instead of appending', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'sahilbot-grok-switch-'))
+  vi.stubEnv('SAHILBOT_GROK_PATH', resolve('tests/fixtures/fake-grok-acp.mjs'))
+  writeFileSync(join(home, 'signed-in'), '')
+  grokPlan.configure(home, () => ({ enabled: true, preferSubscriptions: true }))
+  try {
+    expect(await grokPlan.refresh(true)).toMatchObject({ connected: true })
+    const log = (): Array<{ method: string; sessionId?: string; prompt?: string }> => readFileSync(join(home, 'requests.ndjson'), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    const ask = (messages: ChatRequest['messages']): Promise<StreamPart[]> => collect({ ...request(''), tools: [], messages, conversationKey: 'switch' })
+    const system = { role: 'system' as const, content: 'You are SahilBot.' }
+    const first = [system, { role: 'user' as const, content: 'Plan the launch for Acme.' }]
+    await ask(first)
+    // Grok answered ("Ready."), then the user switched to another model for one turn, then back to Grok.
+    const switched = [...first, { role: 'assistant' as const, content: 'Ready.' }, { role: 'user' as const, content: 'What budget fits?' },
+      { role: 'assistant' as const, content: 'A budget of 5000 dollars fits (from another model).' }, { role: 'user' as const, content: 'What is the next step?' }]
+    await ask(switched)
+    const resumed = log().filter((entry) => entry.method === 'session/prompt').at(-1)!.prompt!
+    expect(log().filter((entry) => entry.method === 'session/load')).toHaveLength(1)
+    expect(resumed).toContain('What budget fits?')
+    expect(resumed).toContain('A budget of 5000 dollars fits (from another model).')
+    expect(resumed).toContain('What is the next step?')
+    // Only the part Grok missed: not the first turn again, and not Grok's own reply.
+    expect(resumed).not.toContain('Plan the launch for Acme.')
+    expect(resumed).not.toContain('Ready.')
+    // SahilBot compacted the chat: Grok's old session no longer matches, so a new one starts from the full record.
+    const compacted = [system, { role: 'user' as const, content: 'Summary of the earlier chat: Acme launch, 5000 dollar budget.' }, { role: 'user' as const, content: 'Draft the announcement.' }]
+    await ask(compacted)
+    const sessions = log().filter((entry) => entry.method === 'session/new').map((entry) => entry.method)
+    expect(sessions).toHaveLength(2)
+    expect(log().filter((entry) => entry.method === 'session/load')).toHaveLength(1)
+    const fresh = log().filter((entry) => entry.method === 'session/prompt').at(-1)!
+    expect(fresh.sessionId).toBe('isolated-2')
+    expect(fresh.prompt).toContain('Summary of the earlier chat')
+    expect(fresh.prompt).toContain('Draft the announcement.')
+  } finally { vi.unstubAllEnvs() }
+})
+
 test('only valid declared tool envelopes become calls', () => {
   const text = '{"ok":true}'
   expect(decodeGrok(JSON.stringify({ sahilbot_action: 'answer', text }), tools)).toEqual({ text })
