@@ -57,6 +57,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'code-wrap', page: 'general', title: 'Wrap long code lines', words: 'appearance code block word wrap', keys: ['appearance.codeWrap'], advanced: true },
   { anchor: 'tint', page: 'general', title: 'Accent tint', words: 'appearance color hue intensity tint colour', keys: ['appearance.hue', 'appearance.tint'], advanced: true },
   { anchor: 'reduce-transparency', page: 'general', title: 'Reduce transparency', words: 'appearance solid background accessibility', keys: ['appearance.reduceTransparency'], advanced: true },
+  { anchor: 'animate-browser', page: 'general', title: 'Animate browser actions', words: 'cursor screen motion quiet flashing background', keys: ['advanced.animateBrowser'], advanced: true, macOnly: true },
   { anchor: 'font-size', page: 'general', title: 'Text size', words: 'appearance font size typography bigger smaller', keys: ['appearance.fontSize'], advanced: true },
   { anchor: 'keep-awake', page: 'general', title: 'Keep the Mac awake while bots work', words: 'sleep awake always on caffeinate', keys: ['keepAwakeWhileWorking'], advanced: true },
   { anchor: 'lid-awake', page: 'general', title: 'Keep working with the lid closed', words: 'lid closed shut clamshell sleep awake laptop travel', keys: ['lidAwake'] },
@@ -124,6 +125,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'usage', page: 'usage', title: 'Usage', words: 'usage spend cost tokens requests bots csv export history' },
   { anchor: 'phone-access', page: 'general', title: 'Phone access', words: 'phone iphone android mobile ipad qr code pair pairing wifi home network tailscale away notifications push remote', macOnly: true },
   { anchor: 'server', page: 'server', title: 'Always-on server', words: 'server raspberry pi always on remote phone devices pairing tailscale' },
+  { anchor: 'worker-machines', page: 'server', title: 'Worker machines', words: 'worker fleet bot placement move assign raspberry pi vm linux container slots', macOnly: true },
 
   // Advanced
   { anchor: 'rules', page: 'advanced', tab: 'rules', title: 'Rules', words: 'rules instructions always follow packs engineering medical business coding' },

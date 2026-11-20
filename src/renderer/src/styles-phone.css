@@ -12,3 +12,5 @@
 .phone-err { color: var(--danger); }
 .phone-foot { margin-top: 8px; }
 .phone-audit-row { padding-top: 4px; padding-bottom: 4px; }
+.worker-pair { display: flex; flex-wrap: wrap; gap: 8px; }
+.worker-pair .set-input { flex: 1 1 155px; min-width: 0; }

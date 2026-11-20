@@ -40,6 +40,7 @@ export interface GoalDeps {
   changed?(): void
   /** "Pause all routines": no wake-ups while true. */
   paused?(): boolean
+  available?(botId: string): boolean
 }
 
 export interface CreateGoal {
@@ -421,12 +422,13 @@ export class GoalManager {
     if (this.d.paused?.()) return
     const now = this.now()
     for (const g of this.store.list()) {
+      if (this.d.available?.(g.botId) === false) continue
       if ((g.status === 'active' || g.status === 'waiting_user') && g.endAt && g.endAt <= now && !this.busy.has(g.id)) {
         this.setStatus(g.id, 'paused', `Reached its end date (${fmtTime(g.endAt)})`, 'bot')
         this.notify(g, 'goal paused', `${g.title}: reached its end date`)
       }
     }
-    const due = this.store.due(now).filter((g) => !this.busy.has(g.id))
+    const due = this.store.due(now).filter((g) => !this.busy.has(g.id) && this.d.available?.(g.botId) !== false)
     await Promise.all(due.map((g) => this.wake(g.id)))
   }
 
@@ -435,7 +437,7 @@ export class GoalManager {
     this.busy.add(id)
     try {
       const g = this.store.get(id)
-      if (!g || g.status !== 'active' || g.nextWakeAt === null) return
+      if (!g || g.status !== 'active' || g.nextWakeAt === null || this.d.available?.(g.botId) === false) return
       const now = this.now()
       if (g.spentUsd >= g.maxUsd) { this.block(g); return }
       if (this.runsOn(id, now) >= g.maxRunsPerDay) {

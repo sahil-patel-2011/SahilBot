@@ -38,10 +38,14 @@ describe('quiet chat', () => {
           partner: 'qwen3.8:27b', needs: ['ideas'], fanout: 0, why: 'Two perspectives on naming'
         }), delay: 0 },
         { content: 'Try Hearth and Grain.', delay: 0 },
-        { content: 'I would choose Hearth and Grain.', reasoning: 'Compare memorable names.', delay: 0 }
+        { content: 'I would choose Hearth and Grain.', reasoning: 'Compare memorable names.', delay: 1200 }
       )
       await page.getByTestId('composer-input').fill('What would you call a shop that sells sourdough in the morning?')
-      await page.keyboard.press('Enter')
+      await page.getByTestId('send').click()
+      const status = page.getByTestId('status-line')
+      await status.waitFor()
+      expect(await page.getByTestId('stop').isVisible()).toBe(true)
+      expect(await status.getByRole('status').evaluate((el) => getComputedStyle(el).animationName)).toBe('none')
       const card = page.getByTestId('collaboration-card')
       await expect.poll(() => card.innerText(), { timeout: 25_000 }).toContain('Complete')
       expect(await card.innerText()).toContain('Second perspective')
@@ -75,7 +79,7 @@ describe('quiet chat', () => {
       { content: 'Done! Your study guide is saved.\n\n**The key idea:** grams of A → moles of A → moles of B → grams of B.\n\n1. Grams to moles: divide by the molar mass.\n2. Mole ratio: use the balanced equation.\n3. Moles to grams: multiply by the molar mass.', reasoning: 'Summarize.', delay: 30 }
     )
     await page.fill('[data-testid="composer-input"]', 'Help me study for my chem quiz on stoichiometry')
-    await page.keyboard.press('Enter')
+    await page.getByTestId('send').click()
     // While it works: one status line with a running timer.
     await page.waitForSelector('[data-testid="turn-timer"]', { timeout: 15_000 })
     await shot(page, '1-working')

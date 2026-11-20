@@ -85,6 +85,7 @@ import { MemorySystem, type RecallHit } from '../memory-system'
 import type { Embedder } from '../knowledge/embeddings'
 import { OutcomeRouter, outcomeLines, verdictFromEmoji, verdictFromWords, type VerdictSource } from '../llm/outcome-router'
 import { requestStrategy } from '@shared/request-strategy'
+import { placementBlock } from '../workers'
 import { completionReport } from './runtime/verification'
 import { phaseTask } from './runtime/phase'
 import { taskGraphTool } from './runtime/graph'
@@ -183,6 +184,7 @@ interface Run {
   record?: RunRecord
   meter?: TaskMeter
   nestedCalls?: number
+  deniedApprovals?: Set<string>
   connectSkipped?: Set<string>
   connectPending?: Map<string, Promise<Array<{ name: string; description: string; loaded: boolean }>>>
   ctrl: AbortController
@@ -615,6 +617,8 @@ export class Agent {
   async send(input: SendInput, opts: { unattended?: boolean } = {}): Promise<{ done: Promise<'finished' | 'stopped' | 'error'> }> {
     const thread = this.d.db.getThread(input.threadId)
     if (!thread) throw new Error('Thread not found')
+    const location = placementBlock(this.d.db, thread.spaceId)
+    if (location) throw new Error(location)
     if (this.runs.has(thread.id)) throw new Error('SahilBot is still working in this thread. Stop it first or wait.')
     if (!isRelayed({ meta: input.meta }) && !/^(?:continue|resume|keep going|go on|retry|try again|yes\b|proceed|fix (?:it|that)|also\b)/i.test(input.text.trim())) {
       const state = this.d.db.getState(thread.id); state.acceptance = undefined; state.taskPolicy = undefined; this.d.db.setState(thread.id, state)
@@ -849,6 +853,8 @@ export class Agent {
   }
 
   private start(thread: Thread, userText: string, opts: { unattended?: boolean; intro?: boolean; confirmTyped?: { slots: TypedSlot[]; messageId: string; text: string } } = {}): { done: Promise<'finished' | 'stopped' | 'error'> } {
+    const location = placementBlock(this.d.db, thread.spaceId)
+    if (location) throw new Error(location)
     const space = this.d.db.getSpace(thread.spaceId)
     const group = space?.kind === 'group'
     const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
@@ -903,13 +909,14 @@ export class Agent {
       if (!space || space.kind !== 'group') {
         status = mxs?.board.strategy === 'hybrid' ? await this.maxHybrid(thread, run, space, mxs) : this.heavyWanted(thread, run) ? await this.heavy(thread, run, space) : this.councilWanted(thread, run) ? await this.council(thread, run, space) : await this.loop(thread, run, space)
       } else {
-        const members = space.members.map((id) => this.d.db.getSpace(id)).filter((b): b is Space => !!b)
-        if (!members.length) throw new Error('This group has no bots. Add some in its settings.')
+        const members = space.members.map((id) => this.d.db.getSpace(id)).filter((b): b is Space => !!b && !placementBlock(this.d.db, b.id))
+        if (!members.length) throw new Error('This group has no bots available on this machine.')
         const queue = mentioned(userText, members)
         if (!queue.length) queue.push(...members)
         let hops = 0
         while (queue.length && status === 'finished') {
           const bot = queue.shift()!
+          if (placementBlock(this.d.db, bot.id)) continue
           run.speaker = bot
           status = await this.loop(thread, run, bot)
           const said = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.meta?.botId === bot.id && m.content)
@@ -1142,6 +1149,10 @@ export class Agent {
   /** A chat (or routine, or helper) is running. */
   busy(): boolean {
     return this.runs.size > 0
+  }
+
+  busyInSpace(spaceId: string): boolean {
+    return [...this.runs].some(([id, run]) => run.speaker?.id === spaceId || this.d.db.getThread(id)?.spaceId === spaceId)
   }
 
   /**
@@ -1715,6 +1726,8 @@ export class Agent {
     const { target, chain } = planAsk({ bots, asker, chain: state.askChain, name: a.bot ?? '', used, helper: !!run.helper || !!state.depth })
     this.asks.set(run, used + 1)
     const askerName = asker?.name ?? 'SahilBot'
+    const location = placementBlock(db, target.id)
+    if (location) return { text: location, display: 'bot is on a different worker' }
     const child = db.createThread(target.id, 'ask', null, thread.id)
     db.updateThread(child.id, { title: `Question from ${askerName}` })
     const cst = db.getState(child.id)
@@ -3500,6 +3513,10 @@ export class Agent {
       return { call, status: 'denied', content: why, meta: { ...baseMeta, status: 'denied', display: 'Skipped (needs approval)' } }
     }
     if (decision.verdict === 'ask' && !granted) {
+      const approvalKey = digest({ tool: tool.name, args, summary, reason: decision.reason })
+      if (run.deniedApprovals?.has(approvalKey)) {
+        return { call, status: 'denied', content: 'The user already declined this action during this run. Continue without it.', meta: { ...baseMeta, status: 'denied', display: 'Already declined' } }
+      }
       const grant = grantableFolder(decision.reason)
       const req: Omit<PendingRequest, 'id' | 'threadId'> = { kind: 'approval', tool: tool.name, label: tool.label, effect, args: pretty(call.arguments), reason: decision.reason, summary, ...(grant ? { folder: grant } : {}) }
       // An always-on bot shows the card while the user is there; otherwise (or after a while) it moves to Needs you.
@@ -3508,6 +3525,7 @@ export class Agent {
       // A pattern of approving or declining this kind of action is remembered as a preference, never as a permission.
       if (this.ownAnswers(run, ctx)) this.noteDecisions(() => this.d.decisions!.approval(thread.id, { tool: tool.name, args, label: tool.label, summary, answer }))
       if (answer === 'deny') {
+        ;(run.deniedApprovals ??= new Set()).add(approvalKey)
         return { call, status: 'denied', content: 'The user declined this action. Do not retry it. Ask what they would like instead, or continue without it.', meta: { ...baseMeta, status: 'denied', display: 'Skipped' } }
       }
       // "Always allow in <folder>": that folder joins this chat's folders (files there no longer ask); else the tool.

@@ -186,6 +186,8 @@ export class Scheduler {
   catchUpHours: () => number | null = () => null
   /** "Pause all routines": nothing fires while true; missed runs follow the catch-up rules on resume. */
   paused: () => boolean = () => false
+  /** Bot placement can pause this machine's copy of a routine without changing its schedule. */
+  available: (spaceId: string) => boolean = () => true
   /** When the scheduler last checked for due routines (null until the first check after launch). */
   private lastTickAt: number | null = null
   /**
@@ -284,7 +286,7 @@ export class Scheduler {
     const now = this.now()
     const lastTickAt = this.lastTickAt
     this.lastTickAt = now.getTime()
-    const due = this.list().filter((t) => t.enabled && t.nextRun !== null && t.nextRun <= now.getTime() && !this.busy.has(t.id))
+    const due = this.list().filter((t) => t.enabled && t.nextRun !== null && t.nextRun <= now.getTime() && !this.busy.has(t.id) && this.available(t.spaceId))
     const window = this.catchUpHours()
     // Goal wake-ups run beside routines; a failure there never affects them.
     const goals = this.wakeups ? this.wakeups().catch(() => undefined) : Promise.resolve()
@@ -309,12 +311,13 @@ export class Scheduler {
   /** Test: runs a routine now without touching its schedule. Returns the run id at once (null if it's already running). */
   test(id: string): { runId: string; done: Promise<void> } | null {
     const t = this.get(id)
-    if (!t || this.busy.has(id)) return null
+    if (!t || this.busy.has(id) || !this.available(t.spaceId)) return null
     return this.begin(t, true)
   }
 
   /** `late` = when a missed run was due (it runs now, once, and says so). */
   async fire(t: ScheduledTask, late?: number): Promise<void> {
+    if (!this.available(t.spaceId)) return
     if (this.busy.has(t.id)) return
     // Advance first (at-most-once), so a crash mid-run can't fire it again.
     const next = nextRun(t.schedule, this.now())

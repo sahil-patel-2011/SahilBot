@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 import { decode, encode } from '../../src/server/codec'
@@ -18,7 +19,7 @@ const workspace = mkdtempSync(join(tmpdir(), 'sb-server-ws-'))
 
 beforeAll(async () => {
   llm = await startMockLlm()
-  Object.assign(process.env, { FOREMAN_BASE_URL: llm.url, FOREMAN_SKIP_ONBOARDING: '1', FOREMAN_NO_AUTOTITLE: '1', FOREMAN_NO_VERIFY: '1', FOREMAN_RAM_GB: '64', SAHILBOT_KNOWLEDGE: '0', SAHILBOT_LEARNING: '0' })
+  Object.assign(process.env, { FOREMAN_BASE_URL: llm.url, FOREMAN_SKIP_ONBOARDING: '1', FOREMAN_NO_AUTOTITLE: '1', FOREMAN_NO_VERIFY: '1', FOREMAN_NO_BRAIN: '1', FOREMAN_RAM_GB: '64', SAHILBOT_KNOWLEDGE: '0', SAHILBOT_LEARNING: '0' })
   const { startServer } = await import('../../src/server/boot')
   srv = await startServer({ data, port: 0, listen: '127.0.0.1', scryptN: 2 ** 10, log: () => undefined, uiDir: join(process.cwd(), 'out', 'renderer'), bridgeFile: join(process.cwd(), 'out', 'server', 'web', 'bridge.js') })
 })
@@ -64,6 +65,43 @@ const until = async <T>(f: () => T | undefined | false, ms = 20_000): Promise<T>
 }
 
 describe('SahilBot Server', () => {
+  test('a paired Mac places a bot, the worker executes its chat, and retirement fences it', async () => {
+    const id = randomUUID()
+    const c = await connect()
+    await expect(c.call('workerHost:request', 'status')).rejects.toThrow(/paired worker/)
+    expect((await fetch(`${srv.url}/api/workers`)).status).toBe(401)
+    const ticket = srv.codes.create().code
+    const paired = await fetch(`${srv.url}/api/pair`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: ticket, mode: 'token', name: 'Worker test Mac' })
+    })
+    const { token } = await paired.json()
+    expect(paired.status).toBe(200)
+    expect(typeof token).toBe('string')
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const request = (path = '', body?: unknown) => fetch(`${srv.url}/api/workers${path}`, { headers, ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }) })
+    const status = await (await request()).json()
+    expect(status).toMatchObject({ capacity: 5, active: 0 })
+    const file = { format: 'sahilbot.bot', version: 1, name: 'Worker Researcher', color: '#123456', shape: 'blob', instructions: 'Summarize public sources.', skills: [], routines: [] }
+    const activate = { instance: status.instance, id, revision: 1, active: true, file }
+    expect((await request('/place', { ...activate, instance: randomUUID() })).status).toBe(409)
+    expect((await request('/place', activate)).status).toBe(200)
+    expect((await request('/place', activate)).status).toBe(200)
+    expect(await (await request()).json()).toMatchObject({ capacity: 5, active: 1 })
+    expect((await c.call('spaces:list')).find((sp: any) => sp.id === id)).toMatchObject({ name: 'Worker Researcher' })
+    const [thread] = await c.call('threads:list', id)
+    const started = c.events.length
+    llm.script.push({ content: 'Reply from the assigned worker.', delay: 0 })
+    await c.call('chat:send', { threadId: thread.id, text: 'Hi' })
+    await until(() => c.events.slice(started).some((e) => e.ch === 'chat:event' && e.args[0].threadId === thread.id && e.args[0].status === 'finished'))
+    expect(await c.call('threads:messages', thread.id)).toEqual(expect.arrayContaining([expect.objectContaining({ content: 'Reply from the assigned worker.' })]))
+    expect((await request('/place', { instance: status.instance, id, revision: 2, active: false })).status).toBe(200)
+    expect((await request('/place', activate)).status).toBe(409)
+    await expect(c.call('chat:send', { threadId: thread.id, text: 'Hi again' })).rejects.toThrow(/inactive on this worker/)
+    expect(await (await request()).json()).toMatchObject({ active: 0 })
+    c.ws.close()
+  })
+
   test('boots headless: Electron-only services off, secrets sealed, the web UI served', async () => {
     expect(srv.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
     expect(srv.firstCode).toMatch(/^[2-9A-Z]{10}$/)
@@ -106,7 +144,7 @@ describe('SahilBot Server', () => {
     expect(msgs.some((m: any) => m.role === 'assistant' && m.content.includes('Hello from the Pi'))).toBe(true)
     // The model never saw a Mac-only tool.
     const tools = llm.requests.flatMap((r) => (r.tools ?? []).map((t: any) => t.function?.name))
-    for (const t of ['computer', 'browser', 'mac_apps', 'mail', 'app']) expect(tools).not.toContain(t)
+    for (const t of ['computer', 'mac_apps', 'mail', 'app']) expect(tools).not.toContain(t)
     // Read state is in the database, over the same channels: unread until a device marks it read, and every
     // connected device hears about it (a 'thread' event), so the Mac app and the web UI agree.
     expect((await c.call('threads:list', main.id)).find((t: any) => t.id === thread.id)).toMatchObject({ unread: true, unreadCount: 1 })

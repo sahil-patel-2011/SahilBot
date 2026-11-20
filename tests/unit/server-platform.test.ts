@@ -110,7 +110,7 @@ describe('tools on the server', () => {
     process.env.SAHILBOT_RUNTIME = 'server'
     const srv = new ToolRegistry()
     srv.register(...(defs as never[]))
-    expect(srv.all().map((t) => t.name)).toEqual(['web_search'])
+    expect(srv.all().map((t) => t.name)).toEqual(['browser', 'web_search'])
     expect(toolUnavailable('computer')).toBe(true)
     expect(serverToolsNote()).toContain('computer use')
     expect(Object.keys(SERVER_UNAVAILABLE_TOOLS)).toContain('mail')

@@ -262,6 +262,19 @@ function outside(name = 'post_thing') {
 }
 
 describe('handoffs and Teach recordings are not the user\'s words', () => {
+  test('a declined tool call does not prompt again during the same run', async () => {
+    const write = probe('local_write', 'write_local', 1)
+    const h = harness([model('model-a', 2)], [write.tool])
+    const t = h.db.createThread(h.space.id, 'ask', 'model-a')
+    const attempt = { toolCalls: [call('local_write', { q: 'draft' })], delay: 0 }
+    llm.script.push(attempt, attempt, { content: 'I left the draft alone.', delay: 0 })
+    const done = (await h.agent.send({ threadId: t.id, text: 'Update the draft.' })).done
+    await answerNext(h.agent, t.id, 'deny')
+    expect(await done).toBe('finished')
+    expect(write.log).toEqual([])
+    expect(h.events.filter((e) => e.type === 'pending')).toHaveLength(1)
+  })
+
   test('an address in another bot\'s handoff is untrusted in the receiving chat: Auto asks', async () => {
     const o = outside()
     const h = harness([model('model-a', 2)], [o.tool])

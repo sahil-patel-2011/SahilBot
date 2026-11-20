@@ -22,7 +22,7 @@ One tool, `browser`, with an `action`:
 | fill_otp | source, secret? | Type a one-time sign-in code (authenticator, email or SMS). You never see it; the user approves codes per site |
 | wallet / fill_payment / fill_address | card / address | Saved cards and addresses by nickname; card fills go through a Purchase card |
 | upload | ref, paths | Attach workspace files to a file field (asks first) |
-| downloads | op (list, save), index? | Files pages offered; nothing is saved until the user approves |
+| downloads | op (list, save), index? | List offered files or save to the workspace. Auto can save matching text, CSV, and raster image files up to 10 MiB from the current HTTPS site. Other downloads ask first. |
 | wait | text?, url?, timeout? | Wait for text, an address change, or the page to settle |
 | scroll | direction, amount? or ref | Scroll the page, or an element into view |
 | screenshot | – | Image of the visible page |

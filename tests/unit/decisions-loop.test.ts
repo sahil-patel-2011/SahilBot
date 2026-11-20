@@ -81,10 +81,10 @@ describe('the loop records the user\'s decisions', () => {
     const stop = h.answering(['Word', 'deny', 'deny', 'deny'])
     // (A task's first question gets one "research first" nudge; then it asks.)
     const ask = call('ask_user', { question: 'Which format for the weekly report?', options: ['PDF (recommended)', 'Word'] })
-    const mail = call('mail', { action: 'send', to: 'team@example.com' })
+    const drafts = ['design', 'finance', 'operations'].map((team) => ({ toolCalls: [call('mail', { action: 'send', to: `${team}@example.com` })], delay: 0 }))
     llm.script.push(
       { toolCalls: [ask], delay: 0 }, { toolCalls: [ask], delay: 0 },
-      { toolCalls: [mail], delay: 0 }, { toolCalls: [mail], delay: 0 }, { toolCalls: [mail], delay: 0 },
+      ...drafts,
       { content: 'Here are three names for the report series:\n1. Pulse\n2. Ledger\n3. Compass\n\nWhich do you like?', delay: 0 }
     )
     await (await h.agent.send({ threadId: h.thread.id, text: 'Write the weekly report and email it to the team' })).done
@@ -117,9 +117,9 @@ describe('the loop records the user\'s decisions', () => {
     ;(h.agent as unknown as { d: { registry: ToolRegistry } }).d.registry.register(web)
     const stop = h.answering(['Acme', 'Acme', 'deny', 'deny', 'deny'])
     const ask = call('ask_user', { question: 'Use Acme or Stripe?', options: ['Acme', 'Stripe'] })
-    const mail = call('mail', { action: 'send', to: 'team@example.com' })
+    const drafts = ['design', 'finance', 'operations'].map((team) => ({ toolCalls: [call('mail', { action: 'send', to: `${team}@example.com` })], delay: 0 }))
     llm.script.push({ toolCalls: [call('fetch_page', { url: 'https://acme.example' })], delay: 0 }, { toolCalls: [ask], delay: 0 }, { toolCalls: [ask], delay: 0 },
-      { toolCalls: [mail], delay: 0 }, { toolCalls: [mail], delay: 0 }, { toolCalls: [mail], delay: 0 }, { content: 'Done.', delay: 0 })
+      ...drafts, { content: 'Done.', delay: 0 })
     await (await h.agent.send({ threadId: h.thread.id, text: 'Pick a payment provider for the shop' })).done
     stop()
     expect(h.events.filter((e) => e.type === 'pending').length).toBeGreaterThanOrEqual(4)

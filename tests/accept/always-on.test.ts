@@ -49,7 +49,7 @@ describe('always-on bots', () => {
       { content: 'Itinerary drafted; the hotel waits on your choice of area.' }
     )
     await page.fill('[data-testid="composer-input"]', 'Plan my 3-day Lisbon trip and pick a hotel')
-    await page.keyboard.press('Enter')
+    await page.getByTestId('send').click()
     await idle(page)
     expect(existsSync(p('research.md'))).toBe(true)
     expect(existsSync(p('itinerary.md'))).toBe(true)
@@ -90,7 +90,7 @@ describe('always-on bots', () => {
       { content: 'Museums listed; the day waits on you.' }
     )
     await page.fill('[data-testid="composer-input"]', 'Add a museum day')
-    await page.keyboard.press('Enter')
+    await page.getByTestId('send').click()
     await idle(page)
     expect(await page.evaluate(() => window.foreman.needsYou.list())).toHaveLength(1)
     llm.script.push(
@@ -101,7 +101,7 @@ describe('always-on bots', () => {
       { content: 'Museums moved to day 3.' }
     )
     await page.fill('[data-testid="composer-input"]', 'Day 3')
-    await page.keyboard.press('Enter')
+    await page.getByTestId('send').click()
     await idle(page)
     expect(existsSync(p('museum-day.md'))).toBe(true)
     expect(await page.locator('[data-testid="question-card"]').count()).toBe(0)
@@ -122,7 +122,7 @@ describe('always-on bots', () => {
       { content: 'I did not place the order.' }
     )
     await page.fill('[data-testid="composer-input"]', 'Buy the travel mugs in my cart with my Personal card')
-    await page.keyboard.press('Enter')
+    await page.getByTestId('send').click()
     const fillCard = page.locator('[data-testid="purchase-card"][data-step="fill"]')
     await fillCard.waitFor({ timeout: 20_000 })
     await fillCard.locator('[data-testid="purchase-approve"]').click()

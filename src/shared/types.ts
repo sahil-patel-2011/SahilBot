@@ -74,6 +74,8 @@ export interface Space {
   unread?: boolean
   /** Replies you haven't seen across the bot's chats (capped at 99; see shared/read-state.ts). */
   unreadCount?: number
+  /** Where this bot executes. A pending move keeps this copy inactive. */
+  placement?: { label: string; moving?: boolean; inactive?: boolean }
 }
 
 export interface Thread {
@@ -235,6 +237,8 @@ export interface Settings {
     devMode?: boolean
     /** Reveal model choices and thinking in bot and group chats. */
     showBotModelThinking?: boolean
+    /** Animate clicks in SahilBot's browser when its panel is visible. */
+    animateBrowser?: boolean
     /** Files anywhere: SahilBot reads and edits files anywhere in your home folder without asking (default on). Deleting still asks; system, private and secret places stay off limits. */
     filesAnywhere?: boolean
   }
@@ -3177,6 +3181,30 @@ export interface RemoteServerApi {
   openUi(): Promise<void>
 }
 
+export interface WorkerView {
+  id: string
+  name: string
+  url: string
+  online?: boolean
+  capacity?: number
+  active?: number
+  error?: string
+}
+
+export interface WorkerPlacement {
+  botId: string
+  workerId: string | null
+  pending?: { workerId: string | null }
+}
+
+export interface WorkerApi {
+  list(refresh?: boolean): Promise<{ workers: WorkerView[]; placements: WorkerPlacement[] }>
+  pair(input: { name: string; url: string; code: string; fingerprint?: string }): Promise<void>
+  capacity(workerId: string, slots: number): Promise<void>
+  assign(botId: string, workerId: string | null): Promise<void>
+  open(workerId: string | null, botId?: string): Promise<void>
+}
+
 // ---- Phone access: the Mac app serves its own UI to the user's paired phones (src/main/phone, docs/phone-access.md)
 
 export interface PhoneAccessAddress { ip: string; kind: 'lan' | 'tailscale'; iface: string; listening: boolean }
@@ -3226,6 +3254,8 @@ export interface SahilBotApi {
   server?: ServerApi
   /** Mac app only: Settings → Always-on server. */
   remoteServer?: RemoteServerApi
+  /** Mac app only: paired machines and bot placement. */
+  workers?: WorkerApi
   /** Mac app only: Settings → General → Phone access. */
   phoneAccess?: PhoneAccessApi
   /** Mac app only: Team access (teammates ask your brain), under Phone access. */
