@@ -77,16 +77,16 @@ describe('learning model choice and the monthly limit', () => {
 })
 
 describe('voice input settings', () => {
-  test('local by default, auto model, junk dropped', () => {
-    expect(cleanVoiceInput(undefined)).toEqual({ local: true, model: 'auto' })
+  test('cloud-only by default, auto model, junk dropped', () => {
+    expect(cleanVoiceInput(undefined)).toEqual({ local: false, model: 'auto' })
     expect(cleanVoiceInput({ local: false, model: 'small-q8_0', bench: { model: 'large-v3-turbo-q5_0', ms: 812.4, at: 5 } })).toEqual({ local: false, model: 'small-q8_0', bench: { model: 'large-v3-turbo-q5_0', ms: 812, at: 5 } })
-    expect(cleanVoiceInput({ model: 'ggml-huge', bench: { model: 'x', ms: 1, at: 1 } })).toEqual({ local: true, model: 'auto' })
+    expect(cleanVoiceInput({ model: 'ggml-huge', bench: { model: 'x', ms: 1, at: 1 } })).toEqual({ local: false, model: 'auto' })
   })
 
-  test('a fresh install transcribes on this Mac even with local models off', () => {
+  test('a fresh install keeps speech models off', () => {
     const s = new SettingsStore(new Db(':memory:'), secrets()).get()
     expect(s.local?.enabled).toBe(false)
-    expect(s.voiceInput).toEqual({ local: true, model: 'auto' })
+    expect(s.voiceInput).toEqual({ local: false, model: 'auto' })
   })
 })
 

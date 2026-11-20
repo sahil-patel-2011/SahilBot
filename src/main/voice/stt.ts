@@ -1,13 +1,6 @@
 import { toWav, SAMPLE_RATE } from './audio'
 
-// Speech to text, local by default. Voice is the one exception to "local models are opt-in": the user
-// asked for it to run on this Mac, so whisper.cpp is used whenever its model is downloaded (it downloads
-// itself in the background after onboarding: voice/models.ts picks the size for this Mac), whatever
-// Settings → Models → Local models says. Until it's ready (or with "Transcribe on this Mac" off in
-// Settings → Voice → Advanced): OpenAI's transcription when an OpenAI key is saved and allowed (the same
-// switch as spoken replies), charged against the monthly limit. Otherwise voice input says what it needs.
-// macOS's own speech recognition isn't reachable from Electron without a native helper (SFSpeechRecognizer)
-// and Chromium's Web Speech API needs Google's servers, so neither is used.
+// Cloud transcription handles one completed utterance per request. Local Whisper requires explicit opt-in.
 
 /** What the voice pipeline needs from speech recognition (whisper-server or the cloud). */
 export interface SpeechToText {
@@ -17,9 +10,9 @@ export interface SpeechToText {
   transcribe(samples: Float32Array, prompt?: string): Promise<string>
 }
 
-export const NO_VOICE_INPUT = 'Voice input needs speech recognition on this Mac or an OpenAI key (Settings → Voice).'
+export const NO_VOICE_INPUT = 'Choose an available speech provider in Settings → Voice and enable its API key in Models & Keys.'
 
-export type SttChoice = { kind: 'whisper' } | { kind: 'openai' } | { kind: 'none'; note: string }
+export type SttChoice = { kind: 'whisper' } | { kind: 'openai' } | { kind: 'xai' } | { kind: 'none'; note: string }
 
 /**
  * Which speech recognition voice input uses. localOn: transcribing on this Mac is allowed (the default,

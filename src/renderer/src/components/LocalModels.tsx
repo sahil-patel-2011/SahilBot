@@ -1,8 +1,7 @@
+import { voicePreference, connectedVoice, nativeVoiceSite, type CloudSpeechProvider } from '@shared/voice-provider'
 import { useState } from 'react'
 import type { Settings } from '@shared/types'
 import { toast } from '../lib/toast'
-import { Toggle } from './Toggle'
-import { InfoTip } from './ui'
 import '../styles-attachments.css'
 
 // Settings → Models: local models are opt-in. Off (the default for new installs): one quiet row, no
@@ -40,21 +39,20 @@ export function LocalModelsRow({ s, patch, onChanged }: { s: Settings; patch: (p
  * recognition on this Mac isn't ready or is off, and speaks replies. Off: the Mac's own voice (free), or
  * Kokoro on this Mac when local models are on.
  */
-export function VoiceOutputRow({ s, patch, output }: { s: Settings; patch: (p: Partial<Settings>) => Promise<unknown>; output?: 'kokoro' | 'openai' | 'say' }) {
-  const allowed = !!s.voiceOutput?.openai
-  const hasKey = !!s.keys?.openai
-  const now = output === 'kokoro' ? 'Kokoro (on this Mac)' : output === 'openai' ? 'OpenAI\'s voice' : output === 'say' ? 'the Mac\'s own voice' : ''
+export function VoiceOutputRow({ s, patch }: { s: Settings; patch: (p: Partial<Settings>) => Promise<unknown> }) {
+  const preference = voicePreference(s)
+  const selected = connectedVoice(preference, { openai: !!s.keys.openai, xai: !!s.keys.xai })
   return (
     <div className="set-row" data-testid="voice-output-row">
       <div className="set-row-text">
-        <div className="set-row-title">Use OpenAI for voice
-          <InfoTip>OpenAI transcribes (about 0.5¢ a minute) while speech recognition on this Mac isn't ready, and speaks replies (about 1.5¢ a minute), through your OpenAI key and within your monthly limit.{localIsOn(s) ? ' Kokoro, when downloaded, speaks first.' : ''}</InfoTip>
-        </div>
-        <div className="set-row-sub">{hasKey ? (now ? `Replies use ${now}.` : 'Speaks replies with OpenAI\'s voice.') : 'Needs an OpenAI key (Models & Keys).'}</div>
+        <div className="set-row-title">Speech provider</div>
+        <div className="set-row-sub">{nativeVoiceSite(preference) ? 'Talk opens the provider website. Select Voice there to use your account. That conversation stays with the provider.' : preference === 'off' ? 'Choose a provider for hands-free cloud voice.' : selected ? 'Microphone audio and spoken replies use your ' + (selected === 'xai' ? 'xAI' : 'OpenAI') + ' API key and monthly limit.' : 'Enable the provider and add its API key in Models & Keys.'}</div>
       </div>
-      <div className="set-row-ctl">
-        <Toggle on={allowed} disabled={!hasKey && !allowed} onChange={(v) => void patch({ voiceOutput: { openai: v } })} label="Use OpenAI for voice" testId="voice-openai" />
-      </div>
+      <select className="set-select" aria-label="Speech provider" data-testid="voice-provider" value={preference} onChange={(e) => void patch({ voiceOutput: { provider: e.target.value as CloudSpeechProvider } })}>
+        <option value="off">Cloud voice off</option><option value="auto">Auto (connected key)</option>
+        <option value="openai">OpenAI voice</option><option value="xai">Grok voice</option>
+        <option value="chatgpt-app">ChatGPT in browser</option><option value="grok-app">Grok in browser</option>
+      </select>
     </div>
   )
 }

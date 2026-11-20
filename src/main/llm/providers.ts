@@ -1,5 +1,6 @@
 import type { ProviderId, ProviderPreset, ProviderSettings } from '@shared/types'
 import { CODEX_URL, PLAN_PROVIDER_NAME } from './codex/ids'
+import { GROK_PLAN_URL } from '@shared/grok-plan'
 
 // Model servers. Several can be on at once: local ones are found by asking them which models they
 // have; cloud ones claim models by name (any "claude-…" goes to Anthropic, like Cursor does).
@@ -39,7 +40,8 @@ export const DEFS: ProviderDef[] = [
   { id: 'openrouter', name: 'OpenRouter', local: false, needsKey: true, claims: /^[a-z0-9-]+\/[^/]+$/i, keyUrl: 'https://openrouter.ai/keys', keyHint: 'Used for models named like "vendor/model". Spending is capped by your monthly budget.' },
   // The user's ChatGPT plan through their own Codex (llm/codex): no key; Connect in Settings → Models. Its
   // chatgpt-plan/… models are routed by Endpoints.for before any claim (an OpenRouter-style name otherwise).
-  { id: 'chatgpt', name: PLAN_PROVIDER_NAME, local: false, needsKey: false }
+  { id: 'chatgpt', name: PLAN_PROVIDER_NAME, local: false, needsKey: false },
+  { id: 'grok-plan', name: 'Grok subscription', local: false, needsKey: false }
 ]
 
 export const def = (id: ProviderId): ProviderDef => DEFS.find((d) => d.id === id)!
@@ -54,6 +56,7 @@ export function baseUrlOf(id: ProviderId, p: ProviderSettings): string {
     case 'openrouter': return OPENROUTER_URL
     case 'xai': return XAI_URL
     case 'chatgpt': return CODEX_URL
+    case 'grok-plan': return GROK_PLAN_URL
   }
 }
 

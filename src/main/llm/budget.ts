@@ -3,6 +3,7 @@ import type { Db } from '../db'
 import { CACHE_WRITE_FACTOR, claudeInfo } from './claude-models'
 import { openaiInfo, writeFactors } from './openai-models'
 import { isPlanModel } from './codex/ids'
+import { isGrokPlanModel } from '@shared/grok-plan'
 import { xaiInfo, xaiRates } from './xai-models'
 import { currentFastTier, fastFactor } from './fast-mode'
 
@@ -24,7 +25,7 @@ const UNKNOWN: [number, number] = [10, 50]
 
 export function priceFor(model: string, inputTokens = 0): { input: number; output: number; known: boolean; cacheRead?: number; estimated?: boolean } {
   // The user's ChatGPT plan (via Codex): covered by their subscription, recorded at $0 (host "chatgpt-plan").
-  if (isPlanModel(model)) return { input: 0, output: 0, cacheRead: 0, known: true }
+  if (isPlanModel(model) || isGrokPlanModel(model)) return { input: 0, output: 0, cacheRead: 0, known: true }
   const spec = claudeInfo(model)
   if (spec?.price) {
     // Long-context rate card (Haiku 5.5: $0.50 / $2.50 above 100K prompt tokens; cache reads stay 0.1x of it).
@@ -162,7 +163,7 @@ export class Budget {
   check(model: string, estimatedInput: number, maxOutput: number): void {
     const mode = this.mode()
     // The ChatGPT plan is covered by the user's subscription: never blocked by the API spending limit.
-    if (isPlanModel(model)) return
+    if (isPlanModel(model) || isGrokPlanModel(model)) return
     if (mode === 'none') throw Object.assign(new Error(NONE_MESSAGE), { billed: false, status: 402 })
     if (mode === 'unlimited') return
     const cap = this.cap()

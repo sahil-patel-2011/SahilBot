@@ -102,13 +102,47 @@ export function grokVersion(model: string): number | undefined {
   return Number(`${m[1]}.${m[2] ? String(Number(m[2])).replace(/0+$/, '') || '0' : '0'}`)
 }
 
+const discovered = new Map<string, XaiSpec>()
+
+/** The authenticated /models list includes context length, standard and long-context prices, and accepted efforts. */
+export function updateXaiCatalog(rows: Array<{ id: string } & Record<string, unknown>>): void {
+  discovered.clear()
+  for (const row of rows) {
+    if (typeof row.id !== 'string' || !isGrok(row.id) || NOT_CHAT.test(row.id)) continue
+    const number = (key: string): number | undefined => {
+      const n = row[key]
+      return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : undefined
+    }
+    const input = number('prompt_text_token_price'), output = number('completion_text_token_price')
+    if (input === undefined || output === undefined) continue
+    const known = xaiInfo(row.id)
+    const price = { input: input / 10_000, output: output / 10_000, cacheRead: (number('cached_prompt_text_token_price') ?? input) / 10_000 }
+    const rates = (key: string, standard: number): number => (number(key) || 0) / 10_000 || standard
+    const capabilities = row.capabilities as { reasoning_effort?: unknown } | undefined
+    const efforts = Array.isArray(capabilities?.reasoning_effort)
+      ? capabilities.reasoning_effort.filter((v): v is XaiEffort => ['none', 'low', 'medium', 'high', 'xhigh'].includes(v)) : known?.efforts
+    discovered.set(row.id.toLowerCase(), {
+      id: row.id, gen: grokVersion(row.id) ?? 0, tier: 2, current: true, label: grokLabel(row.id),
+      tools: true, vision: false, reasoning: true, ...known, price, efforts,
+      contextTokens: number('context_length') || known?.contextTokens || 128_000,
+      maxOutput: known?.maxOutput ?? 4096,
+      longContext: row.long_context_threshold === undefined && known ? known.longContext : {
+        atLeast: number('long_context_threshold') || Infinity,
+        input: rates('prompt_text_token_price_long_context', price.input),
+        output: rates('completion_text_token_price_long_context', price.output),
+        cacheRead: rates('cached_prompt_text_token_price_long_context', price.cacheRead)
+      }
+    })
+  }
+}
+
 /**
  * Everything SahilBot assumes about an xAI model: the table's entry, or, for a newer grok id (grok-4.8,
  * grok-5), the flagship's facts with the highest known prices, marked estimated. Non-chat ids (Imagine,
  * voice) and unknown older ids are undefined.
  */
 export function xaiInfo(model: string): XaiSpec | undefined {
-  const spec = xaiSpec(model)
+  const spec = discovered.get(model.toLowerCase().replace(/^x-?ai\//, '')) ?? xaiSpec(model)
   if (spec) return spec
   if (!isGrok(model) || NOT_CHAT.test(model)) return undefined
   const v = grokVersion(model)

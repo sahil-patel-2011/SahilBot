@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'vitest'
+import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Db } from '../../src/main/db'
 import { MemoryStore } from '../../src/main/memory'
 import { MemorySystem } from '../../src/main/memory-system'
@@ -64,6 +67,23 @@ describe('durable task execution', () => {
     expect(h.runtime.recoverAttempt(h.run.id, 'error')).toBe(false)
     expect(recoveryPlan('mail', 'OAuth expired', 'write_external').kind).toBe('connect')
     expect(recoveryPlan('mail', '503', 'write_external').retry).toBe(false)
+  })
+  test('an explicitly requested file needs a successful write receipt and must still exist', () => {
+    const h = setup()
+    const folder = mkdtempSync(join(tmpdir(), 'sahilbot-verification-'))
+    const path = join(folder, 'report.json')
+    const report = () => completionReport(h.runtime, h.run.id, { files: ['report.json'] })
+    try {
+      writeFileSync(path, '{}')
+      const read = h.runtime.begin(h.run, 'read', 'file_read', { path }, 'read')
+      h.runtime.complete(read.record.id, { text: 'read', path })
+      expect(report().issues).toEqual([expect.stringContaining('report.json')])
+      const write = h.runtime.begin(h.run, 'write', 'file_write', { path }, 'write_local')
+      h.runtime.complete(write.record.id, { text: 'saved', path })
+      expect(report().issues).toEqual([])
+      unlinkSync(path)
+      expect(report().status).toBe('blocked')
+    } finally { rmSync(folder, { recursive: true, force: true }) }
   })
 })
 

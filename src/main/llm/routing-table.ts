@@ -217,7 +217,8 @@ export const spendingPrefs: { mode: 'amount' | 'unlimited' | 'none' } = { mode: 
 export const NONE_ROUTE_MESSAGE = 'Auto has no model to use: pay-per-use API spending is turned off (Settings → Models & Keys → Monthly spending limit: None), so only your ChatGPT plan (via Codex) and local models can run, and neither is available right now. Connect the ChatGPT plan in Settings → Models, start a local model, or set a monthly limit.'
 
 /** A model billed per token (a cloud API), as opposed to local or covered by the ChatGPT plan. */
-export const payPerUse = (m: ModelInfo): boolean => remote(m) && !isPlanModel(m.id) && m.provider !== 'chatgpt'
+export const isSubscription = (m: ModelInfo): boolean => isPlanModel(m.id) || m.provider === 'chatgpt' || m.provider === 'grok-plan'
+export const payPerUse = (m: ModelInfo): boolean => remote(m) && !isSubscription(m)
 
 /** A model id without an OpenRouter-style vendor prefix, Claude dots as dashes ("anthropic/claude-sonnet-5.5"). */
 function bareId(id: string): string {
@@ -229,6 +230,7 @@ const remote = (m: ModelInfo): boolean => m.note === 'remote' || m.note === 'add
 
 /** Which slot a model fills (undefined: neither a current Claude family nor a GPT role this table routes). */
 export function slotOf(m: ModelInfo | string): Slot | undefined {
+  if ((typeof m === 'string' ? m : m.id).startsWith('grok-plan/')) return 'grok'
   const id = bareId(typeof m === 'string' ? m : m.id)
   const fam = claudeFamily(id)
   if (fam) return (Object.keys(SLOT_FAMILY) as Slot[]).find((s) => SLOT_FAMILY[s]!.includes(fam))
@@ -322,7 +324,7 @@ const name = (m: ModelInfo): string => m.label || m.id
  * first token at low effort, AA). Picked by name it is used as picked.
  */
 export const noGrokFor = (task: Pick<TaskClass, 'category' | 'lowLatency'>): boolean => task.category === 'computer-use' || task.category === 'voice' || !!task.lowLatency
-const isXai = (m: ModelInfo): boolean => m.provider === 'xai' || !!xaiInfo(bareId(m.id))
+const isXai = (m: ModelInfo): boolean => m.provider === 'xai' || m.provider === 'grok-plan' || !!xaiInfo(bareId(m.id))
 
 /** Why Auto has nothing for computer use or voice when only Grok is on. */
 export const GROK_ONLY_MESSAGE = (cat: TaskCategory): string => cat === 'computer-use'
@@ -443,7 +445,8 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
   // Hard rules: never Grok for computer use or voice; premium models (Fable without its setting, GPT Pro) only
   // when nothing else is on; the ChatGPT plan for computer use only when nothing else can see the screen.
   if (noGrokFor(task)) {
-    const rest = pool.filter((m) => !isXai(m))
+    const alternatives = pool.filter((m) => !isXai(m))
+    const rest = !alternatives.length && task.category === 'voice' ? pool.filter((m) => m.provider === 'grok-plan') : alternatives
     if (!rest.length) throw Object.assign(new Error(GROK_ONLY_MESSAGE(task.category === 'computer-use' ? 'computer-use' : 'voice')), { grokOnly: true })
     pool = rest
   }
@@ -465,6 +468,14 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
       pool = pool.filter((m) => windowOf(m) === most)
     }
   }
+  if (task.kind === 'agent' && pool.some((m) => m.tools !== false)) pool = pool.filter((m) => m.tools !== false)
+  if (routingPrefs.preferSubscriptions) {
+    const subscriptions = pool.filter((m) => isSubscription(m) && m.tools !== false && (!task.needsVision || m.vision))
+    if (subscriptions.length) { pool = subscriptions; notes.push('subscription first') }
+  }
+
+  const contextPreference = (m: ModelInfo): number => task.category !== 'long-context' ? 0
+    : windowOf(m) >= 1_000_000 ? 2 : windowOf(m) >= 512_000 ? 1 : 0
 
   // An obviously quick ask (a sum, a conversion, a sentence to translate, a typo fix: task-classifier.ts quickAsk) goes
   // to the instant row on Balanced and Cheapest: a quick model answers in seconds (live, 2026-11-17: Luna / Haiku).
@@ -483,7 +494,7 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
   // per-token charge).
   const bySlot = (slot: Slot, from: ModelInfo[] = cloud): ModelInfo | undefined => from
     .filter((m) => slotOf(m) === slot && !isPremiumOpenAI(bareId(m.id)) && m.tools !== false)
-    .sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0) || (slot === 'grok' ? (xaiInfo(bareId(b.id))?.gen ?? 0) - (xaiInfo(bareId(a.id))?.gen ?? 0) : 0) || Number(payPerUse(a)) - Number(payPerUse(b)))[0]
+    .sort((a, b) => contextPreference(b) - contextPreference(a) || (b.rank ?? 0) - (a.rank ?? 0) || (slot === 'grok' ? (xaiInfo(bareId(b.id))?.gen ?? 0) - (xaiInfo(bareId(a.id))?.gen ?? 0) : 0) || Number(payPerUse(a)) - Number(payPerUse(b)))[0]
   const fresh = ((): RoutePick | undefined => {
     const local = pool.filter((m) => !remote(m))
     // Local first (Auto (local), Local first, or Cheapest): a free local model when one is strong enough.

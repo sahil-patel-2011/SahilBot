@@ -35,6 +35,7 @@ interface Assessment {
   complexity: 'direct' | 'multi-step' | 'complex'
   impact: 'routine' | 'consequential'
   deliverable: boolean
+  files?: string[]
   parts: string[]
 }
 
@@ -132,7 +133,7 @@ Make the decision in this order:
 3. Choose the executor and thinking level. Add a teammate only for a concrete check, distinct perspective, or independent slice that makes the result better. A single workspace, external action, or tightly coupled change stays with the lead. Leave room for the lead to join results and verify them.
 
 Fields:
-- assessment: {"goal":"short description of the outcome","work":"answer|lookup|workflow","complexity":"direct|multi-step|complex","impact":"routine|consequential","deliverable":false,"parts":[]}. Set deliverable true for work that produces an artifact. Parts are short, independent, read-only investigations a helper can actually do, up to 8. Leave parts empty when work is sequential.
+- assessment: {"goal":"short description of the outcome","work":"answer|lookup|workflow","complexity":"direct|multi-step|complex","impact":"routine|consequential","deliverable":false,"files":[],"parts":[]}. Set deliverable true for work that produces an artifact. In files, list only exact filenames the latest request asks to save or export as workspace files. Omit input filenames and files mentioned only as examples. Parts are short, independent, read-only investigations a helper can actually do, up to 8. Leave parts empty when work is sequential.
 - needs: what this request needs from a model, from: ${NEEDS.join(', ')}. Match the model to the needs and the difficulty:
   reasoning, math, logic: GPT-6.2 Sol (GPT-6.2 Astra only at difficulty 3, Fable 5.2 only for the very hardest); coding: Sonnet 5.5 for routine work, Opus 5.5 for hard multi-file or agentic work; see-images: Opus 5.5 or GPT-6.2 Sol; make-images: any capable model (the image tool draws); ideas and creative writing: Opus 5.5 or Sonnet 5.5; research: GPT-6.2 Sol or Sonnet 5.5 (GPT-6.2 Astra only for deep, high-stakes research at difficulty 3); computer-use and apps: Opus 5.5 or Sonnet 5.5 (never Grok); quick: GPT-6 Luna, Haiku 5.5 or Terra.
 - category: one of ${TASK_CATEGORIES.join(', ')} (${TASK_CATEGORIES.map((c) => `${c} = ${CATEGORY_LABEL[c]}`).join('; ')}).
@@ -195,11 +196,12 @@ export function parseBrain(reply: string, models: ModelInfo[]): BrainAnswer | un
   const raw = j.assessment as Partial<Assessment> | undefined
   const goal = typeof raw?.goal === 'string' ? raw.goal.trim().slice(0, 240) : ''
   const parts = Array.isArray(raw?.parts) ? [...new Set(raw.parts.slice(0, 12).flatMap((part) => typeof part === 'string' && part.trim() ? [part.trim().slice(0, 240)] : []))].slice(0, 8) : []
+  const files = Array.isArray(raw?.files) ? [...new Set(raw.files.slice(0, 12).filter((name): name is string => typeof name === 'string' && /^[^/\\\r\n\0]{1,120}\.[a-z0-9]{1,12}$/i.test(name) && name === name.trim()))].slice(0, 8) : []
   const assessment: Assessment | undefined = goal && raw &&
     (raw.work === 'answer' || raw.work === 'lookup' || raw.work === 'workflow') &&
     (raw.complexity === 'direct' || raw.complexity === 'multi-step' || raw.complexity === 'complex') &&
     (raw.impact === 'routine' || raw.impact === 'consequential') && typeof raw.deliverable === 'boolean'
-    ? { goal, work: raw.work, complexity: raw.complexity, impact: raw.impact, deliverable: raw.deliverable, parts } : undefined
+    ? { goal, work: raw.work, complexity: raw.complexity, impact: raw.impact, deliverable: raw.deliverable, ...(raw.deliverable && raw.work === 'workflow' && files.length ? { files } : {}), parts } : undefined
   if (!model && !assessment) return undefined
   return {
     ...(assessment ? { assessment } : {}),

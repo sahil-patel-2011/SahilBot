@@ -1,10 +1,18 @@
 # Grok (xAI) in SahilBot
 
-SahilBot can use xAI's Grok models with your own xAI API key. Facts on this page were read from xAI's docs and independent leaderboards on **2026-11-15**. Each number links to its source in [Sources](#sources).
+SahilBot supports Grok through a subscription or an xAI API key. The API model and pricing tables were checked on **2026-11-15**. Each number links to its source in [Sources](#sources).
 - **VR** means vendor-reported: xAI's own docs or announcement.
 - **IND** means independent.
 
-## Setting it up
+## Grok subscription
+
+Install [Grok Build](https://docs.x.ai/build/overview), then open **Settings → Models & Keys → Grok subscription**. Choose **Sign in** and use the Grok account that has your subscription. Back in SahilBot, choose **Check connection**. The CLI keeps its sign-in in a separate SahilBot profile. Turn the connection off at any time with **Use Grok subscription**. Connection checks authenticate without opening a chat. Each SahilBot conversation remembers its Grok session ID and resumes it through the CLI. The model picker reads available models and context limits from the installed CLI.
+
+With **Use subscriptions first** enabled, Auto prefers eligible subscription models, including a connected ChatGPT plan. Other enabled models can take over when a subscription cannot handle the request or reaches its limit. API usage follows SahilBot’s spending limit. Grok manages its own plan allowance and extra credits. [Plan usage](https://docs.x.ai/grok/faq)
+
+The subscription connection uses Grok Build’s [Agent Client Protocol](https://docs.x.ai/build/cli/headless-scripting). It handles text and returns tool requests to SahilBot. SahilBot’s existing file, browser, connector, and approval tools carry out those requests. An API key and a subscription can be enabled independently.
+
+## xAI API key
 
 1. Open **Settings → Models → xAI (Grok)**, or **API Keys & Servers**.
 2. Paste a key from the xAI Console. It is saved in the macOS Keychain, like the other keys.

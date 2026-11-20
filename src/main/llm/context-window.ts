@@ -42,3 +42,12 @@ export function chosenWindow(s: { modelContext?: Record<string, number> }, model
   if (o.cloud) return c
   return Math.max(16_384, Math.min(c, o.localMax || c))
 }
+
+/** Budget against the catalog of the provider actually serving this chat, including subscription CLIs. */
+export function catalogWindow(model: { id: string; provider: string; contextTokens?: number }, strategy: 'max' | 'balanced' | 'economy', picked?: number): number | undefined {
+  if (!model.contextTokens) return undefined
+  const cap = model.provider === 'anthropic'
+    ? Math.max(1, model.contextTokens - Math.min(REPLY_HEADROOM, claudeInfo(model.id)?.maxOutput ?? REPLY_HEADROOM, Math.floor(model.contextTokens / 4)))
+    : model.provider === 'openai' ? Math.min(model.contextTokens, providerMaxPrompt(model.id) ?? Infinity) : model.contextTokens
+  return Math.min(cap, picked ?? (strategy === 'max' ? 1_000_000 : strategy === 'balanced' ? 400_000 : 128_000))
+}

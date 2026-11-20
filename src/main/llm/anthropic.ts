@@ -295,10 +295,16 @@ export function refusalNote(d: { category?: string | null; explanation?: string 
   return `_Claude declined this request${why}._${d?.explanation ? ` ${d.explanation}` : ''} You can rephrase it, or pick another model for this chat.`
 }
 
+export async function anthropicModelCatalog(apiKey: string) {
+  const catalog = []
+  for await (const model of (await client(apiKey)).models.list()) {
+    if (model.lifecycle !== 'retired') catalog.push(model)
+  }
+  return catalog
+}
+
 export async function listAnthropicModels(apiKey: string): Promise<string[]> {
-  const ids: string[] = []
-  for await (const m of (await client(apiKey)).models.list()) ids.push(m.id)
-  return ids.sort()
+  return (await anthropicModelCatalog(apiKey)).map((model) => model.id).sort()
 }
 
 /** A reply cut off by max_tokens: client tool calls and server tool calls without their result are dropped. */

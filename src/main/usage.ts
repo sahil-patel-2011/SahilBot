@@ -128,12 +128,13 @@ export function usageCsv(rows: UsageRow[], spaceName: (id: string | null) => str
 // are statistics only.
 // ---------------------------------------------------------------------------------------------------
 
-export const PROVIDER_NAMES: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', xai: 'xAI', openrouter: 'OpenRouter', chatgpt: 'ChatGPT plan', local: 'Local models', other: 'Other' }
+export const PROVIDER_NAMES: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', xai: 'xAI', openrouter: 'OpenRouter', chatgpt: 'ChatGPT plan', 'grok-plan': 'Grok subscription', local: 'Local models', other: 'Other' }
 
 /** Which provider served a request: the recorded one, else the host, else the model's name. */
 export function providerOf(model: string, host?: string | null, recorded?: string | null): string {
   if (recorded) return recorded
   const h = (host ?? '').toLowerCase()
+  if (model.startsWith('grok-plan/')) return 'grok-plan'
   if (/anthropic\.com$/.test(h)) return 'anthropic'
   if (/(^|\.)openai\.com$/.test(h)) return 'openai'
   if (/(^|\.)x\.ai$/.test(h)) return 'xai'

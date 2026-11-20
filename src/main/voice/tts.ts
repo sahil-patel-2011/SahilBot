@@ -91,7 +91,7 @@ export class OpenAITtsEngine implements TtsEngine {
   }
 }
 
-export type TtsChoice = 'kokoro' | 'openai' | 'say'
+export type TtsChoice = 'kokoro' | 'openai' | 'xai' | 'say'
 
 /**
  * Which voice speaks replies. Local on with Kokoro downloaded: Kokoro. Otherwise OpenAI's voice when an

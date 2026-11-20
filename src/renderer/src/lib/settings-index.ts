@@ -71,6 +71,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'key-xai', page: 'models', title: 'Grok (xAI API key)', words: 'xai grok key api' },
   { anchor: 'provider-switches', page: 'models', title: 'Turn a provider off (keeps its key)', words: 'provider off disable pause claude anthropic openai gpt grok xai switch toggle slider keep key', keys: ['disabledProviders'] },
   { anchor: 'chatgpt-plan', page: 'models', title: 'ChatGPT plan (via Codex)', words: 'chatgpt plan subscription codex sign in plus pro' },
+  { anchor: 'grok-plan', page: 'models', title: 'Grok subscription', words: 'grok build subscription sign in supergrok prefer plans first' },
   { anchor: 'auto-prefers', page: 'models', title: 'Auto prefers', words: 'auto routing best balanced cheapest cost quality', keys: ['cloud.autoPrefers'] },
   { anchor: 'show-bot-model-thinking', page: 'models', title: 'Show model and thinking', words: 'bots group chat hide show model reasoning effort collaboration names', keys: ['advanced.showBotModelThinking'] },
   { anchor: 'monthly-limit', page: 'models', title: 'Monthly spending limit', words: 'budget cap spend spending limit money cost unlimited none dollars', keys: ['cloudBudgetUsd', 'spendingMode'] },
@@ -105,7 +106,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   // Voice
   { anchor: 'speech-model', page: 'voice', title: 'Speech recognition', words: 'whisper dictation transcription speech to text microphone voice input model download', keys: ['voiceInput'] },
   { anchor: 'read-aloud', page: 'voice', title: 'Read replies aloud', words: 'speak read aloud tts speech', keys: ['speakReplies'] },
-  { anchor: 'voice-openai', page: 'voice', title: 'Use OpenAI for voice', words: 'openai voice transcription tts cloud', keys: ['voiceOutput.openai'] },
+  { anchor: 'voice-openai', page: 'voice', title: 'Speech provider', words: 'openai grok xai auto voice transcription tts cloud', keys: ['voiceOutput.provider', 'voiceOutput.openai'] },
   { anchor: 'speaking-voice', page: 'voice', title: 'Voice', words: 'kokoro voice heart bella michael try it' },
   { anchor: 'transcribe-local', page: 'voice', title: 'Transcribe on this Mac', words: 'local whisper offline private', keys: ['voiceInput.local'], advanced: true },
   { anchor: 'whisper-model', page: 'voice', title: 'Speech model', words: 'whisper small medium large turbo model override size', keys: ['voiceInput.model'], advanced: true },

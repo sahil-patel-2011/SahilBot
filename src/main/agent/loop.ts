@@ -40,7 +40,7 @@ import { def as providerDef } from '../llm/providers'
 import { attachmentNotes } from '../attach-process'
 import { localOff } from '@shared/local-mode'
 import { pick, routingPrefs } from '../llm/router'
-import { autoPreference, isStudy, noGrokFor, payPerUse, premiumModel, windowOf } from '../llm/routing-table'
+import { autoPreference, isStudy, isSubscription, noGrokFor, payPerUse, premiumModel, windowOf } from '../llm/routing-table'
 import { acceptBrainModel, applyBrain, askBrain, BrainCache, brainTimeout, explainPick, isQuickModel, semanticReader, skipBrain, teamFor, type BrainAnswer, type TeamIds } from '../llm/auto-brain'
 import { autoRoute, budgetTightFor, planFallback } from '../llm/auto-route'
 import { KIND_WORDS, failureKind, modelHealth } from '../llm/model-health'
@@ -56,7 +56,7 @@ import { HALT_TEXT } from '../llm/claude-native'
 import { stepCost } from '../llm/budget'
 // OpenAI's Responses models run append-only like Claude, in their table's window (llm/openai-responses).
 import { cloudWindow, openaiChatWindow, openaiRequest, openaiServerCompaction } from '../llm/openai-responses'
-import { chosenWindow } from '../llm/context-window'
+import { catalogWindow, chosenWindow } from '../llm/context-window'
 import { usesResponses } from '../llm/openai-models'
 import { autoPool, autoUnavailable, autoVariant } from '../llm/router'
 import { captureConstraints, renderNotes } from './notes'
@@ -620,6 +620,11 @@ export class Agent {
     const location = placementBlock(this.d.db, thread.spaceId)
     if (location) throw new Error(location)
     if (this.runs.has(thread.id)) throw new Error('SahilBot is still working in this thread. Stop it first or wait.')
+    const current = this.d.db.getState(thread.id)
+    if (!!current.voice !== !!input.voice) {
+      current.voice = !!input.voice
+      this.d.db.setState(thread.id, current)
+    }
     if (!isRelayed({ meta: input.meta }) && !/^(?:continue|resume|keep going|go on|retry|try again|yes\b|proceed|fix (?:it|that)|also\b)/i.test(input.text.trim())) {
       const state = this.d.db.getState(thread.id); state.acceptance = undefined; state.taskPolicy = undefined; this.d.db.setState(thread.id, state)
     }
@@ -696,14 +701,6 @@ export class Agent {
     // Bot swarms: the composer's Swarm toggle or the bot's Always turn it on; Auto hints when the request fits.
     const sw = input.heavy || input.council || maxPlan || ((semanticAuto || mx.hint) && !input.swarm) ? {} : swarmNote(this.d.settings.get(), this.d.db.getSpace(thread.spaceId), input.text, { swarm: input.swarm, attachments: input.attachments?.length, unattended: opts.unattended })
     if (sw.note) notes.push(sw.note)
-
-    if (input.voice) {
-      const st = this.d.db.getState(thread.id)
-      if (!st.voice) {
-        st.voice = true
-        this.d.db.setState(thread.id, st)
-      }
-    }
 
     // Attached files and folders (already verified as user-picked by main) become this thread's roots.
     const att = input.attachments ?? []
@@ -825,6 +822,7 @@ export class Agent {
   private rewound(threadId: string): void {
     const st = this.d.db.getState(threadId)
     st.todos = []
+    st.subscriptionRevision = (st.subscriptionRevision ?? 0) + 1
     const ids = new Set(this.d.db.listMessages(threadId).map((m) => m.id))
     if (st.compaction && !ids.has(st.compaction.boundaryId)) st.compaction = undefined
     this.d.db.setState(threadId, st)
@@ -979,6 +977,11 @@ export class Agent {
    * The thread's system prompt for a variant, frozen on first use so every later step and turn sends the same
    * prefix: 'full' (the harness, snapshotted as before), 'chat' (the chat path) and 'compact' (small windows).
    */
+  private withVoice(snapshot: string, voice?: boolean): string {
+    const base = snapshot.replace(VOICE_SUFFIX, '')
+    return voice ? base + VOICE_SUFFIX : base
+  }
+
   private systemFor(thread: Thread, state: ThreadState, speaker?: Space, group?: Space, variant: PromptVariant = 'full'): string {
     if (variant !== 'full') {
       const key = group && speaker ? `${speaker.id}:${variant}` : variant
@@ -986,9 +989,9 @@ export class Agent {
       if (!state.leanSnapshots[key]) {
         const bot = group && speaker ? speaker : this.d.db.getSpace(thread.spaceId)
         const others = group && speaker ? group.members.map((id) => this.d.db.getSpace(id)?.name).filter((n): n is string => !!n && n !== speaker.name) : []
-        state.leanSnapshots[key] = this.baseSystem(bot, thread.spaceId, variant) + (group && speaker ? groupNote(speaker.name, group.name, others) : '') + (state.voice ? VOICE_SUFFIX : '') + (state.snapshotNote ?? '')
+        state.leanSnapshots[key] = this.baseSystem(bot, thread.spaceId, variant) + (group && speaker ? groupNote(speaker.name, group.name, others) : '') + (state.snapshotNote ?? '')
       }
-      return state.leanSnapshots[key]
+      return this.withVoice(state.leanSnapshots[key], state.voice)
     }
     if (group && speaker) {
       state.snapshots ??= {}
@@ -996,10 +999,10 @@ export class Agent {
         const others = group.members.map((id) => this.d.db.getSpace(id)?.name).filter((n): n is string => !!n && n !== speaker.name)
         state.snapshots[speaker.id] = this.baseSystem(speaker, thread.spaceId) + groupNote(speaker.name, group.name, others)
       }
-      return state.snapshots[speaker.id]
+      return this.withVoice(state.snapshots[speaker.id], state.voice)
     }
-    if (!state.systemSnapshot) state.systemSnapshot = this.baseSystem(this.d.db.getSpace(thread.spaceId), thread.spaceId) + (state.voice ? VOICE_SUFFIX : '')
-    return state.systemSnapshot
+    if (!state.systemSnapshot) state.systemSnapshot = this.baseSystem(this.d.db.getSpace(thread.spaceId), thread.spaceId)
+    return this.withVoice(state.systemSnapshot, state.voice)
   }
 
   /**
@@ -2044,8 +2047,10 @@ export class Agent {
     if (autoNow && last && skipRead && task.signals.quick && quickPick) task = { ...task, why: `${task.why} · no read needed` }
     const paidRead = spendingMode(s) !== 'none' && (this.d.endpoints.budgetLeft?.() ?? 1) > 0
     const explicitComputerPair = s.computerUse?.mode === 'pair' && !!s.computerUse.planner && task.category === 'computer-use'
+    const authorizedReaders = brainPool.filter((m) => paidRead || !payPerUse(m))
+    const subscribedReaders = routingPrefs.preferSubscriptions ? authorizedReaders.filter(isSubscription) : []
     const thinker = autoNow && last && !isRelayed(last) && !thread.parentId && !this.runs.get(thread.id)?.group && !state.voice && !explicitComputerPair && !process.env.FOREMAN_NO_BRAIN && !skipRead
-      ? this.routeReader(paidRead ? brainPool : brainPool.filter((m) => !payPerUse(m)), preference === 'cheapest') : undefined
+      ? this.routeReader(subscribedReaders.length ? subscribedReaders : authorizedReaders, preference === 'cheapest') : undefined
     let brain: BrainAnswer | undefined
     if (thinker && last) {
       const role = this.d.db.getSpace(thread.spaceId)
@@ -2121,11 +2126,19 @@ export class Agent {
     let team: Routed['team']
     /** The brain's own model was used (false: a hard limit kept the table's pick). */
     let brainChose = false
+    let measured: ReturnType<OutcomeRouter['pick']>
+    const outcomeCandidates = base ? pool.filter((m) => m.tools !== false && (!task.needsVision || m.vision) && (!task.contextTokens || windowOf(m) >= task.contextTokens + 4096) && !modelHealth.blocked(m) &&
+      (!premiumModel(m.id) || premiumModel(base.id)) && !(noGrokFor(task) && (m.provider === 'xai' || m.provider === 'grok-plan')) &&
+      (task.category !== 'computer-use' || base.provider === 'chatgpt' || m.provider !== 'chatgpt') &&
+      (!routingPrefs.preferSubscriptions || !isSubscription(base) || isSubscription(m))) : []
     if (brain && base) {
       const allowed = pool.filter((m) => m.tools !== false && (!task.needsVision || m.vision) && (!task.contextTokens || windowOf(m) >= task.contextTokens + 4096) && !modelHealth.blocked(m) &&
-        !(noGrokFor(task) && m.provider === 'xai') && (spendingMode(s) !== 'none' || !payPerUse(m)) && (task.category !== 'computer-use' || m.provider !== 'chatgpt'))
+        !(noGrokFor(task) && (m.provider === 'xai' || m.provider === 'grok-plan')) && (spendingMode(s) !== 'none' || !payPerUse(m)) && (task.category !== 'computer-use' || m.provider !== 'chatgpt') &&
+        (!routingPrefs.preferSubscriptions || !isSubscription(base) || isSubscription(m)))
       const brainPick = acceptBrainModel(brain.model, { allowed, tablePick: base, preference: budgetTight ? 'cheapest' : preference, difficulty: task.difficulty, fableOn: routingPrefs.fableForHardest })
-      const executor = brainPick ?? base
+      const initial = brainPick ?? base
+      if (!isStudy(task)) measured = this.outcomes.pick(initial, allowed, task.category, preference)
+      const executor = measured?.model ?? initial
       brainChose = !!brainPick
       if (brainPick && brainPick.id !== base.id) { routed.model = brainPick.id; routed.label = `${brainPick.label ?? brainPick.id} · ${CATEGORY_LABEL[task.category]}`; routed.why = `${task.why} · Auto picked ${brainPick.label ?? brainPick.id} for this request` }
       const allowTeam = botMaxConfig(s, thread.spaceId).mode !== 'off' && !last?.meta?.planFirst
@@ -2137,7 +2150,7 @@ export class Agent {
         ...(t.fanout ? { fanout: { n: t.fanout.n, helper: t.fanout.helper.id, parts: brain.assessment?.parts } } : {})
       }
     }
-    const measured = base && !brain && !isStudy(task) ? this.outcomes.pick(base, pool.filter((m) => (!task.needsVision || m.vision) && (!task.contextTokens || (m.contextTokens ?? m.maxFittingWindow ?? 0) >= task.contextTokens + 4096) && !modelHealth.blocked(m) && (!premiumModel(m.id) || premiumModel(base.id)) && (task.category !== 'computer-use' && task.category !== 'voice' || m.provider !== 'xai') && (task.category !== 'computer-use' || base.provider === 'chatgpt' || m.provider !== 'chatgpt')), task.category, preference) : undefined
+    if (base && !brain && !isStudy(task)) measured = this.outcomes.pick(base, outcomeCandidates, task.category, preference)
     if (measured) { routed.model = measured.model.id; routed.why += ` · ${measured.why}`; routed.label = `${measured.model.label ?? measured.model.id} · ${CATEGORY_LABEL[task.category]}` }
     state.lastTier = r.tier
     state.lastAutoModel = routed.model
@@ -2417,6 +2430,10 @@ export class Agent {
     const windowFor = (m: string, isClaude: boolean): number => {
       const info = this.d.endpoints.last?.models.find((x) => x.id === m)
       const picked = chosenWindow(s, m, { localMax: info?.maxFittingWindow, cloud: isClaude || info?.note === 'remote' })
+      if (info?.note === 'remote') {
+        const limit = catalogWindow(info, claudeOpts.contextStrategy, s.modelContext?.[m] || undefined)
+        if (limit) return limit
+      }
       if (picked) return picked
       return Math.min(isClaude ? cloudWindow(m, claudeOpts.contextStrategy) : openaiChatWindow(this.d.endpoints.for(m).provider, m, claudeOpts.contextStrategy) ?? this.d.fitWindow(m, s.contextWindow || 131072), state.voice ? 16384 : Infinity)
     }
@@ -2573,6 +2590,11 @@ export class Agent {
       if (m.meta.tainted) { run.forceTaint = true; track.web = true }
     }
     const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const expectedFiles = (): string[] | undefined => {
+      if (!opener || run.replay) return undefined
+      const read = db.getMessage(opener.id)?.meta?.autoRead as BrainAnswer | undefined
+      return read?.assessment?.files?.filter((name) => opener.content.includes(name))
+    }
     if (opener && isRelayed(opener) && !opener.meta?.helperTask) relayed(opener)
     // A goal wake-up runs unattended on notes and journal text earlier runs wrote: tainted for outside
     // actions, and the goal's tagged text (written by runs that read outside content) is untrusted.
@@ -2783,7 +2805,7 @@ export class Agent {
         built.end({ step, used: prepared.used, window, tools: wireTools.length, mode: state.toolMode })
         // Cloud models: what the next request costs at this context size (cached prefix read, new tail written).
         // ChatGPT plan models have no per-token charge (the plan's limits apply instead), so no price.
-        const stepPrice = isLocal(ep.baseUrl) || ep.provider === 'chatgpt' ? undefined : stepCost(model, prepared.used)
+        const stepPrice = isLocal(ep.baseUrl) || ep.provider === 'chatgpt' || ep.provider === 'grok-plan' ? undefined : stepCost(model, prepared.used)
         this.d.emit({ threadId: thread.id, type: 'progress', step, actions, plan: planPos(), used: prepared.used, window, model, routed, ...(stepPrice ? { cost: stepPrice } : {}) })
 
         // Keep the plan in view on long runs. Reminders are stored (hidden) and sent exactly as stored: one that
@@ -2962,16 +2984,18 @@ export class Agent {
           }
           // Claude compacted on this final reply: the brief goes in after it, so the next message still carries
           // the goal and the user's rules from before the compaction block.
-          if (run.record && !run.helper && !chatRun) {
+          const files = expectedFiles()
+          if (run.record && !run.helper && (!chatRun || files?.length)) {
             if (state.acceptance?.length && evidenceRounds === 0) {
               await this.perform(thread, run, state, { id: `verify-${randomUUID()}`, name: 'agent_control', arguments: '{"action":"verify"}' }, { failures, untrusted, userText, guard, track, window })
             }
-            const report = completionReport(this.runtime, run.record.id, { required: state.taskPolicy?.requireVerification, criteria: state.acceptance?.map((c) => c.criterion), claims: this.research.list(run.record.id) })
+            const report = completionReport(this.runtime, run.record.id, { required: state.taskPolicy?.requireVerification, criteria: state.acceptance?.map((c) => c.criterion), files, claims: this.research.list(run.record.id) })
             if (report.status === 'blocked' && evidenceRounds++ < 2 && step < HARD_CAP) {
               budget = Math.max(budget, step + 3)
               assistant.meta = { ...assistant.meta, superseded: true, verification: report }
               db.updateMessage(assistant)
-              db.insertMessage({ threadId: thread.id, role: 'user', content: `[From the app] Completion checks are unresolved. Fix or clearly report these blockers; do not claim verified completion. Use agent_control verify after repairs.\n${report.issues.join('\n')}`, kind: 'normal', status: 'done', meta: { hidden: true, ...mine } })
+              const verifyHint = !files?.length || state.acceptance?.length || state.taskPolicy?.requireVerification ? ' Use agent_control verify after repairs.' : ''
+              db.insertMessage({ threadId: thread.id, role: 'user', content: `[From the app] Completion checks are unresolved. Fix or clearly report these blockers; do not claim verified completion.${verifyHint}\n${report.issues.join('\n')}`, kind: 'normal', status: 'done', meta: { hidden: true, ...mine } })
               continue
             }
             assistant.meta = { ...assistant.meta, verification: report, runId: run.record.id }
@@ -3059,7 +3083,7 @@ export class Agent {
     }
     this.d.cua?.end(thread.id, state, status)
     if (run.record && routed?.category && !run.replay) {
-      const report = completionReport(this.runtime, run.record.id)
+      const report = completionReport(this.runtime, run.record.id, { files: expectedFiles() })
       this.outcomes.record({ model, category: routed.category, verified: report.status === 'verified', success: status === 'finished' && report.status !== 'blocked', latencyMs: Date.now() - runStart, usd: run.meter?.spentUsd ?? 0 }, thread.id, opener?.id)
       if (!run.helper && this.d.memory.enabled && this.runtime.actions(run.record.id).length >= 3 && !track.sawUntrusted) {
         const procedure = this.runtime.actions(run.record.id).filter((a) => a.status === 'done').map((a) => `${a.tool}: ${a.args.slice(0, 300)}`).join('\n')
@@ -3125,6 +3149,9 @@ export class Agent {
         apiKey: ep.apiKey,
         model,
         messages: wire,
+        conversationTitle: this.d.db.getThread(threadId)?.title,
+        conversationKey: run.helper || process.env.SAHILBOT_EPHEMERAL_PLAN_THREADS === '1' ? undefined
+          : JSON.stringify([threadId, speaker?.id, this.d.db.getState(threadId).subscriptionRevision ?? 0]),
         // A model that can't call tools (Ollama says so) would reject the whole request: plain chat instead.
         tools: this.d.endpoints.last?.models.find((x) => x.id === model)?.tools === false ? [] : tools,
         sampling: { ...samplingFor(model, s.sampling), ...(run.sampling ?? {}) },

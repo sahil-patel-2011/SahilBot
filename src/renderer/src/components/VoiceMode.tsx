@@ -10,12 +10,13 @@ const LABEL: Record<VState, string> = {
   starting: 'Getting ready…', idle: 'Paused', listening: 'Listening', hearing: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking — talk any time to interrupt'
 }
 
-/** Hands-free conversation: everything stays on the Mac. */
+/** Hands-free conversation: speech follows the provider selected in Settings. */
 export function VoiceMode({ threadId, space, onClose, onThread }: { threadId: string | null; space: Space | undefined; onClose: () => void; onThread: (id: string) => void }) {
   const [state, setState] = useState<VState>('starting')
   const [you, setYou] = useState('')
   const [reply, setReply] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [speech, setSpeech] = useState('')
   const [level, setLevel] = useState(0)
   const mic = useRef<Mic | null>(null)
   const speaker = useRef<Speaker | null>(null)
@@ -33,12 +34,22 @@ export function VoiceMode({ threadId, space, onClose, onThread }: { threadId: st
     })
     void (async () => {
       try {
+        if (await api.voice.openNative()) { if (alive) onClose(); return }
+        if (!alive) return
         const id = await api.voice.start(threadId, space?.id ?? '')
         if (!alive) return
+        const status = await api.voice.status()
+        if (!alive) return
+        setSpeech(status.input === 'xai' ? 'Grok transcribes your microphone audio.' : status.input === 'openai' ? 'OpenAI transcribes your microphone audio.' : 'Transcribing on this Mac.')
         onThread(id)
         mic.current = new Mic()
-        await mic.current.start()
+        const input = mic.current
+        await input.start()
+        if (!alive) input.stop()
       } catch (e) {
+        if (!alive) return
+        mic.current?.stop()
+        void api.voice.stop()
         setError((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))
       }
     })()
@@ -75,7 +86,8 @@ export function VoiceMode({ threadId, space, onClose, onThread }: { threadId: st
       <div className="voice-actions">
         <button className="voice-end" onClick={onClose} data-testid="voice-end"><I.Close size={20} /> End</button>
       </div>
-      <div className="hint">Voice stays on this Mac: Whisper and Kokoro run locally.</div>
+      {error && <button className="btn" onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: 'voice' })) }}>Voice settings</button>}
+      {speech && <div className="hint">{speech}</div>}
     </div>
   )
 }

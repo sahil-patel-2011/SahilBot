@@ -99,19 +99,10 @@ describe('Settings', () => {
       await page.locator('[data-testid="vault-settings"]').waitFor()
       expect(await page.locator('[data-testid="memory-people"]').count()).toBe(1)
 
-      // Voice: the model picked for this Mac (24 GB, Apple silicon: large-v3-turbo, 5-bit, timed once on first use).
       await page.click('[data-testid="settings-voice"]')
-      const speech = page.locator('[data-testid="voice-speech-model"]')
-      await expect.poll(() => speech.innerText()).toMatch(/Whisper large-v3-turbo · best for your Mac/)
-      expect(await speech.innerText()).toMatch(/Downloading 574 MB in the background/)
-      await page.locator('[data-testid="voice-speech-progress"]').waitFor()
-      // Advanced: pin another model; the row follows.
-      await page.click('[data-testid="voice-advanced"] > summary')
-      await page.selectOption('[data-testid="voice-whisper-model"]', 'small-q8_0')
-      await expect.poll(() => speech.innerText()).toMatch(/Whisper small · you chose it/)
-      const st = await page.evaluate(() => window.foreman.voice.status())
-      expect(st.speech?.requested).toEqual(expect.arrayContaining(['ggml-small-q8_0.bin']))
-      for (const f of st.speech!.requested) expect(f).toMatch(/^(ggml-.*\.bin|silero_vad\.onnx)$/)
+      await page.selectOption('[data-testid="voice-provider"]', 'xai')
+      await expect.poll(() => page.evaluate(async () => (await window.foreman.settings.get()).voiceOutput?.provider)).toBe('xai')
+      expect((await page.evaluate(() => window.foreman.voice.status())).speech?.requested).toEqual([])
       await page.click('[data-testid="settings-close"]')
     } finally {
       await app.close()

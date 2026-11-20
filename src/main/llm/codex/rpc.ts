@@ -20,6 +20,7 @@ export interface AppServerOptions {
   args: string[]
   env: NodeJS.ProcessEnv
   cwd?: string
+  jsonrpc?: boolean
   /** Server → client requests (approvals, elicitations). The returned value is the result sent back. */
   onRequest?: (method: string, params: unknown) => unknown | Promise<unknown>
   onNotification?: (method: string, params: unknown) => void
@@ -104,7 +105,7 @@ export class AppServer {
 
   private write(msg: RpcMessage): void {
     if (this.exited || !this.proc.stdin.writable) return
-    this.proc.stdin.write(`${JSON.stringify(msg)}\n`)
+    this.proc.stdin.write(`${JSON.stringify(this.o.jsonrpc ? { jsonrpc: '2.0', ...msg } : msg)}\n`)
   }
 
   request<T = unknown>(method: string, params?: unknown, timeoutMs = 60_000): Promise<T> {
@@ -126,8 +127,8 @@ export class AppServer {
   }
 
   /** initialize + initialized, as the protocol requires once per connection. */
-  async initialize(version: string): Promise<unknown> {
-    const r = await this.request('initialize', { clientInfo: { name: 'sahilbot', title: 'SahilBot', version } }, 30_000)
+  async initialize(version: string, experimentalApi = false): Promise<unknown> {
+    const r = await this.request('initialize', { clientInfo: { name: 'sahilbot', title: 'SahilBot', version }, ...(experimentalApi ? { capabilities: { experimentalApi } } : {}) }, 30_000)
     this.notify('initialized')
     return r
   }

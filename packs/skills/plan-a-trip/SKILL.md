@@ -23,6 +23,7 @@ Dates or flexibility, origin, travelers (ages), budget (total or per day), pace 
 3. Bookings to make, with deadline and link (ordered by what sells out first).
 4. Packing list by weather and activities; documents checklist; offline copies.
 5. Offer calendar events and reminders (check-in times, booking deadlines) via schedule, mac_apps or the calendar connector.
+6. Before finalizing, check the itinerary against local time, opening hours, realistic transfer margins, and the total budget. Separate confirmed details from estimates. Use restaurant-review-research for dining decisions where reviews, accessibility, or dietary constraints matter.
 
 ## Rules
 Never book, pay or enter card details: the user clicks Purchase. Don't share passport numbers in searches. Save the trip (dates, destination, confirmations the user shares) to memory only with the user's OK.

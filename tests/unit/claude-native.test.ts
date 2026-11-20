@@ -139,7 +139,7 @@ describe('long context: strategies and compaction thresholds', () => {
     expect(compactionTrigger(40_000)).toBe(50_000)
   })
   test('settings defaults: balanced, native tools on, Fable off, cloud first once a Claude key is saved', () => {
-    expect(claudeOptions({ cloud: { enabled: true } as never })).toEqual({ contextStrategy: 'balanced', nativeTools: true, fableForHardest: false, preferCloud: false })
+    expect(claudeOptions({ cloud: { enabled: true } as never })).toEqual({ contextStrategy: 'max', nativeTools: true, fableForHardest: false, preferCloud: false })
     expect(claudeOptions({ cloud: { enabled: true } as never, keys: { anthropic: true } }).preferCloud).toBe(true)
     expect(claudeOptions({ cloud: { enabled: true, prefer: 'local' } as never, keys: { anthropic: true } }).preferCloud).toBe(false)
     expect(claudeOptions({ cloud: { enabled: false } as never, keys: { anthropic: true } }).preferCloud).toBe(false)

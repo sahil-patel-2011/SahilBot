@@ -4,7 +4,7 @@ description: Research a purchase: needs, compare options on specs and total cost
 source: you
 uses: 0
 category: Everyday
-triggers: which should i buy, best laptop, best vacuum, worth buying, recommend a product, product comparison, compare prices, cheapest place to buy, good deal, mattress, tv to buy, buying guide, what to buy, product recommendation
+triggers: should i buy, which should i buy, best laptop, best vacuum, worth buying, recommend a product, product comparison, compare prices, cheapest place to buy, good deal, mattress, tv to buy, buying guide, what to buy, product recommendation
 ---
 
 ## Steps
