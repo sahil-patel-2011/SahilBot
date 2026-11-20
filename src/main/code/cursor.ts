@@ -171,7 +171,7 @@ export function reviewCursorChange(o: { brief?: Partial<CursorBrief>; diff: stri
     '[ ] The diff does the goal and nothing else (read every hunk, not just the summary).',
     !o.checksRun ? '[ ] Run the type check and tests yourself (code typecheck / run_tests): none were run here.'
       : o.checksOk === undefined ? '[ ] Check CI again on the reviewed revision. Passing results are still unconfirmed.'
-      : '[ ] Confirm checks pass after resolving any failures above.',
+      : '[ ] Checks pass (above), and you read the failures if any.',
     '[ ] Tell the user what changed (files), how you verified it, and anything left undone.'
   ]
   const fix = findings.filter((f) => !f.startsWith('No changes'))
