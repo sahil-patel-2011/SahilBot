@@ -3,12 +3,13 @@ import { chmodSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import * as github from '../../src/main/code/git'
 import { cursorTool } from '../../src/main/agent/tools/apps'
-import { briefGaps, composeCursorPrompt, diffFiles, formatReview, reviewCursorChange } from '../../src/main/code/cursor'
+import { briefGaps, composeCursorPrompt, diffFiles, formatReview, pullRequestCheckState, reviewCursorChange } from '../../src/main/code/cursor'
 
 // The Cursor hand-off: what a brief is missing before it goes out, and the automatic review when Cursor reports done.
 
-afterEach(() => { vi.unstubAllGlobals(); delete process.env.CURSOR_AGENT_PATH })
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); delete process.env.CURSOR_AGENT_PATH })
 
 const DIFF = `diff --git a/src/export/rows.ts b/src/export/rows.ts
 --- a/src/export/rows.ts
@@ -38,6 +39,15 @@ diff --git a/package.json b/package.json
 -  "dependencies": {}
 +  "dependencies": { "left-pad": "^1.3.0" }
 `
+
+test('only successful check runs and commit statuses count as passing PR CI', () => {
+  expect(pullRequestCheckState([{ conclusion: 'SUCCESS' }, { state: 'SUCCESS' }])).toBe('passed')
+  expect(pullRequestCheckState([])).toBe('unverified')
+  for (const checks of [[{ status: 'IN_PROGRESS' }], [{ state: 'PENDING' }], [{ conclusion: 'SKIPPED' }], [{ conclusion: 'NEUTRAL' }]]) {
+    expect(pullRequestCheckState([{ conclusion: 'SUCCESS' }, ...checks])).toBe('unverified')
+  }
+  expect(pullRequestCheckState([{ status: 'QUEUED' }, { state: 'FAILURE' }])).toBe('failed')
+})
 
 describe('brief gaps', () => {
   test('a thin brief is told exactly what to add', () => {
@@ -100,6 +110,24 @@ describe('follow-ups keep the original goal', () => {
 })
 
 describe('cursor tool', () => {
+  test.each([false, true])('ties the Cursor review to the revision actually read (head moved: %s)', async (moved) => {
+    const url = 'https://github.com/me/app/pull/7'
+    vi.stubGlobal('fetch', vi.fn(async (path) => Response.json(String(path).endsWith('/runs/r1')
+      ? { status: 'FINISHED', git: { branches: [{ prUrl: url }] } } : { id: 'a1', latestRunId: 'r1' })))
+    vi.spyOn(github, 'ghInstalled').mockReturnValue(true)
+    const gh = vi.spyOn(github, 'gh').mockImplementation(async (_cwd, args) => {
+      if (args[1] === 'diff') return DIFF
+      if (args.at(-1) === 'headRefOid,baseRefOid') return JSON.stringify({ headRefOid: moved ? 'next' : 'head', baseRefOid: 'base' })
+      return JSON.stringify({ headRefOid: 'head', baseRefOid: 'base', statusCheckRollup: [{ name: 'build', status: 'QUEUED' }] })
+    })
+    const ctx = { workspaceDir: tmpdir(), signal: new AbortController().signal } as never
+    const result = await cursorTool(() => 'fixture-key', () => tmpdir()).run({ action: 'cloud_review', id: 'a1' }, ctx)
+    expect(gh).toHaveBeenCalledTimes(3)
+    expect(result.verification?.passed).toBe(!moved)
+    expect(result.display).toContain('0 with passing CI')
+    expect(result.text).toContain(moved ? 'revision changed' : 'at head: diff read, CI unverified')
+  })
+
   test('prompt lists the gaps and surfaces the working notes', async () => {
     const t = cursorTool(() => undefined, () => tmpdir())
     const ctx = { state: { roots: [], loaded: [], alwaysAllow: [], todos: [], taskNotes: { entries: [{ section: 'Constraints', text: 'Never touch the billing module', by: 'user', at: 1 }] } }, workspaceDir: tmpdir(), signal: new AbortController().signal } as never

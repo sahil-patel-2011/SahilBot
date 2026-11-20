@@ -121,6 +121,14 @@ export function diffFiles(diff: string): string[] {
   return [...out]
 }
 
+type PullRequestCheck = { name?: string; context?: string; status?: string; conclusion?: string; state?: string }
+
+export function pullRequestCheckState(checks: PullRequestCheck[]): 'passed' | 'failed' | 'unverified' {
+  const states = checks.map((check) => (check.conclusion || check.state || check.status || '').toUpperCase())
+  if (states.some((state) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE'].includes(state))) return 'failed'
+  return states.length && states.every((state) => state === 'SUCCESS') ? 'passed' : 'unverified'
+}
+
 /**
  * The automatic review of what Cursor handed back: scope against the brief, protected paths, tests removed
  * or skipped, suppressed checks, debug leftovers, TODOs, dependency changes, size, check results; then the
@@ -161,7 +169,9 @@ export function reviewCursorChange(o: { brief?: Partial<CursorBrief>; diff: stri
   const checklist = [
     ...(b.acceptance ?? []).map((c) => `[ ] ${c.trim()}: point to the evidence (a test, a command's output, or the lines in the diff).`),
     '[ ] The diff does the goal and nothing else (read every hunk, not just the summary).',
-    o.checksRun ? '[ ] Checks pass (above), and you read the failures if any.' : '[ ] Run the type check and tests yourself (code typecheck / run_tests): none were run here.',
+    !o.checksRun ? '[ ] Run the type check and tests yourself (code typecheck / run_tests): none were run here.'
+      : o.checksOk === undefined ? '[ ] Check CI again on the reviewed revision. Passing results are still unconfirmed.'
+      : '[ ] Confirm checks pass after resolving any failures above.',
     '[ ] Tell the user what changed (files), how you verified it, and anything left undone.'
   ]
   const fix = findings.filter((f) => !f.startsWith('No changes'))

@@ -3,7 +3,7 @@ import { existsSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve, sep } from 'node:path'
 import { runCheck } from '../../code/checks'
-import { backoff, briefGaps, cloudRunning, composeCursorPrompt, type CursorBrief, describeCloud, formatReview, newRunState, prUrlsOf, readCursorEvent, readCursorJson, type RepoFacts, reviewCursorChange } from '../../code/cursor'
+import { backoff, briefGaps, cloudRunning, composeCursorPrompt, type CursorBrief, describeCloud, formatReview, newRunState, prUrlsOf, pullRequestCheckState, readCursorEvent, readCursorJson, type RepoFacts, reviewCursorChange } from '../../code/cursor'
 import { formatFindings, gh, ghInstalled, git, scanDiffForSecrets } from '../../code/git'
 import { clip, runProcess, stripAnsi } from '../../code/proc'
 import { detectProject } from '../../code/project'
@@ -235,6 +235,8 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
         case 'cloud_review': {
           const { agent, run: latest } = await cloudState(key!, a.id!, ctx.signal)
           const parts = [describeCloud(agent, latest)]
+          const observations: string[] = []
+          let passed = 0
           if (cloudRunning(latest?.status)) parts.push('\nThe run is still going: review once it finishes (cloud_wait).')
           const prs = prUrlsOf(latest)
           if (!prs.length) parts.push('\nNo pull request yet.')
@@ -243,20 +245,32 @@ export function cursorTool(cursorKey: () => string | undefined = () => undefined
             const cwd = ctx.workspaceDir
             for (const url of prs.slice(0, 2)) {
               try {
-                const view = await gh(cwd, ['pr', 'view', url, '--json', 'title,state,additions,deletions,changedFiles,statusCheckRollup,files'], { signal: ctx.signal })
+                const view = await gh(cwd, ['pr', 'view', url, '--json', 'title,state,headRefOid,baseRefOid,additions,deletions,changedFiles,statusCheckRollup'], { signal: ctx.signal })
                 const v = JSON.parse(view)
                 const checks = (v.statusCheckRollup ?? []) as Array<{ name?: string; context?: string; conclusion?: string; state?: string; status?: string }>
                 parts.push(`\nPR ${url}: ${v.title} (${v.state}) +${v.additions} −${v.deletions} in ${v.changedFiles} files`)
                 if (checks.length) parts.push(`Checks: ${checks.map((c) => `${c.name ?? c.context}=${c.conclusion || c.state || c.status}`).join(', ')}`)
                 const diff = await gh(cwd, ['pr', 'diff', url, '--color', 'never'], { signal: ctx.signal, timeoutMs: 90_000 })
+                const revision = JSON.parse(await gh(cwd, ['pr', 'view', url, '--json', 'headRefOid,baseRefOid'], { signal: ctx.signal }))
+                if (!v.headRefOid || !v.baseRefOid || revision.headRefOid !== v.headRefOid || revision.baseRefOid !== v.baseRefOid) {
+                  parts.push('The PR revision changed during review. Read it again before using the diff or checks.')
+                  continue
+                }
+                const state = pullRequestCheckState(checks)
+                const receipt = `${url} at ${v.headRefOid}: diff read, CI ${state}`
+                observations.push(receipt)
+                parts.push(receipt)
+                if (state === 'passed') passed++
                 parts.push(`Diff:\n${clip(diff.trim(), 40_000)}`)
-                const failing = checks.some((c) => /fail|error|cancel|timed_out/i.test(`${c.conclusion ?? ''} ${c.state ?? ''}`))
-                parts.push(formatReview(reviewCursorChange({ brief: briefOf(cursorBriefs.get(a.id!)), diff, checksRun: checks.length > 0, checksOk: checks.length ? !failing : undefined, summary: latest?.result }), `cursor(action="cloud_followup", id="${a.id}", goal=…)`))
-              } catch (e) { parts.push(`\nCouldn't read ${url} with gh: ${(e as Error).message}`) }
+                parts.push(formatReview(reviewCursorChange({ brief: briefOf(cursorBriefs.get(a.id!)), diff, checksRun: checks.length > 0, checksOk: state === 'unverified' ? undefined : state === 'passed', summary: latest?.result }), `cursor(action="cloud_followup", id="${a.id}", goal=…)`))
+              } catch (e) { ctx.signal.throwIfAborted(); parts.push(`\nCouldn't read ${url} with gh: ${(e as Error).message}`) }
             }
             parts.push('\nReview: does the diff do exactly the goal, nothing more? Any failing checks, missing tests, secrets, or risky changes? Send fixes with cloud_followup; tell the user what you verified.')
           }
-          return { text: parts.join('\n'), display: prs.length ? 'reviewed PR' : `${agent.id} · ${latest?.status ?? agent.status}` }
+          const verified = prs.length > 0 && observations.length === prs.length
+          const detail = observations.join('\n') || 'No stable revision and check results available.'
+          return { text: parts.join('\n'), display: `${observations.length}/${prs.length} PR diffs read · ${passed} with passing CI`,
+            verification: { criterion: `Inspected revisions and CI for Cursor agent ${a.id}`, passed: verified, detail } }
         }
       }
     }
