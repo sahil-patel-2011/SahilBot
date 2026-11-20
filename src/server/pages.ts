@@ -77,6 +77,7 @@ export const PAIR_JS = `(function(){
   var form=document.getElementById('pair'),code=document.getElementById('code'),name=document.getElementById('name'),msg=document.getElementById('msg'),go=document.getElementById('go');
   function say(t,ok){msg.textContent=t;msg.className=ok?'msg ok':'msg'}
   var m=/[#&]code=([A-Za-z0-9-]+)/.exec(location.hash);
+  var bot=/(?:^|[#&])bot=([0-9a-f-]{36})(?:&|$)/.exec(location.hash);
   var f=/[#&]fp=([0-9A-Fa-f]{8,64})/.exec(location.hash),fp=document.getElementById('fp');
   if(f&&fp){document.getElementById('fp-value').textContent=f[1].toUpperCase().replace(/(.{4})(?=.)/g,'$1 ');fp.hidden=false}
   if(m){code.value=m[1];history.replaceState(null,'',location.pathname)}
@@ -85,7 +86,7 @@ export const PAIR_JS = `(function(){
     fetch('/api/pair',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code.value,name:name.value})})
       .then(function(r){return r.json().catch(function(){return{}}).then(function(j){return{r:r,j:j}})})
       .then(function(x){
-        if(x.r.ok){say('Paired. Opening SahilBot…',true);location.replace('/');return}
+        if(x.r.ok){say('Paired. Opening SahilBot…',true);location.replace(bot?'/?bot='+bot[1]:'/');return}
         go.disabled=false;
         if(x.r.status===429)say('Too many tries. Wait '+Math.ceil((x.j.retryAfter||60)/60)+' min and try again.');
         else say(x.j.error||'That code didn’t work. Check it, or make a new one on the server.');

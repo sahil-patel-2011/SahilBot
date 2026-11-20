@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { PhoneAccessStatus, PhoneHostInfo, RemoteServerStatus, ServerAuditEntry, ServerDeviceInfo, ServerInfo } from '@shared/types'
+import type { PhoneAccessStatus, PhoneHostInfo, RemoteServerStatus, ServerAuditEntry, ServerDeviceInfo, ServerInfo, Space, WorkerApi, WorkerPlacement, WorkerView } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
 import { Toggle } from './Toggle'
@@ -167,6 +167,90 @@ export function AlwaysOnServerPage() {
           </Row>
         </>}
         {err && <Row title={<span className="conn bad">{err}</span>} />}
+      </Section>
+      {api.workers && api.runtime !== 'server' && <WorkersSection workersApi={api.workers} />}
+    </div>
+  )
+}
+
+function WorkersSection({ workersApi }: { workersApi: WorkerApi }) {
+  const [workers, setWorkers] = useState<WorkerView[]>([])
+  const [placements, setPlacements] = useState<WorkerPlacement[]>([])
+  const [bots, setBots] = useState<Space[]>([])
+  const [form, setForm] = useState({ name: '', url: '', code: '', fingerprint: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [destination, setDestination] = useState<Record<string, string>>({})
+  const [slots, setSlots] = useState<Record<string, string>>({})
+
+  const refresh = async (): Promise<void> => {
+    const [data, spaces] = await Promise.all([workersApi.list(true), api.spaces.list()])
+    setWorkers(data.workers)
+    setPlacements(data.placements)
+    setBots(spaces.filter((s) => s.kind === 'bot' && !s.isMain && !s.hidden))
+  }
+  useEffect(() => { void refresh().catch((e) => setError(clean(e))) }, [workersApi])
+
+  const perform = async (action: () => Promise<void>): Promise<void> => {
+    setBusy(true)
+    setError('')
+    try { await action() } catch (e) { setError(clean(e)) }
+    try { await refresh() } catch (e) { setError((previous) => previous || clean(e)) }
+    setBusy(false)
+  }
+  return (
+    <div data-setting="worker-machines">
+      <Section title="Worker machines" sub="Pair each Pi, VM, or computer running SahilBot Server. Bot slots control placement. The server manages how many jobs run at once.">
+        {workers.map((w) => {
+          const count = slots[w.id] ?? String(w.capacity ?? '')
+          const valid = /^\d+$/.test(count) && Number(count) >= 1 && Number(count) <= 50
+          return (
+            <Row key={w.id} title={w.name} sub={w.online ? `${w.active} of ${w.capacity} assigned bot slots used · ${w.url}` : w.error || w.url} testId={`worker-${w.id}`}>
+              <input className="set-input" type="number" min={1} max={50} value={count} onChange={(e) => setSlots({ ...slots, [w.id]: e.target.value })} aria-label={`Bot slots for ${w.name}`} style={{ width: 64 }} />
+              <button className="btn" disabled={busy || !w.online || !valid || Number(count) === w.capacity} onClick={() => void perform(() => workersApi.capacity(w.id, Number(count)))}>Save slots</button>
+              <button className="link-btn" disabled={busy || !w.online} onClick={() => void workersApi.open(w.id).catch((e) => setError(clean(e)))}>Open</button>
+            </Row>
+          )
+        })}
+        <form onSubmit={(e) => {
+          e.preventDefault()
+          void perform(async () => {
+            await workersApi.pair(form)
+            setForm({ name: '', url: '', code: '', fingerprint: '' })
+          })
+        }}>
+          <Row title="Pair a worker" sub="Use the address and one-time code from SahilBot Server. Enter its SHA-256 fingerprint if the certificate is self-signed." />
+          <div className="set-row worker-pair">
+            <input className="set-input" aria-label="Worker name" placeholder="Worker name" maxLength={60} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+            <input className="set-input" aria-label="Worker address" placeholder="https://…" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required />
+            <input className="set-input" aria-label="Worker pairing code" placeholder="Pairing code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} required />
+            <input className="set-input" aria-label="Worker certificate fingerprint" placeholder="Fingerprint, if self-signed" value={form.fingerprint} onChange={(e) => setForm({ ...form, fingerprint: e.target.value })} />
+            <button className="btn primary" disabled={busy}>Pair</button>
+            <button className="btn" type="button" disabled={busy} onClick={() => void perform(async () => undefined)}>Refresh</button>
+          </div>
+        </form>
+        {error && <Row title={<span className="conn bad" role="alert">{error}</span>} />}
+      </Section>
+      <Section title="Bot placement" sub="Each bot has one active machine. A worker gets the bot's profile. Chats, files, routines, and connections stay where they were created.">
+        {bots.map((bot) => {
+          const p = placements.find((x) => x.botId === bot.id)
+          const current = p?.workerId ?? ''
+          const target = p?.pending ? p.pending.workerId ?? '' : destination[bot.id] ?? current
+          const name = (id: string) => workers.find((w) => w.id === id)?.name ?? (id ? 'Paired worker' : 'This Mac')
+          return (
+            <Row key={bot.id} title={bot.name} sub={p?.pending ? `Move to ${name(target)} pending` : `Runs on ${name(current)}`} testId={`bot-placement-${bot.id}`}>
+              <select className="set-select" aria-label={`Worker for ${bot.name}`} value={target} disabled={busy || !!p?.pending}
+                onChange={(e) => setDestination({ ...destination, [bot.id]: e.target.value })}>
+                <option value="">This Mac</option>
+                {workers.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+              <button className="btn" disabled={busy || (!p?.pending && target === current)}
+                onClick={() => void perform(() => workersApi.assign(bot.id, target || null))}>{p?.pending ? 'Retry move' : 'Move'}</button>
+              {current && !p?.pending && <button className="link-btn" disabled={busy} onClick={() => void workersApi.open(current, bot.id).catch((e) => setError(clean(e)))}>Open bot</button>}
+            </Row>
+          )
+        })}
+        {!bots.length && <Row title="Create a bot to place it on a worker." />}
       </Section>
     </div>
   )

@@ -166,7 +166,7 @@ export function coreTools(results: ResultStore): ToolDef[] {
     label: 'Plan',
     core: true,
     effect: 'read',
-    description: 'Show the user your plan and wait for approval before executing. Use it for big, multi-step, risky or ambiguous tasks (and always when Plan first is on): investigate first with read-only tools, ask clarifying questions if needed, then propose. steps: the concrete steps you will take, in order, in plain words (3-15). assumptions: what you assumed. risks: anything irreversible or costly. If approved, execute it right away; if the user asks for changes, revise and propose again.',
+    description: 'Show a plan and wait when the user requested plan approval or Plan first is on, or when a consequential choice about the goal genuinely needs their decision. For a clear task, track the work with todo and proceed. Individual actions still use their own approval checks. In the plan, give concrete steps in order (3-15), assumptions, and any irreversible or costly steps. If approved, execute it right away; if the user asks for changes, revise and propose again.',
     parameters: {
       type: 'object',
       properties: {

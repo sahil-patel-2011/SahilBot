@@ -188,7 +188,13 @@ export function App() {
       setSettings(s)
       setSys(info)
       const sp = await refreshSpaces()
-      setSpaceId(sp.find((x) => x.isMain)?.id ?? null)
+      const workerBot = api.serverHost === 'server' ? new URLSearchParams(window.location.search).get('bot') : null
+      const bot = workerBot ? sp.find((x) => x.id === workerBot && x.kind === 'bot' && !x.isMain) : undefined
+      if (bot) {
+        const threads = await api.threads.list(bot.id)
+        setSpaceId(bot.id)
+        setThread(threads.find((t) => !/^From .+/.test(t.title)) ?? threads[0] ?? null)
+      } else setSpaceId(sp.find((x) => x.isMain)?.id ?? null)
       void refreshModels()
       setBrowser(await api.browser.state())
     })()
@@ -713,6 +719,13 @@ export function App() {
       } : undefined}
     />
   )
+  const chatInput = space?.placement ? (
+    <div className="worker-chat" data-testid="worker-chat">
+      <span>{space.placement.moving ? `Move to ${space.placement.label} pending` : space.placement.inactive ? space.placement.label : `Runs on ${space.placement.label}`}</span>
+      {api.runtime !== 'server' && (space.placement.moving ? <button className="btn" onClick={() => { setSettingsPage('server'); setShowSettings(true) }}>Manage placement</button>
+        : !space.placement.inactive && api.workers && <button className="btn primary" onClick={() => void api.workers!.open(null, space.id).catch((e: Error) => toast(e.message, 'error'))}>Open bot on worker</button>)}
+    </div>
+  ) : composerEl
 
   const prog = thread ? progress[thread.id] : undefined
   const plan = (() => {
@@ -784,7 +797,7 @@ export function App() {
         pinned={settings.pinnedBots}
         onPinned={(ids) => void api.settings.set({ pinnedBots: ids }).then(setSettings)}
       />
-      <main className="main chat-root" style={chatStyle}>
+      <main className={`main chat-root${isBot && !showModelThinking ? ' quiet-bot-chat' : ''}`} style={chatStyle}>
         <header className="main-header drag">
           <div className="header-title">
             {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
@@ -894,13 +907,13 @@ export function App() {
                 </div>
               )}
               {dev && !isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} />}
-              {composerEl}
+              {chatInput}
             </div>
           </>
         ) : isProject && space ? (
           <ProjectHome project={space} onOpen={(t) => setThread(t)} onEdit={() => setEditor({ space, mode: 'project' })} composer={composerEl} />
         ) : (
-          <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={composerEl} refreshKey={running.size}
+          <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={chatInput} refreshKey={running.size}
             onIdea={(text, deep) => { composer.current?.replace(text); composer.current?.setDeep(!!deep) }} />
         )}
       </main>

@@ -320,6 +320,9 @@ function General({ s, patch }: P) {
             </div>
           </Row>
           <Row id="reduce-transparency" title="Reduce transparency"><Toggle on={a.reduceTransparency} onChange={(v) => look({ reduceTransparency: v })} label="Reduce transparency" /></Row>
+          {!isServerRuntime && <Row id="animate-browser" title="Animate browser actions" sub="Show a cursor animation when you’re watching SahilBot’s browser.">
+            <Toggle on={s.advanced.animateBrowser === true} onChange={(v) => void patch({ advanced: { ...s.advanced, animateBrowser: v } })} label="Animate browser actions" />
+          </Row>}
           <Row id="font-size" title="Text size">
             <div className="stepper">
               <button onClick={() => look({ fontSize: Math.max(12, a.fontSize - 1) })} aria-label="Smaller">−</button>

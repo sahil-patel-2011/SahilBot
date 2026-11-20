@@ -15,8 +15,7 @@ export const SERVER_UNAVAILABLE_TOOLS: Record<string, string> = {
   mac_apps: 'Mac apps (Notes, Reminders, Calendar, Contacts through AppleScript)',
   app: 'Mac apps (Finder, Office, iWork, Messages and others through their scripting)',
   app_help: 'Mac apps (Finder, Office, iWork, Messages and others through their scripting)',
-  mail: 'Apple Mail',
-  browser: 'the built-in web browser (signed-in websites, forms, purchases)'
+  mail: 'Apple Mail'
 }
 
 /** Whether a tool is left out here. */
@@ -26,5 +25,5 @@ export const toolUnavailable = (name: string): boolean => isServer() && name in 
 export function serverToolsNote(): string {
   if (!isServer()) return ''
   const missing = [...new Set(Object.values(SERVER_UNAVAILABLE_TOOLS))].join('; ')
-  return ` This is SahilBot Server (always on, no screen): not available here: ${missing}. Use web_search and fetch_page for the web, connected apps (Gmail, Calendar, Drive and others) for accounts, and files and run_command for local work; for the rest, tell the user it needs the SahilBot Mac app.`
+  return ` This is SahilBot Server (always on, no screen): not available here: ${missing}. The browser tool only reads public text pages. Use connected apps (Gmail, Calendar, Drive and others) for accounts, and files and run_command for local work. Visual or signed-in browser interactions need the Mac app.`
 }

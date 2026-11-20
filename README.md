@@ -53,7 +53,9 @@ tar -xzf SahilBot-server-linux-arm64.tar.gz
 sudo tailscale serve --bg 8787        # HTTPS on your tailnet: open https://<pi>.<tailnet>.ts.net on your phone
 ```
 
-It listens only on `127.0.0.1` by default. Every device pairs once with a one-time code and can be removed at any time, and remote approvals are logged. It runs cloud models, or your ChatGPT plan through Codex; local models aren't realistic on a Pi. The built-in browser, computer use, Mac apps and voice need the Mac app. See [docs/server.md](docs/server.md) for the design, security, Docker and launchd installs, and measured memory use.
+It listens only on `127.0.0.1` by default. Every device pairs once with a one-time code and remote approvals are logged. A worker can use cloud models, your ChatGPT plan through Codex, and a background text browser for public pages. The Mac app supports interactive browser sessions, computer use, Mac apps and voice.
+
+**Settings → Always-on server → Worker machines** pairs multiple servers. Give each Pi or VM a bot slot count and use **Bot placement** to move bots between them or bring them back to the Mac. See [server setup and placement](docs/server.md#assign-bots-to-worker-machines).
 
 ## Local models (Ollama)
 

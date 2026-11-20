@@ -53,7 +53,7 @@ function pinnedAgent(socket: TLSSocket): HttpsAgent {
   return a
 }
 
-async function call(base: string, path: string, o: { method?: string; token?: string; body?: unknown; pin?: string; trustOnFirstUse?: boolean } = {}): Promise<Reply> {
+export async function callServer(base: string, path: string, o: { method?: string; token?: string; body?: unknown; pin?: string; trustOnFirstUse?: boolean } = {}): Promise<Reply> {
   const u = new URL(path, base)
   const body = o.body === undefined ? undefined : JSON.stringify(o.body)
   const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': 'SahilBot-Mac' }
@@ -66,7 +66,13 @@ async function call(base: string, path: string, o: { method?: string; token?: st
       // Read while the connection is still open (it may be gone by the end of the body).
       const fingerprint = (res.socket as TLSSocket | undefined)?.getPeerCertificate?.()?.fingerprint256
       const chunks: Buffer[] = []
-      res.on('data', (c: Buffer) => chunks.push(c))
+      let received = 0
+      res.on('data', (c: Buffer) => {
+        received += c.length
+        if (received > 256 * 1024) req.destroy(new Error('The server returned too much data.'))
+        else chunks.push(c)
+      })
+      res.on('error', fail)
       res.on('end', () => {
         let json: Record<string, unknown> = {}
         try { json = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch { /* not JSON */ }
@@ -92,7 +98,7 @@ export function setupRemoteServer(d: { db: Db; secrets: Secrets; openExternal: (
     const base: RemoteServerStatus = { linked: true, url: s.url, deviceName: s.deviceName, pinned: s.pinned, online: null }
     if (!refresh) return base
     try {
-      const r = await call(s.url, '/api/status', { token: t, pin: s.pinned })
+      const r = await callServer(s.url, '/api/status', { token: t, pin: s.pinned })
       if (r.status === 401) return { ...base, online: false, error: 'this Mac was removed from the server; unlink and link again' }
       if (r.status !== 200) return { ...base, online: false, error: `it answered ${r.status}` }
       return { ...base, online: true, info: r.json as unknown as RemoteServerStatus['info'] }
@@ -109,7 +115,7 @@ export function setupRemoteServer(d: { db: Db; secrets: Secrets; openExternal: (
     if (!code) throw new Error('Enter the pairing code from the server (sahilbot-server pair).')
     // The label survives a long hostname: the name part is cut, never "(Mac app)".
     const deviceName = `${hostname().replace(/\.local$/, '').slice(0, 49)} (Mac app)`
-    const pair = (tofu: boolean): Promise<Reply> => call(url, '/api/pair', { method: 'POST', body: { code, name: deviceName, mode: 'token' }, trustOnFirstUse: tofu })
+    const pair = (tofu: boolean): Promise<Reply> => callServer(url, '/api/pair', { method: 'POST', body: { code, name: deviceName, mode: 'token' }, trustOnFirstUse: tofu })
     let r: Reply
     let pinned: string | undefined
     try { r = await pair(false) } catch (e) {
@@ -128,7 +134,7 @@ export function setupRemoteServer(d: { db: Db; secrets: Secrets; openExternal: (
   registerHandler('remoteServer:disconnect', async () => {
     const s = saved()
     const t = token()
-    if (s && t) { try { await call(s.url, '/api/logout', { method: 'POST', token: t, pin: s.pinned }) } catch { /* offline: forget it here anyway */ } }
+    if (s && t) { try { await callServer(s.url, '/api/logout', { method: 'POST', token: t, pin: s.pinned }) } catch { /* offline: forget it here anyway */ } }
     d.secrets.set(TOKEN, null)
     d.db.setSetting(KEY, null)
     return { linked: false } satisfies RemoteServerStatus
@@ -138,7 +144,7 @@ export function setupRemoteServer(d: { db: Db; secrets: Secrets; openExternal: (
     const s = saved()
     const t = token()
     if (!s || !t) throw new Error('Link a server first.')
-    const r = await call(s.url, '/api/handoff', { method: 'POST', token: t, pin: s.pinned })
+    const r = await callServer(s.url, '/api/handoff', { method: 'POST', token: t, pin: s.pinned })
     if (r.status !== 200 || typeof r.json.code !== 'string') throw new Error(String(r.json.error ?? `The server answered ${r.status}.`))
     // The code rides in the fragment: it never reaches a server log or a Referer.
     d.openExternal(`${s.url}/pair#code=${encodeURIComponent(r.json.code)}`)

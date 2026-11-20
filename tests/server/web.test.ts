@@ -38,7 +38,7 @@ beforeAll(async () => {
   if (!existsSync(resolve('out/server/index.js')) || !existsSync(resolve('out/renderer/index.html'))) throw new Error('Build first: npm run build && npm run build:server')
   llm = await startMockLlm()
   proc = spawn(process.execPath, [resolve('out/server/index.js'), '--data', data, '--port', '0'], {
-    env: { ...process.env, FOREMAN_BASE_URL: llm.url, FOREMAN_SKIP_ONBOARDING: '1', FOREMAN_NO_AUTOTITLE: '1', FOREMAN_NO_VERIFY: '1', FOREMAN_RAM_GB: '64', SAHILBOT_KNOWLEDGE: '0', SAHILBOT_LEARNING: '0' },
+    env: { ...process.env, FOREMAN_BASE_URL: llm.url, FOREMAN_SKIP_ONBOARDING: '1', FOREMAN_NO_AUTOTITLE: '1', FOREMAN_NO_VERIFY: '1', FOREMAN_NO_BRAIN: '1', FOREMAN_RAM_GB: '64', SAHILBOT_KNOWLEDGE: '0', SAHILBOT_LEARNING: '0' },
     stdio: ['ignore', 'pipe', 'pipe']
   })
   let out = ''
@@ -100,8 +100,7 @@ test('pair in a browser, chat, approve, and use it at phone width', async () => 
   await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 20_000 }).toContain('Wrote it')
 
   // Settings → Server: this device listed; a new pairing code can be made.
-  await page.keyboard.press('Meta+,')
-  if (!(await page.locator('[data-testid="settings-server"]').count())) await page.locator('button[title^="Settings"]').first().click()
+  await page.getByTestId('header-settings').click()
   await page.click('[data-testid="settings-server"]')
   await page.waitForSelector('[data-testid="server-status"]')
   await expect.poll(() => page.locator('[data-testid="server-settings"]').innerText()).toContain('Playwright')

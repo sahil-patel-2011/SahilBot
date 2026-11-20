@@ -61,6 +61,17 @@ already signed in.
 **Finish setup in the web UI:** Settings → API Keys & Servers (a Claude or OpenAI key), or Settings → Models
 → ChatGPT plan. Then create bots and routines as usual.
 
+## Assign bots to worker machines
+
+1. Run SahilBot Server on each Pi, VM, or computer. For separate instances on one computer, use separate VMs or containers with their own data volumes and addresses. Start each instance with a fresh data directory.
+2. In the Mac app, open **Settings → Always-on server → Worker machines**. Pair each machine with a code from `sahilbot-server pair`. Enter the SHA-256 fingerprint printed by the server if it uses a self-signed certificate.
+3. Set **Bot slots** to the number of assigned bots each worker should accept. Use one slot for a dedicated worker, or set two, three, five, or another limit up to 50. The server's `--max-runs` still controls how many jobs can execute at once.
+4. In **Bot placement**, choose a machine and select **Move**. **Open bot on worker** opens its chat in the worker's web app. Choose **This Mac** to bring execution back.
+
+The previous host must acknowledge the move while the bot is idle. A pending move can be retried after the hosts reconnect. SahilBot copies the bot's scrubbed profile to a new worker. Chats, files, routines, goals, and connected accounts stay on their own machines. Configure the model and connectors on each worker, and set up routines there if you want them to run there. An inactive copy keeps its chat history, and its routines wait while it is inactive.
+
+Bots in the same server instance share its service account and configured tools. Use separate VMs or separate machines for OS-level isolation.
+
 ## What runs where
 
 | | Server (Pi / VM / Mac mini) | Mac app only |
@@ -73,17 +84,19 @@ already signed in.
 | Memory, rules, skills, notes vault, knowledge base (server files) | ✓ | |
 | Files, workspace, `run_command`, coding tools, git (Linux commands) | ✓ | |
 | Word, Excel and PowerPoint documents, Docs, Markdown | ✓ | |
-| Web search and page reading | ✓ | |
+| Web search and background browser for public text pages | ✓ | |
 | Password vault (unlocked with a master password; values never shown in the browser) | ✓ | Touch ID, reveal |
 | Cloud models (Claude, OpenAI, OpenRouter) and the ChatGPT plan through Codex | ✓ | |
 | Local models (Ollama, LM Studio) | another machine's server as a custom endpoint | ✓ |
-| Built-in browser (signed-in sites, forms, purchases), Teach a task, Pages preview | ✗ | ✓ |
+| Interactive browser (signed-in sites, forms, purchases), Teach a task, Pages preview | ✗ | ✓ |
 | Computer use, Mac apps (AppleScript), Apple Mail, Quick Ask, screenshots | ✗ | ✓ |
 | Voice (dictation, voice mode), PDF printing, Quick Look previews | ✗ | ✓ |
 
 On the server, the tools in the ✗ rows are **not registered** (src/main/runtime.ts), so the model never sees
 them. If it searches for one, `find_tools` tells it which features are missing and what to use instead. The
 web UI hides the matching controls.
+
+The background browser on a worker can open public pages, read the current page, and follow links. It reads HTML and plain text over public IPv4. Use the Mac app for interactive or JavaScript-only sites, and connected apps for account data.
 
 ## Design
 

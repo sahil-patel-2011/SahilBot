@@ -12,6 +12,7 @@ export type AuditKind =
   | 'device.revoke' | 'device.rename'
   | 'call.denied' | 'call.approval'
   | 'team.invite' | 'team.join' | 'team.ask' | 'team.scope' | 'team.revoke' | 'team.denied'
+  | 'worker.capacity' | 'worker.place'
 
 export interface AuditEntry {
   at: string

@@ -239,8 +239,7 @@ export class Db {
     return r ? toSpace(r) : undefined
   }
 
-  createSpace(name: string, color: string, extra: Partial<Pick<Space, 'shape' | 'kind' | 'isMain' | 'members' | 'folder'>> = {}): Space {
-    const id = uid()
+  createSpace(name: string, color: string, extra: Partial<Pick<Space, 'shape' | 'kind' | 'isMain' | 'members' | 'folder'>> = {}, id = uid()): Space {
     this.sql.prepare('INSERT INTO spaces(id, name, color, created_at, shape, kind, is_main, members, folder) VALUES(?,?,?,?,?,?,?,?,?)')
       .run(id, name, color, Date.now(), extra.shape ?? 'blob', extra.kind ?? 'bot', extra.isMain ? 1 : 0, JSON.stringify(extra.members ?? []), extra.folder ?? null)
     return this.getSpace(id)!

@@ -2,7 +2,8 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PurchaseInfo, ToolEffect } from '@shared/types'
 import { benignClickLabel, classifyPurchase, clean, isCheckoutUrl, labelHasPrice, purchaseWording, PURCHASES_NEED_YOU, redactCards, type PurchaseGate, type PurchaseSignals } from '../../browser/checkout'
-import { safeUrl, type BrowserManager, type Expected, type PageCommerce, type RefInfo } from '../../browser/manager'
+import { safeUrl, type BrowserManager, type Expected, type OfferedDownload, type PageCommerce, type RefInfo } from '../../browser/manager'
+import { routineDownload } from '../../browser/download-policy'
 import { MAX_MS, MAX_STEPS, stepDetails, stepsToText, SECRET } from '../../browser/teach'
 import { codeCandidate, codeSnippet, pickCode, senderDomain, type CodeMessage } from '../../otp'
 import type { SiteEvent } from '../../sites/learn'
@@ -104,6 +105,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
   const filled = new Map<number, { host: string; card?: string; address?: string }>()
   /** The tab and site an approved fill was decided for (set when the permission check sees it). */
   const decidedFor = new WeakMap<object, Expected>()
+  const downloads = new WeakMap<Args, { expected: OfferedDownload; page?: string }>()
   const expectNow = (): Expected | undefined => { try { return b.expectation?.() } catch { return undefined } }
   /** Purchase steps the user declined (the submit after them doesn't run). */
   const declined = new WeakSet<ToolOutput>()
@@ -181,7 +183,13 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     }
     if (a.action === 'fill_address') return `typing your saved address "${a.address}" into ${safeHost(url)}`
     if (a.action === 'upload') return `uploading ${(a.paths ?? []).map((x) => `"${x.split(/[\\/]/).pop()}"`).join(', ')} to ${safeHost(url)}`
-    if (a.action === 'downloads' && a.op === 'save') return `saving a download ("${b.offeredDownloads()[(a.index ?? 1) - 1]?.filename ?? '?'}") from ${b.offeredDownloads()[(a.index ?? 1) - 1]?.host ?? 'the web'} into your workspace`
+    if (a.action === 'downloads' && a.op === 'save') {
+      const item = b.offeredDownloads()[(a.index ?? 1) - 1]
+      if (!item) return null
+      const routine = routineDownload(item, url)
+      downloads.set(a, { expected: item, ...(routine ? { page: url } : {}) })
+      return routine ? null : `saving a download ("${item.filename}") from ${item.host} into your workspace`
+    }
     if (a.action === 'type' && r?.password) return 'typing into a password field'
     if (a.action === 'fill_form' && (a.fields ?? []).some((f) => b.refInfo(f.ref)?.password)) return 'typing into a password field'
     if (a.action === 'dialog' && a.accept && (looksLikePayment(b.pendingDialog?.message) || DESTRUCTIVE.test(b.pendingDialog?.message ?? ''))) return `confirming "${b.pendingDialog?.message.slice(0, 80)}"`
@@ -264,7 +272,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
       return true
     },
     untrusted: true,
-    description: `Control the built-in web browser (persistent logins, visible to the user). Actions:
+    description: `Control SahilBot's built-in web browser. It works in the background and the user can open it at any time. Actions:
 - navigate {url}: open a URL (declines cookie banners when there's a reject option)
 - snapshot {full?}: page structure with element refs like e12. navigate, click, type and Enter already return what they changed (new elements marked *, or the new page's start), and a ref stays the same for the same element while the page is the same, so snapshot only to read the whole page. Long pages show the visible area first; long lists show a few items and [expand=g3]; full=true shows all
 - find {query}: elements matching a description ("the search box"), with refs
@@ -284,7 +292,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
 - fill_payment {card}: put a saved card (nickname, or "Visa ending 4242") into the page's card fields; you never see it. The user approves it on a Purchase card.
 - fill_address {address, section?}: put a saved address into the shipping (default) or billing fields
 - upload {ref, paths}: attach files from the workspace or attached folders to a file field (asks first)
-- downloads {op: list|save, index?}: files pages offered; nothing is saved until the user approves
+- downloads {op: list|save, index?}: view offered files or save one. Auto can save small same-site HTTPS text, CSV, and raster image files into Downloads. Other downloads need approval.
 - wait {text?, url?, timeout?}: wait for text to appear, the address to change, or the page to settle
 - scroll {direction, amount?} or {ref}: amount is in screens (default 1); ref scrolls that element into view
 - screenshot: image of the visible page
@@ -920,7 +928,9 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         const list = b.offeredDownloads()
         if (a.op === 'save') {
           if (!ctx) throw new Error('Saving needs a chat.')
-          const r = await b.saveDownload((a.index ?? 1) - 1, join(ctx.workspaceDir, 'Downloads'))
+          const decision = downloads.get(a)
+          if (!decision) throw new Error('List the available downloads and choose one to save.')
+          const r = await b.saveDownload((a.index ?? 1) - 1, join(ctx.workspaceDir, 'Downloads'), { ...decision, signal: ctx.signal })
           if (r.state !== 'completed') throw new Error(`The download ${r.state}.`)
           return { text: `Saved to ${r.path}.`, display: 'saved a download', path: r.path }
         }

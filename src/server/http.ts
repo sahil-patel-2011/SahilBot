@@ -20,6 +20,7 @@ import { acceptUpgrade, isUpgrade, rejectUpgrade } from './ws'
 import { cleanText, clearTeamCookie, MAX_QUESTION_CHARS, TEAM_COOKIE, teamCookie, type TeamMemberRecord, type TeamStore } from './team'
 import { TEAM_CSS, TEAM_JS, teamHtml } from './team-pages'
 import type { BrainSourceRef, TeamQuestion } from '@shared/brain-access'
+import { hasHandler, invoke } from '../main/rpc'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -221,6 +222,20 @@ export class HttpFront {
 
     if (method === 'GET' && path === '/api/session') return this.json(res, 200, { device: { id: device.id, name: device.name }, csrf: this.o.devices.csrf(device.id), runtime: 'server', host: this.o.host ?? 'server', version: host.version })
     if (method === 'GET' && path === '/api/status') return this.json(res, 200, await this.o.status())
+    if (path === '/api/workers' || path.startsWith('/api/workers/')) {
+      if (this.o.host === 'mac' || !hasHandler('workerHost:request')) return this.fail(res, 404, 'Worker placement is unavailable.')
+      if (via !== 'bearer' || device.kind !== 'app') return this.fail(res, 403, 'Pair the Mac app to manage this worker.')
+      const action = method === 'GET' && path === '/api/workers' ? 'status'
+        : method === 'POST' && path === '/api/workers/capacity' ? 'capacity'
+          : method === 'POST' && path === '/api/workers/place' ? 'place' : undefined
+      if (!action) return this.fail(res, 404, 'Unknown worker action.')
+      try {
+        const body = method === 'POST' ? await this.body(req) : undefined
+        const result = await invoke('workerHost:request', { transport: 'worker', deviceId: device.id }, [action, body])
+        if (action !== 'status') this.o.audit.write(`worker.${action}`, { device: device.id, ip })
+        return this.json(res, 200, result)
+      } catch (error) { return this.fail(res, (error as { status?: number }).status ?? 409, (error as Error).message) }
+    }
     if (method === 'POST' && path === '/api/logout') {
       this.o.devices.revoke(device.id)
       this.o.audit.write('device.revoke', { ip, device: device.id, detail: 'signed out' })

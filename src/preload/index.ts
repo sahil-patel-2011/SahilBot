@@ -469,6 +469,13 @@ const api: SahilBotApi = {
     disconnect: call('remoteServer:disconnect') as never,
     openUi: call('remoteServer:openUi') as never
   },
+  workers: {
+    list: call('workers:list') as never,
+    pair: call('workers:pair') as never,
+    capacity: call('workers:capacity') as never,
+    assign: call('workers:assign') as never,
+    open: call('workers:open') as never
+  },
   // Settings → General → Phone access: this Mac serves SahilBot to paired phones (src/main/phone).
   phoneAccess: {
     status: call('phoneAccess:status') as never,

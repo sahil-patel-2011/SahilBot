@@ -1,5 +1,5 @@
 import { parseKeys } from './keys'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { BrowserWindow, WebContentsView, session as electronSession, systemPreferences, type Rectangle, type Session, type WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
@@ -10,6 +10,7 @@ import { readable } from '../agent/tools/web'
 import { TeachRecorder } from './teach'
 import { FIELD_FACTS, FillGuardError, IS_FOCUSED, fieldProblem, type FieldFacts, type FieldKind } from '../secure/guards'
 import { moveDuration, pageCursorCss, type Point } from '../computer/overlay'
+import { ROUTINE_DOWNLOAD_LIMIT, routineDownload } from './download-policy'
 import { COMMERCE_FN, COOKIE_SCRIPT, PAGE_LIB, SHOT_MASK_CSS, cardValuesFor, countryNames, fillAddressScript, fillCardScript, isProcessorHost, locateCardScript, maskScript, pickTotal, regionNames, splitItem, type CardValues, type Money } from './checkout'
 
 /** Size the page renders at while the panel is closed (a typical laptop viewport). */
@@ -189,9 +190,9 @@ export class BrowserManager {
   private worlds = new Map<number, Map<string, number>>()
   private lastAgentAt = 0
   private blockedCard: string[] = []
-  /** Downloads pages offered (newest last); none is saved until the user approves it. */
+  /** Downloads pages offered (newest last), saved only through an authorized tool call. */
   private offered: OfferedDownload[] = []
-  private allowDownload: { url: string; path: string; done: (state: string) => void } | null = null
+  private allowDownload: { url: string; tabId: number; path: string; page?: string; filename: string; signal?: AbortSignal; cancel?: () => void; done: (state: string) => void } | null = null
   /** One-time codes typed recently: hidden from every result for 10 minutes. */
   private codes: Array<{ value: string; until: number }> = []
   /** Requests in flight per tab (for "network idle"). */
@@ -208,16 +209,25 @@ export class BrowserManager {
   private readonly saveToken = randomUUID()
   private lastSave = { payload: '', at: 0 }
 
-  constructor(private win: () => BrowserWindow | null, private emit: (s: BrowserState) => void, private requestOpen?: () => void) {
+  constructor(private win: () => BrowserWindow | null, private emit: (s: BrowserState) => void, private requestOpen?: () => void, private animate = () => false) {
     this.ses = electronSession.fromPartition('persist:foreman-browser')
-    // Sites don't get the camera, mic, location or notifications, and nothing downloads silently.
+    // Sites never get device permissions or start unmanaged downloads.
     this.ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
     this.ses.on('will-download', (e, item, wc) => {
-      // The one download the user approved (downloads op=save) goes to the path they saw.
+      // A saved download is bound to its tab and URL. Automatic saves check the new response too.
       const allowed = this.allowDownload
-      if (allowed && item.getURL() === allowed.url) {
-        this.allowDownload = null
+      if (allowed && wc.id === allowed.tabId && item.getURLChain()[0] === allowed.url) {
+        if (allowed.cancel || allowed.signal?.aborted || item.getURL() !== allowed.url || (allowed.page && (item.getURLChain().length !== 1 || wc.getURL() !== allowed.page ||
+          item.getFilename() !== allowed.filename ||
+          !routineDownload({ url: item.getURL(), filename: item.getFilename(), size: item.getTotalBytes(), mime: item.getMimeType() }, allowed.page)))) {
+          e.preventDefault()
+          if (!allowed.cancel) allowed.done('changed since it was offered')
+          return
+        }
         item.setSavePath(allowed.path)
+        const stop = (): void => item.cancel()
+        allowed.cancel = stop
+        if (allowed.page) item.on('updated', () => { if (item.getReceivedBytes() > ROUTINE_DOWNLOAD_LIMIT) stop() })
         item.once('done', (_ev, state) => allowed.done(state))
         return
       }
@@ -1428,7 +1438,7 @@ export class BrowserManager {
 
   /** Glides the in-page cursor to the element; resolves as it arrives (the real event follows). */
   private async showCursor(wc: WebContents, backendNodeId: number, kind: 'click' | 'type', at?: Point): Promise<void> {
-    if (!this.panelShown()) return
+    if (!this.animate() || !this.panelShown()) return
     try {
       if (kind === 'type') await this.cdp(wc, 'DOM.scrollIntoViewIfNeeded', { backendNodeId }).catch(() => undefined)
       const { model } = await this.cdp<{ model: { border: number[] } }>(wc, 'DOM.getBoxModel', { backendNodeId })
@@ -1898,17 +1908,31 @@ export class BrowserManager {
     return [...this.offered]
   }
 
-  /** Saves one offered download (after the user approved it) into `dir`. */
-  async saveDownload(index: number, dir: string): Promise<{ path: string; state: string }> {
+  /** Saves the same download the permission check saw. */
+  async saveDownload(index: number, dir: string, o: { expected?: OfferedDownload; page?: string; signal?: AbortSignal } = {}): Promise<{ path: string; state: string }> {
     const d = this.offered[index]
     if (!d) throw new Error(`No download ${index + 1}. Use downloads op=list.`)
+    if (o.expected && d !== o.expected) throw new Error('The download list changed. List the downloads again.')
+    if (o.page && (this.pageUrl() !== o.page || !routineDownload(d, o.page))) throw new Error('The download no longer meets the automatic save requirements.')
+    if (this.allowDownload) throw new Error('Another download is still saving.')
+    o.signal?.throwIfAborted()
     mkdirSync(dir, { recursive: true })
+    if (o.page && lstatSync(dir).isSymbolicLink()) throw new Error('The workspace Downloads folder is a link.')
     const path = uniquePath(dir, safeName(d.filename))
     const wc = this.wc()
     const state = await new Promise<string>((resolve) => {
-      const t = setTimeout(() => { this.allowDownload = null; resolve('timed out') }, 120_000)
-      this.allowDownload = { url: d.url, path, done: (st) => { clearTimeout(t); resolve(st) } }
-      wc.downloadURL(d.url)
+      const stop = (st: string): void => { if (this.allowDownload?.done === done) this.allowDownload.cancel?.(); done(st) }
+      const abort = (): void => stop('cancelled')
+      const done = (st: string): void => {
+        clearTimeout(t)
+        o.signal?.removeEventListener('abort', abort)
+        if (this.allowDownload?.done === done) this.allowDownload = null
+        resolve(st)
+      }
+      const t = setTimeout(() => stop('timed out'), 120_000)
+      this.allowDownload = { url: d.url, tabId: wc.id, path, page: o.page, filename: d.filename, signal: o.signal, done }
+      o.signal?.addEventListener('abort', abort, { once: true })
+      try { wc.downloadURL(d.url) } catch { done('could not start') }
     })
     if (state === 'completed') this.offered = this.offered.filter((x) => x !== d)
     return { path, state }

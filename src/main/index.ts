@@ -43,6 +43,7 @@ import { ResultStore } from './agent/context'
 import { Agent } from './agent/loop'
 import { ToolRegistry } from './agent/registry'
 import { browserTool } from './agent/tools/browser'
+import { workerBrowserTool } from './agent/tools/worker-browser'
 import { sitesTool } from './agent/tools/sites'
 import { SiteStore } from './sites/store'
 import { setSiteHintProvider } from './sites/hint'
@@ -172,6 +173,7 @@ import { mark, TIMING } from './timing'
 import { addAdapter, broadcast, registerHandler } from './rpc'
 import { electronAdapter } from './rpc-electron'
 import { setupRemoteServer } from './remote-server'
+import { placementBlock, placementOf, setupWorkerFleet, setupWorkerHost } from './workers'
 
 // SAHILBOT_TIMING=1: launch phases in the log (src/main/timing.ts).
 mark('main module loaded')
@@ -576,7 +578,8 @@ app.whenReady().then(() => {
   const browser = new BrowserManager(
     () => win,
     (state) => toWin('browser:state', state),
-    () => toWin('browser:open')
+    () => toWin('browser:open'),
+    () => settings.get().advanced.animateBrowser === true
   )
   // A saved password typed while teaching a task is never recorded, whichever field it went into.
   browser.teach.secretValues = () => vault.secretValues()
@@ -672,7 +675,7 @@ app.whenReady().then(() => {
     ...webTools(() => ({ ...settings.get().search, braveKey: secrets.get('braveKey') })),
     memoryTool(memory, db, skills, rules, () => worldRef.current),
     // Built in and always available (connector tools are found with find_tools).
-    { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since), sites }), core: true },
+    isServer() ? workerBrowserTool() : { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since), sites }), core: true },
     sitesTool(sites),
     { ...cursorTool(() => secrets.get('cursorKey'), () => settings.get().workspaceDir, () => !!settings.get().cursorLocalAgent), core: true },
     { ...macAppsTool(), core: true },
@@ -1160,7 +1163,10 @@ app.whenReady().then(() => {
     }
   })
 
-  handle('spaces:list', () => db.listSpaces())
+  handle('spaces:list', () => db.listSpaces().map((space) => {
+    const placement = placementOf(db, space.id)
+    return placement ? { ...space, placement } : space
+  }))
   handle('spaces:create', (input: { name?: string; color?: string; shape?: BotShape; kind?: 'bot' | 'group' | 'project'; members?: string[]; intro?: boolean; folder?: string }) => {
     const kind = input.kind ?? 'bot'
     const name = input.name?.trim() || (kind === 'group' ? 'Group chat' : kind === 'project' ? 'New project' : 'New Bot')
@@ -1196,6 +1202,7 @@ app.whenReady().then(() => {
   })
   handle('spaces:remove', (id: string) => {
     if (db.getSpace(id)?.isMain) throw new Error("The main bot can't be deleted.")
+    if (!isServer() && placementOf(db, id)) throw new Error('Move this bot back to this Mac before deleting its local profile.')
     for (const t of db.listThreads(id)) chat.stop(t.id)
     // Background jobs belong to the bot's chats: they stop with it.
     void jobs.stopThreads(db.listThreads(id).map((t) => t.id))
@@ -1580,6 +1587,7 @@ app.whenReady().then(() => {
   // Missed runs (closed or asleep) catch up once within Settings → General → "Catch up on missed routines".
   scheduler.catchUpHours = () => settings.get().catchUpHours ?? 12
   scheduler.paused = () => !!settings.get().routinesPaused
+  scheduler.available = (id) => !placementBlock(db, id)
   scheduler.start()
   // Waking from sleep: check for due (missed) routines now rather than at the next tick, once the network is back.
   powerMonitor.on('resume', () => { setTimeout(() => void scheduler.tick().catch(() => undefined), 5000) })
@@ -1592,7 +1600,10 @@ app.whenReady().then(() => {
   handle('schedules:remove', (id: string) => scheduler.remove(id))
   // Test: starts the run and returns at once; progress arrives as schedules:changed + schedules:runs.
   handle('schedules:runNow', (id: string) => {
-    if (!scheduler.get(id)) throw new Error('That routine no longer exists.')
+    const routine = scheduler.get(id)
+    if (!routine) throw new Error('That routine no longer exists.')
+    const location = placementBlock(db, routine.spaceId)
+    if (location) throw new Error(location)
     scheduler.test(id)
   })
 
@@ -1756,7 +1767,8 @@ app.whenReady().then(() => {
       if (goalsTimer) return
       goalsTimer = setTimeout(() => { goalsTimer = null; toWin('goals:changed') }, 250)
     },
-    paused: () => !!settings.get().routinesPaused
+    paused: () => !!settings.get().routinesPaused,
+    available: (id) => !placementBlock(db, id)
   })
   goalHooks.ask = (threadId, info) => goals.onUnattendedAsk(threadId, info)
   // goal and follow_up are found with find_tools("goal"); wake-ups load them into their chat.
@@ -2800,6 +2812,28 @@ app.whenReady().then(() => {
   registerProtocolClient(HIDDEN)
   // Settings → Always-on server: this Mac's link to a SahilBot Server (src/main/remote-server.ts).
   setupRemoteServer({ db, secrets, openExternal: (u) => { if (/^https?:\/\//.test(u)) void shell.openExternal(u) } })
+  const workerPlacement = {
+    db,
+    isBusy: (id: string) => chat.busyInSpace(id) || jobs.running().some((job) => db.getThread(job.threadId)?.spaceId === id),
+    changed: () => emit({ threadId: '', type: 'spaces' })
+  }
+  if (isServer()) setupWorkerHost({
+    ...workerPlacement,
+    provision: (id, file) => {
+      if (!db.getSpace(id)) db.createSpace(file.name, file.color, { shape: file.shape, folder: sub('worker-bots', id) }, id)
+      // Interrupted provisioning is idempotent. Returning to this worker keeps its local profile and history.
+      if (!db.listThreads(id).length) {
+        spaces.setPrompt(id, [file.description, file.instructions, file.skills.length ? `Load these skills when they fit: ${file.skills.join(', ')}.` : undefined].filter(Boolean).join('\n\n'))
+        if (file.label) db.updateSpace(id, { label: file.label })
+        db.updateThread(db.createThread(id, botLevel(settings.get(), db.getSpace(id)!), null).id, { title: file.name })
+      }
+    }
+  })
+  else setupWorkerFleet({
+    ...workerPlacement, secrets,
+    profile: (space) => botFileFor({ space, prompt: spaces.getPrompt(space.id), routines: [], skillNames: skillNames(), secrets: secretValues() }).file,
+    openExternal: (url) => { void shell.openExternal(url) }
+  })
   openUrls.attach(urlHandler({ db, emit, openThread, newChat: () => sendMenu('new-chat'), mainWindow: () => showMain(), isAppThread: (id) => mcp.isAppThread(id) }))
 
   // ---------------------------------------------------------------- swarms and Heavy runs

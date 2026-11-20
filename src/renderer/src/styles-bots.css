@@ -137,6 +137,8 @@
 .chat-pill .title-edit { width: 280px; max-width: 100%; min-width: 0; border-radius: 999px; padding: 5px 14px; font-size: 14px; }
 .chat-root .header-actions { gap: 2px; flex: 1 1 0; justify-content: flex-end; min-width: max-content; }
 .chat-root .header-actions .icon-btn { width: 30px; height: 30px; border-radius: 50%; color: var(--text-3); transition: background .14s ease-out, color .14s ease-out; }
+.quiet-bot-chat .cursor::after, .quiet-bot-chat .activity-dots.live i { animation: none; }
+.quiet-bot-chat .activity-title.shimmer, .quiet-bot-chat .activity[data-live="true"] .activity-title { animation: none; background: none; color: var(--text-2); }
 .chat-root .header-actions .icon-btn:hover { color: var(--text); background: var(--hover); }
 .chat-root .header-actions .icon-btn.on { color: var(--text); background: var(--selected); }
 .chat-root .progress-chip { color: var(--text-2); }
@@ -192,6 +194,7 @@
 .chat-root .row.ai .ai-foot .msg-actions:focus-within,
 .chat-root .row.ai .ai-foot .msg-actions.pinned { opacity: 1; }
 .reply-model-details { margin: 4px 12px 0; font-size: 11.5px; color: var(--text-2); overflow-wrap: anywhere; }
+.worker-chat { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; color: var(--text-2); }
 .chat-root .ai-foot .icon-btn { width: 28px; height: 28px; border-radius: 50%; }
 .chat-root .row.me .msg-actions .icon-btn { width: 28px; height: 28px; border-radius: 50%; color: var(--text-3); }
 .chat-root .row.me .msg-actions .icon-btn:hover { color: var(--text); }
