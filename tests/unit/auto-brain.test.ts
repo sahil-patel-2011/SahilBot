@@ -274,13 +274,13 @@ describe('the brain in the agent loop', () => {
   test('Auto reviews consequential work using the actual check result, even when the router proposes solo', async () => {
     const h = harness([...ALL, SOL])
     const t = h.thread()
-    h.registry.register({ name: 'review_revision', label: 'Review revision', effect: 'read', description: 'Inspect this fixture revision',
+    h.registry.register({ name: 'git', label: 'Review revision', effect: 'read', description: 'Inspect this fixture revision',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
-      async run() { return { display: 'read PR', text: 'Read PR', verification: { criterion: 'PR checks at f00baa', passed: false, detail: 'The required build is queued.' } } }
+      async run() { return { display: 'read PR', text: 'Head f00baa. token=fixturecredential', verification: { criterion: 'PR checks at f00baa', passed: false, detail: 'The required build is queued.' } } }
     } as never)
     llm.script.push(
       { content: JSON.stringify(answer({ model: OPUS.id, assessment: { goal: 'Decide whether to release', work: 'workflow', complexity: 'multi-step', impact: 'consequential', deliverable: false, parts: [] } })), delay: 0 },
-      { toolCalls: [{ name: 'review_revision', arguments: '{}' }], delay: 0 },
+      { toolCalls: [{ name: 'git', arguments: '{}' }], delay: 0 },
       { content: 'The release is ready.', delay: 0 },
       { content: 'LGTM except the required build is queued. Correct the release status.', delay: 0 },
       { content: 'Hold the release. The required build is queued.', delay: 0 }
@@ -289,7 +289,10 @@ describe('the brain in the agent loop', () => {
     const review = llm.requests.find((r) => JSON.stringify(r.messages[0]).includes('You review an AI assistant'))
     expect(review?.model).not.toBe(OPUS.id)
     expect(review?.tools ?? []).toHaveLength(0)
-    expect(JSON.parse(review!.messages[1].content).checks).toContainEqual({ criterion: 'PR checks at f00baa', passed: false, detail: 'The required build is queued.' })
+    const packet = JSON.parse(review!.messages[1].content)
+    expect(packet.observations[0].excerpt).toContain('Head f00baa.')
+    expect(packet.observations[0].excerpt).not.toContain('fixturecredential')
+    expect(packet.checks).toContainEqual({ criterion: 'PR checks at f00baa', passed: false, detail: 'The required build is queued.' })
     expect(JSON.stringify(llm.requests.at(-1)?.messages)).toContain('Correct the release status.')
   })
 
