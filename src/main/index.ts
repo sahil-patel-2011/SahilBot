@@ -27,7 +27,7 @@ import { PROVIDERS } from './llm/providers'
 import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
 import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff, speedOptions } from './llm/fast-mode'
 import { isAuto } from './llm/router'
-import { automationStatus, fileProbe, permissionsStatus, settingsUrl } from './permissions-center'
+import { NotificationPermission, automationStatus, fileProbe, permissionsStatus, settingsUrl } from './permissions-center'
 import { collectText, isLocal, spendHooks, streamChat, usageDetails } from './llm/client'
 import { ConnectorIcons, Connectors, PRESETS } from './connectors'
 import { OAUTH_CLIENTS_FILE, readBuiltinClients } from './oauth-clients'
@@ -455,10 +455,13 @@ app.whenReady().then(() => {
   const quickSeen = new Set<string>()
   /** Recent notifications, held so their click handlers survive garbage collection. */
   const notes: Notification[] = []
+  /** What macOS last did with a SahilBot notification (setup's "Turn on" and every notification since). */
+  const notePermission = new NotificationPermission(join(dataDir(), 'notification-permission.json'))
   const showNote = (n: Notification, threadId: string): void => {
     n.on('click', () => openThread(threadId))
     notes.push(n)
     if (notes.length > 30) notes.shift()
+    notePermission.observe(n)
     n.show()
   }
   const botName = (spaceId: string | undefined): string => {
@@ -2790,6 +2793,7 @@ app.whenReady().then(() => {
     accessibility: () => systemPreferences.isTrustedAccessibilityClient(false),
     media: (kind) => systemPreferences.getMediaAccessStatus(kind),
     notificationsSupported: () => Notification.isSupported(),
+    notifications: () => notePermission.get(),
     open: fileProbe,
     home: homedir()
   }))
@@ -2813,10 +2817,9 @@ app.whenReady().then(() => {
         }
         return pane()
       case 'notifications':
-        // The first notification is what makes macOS ask; once it's been asked, the pane is where it's changed.
+        // The first notification is what makes macOS ask; once it's been refused, the pane is where it's changed.
         if (!Notification.isSupported()) return pane()
-        new Notification({ title: 'SahilBot', body: 'Notifications are on: SahilBot will tell you when a task finishes or needs you.' }).show()
-        return 'prompted'
+        return notePermission.request(new Notification({ title: 'SahilBot', body: 'Notifications are on: SahilBot will tell you when a task finishes or needs you.' }))
       case 'automation': return pane()
       case 'fullDisk': return pane()
       default: { const never: never = kind; throw new Error(`Unknown permission "${String(never)}".`) }
