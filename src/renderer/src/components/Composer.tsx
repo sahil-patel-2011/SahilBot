@@ -99,6 +99,7 @@ export const Composer = forwardRef<ComposerHandle, {
   inheritedFolder?: string | null
   /** Model controls are optional in bot and group chats. */
   autoBot?: boolean
+  onAuto: () => void
   showModelThinking?: boolean
 }>(function Composer(p, ref) {
   const dev = useDevMode()
@@ -354,7 +355,7 @@ export const Composer = forwardRef<ComposerHandle, {
             <span className="bypass-dot" aria-hidden />Bypass on
           </span>
         )}
-        <ComposerPicker key={p.showModelThinking === false ? 'permissions' : 'full'} models={p.models} model={p.model} onModel={p.onModel} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
+        <ComposerPicker key={p.showModelThinking === false ? 'permissions' : 'full'} models={p.models} model={p.model} onModel={p.onModel} onAuto={p.onAuto} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
           thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} showModelThinking={p.showModelThinking} />
       </div>
       {dev && p.running && !p.answering && (

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { EffortChoice, ModelInfo, ModelList, PermissionMode } from '@shared/types'
 import * as I from '../icons'
-import { AUTO_ENTRIES, autoUnavailableReason, pickerModels, toDownload } from '@shared/model-picker'
+import { AUTO_ENTRIES, isAutoModel, autoUnavailableReason, pickerModels, toDownload } from '@shared/model-picker'
 import { THINKING_LABEL, pickerLabel, runnable, shortModelName, splitModels, thinkingLevels } from '../lib/picker'
 
 // The composer's one picker, under the box on the right: model, thinking and permissions in one button
@@ -39,6 +39,7 @@ export interface PickerProps {
   models: ModelList | null
   model: string
   onModel: (id: string) => void
+  onAuto: () => void
   onRefreshModels: () => void
   onManageModels?: () => void
   thinking?: EffortChoice
@@ -63,6 +64,7 @@ function modelSub(m: ModelInfo, withId: boolean): string {
 
 export function ComposerPicker(p: PickerProps) {
   const [open, setOpen] = useState(false)
+  const [customize, setCustomize] = useState(false)
   const [sub, setSub] = useState<Sub | null>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const btn = useRef<HTMLButtonElement>(null)
@@ -81,11 +83,13 @@ export function ComposerPicker(p: PickerProps) {
   const modes = MODES
   const mode = MODES.find((m) => m.id === (p.mode === 'autonomous' ? 'auto' : p.mode)) ?? MODES[1]
   // Model and thinking are independent: either can be Auto or picked, and changed back at any time.
-  const permissionsOnly = p.autoBot && p.showModelThinking === false
-  const hasThinking = !permissionsOnly && !!(p.thinking && p.onThinking)
+  const quiet = p.showModelThinking === false
+  const compact = quiet && !customize
+  const automatic = isAutoModel(p.model) && (p.thinking ?? 'auto') === 'auto'
+  const hasThinking = !compact && !!(p.thinking && p.onThinking)
   const levels = thinkingLevels(p.model)
   const thinkingShown = THINKING.filter((t) => levels.includes(t.id) || t.id === p.thinking)
-  const label = permissionsOnly ? mode.id === 'auto' ? 'Autonomous' : `Permissions · ${mode.label}`
+  const label = quiet ? [automatic ? 'Auto' : 'Custom', mode.id !== 'auto' && mode.label].filter(Boolean).join(' · ')
     : pickerLabel({ model: p.model, models: usable, thinking: hasThinking ? p.thinking : undefined, mode: p.mode })
   const autoVariants = AUTO_ENTRIES.filter((e) => e.id !== 'auto' && (e.id !== 'auto:local' || !list?.localOff))
   const inMore = p.model !== 'auto' && (more.some((m) => m.id === p.model) || autoVariants.some((e) => e.id === p.model))
@@ -95,6 +99,7 @@ export function ComposerPicker(p: PickerProps) {
   const close = (refocus = false): void => {
     clearHover()
     setOpen(false)
+    setCustomize(false)
     setSub(null)
     if (refocus) btn.current?.focus()
   }
@@ -155,7 +160,7 @@ export function ComposerPicker(p: PickerProps) {
       items[next].focus()
       return
     }
-    if (!permissionsOnly && /^[1-4]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (!compact && /^[1-4]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) {
       const m = top[Number(e.key) - 1]
       if (m && runnable(m)) { e.preventDefault(); pickModel(m.id, true) }
     }
@@ -182,7 +187,7 @@ export function ComposerPicker(p: PickerProps) {
     pendingFocus.current = null
     if (want === 'item') (main.current.querySelector<HTMLElement>('[aria-checked="true"]:not(:disabled)') ?? main.current.querySelector<HTMLElement>(ITEMS))?.focus()
     else menu.current?.focus({ preventScroll: true })
-  }, [open, sub])
+  }, [open, sub, customize])
 
   // Flyout placement: beside its row (left of the menu when there's room, else right, else over it), and
   // moved up or down so it stays inside the window.
@@ -313,8 +318,8 @@ export function ComposerPicker(p: PickerProps) {
 
   return (
     <div ref={wrap} className={`pick under-pick cpick${p.mode === 'bypass' ? ' bypass' : ''}${open ? ' is-open' : ''}`}>
-      <button ref={btn} className="cpick-btn" data-testid={permissionsOnly ? 'bot-permissions-picker' : 'model-picker'} aria-haspopup="menu" aria-expanded={open}
-        title={permissionsOnly ? 'Permissions for this bot chat' : `${label} · model${hasThinking ? ', thinking' : ''} and permissions for this chat`}
+      <button ref={btn} className="cpick-btn" data-testid={compact ? 'bot-permissions-picker' : 'model-picker'} aria-haspopup="menu" aria-expanded={open}
+        title={compact ? 'Auto and permissions for this chat' : `${label} · model${hasThinking ? ', thinking' : ''} and permissions for this chat`}
         onClick={(e) => {
           if (open) { close(); return }
           pendingFocus.current = e.detail === 0 ? 'item' : 'menu'
@@ -325,8 +330,18 @@ export function ComposerPicker(p: PickerProps) {
       </button>
       {open && (
         <div ref={menu} className="menu right cpick-menu model-menu" tabIndex={-1} data-testid="picker-menu">
-          <div ref={main} className="cpick-main" role="menu" aria-label={permissionsOnly ? 'Permissions' : 'Model, thinking and permissions'}>
-            {!permissionsOnly && <>
+          <div ref={main} className="cpick-main" role="menu" aria-label={compact ? 'Auto and permissions' : 'Model, thinking and permissions'}>
+            {compact && <>
+              <button className="menu-item cpick-row" role="menuitemradio" aria-checked={automatic} data-testid="use-auto"
+                onClick={(e) => { p.onAuto(); close(e.detail === 0) }}>
+                {check(automatic)}<span className="cpick-text">Auto<span className="sub">Choose models, teammates and thinking for each request</span></span>
+              </button>
+              <button className="menu-item cpick-row" role="menuitem" onClick={() => { pendingFocus.current = 'item'; setCustomize(true) }}>
+                <I.Cpu size={14} /><span className="cpick-text">Customize model and thinking</span>
+              </button>
+              <div className="menu-sep" />
+            </>}
+            {!compact && <>
                 <button className={`menu-item cpick-row cpick-model${autoWhy ? ' unavailable' : ''}`} role="menuitemradio" aria-checked={p.model === 'auto'}
                   onMouseEnter={plainHover} onClick={(e) => pickModel('auto', e.detail === 0)} data-testid="model-option" data-auto="auto">
                   {check(p.model === 'auto')}
@@ -359,7 +374,7 @@ export function ComposerPicker(p: PickerProps) {
                 {subRow('more', { testId: 'more-models', icon: <I.Cpu size={14} />, label: 'More models', value: inMore ? shortModelName(p.model, current) : undefined })}
                 <div className="menu-sep" />
             </>}
-            {permissionsOnly ? flyout('perm') : subRow('perm', {
+            {compact ? flyout('perm') : subRow('perm', {
               testId: 'mode-picker', icon: permIcon, label: 'Permissions',
               value: <span className={p.mode === 'bypass' ? 'ui-text-danger' : undefined}>{mode.label}</span>,
               title: 'Permissions: how much SahilBot does without asking'

@@ -6,7 +6,7 @@ import { toast } from '../lib/toast'
 import { money, swarmStats, tokenCount, unfinished, type AskBotView } from '../lib/swarm-view'
 import { SpaceAvatar } from '../brand'
 import { Markdown } from './Markdown'
-import { useModelDetails } from '../lib/dev-mode'
+import { useDevMode } from '../lib/dev-mode'
 
 // Heavy mode's card (each attempt's model, status and cost, the judge's verdict, the answers on demand),
 // one compact helper row shared with the Team board, and the cost card a big swarm or a Heavy run asks with.
@@ -22,7 +22,7 @@ const plain = (t?: string): string => (t ?? '').replace(/[#*_`>]+/g, '').replace
 
 /** One helper (or attempt) as a compact row: status dot, name, what it's doing, model, tokens, cost, cancel. */
 export function MemberRow({ m, live, label }: { m: Pick<TeamMember, 'id' | 'title' | 'status' | 'detail' | 'model' | 'usd' | 'tokens' | 'depth'>; live: boolean; label?: string }) {
-  const { show } = useModelDetails()
+  const show = useDevMode()
   const canCancel = live && (m.status === 'working' || m.status === 'queued')
   return (
     <div className={`team-row tm-${m.status}${m.depth > 1 ? ' sub' : ''}`} data-testid="team-member" title={m.detail}>
@@ -129,8 +129,8 @@ const SPEND_KIND: Record<NonNullable<PendingRequest['spend']>['kind'], string> =
 /** A big swarm or a Heavy run asking for the user's OK on what it will cost. */
 export function SpendCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
   const s = req.spend!
-  const { show, botChat } = useModelDetails()
-  const quiet = botChat && !show
+  const show = useDevMode()
+  const quiet = !show
   return (
     <div className="pending ap-card spend-card" data-testid="spend-card" data-id={req.id}>
       <div className="ap-head">
@@ -188,7 +188,7 @@ const ROLE_TAG: Record<string, string> = { breadth: 'breadth', solid: 'solid', h
 
 function SwarmHelperRow({ h, live, credited }: { h: SwarmHelperView; live: boolean; credited: boolean }) {
   const [open, setOpen] = useState(false)
-  const { show } = useModelDetails()
+  const show = useDevMode()
   return (
     <li className={`sw-helper${credited ? ' credited' : ''}`} data-testid="swarm-helper" data-status={h.status}>
       <button className="sw-helper-head" onClick={() => setOpen((o) => !o)} aria-expanded={open} title={h.angle}>
@@ -215,7 +215,7 @@ function SwarmHelperRow({ h, live, credited }: { h: SwarmHelperView; live: boole
 export function SwarmCard({ board, live, embedded, title }: { board: SwarmBoard; live: boolean; embedded?: boolean; title?: string }) {
   const [open, setOpen] = useState(true)
   const [all, setAll] = useState(false)
-  const { show, botChat } = useModelDetails()
+  const show = useDevMode()
   const st = swarmStats(board)
   const active = live && !['done', 'stopped', 'failed'].includes(board.phase)
   const left = unfinished(board.helpers)
@@ -235,7 +235,7 @@ export function SwarmCard({ board, live, embedded, title }: { board: SwarmBoard;
           <div className="sw-meta">
             <span className="sw-pill">{board.pattern === 'ideate' ? 'Divergent ideas' : 'Divide and conquer'}</span>
             {board.sizing && <span className="sw-sizing" title="How the helper count was chosen">{board.sizing}</span>}
-            {board.routing && (show || !botChat) && <span className="sw-sizing">{board.routing}</span>}
+            {board.routing && show && <span className="sw-sizing">{board.routing}</span>}
             {board.unattended && <span className="sw-pill">routine budget</span>}
           </div>
           {active && left > 0 && (
@@ -279,7 +279,7 @@ const COUNCIL_PHASE: Record<CouncilBoard['phase'], string> = {
 /** Council: each member's own plan and critique, the merged plan with owners, disagreements, reviews, cost. */
 export function CouncilCard({ board, live }: { board: CouncilBoard; live: boolean }) {
   const [open, setOpen] = useState(true)
-  const { show } = useModelDetails()
+  const show = useDevMode()
   const active = live && !['done', 'stopped', 'failed'].includes(board.phase)
   const who = (i: number): string => (show && (board.members[i]?.label ?? board.members[i]?.model)) || `Member ${i + 1}`
   return (

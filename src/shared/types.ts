@@ -236,8 +236,6 @@ export interface Settings {
     sandboxCommands?: boolean
     /** Developer mode: the chat shows the model behind each reply, thinking, every step, tokens and cost (default off). */
     devMode?: boolean
-    /** Reveal model choices and thinking in bot and group chats. */
-    showBotModelThinking?: boolean
     /** Animate clicks in SahilBot's browser when its panel is visible. */
     animateBrowser?: boolean
     /** Files anywhere: SahilBot reads and edits files anywhere in your home folder without asking (default on). Deleting still asks; system, private and secret places stay off limits. */

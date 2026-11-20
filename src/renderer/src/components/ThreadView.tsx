@@ -18,7 +18,7 @@ import { AskBotCard, CouncilCard, HeavyCard, MemberRow, SpendCard, SwarmCard } f
 import { CuaCard, cuaOf } from './CuaCard'
 import { askBotOf, councilOf, groupMembers, heavyOf, isCardNotice, maxOf, maxTeamCalls, money, swarmOf, teamTotals, tokenCount, unfinished } from '../lib/swarm-view'
 import { MaxCard } from './MaxCard'
-import { useDevMode, useModelDetails } from '../lib/dev-mode'
+import { useDevMode } from '../lib/dev-mode'
 import { THINKING_LABEL } from '../lib/picker'
 import { elapsed, galleryFromSteps, hasQuietContent, internalNotice, quietActions, turnStart } from '../lib/quiet'
 
@@ -323,15 +323,14 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     divider.current = f && unreadAfter != null ? { id: f.id, createdAt: f.createdAt, after: unreadAfter } : null
   }
   const dev = useDevMode()
-  const { show: modelDetails, botChat } = useModelDetails()
   const hasDocs = !!actions.onOpenDoc
   const all = useMemo(() => blocks(messages), [messages])
   // The quiet chat leaves out the plan, compaction markers, notes about models, and runs that left nothing to
   // show; Developer mode shows everything.
   const bs = useMemo(() => all.filter((b) => {
-    if (b.kind === 'notice' && internalNotice(b.m)) return botChat ? modelDetails : dev
-    return dev || (modelDetails && b.kind === 'text' && !!b.m.reasoning) || quietVisible(b, hasDocs)
-  }), [all, botChat, dev, hasDocs, modelDetails])
+    if (b.kind === 'notice' && internalNotice(b.m)) return dev
+    return dev || quietVisible(b, hasDocs)
+  }), [all, dev, hasDocs])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
   // Long chats mount their latest WINDOW blocks; an older first unread grows the window to include it.
   const limit = windowLimit(win.threadId === threadId ? win.limit : WINDOW, bs.length, dividerAt)
@@ -729,7 +728,6 @@ const MORE = ['🔥', '🎉', '🙏', '👀', '🤔', '😂', '😮', '💯', '�
 
 function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' } | { kind: 'heavy' }>; actions: ThreadActions; editable?: boolean; cont?: boolean; dev?: boolean; retry?: boolean }) {
   const m = b.m
-  const { show: modelDetails, botChat } = useModelDetails()
   const [editing, setEditing] = useState<string | null>(null)
   if (b.kind === 'compacted') {
     const before = m.meta?.before as number | undefined, after = m.meta?.after as number | undefined
@@ -751,7 +749,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
     // Planner ⇄ Executor computer use: its live timeline card rides on a notice (CuaCard.tsx).
     if (cuaOf(m)) return <CuaCard m={m} />
     if (Array.isArray(m.meta?.collaboration)) return <CollaborationCard steps={m.meta.collaboration as CollaborationStep[]} interrupted={m.status === 'stopped'} />
-    const message = botChat && !modelDetails && typeof m.meta?.publicText === 'string' ? m.meta.publicText : m.content
+    const message = !dev && typeof m.meta?.publicText === 'string' ? m.meta.publicText : m.content
     return <div className="notice sys-line" role="status">{message}</div>
   }
   const reactions = (m.meta?.reactions ?? {}) as { user?: string; bot?: string }
@@ -800,7 +798,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
 
   const streaming = m.status === 'streaming'
   const error = m.status === 'error' ? String(m.meta?.error ?? 'Something went wrong') : null
-  const visibleError = botChat && !modelDetails && m.model ? (m.meta?.publicError as string | undefined) ?? 'The bot could not finish this reply.' : error
+  const visibleError = !dev && m.model ? (m.meta?.publicError as string | undefined) ?? 'The bot could not finish this reply.' : error
   const effort = m.meta?.effort as Effort | undefined
   const speaker = m.meta?.botName as string | undefined
   // The speaker's name in their colour, nudged toward the text colour until it reads (4.5:1) on the light and dark backgrounds.
@@ -811,7 +809,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
       <div className="bubble-wrap ai-col">
         {speaker && !cont && <div className={`speaker${spStyle ? ' spk-c' : ''}`} style={spStyle}>{speaker}</div>}
         <div className={`bubble ai${error ? ' err' : ''}`} data-testid="assistant-bubble" data-status={m.status}>
-          {modelDetails && m.reasoning && (
+          {dev && m.reasoning && (
             <details className="reasoning" open={streaming && !m.content}>
               <summary><I.Sparkle size={14} />{streaming && !m.content ? 'Thinking…' : 'Thought process'}</summary>
               <pre>{m.reasoning.trim()}</pre>
@@ -848,7 +846,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
         {reactions.user && (
           <button className="reaction" onClick={() => actions.onReact(m.id, null)} title="Remove reaction" data-testid="user-reaction">{reactions.user}</button>
         )}
-        {modelDetails && m.model && m.content && !streaming && (
+        {dev && m.model && m.content && !streaming && (
           <div className="reply-model-details" title={routedTitle(m)} data-testid="routed">
             {(((m.meta?.routed as { label?: string } | undefined)?.label) || m.model).split(' · ')[0]}
             {effort && THINKING_LABEL[effort] ? ` · ${THINKING_LABEL[effort]} thinking` : ''}
@@ -871,7 +869,7 @@ const COLLABORATION_ROLE: Record<CollaborationRole, string> = { lead: 'Lead agen
 const COLLABORATION_STATUS: Record<CollaborationStatus, string> = { queued: 'Up next', working: 'Working', done: 'Done', unavailable: 'Unavailable', stopped: 'Stopped' }
 
 function CollaborationCard({ steps, interrupted }: { steps: CollaborationStep[]; interrupted: boolean }) {
-  const { show } = useModelDetails()
+  const show = useDevMode()
   const active = !interrupted && steps.some((s) => s.status === 'working' || s.status === 'queued')
   const finished = steps.filter((s) => s.status === 'done').length
   const outcome = active ? 'In progress' : interrupted || steps.some((s) => s.status === 'stopped') ? 'Stopped'
@@ -903,6 +901,7 @@ function CollaborationCard({ steps, interrupted }: { steps: CollaborationStep[];
 
 /** Hover bar: react, reply, more (copy). Matches the bot-chat style. */
 function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actions: ThreadActions; side: 'left' | 'right'; onEdit?: () => void; onRetry?: () => void }) {
+  const dev = useDevMode()
   const [picker, setPicker] = useState<'quick' | 'more' | null>(null)
   const [copied, setCopied] = useState(false)
   const [menu, setMenu] = useState(false)
@@ -941,7 +940,7 @@ function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actio
             setTimeout(() => { setCopied(false); setMenu(false) }, 700)
           }}>{copied ? <I.Check size={15} /> : <I.Copy size={15} />}Copy text</button>
           {/* Which model answered and why (Auto's read, teamwork, cost class): one click away, without cluttering the chat. */}
-          {m.role === 'assistant' && m.model && (
+          {dev && m.role === 'assistant' && m.model && (
             <div className="menu-note" data-testid="why-model">
               <b>{(((m.meta?.routed as { label?: string } | undefined)?.label) || m.model).split(' · ')[0]}</b>
               <span>{routedTitle(m).replace(/^Why this model:\s*/, '')}</span>

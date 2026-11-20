@@ -448,11 +448,8 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
       {api.runtime !== 'server' && <GrokPlanSettings onRefresh={onRefresh} />}
 
       <Section title="How models are used">
-        <Row id="show-bot-model-thinking" title="Show model and thinking" sub="Reveal model choices, thinking, and model names in bot and group chats.">
-          <Toggle on={s.advanced.showBotModelThinking === true} onChange={(v) => void patch({ advanced: { ...s.advanced, showBotModelThinking: v } })} label="Show model and thinking" testId="show-bot-model-thinking" />
-        </Row>
-        <Row id="auto-prefers" title="Auto prefers" info="Best result: the strongest model for each kind of task. Balanced: the cheapest one that's strong enough. Cheapest: free local models first.">
-          <Segmented value={s.cloud.autoPrefers ?? 'balanced'} label="Auto prefers" testIdPrefix="auto-prefers" onChange={(v) => void patch({ cloud: { ...s.cloud, autoPrefers: v } })}
+        <Row id="auto-prefers" title="Auto prefers" info="Best prioritizes the quality of the result. Price breaks close ties. Balanced and Cheapest give cost more weight.">
+          <Segmented value={s.cloud.autoPrefers ?? 'best'} label="Auto prefers" testIdPrefix="auto-prefers" onChange={(v) => void patch({ cloud: { ...s.cloud, autoPrefers: v } })}
             options={[{ id: 'best', label: 'Best' }, { id: 'balanced', label: 'Balanced' }, { id: 'cheapest', label: 'Cheapest' }]} />
         </Row>
         <div data-setting="local-models"><LocalModelsRow s={s} patch={patch} onChanged={onRefresh} /></div>
@@ -1245,7 +1242,7 @@ function Developer({ s, models, patch }: P & { models: ModelList | null }) {
   return (
     <>
       <Section>
-        <Row id="dev-mode" title="Developer mode" sub="Show detailed steps, tokens and cost in chats, plus model details in regular chats.">
+        <Row id="dev-mode" title="Developer mode" sub="Show detailed steps, tokens and cost in chats, and the models and thinking levels behind replies in every chat.">
           <Toggle on={!!s.advanced.devMode} onChange={(v) => void patch({ advanced: { ...s.advanced, devMode: v } })} label="Developer mode" testId="dev-mode" />
         </Row>
       </Section>

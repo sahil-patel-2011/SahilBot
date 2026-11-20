@@ -73,7 +73,6 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'chatgpt-plan', page: 'models', title: 'ChatGPT plan (via Codex)', words: 'chatgpt plan subscription codex sign in plus pro' },
   { anchor: 'grok-plan', page: 'models', title: 'Grok subscription', words: 'grok build subscription sign in supergrok prefer plans first' },
   { anchor: 'auto-prefers', page: 'models', title: 'Auto prefers', words: 'auto routing best balanced cheapest cost quality', keys: ['cloud.autoPrefers'] },
-  { anchor: 'show-bot-model-thinking', page: 'models', title: 'Show model and thinking', words: 'bots group chat hide show model reasoning effort collaboration names', keys: ['advanced.showBotModelThinking'] },
   { anchor: 'monthly-limit', page: 'models', title: 'Monthly spending limit', words: 'budget cap spend spending limit money cost unlimited none dollars', keys: ['cloudBudgetUsd', 'spendingMode'] },
   { anchor: 'local-models', page: 'models', title: 'Local models', words: 'ollama lm studio local offline private download free', keys: ['local.enabled'] },
   { anchor: 'default-model', page: 'models', title: 'Model for new chats', words: 'default model auto picker', keys: ['defaultModel'], advanced: true },
@@ -132,7 +131,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'rules', page: 'advanced', tab: 'rules', title: 'Rules', words: 'rules instructions always follow packs engineering medical business coding' },
   { anchor: 'skills', page: 'advanced', tab: 'rules', title: 'Skills', words: 'skills procedures steps learned customize' },
   { anchor: 'knowledge', page: 'advanced', tab: 'knowledge', title: 'Knowledge folders', words: 'knowledge search files folders documents index pdf embeddings rebuild openai meaning', keys: ['openaiEmbeddings'] },
-  { anchor: 'dev-mode', page: 'advanced', tab: 'developer', title: 'Developer mode', words: 'developer dev mode debug model tokens cost thinking steps commands show details', keys: ['advanced.devMode'] },
+  { anchor: 'dev-mode', page: 'advanced', tab: 'developer', title: 'Developer mode', words: 'developer dev mode debug show bot models thinking collaboration names tokens cost steps commands details', keys: ['advanced.devMode'] },
   { anchor: 'context-window', page: 'advanced', tab: 'developer', title: 'Context window (local models)', words: 'context window tokens 16k 32k 64k 128k', keys: ['contextWindow'] },
   { anchor: 'gpu', page: 'advanced', tab: 'developer', title: 'GPU memory for local models', words: 'gpu memory 90% metal wired' },
   { anchor: 'sampling', page: 'advanced', tab: 'developer', title: 'Sampling', words: 'temperature top p top k min p penalty sampling', keys: ['sampling'] }
