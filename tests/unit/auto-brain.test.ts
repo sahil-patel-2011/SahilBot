@@ -56,7 +56,7 @@ describe('the brain\'s decision', () => {
   test('the prompt fences the request off and asks for routing only', () => {
     const { system, user } = brainPrompt({ text: 'Prove that sqrt 2 is irrational', history: [], attachments: [], images: 0, preference: 'balanced', models: ALL, rules: classifyTask('Prove that sqrt 2 is irrational') })
     expect(system).toMatch(/never answer or carry out the request yourself/)
-    expect(system).toMatch(/difficulty 0-1 .* gets a quick model whatever the category/)
+    expect(system).toContain('Use a fast model when it can deliver the same quality.')
     expect(user).toMatch(/<request>\nProve that sqrt 2 is irrational\n<\/request>/)
     expect(user).toMatch(/Reply with the JSON object only/)
   })
