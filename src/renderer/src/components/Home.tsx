@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { FilePreview, HomeIdea, Space, Thread } from '@shared/types'
 import { api } from '../api'
+import { toast } from '../lib/toast'
 import { Mascot } from '../brand'
 import * as I from '../icons'
 
@@ -111,6 +112,17 @@ export const artifactKind = (name: string): string => {
   return ARTIFACT_KINDS.find((k) => (k.ext as readonly string[]).includes(ext))?.id ?? 'other'
 }
 
+/** Files the Document tab opens and saves back (src/main/docspace/import.ts EDITABLE). */
+const EDITABLE_EXT = /\.(docx|pdf|pptx|md|markdown|txt|html?|xlsx|csv|tsv)$/i
+
+/** Opens a file in its chat's Document tab (App listens for sahilbot:open-doc). */
+async function editFile(f: RecentFile): Promise<void> {
+  try {
+    const d = await api.docs.importFile(f.path, f.threadId)
+    window.dispatchEvent(new CustomEvent('sahilbot:open-doc', { detail: d }))
+  } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') }
+}
+
 /** Artifacts: every file SahilBot's agents made (documents, PDFs, decks, sheets, images, audio), filterable by kind. */
 export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: string) => void; onOpenChat: (threadId: string) => void }) {
   const [files, setFiles] = useState<RecentFile[] | null>(null)
@@ -135,7 +147,10 @@ export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: strin
           {shown.map((f) => (
             <div key={f.path} className="file-wrap">
               <FileCard f={f} onOpen={onOpenFile} />
-              <button className="file-from" onClick={() => onOpenChat(f.threadId)}>from “{f.threadTitle.replace(/^⏰ /, '')}”</button>
+              <div className="file-actions">
+                {EDITABLE_EXT.test(f.name) && <button className="file-edit" onClick={() => void editFile(f)} data-testid="artifact-edit" title="Open in SahilBot's editor: change the text, fonts and layout, then save it back">Edit</button>}
+                <button className="file-from" onClick={() => onOpenChat(f.threadId)}>from “{f.threadTitle.replace(/^⏰ /, '')}”</button>
+              </div>
             </div>
           ))}
         </div>

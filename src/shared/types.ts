@@ -2329,7 +2329,21 @@ export interface DocContent {
   title: string
   blocks: DocBlock[]
   sheet?: DocSheet
+  /** How the document looks, in the editor and in Word / PDF / HTML exports. */
+  style?: DocStyle
 }
+
+/** A document's look: its font, text size and theme (src/main/docs/theme.ts). */
+export interface DocStyle {
+  /** One of DOC_FONTS (installed on every Mac and Windows PC); unset = the theme's own. */
+  font?: string
+  /** Body text size in points, 9-16. */
+  size?: number
+  theme?: 'modern' | 'classic' | 'minimal'
+}
+
+/** Fonts a document may use: on every Mac and every Windows PC, so a Word file looks the same everywhere. */
+export const DOC_FONTS = ['Helvetica', 'Arial', 'Avenir Next', 'Georgia', 'Times New Roman', 'Palatino', 'Verdana', 'Courier New'] as const
 
 export type DocAuthor = 'user' | 'bot'
 
@@ -2413,6 +2427,12 @@ export interface SahilBotApi {
     diff(id: string, from: number, to: number): Promise<DocDiff>
     restore(id: string, n: number): Promise<DocSnapshot>
     export(id: string, format: DocExportFormat): Promise<string>
+    /** Opens a file SahilBot made (Word, PDF, slides, Markdown, text, HTML, Excel, CSV) as an editable document in its chat. */
+    importFile(path: string, threadId?: string): Promise<{ docId: string; threadId: string }>
+    /** The file a document was opened from, or null. */
+    source(id: string): Promise<string | null>
+    /** Saves the document back over its file (backup first) or as a copy; returns the path written. */
+    saveBack(id: string, mode: 'replace' | 'copy'): Promise<string>
     /** Picks an image, copies it into the workspace and returns its path (null if cancelled). */
     addImage(): Promise<string | null>
     /** Tells main whether the editor holds unsaved edits (so the bot's next read waits for them). */

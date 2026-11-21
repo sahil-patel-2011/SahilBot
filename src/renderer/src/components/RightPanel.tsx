@@ -4,6 +4,7 @@ import type { BrowserState, FilePreview, Message, TeamMember } from '@shared/typ
 import { prettyName } from '../lib/steps'
 import { Markdown, SANITIZE } from './Markdown'
 import { api } from '../api'
+import { toast } from '../lib/toast'
 import { SaveOfferCard } from './VaultOffer'
 import * as I from '../icons'
 import { TeachBar } from './TeachBar'
@@ -228,6 +229,10 @@ function FilePane({ path }: { path: string | null }) {
     <div className="file-pane" data-testid="file-pane" data-kind={p.kind}>
       <div className="file-bar">
         <I.File size={15} /><span className="file-title" title={p.path}>{p.name}</span>
+        {/\.(docx|pdf|pptx|md|markdown|txt|html?|xlsx|csv|tsv)$/i.test(p.name) && (
+          <button className="btn primary" title="Edit it in SahilBot: text, fonts and layout, then save it back" data-testid="file-edit"
+            onClick={() => void api.docs.importFile(p.path).then((d) => window.dispatchEvent(new CustomEvent('sahilbot:open-doc', { detail: d }))).catch((e: Error) => toast(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error'))}>Edit</button>
+        )}
         <button className="btn" onClick={() => void api.files.open(p.path)}><I.External size={13} /> Open</button>
         <button className="btn" onClick={() => void api.files.reveal(p.path)}>Show in Finder</button>
       </div>

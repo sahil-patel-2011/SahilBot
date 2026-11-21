@@ -12,7 +12,7 @@ import { sheetRows, toCsv } from './sheet'
 export type ReadImageFn = (src: string) => Buffer
 
 /** The generator API this uses (src/main/docs/create.ts `createDocument`), injectable for tests. */
-export type CreateDocumentFn = (fullPath: string, spec: { path: string; title?: string; markdown?: string; sheets?: Array<{ name: string; rows: Array<Array<string | number | boolean | null>>; header?: boolean }> }, o?: { readImage?: ReadImageFn }) => Promise<unknown>
+export type CreateDocumentFn = (fullPath: string, spec: { path: string; title?: string; markdown?: string; font?: string; font_size?: number; theme?: 'modern' | 'classic' | 'minimal'; sheets?: Array<{ name: string; rows: Array<Array<string | number | boolean | null>>; header?: boolean }> }, o?: { readImage?: ReadImageFn }) => Promise<unknown>
 
 const defaultCreate: CreateDocumentFn = async (fullPath, spec, o) => {
   const { createDocument } = await import('../docs/create')
@@ -126,7 +126,7 @@ export function exportHtml(d: DocSnapshot): string {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: file:">
 <title>${escapeHtml(d.title)}</title>
 <style>
-:root{color-scheme:light dark}body{font:16px/1.6 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;max-width:760px;margin:40px auto;padding:0 20px;color:#1a1a1a;background:#fff}
+:root{color-scheme:light dark}body{font:${d.content.style?.size ? Math.round(d.content.style.size * 4 / 3) : 16}px/1.6 ${d.content.style?.font ? `"${d.content.style.font}",` : ''}-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;max-width:760px;margin:40px auto;padding:0 20px;color:#1a1a1a;background:#fff}
 @media (prefers-color-scheme:dark){body{color:#ececec;background:#161616}th{background:#232323!important}blockquote,aside{color:#bbb}}
 h1{font-size:2em;line-height:1.2}h2{font-size:1.45em}h3{font-size:1.15em}blockquote{border-left:3px solid #ccc;margin:1em 0;padding:.1em 1em;color:#444}
 aside.callout{border-left:4px solid #3b82f6;background:rgba(59,130,246,.08);padding:.7em 1em;border-radius:8px;margin:1em 0}aside.warn{border-color:#f59e0b;background:rgba(245,158,11,.1)}aside.danger{border-color:#ef4444;background:rgba(239,68,68,.08)}aside.tip{border-color:#10b981;background:rgba(16,185,129,.08)}
@@ -162,9 +162,11 @@ export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: st
       break
     }
     case 'docx':
-    case 'pdf':
-      await create(path, { path, title: d.title, markdown: exportMarkdown(d) }, { readImage })
+    case 'pdf': {
+      const st = d.content.style
+      await create(path, { path, title: d.title, markdown: exportMarkdown(d), ...(st?.font ? { font: st.font } : {}), ...(st?.size ? { font_size: st.size } : {}), ...(st?.theme ? { theme: st.theme } : {}) }, { readImage })
       break
+    }
   }
   if (!existsSync(path)) throw new Error(`The ${format} export didn't produce a file.`)
   return path
