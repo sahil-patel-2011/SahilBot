@@ -123,26 +123,29 @@ async function editFile(f: RecentFile): Promise<void> {
   } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') }
 }
 
-const NEW_KINDS: Array<{ kind: 'doc' | 'slides' | 'sheet'; label: string; hint: string }> = [
+type NewKind = 'doc' | 'slides' | 'sheet' | 'dashboard'
+const NEW_KINDS: Array<{ kind: NewKind; label: string; hint: string }> = [
   { kind: 'doc', label: 'Docs', hint: 'Reports, letters, plans' },
   { kind: 'slides', label: 'Slides', hint: 'Decks you and SahilBot build' },
-  { kind: 'sheet', label: 'Sheets', hint: 'Tables with formulas' }
+  { kind: 'sheet', label: 'Sheets', hint: 'Tables with formulas' },
+  { kind: 'dashboard', label: 'Dashboards', hint: 'Numbers, charts and notes' }
 ]
 
-function NewKindIcon({ kind }: { kind: 'doc' | 'slides' | 'sheet' }) {
+function NewKindIcon({ kind }: { kind: NewKind }) {
   const p = { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true }
   if (kind === 'slides') return <svg {...p}><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M12 17v3M8 21h8M7 9h6M7 12h9" /></svg>
+  if (kind === 'dashboard') return <svg {...p}><rect x="3" y="3" width="8" height="8" rx="2" /><rect x="13" y="3" width="8" height="5" rx="2" /><rect x="13" y="10" width="8" height="11" rx="2" /><rect x="3" y="13" width="8" height="8" rx="2" /></svg>
   if (kind === 'sheet') return <svg {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M3 14h18M9 4v16M15 4v16" /></svg>
   return <svg {...p}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M9 13h6M9 17h6" /></svg>
 }
 
 /** Make something new (Docs, Slides, Sheets) and the documents already being worked on. */
 function MakeNew() {
-  const [recent, setRecent] = useState<Array<DocInfo & { slides: boolean }>>([])
+  const [recent, setRecent] = useState<Array<DocInfo & { slides: boolean; kind?: 'slides' | 'dashboard' }>>([])
   const [busy, setBusy] = useState<string | null>(null)
   useEffect(() => { void api.docs.recent?.(12).then(setRecent).catch(() => undefined) }, [])
   const open = (d: { docId: string; threadId: string }): void => { window.dispatchEvent(new CustomEvent('sahilbot:open-doc', { detail: d })) }
-  const make = async (kind: 'doc' | 'slides' | 'sheet'): Promise<void> => {
+  const make = async (kind: NewKind): Promise<void> => {
     setBusy(kind)
     try { open(await api.docs.createNew(kind)) } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') } finally { setBusy(null) }
   }
@@ -162,11 +165,11 @@ function MakeNew() {
           <h2 className="page-h2">Your documents</h2>
           <div className="doc-recent" data-testid="doc-recent">
             {recent.map((d) => {
-              const kind = d.type === 'sheet' ? 'sheet' : d.slides ? 'slides' : 'doc'
+              const kind: NewKind = d.type === 'sheet' ? 'sheet' : d.kind ?? (d.slides ? 'slides' : 'doc')
               return (
                 <button key={d.id} className={`doc-recent-card k-${kind}`} onClick={() => open({ docId: d.id, threadId: d.threadId })} title={`Open “${d.title}”`}>
                   <span className="make-icon small"><NewKindIcon kind={kind} /></span>
-                  <span className="doc-recent-text"><b>{d.title}</b><span>{kind === 'slides' ? 'Deck' : kind === 'sheet' ? 'Sheet' : 'Document'} · {d.lastAuthor === 'bot' ? 'SahilBot' : 'You'} · {ago(d.updatedAt)}</span></span>
+                  <span className="doc-recent-text"><b>{d.title}</b><span>{kind === 'slides' ? 'Deck' : kind === 'sheet' ? 'Sheet' : kind === 'dashboard' ? 'Dashboard' : 'Document'} · {d.lastAuthor === 'bot' ? 'SahilBot' : 'You'} · {ago(d.updatedAt)}</span></span>
                 </button>
               )
             })}
@@ -191,14 +194,14 @@ export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: strin
   return (
     <div className="page" data-testid="files-view">
       <div className="page-head"><h1>Artifacts</h1><input className="set-input page-search" placeholder="Search artifacts" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-      <div className="set-sub">Start a document, deck or sheet that you and SahilBot edit together, or open the files your agents made. Click a file to preview it; the link under it opens the chat it came from.</div>
+      <div className="set-sub">Start a document, deck, sheet or dashboard that you and SahilBot edit together, or open the files your agents made. Click a file to preview it; the link under it opens the chat it came from.</div>
       <MakeNew />
       {chips.length > 2 && (
         <div className="artifact-chips" role="tablist" aria-label="Kind" data-testid="artifact-kinds">
           {chips.map((c) => <button key={c.id} role="tab" aria-selected={kind === c.id} className={`artifact-chip${kind === c.id ? ' on' : ''}`} onClick={() => setKind(c.id)} data-testid={`artifact-kind-${c.id}`}>{c.label} <span>{c.n}</span></button>)}
         </div>
       )}
-      {files === null ? <div className="hint">Loading…</div> : shown.length === 0 ? <div className="empty-state"><I.File size={22} /><div>{files.length ? 'Nothing matches.' : 'Nothing yet. Ask for a report, a deck, a spreadsheet or an image and it shows up here.'}</div></div> : (
+      {files === null ? <div className="hint">Loading…</div> : shown.length === 0 ? <div className="empty-state"><I.File size={22} /><div>{files.length ? 'Nothing matches.' : 'No files yet. Ask for a report, a deck, a spreadsheet or an image, or export a document above, and it shows up here.'}</div></div> : (
         <div className="file-grid">
           {shown.map((f) => (
             <div key={f.path} className="file-wrap">

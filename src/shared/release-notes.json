@@ -1,0 +1,101 @@
+[
+  {
+    "version": "26.11.20",
+    "date": "2026-11-20",
+    "title": "Native decks, documents and dashboards, a smarter Auto, and Hybrid compute",
+    "highlights": [
+      "Make slides, documents, dashboards and sheets right in SahilBot, edit them with your agent, and export to PowerPoint, Keynote/ODP, PDF, Word or images",
+      "Hybrid compute: personal details stay on your Mac while cloud models do the heavy lifting",
+      "Auto picks models from benchmark results for each kind of task, and pulls in a second model when two are better than one",
+      "Updates show their size, keep one copy of SahilBot installed, and back up your data in two places first"
+    ],
+    "sections": [
+      {
+        "title": "Slides, documents and dashboards",
+        "items": [
+          "New slide editor: click any text on a slide to type, add, duplicate and reorder slides, add big numbers, pictures and speaker notes, and present full screen",
+          "Slides look the same everywhere: the editor, Present, PDF, PNG and PowerPoint (pictures) are drawn by one renderer",
+          "Export a deck as editable PowerPoint, PowerPoint with exact fonts, OpenDocument (Keynote, LibreOffice, Google Slides), PDF or PNG images",
+          "New native dashboards: stat tiles, charts drawn from your tables, sections and notes",
+          "Artifacts page: start a Doc, Deck, Sheet or Dashboard in one click, and see the documents you're working on",
+          "Your agent now makes editable documents first and exports a PDF, Word or PowerPoint file when you want one",
+          "Open Word, PDF, PowerPoint, Excel and CSV files in the editor, change fonts and text, and save back to the original",
+          "Presenter view: your notes, the next slide and a timer while you present (press P)",
+          "Native sheets work out IF, SUMIF, VLOOKUP, XLOOKUP, text and date functions",
+          "Tables, numbered lists and checklists on a slide are kept when you edit it, and slides show their tables"
+        ]
+      },
+      {
+        "title": "A more capable agent",
+        "items": [
+          "Shows its plan as a live checklist and keeps it current as it works, so you can see where it is",
+          "Does what it says it will do, keeps going until the task is finished, and runs your tests until they pass after code changes",
+          "Says so plainly when it disagrees, and gives its reasons and the approach it would take",
+          "Remembers what you've said in your other chats with the same bot (only your own words), so answers fit you better",
+          "Plans and makes videos end to end: research, brief, shot list and the right platform at its best settings",
+          "Waits for you to sign in or type a code in the browser, then carries on by itself",
+          "Paste an API key or password into the chat and it goes straight into your vault"
+        ]
+      },
+      {
+        "title": "Chat",
+        "items": [
+          "Type / in the message box for commands: /new, /doc, /deck, /dashboard, /sheet, /research, /max, /plan, /voice, /artifacts, /settings, /whatsnew",
+          "Code in replies is syntax-colored; wide tables scroll and copy straight into Numbers or Excel",
+          "Inline citations like [1] link to their sources, numbered the same as the source chips",
+          "Press ↑ in an empty message box to edit your last message",
+          "Errors are in plain words with the next step, with the details a click away",
+          "If a message fails to send, your text comes back into the box"
+        ]
+      },
+      {
+        "title": "Auto model routing",
+        "items": [
+          "Each kind of task has its own model order, taken from published benchmarks: Opus 5.5, Sonnet 5.5 and GPT-6.2 Sol for daily work, GPT-6.2 Astra and Fable 5.2 for the hardest problems, Haiku 5.5 and GPT-6.1 Terra for quick ones, and GPT-6 Luna for a quick hello",
+          "Harder tasks get a stronger model, or two models working together when that's better",
+          "Context carries over perfectly when the model changes mid-chat"
+        ]
+      },
+      {
+        "title": "Privacy and Hybrid compute",
+        "items": [
+          "Hybrid compute on Macs with at least 32 GB of memory and 50 GB free (64 GB and 150 GB are best)",
+          "A local Privacy Gate (PII-Tracer) checks each cloud request on your Mac and asks before personal details leave it",
+          "Choose to process on your Mac, split the work (the cloud plans, your Mac keeps the details), share, or skip"
+        ]
+      },
+      {
+        "title": "Everyday polish",
+        "items": [
+          "What you type and don't send stays in the box, even after you quit or update. Sending or clearing it forgets it",
+          "Updates show how big they are, back up your data in two folders first, and remove the old version once the new one runs cleanly (it rolls back if the new one fails to start)",
+          "Checks for updates every 5 minutes and when your Mac wakes",
+          "More one-click connectors, including Cloudflare, Vimeo, Semrush, HeyGen and Higgsfield",
+          "Mac notifications are on by default. Built-in skills are grouped as Medical, Office, Engineering and Health",
+          "MIT License and a one-command Quick install in the README",
+          "Keyboard focus stays inside dialogs and returns where you were, and animations respect Reduce motion"
+        ]
+      }
+    ]
+  },
+  {
+    "version": "26.11.19",
+    "date": "2026-11-19",
+    "title": "Better Auto routing and teamwork between bots",
+    "highlights": [
+      "Auto routing picks better models and lets bots work together",
+      "Bots work more quietly on their own"
+    ],
+    "sections": [
+      {
+        "title": "Auto and bots",
+        "items": [
+          "Auto routing chooses models more accurately for each request",
+          "Bots can hand work to each other and collaborate on a task",
+          "Work can run on the best place available (this Mac, a server or the cloud)",
+          "Bots that run on their own interrupt you less"
+        ]
+      }
+    ]
+  }
+]

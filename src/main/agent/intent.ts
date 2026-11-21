@@ -27,7 +27,7 @@ const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
   },
   {
     tools: ['doc_create', 'doc_read', 'doc_edit', 'doc_export'],
-    when: /\b(docs?|document|draft|write( up)?|rewrite|edit|paragraph|section|heading|report|memo|letter|essay|notes|outline|proposal|resume|cv|spreadsheet|sheet|rows?|columns?|checklist|agenda|minutes|brief|article|blog post|cover letter)\b/i
+    when: /\b(docs?|document|draft|write( up)?|rewrite|edit|paragraph|section|heading|report|memo|letter|essay|notes|outline|proposal|resume|cv|spreadsheet|sheet|rows?|columns?|checklist|agenda|minutes|brief|article|blog post|cover letter|deck|slides?|presentation|pitch|pptx|powerpoint|keynote|odp|pdf|word|docx|dashboard|kpis?|scorecard|artifacts?)\b/i
   },
   {
     tools: ['research'],

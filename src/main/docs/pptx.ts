@@ -27,6 +27,8 @@ export type SlideLayout = 'title' | 'bullets' | 'two_column' | 'section' | 'quot
 
 export interface SlideSpec {
   title: string
+  /** A small label above the title ("ASSEMBLY GUIDE · NOV 2026"). */
+  kicker?: string
   subtitle?: string
   /** Bullet points; indent a sub-point with two leading spaces. */
   bullets?: string[]
@@ -269,6 +271,7 @@ export async function buildPptx(input: SlideSpec[], o: DeckOptions = {}): Promis
     const heading = (): number => {
       const t = titleSize(s.title)
       const th = 0.85 + (t.lines - 1) * 0.45
+      if (s.kicker) sl.addText(s.kicker.toUpperCase(), { x: X, y: 0.12, w: CW, h: 0.3, fontSize: 11, bold: true, color: A, charSpacing: 2, fontFace: FONT, objectName: 'Kicker', margin: 6 })
       sl.addText(s.title, { x: X, y: 0.4, w: CW, h: th, fontSize: t.size, bold: true, color: T.ink, fontFace: HFONT, valign: 'bottom', objectName: 'Title', margin: 6 })
       if (s.subtitle) sl.addText(s.subtitle, { x: X, y: 0.4 + th + 0.02, w: CW, h: 0.45, fontSize: 16, color: T.muted, fontFace: FONT, objectName: 'Subtitle', margin: 6 })
       return bodyTop(s)
@@ -287,12 +290,25 @@ export async function buildPptx(input: SlideSpec[], o: DeckOptions = {}): Promis
         const fitted = bestSize((z) => [{ text: s.title, size: z, bold: true }], 11.5, 1.9, [big, 36, 32, 28]) ?? 26
         const ink = layout === 'section' ? onA : T.titleInk
         sl.addShape(p.ShapeType.rect, { x: X + 0.18, y: 3.55, w: 1.2, h: 0.08, fill: { color: layout === 'section' ? onA : A }, line: { color: layout === 'section' ? onA : A } })
+        if (s.kicker) sl.addText(s.kicker.toUpperCase(), { x: X + 0.1, y: 1.15, w: 11.5, h: 0.35, fontSize: 12, bold: true, color: layout === 'section' ? onA : A, charSpacing: 2, fontFace: FONT, objectName: 'Kicker', margin: 6 })
         sl.addText(s.title, { x: X + 0.1, y: 1.55, w: 11.5, h: 1.9, fontSize: fitted, bold: true, color: ink, fontFace: HFONT, valign: 'bottom', objectName: 'Title', margin: 6 })
         if (s.subtitle) sl.addText(s.subtitle, { x: X + 0.1, y: 3.8, w: 11.5, h: 1.0, fontSize: 20, color: layout === 'section' ? onA : T.titleMuted, fontFace: FONT, valign: 'top', objectName: 'Subtitle', margin: 6 })
-        if (s.bullets?.length && layout !== 'title') {
+        if (s.bullets?.length) {
+          // On a title slide these are the description lines under the subtitle (no bullets).
           const bs = bulletsOf(s.bullets)
-          const z = bestSize((q) => paras(bs, q), 11.5, 1.9, [18, 16, 14]) ?? 14
-          sl.addText(bs.map((b) => ({ text: b.text, options: { bullet: { indent: 16 }, breakLine: true } })), { x: X + 0.1, y: 4.85, w: 11.5, h: 1.9, fontSize: z, color: T.titleMuted, fontFace: FONT, valign: 'top', objectName: 'Body', margin: 6 })
+          const h = s.stats?.length ? 1.0 : 1.9
+          const z = bestSize((q) => paras(bs, q), 11.5, h, [18, 16, 14]) ?? 14
+          sl.addText(bs.map((b) => ({ text: b.text, options: { ...(layout === 'title' ? {} : { bullet: { indent: 16 } }), breakLine: true } })), { x: X + 0.1, y: 4.85, w: 11.5, h, fontSize: z, color: T.titleMuted, fontFace: FONT, valign: 'top', objectName: 'Body', margin: 6 })
+        }
+        if (s.stats?.length && layout === 'title') {
+          // Big numbers along the bottom, as in the editor's title slide.
+          const st = s.stats.slice(0, 5)
+          sl.addShape(p.ShapeType.line, { x: X + 0.1, y: 6.0, w: 11.5, h: 0, line: { color: T.titleMuted, width: 0.5 } })
+          st.forEach((x, k) => {
+            const cx = X + 0.1 + k * (11.5 / st.length)
+            sl.addText(x.value, { x: cx, y: 6.1, w: 11.5 / st.length - 0.1, h: 0.5, fontSize: 24, bold: true, color: ink, fontFace: HFONT, objectName: 'Stat', margin: 6 })
+            sl.addText(x.label.toUpperCase(), { x: cx, y: 6.6, w: 11.5 / st.length - 0.1, h: 0.3, fontSize: 9, color: T.titleMuted, charSpacing: 1, fontFace: FONT, objectName: 'Stat label', margin: 6 })
+          })
         }
         if (layout === 'closing' && numbers) sl.slideNumber = num(T.titleMuted)
         break

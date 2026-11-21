@@ -178,7 +178,7 @@ describe('model fallback', () => {
 })
 
 describe('plan reminder on long runs', () => {
-  test('after 12 tool calls without a todo update, one hidden reminder goes in', async () => {
+  test('agent work without a plan gets a hidden reminder, again after 12 more calls (three at most)', async () => {
     const reads = probe('slow_read', 'read', 1)
     const h = harness([model('model-a', 2)], [reads.tool])
     llm.script.push(
@@ -190,7 +190,8 @@ describe('plan reminder on long runs', () => {
     // Agent work (a chat that only looks things up gets no plan reminders: see the chat path tests).
     expect(await h.run(t, 'Audit every file in my workspace and write a report')).toBe('finished')
     const reminders = h.db.listMessages(t.id).filter((m) => m.meta?.hidden && /tool calls without a plan/.test(m.content))
-    expect(reminders).toHaveLength(1)
+    // One after the first batch of 12 calls, one after the next 12 (the plan is the user's live progress view).
+    expect(reminders).toHaveLength(2)
     expect(JSON.stringify(llm.requests[1].messages)).toContain('tool calls without a plan')
   })
 })

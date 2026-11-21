@@ -1785,6 +1785,8 @@ export interface UpdateStatus {
   notes?: string
   /** Download progress, 0-100. */
   progress?: number
+  /** The download's size in bytes. */
+  size?: number
   detail?: string
   checkedAt?: number
 }
@@ -1795,6 +1797,10 @@ export interface SahilBotApi {
     status(): Promise<UpdateStatus>
     check(): Promise<UpdateStatus>
     install(): Promise<UpdateStatus>
+    /** Published versions with the size of each download (newest first). */
+    history(): Promise<Array<{ version: string; build: number; size: number; date: string }>>
+    /** "0.1.0-128" when this is the first start after updating from it, else null. */
+    upgradedFrom(): Promise<string | null>
     onStatus(cb: (s: UpdateStatus) => void): () => void
   }
   /** macOS permissions: status (never prompts) and the System Settings pane for each. Nothing is granted from here. */
@@ -2332,7 +2338,7 @@ export interface DocContent {
   /** How the document looks, in the editor and in Word / PDF / HTML exports. */
   style?: DocStyle
   /** 'slides': a native deck (each heading starts a slide; src/shared/slides.ts). */
-  kind?: 'slides'
+  kind?: DocKind
 }
 
 /** A document's look: its font, text size and theme (src/main/docs/theme.ts). */
@@ -2409,7 +2415,11 @@ export interface DocDiff {
   cells?: Array<{ addr: string; before: string; after: string }>
 }
 
-export type DocExportFormat = 'docx' | 'pdf' | 'md' | 'html' | 'xlsx' | 'csv' | 'pptx'
+/** What a document is drawn as: a deck of slides or a dashboard (blocks stay the source of truth). */
+export type DocKind = 'slides' | 'dashboard'
+export const DOC_KINDS: DocKind[] = ['slides', 'dashboard']
+
+export type DocExportFormat = 'docx' | 'pdf' | 'md' | 'html' | 'xlsx' | 'csv' | 'pptx' | 'pptx_pictures' | 'odp' | 'png'
 
 /** Library items can be live documents (opened in the Document tab). */
 export interface LibraryItem {
@@ -2421,7 +2431,7 @@ export interface SahilBotApi {
     /** Documents in a chat, newest change first. */
     list(threadId: string): Promise<DocInfo[]>
     get(id: string): Promise<DocSnapshot>
-    create(threadId: string, title: string, type?: DocType | 'slides'): Promise<DocSnapshot>
+    create(threadId: string, title: string, type?: DocType | DocKind): Promise<DocSnapshot>
     /** Saves the user's edits made on top of version `base` (merged with any newer bot edit). */
     save(id: string, base: number, content: DocContent): Promise<DocSnapshot>
     versions(id: string): Promise<DocVersionInfo[]>
@@ -2434,9 +2444,9 @@ export interface SahilBotApi {
     /** The file a document was opened from, or null. */
     source(id: string): Promise<string | null>
     /** A blank document, deck or sheet in a new chat (Artifacts → Make something new). */
-    createNew(kind: 'doc' | 'slides' | 'sheet'): Promise<{ docId: string; threadId: string }>
+    createNew(kind: 'doc' | 'sheet' | DocKind): Promise<{ docId: string; threadId: string }>
     /** Documents across every chat, newest change first; `slides` marks decks. */
-    recent(limit?: number): Promise<Array<DocInfo & { slides: boolean }>>
+    recent(limit?: number): Promise<Array<DocInfo & { slides: boolean; kind?: DocKind }>>
     /** Saves the document back over its file (backup first) or as a copy: the path written, and whether it was the original. */
     saveBack(id: string, mode: 'replace' | 'copy'): Promise<{ path: string; replaced: boolean }>
     /** Picks an image, copies it into the workspace and returns its path (null if cancelled). */

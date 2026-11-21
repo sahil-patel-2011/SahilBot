@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify'
 import { marked, type Tokens } from 'marked'
 import { memo, useMemo } from 'react'
+import { highlight } from '../lib/highlight'
 
 const escape = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
 
@@ -19,7 +20,7 @@ marked.use({
   renderer: {
     code({ text, lang }: Tokens.Code) {
       const l = (lang ?? '').split(/\s/)[0]
-      return `<div ${mark('code')}><div ${mark('code-head')}><span>${escape(l || 'text')}</span><span ${mark('copy')}></span></div><pre><code>${escape(text)}</code></pre></div>`
+      return `<div ${mark('code')}><div ${mark('code-head')}><span>${escape(l || 'text')}</span><span ${mark('copy')}></span></div><pre><code>${highlight(text, l, mark)}</code></pre></div>`
     },
     checkbox({ checked }: Tokens.Checkbox) {
       return `<span ${mark(checked ? 'task-x' : 'task')}></span> `
@@ -30,6 +31,16 @@ marked.use({
 /** Copy buttons and links are handled here once for every rendered message. */
 function onClick(e: React.MouseEvent<HTMLDivElement>): void {
   const el = e.target as HTMLElement
+  const tbtn = el.closest('[data-copy-table]') as HTMLButtonElement | null
+  if (tbtn) {
+    // A table copies as tab-separated rows, so it pastes into Numbers, Excel or Sheets as cells.
+    const table = tbtn.closest('.table-wrap')?.querySelector('table')
+    const tsv = table ? [...table.querySelectorAll('tr')].map((tr) => [...tr.querySelectorAll('th,td')].map((c) => (c.textContent ?? '').replace(/\s+/g, ' ').trim()).join('\t')).join('\n') : ''
+    void navigator.clipboard.writeText(tsv)
+    tbtn.textContent = 'Copied'
+    setTimeout(() => { tbtn.textContent = 'Copy table' }, 1200)
+    return
+  }
   const btn = el.closest('[data-copy]') as HTMLButtonElement | null
   if (btn) {
     const code = btn.closest('.code')?.querySelector('code')?.textContent ?? ''
@@ -55,9 +66,26 @@ export const SANITIZE = { FORBID_TAGS: ['style', 'form', 'input', 'button', 'tex
 export const render = (text: string): string => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, SANITIZE)
   .replace(new RegExp(`<span data-sb-${KEY}="copy"></span>`, 'g'), '<button type="button" data-copy="">Copy</button>')
   .replace(new RegExp(`<span data-sb-${KEY}="task(-x)?"></span>`, 'g'), (_, x?: string) => `<input type="checkbox" disabled=""${x ? ' checked=""' : ''}>`)
-  .replace(new RegExp(`data-sb-${KEY}="(code|code-head)"`, 'g'), (_, c: string) => `class="${c}"`)
+  .replace(new RegExp(`data-sb-${KEY}="(code|code-head|tk-(?:kw|str|com|num|fn|type))"`, 'g'), (_, c: string) => `class="${c}"`)
+  // Wide tables scroll inside the message and copy as cells.
+  .replace(/<table>/g, '<div class="table-wrap"><button type="button" data-copy-table="">Copy table</button><table>')
+  .replace(/<\/table>/g, '</table></div>')
 
-export const Markdown = memo(function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
-  const html = useMemo(() => render(text), [text])
+/**
+ * Inline citations: "[2]" becomes a link to the second source the answer used (outside code), with the
+ * source's title on hover. Sources come from the message (m.meta.sources), numbered in order.
+ */
+export function linkCitations(html: string, sources?: Array<{ url: string; title?: string }>): string {
+  if (!sources?.length) return html
+  return html.split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>|<a [\s\S]*?<\/a>)/g).map((part, i) => (i % 2 === 1 ? part : part.replace(/\[(\d{1,2})\]/g, (m, d: string) => {
+    const s = sources[Number(d) - 1]
+    if (!s || !/^https?:\/\//.test(s.url)) return m
+    const host = (() => { try { return new URL(s.url).hostname.replace(/^www\./, '') } catch { return '' } })()
+    return `<a href="${escape(s.url)}" class="cite" title="${escape([s.title, host].filter(Boolean).join(' · '))}">${d}</a>`
+  }))).join('')
+}
+
+export const Markdown = memo(function Markdown({ text, streaming, sources }: { text: string; streaming?: boolean; sources?: Array<{ url: string; title?: string }> }) {
+  const html = useMemo(() => linkCitations(render(text), sources), [text, sources])
   return <div className={`md${streaming ? ' cursor' : ''}`} onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />
 })

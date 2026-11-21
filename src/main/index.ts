@@ -71,6 +71,8 @@ import { IMPORT_MAX_CHARS, ruleName } from './memory-import'
 import { MEMORY_IMPORT_PROMPT } from '@shared/memory-import'
 import { appRoot, dataDir, isPackaged, sub } from './paths'
 import { Updater, backupBeforeUpgrade, bundleBuild, bundleOf } from './updater'
+/** The version this Mac ran before this start, when this is the first start of a new version. */
+let upgradedFrom: string | undefined
 import { SkillStore } from './skills'
 import { docxText, pdfText, pptxText } from './docs/read'
 import { RuleStore } from './rules'
@@ -332,6 +334,11 @@ app.whenReady().then(() => {
   // A new version's first start: a copy of the database before its migrations run (main/updater.ts). Only the
   // instance that holds the lock (a second one is quitting).
   if (isPackaged() && app.hasSingleInstanceLock()) {
+    // The version this Mac ran before, when this start is the first of a new one (What's new shows once).
+    try {
+      const was = readFileSync(join(dataDir(), '.sahilbot-version'), 'utf8').trim()
+      if (was && was !== `${app.getVersion()}-${bundleBuild(bundleOf(process.execPath))}`) upgradedFrom = was
+    } catch { /* first install: nothing to announce */ }
     try { backupBeforeUpgrade(dataDir(), app.getVersion(), bundleBuild(bundleOf(process.execPath))) }
     catch (e) {
       dialog.showErrorBox('Your data has been kept safe', `SahilBot could not make its required backup before opening this version. Your data has not been migrated or removed. Free some space or check folder permissions, then reopen SahilBot.\n\n${(e as Error).message}`)
@@ -1211,6 +1218,13 @@ app.whenReady().then(() => {
     return privacyStatus()
   })
   handle('privacy:remove', () => { piiTracer.remove(); return privacyStatus() })
+  /** Settings → Hybrid compute → Test: a made-up sample through PII-Tracer on this Mac, and what it caught. */
+  handle('privacy:selfTest', async () => {
+    const sample = 'Hi, I\'m Jordan Ellis. Email me at jordan.ellis@example.com or call (404) 555-0182. My card ends 4242 4242 4242 4242 and I live at 18 Peachtree St, Atlanta.'
+    const t0 = Date.now()
+    const { spans } = await piiTracer.detect(sample, AbortSignal.timeout(60_000))
+    return { sample, ms: Date.now() - t0, found: spans.map((s) => ({ label: s.label, text: sample.slice(s.start, s.end) })) }
+  })
   // Check in the background at start when it's switched on (the model list waits for a stale check anyway).
   if (chatgptPlan.prefs().enabled) void chatgptPlan.refresh().then(() => endpoints.list()).catch(() => undefined)
 
@@ -1551,11 +1565,12 @@ app.whenReady().then(() => {
   handle('docs:list', (threadId: string) => docs.list(threadId))
   handle('docs:get', (id: string) => docs.get(id))
   /** A new blank document, deck (a document of slides) or sheet. */
-  const blankDoc = (kind: 'doc' | 'slides' | 'sheet'): { type: 'doc' | 'sheet'; content: Omit<import('@shared/types').DocContent, 'title'> } =>
+  const blankDoc = (kind: 'doc' | 'slides' | 'sheet' | 'dashboard'): { type: 'doc' | 'sheet'; content: Omit<import('@shared/types').DocContent, 'title'> } =>
     kind === 'sheet' ? { type: 'sheet', content: { blocks: [] } }
       : kind === 'slides' ? { type: 'doc', content: { kind: 'slides', blocks: [{ id: 'b000', type: 'h2', text: '' }, { id: 'b001', type: 'bullet', text: '' }] } }
+        : kind === 'dashboard' ? { type: 'doc', content: { kind: 'dashboard', blocks: [{ id: 'b000', type: 'h2', text: 'Overview' }, { id: 'b001', type: 'bullet', text: '**$0** Revenue' }, { id: 'b002', type: 'bullet', text: '**0** Customers' }, { id: 'b003', type: 'h2', text: 'By month' }, { id: 'b004', type: 'table', header: true, rows: [['Month', 'Revenue'], ['Jan', '0'], ['Feb', '0'], ['Mar', '0']] }] } }
         : { type: 'doc', content: { blocks: [{ id: 'b000', type: 'p', text: '' }] } }
-  handle('docs:create', (threadId: string, title: string, type?: 'doc' | 'sheet' | 'slides') => {
+  handle('docs:create', (threadId: string, title: string, type?: 'doc' | 'sheet' | 'slides' | 'dashboard') => {
     const t = db.getThread(threadId)
     if (!t) throw new Error('Thread not found')
     const b = blankDoc(type ?? 'doc')
@@ -1597,10 +1612,10 @@ app.whenReady().then(() => {
   handle('docs:source', (id: string) => docSources()[String(id)] ?? null)
   handle('docs:recent', (limit?: number) => docs.recent(Number(limit) || 24))
   /** Make something new (Artifacts): a blank document, deck or sheet in its own new chat with SahilBot. */
-  handle('docs:createNew', (kind: 'doc' | 'slides' | 'sheet') => {
+  handle('docs:createNew', (kind: 'doc' | 'slides' | 'sheet' | 'dashboard') => {
     const main = db.listSpaces().find((s) => s.isMain)
     if (!main) throw new Error('SahilBot\'s main chat space is missing.')
-    const title = kind === 'slides' ? 'Untitled deck' : kind === 'sheet' ? 'Untitled sheet' : 'Untitled document'
+    const title = kind === 'slides' ? 'Untitled deck' : kind === 'sheet' ? 'Untitled sheet' : kind === 'dashboard' ? 'Untitled dashboard' : 'Untitled document'
     const t = db.updateThread(db.createThread(main.id, 'auto', null).id, { title })
     const b = blankDoc(kind)
     const snap = docs.create({ threadId: t.id, spaceId: main.id, title, type: b.type, content: b.content, author: 'user' })
@@ -2965,6 +2980,8 @@ app.whenReady().then(() => {
   handle('update:status', () => updater.get())
   handle('update:check', () => updater.check())
   handle('update:install', () => updater.install())
+  handle('update:history', () => updater.history())
+  handle('update:upgradedFrom', () => upgradedFrom ?? null)
   // Settings → Privacy & Security: status (no prompts) and the exact System Settings pane; nothing is granted here.
   handle('permissions:status', () => permissionsStatus({
     accessibility: () => systemPreferences.isTrustedAccessibilityClient(false),

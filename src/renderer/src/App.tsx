@@ -6,6 +6,9 @@ import { readableOn, SpaceAvatar } from './brand'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
 import { FilesView, Home, ProjectsView } from './components/Home'
+import { WhatsNewOnce } from './components/WhatsNew'
+import { pruneDrafts } from './lib/drafts'
+import { installFocusTrap } from './lib/focus-trap'
 import { TasksView } from './components/TasksView'
 import { BrainView } from './components/BrainView'
 import { RightPanel, type PanelTab } from './components/RightPanel'
@@ -421,6 +424,23 @@ export function App() {
     return () => { window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch) }
   }, [])
 
+  // Slash commands from the message box (lib/slash.ts).
+  useEffect(() => {
+    const on = (e: Event): void => {
+      const id = (e as CustomEvent<string>).detail
+      if (id === 'new') newChatRef.current()
+      else if (id === 'settings' || id === 'whatsnew') setShowSettings(true)
+      else if (id === 'artifacts') setView('files')
+      else if (id === 'voice') setVoiceOn(true)
+      else if (id === 'doc' || id === 'deck' || id === 'dashboard' || id === 'sheet') {
+        const kind = id === 'deck' ? 'slides' : id
+        void api.docs.createNew(kind).then((d) => window.dispatchEvent(new CustomEvent('sahilbot:open-doc', { detail: d }))).catch((err: Error) => toast(err.message, 'error'))
+      }
+    }
+    window.addEventListener('sahilbot:command', on)
+    return () => window.removeEventListener('sahilbot:command', on)
+  }, [])
+
   useEffect(() => {
     const k = (e: KeyboardEvent): void => {
       if (e.metaKey && e.key === 'n') { e.preventDefault(); newChatRef.current() }
@@ -584,6 +604,7 @@ export function App() {
     setDocId(p)
     if (p) setPanel('doc')
   }, [thread?.id])
+  useEffect(() => { pruneDrafts(); return installFocusTrap() }, [])
   const openDocRef = useRef<(d: { docId: string; threadId: string }) => void>(() => undefined)
   useEffect(() => {
     const on = (e: Event): void => { const d = (e as CustomEvent<{ docId: string; threadId: string }>).detail; if (d?.docId) openDocRef.current(d) }
@@ -620,29 +641,29 @@ export function App() {
     setThread(await api.threads.update(thread.id, patch))
   }
 
-  const send = async (o: Outgoing): Promise<void> => {
+  /** Sends what you typed; false when it didn't go through (the box gets the text back). */
+  const send = async (o: Outgoing): Promise<boolean> => {
     // A bot asked a question: what you type is the answer (but never unedited text from a link).
-    if (question && thread && o.fromLink) { toast('Text from a link can\'t answer this. Edit it, or answer the card above.', 'error'); return }
+    if (question && thread && o.fromLink) { toast('Text from a link can\'t answer this. Edit it, or answer the card above.', 'error'); return false }
     if (question && thread) {
       // Typing answers the card: one answer for every question, or approval / changes for a plan.
       const answer = question.kind === 'questions' ? JSON.stringify((question.questions ?? []).map(() => o.text))
         : question.kind === 'plan' ? (/^(yes|yep|ok|okay|approve|approved|go|go ahead|start|looks good|lgtm|do it)\b/i.test(o.text.trim()) ? 'approve' : `revise: ${o.text}`)
           : o.text
-      await api.chat.respond(thread.id, question.id, answer)
-      return
+      try { await api.chat.respond(thread.id, question.id, answer); return true } catch (e) { toast((e as Error).message, 'error'); return false }
     }
     if (thread && running.has(thread.id)) {
       // ⌘Enter (or attachments): wait until it's done. Enter: steer the agent now.
       // Link text waits too: a steer can't carry its "from a link" mark.
-      if (o.queue || o.fromLink || o.attachments.length || o.images.length) setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] }))
-      else await api.chat.steer(thread.id, o.text).catch((e: Error) => toast(e.message, 'error'))
-      return
+      if (o.queue || o.fromLink || o.attachments.length || o.images.length) { setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] })); return true }
+      try { await api.chat.steer(thread.id, o.text); return true } catch (e) { toast((e as Error).message, 'error'); return false }
     }
     let t = thread
     if (!t) {
       const sid = space?.id ?? main?.id
-      if (!sid) return
-      const created = await api.threads.create(sid)
+      if (!sid) return false
+      let created: Thread
+      try { created = await api.threads.create(sid) } catch (e) { toast((e as Error).message, 'error'); return false }
       // Without a pick here, main already started it at the bot's (or the app's) autonomy level.
       t = await api.threads.update(created.id, { model: draft.model, ...(draft.mode ? { permissionMode: draft.mode } : {}), ...(draft.effort ? { effort: draft.effort } : {}) })
       threadRef.current = t.id
@@ -652,8 +673,10 @@ export function App() {
     try {
       await api.chat.send({ threadId: t.id, text: o.text, images: o.images, attachments: o.attachments, team: o.team, deepResearch: o.deepResearch, planFirst: o.planFirst, ...(o.heavy ? { heavy: true } : {}), ...(o.max ? { max: true } : {}), ...(o.swarm ? { swarm: true } : {}), ...(o.council ? { council: o.council } : {}), ...(o.fromLink ? { meta: { fromLink: true } } : {}), ...(o.workingFolder ? { workingFolder: o.workingFolder } : {}) })
       void refreshSpaces()
+      return true
     } catch (e) {
       toast((e as Error).message, 'error')
+      return false
     }
   }
 
@@ -682,7 +705,7 @@ export function App() {
       inheritedFolder={space?.kind === 'group' ? null : space?.folder ?? null}
       running={isRunning}
       answering={!!question}
-      onSend={(o) => void send(o)}
+      onSend={(o) => send(o)}
       onStop={() => thread && void api.chat.stop(thread.id)}
       models={models}
       model={model}
@@ -765,6 +788,7 @@ export function App() {
   return (
     <DevMode.Provider value={dev}>
     <div className={`app${dev ? ' dev model-details' : ''}`}>
+      <WhatsNewOnce />
       <Toasts />
       {/* The secrets vault's unlock / confirm dialog: main asks, this only shows it. */}
       <VaultAuthDialog />

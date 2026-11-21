@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { cpSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Page } from 'playwright'
@@ -25,7 +25,7 @@ describe('slides: a native deck the bot and the user both edit', () => {
       await page.evaluate((w) => window.foreman.settings.set({ workspaceDir: w }), ws)
       await page.setViewportSize({ width: 1500, height: 950 }).catch(() => undefined)
       llm.script.push(
-        call('doc_create', { title: 'Launch plan', type: 'slides', markdown: '## Launch plan\n- Spring 2027\n\n## Goals\n- 1,000 sign-ups\n- Two partners\n  - One retailer\n> Keep this under a minute.\n\n## Timeline\n- March: beta\n- April: launch' }),
+        call('doc_create', { title: 'Launch plan', type: 'slides', markdown: '### Product launch\n## Launch plan\n- Spring 2027\n- From beta to a public launch in six weeks\n- **1,000** Sign-ups\n- **6** Weeks\n\n## Goals\n- 1,000 sign-ups\n- Two partners\n  - One retailer\n> Keep this under a minute.\n\n## Timeline\n- March: beta\n- April: launch' }),
         { content: 'I drafted the deck beside the chat.' }
       )
       await page.fill('[data-testid="composer-input"]', 'Make a launch deck we can edit together')
@@ -34,30 +34,62 @@ describe('slides: a native deck the bot and the user both edit', () => {
       const editor = page.locator('[data-testid="doc-editor"]')
       const docId = (await editor.getAttribute('data-doc'))!
       await expect.poll(() => page.locator('[data-testid="slide-thumb"]').count(), { timeout: 10_000 }).toBe(3)
-      expect(await page.locator('[data-testid="slide-title"]').inputValue()).toBe('Launch plan')
+      expect(await page.locator('[data-testid="slide-title"]').textContent()).toBe('Launch plan')
+      expect(await page.locator('[data-testid="slide-kicker"]').textContent()).toBe('Product launch')
       await shot(page, 'deck-title')
 
-      // The user picks slide 2 and changes its title and points by typing on the slide.
+      // The user picks slide 2 and types on the slide itself.
       await page.locator('[data-testid="slide-thumb"]').nth(1).click()
-      expect(await page.locator('[data-testid="slide-points"]').inputValue()).toBe('1,000 sign-ups\nTwo partners\n\tOne retailer')
+      expect(await page.locator('[data-testid="slide-point"]').allTextContents()).toEqual(['1,000 sign-ups', 'Two partners', 'One retailer'])
       expect(await page.locator('[data-testid="slide-notes"]').inputValue()).toBe('Keep this under a minute.')
       await page.locator('[data-testid="slide-title"]').click()
       await page.keyboard.press('End')
       await page.keyboard.type(' for 2027')
-      await page.locator('[data-testid="slide-points"]').click()
-      await page.keyboard.press('Meta+ArrowDown')
-      await page.keyboard.type('\nPress coverage')
+      await page.locator('[data-testid="slide-point"]').last().click()
+      await page.keyboard.press('End')
+      await page.keyboard.press('Shift+Tab')
+      await page.keyboard.press('End')
+      await page.keyboard.press('Enter')
+      await page.keyboard.type('Press coverage')
+      await page.locator('[data-testid="slide-add-stat"]').click()
+      await page.keyboard.press('Meta+a')
+      await page.keyboard.type('3')
+      await page.keyboard.press('Enter')
+      await page.keyboard.press('Meta+a')
+      await page.keyboard.type('Partners')
       await shot(page, 'deck-edit')
       await page.locator('[data-testid="slide-add"]').click()
       await expect.poll(() => page.locator('[data-testid="slide-thumb"]').count()).toBe(4)
-      await page.locator('[data-testid="slide-title"]').fill('Questions?')
+      await page.keyboard.type('Questions?')
       await expect.poll(async () => {
         const d = await page.evaluate((id) => window.foreman.docs.get(id), docId)
-        return d.content.blocks.filter((b) => b.type === 'h2').map((b) => b.text).join(' | ') + ' / ' + d.content.blocks.some((b) => b.text === 'Press coverage') + ' / ' + d.content.kind
-      }, { timeout: 15_000 }).toBe('Launch plan | Goals for 2027 | Timeline | Questions? / true / slides')
+        const b = d.content.blocks
+        return [b.filter((x) => x.type === 'h2').map((x) => x.text).join(' | '), b.some((x) => x.text === 'Press coverage'), b.some((x) => x.text === '**3** Partners'), b.find((x) => x.text === 'One retailer')?.indent ?? 0, d.content.kind].join(' / ')
+      }, { timeout: 15_000 }).toBe('Launch plan | Goals for 2027 | Questions? | Timeline / true / true / 0 / slides')
 
-      const pptx = await page.evaluate((id) => window.foreman.docs.export(id, 'pptx'), docId)
-      expect(pptx.endsWith('.pptx')).toBe(true)
+      // Every deck format.
+      for (const f of ['pptx', 'pdf', 'pptx_pictures', 'odp', 'png'] as const) {
+        const out = await page.evaluate(([id, fmt]) => window.foreman.docs.export(id, fmt), [docId, f] as const)
+        const st = statSync(out)
+        if (f === 'png') { expect(st.isDirectory()).toBe(true); expect(readdirSync(out).filter((n) => n.endsWith('.png'))).toHaveLength(4) }
+        else expect(st.size).toBeGreaterThan(f === 'pptx_pictures' ? 50_000 : 2_000)
+        if (f === 'pdf') expect(readFileSync(out).toString('latin1').match(/\/Type\s*\/Page[^s]/g)?.length).toBe(4)
+        if (f === 'pptx_pictures') expect(out.endsWith('-pictures.pptx')).toBe(true)
+        if (shots) cpSync(out, join(shots, `export-${f}${f === 'png' ? '' : `.${f === 'pptx_pictures' ? 'pptx' : f}`}`), { recursive: true })
+      }
+
+      // Grid view and Present.
+      await page.locator('[data-testid="deck-view"]').click()
+      await page.locator('[data-testid="deck-grid"]').click()
+      await expect.poll(() => page.locator('.deck-grid [data-testid="slide-thumb"]').count()).toBe(4)
+      await shot(page, 'deck-grid')
+      await page.locator('[data-testid="slide-thumb"]').first().click()
+      await page.locator('[data-testid="deck-view"]').click()
+      await page.locator('[data-testid="deck-present"]').click()
+      await page.locator('.deck-present').waitFor()
+      await shot(page, 'deck-present')
+      await page.keyboard.press('Escape')
+      await expect.poll(() => page.locator('.deck-present').count()).toBe(0)
 
       // Artifacts → Slides: a blank deck in its own chat.
       await page.locator('[data-testid="nav-artifacts"], [data-testid="nav-files"]').first().click()
@@ -68,6 +100,29 @@ describe('slides: a native deck the bot and the user both edit', () => {
       expect(await page.locator('[data-testid="slide-thumb"]').count()).toBe(1)
       expect(await page.locator('[data-testid="doc-editor"]').getAttribute('data-doc')).not.toBe(docId)
       await shot(page, 'new-deck')
+
+      // Slash command: "/de" → /deck opens a new deck.
+      await page.locator('[data-testid="nav-artifacts"], [data-testid="nav-files"]').first().click()
+      await page.keyboard.press('Meta+n')
+      await page.fill('[data-testid="composer-input"]', '/de')
+      await page.locator('[data-testid="slash-menu"]').waitFor({ timeout: 5_000 })
+      await shot(page, 'slash-menu')
+      await page.keyboard.press('Enter')
+      await expect.poll(async () => (await page.locator('[data-testid="slide-thumb"]').count()) === 1 && (await page.locator('[data-testid="doc-editor"]').getAttribute('data-doc')) !== docId, { timeout: 15_000 }).toBe(true)
+      expect(await page.locator('[data-testid="composer-input"]').inputValue()).toBe('')
+
+      // Artifacts → Dashboards: a starter dashboard, drawn, with a chart from its table; exports to PDF.
+      await page.locator('[data-testid="nav-artifacts"], [data-testid="nav-files"]').first().click()
+      await page.locator('[data-testid="make-dashboard"]').click()
+      await page.locator('[data-testid="dashboard"]').waitFor({ timeout: 15_000 })
+      expect(await page.locator('[data-testid="dashboard"] .db-tile').count()).toBe(2)
+      expect(await page.locator('[data-testid="dashboard"] svg rect').count()).toBeGreaterThan(0)
+      await shot(page, 'dashboard')
+      const dashId = (await page.locator('[data-testid="doc-editor"]').getAttribute('data-doc'))!
+      const dpdf = await page.evaluate((id) => window.foreman.docs.export(id, 'pdf'), dashId)
+      expect(statSync(dpdf).size).toBeGreaterThan(5_000)
+      await page.locator('[data-testid="dash-edit"]').click()
+      expect(await page.locator('[data-testid="doc-block"]').count()).toBeGreaterThan(3)
     } catch (e) { await shot(page, 'failure'); throw e } finally { await app.close() }
   }, 120_000)
 })

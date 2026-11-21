@@ -232,6 +232,65 @@ function PlanCard({ items, live, title }: { items: PlanItem[]; live: boolean; ti
   )
 }
 
+/**
+ * The plan of the run that's working, pinned above the message box: where the agent is ("Step 3 of 6:
+ * Check the export"), with the whole checklist a click away. The full card stays in the chat as well.
+ */
+function LivePlan({ items, title }: { items: PlanItem[]; title?: string }) {
+  const [open, setOpen] = useState(false)
+  const done = items.filter((t) => t.status === 'done').length
+  const i = items.findIndex((t) => t.status === 'in_progress')
+  const at = i >= 0 ? i : items.findIndex((t) => t.status !== 'done')
+  const cur = items[at]
+  return (
+    <div className={`live-plan${open ? ' open' : ''}`} data-testid="live-plan" role="status" aria-live="polite">
+      {open && (
+        <ol className="plan-steps">
+          {items.map((t, k) => (
+            <li key={k} className={`ps-${t.status}${t.status === 'in_progress' ? ' live' : ''}`}>
+              <span className="ps-mark">{t.status === 'done' ? <I.Check size={11} /> : null}</span>
+              <span className="ps-text">{t.text}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      <button className="live-plan-head" onClick={() => setOpen((o) => !o)} aria-expanded={open} title={open ? 'Hide the plan' : 'Show the whole plan'}>
+        <span className="spin" />
+        <span className="live-plan-step">{title ? `${title} · ` : ''}Step {Math.min(items.length, at + 1)} of {items.length}{cur ? `: ${cur.text}` : ''}</span>
+        <span className="plan-bar"><i style={{ width: `${(done / items.length) * 100}%` }} /></span>
+        <I.Chevron size={13} style={{ transform: open ? undefined : 'rotate(180deg)', transition: 'transform .15s' }} />
+      </button>
+    </div>
+  )
+}
+
+/**
+ * The sources an answer used, numbered exactly as the inline [1], [2] citations (which link to them), six at
+ * a time with "+N more".
+ */
+function SourceChips({ sources }: { sources: Array<{ title: string; url: string }> }) {
+  const [all, setAll] = useState(false)
+  const list = sources.map((src, i) => ({ ...src, n: i + 1 })).filter((src, i, xs) => xs.findIndex((x) => x.url === src.url) === i)
+  const shown = all ? list : list.slice(0, 6)
+  return (
+    <div className="sources" data-testid="sources">
+      {shown.map((src) => {
+        let host = src.url
+        try { host = new URL(src.url).hostname.replace(/^www\./, '') } catch { /* keep url */ }
+        const hue = [...host].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
+        return (
+          <a key={src.url} className="source-pill" href={src.url} target="_blank" rel="noreferrer" title={`${src.title}\n${src.url}`}>
+            <span className="source-ico" style={{ background: `hsl(${hue} 55% 45%)` }}>{host[0]?.toUpperCase()}</span>
+            <span className="source-host">{host}</span>
+            <span className="source-n">{src.n}</span>
+          </a>
+        )
+      })}
+      {list.length > 6 && <button className="source-pill source-more" onClick={() => setAll((x) => !x)}>{all ? 'Fewer' : `+${list.length - 6} more`}</button>}
+    </div>
+  )
+}
+
 const PREPARING: Record<string, string> = {
   file_write: 'Preparing to write a file', create_document: 'Building a document', file_manage: 'Preparing a file change',
   web_search: 'Preparing a web search', create_page: 'Building a page', update_page: 'Updating the page', doc_create: 'Writing the document', doc_edit: 'Editing the document', doc_export: 'Exporting the document', message_bot: 'Handing off to another bot', fetch_page: 'Opening a page', browser: 'Preparing a browser step', todo: 'Planning',
@@ -393,6 +452,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const lastOf = (kind: Block['kind']): Block | undefined => { for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind === kind) return bs[i]; return undefined }
   const lastActivity = lastOf('activity')
   const lastPlan = lastOf('plan')
+  // The pinned plan is this run's: a plan from before your latest message belongs to an earlier task.
+  const lastUser = (() => { for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind === 'user') return i; return -1 })()
+  const runPlan = lastPlan && bs.indexOf(lastPlan) > lastUser ? lastPlan : undefined
   const tail = bs[bs.length - 1]
   const last = messages[messages.length - 1]
   const waiting = running && !pending.length && tail?.kind !== 'activity' && (!last || last.role !== 'assistant' || (last.status === 'streaming' && !last.content && !last.reasoning && !last.toolCalls))
@@ -456,6 +518,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
           })}
           {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} thumb={p.tool === 'browser' ? lastBrowserShot(messages) : undefined} />))}
           {showStatus && <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={liveStep && !dev ? describe(liveStep)[2] : null} />}
+          {running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
           {!running && lastText && !pending.length && (dev || (tailText?.kind === 'text' && (tailText.m.status === 'error' || tailText.m.status === 'stopped'))) && (
             <div className="after-actions">
               <button className="chip-btn" onClick={stable.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>
@@ -729,6 +792,13 @@ const MORE = ['🔥', '🎉', '🙏', '👀', '🤔', '😂', '😮', '💯', '�
 function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' } | { kind: 'heavy' }>; actions: ThreadActions; editable?: boolean; cont?: boolean; dev?: boolean; retry?: boolean }) {
   const m = b.m
   const [editing, setEditing] = useState<string | null>(null)
+  // ↑ in an empty message box opens this editor on your last message.
+  useEffect(() => {
+    if (!editable) return
+    const on = (): void => setEditing(m.content)
+    window.addEventListener('sahilbot:edit-last', on)
+    return () => window.removeEventListener('sahilbot:edit-last', on)
+  }, [editable, m.content])
   if (b.kind === 'compacted') {
     const before = m.meta?.before as number | undefined, after = m.meta?.after as number | undefined
     return (
@@ -815,7 +885,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
               <pre>{m.reasoning.trim()}</pre>
             </details>
           )}
-          {m.content && <Markdown text={m.content} streaming={streaming} />}
+          {m.content && <Markdown text={m.content} streaming={streaming} sources={Array.isArray(m.meta?.sources) ? m.meta!.sources as Array<{ title: string; url: string }> : undefined} />}
           {m.status === 'stopped' && <div className="hint">Stopped</div>}
           {error && <div>{visibleError}</div>}
           {error && (() => {
@@ -823,26 +893,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
             return fix && <button className="chip-btn err-fix" onClick={fix.run} data-testid="error-fix">{fix.label}</button>
           })()}
         </div>
-        {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && (
-          <div className="sources" data-testid="sources">
-            {(m.meta!.sources as Array<{ title: string; url: string }>).filter((src, i, all) => {
-              // One chip per site.
-              const h = (u: string): string => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
-              return all.findIndex((x) => h(x.url) === h(src.url)) === i
-            }).slice(0, 6).map((src, i) => {
-              let host = src.url
-              try { host = new URL(src.url).hostname.replace(/^www\./, '') } catch { /* keep url */ }
-              const hue = [...host].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
-              return (
-                <a key={src.url} className="source-pill" href={src.url} target="_blank" rel="noreferrer" title={`${src.title}\n${src.url}`}>
-                  <span className="source-ico" style={{ background: `hsl(${hue} 55% 45%)` }}>{host[0]?.toUpperCase()}</span>
-                  <span className="source-host">{host}</span>
-                  <span className="source-n">{i + 1}</span>
-                </a>
-              )
-            })}
-          </div>
-        )}
+        {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && <SourceChips sources={m.meta!.sources as Array<{ title: string; url: string }>} />}
         {reactions.user && (
           <button className="reaction" onClick={() => actions.onReact(m.id, null)} title="Remove reaction" data-testid="user-reaction">{reactions.user}</button>
         )}

@@ -7,7 +7,7 @@ describe('on-demand tools from the request', () => {
   test('each kind of request loads only what it needs', () => {
     expect(intentTools('Fix the failing unit test in my repo', known)).toEqual(['code', 'git', 'jobs'])
     expect(intentTools('Click Save in Numbers', known)).toEqual(['computer', 'app', 'app_help'])
-    expect(intentTools('Make me a dashboard of Q4 sales', known)).toEqual(['create_page', 'update_page'])
+    expect(intentTools('Make me a dashboard of Q4 sales', known).filter((t) => !t.startsWith('doc_'))).toEqual(['create_page', 'update_page'])
     expect(intentTools('What do recent studies say about creatine?', known)).toEqual(['research'])
     expect(intentTools('Clean up my inbox', known)).toEqual(['mail'])
     expect(intentTools('Draft a memo about the new schedule', known)).toEqual(['doc_create', 'doc_read', 'doc_edit', 'doc_export'])
