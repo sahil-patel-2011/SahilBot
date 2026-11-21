@@ -50,8 +50,11 @@ describe('slides: a native deck the bot and the user both edit', () => {
       await expect.poll(() => page.evaluate(() => document.activeElement?.closest('[data-testid]')?.getAttribute('data-testid') ?? '')).toBe('slide-point')
       await page.keyboard.press('End')
       await page.keyboard.press('Shift+Tab')
+      await expect.poll(() => page.evaluate(() => document.activeElement?.textContent ?? '')).toBe('One retailer')
       await page.keyboard.press('End')
       await page.keyboard.press('Enter')
+      // The new, empty point has the caret before typing (as when a person types).
+      await expect.poll(() => page.evaluate(() => { const a = document.activeElement; return a?.getAttribute('data-testid') === 'slide-point' && !a.textContent })).toBe(true)
       await page.keyboard.type('Press coverage')
       await page.locator('[data-testid="slide-add-stat"]').click()
       await page.keyboard.press('Meta+a')

@@ -200,7 +200,9 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
         setSnap(res)
         if (contentRef.current === sent) {
           dirtyRef.current = false
-          setC(res.content)
+          // Saved as sent: keep the editor's own copy (a new copy mid-typing would make the editors start over
+          // from it, and a keystroke made in between could be lost).
+          if (JSON.stringify(res.content) !== JSON.stringify(sent)) setC(res.content)
           setStatus('saved')
         } else {
           // Typed while saving: keep that typing on top of what was saved.
