@@ -81,4 +81,11 @@ test('a reply that announces an action without doing it is caught; finished work
   expect(promisesAction('Done. The deck is saved to ~/SahilBot/Decks/q4.pptx.')).toBe(false)
   expect(promisesAction('Want me to publish it?')).toBe(false)
   expect(promisesAction('Here is the summary of the article you asked about.')).toBe(false)
+  // Ordinary closers the independent review flagged: not promises of work to do now.
+  expect(promisesAction('All three reports are attached. I\'ll update you if anything changes.')).toBe(false)
+  expect(promisesAction('Let me run through what I found: the costs are within budget.')).toBe(false)
+  expect(promisesAction('Done for today. I\'ll check in tomorrow.')).toBe(false)
+  // The gerund forms it used to miss.
+  expect(promisesAction('Running the migration now.')).toBe(true)
+  expect(promisesAction('Submitting the form now.')).toBe(true)
 })

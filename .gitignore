@@ -12,3 +12,4 @@ playwright-report/
 
 # SahilBot's own OAuth app registrations (docs/oauth-registration.md): never committed.
 resources/oauth-clients.json
+.bench/
