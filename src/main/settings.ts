@@ -299,6 +299,8 @@ export class SettingsStore {
       appearance: { ...cur.appearance, ...rest.appearance },
       taskModels: { ...cur.taskModels, ...rest.taskModels },
       cloud: { ...cur.cloud, ...rest.cloud },
+      // Merged, so a patch of one field keeps the others (on/off keeps the mode).
+      hybridCompute: rest.hybridCompute !== undefined ? { enabled: rest.hybridCompute.enabled ?? cur.hybridCompute?.enabled ?? false, mode: rest.hybridCompute.mode === 'auto' ? 'auto' : rest.hybridCompute.mode === 'ask' ? 'ask' : cur.hybridCompute?.mode } : cur.hybridCompute,
       customRules: rest.customRules !== undefined ? cleanRules(rest.customRules) : cur.customRules,
       catchUpHours: rest.catchUpHours !== undefined ? cleanCatchUpHours(rest.catchUpHours) : cur.catchUpHours,
       markets: rest.markets !== undefined ? cleanMarkets({ ...cur.markets, ...rest.markets }) : cur.markets,

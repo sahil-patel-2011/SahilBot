@@ -57,4 +57,6 @@ Claude Code and Codex come out identical. About 14 of the 21 scenarios exercise 
 
 **What isn't measured.** Model intelligence, long-context recall, real network or provider failures, and the actual products. The paid real-model mode (`HARNESS_BENCH_REAL=1`) wasn't run for this table.
 
+**On the requested scale** (the Claude Code profile set to 70): SahilBot is 100 end to end, Grok Build 74, the chat agent 73, Codex 70. The same caveats apply: these are ablations, not the products.
+
 **Fair headline.** On 21 scripted failure modes, SahilBot's loop finishes with fewer steps and step-ins than the same loop with those runtime features off. The e2e numbers are in the table above. It hasn't been run against the real Claude Code, Codex or Grok, nor with real models.

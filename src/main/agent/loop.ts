@@ -97,7 +97,7 @@ import { detectProject } from '../code/project'
 import { runCheck } from '../code/checks'
 import { cwdFor } from './tools/shell'
 import { PRIVACY_DOCUMENT_TEXT, type PrivacyAnswer } from '@shared/privacy'
-import { StreamRestorer, applyAnswer, describe as describePrivate, detectInContext, documentFindings, emptyPrivacy, recordNotPersonal, findings as privacyFindings, markScanned, maskText, maskWire, parseAnswer, restoreText, segmentsOf, unscanned, type PrivacyThreadState } from '../privacy/gate'
+import { StreamRestorer, applyAnswer, describe as describePrivate, detectInContext, documentFindings, emptyPrivacy, recordNotPersonal, findings as privacyFindings, markScanned, maskText, maskWire, parseAnswer, restoreText, segmentsOf, unscanned, type PrivacyThreadState, notPersonalKey } from '../privacy/gate'
 
 /**
  * No fixed step count: a run gets a budget that grows with the agent's own plan and with progress
@@ -129,6 +129,14 @@ export interface AgentDeps {
      * personal. undefined (no local model, or it failed): all stay on the card.
      */
     judge?(items: Array<{ id: string; label: string; value: string }>, context: string, signal: AbortSignal): Promise<Set<string> | undefined>
+    /** 'ask' (default): pause on a card. 'auto': protect on its own (stand-ins, or the Mac's model) and say so. */
+    mode?(): 'ask' | 'auto'
+    /** Details the user said aren't personal, in any chat, as notPersonalKey(label, value). */
+    notPersonal?(): Set<string>
+    /** Remembers details the user said aren't personal (their keys), for every chat. */
+    rememberNotPersonal?(keys: string[]): void
+    /** Counts what the gate did today (Settings shows it). */
+    count?(what: 'requests' | 'checked' | 'asked' | 'protected' | 'cleared' | 'errors', n?: number): void
   }
   memoryEmbedder?: () => Embedder | null
   recallFiles?: (query: string, threadId: string, signal: AbortSignal) => Promise<RecallHit[]>
@@ -1972,6 +1980,7 @@ export class Agent {
       }
     } catch (e) {
       if (run.ctrl.signal.aborted) throw e
+      gate.count?.('errors')
       // Nothing unchecked goes to the cloud; with a local model the task carries on there instead of stopping.
       if (local) {
         this.notice(thread.id, `Privacy Gate couldn't check this request (${(e as Error).message}), so ${this.d.endpoints.last?.models.find((m) => m.id === local.id)?.label ?? local.id} on this Mac carries on with it.`, { internal: false })
@@ -1979,7 +1988,13 @@ export class Agent {
       }
       throw new Error(`The Privacy Gate couldn't check this request on your Mac (${(e as Error).message}), so nothing was sent to the cloud. Try again, use a local model, or turn hybrid compute off in Settings → Privacy & Security → Hybrid compute.`)
     }
+    gate.count?.('requests')
+    gate.count?.('checked', todo.length)
+    // Details the user already said aren't personal (in any chat) are shared without asking.
+    const known = gate.notPersonal?.() ?? new Set<string>()
     let items = privacyFindings(record, found)
+    const remembered = items.filter((i) => !i.strict && known.has(notPersonalKey(i.label, i.value)))
+    if (remembered.length) { recordNotPersonal(record, remembered); items = items.filter((i) => !remembered.includes(i)); gate.count?.('cleared', remembered.length) }
     // Not too strict: what PII-Tracer was unsure about gets a second look from a larger local model, in context.
     const unsure = items.filter((i) => i.unsure)
     if (unsure.length && gate.judge) {
@@ -1989,6 +2004,7 @@ export class Agent {
         const cleared = unsure.filter((i) => !personal.has(i.id))
         recordNotPersonal(record, cleared)
         items = items.filter((i) => !cleared.includes(i))
+        if (cleared.length) gate.count?.('cleared', cleared.length)
       }
     }
     // Whole personal records (a bank statement, an internet bill) count even with few tagged details.
@@ -1999,8 +2015,14 @@ export class Agent {
     let answer: PrivacyAnswer | undefined = record.remember ? { action: record.remember, notPersonal: [], remember: true } : undefined
     if (answer?.action === 'local' && !local) answer = undefined
     // Nobody to answer a card (a routine, a goal running in the background): the safe choice, without waiting.
-    if (!answer && run.unattended) answer = { action: local ? 'local' : 'split', notPersonal: [], remember: false }
+    const unattendedAuto = !answer && run.unattended
+    if (unattendedAuto) answer = { action: local ? 'local' : 'split', notPersonal: [], remember: false }
+    // Protect automatically (Settings): the same safe choice without a pause. Cloud models see stand-ins (or the
+    // task moves to the Mac's model for a personal record like a bank statement), and a note says what happened.
+    const auto = !answer && gate.mode?.() === 'auto'
+    if (auto) answer = { action: docs.length && local ? 'local' : 'split', notPersonal: [], remember: false }
     if (!answer) {
+      gate.count?.('asked')
       const raw = await this.ask(thread.id, run, {
         kind: 'privacy', label: 'Privacy Gate', summary: [...docs.map((d) => PRIVACY_DOCUMENT_TEXT[d.kind]), describePrivate(items)].filter(Boolean).join(' · '),
         privacy: { items: items.map(({ segment: _s, ...i }) => i), documents: docs.map(({ kind, source }) => ({ kind, source })), sources: [...new Set([...docs.map((d) => d.source), ...items.map((i) => i.source)])], localModel: local ? label(local.id) : undefined, cloudModel: label(cloudModel) }
@@ -2010,14 +2032,19 @@ export class Agent {
       answer = parsed.action === 'local' && !local ? { ...parsed, action: 'split' } : parsed
     }
     const chosen: PrivacyAnswer = answer
+    if (auto || unattendedAuto) gate.count?.('protected', items.length + docs.length)
+    // Unticked as "not personal" on the card: remembered for every chat, so it's never asked about again.
+    // Never a bare one-word name ("Jordan" could be anyone next time), never passwords, keys or account numbers.
+    if (chosen.notPersonal.length) gate.rememberNotPersonal?.(items.filter((i) => chosen.notPersonal.includes(i.id) && !i.strict && !(i.label === 'private_person' && !/\s/.test(i.value.trim()))).map((i) => notPersonalKey(i.label, i.value)))
     applyAnswer(record, items, chosen, docs)
     markScanned(record, todo)
     save()
     const what = [...new Set(docs.map((d) => `a ${PRIVACY_DOCUMENT_TEXT[d.kind]}`)), describePrivate(items)].filter(Boolean).join(' and ')
-    this.notice(thread.id, chosen.action === 'local' ? `Privacy Gate: ${what} stay on this Mac. ${local ? label(local.id) : 'A local model'} takes over this task; cloud models see stand-ins like [PERSON_1] from now on.`
-      : chosen.action === 'split' ? `Privacy Gate: ${what} stay on this Mac. ${label(cloudModel)} sees stand-ins like [PERSON_1], and SahilBot puts the real details back here.`
+    const autoNote = auto ? ' (protected automatically; change this in Settings → Privacy & Security → Hybrid compute)' : ''
+    this.notice(thread.id, (chosen.action === 'local' ? `Privacy Gate: ${what} stay on this Mac. ${local ? label(local.id) : 'A local model'} takes over this task; cloud models see stand-ins like [PERSON_1] from now on.`
+      : chosen.action === 'split' ? `Privacy Gate: ${what} stay on this Mac. ${docs.length ? 'The record itself is withheld from cloud models; ' : ''}${label(cloudModel)} sees stand-ins like [PERSON_1], and SahilBot puts the real details back here.`
       : chosen.action === 'share' ? `Privacy Gate: ${what} shared with ${label(cloudModel)}${items.some((i) => i.strict && !chosen.notPersonal.includes(i.id)) ? ' (passwords, keys and account numbers stay masked)' : ''}.`
-      : `Privacy Gate: the content with ${what} is withheld from cloud models.`, { internal: false })
+      : `Privacy Gate: the content with ${what} is withheld from cloud models.`) + autoNote, { internal: false })
     return chosen.action === 'local' ? 'local' : 'go'
   }
 
@@ -2877,6 +2904,8 @@ export class Agent {
     let budget = START_BUDGET
     let actions = 0
     state.consults = 0
+    // One idea card per task (propose_idea).
+    ;(state as { ideas?: number }).ideas = 0
     // Each new request gets a fresh team budget (helpers of helpers share their root's).
     if (!run.helper) this.teamUsed.delete(thread.id)
     let doneItems = state.todos.filter((t) => t.status === 'done').length

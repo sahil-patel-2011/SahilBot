@@ -7,7 +7,8 @@
       "The agent tries another way when a tool fails, instead of giving up",
       "It never re-sends something whose first send may have gone through, and it won't claim it did something it didn't",
       "Slides can hold charts that export to PowerPoint as real, editable charts",
-      "Reads AGENTS.md and CLAUDE.md in your project folder, the way Codex does"
+      "Reads AGENTS.md and CLAUDE.md in your project folder, the way Codex does",
+      "The Privacy Gate is out of beta: it can protect details automatically and remembers what you said isn't personal"
     ],
     "sections": [
       {
@@ -21,7 +22,8 @@
           "Project instructions in AGENTS.md (or CLAUDE.md / GROK.md) from your folder up to the repo root go into the agent's context, like Codex",
           "If you set a limit (\"under $200\"), what the agent picks is checked against it, and it fixes a choice that's over",
           "It reads every page of a paged result before answering, instead of stopping at page 1",
-          "A write that fails outright (bad input, no permission) no longer counts as \"may have happened\", so a corrected retry goes straight through"
+          "A write that fails outright (bad input, no permission) no longer counts as \"may have happened\", so a corrected retry goes straight through",
+          "When the agent sees a better way or the obvious next step, it offers it as an idea card with \"Do it\". It never starts the idea on its own"
         ]
       },
       {
@@ -32,6 +34,15 @@
           "A deck check after the agent makes or exports a deck: too many points, long lines, missing or long titles get fixed before you see it",
           "Documents show their word count and reading time next to the save state",
           "Typing fast on a slide (Tab, Enter, then straight on) never drops a keystroke or undoes the step before"
+        ]
+      },
+      {
+        "title": "Privacy Gate, out of beta",
+        "items": [
+          "Protect automatically (Settings → Hybrid compute): personal details get stand-ins for cloud models without pausing the chat, and a note says what was protected",
+          "Anything you mark \"not personal\" is remembered for every chat (never passwords, keys or account numbers), and Forget clears the list",
+          "See what the gate did today: requests checked, times it asked, details protected, and finds the model on your Mac cleared",
+          "PII-Tracer tests itself after the download, and restarts on its own if it stops mid-check"
         ]
       }
     ]

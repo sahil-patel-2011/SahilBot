@@ -418,10 +418,23 @@ export function App() {
     // sahilbot:// links: the composer shows where the text came from (main/mcp-server/url-scheme.ts).
     const fillLink = (e: Event): void => { const t = (e as CustomEvent<unknown>).detail; if (typeof t === 'string') composer.current?.prefillFromLink(t); requestAnimationFrame(() => composer.current?.focus()) }
     const watch = (): void => setPanel('watchlist')
+    // An idea card's "Do it": send it as your message.
+    // Only into the chat the card is in, and not while that chat is working or asking (then it waits in the box).
+    const sendText = (e: Event): void => {
+      const d = (e as CustomEvent<{ text?: unknown; threadId?: unknown; done?: (ok: boolean) => void }>).detail
+      const text = typeof d?.text === 'string' ? d.text.trim() : ''
+      if (!text || d?.threadId !== threadRef.current || ideaBusyRef.current) {
+        if (text) { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }
+        d?.done?.(false)
+        return
+      }
+      void sendRef.current({ text, images: [], attachments: [] } as never).then((ok) => d?.done?.(ok), () => d?.done?.(false))
+    }
+    window.addEventListener('sahilbot:send-text', sendText)
     window.addEventListener('sahilbot:compose', fill)
     window.addEventListener('sahilbot:compose-link', fillLink)
     window.addEventListener('sahilbot:open-watchlist', watch)
-    return () => { window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch) }
+    return () => { window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch); window.removeEventListener('sahilbot:send-text', sendText) }
   }, [])
 
   // Slash commands from the message box (lib/slash.ts).
@@ -606,6 +619,10 @@ export function App() {
   }, [thread?.id])
   useEffect(() => { pruneDrafts(); return installFocusTrap() }, [])
   const openDocRef = useRef<(d: { docId: string; threadId: string }) => void>(() => undefined)
+  /** The current send (an idea card's "Do it" uses it from a window event). */
+  const sendRef = useRef<(o: Outgoing) => Promise<boolean>>(async () => false)
+  /** The open chat is working or asking: an idea waits in the message box instead of sending. */
+  const ideaBusyRef = useRef(false)
   useEffect(() => {
     const on = (e: Event): void => { const d = (e as CustomEvent<{ docId: string; threadId: string }>).detail; if (d?.docId) openDocRef.current(d) }
     window.addEventListener('sahilbot:open-doc', on)
@@ -681,6 +698,9 @@ export function App() {
   }
 
 
+  // The current send, for an idea card's "Do it" (set on every render, so it's this chat's).
+  sendRef.current = send
+  ideaBusyRef.current = !!question || (!!thread && running.has(thread.id))
   const openFile = (p: string): void => { setFile(p); setPanel('file') }
   const openDoc = (id: string): void => { setDocId(id); setPanel('doc') }
   // The bot's Library opens a document in its chat (hooks are above, before the early return).

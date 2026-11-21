@@ -81,9 +81,17 @@ export interface HybridRequirements {
 export const HYBRID_MIN = { ramGB: 32, diskGB: 50 }
 export const HYBRID_BEST = { ramGB: 64, diskGB: 150 }
 
+/** What the gate did today (Settings → Hybrid compute). */
+export interface PrivacyDayStats { day: string; requests: number; checked: number; asked: number; protected: number; cleared: number; errors: number }
+
 export interface PrivacyStatus {
   /** PII-Tracer is downloaded. */
   installed: boolean
+  /** 'ask': pause on a card; 'auto': protect on its own and say so. */
+  mode: 'ask' | 'auto'
+  /** How many details are remembered as not personal across chats. */
+  remembered: number
+  today: PrivacyDayStats
   installing: boolean
   /** Hybrid compute is switched on (Settings → Privacy & Security → Hybrid compute). */
   enabled: boolean
@@ -100,6 +108,10 @@ export interface PrivacyApi {
   install(): Promise<PrivacyStatus>
   setEnabled(enabled: boolean): Promise<PrivacyStatus>
   remove(): Promise<PrivacyStatus>
+  /** Ask on a card, or protect automatically. */
+  setMode(mode: 'ask' | 'auto'): Promise<PrivacyStatus>
+  /** Forgets the details remembered as not personal. */
+  forgetNotPersonal(): Promise<PrivacyStatus>
   /** Runs a made-up sample through PII-Tracer on this Mac: what it caught and how long it took. */
   selfTest(): Promise<{ sample: string; ms: number; found: Array<{ label: PrivacyLabel; text: string }> }>
   onInstall(cb: (e: PrivacyInstallEvent) => void): () => void

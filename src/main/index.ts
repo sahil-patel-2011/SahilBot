@@ -725,9 +725,25 @@ app.whenReady().then(() => {
   // Memory doesn't change while the app runs; disk is checked when the user turns hybrid compute on.
   const hybridRamOk = (): boolean => process.arch === 'arm64' && (Number(process.env.FOREMAN_RAM_GB) || totalmem() / 1024 ** 3) >= HYBRID_MIN.ramGB - 0.5
   const privacyActive = (): boolean => settings.get().hybridCompute?.enabled === true && hybridRamOk() && piiTracer.installed() && privacyHybrid()
+  /** Today's Privacy Gate numbers (kept in the database, a new day starts at zero). */
+  const privacyToday = (): import('@shared/privacy').PrivacyDayStats => {
+    const now = new Date()
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const s = db.getSetting<import('@shared/privacy').PrivacyDayStats>('privacy:today')
+    return s && s.day === day ? s : { day, requests: 0, checked: 0, asked: 0, protected: 0, cleared: 0, errors: 0 }
+  }
+  const privacyCount = (what: 'requests' | 'checked' | 'asked' | 'protected' | 'cleared' | 'errors', n = 1): void => {
+    const s = privacyToday()
+    s[what] += n
+    db.setSetting('privacy:today', s)
+  }
+  const hybridSettings = (): NonNullable<import('@shared/types').Settings['hybridCompute']> => settings.get().hybridCompute ?? { enabled: false }
+  /** Details the user said aren't personal, as "label:value" (lowercased, spaces collapsed), newest last, at most 500. */
+  const notPersonalList = (): string[] => db.getSetting<string[]>('privacy:notPersonal') ?? []
   const privacyStatus = (): import('@shared/privacy').PrivacyStatus => {
     hybridAt = 0
-    return { installed: piiTracer.installed(), installing: piiTracer.installingNow(), enabled: settings.get().hybridCompute?.enabled === true, requirements: hybridRequirements(), hybrid: privacyHybrid(), active: privacyActive(), downloadBytes: PII_TRACER_BYTES }
+    const h = hybridSettings()
+    return { installed: piiTracer.installed(), installing: piiTracer.installingNow(), enabled: h.enabled === true, mode: h.mode === 'auto' ? 'auto' : 'ask', remembered: notPersonalList().length, today: privacyToday(), requirements: hybridRequirements(), hybrid: privacyHybrid(), active: privacyActive(), downloadBytes: PII_TRACER_BYTES }
   }
   // The context engine (People & Places), set up with the knowledge vault below; the memory tool's "about" uses it.
   const worldRef: { current?: ContextEngine } = {}
@@ -985,6 +1001,15 @@ app.whenReady().then(() => {
       active: privacyActive,
       detect: (text, signal) => piiTracer.detect(text, signal),
       warm: () => piiTracer.warm(),
+      mode: () => (hybridSettings().mode === 'auto' ? 'auto' : 'ask'),
+      notPersonal: () => new Set(notPersonalList()),
+      rememberNotPersonal: (keys) => {
+        // Re-confirming an old one moves it to the end, so the newest 500 are kept.
+        const add = keys.filter((k) => k.length >= 4 && k.length <= 220)
+        const next = [...notPersonalList().filter((k) => !add.includes(k)), ...add].slice(-500)
+        db.setSetting('privacy:notPersonal', next)
+      },
+      count: privacyCount,
       judge: async (items, context, signal) => {
         // The strongest local model that fits: never a cloud model, the finds stay on this Mac.
         const model = (() => { try { return endpoints.usable().filter((m) => isLocal(endpoints.for(m.id).baseUrl)).sort((a, b) => (b.tier ?? 0) - (a.tier ?? 0) || (b.requiredGB ?? 0) - (a.requiredGB ?? 0))[0]?.id } catch { return undefined } })()
@@ -1206,6 +1231,20 @@ app.whenReady().then(() => {
   handle('privacy:status', () => privacyStatus())
   handle('privacy:install', async () => {
     await piiTracer.install((e) => toWin('privacy:install', e))
+    // Proves it works right after the download: a made-up sample must come back with its details found (a cold
+    // start can take a while on a slow disk, so the wait is generous).
+    try {
+      const { spans } = await piiTracer.detect('Hi, I\'m Jordan Ellis, jordan.ellis@example.com, (404) 555-0182.', AbortSignal.timeout(150_000))
+      if (!spans.length) toWin('privacy:install', { phase: 'error', error: 'PII-Tracer downloaded, but its self-test found nothing in a sample with a name, email and phone. Remove the download and try again.' })
+    } catch (e) { toWin('privacy:install', { phase: 'error', error: `PII-Tracer downloaded, but it didn't start: ${(e as Error).message}` }) }
+    return privacyStatus()
+  })
+  handle('privacy:setMode', (mode: 'ask' | 'auto') => {
+    settings.set({ hybridCompute: { ...hybridSettings(), mode: mode === 'auto' ? 'auto' : 'ask' } })
+    return privacyStatus()
+  })
+  handle('privacy:forgetNotPersonal', () => {
+    db.setSetting('privacy:notPersonal', [])
     return privacyStatus()
   })
   handle('privacy:setEnabled', (enabled: boolean) => {
@@ -1213,11 +1252,11 @@ app.whenReady().then(() => {
       const req = hybridRequirements()
       if (!req.meetsMinimum) throw new Error(req.problem ?? 'This Mac doesn\'t meet hybrid compute\'s requirements.')
     }
-    settings.set({ hybridCompute: { enabled: enabled === true } })
-    if (enabled === true) piiTracer.warm(); else piiTracer.stop()
+    settings.set({ hybridCompute: { ...hybridSettings(), enabled: enabled === true } })
+    if (enabled === true) piiTracer.warm(); else piiTracer.halt()
     return privacyStatus()
   })
-  handle('privacy:remove', () => { piiTracer.remove(); return privacyStatus() })
+  handle('privacy:remove', () => { piiTracer.halt(); piiTracer.remove(); return privacyStatus() })
   /** Settings → Hybrid compute → Test: a made-up sample through PII-Tracer on this Mac, and what it caught. */
   handle('privacy:selfTest', async () => {
     const sample = 'Hi, I\'m Jordan Ellis. Email me at jordan.ellis@example.com or call (404) 555-0182. My card ends 4242 4242 4242 4242 and I live at 18 Peachtree St, Atlanta.'

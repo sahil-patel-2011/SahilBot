@@ -32,6 +32,7 @@ type Block =
   | { kind: 'plan'; id: string; items: PlanItem[]; at: number; title?: string }
   | { kind: 'team'; id: string; titles: string[]; final?: TeamMember[]; summary?: string; at: number }
   | { kind: 'heavy'; id: string; groupId: string; board: HeavyBoard; at: number }
+  | { kind: 'idea'; id: string; idea: string; why: string; outside: boolean; threadId: string; at: number }
 
 type PlanItem = { text: string; status: 'pending' | 'in_progress' | 'done' }
 
@@ -111,6 +112,13 @@ export function blocks(messages: Message[]): Block[] {
           const r = results.get(call.id)
           act = null
           out.push({ kind: 'team', id: call.id, titles, final: r?.meta?.team as TeamMember[] | undefined, summary: r?.meta?.display as string | undefined, at: m.createdAt })
+          continue
+        }
+        // An idea the agent offers: a card with "Do it" (the result carries the cleaned-up text).
+        if (call.name === 'propose_idea') {
+          const r = results.get(call.id)
+          const meta = r?.meta?.idea as { idea?: string; why?: string; outside?: boolean } | undefined
+          if (meta?.idea) { act = null; out.push({ kind: 'idea', id: call.id, idea: meta.idea, why: meta.why ?? '', outside: meta.outside === true, threadId: m.threadId, at: m.createdAt }) }
           continue
         }
         // An approved plan becomes the checklist (later todo updates tick it off).
@@ -228,6 +236,36 @@ function PlanCard({ items, live, title }: { items: PlanItem[]; live: boolean; ti
           ))}
         </ol>
       )}
+    </div>
+  )
+}
+
+const IDEA_SENT = 'sahilbot:idea-sent:'
+/**
+ * The agent's idea: a better way or the next step. "Do it" sends it as your message in this chat, once (it
+ * remembers). When the run read outside content (a page, an email, a file) the idea may have been planted there,
+ * so it only goes into the message box to read first. Not while the chat is still working or asking.
+ */
+function IdeaCard({ id, idea, why, outside, threadId, busy }: { id: string; idea: string; why: string; outside: boolean; threadId: string; busy?: boolean }) {
+  const [sent, setSent] = useState(() => { try { return localStorage.getItem(IDEA_SENT + id) === '1' } catch { return false } })
+  const [sending, setSending] = useState(false)
+  const doIt = (): void => {
+    setSending(true)
+    window.dispatchEvent(new CustomEvent('sahilbot:send-text', { detail: { text: idea, threadId, done: (ok: boolean) => {
+      setSending(false)
+      if (ok) { setSent(true); try { localStorage.setItem(IDEA_SENT + id, '1') } catch { /* not remembered */ } }
+    } } }))
+  }
+  return (
+    <div className={`idea-card${outside ? ' outside' : ''}`} data-testid="idea-card">
+      <div className="idea-head"><span className="idea-mark" aria-hidden>✦</span> Idea from SahilBot<span className="idea-who">not written by you</span></div>
+      <div className="idea-text">{idea}</div>
+      {why && <div className="idea-why">{why}</div>}
+      {outside && <div className="idea-why">This task read outside content (a web page, an email or a file), so check the idea before you send it.</div>}
+      <div className="idea-actions">
+        {!outside && <button className="btn primary" disabled={sent || sending || busy} title={busy ? 'When this task finishes' : undefined} onClick={doIt} data-testid="idea-do">{sent ? 'Sent' : sending ? 'Sending…' : 'Do it'}</button>}
+        <button className={`btn${outside ? ' primary' : ''}`} disabled={sent} onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:compose', { detail: idea }))} title="Put it in the message box to read or change it first" data-testid="idea-edit">{outside ? 'Put in message box' : 'Edit first'}</button>
+      </div>
     </div>
   )
 }
@@ -547,8 +585,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   )
 }
 
-const atOf = (x: Block): number => (x.kind === 'activity' ? x.steps[0].at : x.kind === 'qa' || x.kind === 'plan' || x.kind === 'team' || x.kind === 'heavy' ? x.at : x.m.createdAt)
-const blockKey = (b: Block): string => (b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.kind === 'heavy' ? `h-${b.id}` : b.m.id)
+const atOf = (x: Block): number => (x.kind === 'activity' ? x.steps[0].at : x.kind === 'qa' || x.kind === 'plan' || x.kind === 'team' || x.kind === 'heavy' || x.kind === 'idea' ? x.at : x.m.createdAt)
+const blockKey = (b: Block): string => (b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.kind === 'heavy' ? `h-${b.id}` : b.kind === 'idea' ? `i-${b.id}` : b.m.id)
 
 type BlockProps = {
   b: Block
@@ -575,7 +613,7 @@ function quietVisible(b: Block, docs: boolean): boolean {
     case 'notice': return !internalNotice(b.m)
     case 'activity': return hasQuietContent(b.steps, docs)
     case 'text': return !!(b.m.content || b.m.status === 'error' || b.m.status === 'stopped')
-    case 'user': case 'qa': case 'team': case 'heavy': return true
+    case 'user': case 'qa': case 'team': case 'heavy': case 'idea': return true
     default: { const never: never = b; return never }
   }
 }
@@ -639,6 +677,8 @@ export function sameBlock(a: Block, b: Block): boolean {
       return b.kind === 'team' && a.id === b.id && a.final === b.final && a.summary === b.summary && a.titles.join('\n') === b.titles.join('\n')
     case 'heavy':
       return b.kind === 'heavy' && a.id === b.id && a.groupId === b.groupId && a.board === b.board && a.at === b.at
+    case 'idea':
+      return b.kind === 'idea' && a.id === b.id && a.idea === b.idea && a.outside === b.outside
   }
 }
 
@@ -657,6 +697,8 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
         <HeavyCard board={b.board} groupId={b.groupId} live={running} />
       ) : b.kind === 'plan' ? (
         <PlanCard items={b.items} live={planLive} title={b.title} />
+      ) : b.kind === 'idea' ? (
+        <IdeaCard id={b.id} idea={b.idea} why={b.why} outside={b.outside} threadId={b.threadId} busy={running} />
       ) : b.kind === 'activity' && !dev ? (
         <QuietActivity steps={b.steps} actions={actions} hasDocs={hasDocs} />
       ) : b.kind === 'activity' ? (
@@ -789,7 +831,7 @@ function StepDetail({ s, onOpenFile }: { s: Step; onOpenFile: (p: string) => voi
 const QUICK = ['👍', '😄', '👎', '❤️', '🤐']
 const MORE = ['🔥', '🎉', '🙏', '👀', '🤔', '😂', '😮', '💯', '✅', '🚀', '😢', '👏']
 
-function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' } | { kind: 'heavy' }>; actions: ThreadActions; editable?: boolean; cont?: boolean; dev?: boolean; retry?: boolean }) {
+function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { kind: 'activity' } | { kind: 'qa' } | { kind: 'plan' } | { kind: 'team' } | { kind: 'heavy' } | { kind: 'idea' }>; actions: ThreadActions; editable?: boolean; cont?: boolean; dev?: boolean; retry?: boolean }) {
   const m = b.m
   const [editing, setEditing] = useState<string | null>(null)
   // ↑ in an empty message box opens this editor on your last message.

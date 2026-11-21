@@ -43,6 +43,8 @@ const api: SahilBotApi = {
     setEnabled: call('privacy:setEnabled') as never,
     remove: call('privacy:remove') as never,
     selfTest: call('privacy:selfTest') as never,
+    setMode: call('privacy:setMode') as never,
+    forgetNotPersonal: call('privacy:forgetNotPersonal') as never,
     onInstall: (cb) => {
       const h = (_e: unknown, ev: import('@shared/privacy').PrivacyInstallEvent): void => cb(ev)
       ipcRenderer.on('privacy:install', h)

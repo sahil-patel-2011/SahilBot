@@ -178,7 +178,12 @@ export interface Settings {
    * with 32 GB memory and 50 GB free disk. Then the Privacy Gate (PII-Tracer on this Mac) checks every cloud
    * request in chats that have local and cloud models.
    */
-  hybridCompute?: { enabled: boolean }
+  /**
+   * Hybrid compute and the Privacy Gate. mode: 'ask' pauses on a card (default); 'auto' protects on its own
+   * (stand-ins for the cloud, the Mac keeps the details) and says so. (Details the user said aren't personal are
+   * kept by main under their own key, never in Settings, which windows and a paired phone can read.)
+   */
+  hybridCompute?: { enabled: boolean; mode?: 'ask' | 'auto' }
   /** A Cursor API key is saved: Cursor is connected (Cloud Agents). */
   hasCursorKey: boolean
   /** Also run Cursor's agent through its CLI on this Mac (off by default: Cursor connects by API key, for Cloud Agents). */

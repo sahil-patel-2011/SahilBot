@@ -1070,6 +1070,20 @@ function HybridComputeSettings() {
           {st?.installed && !busy && !st.enabled && <button className="btn" onClick={() => void api.privacy.remove().then(setSt)} data-testid="privacy-gate-remove">Remove download</button>}
         </Row>
         {test && !test.running && <div className={`hint${test.error ? ' ui-text-danger' : ''}`} style={{ margin: '0 0 10px' }} data-testid="privacy-gate-test-result">{test.error ?? test.text}</div>}
+        {st?.enabled && st.installed && (
+          <Row title="When it finds personal details" sub={st.mode === 'auto'
+            ? 'Protect automatically: cloud models get stand-ins like [PERSON_1] (a personal record like a bank statement moves to the model on your Mac), the chat carries on, and a note says what was protected.'
+            : 'Ask me: the chat pauses on a card so you choose for each new detail.'} testId="privacy-gate-mode">
+            <Segmented value={st.mode} options={[{ id: 'ask', label: 'Ask me' }, { id: 'auto', label: 'Protect automatically' }]} onChange={(m) => void api.privacy.setMode(m).then(setSt).catch((e) => toast(clean(e), 'error'))} label="When it finds personal details" testIdPrefix="privacy-mode" />
+          </Row>
+        )}
+        {st?.enabled && st.installed && (
+          <Row title="Today" sub={st.today.requests
+            ? `Checked ${st.today.checked.toLocaleString()} new part${st.today.checked === 1 ? '' : 's'} of conversations in ${st.today.requests.toLocaleString()} check${st.today.requests === 1 ? '' : 's'} on this Mac · asked you ${st.today.asked} time${st.today.asked === 1 ? '' : 's'} · protected ${st.today.protected} automatically · ${st.today.cleared} cleared as not personal (by you before, or the model on your Mac)${st.today.errors ? ` · ${st.today.errors} check${st.today.errors === 1 ? '' : 's'} failed (nothing unchecked was sent)` : ''}`
+            : 'Nothing checked yet today.'} testId="privacy-gate-today">
+            {st.remembered > 0 && <button className="btn" onClick={() => void api.privacy.forgetNotPersonal().then(setSt)} title="Details you marked as not personal are shared without asking in every chat" data-testid="privacy-forget">Forget {st.remembered} “not personal”</button>}
+          </Row>
+        )}
         {busy && progress?.phase === 'download' && <div className="meter" style={{ margin: '0 0 8px' }}><i style={{ width: `${progress.pct ?? 0}%` }} /></div>}
       </div>
     </Section>

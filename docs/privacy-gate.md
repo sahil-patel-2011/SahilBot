@@ -1,5 +1,7 @@
 # Hybrid compute and the Privacy Gate
 
+Generally available since 26.11.21.
+
 Hybrid compute lets a chat use cloud models for planning, research and reasoning while personal details stay on the Mac. It follows the design of Perplexity's hybrid compute on Mac ([announcement](https://www.perplexity.ai/hub/blog/introducing-hybrid-compute-on-mac), [PII-TRACE](https://www.perplexity.ai/hub/blog/pii-trace-detecting-personal-data-before-it-leaves-the-device)).
 
 ## Turning it on
@@ -23,6 +25,17 @@ When it finds something new, the chat pauses on a card. **View items** lists eac
 2. **Split: cloud plans, Mac keeps the details**: the cloud model sees stand-ins like `[PERSON_1]` and `[EMAIL_1]`, and a note in place of any flagged document. It can ask the local model about them with the `ask_on_mac` tool. Whatever it writes, including tool calls, gets the real values back on this Mac before it runs or is shown.
 3. **Share anyway**: sends the content as it is. Passwords, keys, card, account and ID numbers stay masked unless unticked.
 4. **Skip content** (Esc): the message or tool result is withheld from cloud models.
+
+**When it finds personal details** (Settings → Hybrid compute) is either:
+
+- **Ask me** (the default): the card above.
+- **Protect automatically**: the gate makes the safe choice without pausing. Cloud models get stand-ins. A personal record, such as a bank statement, moves to the model on the Mac when there is one. A note in the chat says what was protected.
+
+**Not personal, everywhere.** A detail you untick on the card is remembered for every chat and never asked about again. Passwords, keys and account numbers are never remembered this way. **Forget** in Settings clears the list.
+
+**Today.** Settings shows what the gate did today: the requests and parts checked, how often it asked, what it protected automatically, what the local model cleared as not personal, and any failed checks.
+
+**Self-test.** After the download, PII-Tracer checks a made-up sample. **Test** runs the check again any time. If its server crashes mid-check (for example after sleep), it restarts and checks once more. If the check still fails, nothing unchecked is sent.
 
 **Don't ask again for this chat** applies the same choice to later finds in the chat. Every choice is remembered per detail, so each one is asked about once per chat. With every choice except Share anyway, cloud models see stand-ins for those details from then on.
 

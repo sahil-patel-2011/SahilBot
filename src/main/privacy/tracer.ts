@@ -280,7 +280,7 @@ export class PiiTracer {
   installingNow(): boolean { return !!this.installing }
 
   /** Starts the server in the background (the first check then doesn't wait for the model to load). */
-  warm(): void { if (this.installed() && !this.installing) void this.ensure().catch(() => undefined) }
+  warm(): void { this.halted = false; if (this.installed() && !this.installing) void this.ensure().catch(() => undefined) }
 
   /** Downloads llama-server and the model (about 1.2 GB), each checked against its pinned SHA-256. */
   install(emit: (e: PrivacyInstallEvent) => void, signal?: AbortSignal): Promise<void> {
@@ -335,6 +335,10 @@ export class PiiTracer {
     this.proc = undefined
     this.starting = undefined
   }
+
+  /** Switched off (or removed): stop, and don't come back by a retry until warmed again. */
+  private halted = false
+  halt(): void { this.halted = true; this.stop() }
 
   private loadHeads(): NonNullable<PiiTracer['heads']> {
     if (this.heads) return this.heads
@@ -402,6 +406,18 @@ export class PiiTracer {
   }
 
   private async detectNow(text: string, signal?: AbortSignal): Promise<Detection> {
+    const proc = this.proc
+    try { return await this.detectOnce(text, signal) } catch (e) {
+      // The server died on its own mid-check (a crash, the Mac woke from sleep): start it again and check once
+      // more. Not after the gate was switched off, and not for a slow answer (the server is still running).
+      const died = !!proc && (proc.exitCode !== null || proc.killed) && this.proc !== proc
+      if (signal?.aborted || this.halted || !died || !/ECONNREFUSED|ECONNRESET|fetch failed|socket|stopped|terminated/i.test(String((e as Error)?.message ?? e))) throw e
+      this.stop()
+      return this.detectOnce(text, signal)
+    }
+  }
+
+  private async detectOnce(text: string, signal?: AbortSignal): Promise<Detection> {
     if (!text.trim()) return { spans: [], sensitivity: 0 }
     await this.ensure()
     const heads = this.loadHeads()
