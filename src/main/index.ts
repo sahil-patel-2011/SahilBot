@@ -111,7 +111,7 @@ import { BrowserManager } from './browser/manager'
 import { Vault } from './vault'
 import { VaultAuth } from './secure/auth'
 import { vaultHandlers } from './secure/ipc'
-import { SaveOffers } from './secure/offers'
+import { SaveOffers, savesWithoutAsking } from './secure/offers'
 import { findSecrets, redactFound, replacePlaceholder, savedPlaceholder } from './secure/detect'
 import { electronTouchId, electronVaultFiles, protectSender, registerVaultIpc, startAutoLock } from './secure/electron'
 import { PurchaseGate } from './browser/checkout'
@@ -621,7 +621,28 @@ app.whenReady().then(() => {
    * become [redacted] (secure/detect.ts) and get a "Save to Vault?" card next to the message.
    */
   const guardUserText = (threadId: string, text: string): { text: string; offers: import('@shared/types').VaultSaveOffer[] } => {
-    try { return saveOffers.scanChat(String(text ?? ''), threadId) } catch { return { text: String(text ?? ''), offers: [] } }
+    let out: { text: string; offers: import('@shared/types').VaultSaveOffer[] }
+    try { out = saveOffers.scanChat(String(text ?? ''), threadId) } catch { return { text: String(text ?? ''), offers: [] } }
+    if (out.offers.length && settings.get().advanced.autoSaveSecrets !== false) autoSaveOffers(threadId, out.offers)
+    return out
+  }
+  /**
+   * A password, API key or card pasted into the chat is saved to the vault by itself (Touch ID or the master
+   * password unlocks it if needed): the message then shows [saved to vault: name], and the model can use it
+   * through the vault without ever seeing the value. Offers that still need an answer (which site a password
+   * is for) keep their "Save to Vault?" card. Settings → Advanced → autoSaveSecrets: false turns this off.
+   */
+  const autoSaveOffers = (threadId: string, offers: import('@shared/types').VaultSaveOffer[]): void => {
+    // After the message is stored, so the saved name lands on it.
+    setTimeout(() => void (async () => {
+      for (const o of offers.filter(savesWithoutAsking)) {
+        try {
+          const r = await saveOffers.save(o.id)
+          const m = [...db.listMessages(threadId)].reverse().find((x) => x.role === 'user' && Array.isArray(x.meta?.vaultOffers) && (x.meta!.vaultOffers as Array<{ id: string }>).some((v) => v.id === o.id))
+          offerOnMessage({ id: o.id, status: 'saved', name: r.name, ...(m ? { messageId: m.id } : {}) })
+        } catch { /* locked and not unlocked, or already handled: the card stays */ }
+      }
+    })(), 400)
   }
   /** Offers for a message sent another way (steer, edit): attached to the newest user message with that text. */
   const attachOffers = (threadId: string, text: string, offers: import('@shared/types').VaultSaveOffer[]): void => {

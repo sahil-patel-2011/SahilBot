@@ -235,6 +235,8 @@ export interface Settings {
   workspaceDir: string
   search: { provider: 'auto' | 'none' | 'brave' | 'searxng' | 'duckduckgo'; searxngUrl: string; hasBraveKey: boolean }
   advanced: {
+    /** A password, API key or card pasted into a chat is saved to the vault by itself (default on). */
+    autoSaveSecrets?: boolean
     hardStopsEnabled: boolean
     /** Offer Bypass (Full access) in the composer's autonomy picker (default off). */
     allowBypass?: boolean

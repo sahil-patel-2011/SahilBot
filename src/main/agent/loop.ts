@@ -3734,6 +3734,32 @@ export class Agent {
       workspaceDir: state.workerFolder ?? s.workspaceDir,
       docsDir: this.d.docsDir,
       state,
+      waitForUser: async (question, done, o = {}) => {
+        const every = Math.max(1000, o.everyMs ?? 2000)
+        const until = Date.now() + (o.timeoutMs ?? 10 * 60_000)
+        const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+        // Nobody to answer (a schedule, a helper): just watch the page for a while.
+        if (run.unattended) {
+          while (Date.now() < until && !run.ctrl.signal.aborted) { if (await done().catch(() => false)) return 'done'; await sleep(every) }
+          return 'timeout'
+        }
+        const before = new Set(run.pending.keys())
+        const answered = this.ask(thread.id, run, { kind: 'question', question, options: o.options ?? ['Done', 'Skip'] })
+        const id = [...run.pending.keys()].find((k) => !before.has(k))
+        let finished: string | undefined
+        void answered.then((a) => { finished ??= a })
+        while (!finished && Date.now() < until && !run.ctrl.signal.aborted) {
+          if (await done().catch(() => false)) {
+            // Done on the page: the card closes by itself, nobody has to say "go".
+            if (id && run.pending.has(id)) this.respond(thread.id, id, 'Done')
+            return 'done'
+          }
+          await sleep(every)
+        }
+        if (finished) return finished
+        if (id && run.pending.has(id)) this.respond(thread.id, id, 'timeout')
+        return 'timeout'
+      },
       askUser: run.unattended
         ? async () => '(Nobody can answer right now. Use your best judgment, state the assumption you made, and continue.)'
         : async (question, options) => {
