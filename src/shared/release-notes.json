@@ -4,6 +4,7 @@
     "date": "2026-11-21",
     "title": "A sharper agent loop, chart slides, and project instructions",
     "highlights": [
+      "Use your bots from your iPhone through an always-on server, and let the server use your Mac's files, Messages and apps",
       "The agent tries another way when a tool fails, instead of giving up",
       "It never re-sends something whose first send may have gone through, and it won't claim it did something it didn't",
       "Slides can hold charts that export to PowerPoint as real, editable charts",
@@ -11,6 +12,17 @@
       "The Privacy Gate is out of beta: it can protect details automatically and remembers what you said isn't personal"
     ],
     "sections": [
+      {
+        "title": "Your iPhone, a server and your Mac",
+        "items": [
+          "Run your bots around the clock on a small cloud server (DigitalOcean's 4 GB Droplet is about $24 a month) and use them from your iPhone as a Home Screen app",
+          "The server can use your Mac. At first it can only find and read your files. You can turn on Terminal, Messages, Mail, Notes, Calendar, the browser and the screen. Anything that changes something asks you first",
+          "Only the Mac you linked can take work from the server. Your Mac limits how fast the server can act and logs what it did",
+          "Your Mac connects out to the server, so nothing on your Mac is opened to the internet",
+          "Keep this Mac awake: while it's plugged in, your phone can always reach it (the display still turns off)",
+          "Setup steps are in the server guide (docs/server.md)"
+        ]
+      },
       {
         "title": "Agent loop",
         "items": [
@@ -23,7 +35,8 @@
           "If you set a limit (\"under $200\"), what the agent picks is checked against it, and it fixes a choice that's over",
           "It reads every page of a paged result before answering, instead of stopping at page 1",
           "A write that fails outright (bad input, no permission) no longer counts as \"may have happened\", so a corrected retry goes straight through",
-          "When the agent sees a better way or the obvious next step, it offers it as an idea card with \"Do it\". It never starts the idea on its own"
+          "When the agent sees a better way or the obvious next step, it offers it as an idea card with \"Do it\". It never starts the idea on its own",
+          "It won't say \"I can't access that\" without trying the tools it has, and after a second failure it lists other ways and tries the best one"
         ]
       },
       {
@@ -43,6 +56,12 @@
           "Anything you mark \"not personal\" is remembered for every chat (never passwords, keys or account numbers), and Forget clears the list",
           "See what the gate did today: requests checked, times it asked, details protected, and finds the model on your Mac cleared",
           "PII-Tracer tests itself after the download, and restarts on its own if it stops mid-check"
+        ]
+      },
+      {
+        "title": "Simpler Settings",
+        "items": [
+          "Five main pages up front (General, Models, Connected apps, Privacy, Phone & server), with everything else under More settings. Search still finds every setting"
         ]
       }
     ]

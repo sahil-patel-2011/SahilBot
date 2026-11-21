@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, shell, systemPreferences } from 'electron'
 import { autoPool, autoVariant } from './llm/router'
 import { execFileSync } from 'node:child_process'
-import { homedir, tmpdir, totalmem, userInfo } from 'node:os'
+import { homedir, hostname, tmpdir, totalmem, userInfo } from 'node:os'
 import { statfsSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { homeIdeas } from './ideas'
@@ -44,6 +44,8 @@ import { Agent } from './agent/loop'
 import { ToolRegistry } from './agent/registry'
 import { browserTool } from './agent/tools/browser'
 import { workerBrowserTool } from './agent/tools/worker-browser'
+import { DEFAULT_MAC_TOOLS, MAC_TOOLS, MacLinkClient, MacLinkHub, macEffect, macTool } from './mac-link'
+import { linkedServerCall } from './remote-server'
 import { sitesTool } from './agent/tools/sites'
 import { SiteStore } from './sites/store'
 import { setSiteHintProvider } from './sites/hint'
@@ -131,7 +133,7 @@ import { findOllamaBinary, setupOllama, startOllama, stopOllama } from './ollama
 import { needsYouBody } from './needs-you'
 import { MenuBarIcon, type TrayItem } from './tray'
 import { KeepAwake, RESUME_NEXT_NOTE, RESUME_NOTE, WorkTracker, wantAwake } from './resume'
-import { LidAwake } from './lid-awake'
+import { LidAwake, LOW_BATTERY, parseBattery, run as runPmset } from './lid-awake'
 import type { MenuAction } from './shell'
 import { getWatchlist, setWatchlist } from './watchlist'
 import { MarketData } from './markets/data'
@@ -3102,6 +3104,101 @@ app.whenReady().then(() => {
   registerProtocolClient(HIDDEN)
   // Settings → Always-on server: this Mac's link to a SahilBot Server (src/main/remote-server.ts).
   setupRemoteServer({ db, secrets, openExternal: (u) => { if (/^https?:\/\//.test(u)) void shell.openExternal(u) } })
+  // The Mac link (src/main/mac-link.ts). On the server: the job hub and the agent's `mac` tool. On the Mac: the
+  // poller, the tools it allows, and keeping the Mac awake while linked (on power).
+  if (isServer()) {
+    // Bound to the one Mac that links (kept across restarts).
+    const hub = new MacLinkHub({ bound: { get: () => db.getSetting<string>('macLink:device'), set: (id) => db.setSetting('macLink:device', id) } })
+    registry.register(macTool(hub))
+    registerHandler('macLink:request', (ctx, action, body) => {
+      if (ctx.transport !== 'mac') throw new Error('Use the paired Mac app connection.')
+      if (action === 'poll') return hub.poll((body ?? {}) as { name?: string; tools?: string[] }, ctx.deviceId).then((jobs) => ({ jobs }))
+      if (action === 'result') return { ok: hub.result(body as never, ctx.deviceId) }
+      if (action === 'dropPoll') { hub.dropPoll(); return { ok: true } }
+      throw new Error('Unknown Mac link action.')
+    })
+    registerHandler('macLink:status', () => ({ server: true, ...hub.status() }))
+  } else {
+    type MacLinkPrefs = { allow: boolean; tools: string[]; keepAwake: boolean }
+    const prefs = (): MacLinkPrefs => ({ allow: false, tools: DEFAULT_MAC_TOOLS, keepAwake: false, ...(db.getSetting<Partial<MacLinkPrefs>>('macLink') ?? {}) })
+    let linkState: { connected: boolean; error?: string } = { connected: false }
+    let blocker: number | undefined
+    const awake = async (): Promise<void> => {
+      // Awake while linked, allowed and plugged in (or above 20% on battery); the display can still sleep.
+      const want = prefs().allow && prefs().keepAwake && client.running() && linkState.connected
+      let power = { onBattery: false, percent: null as number | null }
+      try { power = parseBattery((await runPmset('/usr/bin/pmset', ['-g', 'batt'])).out) } catch { /* unknown: assume power */ }
+      const ok = want && (!power.onBattery || (power.percent ?? 100) > LOW_BATTERY)
+      if (ok && blocker === undefined) blocker = powerSaveBlocker.start('prevent-app-suspension')
+      if (!ok && blocker !== undefined) { powerSaveBlocker.stop(blocker); blocker = undefined }
+    }
+    const client = new MacLinkClient({
+      call: async (path, body, timeoutMs) => {
+        const call = linkedServerCall({ db, secrets })
+        if (!call) throw new Error('This Mac isn\'t linked to a server.')
+        return call(path, body, timeoutMs)
+      },
+      allowed: () => prefs().tools.filter((t) => t in MAC_TOOLS && (t === 'find_files' || !!registry.get(t))),
+      name: () => hostname().replace(/\.local$/, ''),
+      onStatus: (s) => { linkState = s },
+      exec: async (job) => {
+        // find_files: Spotlight by name in the home folder (read-only, no shell).
+        if (job.tool === 'find_files') {
+          const q = String(job.args.query ?? job.args.name ?? '').trim().slice(0, 200)
+          if (!q) throw new Error('Say what file to find.')
+          const out = await new Promise<string>((resolve, reject) => execFile('/usr/bin/mdfind', ['-onlyin', homedir(), '-name', q], { timeout: 20_000, maxBuffer: 4_000_000 }, (e, so) => (e && !so ? reject(e) : resolve(so))))
+          const hits = out.split('\n').filter((l) => l && !/\/(\.Trash|Library\/(Caches|Containers|Group Containers|Application Support\/SahilBot))\//.test(l)).slice(0, 50)
+          return { text: hits.length ? `Found ${hits.length} file${hits.length === 1 ? '' : 's'} named like "${q}":\n${hits.join('\n')}` : `No files named like "${q}" in the home folder.`, display: `found ${hits.length} file${hits.length === 1 ? '' : 's'}` }
+        }
+        const tool = registry.get(job.tool)
+        if (!tool) throw new Error(`This Mac has no ${job.tool} tool.`)
+        // This Mac's own hard stops (deleting, outside the home folder, protected places) need an OK on the Mac
+        // itself: the server can't give it.
+        const stop = tool.hardStop?.(job.args as never, { roots: [homedir()], folder: homedir() })
+        if (stop) throw new Error(`This Mac asks for your OK right here for this (${typeof stop === 'string' ? stop : 'a protected action'}), so it wasn't done from the server.`)
+        // No background jobs from the server: nothing outlives the call.
+        if (job.tool === 'run_command' && 'background' in job.args) delete (job.args as { background?: unknown }).background
+        const state = db.getState('mac-link')
+        state.folder = homedir()
+        state.roots = [homedir()]
+        const ctx = {
+          threadId: 'mac-link', signal: AbortSignal.timeout(280_000), workspaceDir: settings.get().workspaceDir, docsDir, state,
+          askUser: async () => { throw new Error('The Mac can\'t ask here: the server already asked the user. Decide from what you have.') },
+          loadTools: () => [], searchTools: () => [], readResult: () => undefined, roots: [homedir()], folder: homedir()
+        }
+        // Every change the server makes on this Mac is logged and announced here (reads are only logged).
+        const effect = macEffect(job.tool, job.args)
+        const action = typeof job.args.action === 'string' ? job.args.action : ''
+        const what = `${job.tool.replace(/_/g, ' ')}${action ? ` · ${action}` : ''}`
+        const log = (ok: boolean, note: string): void => {
+          const entries = db.getSetting<Array<{ at: number; what: string; effect: string; ok: boolean; note: string }>>('macLink:log') ?? []
+          db.setSetting('macLink:log', [...entries, { at: Date.now(), what, effect, ok, note: note.slice(0, 160) }].slice(-100))
+        }
+        if (effect !== 'read' && Notification.isSupported()) new Notification({ title: 'Your server used this Mac', body: what, silent: true }).show()
+        try {
+          const out = await tool.run(job.args as never, ctx as never)
+          log(true, out.display ?? '')
+          return { text: out.text ?? '', display: out.display }
+        } catch (e) { log(false, (e as Error).message); throw e }
+      }
+    })
+    const sync = (): void => { if (prefs().allow && linkedServerCall({ db, secrets })) client.start(); else client.stop(); void awake() }
+    app.on('will-quit', () => { client.stop(); if (blocker !== undefined) { powerSaveBlocker.stop(blocker); blocker = undefined } })
+    sync()
+    setInterval(() => { sync() }, 120_000).unref?.()
+    registerHandler('macLink:status', () => ({ server: false, linked: !!linkedServerCall({ db, secrets }), ...prefs(), connected: client.running() && linkState.connected, error: linkState.error, awake: blocker !== undefined, available: Object.entries(MAC_TOOLS).map(([id, t]) => ({ id, what: t.what })), log: (db.getSetting<Array<{ at: number; what: string; effect: string; ok: boolean; note: string }>>('macLink:log') ?? []).slice(-20).reverse() }))
+    registerHandler('macLink:set', (_ctx, patch) => {
+      const p = (patch ?? {}) as Partial<MacLinkPrefs>
+      const cur = prefs()
+      db.setSetting('macLink', {
+        allow: typeof p.allow === 'boolean' ? p.allow : cur.allow,
+        keepAwake: typeof p.keepAwake === 'boolean' ? p.keepAwake : cur.keepAwake,
+        tools: Array.isArray(p.tools) ? p.tools.filter((t) => typeof t === 'string' && t in MAC_TOOLS) : cur.tools
+      })
+      sync()
+      return { ok: true }
+    })
+  }
   const workerPlacement = {
     db,
     isBusy: (id: string) => chat.busyInSpace(id) || jobs.running().some((job) => db.getThread(job.threadId)?.spaceId === id),

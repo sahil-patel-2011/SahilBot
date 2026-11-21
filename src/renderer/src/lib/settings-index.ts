@@ -39,7 +39,7 @@ export interface SettingEntry {
 
 export const PAGE_TITLES: Record<SettingsPage, string> = {
   general: 'General', models: 'Models & Keys', connected: 'Connected apps', permissions: 'Permissions', memory: 'Memory', voice: 'Voice',
-  privacy: 'Privacy & Security', usage: 'Usage', server: 'Always-on server', advanced: 'Advanced'
+  privacy: 'Privacy & Security', usage: 'Usage', server: 'Phone & server', advanced: 'Advanced'
 }
 
 export const SETTINGS_INDEX: SettingEntry[] = [
@@ -125,7 +125,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   // Usage, server
   { anchor: 'usage', page: 'usage', title: 'Usage', words: 'usage spend cost tokens requests bots csv export history' },
   { anchor: 'phone-access', page: 'general', title: 'Phone access', words: 'phone iphone android mobile ipad qr code pair pairing wifi home network tailscale away notifications push remote', macOnly: true },
-  { anchor: 'server', page: 'server', title: 'Always-on server', words: 'server raspberry pi always on remote phone devices pairing tailscale' },
+  { anchor: 'server', page: 'server', title: 'Phone & server', words: 'server raspberry pi vps digitalocean always on remote phone iphone devices pairing tailscale mac link use this mac keep awake wake' },
   { anchor: 'worker-machines', page: 'server', title: 'Worker machines', words: 'worker fleet bot placement move assign raspberry pi vm linux container slots', macOnly: true },
 
   // Advanced

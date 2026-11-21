@@ -2,7 +2,7 @@ import { chmodSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { ElectronApplication, Page } from 'playwright'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
-import { launch, tempProfile } from './app'
+import { launch, tempProfile, expandMoreSettings } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 import { startFakeServer } from '../fixtures/fake-oauth-mcp'
 
@@ -107,6 +107,7 @@ const idle = async (page: Page): Promise<void> => {
 async function everySettingsPage(page: Page): Promise<string[]> {
   await page.keyboard.press('Meta+,')
   await page.locator('[data-testid="settings"]').waitFor()
+  await expandMoreSettings(page)
   const ids = await page.locator('.set-nav .set-nav-item').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid') ?? ''))
   expect(ids.length).toBeGreaterThan(8)
   for (const id of ids) {

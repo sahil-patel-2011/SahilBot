@@ -202,7 +202,7 @@ const URL_READS: Record<string, (args: any) => string | undefined> = {
 }
 
 /** Tools whose every call is checked for taint, whatever its effect: a terminal command can do anything. */
-export const ALWAYS_TAINT_CHECKED = new Set(['run_command'])
+export const ALWAYS_TAINT_CHECKED = new Set(['run_command', 'mac'])
 
 /** Whether a call's arguments were steered by fetched content, for decide()'s `tainted`. */
 export function checkTaint(tool: string, effect: string, args: unknown, untrusted: string[], userText: string): boolean {

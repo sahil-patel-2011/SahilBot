@@ -29,6 +29,8 @@ export interface HarnessFeatures {
   giveUpNudge: boolean
   /** A write whose result was uncertain (a timeout) isn't repeated, nor offered to the user to approve again, until the state is checked. */
   noBlindRepeat: boolean
+  /** "I don't have access to your files" with no attempt at all: it's sent to try the tools it has first. */
+  cantNudge: boolean
   /** A limit the user stated ("under $200") is checked against what the agent chose. */
   constraintCheck: boolean
   /** An answer given from page 1 of a paged result is sent back for the rest. */
@@ -37,7 +39,7 @@ export interface HarnessFeatures {
 
 export const ALL_FEATURES: HarnessFeatures = {
   announceNudge: true, continueNudge: true, falseClaimNudge: true, pollingGuard: true, pendingPollNudge: true,
-  testsAtEnd: true, testsAfterEdit: true, waitForUser: true, toolRetry: true, planReminders: true, giveUpNudge: true, noBlindRepeat: true, constraintCheck: true, paginationCheck: true
+  testsAtEnd: true, testsAfterEdit: true, waitForUser: true, toolRetry: true, planReminders: true, giveUpNudge: true, noBlindRepeat: true, cantNudge: true, constraintCheck: true, paginationCheck: true
 }
 
 const NONE: HarnessFeatures = Object.fromEntries(Object.keys(ALL_FEATURES).map((k) => [k, false])) as unknown as HarnessFeatures
@@ -132,4 +134,14 @@ export function morePages(toolText: string): string | undefined {
   if (cursor) return cursor[0]
   const more = /\b(has_more|hasMore|more_results)["']?\s*[:=]\s*true\b|\bmore results (are )?available\b/i.exec(t)
   return more?.[0]
+}
+
+/**
+ * "I don't have access to your Mac", "I can't browse the web", "I'm not able to open that file": a claim it
+ * can't, about access or ability, not a refusal on safety grounds ("I can't help with that" is left alone).
+ */
+export function claimsCant(text: string): boolean {
+  const t = (text ?? '').trim()
+  if (!t || t.length > 2500) return false
+  return /\b(i (don'?t|do not) have (the )?(ability|access|a way|permission|tools?)|i\s?(can'?t|cannot|am not able to|'m not able to|am unable to|'m unable to) (access|browse|open|see|view|read|reach|control|run|check|look at|search|get into|log ?in|send|use)|i have no (way|access|ability)|(beyond|outside) (my|of my) (capabilities|abilities|reach)|as an ai,? i (can'?t|cannot|don'?t))\b/i.test(t)
 }

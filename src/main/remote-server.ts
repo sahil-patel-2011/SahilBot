@@ -53,7 +53,7 @@ function pinnedAgent(socket: TLSSocket): HttpsAgent {
   return a
 }
 
-export async function callServer(base: string, path: string, o: { method?: string; token?: string; body?: unknown; pin?: string; trustOnFirstUse?: boolean } = {}): Promise<Reply> {
+export async function callServer(base: string, path: string, o: { method?: string; token?: string; body?: unknown; pin?: string; trustOnFirstUse?: boolean; timeoutMs?: number } = {}): Promise<Reply> {
   const u = new URL(path, base)
   const body = o.body === undefined ? undefined : JSON.stringify(o.body)
   const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': 'SahilBot-Mac' }
@@ -61,7 +61,7 @@ export async function callServer(base: string, path: string, o: { method?: strin
   if (o.token) headers.Authorization = `Bearer ${o.token}`
   const socket = u.protocol === 'https:' && o.pin ? await pinnedSocket(u, o.pin) : undefined
   return new Promise<Reply>((ok, fail) => {
-    const opts = { method: o.method ?? 'GET', headers, timeout: 15_000, ...(socket ? { agent: pinnedAgent(socket) } : {}), ...(o.trustOnFirstUse ? { rejectUnauthorized: false } : {}) }
+    const opts = { method: o.method ?? 'GET', headers, timeout: o.timeoutMs ?? 15_000, ...(socket ? { agent: pinnedAgent(socket) } : {}), ...(o.trustOnFirstUse ? { rejectUnauthorized: false } : {}) }
     const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, opts, (res: IncomingMessage) => {
       // Read while the connection is still open (it may be gone by the end of the body).
       const fingerprint = (res.socket as TLSSocket | undefined)?.getPeerCertificate?.()?.fingerprint256
@@ -84,6 +84,14 @@ export async function callServer(base: string, path: string, o: { method?: strin
     if (body) req.write(body)
     req.end()
   })
+}
+
+/** A signed-in call to the linked server (the Mac link uses it), or undefined when this Mac isn't linked. */
+export function linkedServerCall(d: { db: Db; secrets: Secrets }): ((path: string, body: unknown, timeoutMs: number) => Promise<Reply>) | undefined {
+  const s = d.db.getSetting<Saved>(KEY) ?? undefined
+  const t = d.secrets.get(TOKEN)
+  if (!s || !t) return undefined
+  return (path, body, timeoutMs) => callServer(s.url, path, { method: 'POST', token: t, pin: s.pinned, body, timeoutMs })
 }
 
 export function setupRemoteServer(d: { db: Db; secrets: Secrets; openExternal: (url: string) => void }): void {

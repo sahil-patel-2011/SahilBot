@@ -49,6 +49,8 @@ const PAGES: Array<{ id: Page; icon: ReactNode; color: string }> = [
   { id: 'server', icon: <I.Globe size={14} />, color: '#1f8a5b' },
   { id: 'advanced', icon: <I.Sliders size={14} />, color: '#af52de' }
 ]
+/** The pages shown up front; the others sit under "More settings". */
+const MAIN_PAGES = new Set<Page>(['general', 'models', 'connected', 'privacy', 'server'])
 /** A phone using the Mac (Phone access) sees its own page where SahilBot Server's browsers see the server's. */
 const onPhone = isServerRuntime && api?.serverHost === 'mac'
 const pageTitle = (id: Page): string => (id === 'server' && isServerRuntime ? (onPhone ? 'This phone' : 'Server') : PAGE_TITLES[id])
@@ -192,6 +194,7 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   const [jump, setJump] = useState<string | null>(anchored?.anchor ?? null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const pages = PAGES.filter((x) => !isServerRuntime || x.id !== 'voice')
+  const [more, setMore] = useState(() => { try { return localStorage.getItem('sahilbot:settings-more') === '1' } catch { return false } })
   const results = useMemo(() => searchSettings(find, { server: isServerRuntime }), [find])
   const [s, setS] = useState(settings)
   useEffect(() => setS(settings), [settings])
@@ -257,9 +260,16 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
                 </button>
               ))}
             </div>
-          ) : pages.map((p) => (
-            <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{pageTitle(p.id)}</button>
-          ))}
+          ) : <>
+            {/* Simple first: the five pages most people need, the rest one click away (search finds everything). */}
+            {pages.filter((p) => MAIN_PAGES.has(p.id)).map((p) => (
+              <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{pageTitle(p.id)}</button>
+            ))}
+            <button className="set-nav-more" onClick={() => { setMore((m) => { try { localStorage.setItem('sahilbot:settings-more', m ? '0' : '1') } catch { /* ignore */ } return !m }) }} aria-expanded={more || !MAIN_PAGES.has(page)} data-testid="settings-more">{more || !MAIN_PAGES.has(page) ? '▾' : '▸'} More settings</button>
+            {(more || !MAIN_PAGES.has(page)) && pages.filter((p) => !MAIN_PAGES.has(p.id)).map((p) => (
+              <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{pageTitle(p.id)}</button>
+            ))}
+          </>}
           {sys && <div className="set-nav-foot">{sys.chip}<br />{sys.totalGB} GB RAM · SahilBot {sys.appVersion}</div>}
         </nav>
         <div className="set-body" ref={bodyRef} data-page={page}>

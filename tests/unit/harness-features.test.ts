@@ -60,3 +60,9 @@ test('a read checks an uncertain write when it reads the same service', async ()
   expect(sameThing('send_invoice', 'web_search')).toBe(false)
   expect(sameThing('post_tweet', 'file_read')).toBe(false)
 })
+
+test('"I can\'t access that" is a claim about ability (worth trying first); a safety refusal isn\'t', async () => {
+  const { claimsCant } = await import('../../src/main/agent/harness-features')
+  for (const t of ['I don\'t have access to your files.', 'I can\'t browse the web, but here is what I know.', 'As an AI, I can\'t open apps on your Mac.', 'I\'m not able to read that PDF.']) expect(claimsCant(t), t).toBe(true)
+  for (const t of ['I can\'t help with that.', 'I won\'t do that: it could hurt someone.', 'Here is the summary.', 'I can send it once you confirm.']) expect(claimsCant(t), t).toBe(false)
+})

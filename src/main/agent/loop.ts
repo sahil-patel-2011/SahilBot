@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { projectInstructions } from './project-instructions'
-import { ALL_FEATURES, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
+import { ALL_FEATURES, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
 import { definiteFailure } from './runtime/policy'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -2882,6 +2882,7 @@ export class Agent {
     const guard = new LoopGuard({ pendingNudge: this.feat.pendingPollNudge })
     let claimNudges = 0
     let giveUpNudges = 0
+    let cantNudges = 0
     let afterEditRounds = 0
     /** Hidden nudges after a final reply in this run (all kinds): a reply bounces back three times at most. */
     let finalNudges = 0
@@ -3250,11 +3251,22 @@ export class Agent {
           // Gave up after a tool failed ("I couldn't get it: the report doesn't exist"): try another way first
           // (a different tool, source or approach), once per run, in a plain chat too (a lookup that failed once
           // isn't an answer). A real blocker still gets said plainly.
-          if (this.feat.giveUpNudge && runFailures > 0 && failStreak > 0 && finalNudges < 3 && giveUpNudges < 1 && !asksToContinue && !run.unattended && step < HARD_CAP && givesUp(assistant.content)) {
+          // Twice per run: the second time, it has to name other ways and try the best one.
+          if (this.feat.giveUpNudge && runFailures > 0 && failStreak > 0 && finalNudges < 3 && giveUpNudges < 2 && !asksToContinue && !run.unattended && step < HARD_CAP && givesUp(assistant.content)) {
             finalNudges++
             giveUpNudges++
-            budget = Math.max(budget, step + 6)
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] A tool failed, but the task is not done. Before giving up, try another way you have: a different tool, data source, search or approach (find_tools lists more). If nothing else can work, say exactly what blocked it and what the user could do.' })
+            budget = Math.max(budget, step + 8)
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: giveUpNudges === 1
+              ? '[From the app] A tool failed, but the task is not done. Before giving up, try another way you have: a different tool, data source, search or approach (find_tools lists more; the browser and the user\'s Mac can often do what an API can\'t). If nothing else can work, say exactly what blocked it and what the user could do.'
+              : '[From the app] Still not done. Write down three other ways to get this done (other tools, the browser, the Mac, a different source, a workaround), pick the most promising, and do it now. Only if every one is truly impossible, say what you tried and exactly what the user would need to do.' })
+            continue
+          }
+          // "I don't have access to your files" without trying anything: it has tools for that. Try first (once).
+          if (this.feat.cantNudge && actions === 0 && finalNudges < 3 && cantNudges < 1 && !asksToContinue && !run.unattended && step < HARD_CAP && claimsCant(assistant.content)) {
+            finalNudges++
+            cantNudges++
+            budget = Math.max(budget, step + 8)
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] You said you can\'t, but you haven\'t tried. You have tools: files and Terminal, the browser (it can sign in and use sites), Mac apps, the screen, connected apps, the user\'s Mac from a server (mac), and find_tools for more. Try the most direct one now. Only if it truly can\'t be done this way either, say what you tried and what the user can do.' })
             continue
           }
           // Says it's done, but no tool ran at all in this task, or its last write failed and nothing succeeded since: a false

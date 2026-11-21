@@ -616,3 +616,7 @@
 .idea-actions { display: flex; gap: 8px; margin-top: 10px; }
 .idea-who { margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
 .idea-card.outside { border-color: var(--line); background: var(--card, var(--bg)); }
+
+/* Settings: "More settings" under the five main pages */
+.set-nav-more { display: block; width: 100%; text-align: left; margin: 8px 0 2px; padding: 6px 10px; border: none; background: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; border-radius: 8px; }
+.set-nav-more:hover { color: var(--text); background: var(--hover, rgba(0,0,0,.05)); }

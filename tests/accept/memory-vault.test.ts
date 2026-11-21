@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
-import { launch, tempProfile } from './app'
+import { launch, tempProfile, settingsPage } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 
 // Import memory to SahilBot (copy the prompt, paste, review, save) and the Vault view (notes, links,
@@ -47,7 +47,7 @@ describe('import memory to SahilBot', () => {
     await page.evaluate((dir) => window.foreman.settings.set({ workspaceDir: dir }), ws)
     await page.evaluate(() => window.foreman.memory.add('Lives in Atlanta, GA', null))
     await page.click('[data-testid="profile"]')
-    await page.click('[data-testid="settings-memory"]')
+    await settingsPage(page, 'memory')
     await page.click('[data-testid="memory-import-open"]')
     const dialog = page.locator('[data-testid="memory-import"]')
     await dialog.waitFor()
@@ -208,7 +208,7 @@ describe('the Vault view', () => {
     expect(st.settings.bots[id]).toEqual({ enabled: false })
     // Settings → Memory → Knowledge vault shows the vault section.
     await page.click('[data-testid="profile"]')
-    await page.click('[data-testid="settings-memory"]')
+    await settingsPage(page, 'memory')
     await page.click('[data-testid="settings-tab-vault"]')
     await page.locator('[data-testid="vault-settings"]').waitFor()
     expect(await page.locator('[data-testid="vault-level-aggressive"]').getAttribute('aria-checked')).toBe('true')

@@ -374,14 +374,38 @@ export class Db {
     const need = Math.min(2, words.length)
     const out: Array<{ threadId: string; title: string; text: string; at: number }> = []
     const perThread = new Map<string, number>()
+    const forgotten = this.forgottenNames()
     for (const r of rows) {
       if (r.hits < need) continue
+      // Someone the user told SahilBot to forget (People & Places) isn't brought back by quoting old messages.
+      if (forgotten.length) { const low = r.text.toLowerCase(); if (forgotten.some((n) => low.includes(n))) continue }
       if ((perThread.get(r.threadId) ?? 0) >= 2) continue
       perThread.set(r.threadId, (perThread.get(r.threadId) ?? 0) + 1)
       out.push({ threadId: r.threadId, title: r.title, text: r.text.replace(/\s+/g, ' ').slice(0, 400), at: r.at })
       if (out.length >= limit) break
     }
     return out
+  }
+
+  /**
+   * Names (and aliases) of the people, places and things the user forgot in People & Places and hasn't
+   * undone, lowercased: a person's first name too ("Priya" for "Priya Patel"), since that's how they're
+   * usually mentioned. Empty when the context engine has never run.
+   */
+  private forgottenNames(): string[] {
+    try {
+      const rows = this.sql.prepare("SELECT payload FROM ce_trash WHERE restored_at IS NULL AND label LIKE 'Forgot %' ORDER BY at DESC LIMIT 500").all() as Array<{ payload: string }>
+      const names = new Set<string>()
+      for (const r of rows) {
+        let snap: { entity?: { name?: unknown; type?: unknown }; aliases?: Array<{ value?: unknown }> }
+        try { snap = JSON.parse(r.payload) } catch { continue }
+        const name = typeof snap.entity?.name === 'string' ? snap.entity.name.trim().toLowerCase() : ''
+        if (name) names.add(name)
+        if (name && snap.entity?.type === 'person') { const first = name.split(/\s+/)[0]; if (first.length >= 3) names.add(first) }
+        for (const a of snap.aliases ?? []) if (typeof a.value === 'string' && a.value.trim().length >= 3) names.add(a.value.trim().toLowerCase())
+      }
+      return [...names]
+    } catch { return [] }
   }
 
   searchThreads(q: string): Thread[] {

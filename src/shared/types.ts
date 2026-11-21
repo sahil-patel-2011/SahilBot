@@ -3228,8 +3228,30 @@ export interface RemoteServerStatus {
   info?: { version: string; uptime: number; bots: number; running: number; queued: number; routines: number; rssMB: number; platform: string; arch: string }
 }
 
+/** The Mac link (src/main/mac-link.ts): on the Mac, whether the server may use it; on the server, whether a Mac is online. */
+export interface MacLinkStatus {
+  server: boolean
+  linked?: boolean
+  allow?: boolean
+  tools?: string[]
+  keepAwake?: boolean
+  connected?: boolean
+  error?: string
+  awake?: boolean
+  available?: Array<{ id: string; what: string }>
+  /** What the server did on this Mac, newest first. */
+  log?: Array<{ at: number; what: string; effect: string; ok: boolean; note: string }>
+  /** On the server: the linked Mac. */
+  online?: boolean
+  name?: string
+  lastSeen?: number
+}
+
 export interface RemoteServerApi {
   status(refresh?: boolean): Promise<RemoteServerStatus>
+  /** The Mac link: status, and (on the Mac) whether the server may use this Mac. */
+  macLink?(): Promise<MacLinkStatus>
+  setMacLink?(patch: { allow?: boolean; keepAwake?: boolean; tools?: string[] }): Promise<{ ok: boolean }>
   /** Pairs with a server (URL + one-time code from it). */
   connect(url: string, code: string): Promise<RemoteServerStatus>
   disconnect(): Promise<RemoteServerStatus>

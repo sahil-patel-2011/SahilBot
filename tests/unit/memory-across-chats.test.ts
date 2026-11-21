@@ -24,3 +24,18 @@ test('the agent sees what the user said in their other chats with the same bot: 
   expect(db.recallUserSaid('hi', here.id)).toEqual([])
   expect(db.recallUserSaid("100% off_the_shelf 'quotes'", here.id)).toEqual([])
 })
+
+test('someone the user forgot in People & Places isn\'t quoted back from old chats, until Undo', () => {
+  const db = new Db(':memory:')
+  const space = db.listSpaces().find((s) => s.isMain) ?? db.createSpace('Main', '#000', { isMain: true })
+  const a = db.createThread(space.id, 'auto', null)
+  const here = db.createThread(space.id, 'auto', null)
+  db.insertMessage({ threadId: a.id, role: 'user', kind: 'normal', status: 'done', content: 'My sister Priya Patel loves peonies and her birthday is in March' })
+  db.insertMessage({ threadId: a.id, role: 'user', kind: 'normal', status: 'done', content: 'Order peonies for the birthday table in March' })
+  db.sql.exec('CREATE TABLE IF NOT EXISTS ce_trash (id TEXT PRIMARY KEY, at INTEGER NOT NULL, label TEXT NOT NULL, payload TEXT NOT NULL, restored_at INTEGER)')
+  expect(db.recallUserSaid('What does Priya like for her birthday? peonies?', here.id)).toHaveLength(2)
+  db.sql.prepare('INSERT INTO ce_trash(id, at, label, payload) VALUES(?,?,?,?)').run('t1', 1, 'Forgot Priya Patel', JSON.stringify({ entity: { name: 'Priya Patel', type: 'person' }, aliases: [{ value: 'Pri' }] }))
+  expect(db.recallUserSaid('What does Priya like for her birthday? peonies?', here.id).map((h) => h.text)).toEqual(['Order peonies for the birthday table in March'])
+  db.sql.prepare('UPDATE ce_trash SET restored_at = 2 WHERE id = ?').run('t1')
+  expect(db.recallUserSaid('What does Priya like for her birthday? peonies?', here.id)).toHaveLength(2)
+})

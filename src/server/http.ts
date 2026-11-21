@@ -222,6 +222,18 @@ export class HttpFront {
 
     if (method === 'GET' && path === '/api/session') return this.json(res, 200, { device: { id: device.id, name: device.name }, csrf: this.o.devices.csrf(device.id), runtime: 'server', host: this.o.host ?? 'server', version: host.version })
     if (method === 'GET' && path === '/api/status') return this.json(res, 200, await this.o.status())
+    // The Mac link: the paired Mac app long-polls for jobs and posts their results (src/main/mac-link.ts).
+    if (method === 'POST' && (path === '/api/mac/poll' || path === '/api/mac/result')) {
+      if (this.o.host === 'mac' || !hasHandler('macLink:request')) return this.fail(res, 404, 'The Mac link is unavailable here.')
+      if (via !== 'bearer' || device.kind !== 'app') return this.fail(res, 403, 'Pair the Mac app to link this Mac.')
+      try {
+        // Results can carry a file's text (up to 512 KB); a poll whose connection drops is forgotten, not handed jobs.
+        const body = await this.body(req, path.endsWith('/result') ? 512 * 1024 : undefined)
+        if (path.endsWith('/poll')) req.on('close', () => { if (!res.writableEnded) void invoke('macLink:request', { transport: 'mac', deviceId: device.id }, ['dropPoll']).catch(() => undefined) })
+        const result = await invoke('macLink:request', { transport: 'mac', deviceId: device.id }, [path.endsWith('/poll') ? 'poll' : 'result', body])
+        return this.json(res, 200, result)
+      } catch (error) { return this.fail(res, (error as { status?: number }).status ?? 409, (error as Error).message) }
+    }
     if (path === '/api/workers' || path.startsWith('/api/workers/')) {
       if (this.o.host === 'mac' || !hasHandler('workerHost:request')) return this.fail(res, 404, 'Worker placement is unavailable.')
       if (via !== 'bearer' || device.kind !== 'app') return this.fail(res, 403, 'Pair the Mac app to manage this worker.')

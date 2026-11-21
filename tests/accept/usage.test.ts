@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
-import { launch, tempProfile } from './app'
+import { launch, tempProfile, settingsPage } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 import { seedUsage } from '../fixtures/usage-seed'
 
@@ -27,7 +27,7 @@ describe('usage dashboard', () => {
 
       await page.keyboard.press('Meta+,')
       await page.waitForSelector('[data-testid="settings"]')
-      await page.click('[data-testid="settings-usage"]')
+      await settingsPage(page, 'usage')
       await page.waitForSelector('[data-testid="usage-page"]')
       await expect.poll(() => page.locator('[data-testid="usage-spend"]').textContent()).toMatch(/\$\d+\.\d\d used of \$200\.00 this month/)
       const tiles = await page.locator('[data-testid="usage-tiles"]').innerText()

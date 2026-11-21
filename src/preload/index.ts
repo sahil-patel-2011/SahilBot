@@ -498,7 +498,9 @@ const api: SahilBotApi = {
     status: call('remoteServer:status') as never,
     connect: call('remoteServer:connect') as never,
     disconnect: call('remoteServer:disconnect') as never,
-    openUi: call('remoteServer:openUi') as never
+    openUi: call('remoteServer:openUi') as never,
+    macLink: call('macLink:status') as never,
+    setMacLink: call('macLink:set') as never
   },
   workers: {
     list: call('workers:list') as never,
