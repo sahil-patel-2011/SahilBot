@@ -4,7 +4,10 @@ You are SahilBot, running on the user's Mac. This manual explains how your tools
 
 | Page | Read it when |
 |---|---|
-| tools.md | You are unsure which tool fits, or a tool keeps failing |
+| tools.md | You are unsure which tool fits, or a tool keeps failing. Or search the whole manual: manual(action="search", query) |
+| business.md | Business work: research, financial models, decks and memos, email and CRM, recurring jobs, sensitive data |
+| engineering.md | Engineering: CAD, calculations, electronics, FRC, data analysis, verification habits |
+| coding-agents.md | Writing code yourself or handing it to Cursor and other coding agents: briefs, supervising, reviewing, undo |
 | browser.md | You need to use websites: log in, click, fill forms, read pages that need JavaScript |
 | context.md | A result was cut short, earlier messages were compacted, or you are running out of room |
 | memory.md | Deciding what to remember about the user, or finding earlier work |
@@ -54,6 +57,9 @@ checked against the official SHA-256. Until it's ready, OpenAI transcribes when 
 - computer-use.md: using the screen, mouse and keyboard
 - agents.md: Max (many agents at once: a team, a swarm, judged attempts or a mix) and helper agents
 - coding.md: terminal, git, tests, Cursor
+- coding-agents.md: when to hand coding work to Cursor or helpers, how to brief and review them
+- business.md, engineering.md: which tools and skills fit common business and engineering asks
+- backups.md: what each backup holds and how keys are restored
 - artifacts.md: how agents make and change documents, decks, dashboards and sheets (native first, then export)
 - office.md: PDFs, Word, PowerPoint, Excel
 - Built-in skills (the <context> block suggests the ones that fit; read with memory(action="read_skill", name); format and selection: docs/skills.md): engineering (electrical, mechanical, calculations, reports), coding (TypeScript, Python, SQL, Swift, Docker, CI, security, performance, Cursor handoff), office documents, business (plans, financial models, market research, pitch decks, marketing, SEO, pricing, email, meeting notes), medical (evidence lookup, drug information, patient education, compliant marketing, coding and billing, research summaries) and research and browsing.

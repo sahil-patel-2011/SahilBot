@@ -150,6 +150,7 @@ import { knowledgeTools, resolveScope } from './agent/tools/knowledge'
 import { vaultTool } from './agent/tools/vault'
 import { apiRequestTool } from './agent/tools/api-request'
 import { chatHistoryTool } from './agent/tools/chat-history'
+import { manualTool } from './agent/tools/manual'
 import { VaultService } from './vault/service'
 import { workingMemoryPage } from './vault/working-memory'
 import { MemoryMirror } from './vault/memory-mirror'
@@ -764,6 +765,8 @@ app.whenReady().then(() => {
     ...coreTools(results),
     apiRequestTool(vault),
     chatHistoryTool(db),
+    // The app's own manual (docs/*.md), searchable: the agent looks things up instead of guessing.
+    manualTool(docsDir),
     ...fileTools(() => settings.get().workspaceDir, docsDir),
     // Office: review_document (core; every new document gets checked) and the office tool (find_tools("office"/"excel"/"pdf")):
     // spreadsheets read/edited in place, PDF forms, merge/split, batch file jobs, receipts, meeting notes.
