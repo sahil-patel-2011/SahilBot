@@ -15,7 +15,7 @@ import { zipFiles } from './zip'
 // store, the compiler the learning pass runs, retrieval for each run's context block, search for the
 // vault tool, and what the Vault view needs (notes, backlinks, graph, changes with Undo, export).
 
-export const DEFAULT_VAULT: VaultSettings = { enabled: true, dir: '', level: 'aggressive', docs: true, activity: true, bots: {}, obsidian: { ...DEFAULT_OBSIDIAN } }
+export const DEFAULT_VAULT: VaultSettings = { enabled: true, dir: '', level: 'aggressive', docs: true, activity: true, memories: true, bots: {}, obsidian: { ...DEFAULT_OBSIDIAN } }
 const within = (root: string, p: string): boolean => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep)
 const SETTINGS_KEY = 'vault:settings'
 const BOTS_KEY = 'vault:sections'
@@ -39,6 +39,7 @@ export function cleanVaultSettings(v: unknown): VaultSettings {
     level: lvl(x.level) ?? 'aggressive',
     docs: x.docs !== false,
     activity: x.activity !== false,
+    memories: x.memories !== false,
     bots,
     obsidian: cleanObsidianSettings(x.obsidian)
   }
@@ -393,7 +394,8 @@ export class VaultService {
       const level = this.levelFor(o.spaceId)
       // Activity digests (other apps' window titles) never go to a cloud model from here.
       // A project's working memory page is in the run's context already (its core) and recalled step by step.
-      const skip = (n: VaultNoteMeta): boolean => n.tags.includes('sahilbot/working-memory') || (o.local === false && n.tags.includes('sahilbot/activity'))
+      // Mirrored memories and decisions are in the run's context already (ranked memories, past decisions).
+      const skip = (n: VaultNoteMeta): boolean => n.tags.includes('sahilbot/working-memory') || n.tags.includes('sahilbot/memory') || (o.local === false && n.tags.includes('sahilbot/activity'))
       const picked = retrieve(this.store, { query: o.query.slice(0, 4000), sections: this.sectionsFor(o.spaceId), window: o.window, level, keyword: this.keywordFor(), skip })
       // The user's own notes in their Obsidian vault (never excluded folders), ranked the same way.
       const mine = this.obsidianPicks(o.query.slice(0, 4000), o.window, level)

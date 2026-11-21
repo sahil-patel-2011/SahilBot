@@ -151,6 +151,7 @@ import { apiRequestTool } from './agent/tools/api-request'
 import { chatHistoryTool } from './agent/tools/chat-history'
 import { VaultService } from './vault/service'
 import { workingMemoryPage } from './vault/working-memory'
+import { MemoryMirror } from './vault/memory-mirror'
 import { ContextEngine } from './context-engine/service'
 import { BrainService } from './brain/service'
 import { liveIO } from './brain/io'
@@ -2347,6 +2348,19 @@ app.whenReady().then(() => {
   })
   worldRef.current = world
   registry.register(aboutTool({ engine: world, db }))
+
+  // Memories and the user's decisions, mirrored into the knowledge vault (Shared/Memory, Shared/Decisions/Decision
+  // log; src/main/vault/memory-mirror.ts): after every change (debounced), once at startup, and every few minutes.
+  const memoryMirror = new MemoryMirror({
+    vault: notesVault, memory, db,
+    screen: (text) => world.screenMemory(text),
+    secretValues: () => { try { return [...vault.secretValues(), ...browser.hiddenValues()] } catch { return [] } }
+  })
+  memory.onChange(() => memoryMirror.schedule())
+  memoryMirror.schedule(HIDDEN ? 500 : 15_000)
+  const memoryMirrorTimer = setInterval(() => memoryMirror.schedule(0), 5 * 60_000)
+  memoryMirrorTimer.unref?.()
+  app.on('before-quit', () => { memoryMirror.stop(); clearInterval(memoryMirrorTimer) })
   handle('people:status', () => world.status())
   handle('people:setSettings', (patch: Record<string, unknown>) => { world.setSettings((patch ?? {}) as never); return world.status() })
   handle('people:list', (o?: { query?: string; type?: string }) => world.list({ query: typeof o?.query === 'string' ? o.query.slice(0, 200) : undefined, type: typeof o?.type === 'string' ? o.type as never : undefined }))
@@ -2361,10 +2375,11 @@ app.whenReady().then(() => {
     return out
   })
   handle('notesVault:status', () => notesVault.status())
-  handle('notesVault:setSettings', (patch: Record<string, unknown>) => { notesVault.setSettings((patch ?? {}) as never); return notesVault.status() })
+  handle('notesVault:setSettings', (patch: Record<string, unknown>) => { notesVault.setSettings((patch ?? {}) as never); memoryMirror.schedule(0); return notesVault.status() })
   handle('notesVault:setBot', (spaceId: string, patch: { enabled?: boolean | null; level?: 'normal' | 'aggressive' | null }) => {
     if (!db.getSpace(String(spaceId ?? ''))) throw new Error('That bot is gone.')
     notesVault.setBot(String(spaceId), patch ?? {})
+    memoryMirror.schedule(0)
     return notesVault.status()
   })
   handle('notesVault:list', () => notesVault.list())
