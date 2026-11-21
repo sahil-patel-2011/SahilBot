@@ -91,15 +91,16 @@ export async function importFile(path: string): Promise<{ title: string; type: D
     md = htmlToMarkdown(html)
   }
   else if (ext === '.pdf') md = textToMarkdown((await pdfText(path)).text)
-  else if (ext === '.pptx') md = (await pptxSlides(path)).map((s) => [`## ${s.texts[0] || `Slide ${s.n}`}`, ...s.texts.slice(1).map((t) => `- ${t}`), ...(s.notes ? [`> Notes: ${s.notes}`] : [])].join('\n')).join('\n\n')
+  else if (ext === '.pptx') md = (await pptxSlides(path)).map((s) => [`## ${s.texts[0] || `Slide ${s.n}`}`, ...s.texts.slice(1).map((t) => `- ${t}`), ...(s.notes ? [`> ${s.notes}`] : [])].join('\n')).join('\n\n')
   else if (ext === '.html' || ext === '.htm') md = htmlToMarkdown(readFileSync(path, 'utf8'))
   else md = readFileSync(path, 'utf8')
   const blocks: DocBlock[] = markdownToBlocks(md)
-  return { title, type: 'doc', content: { title, blocks: blocks.length ? blocks : [{ id: 'b000', type: 'p', text: '' }] } }
+  // A PowerPoint file opens as a native deck (each slide a heading with its points and notes).
+  return { title, type: 'doc', content: { title, blocks: blocks.length ? blocks : [{ id: 'b000', type: 'p', text: '' }], ...(ext === '.pptx' ? { kind: 'slides' as const } : {}) } }
 }
 
 /** The export format that matches the original file (slides and plain text save as Word / Markdown). */
-export function saveFormat(path: string): 'docx' | 'pdf' | 'md' | 'html' | 'xlsx' | 'csv' {
+export function saveFormat(path: string): 'docx' | 'pdf' | 'md' | 'html' | 'xlsx' | 'csv' | 'pptx' {
   const ext = extname(path).toLowerCase()
-  return ext === '.pdf' ? 'pdf' : ext === '.md' || ext === '.markdown' || ext === '.txt' ? 'md' : ext === '.html' || ext === '.htm' ? 'html' : ext === '.xlsx' ? 'xlsx' : ext === '.csv' || ext === '.tsv' ? 'csv' : 'docx'
+  return ext === '.pptx' ? 'pptx' : ext === '.pdf' ? 'pdf' : ext === '.md' || ext === '.markdown' || ext === '.txt' ? 'md' : ext === '.html' || ext === '.htm' ? 'html' : ext === '.xlsx' ? 'xlsx' : ext === '.csv' || ext === '.tsv' ? 'csv' : 'docx'
 }

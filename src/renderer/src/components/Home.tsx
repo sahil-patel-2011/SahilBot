@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { FilePreview, HomeIdea, Space, Thread } from '@shared/types'
+import type { DocInfo, FilePreview, HomeIdea, Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
 import { Mascot } from '../brand'
@@ -123,6 +123,61 @@ async function editFile(f: RecentFile): Promise<void> {
   } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') }
 }
 
+const NEW_KINDS: Array<{ kind: 'doc' | 'slides' | 'sheet'; label: string; hint: string }> = [
+  { kind: 'doc', label: 'Docs', hint: 'Reports, letters, plans' },
+  { kind: 'slides', label: 'Slides', hint: 'Decks you and SahilBot build' },
+  { kind: 'sheet', label: 'Sheets', hint: 'Tables with formulas' }
+]
+
+function NewKindIcon({ kind }: { kind: 'doc' | 'slides' | 'sheet' }) {
+  const p = { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true }
+  if (kind === 'slides') return <svg {...p}><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M12 17v3M8 21h8M7 9h6M7 12h9" /></svg>
+  if (kind === 'sheet') return <svg {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M3 14h18M9 4v16M15 4v16" /></svg>
+  return <svg {...p}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M9 13h6M9 17h6" /></svg>
+}
+
+/** Make something new (Docs, Slides, Sheets) and the documents already being worked on. */
+function MakeNew() {
+  const [recent, setRecent] = useState<Array<DocInfo & { slides: boolean }>>([])
+  const [busy, setBusy] = useState<string | null>(null)
+  useEffect(() => { void api.docs.recent?.(12).then(setRecent).catch(() => undefined) }, [])
+  const open = (d: { docId: string; threadId: string }): void => { window.dispatchEvent(new CustomEvent('sahilbot:open-doc', { detail: d })) }
+  const make = async (kind: 'doc' | 'slides' | 'sheet'): Promise<void> => {
+    setBusy(kind)
+    try { open(await api.docs.createNew(kind)) } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') } finally { setBusy(null) }
+  }
+  return (
+    <>
+      <div className="make-new" data-testid="make-new">
+        {NEW_KINDS.map((k) => (
+          <button key={k.kind} className={`make-tile k-${k.kind}`} onClick={() => void make(k.kind)} disabled={!!busy} data-testid={`make-${k.kind}`}>
+            <span className="make-icon"><NewKindIcon kind={k.kind} /></span>
+            <b>{k.label}</b>
+            <span>{busy === k.kind ? 'Opening…' : k.hint}</span>
+          </button>
+        ))}
+      </div>
+      {recent.length > 0 && (
+        <>
+          <h2 className="page-h2">Your documents</h2>
+          <div className="doc-recent" data-testid="doc-recent">
+            {recent.map((d) => {
+              const kind = d.type === 'sheet' ? 'sheet' : d.slides ? 'slides' : 'doc'
+              return (
+                <button key={d.id} className={`doc-recent-card k-${kind}`} onClick={() => open({ docId: d.id, threadId: d.threadId })} title={`Open “${d.title}”`}>
+                  <span className="make-icon small"><NewKindIcon kind={kind} /></span>
+                  <span className="doc-recent-text"><b>{d.title}</b><span>{kind === 'slides' ? 'Deck' : kind === 'sheet' ? 'Sheet' : 'Document'} · {d.lastAuthor === 'bot' ? 'SahilBot' : 'You'} · {ago(d.updatedAt)}</span></span>
+                </button>
+              )
+            })}
+          </div>
+          <h2 className="page-h2">Files</h2>
+        </>
+      )}
+    </>
+  )
+}
+
 /** Artifacts: every file SahilBot's agents made (documents, PDFs, decks, sheets, images, audio), filterable by kind. */
 export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: string) => void; onOpenChat: (threadId: string) => void }) {
   const [files, setFiles] = useState<RecentFile[] | null>(null)
@@ -136,7 +191,8 @@ export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: strin
   return (
     <div className="page" data-testid="files-view">
       <div className="page-head"><h1>Artifacts</h1><input className="set-input page-search" placeholder="Search artifacts" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-      <div className="set-sub">Documents, PDFs, presentations, spreadsheets, images and audio your agents made. Click one to preview it; the link under it opens the chat it came from.</div>
+      <div className="set-sub">Start a document, deck or sheet that you and SahilBot edit together, or open the files your agents made. Click a file to preview it; the link under it opens the chat it came from.</div>
+      <MakeNew />
       {chips.length > 2 && (
         <div className="artifact-chips" role="tablist" aria-label="Kind" data-testid="artifact-kinds">
           {chips.map((c) => <button key={c.id} role="tab" aria-selected={kind === c.id} className={`artifact-chip${kind === c.id ? ' on' : ''}`} onClick={() => setKind(c.id)} data-testid={`artifact-kind-${c.id}`}>{c.label} <span>{c.n}</span></button>)}
