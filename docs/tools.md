@@ -9,7 +9,7 @@ Built-in tools are always available (no limit on how many). Connected apps' tool
 | ask_user(question, options) | A decision only the user can make | read |
 | web_search(query, count) | Finding pages (falls back across engines automatically) | read |
 | fetch_page(url, chunk) | Reading any page's text in ~1.5k-token chunks | read |
-| research(source, query/ids) | PubMed (search, abstracts), ClinicalTrials.gov, FDA drug labels, Wikipedia, arXiv, DOI citations via official APIs | read |
+| research(source, query/ids) | Medical: PubMed (search with evidence filters and date ranges, abstracts), MeSH headings, Europe PMC (preprints, citation counts), open-access full text, verify (PMIDs, DOIs, NCT IDs exist? retracted?), ClinicalTrials.gov, FDA drug labels and adverse events, MedlinePlus. Also Wikipedia, arXiv, DOI citations. Official APIs; see docs/medical.md | read |
 | browser(action, …) | Real browsing: logins, clicks, forms (`fill_form` does a whole form at once). See browser.md | read → write_external |
 | file_read / file_write / file_manage | Files in the workspace and attached folders (delete always asks) | read / write_local / destructive |
 | create_document(path, …) | .pdf, .docx, .pptx, .xlsx. See office.md | write_local |

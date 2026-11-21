@@ -1,4 +1,5 @@
 import { CAD_RE } from '../cad/cad-intent'
+import { isMedicalQuestion } from './medical-check'
 import { VIDEO_RE } from './video-intent'
 import { IMAGE_RE, classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
 
@@ -12,7 +13,7 @@ import { IMAGE_RE, classifyTask as classifyRequest, type TaskCategory as RouteCa
 
 export { IMAGE_RE, VIDEO_RE }
 
-const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
+const GROUPS: Array<{ tools: string[]; when: { test(text: string): boolean } }> = [
   {
     tools: ['code', 'git', 'jobs'],
     when: /\b(code|coding|bug|bugs|debug|tests?|unit test|repo|repository|git|commit|branch|pull request|\bPR\b|merge|function|class|compile|build|lint|typecheck|npm|pnpm|yarn|pip|python|typescript|javascript|java|kotlin|swift|rust|golang|c\+\+|refactor|stack ?trace|exception|deploy|dev server|localhost|api endpoint|wpilib|gradle|robot code)\b/i
@@ -31,7 +32,8 @@ const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
   },
   {
     tools: ['research'],
-    when: /\b(stud(y|ies)|pubmed|clinical( trial)?s?|paper|papers|arxiv|doi|journal|peer[- ]reviewed|drug|dosage|fda|side effects?|medical|diagnos|symptom|research)\b/i
+    // Any health question (medical-check.ts: clinical terms, conditions, doses, drug names) gets the medical sources.
+    when: { test: (t: string) => /\b(stud(y|ies)|pubmed|clinical( trial)?s?|paper|papers|arxiv|doi|journal|peer[- ]reviewed|drug|dosage|fda|side effects?|medical|diagnos|symptom|research)\b/i.test(t) || isMedicalQuestion(t) }
   },
   {
     tools: ['mail'],

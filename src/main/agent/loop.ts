@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { projectInstructions } from './project-instructions'
+import { checkMedicalAnswer, medicalNote } from './medical-check'
 import { ALL_FEATURES, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
 import { definiteFailure } from './runtime/policy'
 import { existsSync } from 'node:fs'
@@ -171,6 +172,8 @@ export interface AgentDeps {
   onUnattendedAsk?: (threadId: string, info: { tool: string; label: string; summary?: string; reason?: string }) => string | undefined
   /** Computer use as Planner + executor (agent/cua): the planner plans and checks; this loop runs the executor. */
   cua?: import('./cua/session').CuaOrchestrator
+  /** The medical accuracy check's PubMed lookups (tests inject a fetcher) and the user's optional NCBI key. */
+  medical?: { fetchJson?: import('./medical-check').JsonFetcher; apiKey?: () => string | undefined }
   /** The knowledge vault's notes for a request (src/main/vault), sized to the run's model; null when none. */
   vaultContext?: (o: { spaceId: string | null; query: string; model?: string; local: boolean; threadId: string }) => ContextSection | null
   /**
@@ -2902,6 +2905,7 @@ export class Agent {
     /** Nudges for an announced action with no tool call (promisesAction). */
     let actionNudges = 0
     let linkChecked = false
+    let medChecked = false
     let verified = false
     /** The answer written before the double-check (kept when the check finds nothing to fix). */
     let verifyDraft: Message | undefined
@@ -3170,6 +3174,30 @@ export class Agent {
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
             continue
+          }
+          // Medical accuracy (medical-check.ts): cited PMIDs/DOIs/NCT IDs must come from what was retrieved, PMIDs must
+          // exist in PubMed and not be retracted, and a clinical answer needs research behind it. Once per run.
+          if (this.feat.medicalCheck && !medChecked && step < HARD_CAP && finalNudges < 3 && (this.d.medical?.fetchJson || !process.env.FOREMAN_NO_VERIFY)) {
+            medChecked = true
+            const findings = await checkMedicalAnswer({
+              question: userText, answer: assistant.content, seen, researched: track.researched,
+              fetchJson: this.d.medical?.fetchJson ?? (async (url, signal) => { const r = await fetch(url, { headers: { 'user-agent': 'SahilBot/1.0', accept: 'application/json' }, signal }); if (!r.ok) throw new Error(String(r.status)); return r.json() }),
+              signal: run.ctrl.signal, apiKey: this.d.medical?.apiKey?.()
+            }).catch(() => undefined)
+            const note = findings ? medicalNote(findings) : ''
+            if (note) {
+              finalNudges++
+              budget = Math.max(budget, step + 6)
+              db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, medicalCheck: true, ...mine }, content: note })
+              assistant.meta = { ...assistant.meta, superseded: true }
+              db.updateMessage(assistant)
+              this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
+              continue
+            }
+            if (findings?.pubmed?.ok.length) {
+              assistant.meta = { ...assistant.meta, medicalChecked: { verified: findings.pubmed.ok.length } }
+              db.updateMessage(assistant)
+            }
           }
           // Sources this run read (or found) ride along for the UI's source pills.
           // (Server web search / fetch sources from this run's earlier steps and this reply are added after them.)

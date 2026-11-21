@@ -129,6 +129,8 @@ export const PRESETS: ConnectorPreset[] = [
   // Connected only by the user's Cursor API key (Settings → Connected apps → Cursor), never by a CLI found on this Mac.
   { id: 'cursor-app', name: 'Cursor', url: 'app:cursor', color: '#111111', category: 'Code', domain: 'cursor.com', auth: 'app', description: 'Hand coding work to Cursor Cloud Agents on your GitHub repos. Connect with your Cursor API key.' },
   { id: 'apple-notes', name: 'Notes, Reminders & Calendar', url: 'app:mac_apps', color: '#F5B400', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Your Mac\'s own apps; macOS asks once to allow access.' },
+  // SahilBot's own research tool (agent/tools/research.ts): PubMed and the other official medical databases, no sign-in.
+  { id: 'pubmed', name: 'PubMed & medical sources', url: 'app:research', color: '#20558A', category: 'Built in', domain: 'pubmed.ncbi.nlm.nih.gov', auth: 'app', description: 'PubMed, MeSH, open full text, ClinicalTrials.gov, FDA labels and adverse events, MedlinePlus. No sign-in; cited papers are checked against PubMed.' },
   { id: 'apple-mail', name: 'Mail (all your accounts)', url: 'app:mail', color: '#1A8CFF', category: 'Built in', domain: 'apple.com', auth: 'app', description: 'Apple Mail on this Mac: Gmail, iCloud, Outlook and more, no sign-in. macOS asks once.' },
   // Web automation, by design: the user signs in inside SahilBot's own browser and SahilBot uses the
   // site like they do (no connector, no API). Listed next to the app's real connector, below it.

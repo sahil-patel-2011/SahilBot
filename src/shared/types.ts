@@ -190,6 +190,8 @@ export interface Settings {
   cursorLocalAgent?: boolean
   /** The Blue Alliance read key (FRC scouting), kept in the Keychain. */
   hasTbaKey?: boolean
+  /** An NCBI API key (PubMed, faster and steadier medical research), kept in the Keychain. */
+  hasNcbiKey?: boolean
   /** 'auto' routes each request to the right model for how hard it is. */
   defaultModel: string
   /** Models switched off on the Models page (hidden from the picker and from Auto). */
@@ -1273,7 +1275,7 @@ export interface SahilBotApi {
   privacy: import('./privacy').PrivacyApi
   settings: {
     get(): Promise<Settings>
-    set(patch: Partial<Settings> & { apiKey?: string | null; braveKey?: string | null; cursorKey?: string | null; tbaKey?: string | null; setKeys?: Partial<Record<ProviderId, string | null>> }): Promise<Settings>
+    set(patch: Partial<Settings> & { apiKey?: string | null; braveKey?: string | null; cursorKey?: string | null; tbaKey?: string | null; ncbiKey?: string | null; setKeys?: Partial<Record<ProviderId, string | null>> }): Promise<Settings>
   }
   models: {
     list(): Promise<ModelList>

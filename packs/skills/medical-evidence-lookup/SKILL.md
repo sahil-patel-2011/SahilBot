@@ -24,8 +24,8 @@ triggers: medical evidence, latest guidelines, studies show, health claim, evide
 ## Workflow
 1. Restate the question in PICO form: Population, Intervention, Comparison, Outcome.
 2. Guidelines: web_search for "<condition> guideline <society> <year>" and fetch_page the official source.
-3. Literature: research(source="pubmed", query="<topic>[tiab] AND (systematic review[pt] OR meta-analysis[pt] OR guideline[pt])"), then research(source="pubmed_abstract", ids=[...]) before relying on any paper. For ongoing trials: research(source="clinical_trials"). For drugs: research(source="drug_label").
-4. Patient-friendly references for plain-language framing: MedlinePlus, NIH institutes, NHS, CDC.
+3. Literature: research(source="mesh", query="<lay term>") for the MeSH heading when the topic has one, then research(source="pubmed", query="\"<heading>\"[mh] OR <words>[tiab]", filter="guidelines" | "systematic_reviews" | "meta_analyses" | "rcts", years=5 or 10). Read before relying on any paper: research(source="pubmed_abstract", ids=[...]), or research(source="full_text", ids=[PMCID or PMID]) for open-access papers when the numbers matter (results and conclusions come first). research(source="europe_pmc") adds preprints (label them) and citation counts. Ongoing trials: research(source="clinical_trials"). Drugs: research(source="drug_label") for labeled uses, doses, warnings and interactions; research(source="adverse_events") for what FAERS reports most (counts, not rates).
+4. Patient-friendly references for plain-language framing: research(source="medlineplus"), NIH institutes, NHS, CDC.
 5. Check the user's knowledge vault (knowledge_search) if they have papers or notes on the topic.
 6. Synthesize: bottom line first, then strength of evidence (high / moderate / low / very low), key numbers with absolute effects (e.g. "reduces risk from 4% to 3% over 5 years"), harms, what's uncertain, and what guidelines disagree on.
 
@@ -39,4 +39,7 @@ triggers: medical evidence, latest guidelines, studies show, health claim, evide
 Single studies or press releases presented as settled; relative risk without absolute risk; old guidelines superseded by updates; supplement and wellness claims based on mechanistic or animal data; retracted papers (check Retraction Watch or the PubMed notice); preprints not yet peer reviewed (label them).
 
 ## Verify
-Every claim traced to a source you actually read in this session; numbers copied exactly as stated; publication dates shown. Never invent studies, statistics, PMIDs or doses.
+Every claim traced to a source you actually read in this session; numbers copied exactly as stated; publication dates shown. Never invent studies, statistics, PMIDs or doses. Before you answer, run research(source="verify", ids=[every PMID, DOI and NCT ID you cite]): drop anything that comes back missing or retracted. The app checks again after you answer (cited IDs must come from what you retrieved, must exist in PubMed and not be retracted) and sends the answer back if one fails.
+
+## Clinicians
+When the user's profile or memories say they're a clinician, answer at a clinical level: labeled and guideline doses with their source, grades of recommendation, numbers needed to treat, and where guidelines differ (e.g. AUA vs EAU). Same evidence rules; skip the lay framing they don't need.

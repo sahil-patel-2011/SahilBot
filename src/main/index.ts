@@ -788,7 +788,7 @@ app.whenReady().then(() => {
     // Coding: search, symbols, exact edits, patches, tests/type checks/lint with parsed failures; git with a secret scan.
     codeTool({ getWorkspace: () => settings.get().workspaceDir }),
     gitTool(),
-    researchTool(),
+    researchTool({ ncbiKey: () => secrets.get('ncbiKey') }),
     // Patient data: find and redact the 18 HIPAA identifiers before text goes anywhere (local, read-only).
     phiTool(),
     maxTool(),
@@ -1059,6 +1059,7 @@ app.whenReady().then(() => {
     onUnattendedAsk: (threadId, info) => goalHooks.ask?.(threadId, info),
     // A project's durable task memory is also a page in its vault area (vault/working-memory.ts), editable there.
     workingMemoryPage: () => { const v = notesVaultRef.current; if (!v) return undefined; return (workingMemoryRef.current ??= workingMemoryPage(v, db)) },
+    medical: { apiKey: () => secrets.get('ncbiKey') },
     vaultContext: (o) => notesVaultRef.current?.context({ spaceId: o.spaceId, query: o.query, local: o.local, window: notesVaultWindow(o.model) }) ?? null,
     // One "About the user and their world" section: memories + vault notes + people/places cards (src/main/context-engine).
     worldContext: (o) => worldRef.current?.context({ threadId: o.threadId, spaceId: o.spaceId, query: o.query, window: notesVaultWindow(o.model), local: o.local, memories: o.memories, vault: o.vault, openerId: o.openerId }) ?? null,
