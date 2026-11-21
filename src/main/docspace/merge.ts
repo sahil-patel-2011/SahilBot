@@ -62,7 +62,9 @@ export function merge3(base: DocContent, theirs: DocContent, mine: DocContent): 
       header: mine.sheet.header !== base.sheet.header ? mine.sheet.header : theirs.sheet.header
     }
   }
-  return { title, blocks, ...(sheet ? { sheet } : {}) }
+  // The look: mine when I changed it, else theirs.
+  const style = JSON.stringify(mine.style ?? null) !== JSON.stringify(base.style ?? null) ? mine.style : theirs.style
+  return { title, blocks, ...(sheet ? { sheet } : {}), ...(style ? { style } : {}) }
 }
 
 function insertAfterPred(order: string[], ref: string[], id: string): void {

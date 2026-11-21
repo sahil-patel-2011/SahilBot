@@ -30,6 +30,7 @@ const DENIED: Record<string, string> = {
   'usage:exportCsv': 'Exports are saved on your Mac.',
   'people:exportData': 'Exports are saved on your Mac.',
   'docs:export': 'Exports are saved on your Mac.',
+  'docs:saveBack': 'Documents are saved back to their files on your Mac.',
   'docs:addImage': 'Add images to documents on your Mac.',
   'pages:openWindow': 'Pages open in their own window on your Mac.',
   'pages:show': 'Pages open on your Mac.',

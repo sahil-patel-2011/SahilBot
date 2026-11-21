@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
-import type { DocAuthor, DocBlock, DocContent, DocSheet, DocDiff, DocEvent, DocInfo, DocSnapshot, DocType, DocVersionInfo, LibraryItem } from '@shared/types'
+import { DOC_FONTS, type DocAuthor, type DocBlock, type DocContent, type DocSheet, type DocDiff, type DocEvent, type DocInfo, type DocSnapshot, type DocStyle, type DocType, type DocVersionInfo, type LibraryItem } from '@shared/types'
 import { changeKeys, diffContent, diffView, isEmptyDelta, summarize } from './diff'
 import { preview } from './inline'
 import { merge3 } from './merge'
@@ -333,7 +333,18 @@ export function normalizeContent(c: unknown, type: DocType): DocContent {
     }
     sheet = fitSheet({ rows: Math.min(MAX_ROWS, Math.max(1, Number(sh.rows) || 1)), cols: Math.min(MAX_COLS, Math.max(1, Number(sh.cols) || 1)), cells, header: sh.header !== false })
   }
-  return { title: cleanTitle(x.title), blocks, ...(sheet ? { sheet } : {}) }
+  const style = normalizeStyle(x.style)
+  return { title: cleanTitle(x.title), blocks, ...(sheet ? { sheet } : {}), ...(style ? { style } : {}) }
+}
+
+/** A document style with only allowed values (an unknown font, size or theme is dropped). */
+export function normalizeStyle(s: unknown): DocStyle | undefined {
+  const x = (s ?? {}) as Partial<DocStyle>
+  const out: DocStyle = {}
+  if (typeof x.font === 'string' && (DOC_FONTS as readonly string[]).includes(x.font)) out.font = x.font
+  if (typeof x.size === 'number' && x.size >= 9 && x.size <= 16) out.size = Math.round(x.size * 2) / 2
+  if (x.theme === 'modern' || x.theme === 'classic' || x.theme === 'minimal') out.theme = x.theme
+  return Object.keys(out).length ? out : undefined
 }
 
 export function cleanTitle(t: unknown): string {

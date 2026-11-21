@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { DocBlock, DocBlockType, DocContent, DocDiff, DocExportFormat, DocInfo, DocSnapshot, DocVersionInfo } from '@shared/types'
+import { DOC_FONTS, type DocBlock, type DocBlockType, type DocContent, type DocDiff, type DocExportFormat, type DocInfo, type DocSnapshot, type DocStyle, type DocVersionInfo } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
 import * as I from '../icons'
@@ -120,6 +120,9 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
   const [drop, setDrop] = useState<{ id: string; pos: 'before' | 'after' } | null>(null)
   const [imgs, setImgs] = useState<Record<string, string | null>>({})
   const [exported, setExported] = useState<string | null>(null)
+  // The file this document was opened from (Artifacts → Edit), if any: Save to file writes it back.
+  const [source, setSource] = useState<string | null>(null)
+  useEffect(() => { let alive = true; void api.docs.source?.(id).then((p) => { if (alive) setSource(p) }).catch(() => undefined); return () => { alive = false } }, [id])
 
   const contentRef = useRef<DocContent | null>(null)
   const snapRef = useRef<DocSnapshot | null>(null)
@@ -695,6 +698,24 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
   }
   const curBlock = content?.blocks.find((b) => b.id === currentId)
 
+  const setStyle = (patch: Partial<DocStyle>): void => {
+    const cur = contentRef.current
+    if (!cur) return
+    const next: DocStyle = { ...(cur.style ?? {}), ...patch }
+    for (const k of Object.keys(next) as Array<keyof DocStyle>) if (next[k] === undefined || next[k] === '') delete next[k]
+    change({ ...cur, style: Object.keys(next).length ? next : undefined }, 'struct')
+  }
+  const saveBack = async (mode: 'replace' | 'copy'): Promise<void> => {
+    setMenu(null)
+    try {
+      await save()
+      const path = await api.docs.saveBack(id, mode)
+      setExported(path)
+      toast(mode === 'replace' ? 'Saved to the original file (a backup of the old version was kept).' : 'Saved a copy.')
+      setTimeout(() => setExported((p) => (p === path ? null : p)), 10_000)
+    } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') }
+  }
+
   const doExport = async (f: DocExportFormat): Promise<void> => {
     setMenu(null)
     try {
@@ -767,6 +788,9 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
           </div>
           <button className={`icon-btn${historyOpen ? ' on' : ''}`} title="Version history" aria-label="Version history" aria-pressed={historyOpen}
             onClick={() => { setHistoryOpen(!historyOpen); if (historyOpen) setViewing(null) }} data-testid="doc-history-toggle"><I.Clock size={15} /></button>
+          {source && (
+            <button className="btn primary doc-save-back" onClick={() => void saveBack('replace')} title={`Save your edits back to ${source.split('/').pop()} (the old version is kept in .sahilbot-backups)`} data-testid="doc-save-back">Save to file</button>
+          )}
           <div className="doc-menu-wrap">
             <button className="btn doc-export-btn" onClick={() => setMenu(menu === 'export' ? null : 'export')} aria-expanded={menu === 'export'} aria-haspopup="menu" data-testid="doc-export">
               <I.Share size={13} /> Export
@@ -774,6 +798,7 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
             {menu === 'export' && (
               <div className="doc-menu right" role="menu">
                 {EXPORTS[isSheet ? 'sheet' : 'doc'].map((x) => <button key={x.f} role="menuitem" onClick={() => void doExport(x.f)} data-testid={`doc-export-${x.f}`}>{x.label}</button>)}
+                {source && <button role="menuitem" onClick={() => void saveBack('copy')} data-testid="doc-save-copy">Save a copy next to the original</button>}
               </div>
             )}
           </div>
@@ -786,6 +811,17 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
             onChange={(e) => { const bid = target(); if (bid && e.target.value) setType(bid, e.target.value as DocBlockType) }}>
             <option value="" disabled>Style</option>
             <option value="p">Text</option><option value="h1">Heading 1</option><option value="h2">Heading 2</option><option value="h3">Heading 3</option>
+          </select>
+          <select className="doc-style doc-font" aria-label="Font" title="Font (the editor and Word / PDF exports)" value={content.style?.font ?? ''} disabled={readOnly} onChange={(e) => setStyle({ font: e.target.value || undefined })} data-testid="doc-font">
+            <option value="">Default font</option>
+            {DOC_FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
+          </select>
+          <select className="doc-style doc-size" aria-label="Text size" title="Text size in points" value={content.style?.size ?? ''} disabled={readOnly} onChange={(e) => setStyle({ size: e.target.value ? Number(e.target.value) : undefined })} data-testid="doc-size">
+            <option value="">Size</option>
+            {[9, 10, 10.5, 11, 12, 13, 14, 16].map((n) => <option key={n} value={n}>{n} pt</option>)}
+          </select>
+          <select className="doc-style doc-theme" aria-label="Theme" title="Theme for exports: headings, tables and accents" value={content.style?.theme ?? ''} disabled={readOnly} onChange={(e) => setStyle({ theme: (e.target.value || undefined) as DocStyle['theme'] })} data-testid="doc-theme">
+            <option value="">Theme</option><option value="modern">Modern</option><option value="classic">Classic</option><option value="minimal">Minimal</option>
           </select>
           <span className="doc-sep" />
           {tb('Bold (⌘B)', <b>B</b>, () => exec('bold'), { pressed: fmt.bold })}
@@ -838,7 +874,7 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
                 <SheetView sheet={content.sheet ?? { rows: 20, cols: 6, cells: {}, header: true }} flash={flash} readOnly={readOnly}
                   onChange={(next, structural) => change({ ...content, sheet: next }, structural ? 'struct' : 'type')} />
               ) : (
-                <div className="doc-blocks" role="document" aria-label={content.title}>
+                <div className="doc-blocks" role="document" aria-label={content.title} style={{ ...(content.style?.font ? { fontFamily: `"${content.style.font}", var(--font)` } : {}), ...(content.style?.size ? { fontSize: `${Math.round(content.style.size * 4 / 3)}px` } : {}) }}>
                   {rows.map((r) => r.ghost ? (
                     <div key={`ghost-${r.key}`} className="doc-row doc-ghost" aria-hidden><BlockStatic b={r.b} /></div>
                   ) : (

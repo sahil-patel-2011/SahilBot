@@ -3,7 +3,7 @@ import { autoPool, autoVariant } from './llm/router'
 import { execFileSync } from 'node:child_process'
 import { homedir, tmpdir, totalmem, userInfo } from 'node:os'
 import { statfsSync, writeFileSync } from 'node:fs'
-import { basename, extname, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { homeIdeas } from './ideas'
 import { classifyTask, type TaskCategory } from './llm/task-classifier'
 import { execFile } from 'node:child_process'
@@ -54,6 +54,7 @@ import { exportPagePdf, guardFrames, isPagePath, openPageWindow, PagePanel, page
 // Docs: live two-way documents beside the chat.
 import { DocStore } from './docspace/store'
 import { exportDoc } from './docspace/export'
+import { importFile, isEditable, saveFormat } from './docspace/import'
 import { docTools } from './agent/tools/docspace'
 import { memoryTool } from './agent/tools/memory'
 import { webTools } from './agent/tools/web'
@@ -1565,6 +1566,44 @@ app.whenReady().then(() => {
     const path = await exportDoc(docs.get(id), format, join(settings.get().workspaceDir, 'exports'))
     attachments.allow(path)
     if (!HIDDEN) shell.showItemInFolder(path)
+    return path
+  })
+  // Opening a file agents made (Artifacts, the preview) in the Document tab, and saving the edits back to it.
+  const docSources = (): Record<string, string> => db.getSetting<Record<string, string>>('docs:sources') ?? {}
+  handle('docs:importFile', async (path: string, threadId?: string) => {
+    const p = String(path ?? '')
+    // Only files SahilBot made or showed (never an arbitrary path from the window).
+    const known = db.artifactFiles(1000).find((f) => f.path === p) ?? db.recentFiles(500).find((f) => f.path === p)
+    if (!known || !existsSync(p)) throw new Error('Only files SahilBot made can be opened in the editor.')
+    if (!isEditable(p)) throw new Error('This kind of file doesn\'t open in the editor yet.')
+    const t = db.getThread(typeof threadId === 'string' && db.getThread(threadId) ? threadId : known.threadId)
+    if (!t) throw new Error('The chat this file came from is gone.')
+    const existing = Object.entries(docSources()).find(([id, src]) => src === p && (() => { try { return docs.get(id).threadId === t.id } catch { return false } })())
+    if (existing) return { docId: existing[0], threadId: t.id }
+    const imported = await importFile(p)
+    const snap = docs.create({ threadId: t.id, spaceId: t.spaceId, title: imported.title, type: imported.type, content: imported.content, author: 'user' })
+    db.setSetting('docs:sources', { ...docSources(), [snap.id]: p })
+    return { docId: snap.id, threadId: t.id }
+  })
+  handle('docs:source', (id: string) => docSources()[String(id)] ?? null)
+  /** Writes the document back over its file (a copy of the original goes to <folder>/.sahilbot-backups first), or next to it. */
+  handle('docs:saveBack', async (id: string, mode: 'replace' | 'copy') => {
+    const src = docSources()[String(id)]
+    if (!src) throw new Error('This document wasn\'t opened from a file.')
+    const format = saveFormat(src)
+    const out = await exportDoc(docs.get(id), format, join(settings.get().workspaceDir, 'exports'), { name: basename(src) })
+    let path = out
+    if (mode === 'replace' && extname(src).toLowerCase() === `.${format}`) {
+      if (existsSync(src)) {
+        const backups = join(dirname(src), '.sahilbot-backups')
+        mkdirSync(backups, { recursive: true })
+        copyFileSync(src, join(backups, `${basename(src, extname(src))}-${new Date().toISOString().replace(/[:.]/g, '-')}${extname(src)}`))
+      }
+      copyFileSync(out, src)
+      rmSync(out, { force: true })
+      path = src
+    }
+    attachments.allow(path)
     return path
   })
   handle('docs:addImage', async () => {
