@@ -167,3 +167,22 @@ test('a chart slide exports as a native, editable PowerPoint chart', async () =>
   const names = execFileSync('/usr/bin/unzip', ['-Z1', path]).toString()
   expect(names).toMatch(/ppt\/charts\/chart\d+\.xml/)
 }, 60_000)
+
+test('the PowerPoint chart is the same kind as the slide\'s (one rule), and blanks stay gaps', async () => {
+  const { chartKind } = await import('../../src/shared/dashboard')
+  const t = (n: number, h = 'Month') => ({ header: [h, 'Sales'], rows: Array.from({ length: n }, (_, i) => [`m${i}`, String(i)]) })
+  expect([chartKind(t(5)), chartKind(t(7)), chartKind(t(8, 'Region')), chartKind(t(12, 'Region'))]).toEqual(['column', 'line', 'column', 'line'])
+  const { execFileSync } = await import('node:child_process')
+  const dir = mkdtempSync(join(tmpdir(), 'slides-kind-'))
+  const rows = ['Month, Sales', ...Array.from({ length: 6 }, (_, i) => `M${i}, ${i === 3 ? '' : 10 + i}`)].join('\n')
+  const blocks: DocBlock[] = [{ id: 't', type: 'h2', text: 'Deck' }, { id: 'h', type: 'h2', text: 'Sales' }, { id: 'c', type: 'code', lang: 'chart', text: rows }]
+  const path = await exportDoc({ id: 'd', threadId: 't', title: 'Deck', type: 'doc', version: 1, createdAt: 0, updatedAt: 0, lastAuthor: 'user', lastSummary: '', content: { title: 'Deck', blocks, kind: 'slides' } } as never, 'pptx', dir)
+  // pptxgenjs numbers chart parts across the whole process, so find this deck's one by listing.
+  const part = execFileSync('/usr/bin/unzip', ['-Z1', path]).toString().split('\n').find((n) => /^ppt\/charts\/chart\d+\.xml$/.test(n))!
+  const chartXml = execFileSync('/usr/bin/unzip', ['-p', path, part]).toString()
+  // Six months is bars in the editor (chartKind), so bars in PowerPoint too; the blank month is a gap, not 0;
+  // and a slide with only a title and a chart keeps its chart (it isn't a section slide).
+  expect(chartXml).toContain('<c:barChart>')
+  expect(chartXml).toMatch(/<c:dispBlanksAs val="gap"\/>/)
+  expect(chartXml).toContain('<c:v></c:v>')
+}, 60_000)

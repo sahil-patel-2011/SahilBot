@@ -4087,7 +4087,8 @@ export class Agent {
       // Only a failure that might still have gone through (a timeout, a dropped connection) is "uncertain"; a
       // refusal or bad input is plainly failed, so it neither blocks completion nor a corrected retry.
       this.runtime.fail(preparedAction.record.id, msg, effect !== 'read' && !tool.idempotent && !notApplied && !definiteFailure(msg))
-      if (effect !== 'read') (ctx.track.failedWrites ??= new Set()).add(tool.name)
+      // Only a plain failure counts against a later "I've done it"; an uncertain one (a timeout) may have gone through.
+      if (effect !== 'read' && definiteFailure(msg)) (ctx.track.failedWrites ??= new Set()).add(tool.name)
       if (run.ctrl.signal.aborted) throw e
       const recovery = recoveryPlan(tool.name, msg, effect)
       const mayRecover = this.runtime.recoverAttempt(record.id, digest({ tool: tool.name, kind: recovery.kind }))

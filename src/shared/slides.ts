@@ -83,8 +83,10 @@ export function slidesToBlocks(slides: Slide[], newId: () => string): DocBlock[]
 export function slideLayout(s: Slide, index: number): 'title' | 'bullets' | 'image' | 'image_text' | 'section' {
   const text = textPoints(s)
   if (s.image) return text.length ? 'image_text' : 'image'
-  if (index === 0 && text.length <= 3) return 'title'
-  if (!s.points.length) return 'section'
+  // A slide that carries a chart or a table is a content slide, even with no points.
+  const visual = (s.extra ?? []).some((b) => b.type === 'table' || (b.type === 'code' && /^chart$/i.test(b.lang ?? '')))
+  if (index === 0 && text.length <= 3 && !visual) return 'title'
+  if (!s.points.length && !visual) return 'section'
   return 'bullets'
 }
 

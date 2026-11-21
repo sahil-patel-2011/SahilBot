@@ -57,6 +57,12 @@ const PALETTE: Record<'modern' | 'classic' | 'minimal', string[]> = {
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 const short = (n: number): string => Math.abs(n) >= 1e9 ? `${+(n / 1e9).toFixed(1)}B` : Math.abs(n) >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : Math.abs(n) >= 1e4 ? `${+(n / 1e3).toFixed(1)}k` : `${+n.toFixed(2)}`
 
+/** Line or bars for a table: 12+ rows, or 7+ rows under a time column (Month, Quarter…), is a line. Shared with the PowerPoint export. */
+export function chartKind(t: DashTable): 'line' | 'column' {
+  const n = t.rows.length
+  return (n >= 7 && /^(date|day|week|month|year|quarter|q\d|period|time)/i.test(t.header[0] ?? '')) || n >= 12 ? 'line' : 'column'
+}
+
 /** A chart (SVG) of a table's number columns: a line for 7+ rows over time, otherwise bars. */
 export function chartSvg(t: DashTable, colors: string[]): string | null {
   const cols = t.header.map((_, c) => c).filter((c) => c > 0 && t.rows.length > 0 && t.rows.every((r) => r[c] === undefined || r[c].trim() === '' || numberOf(r[c]) !== null) && t.rows.some((r) => numberOf(r[c] ?? '') !== null)).slice(0, 4)
@@ -69,7 +75,7 @@ export function chartSvg(t: DashTable, colors: string[]): string | null {
   const span = max - min || 1
   const y = (v: number): number => T + (H - T - B) * (1 - (v - min) / span)
   const n = t.rows.length
-  const line = n >= 7 && /^(date|day|week|month|year|quarter|q\d|period|time)/i.test(t.header[0] ?? '') || n >= 12
+  const line = chartKind(t) === 'line'
   const step = (W - L - R) / n
   const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => { const v = min + span * f; return `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e5e7eb"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="#6b7280">${esc(short(v))}</text>` }).join('')
   const every = Math.ceil(n / 12)

@@ -6,7 +6,7 @@ import { blocksToMarkdown, listNumbers } from './markdown'
 import { sheetRows, toCsv } from './sheet'
 import { blocksToSlides, plainInline } from '@shared/slides'
 import { slidePieces } from '@shared/slide-render'
-import { chartTable, donutSvg, numberOf } from '@shared/dashboard'
+import { chartKind, chartTable, donutSvg, numberOf } from '@shared/dashboard'
 import { dashboardPage, dashboardPdf, deckOdp, deckPdf, deckPngFolder, deckPptxPictures } from './deck-export'
 
 // doc_export and the editor's Export menu: Word and PDF through the app's document generators
@@ -189,7 +189,8 @@ export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: st
         const ct = fence ? chartTable(fence.text ?? '') : null
         const nums = ct ? ct.header.map((_, c) => c).filter((c) => c > 0 && ct.rows.some((r) => numberOf(r[c] ?? '') !== null)) : []
         const chart = ct && nums.length ? {
-          type: (donutSvg(ct, ['#000']) ? 'doughnut' : ct.rows.length >= 7 || /^(date|day|week|month|year|quarter|q\d|period|time)/i.test(ct.header[0] ?? '') && ct.rows.length >= 5 ? 'line' : 'column') as 'doughnut' | 'line' | 'column',
+          // The same rule as the slide's own chart (dashboard.ts chartKind), so the file matches the editor.
+          type: (donutSvg(ct, ['#000']) ? 'doughnut' : chartKind(ct)) as 'doughnut' | 'line' | 'column',
           categories: ct.rows.map((r) => r[0] ?? ''),
           series: nums.map((c) => ({ name: ct.header[c], values: ct.rows.map((r) => numberOf(r[c] ?? '')) }))
         } : undefined
