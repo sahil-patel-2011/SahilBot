@@ -132,6 +132,29 @@ export interface TaskClass {
   lowLatency: boolean
   /** The decision path, for the eval and the calibration table. */
   rule: string
+  /**
+   * For writing: whose words these are. 'professional' (emails, replies, memos, proposals, cover letters: what a
+   * person will receive) uses the business-writing row (routing-table PROFESSIONAL_WRITING); 'creative' (poems,
+   * stories, lyrics) the creative-writing one.
+   */
+  voice?: WritingVoice
+  /** A specialised engineering domain with its own evidence-based row (routing-table ELECTRICAL_ENGINEERING). */
+  domain?: 'electrical'
+}
+
+export type WritingVoice = 'professional' | 'creative' | 'technical'
+
+const ELECTRICAL = /\b(circuits?|schematics?|pcb|resistors?|capacitors?|inductors?|voltage (divider|drop|regulator)|op-?amps?|mosfets?|transistors?|ohm'?s law|kirchhoff|buck converter|boost converter|wire gauge|awg|circuit breaker|amperage|three[- ]phase|led driver|current limiting|impedance|h-bridge|motor driver|bypass cap|pull-?up resistor)\b/
+
+const CREATIVE = /\b(poem|poetry|haiku|sonnet|limerick|story|short story|fiction|novel|chapter|lyrics|song|screenplay|script for a (film|movie|play)|fairy tale|fable|rap|verse|toast|eulogy|wedding speech|fan ?fic)\b/
+const PROFESSIONAL = /\b(e-?mails?|replies|reply|respond|response to|memo|cover letter|proposal|client|customer|colleague|boss|manager|recruiter|hiring|follow[- ]up|status (update|report)|update (to|for) (the )?(team|client|stakeholders)|linkedin|bio|resume|cv|press release|announcement|newsletter|slack message|message to|letter (to|for)|thank[- ]you note|apology|complaint|invoice note|out of office|more formal|less formal|professional|polite|sound like me|executive summary|meeting notes|minutes)\b/
+
+/** Whose words a writing request is (see TaskClass.voice). Creative wins when both match ("a poem for my boss"). */
+export function writingVoice(text: string): WritingVoice {
+  const t = (text ?? '').toLowerCase()
+  if (CREATIVE.test(t)) return 'creative'
+  if (PROFESSIONAL.test(t)) return 'professional'
+  return 'technical'
 }
 
 /** Very large inputs: above this, only the 1M-window cloud models fit (local windows stop at 128K). */
@@ -518,6 +541,8 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
       if (!acting && question) return { category: 'code-quick', rule: 'code-quick', why: 'a question about code' }
       return { category: 'coding', rule: has(CODE_STRONG, t) || has(BUILD_APP, t) ? 'coding' : 'coding:project', why: 'changes code' }
     }
+    // Electrical engineering (circuits, power, components): a math-like category with its own EEBench row (domain).
+    if (has(ELECTRICAL, t) && !officeDeliverable && !(files && docFile)) return { category: 'math', rule: 'electrical', why: 'electrical engineering' }
     if (has(MATH, t) && !officeDeliverable && !(files && docFile)) return { category: 'math', rule: 'math', why: 'math' }
     if (has(SELF, t) || has(/\b(remind me|set a timer|daily briefing)\b/, t)) return { category: 'agent-tools', rule: 'agent-tools:self', why: 'a reminder, routine or message' }
     if (has(RELAY, t)) return { category: 'agent-tools', rule: 'agent-tools:relay', why: 'another bot or a recording' }
@@ -674,7 +699,9 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     needsVision: images > 0,
     contextTokens,
     lowLatency: !!ctx.voice,
-    rule: pick.rule
+    rule: pick.rule,
+    ...(category === 'writing' ? { voice: writingVoice(t) } : {}),
+    ...(pick.rule === 'electrical' ? { domain: 'electrical' as const } : {})
   }
 }
 

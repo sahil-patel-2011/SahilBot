@@ -132,6 +132,7 @@ export const ROUTING_TABLE: Record<TaskCategory, CategoryRoute> = {
     // arena Creative Writing: Astra 1451, 6.1 Sol 1449.
     ties: [['astra', 'sol']]
   },
+  // (Professional writing, the writing row's 'professional' voice, is PROFESSIONAL_WRITING below.)
   // Office documents, spreadsheets, data analysis. GDPval-AA v2.1 (IND, AA): Opus 5.5 #1 (1866), Sonnet 5.5 #4 (1838),
   // Fable 5.2 #6 (1831), Haiku #32 (1629), 6.1 Sol #41 (1607), Astra #48 (1587). Vals Finance Agent: Opus #2.
   // Opus is above Fable here: no Fable.
@@ -296,6 +297,42 @@ export interface RoutePick {
   source: 'table' | 'local' | 'fallback' | 'sticky' | 'close-call'
 }
 
+/**
+ * Writing a person will receive (emails, replies, memos, proposals, cover letters, client updates). No public
+ * benchmark scores business prose alone (researched 2026-11-20); the closest proxies agree on Claude:
+ * AA-Briefcase v1.1 Elo (IND, multi-week business workflows ending in memos and documents): Sonnet 5.5 1815,
+ * Opus 5.5 1800, Fable 5.2 1785, GPT-6.2 Astra 1644, Grok 4.7 1634, GPT-6.2 Sol 1612, Haiku 1572, Terra 1400.
+ * arena Text "Writing, Literature & Language" (IND, Nov 20): Opus 5.5 #3 (1516), Fable 5.2 #4; Sonnet, GPT-6.x and
+ * Grok outside the top 15. So Sonnet leads the everyday rows (first on Briefcase at a fraction of Opus's price),
+ * Opus the hardest, Astra the GPT runner-up, Grok last.
+ */
+export const PROFESSIONAL_WRITING: CategoryRoute = {
+  tiers: [['haiku', 'sonnet', 'terra'], ['sonnet', 'haiku', 'terra', 'sol', 'grok'], ['sonnet', 'opus', 'astra', 'sol', 'grok'], ['opus', 'sonnet', 'astra', 'sol', 'grok']],
+  // Briefcase: Opus 1800 above Fable 1785, as on the creative-writing board: no Fable.
+  fable: false,
+  ties: [['sonnet', 'opus']]
+}
+
+/**
+ * Electrical engineering (circuits, power, components, PCB). EEBench (IND, atopile: SPICE simulation and real-part
+ * BOM checks; BenchLM mirror 2026-11-18): Fable 5.2 77.3%, Opus 5.5 75.0%, GPT-6.2 Astra 74.6%, Sonnet 5.5 67.2%,
+ * Haiku 67.1%, GPT-6.2 Sol 64.2%, Grok 4.7 64.0%, Luna 31.1%. AnalogPortBench (IND, arXiv 2610.33088): Opus 5.5 best
+ * overall; GPT-6.1 Sol best with simulation feedback (56% vs 52%). So Claude leads, Astra is the runner-up, Luna never.
+ */
+export const ELECTRICAL_ENGINEERING: CategoryRoute = {
+  // Astra only at the hardest tier: routine work never runs on it (the app's cost rule, see the header).
+  tiers: [['haiku', 'sonnet', 'terra'], ['sonnet', 'haiku', 'sol', 'terra'], ['opus', 'sonnet', 'sol', 'grok'], ['opus', 'astra', 'sonnet', 'sol', 'grok']],
+  fable: true,
+  ties: [['opus', 'astra']]
+}
+
+/** The row for a request: the category's, or a specialised one (professional writing, electrical engineering). */
+export function routeFor(category: TaskCategory, hint?: Pick<TaskClass, 'voice' | 'domain'>): CategoryRoute {
+  if (category === 'writing' && hint?.voice === 'professional') return PROFESSIONAL_WRITING
+  if (hint?.domain === 'electrical') return ELECTRICAL_ENGINEERING
+  return ROUTING_TABLE[category]
+}
+
 /** The tier a preference routes a difficulty at. */
 export function routeTier(category: TaskCategory, difficulty: Tier, preference: AutoPreference): Tier {
   const max = ROUTING_TABLE[category].maxTier ?? 3
@@ -305,8 +342,8 @@ export function routeTier(category: TaskCategory, difficulty: Tier, preference: 
 }
 
 /** The ordered slots for a category at a tier, under a preference and the Fable setting. */
-export function slotsFor(category: TaskCategory, tier: Tier, preference: AutoPreference, fableForHardest: boolean): Slot[] {
-  const route = ROUTING_TABLE[category]
+export function slotsFor(category: TaskCategory, tier: Tier, preference: AutoPreference, fableForHardest: boolean, hint?: Pick<TaskClass, 'voice' | 'domain'>): Slot[] {
+  const route = routeFor(category, hint)
   let row = [...(tier === 3 && preference === 'balanced' && route.balancedHardest ? route.balancedHardest : route.tiers[tier])]
   if (tier === 3 && fableForHardest && route.fable === true && preference !== 'cheapest') row = ['fable', ...row.filter((s) => s !== 'fable')]
   if (preference === 'cheapest') row = row.map((s, i) => ({ s, i })).sort((a, b) => slotCost(a.s) - slotCost(b.s) || a.i - b.i).map((x) => x.s)
@@ -411,7 +448,7 @@ export function keepPrevious(prev: ModelInfo, fresh: ModelInfo, task: TaskClass,
   if (lightChat) return prev.tier >= fresh.tier && slotPrice(prev) <= CLOSE_CALL_PRICE * slotPrice(fresh) + 1e-9
   const ps = slotOf(prev), fs = slotOf(fresh)
   if (!ps || !fs) return prev.tier >= fresh.tier && (prev.rank ?? 0) >= (fresh.rank ?? 0)
-  const hardest = slotsFor(task.category, 3, 'best', fableOn)
+  const hardest = slotsFor(task.category, 3, 'best', fableOn, task)
   const order = [...hardest, ...(['fable', 'opus', 'astra', 'sonnet', 'sol', 'grok', 'terra', 'haiku', 'luna'] as Slot[]).filter((s) => !hardest.includes(s))]
   if (order.indexOf(ps) <= order.indexOf(fs)) return true
   return !!ROUTING_TABLE[task.category].ties?.some((g) => g.includes(ps) && g.includes(fs))
@@ -510,7 +547,7 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
     const order: Tier[] = [tier, ...([1, 2, 3].map((d) => tier + d).filter((t) => t <= 3) as Tier[]), ...([1, 2, 3].map((d) => tier - d).filter((t) => t >= 0) as Tier[])]
     for (const t of order) {
       // Premium Claude (Fable) is only in a row when the setting puts it there (the hardest tier).
-      for (const slot of slotsFor(task.category, t, preference, fableOn)) {
+      for (const slot of slotsFor(task.category, t, preference, fableOn, task)) {
         if (study && STUDY_SKIPS.has(slot)) continue
         const m = bySlot(slot)
         if (m) return result(m, 'table')
@@ -530,7 +567,7 @@ export function routeTask(models: ModelInfo[], task: TaskClass, o: RouteOptions 
     const provider = (prev ?? models.find((m) => m.id === o.previous!.model))?.provider
     if (provider && remote(fresh.model) && fresh.model.provider !== provider) {
       const mine = cloud.filter((m) => m.provider === provider)
-      const alt = slotsFor(task.category, tier, preference, fableOn).map((slot) => bySlot(slot, mine)).find((m) => m && keepPrevious(m, fresh.model, task, o.previous!.category, tier, fableOn, preference))
+      const alt = slotsFor(task.category, tier, preference, fableOn, task).map((slot) => bySlot(slot, mine)).find((m) => m && keepPrevious(m, fresh.model, task, o.previous!.category, tier, fableOn, preference))
       if (alt) return result(alt, 'sticky', 'same provider as the last reply')
     }
   }

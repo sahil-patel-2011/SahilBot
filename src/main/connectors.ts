@@ -198,6 +198,8 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'frontify', name: 'Frontify', url: 'https://mcp.frontify-integrations.com/mcp', color: '#2D3232', category: 'Design', domain: 'frontify.com', auth: 'oauth', description: 'Brand guidelines, assets and templates.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR mcp.frontify-integrations.com/oauth/register
   // Media & AI
   { id: 'higgsfield', name: 'Higgsfield', url: 'https://mcp.higgsfield.ai/mcp', color: '#C7F23A', category: 'Media & AI', domain: 'higgsfield.ai', auth: 'oauth', description: 'AI images, video and voice on your plan\'s credits; publishing always asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM /mcp, DCR clerk.higgsfield.ai/oauth/register
+  { id: 'invideo', name: 'invideo AI', url: 'https://mcp.invideo.io/mcp', color: '#2D6BFF', category: 'Media & AI', domain: 'invideo.io', auth: 'oauth', description: 'AI videos in the invideo editor, on your plan\'s credits.' }, // NEW 2026-11-20: 401+PRM /mcp (probed); URL from help.invideo.io (the old /sse endpoint is retired)
+  { id: 'vimeo', name: 'Vimeo', url: 'https://mcp.vimeo.com/mcp', color: '#17D5FF', category: 'Media & AI', domain: 'vimeo.com', auth: 'oauth', description: 'Your Vimeo videos, showcases, stats and uploads; uploads and edits ask.' }, // NEW 2026-11-20: 401+PRM, DCR mcp.vimeo.com/register, PKCE S256 (probed); official server, public beta
   { id: 'descript', name: 'Descript', url: 'https://api.descript.com/v2/mcp', color: '#3D5AFE', category: 'Media & AI', domain: 'descript.com', auth: 'oauth', description: 'Import media and edit video and podcasts with prompts.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM (resource /v2/mcp), DCR auth.descript.com/v1/oauth2/register
   { id: 'picsart', name: 'Picsart Media Studio', url: 'https://api.picsart.com/connectors/media-tools/mcp', color: '#C209C1', category: 'Media & AI', domain: 'picsart.com', auth: 'oauth', description: 'Turn clips and photos into finished videos.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR auth.picsart.com/api/oauth2/register
   // Sales & marketing
@@ -241,6 +243,16 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'cloudflare', name: 'Cloudflare', url: 'https://mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'The whole Cloudflare API: Workers, DNS, R2, KV, D1 and more.' }, // NEW 2026-11-14, swept 2026-11-15: 401+PRM, DCR mcp.cloudflare.com/register (Cloudflare's recommended server; bindings.mcp is deprecated)
   { id: 'cloudflare-observability', name: 'Cloudflare Observability', url: 'https://observability.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'Workers logs and analytics.' }, // NEW 2026-11-14, swept 2026-11-15: 401+PRM, DCR observability.mcp.cloudflare.com/register
   { id: 'cloudflare-docs', name: 'Cloudflare Docs', url: 'https://docs.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'developers.cloudflare.com', auth: 'none', description: 'Cloudflare developer docs. No sign-in.' }, // NEW 2026-11-14, swept 2026-11-15: initialize 200, open
+  { id: 'cloudflare-browser', name: 'Cloudflare Browser Rendering', url: 'https://browser.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'Fetch pages, screenshots and markdown through Cloudflare\'s browsers.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
+  { id: 'cloudflare-builds', name: 'Cloudflare Workers Builds', url: 'https://builds.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'Build history and logs for Workers.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
+  { id: 'cloudflare-ai-gateway', name: 'Cloudflare AI Gateway', url: 'https://ai-gateway.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'AI Gateway logs, prompts and responses.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
+  { id: 'cloudflare-autorag', name: 'Cloudflare AutoRAG', url: 'https://autorag.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'Search your AutoRAG document indexes.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
+  { id: 'cloudflare-auditlogs', name: 'Cloudflare Audit Logs', url: 'https://auditlogs.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'Who changed what in your Cloudflare account.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
+  { id: 'cloudflare-dns-analytics', name: 'Cloudflare DNS Analytics', url: 'https://dns-analytics.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'DNS query analytics and performance.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
+  { id: 'cloudflare-logpush', name: 'Cloudflare Logpush', url: 'https://logs.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'Logpush job health and summaries.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
+  { id: 'cloudflare-graphql', name: 'Cloudflare GraphQL', url: 'https://graphql.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'Analytics through Cloudflare\'s GraphQL API.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
+  { id: 'cloudflare-containers', name: 'Cloudflare Containers', url: 'https://containers.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'A sandbox container to run code; running anything asks.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
+  { id: 'cloudflare-casb', name: 'Cloudflare CASB', url: 'https://casb.mcp.cloudflare.com/mcp', color: '#F38020', category: 'Code', domain: 'cloudflare.com', auth: 'oauth', description: 'SaaS security findings across your connected apps.' }, // NEW 2026-11-20: 401+PRM /mcp (probed)
   { id: 'supabase', name: 'Supabase', url: 'https://mcp.supabase.com/mcp', color: '#3ECF8E', category: 'Code', auth: 'oauth', description: 'Databases, auth and storage.' }, // 2026-11-15: 401+PRM, DCR api.supabase.com/platform/oauth/apps/register
   { id: 'neon', name: 'Neon', url: 'https://mcp.neon.tech/mcp', color: '#00E599', category: 'Code', auth: 'oauth', description: 'Serverless Postgres.' }, // 2026-11-15: 401+PRM, DCR mcp.neon.tech/api/register
   { id: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', color: '#FFD21E', category: 'Code', domain: 'huggingface.co', auth: 'oauth', description: 'Models, datasets and Spaces.' }, // 2026-11-15: initialize 200 (anonymous works), DCR huggingface.co/oauth/register
@@ -679,6 +691,23 @@ export const EFFECT_MAPS: Record<string, EffectRule[]> = {
     // Code-mode server: "search" reads the API spec, "execute" runs API calls.
     [/^search$/i, READ],
     [/^execute$/i, ASK]
+  ],
+  'cloudflare-containers': [
+    // A sandbox shell: running or writing anything asks.
+    [/^(container_exec|container_file_write|container_file_delete|container_initialize)/i, ASK],
+    [/^(container_ls|container_file_read)/i, READ]
+  ],
+  vimeo: [
+    [/^delete_/i, DESTROY],
+    // Uploads, edits and new showcases change the account.
+    [/(upload|edit|update|create|add|set|remove|move)/i, ASK],
+    [/^(get|list|search|read|fetch)/i, READ]
+  ],
+  invideo: [
+    [/^delete_/i, DESTROY],
+    // Generation and exports spend plan credits.
+    [/(generate|create|render|export|publish|upload)/i, ASK],
+    [/^(get|list|search|read)/i, READ]
   ],
   supabase: [
     [/^(execute_sql|apply_migration|deploy_edge_function|merge_branch|reset_branch|rebase_branch|pause_project|restore_project|create_project|create_branch|confirm_cost)$/i, ASK],

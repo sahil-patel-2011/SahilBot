@@ -10,24 +10,25 @@ import { NO_PRESET, sourceInfo } from '../../src/renderer/src/lib/function-bots'
 const dir = resolve('packs/templates')
 const skillsDir = resolve('packs/skills')
 const skillNames = readdirSync(skillsDir).filter((d) => existsSync(join(skillsDir, d, 'SKILL.md')))
-const FUNCTION_IDS = ['accounting-bot', 'marketing-bot', 'sales-bot', 'contracts-bot']
+const FUNCTION_IDS = ['accounting-bot', 'marketing-bot', 'sales-bot', 'contracts-bot', 'customer-support']
 const read = (id: string): BotTemplate => JSON.parse(readFileSync(join(dir, `${id}.json`), 'utf8')) as BotTemplate
 
 describe('function bot templates', () => {
-  test('the four exist, are valid and grouped as function bots', () => {
+  test('the five exist, are valid and grouped as function bots', () => {
     for (const id of FUNCTION_IDS) {
       const t = read(id)
       expect(templateProblems(t, skillNames), id).toEqual([])
       expect(t.group, id).toBe('function')
     }
     const loaded = loadTemplates(dir).filter((t) => t.group === 'function').map((t) => t.name)
-    expect(loaded).toEqual(['Accounting', 'Contracts', 'Marketing', 'Sales'])
+    expect(loaded).toEqual(['Accounting', 'Contracts', 'Customer Support', 'Marketing', 'Sales'])
   })
 
   test('sources are connector presets (or a named app with no preset yet)', () => {
     const presetIds = new Set(PRESETS.map((p) => p.id))
     const expected: Record<string, string[]> = {
-      'accounting-bot': ['quickbooks', 'gmail'], 'marketing-bot': ['slack', 'notion'], 'sales-bot': ['hubspot', 'zoom'], 'contracts-bot': ['gdrive', 'gmail']
+      'accounting-bot': ['quickbooks', 'gmail'], 'marketing-bot': ['slack', 'notion'], 'sales-bot': ['hubspot', 'zoom'], 'contracts-bot': ['gdrive', 'gmail'],
+      'customer-support': ['gmail', 'gdrive', 'intercom', 'helpscout', 'front']
     }
     for (const id of FUNCTION_IDS) {
       const t = read(id)
@@ -39,7 +40,8 @@ describe('function bot templates', () => {
   test('starter tasks match the jobs, and skills exist', () => {
     const first: Record<string, string> = {
       'accounting-bot': 'Which invoices are overdue?', 'marketing-bot': "Draft this week's newsletter",
-      'sales-bot': 'Prep me for my 2pm', 'contracts-bot': 'What scope did we agree with Client C?'
+      'sales-bot': 'Prep me for my 2pm', 'contracts-bot': 'What scope did we agree with Client C?',
+      'customer-support': 'Check the support inbox now'
     }
     for (const id of FUNCTION_IDS) {
       const t = read(id)

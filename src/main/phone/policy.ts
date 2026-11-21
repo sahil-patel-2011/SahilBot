@@ -41,6 +41,8 @@ const DENIED: Record<string, string> = {
   'chatgptPlan:openInstallGuide': 'Set up your ChatGPT plan on your Mac.',
   'chatgptPlan:installInTerminal': 'Install Codex on your Mac: Terminal opens there.',
   'grokPlan:signIn': 'Sign in to your Grok subscription on your Mac.',
+  'privacy:install': 'Download PII-Tracer on your Mac: Settings → Privacy Gate.',
+  'privacy:remove': 'Remove PII-Tracer on your Mac: Settings → Privacy Gate.',
   'grokPlan:installInTerminal': 'Install Grok Build on your Mac: Terminal opens there.',
   'grokPlan:openInstallGuide': 'Set up your Grok subscription on your Mac.',
   'connectors:connect': 'Connect apps on your Mac: the sign-in page opens there.',

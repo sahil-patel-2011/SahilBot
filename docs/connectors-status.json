@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-16",
+  "date": "2026-11-21",
   "rows": [
     {
       "id": "gmail",
@@ -440,23 +440,14 @@
       "name": "Trello",
       "auth": "oauth",
       "url": "https://mcp.trello.com/v1",
-      "status": "ok",
-      "observed": "oauth-dcr",
-      "problems": [],
-      "notes": [
-        "initialize error: \"invalid_token\""
+      "status": "unreachable",
+      "observed": "unreachable",
+      "problems": [
+        "initialize failed: UND_ERR_CONNECT_TIMEOUT"
       ],
+      "notes": [],
       "iconDomain": "trello.com",
-      "iconResolves": true,
-      "http": 401,
-      "prm": "https://mcp.trello.com/.well-known/oauth-protected-resource/v1",
-      "resource": "https://mcp.trello.com/v1",
-      "authServer": "https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3",
-      "registration": "https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3/dcr/register",
-      "pkceS256": true,
-      "publicClients": true,
-      "refresh": true,
-      "cimd": true
+      "iconResolves": true
     },
     {
       "id": "coda",
@@ -753,8 +744,7 @@
       "observed": "key",
       "problems": [],
       "notes": [
-        "initialize error: Authorization: Bearer <api_key> required",
-        "re-checked 2026-11-16"
+        "initialize error: Authorization: Bearer <api_key> required"
       ],
       "iconDomain": "mandrillapp.com",
       "iconResolves": true,
@@ -949,11 +939,10 @@
       "name": "HyperFrames by HeyGen",
       "auth": "oauth",
       "url": "https://mcp.heygen.com/mcp/hyperframes",
-      "status": "warn",
+      "status": "ok",
       "observed": "oauth-dcr",
       "problems": [],
       "notes": [
-        "initialize followed a redirect to https://mcp.heygen.com/mcp/hyperframes/",
         "initialize error: \"invalid_token\""
       ],
       "iconDomain": "heygen.com",
@@ -1053,12 +1042,56 @@
       "http": 401,
       "prm": "https://mcp.higgsfield.ai/.well-known/oauth-protected-resource/mcp",
       "resource": "https://mcp.higgsfield.ai/mcp",
-      "authServer": "https://clerk.higgsfield.ai",
-      "registration": "https://clerk.higgsfield.ai/oauth/register",
+      "authServer": "https://higgsfield.ai/_clerk",
+      "registration": "https://higgsfield.ai/_clerk/oauth/register",
       "pkceS256": true,
       "publicClients": true,
       "refresh": true,
       "cimd": true
+    },
+    {
+      "id": "invideo",
+      "name": "invideo AI",
+      "auth": "oauth",
+      "url": "https://mcp.invideo.io/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "invideo.io",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://mcp.invideo.io/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://mcp.invideo.io/mcp",
+      "authServer": "https://pro-api-auth.invideo.io",
+      "registration": "https://pro-api-auth.invideo.io/oauth/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": true
+    },
+    {
+      "id": "vimeo",
+      "name": "Vimeo",
+      "auth": "oauth",
+      "url": "https://mcp.vimeo.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [
+        "no refresh_token grant listed: sign-in may be needed again when the token expires"
+      ],
+      "iconDomain": "vimeo.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://mcp.vimeo.com/.well-known/oauth-protected-resource",
+      "resource": "https://mcp.vimeo.com",
+      "authServer": "https://mcp.vimeo.com/",
+      "registration": "https://mcp.vimeo.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": false,
+      "cimd": false
     },
     {
       "id": "descript",
@@ -1383,8 +1416,7 @@
       "problems": [],
       "notes": [
         "initialize error: \"invalid_token\"",
-        "server now also offers OAuth with DCR + PKCE S256 (public clients): could become one click if the vendor documents it",
-        "re-checked 2026-11-16"
+        "server now also offers OAuth with DCR + PKCE S256 (public clients): could become one click if the vendor documents it"
       ],
       "iconDomain": "brevo.com",
       "iconResolves": true,
@@ -1651,7 +1683,7 @@
       "id": "xero",
       "name": "Xero",
       "auth": "oauth-static",
-      "url": "https://mcp.xero.com/mcp",
+      "url": "https://api.xero.com/mcp/v1",
       "status": "ok",
       "observed": "oauth-no-dcr",
       "problems": [],
@@ -1659,9 +1691,9 @@
       "iconDomain": "xero.com",
       "iconResolves": true,
       "http": 401,
-      "prm": "https://mcp.xero.com/.well-known/oauth-protected-resource/mcp",
-      "resource": "https://mcp.xero.com/mcp",
-      "authServer": "https://identity.xero.com/",
+      "prm": "https://api.xero.com/.well-known/oauth-protected-resource/mcp/v1",
+      "resource": "https://api.xero.com/mcp/v1",
+      "authServer": "https://identity.xero.com",
       "pkceS256": true,
       "publicClients": false,
       "refresh": true,
@@ -1922,6 +1954,216 @@
       "serverName": "docs-ai-search"
     },
     {
+      "id": "cloudflare-browser",
+      "name": "Cloudflare Browser Rendering",
+      "auth": "oauth",
+      "url": "https://browser.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://browser.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://browser.mcp.cloudflare.com/mcp",
+      "authServer": "https://browser.mcp.cloudflare.com",
+      "registration": "https://browser.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
+      "id": "cloudflare-builds",
+      "name": "Cloudflare Workers Builds",
+      "auth": "oauth",
+      "url": "https://builds.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://builds.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://builds.mcp.cloudflare.com/mcp",
+      "authServer": "https://builds.mcp.cloudflare.com",
+      "registration": "https://builds.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
+      "id": "cloudflare-ai-gateway",
+      "name": "Cloudflare AI Gateway",
+      "auth": "oauth",
+      "url": "https://ai-gateway.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://ai-gateway.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://ai-gateway.mcp.cloudflare.com/mcp",
+      "authServer": "https://ai-gateway.mcp.cloudflare.com",
+      "registration": "https://ai-gateway.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
+      "id": "cloudflare-autorag",
+      "name": "Cloudflare AutoRAG",
+      "auth": "oauth",
+      "url": "https://autorag.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://autorag.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://autorag.mcp.cloudflare.com/mcp",
+      "authServer": "https://autorag.mcp.cloudflare.com",
+      "registration": "https://autorag.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
+      "id": "cloudflare-auditlogs",
+      "name": "Cloudflare Audit Logs",
+      "auth": "oauth",
+      "url": "https://auditlogs.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://auditlogs.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://auditlogs.mcp.cloudflare.com/mcp",
+      "authServer": "https://auditlogs.mcp.cloudflare.com",
+      "registration": "https://auditlogs.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
+      "id": "cloudflare-dns-analytics",
+      "name": "Cloudflare DNS Analytics",
+      "auth": "oauth",
+      "url": "https://dns-analytics.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://dns-analytics.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://dns-analytics.mcp.cloudflare.com/mcp",
+      "authServer": "https://dns-analytics.mcp.cloudflare.com",
+      "registration": "https://dns-analytics.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
+      "id": "cloudflare-logpush",
+      "name": "Cloudflare Logpush",
+      "auth": "oauth",
+      "url": "https://logs.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://logs.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://logs.mcp.cloudflare.com/mcp",
+      "authServer": "https://logs.mcp.cloudflare.com",
+      "registration": "https://logs.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
+      "id": "cloudflare-graphql",
+      "name": "Cloudflare GraphQL",
+      "auth": "oauth",
+      "url": "https://graphql.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://graphql.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://graphql.mcp.cloudflare.com/mcp",
+      "authServer": "https://graphql.mcp.cloudflare.com",
+      "registration": "https://graphql.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
+      "id": "cloudflare-containers",
+      "name": "Cloudflare Containers",
+      "auth": "oauth",
+      "url": "https://containers.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://containers.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://containers.mcp.cloudflare.com/mcp",
+      "authServer": "https://containers.mcp.cloudflare.com",
+      "registration": "https://containers.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
+      "id": "cloudflare-casb",
+      "name": "Cloudflare CASB",
+      "auth": "oauth",
+      "url": "https://casb.mcp.cloudflare.com/mcp",
+      "status": "ok",
+      "observed": "oauth-dcr",
+      "problems": [],
+      "notes": [],
+      "iconDomain": "cloudflare.com",
+      "iconResolves": true,
+      "http": 401,
+      "prm": "https://casb.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp",
+      "resource": "https://casb.mcp.cloudflare.com/mcp",
+      "authServer": "https://casb.mcp.cloudflare.com",
+      "registration": "https://casb.mcp.cloudflare.com/register",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": false
+    },
+    {
       "id": "supabase",
       "name": "Supabase",
       "auth": "oauth",
@@ -1976,8 +2218,7 @@
       "observed": "open+oauth-dcr",
       "problems": [],
       "notes": [
-        "token endpoint does not list \"none\" auth (DCR may hand out a client secret; the SDK handles that)",
-        "re-checked 2026-11-16"
+        "token endpoint does not list \"none\" auth (DCR may hand out a client secret; the SDK handles that)"
       ],
       "iconDomain": "huggingface.co",
       "iconResolves": true,
@@ -2015,8 +2256,7 @@
       "observed": "open+oauth-dcr",
       "problems": [],
       "notes": [
-        "open, and also offers OAuth with DCR (clerk.context7.com): stays no sign-in",
-        "re-checked 2026-11-16"
+        "open, and also offers OAuth with DCR (clerk.context7.com): stays no sign-in"
       ],
       "iconDomain": "context7.com",
       "iconResolves": true,
@@ -2327,8 +2567,7 @@
       "observed": "oauth-no-dcr",
       "problems": [],
       "notes": [
-        "OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app)",
-        "re-checked 2026-11-16"
+        "OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app)"
       ],
       "iconDomain": "render.com",
       "iconResolves": true,
@@ -2351,8 +2590,7 @@
       "problems": [],
       "notes": [
         "initialize error: \"invalid_token\"",
-        "OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app)",
-        "re-checked 2026-11-16"
+        "OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app)"
       ],
       "iconDomain": "pagerduty.com",
       "iconResolves": true,
@@ -2363,7 +2601,7 @@
       "pkceS256": true,
       "publicClients": true,
       "refresh": true,
-      "cimd": false
+      "cimd": true
     },
     {
       "id": "posthog",
@@ -2569,8 +2807,7 @@
       "observed": "open+oauth-dcr",
       "problems": [],
       "notes": [
-        "open, and also offers OAuth with DCR (auth.exa.ai): stays no sign-in",
-        "re-checked 2026-11-16"
+        "open, and also offers OAuth with DCR (auth.exa.ai): stays no sign-in"
       ],
       "iconDomain": "exa.ai",
       "iconResolves": true,
@@ -3131,23 +3368,14 @@
       "name": "WorkOS",
       "auth": "oauth",
       "url": "https://mcp.workos.com/mcp",
-      "status": "ok",
-      "observed": "oauth-dcr",
-      "problems": [],
-      "notes": [
-        "initialize error: \"unauthorized\""
+      "status": "unreachable",
+      "observed": "unreachable",
+      "problems": [
+        "initialize failed: ECONNRESET"
       ],
+      "notes": [],
       "iconDomain": "workos.com",
-      "iconResolves": true,
-      "http": 401,
-      "prm": "https://mcp.workos.com/.well-known/oauth-protected-resource/mcp",
-      "resource": "https://mcp.workos.com/mcp",
-      "authServer": "https://signin.workos.com",
-      "registration": "https://signin.workos.com/oauth2/register",
-      "pkceS256": true,
-      "publicClients": true,
-      "refresh": true,
-      "cimd": true
+      "iconResolves": true
     },
     {
       "id": "rootly",
@@ -3255,13 +3483,20 @@
       "auth": "none",
       "url": "https://mcp.twilio.com/docs",
       "status": "ok",
-      "observed": "open",
+      "observed": "open+oauth-no-dcr",
       "problems": [],
       "notes": [],
       "iconDomain": "twilio.com",
       "iconResolves": true,
       "http": 200,
-      "serverName": "twilio-docs-mcp"
+      "serverName": "twilio-docs-mcp",
+      "prm": "https://mcp.twilio.com/.well-known/oauth-protected-resource",
+      "resource": "https://mcp.twilio.com/mcp",
+      "authServer": "https://oauth.twilio.com",
+      "pkceS256": true,
+      "publicClients": true,
+      "refresh": true,
+      "cimd": true
     },
     {
       "id": "clickhouse",
@@ -3558,7 +3793,9 @@
       "status": "ok",
       "observed": "oauth-dcr",
       "problems": [],
-      "notes": [],
+      "notes": [
+        "token endpoint does not list \"none\" auth (DCR may hand out a client secret; the SDK handles that)"
+      ],
       "iconDomain": "airwallex.com",
       "iconResolves": true,
       "http": 401,
@@ -3567,9 +3804,9 @@
       "authServer": "https://mcp.airwallex.com/mcp",
       "registration": "https://mcp.airwallex.com/mcp/register",
       "pkceS256": true,
-      "publicClients": true,
+      "publicClients": false,
       "refresh": true,
-      "cimd": true
+      "cimd": false
     },
     {
       "id": "paddle",
@@ -3610,8 +3847,8 @@
       "http": 401,
       "prm": "https://mcp.checkout.com/.well-known/oauth-protected-resource",
       "resource": "https://mcp.checkout.com",
-      "authServer": "https://access.mcp.checkout.com/payment-operations",
-      "registration": "https://access.mcp.checkout.com/payment-operations/register",
+      "authServer": "https://access.mcp.checkout.com/payment-operations-v2",
+      "registration": "https://access.mcp.checkout.com/payment-operations-v2/register",
       "pkceS256": true,
       "publicClients": "unlisted",
       "refresh": true,
@@ -3836,9 +4073,7 @@
       "status": "ok",
       "observed": "oauth-dcr",
       "problems": [],
-      "notes": [
-        "token endpoint does not list \"none\" auth (DCR may hand out a client secret; the SDK handles that)"
-      ],
+      "notes": [],
       "iconDomain": "pandadoc.com",
       "iconResolves": true,
       "http": 401,
@@ -3847,7 +4082,7 @@
       "authServer": "https://mcp.pandadoc.com/",
       "registration": "https://mcp.pandadoc.com/register",
       "pkceS256": true,
-      "publicClients": false,
+      "publicClients": true,
       "refresh": true,
       "cimd": false
     },
@@ -3971,8 +4206,7 @@
       "observed": "open",
       "problems": [],
       "notes": [
-        "PRM https://agenttools.wolfram.com/.well-known/oauth-protected-resource/mcp redirects to another site (https://www.wolframcloud.com)",
-        "PRM https://agenttools.wolfram.com/.well-known/oauth-protected-resource redirects to another site (https://www.wolframcloud.com)"
+        "PRM https://agenttools.wolfram.com/.well-known/oauth-protected-resource/mcp redirects to another site (https://www.wolframcloud.com)"
       ],
       "iconDomain": "wolfram.com",
       "iconResolves": true,

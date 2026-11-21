@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ComputerUseSetting } from './ComputerUseSetting'
 import type { ConnectorStatus, ModelInfo, ModelList, PermissionKind, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, UpdateStatus, VoiceStatus } from '@shared/types'
 import { SENSITIVE_CATEGORIES, type ContextEngineStatus } from '@shared/context-engine'
+import { HYBRID_BEST, HYBRID_MIN, type PrivacyInstallEvent, type PrivacyStatus } from '@shared/privacy'
 import { api, isServerRuntime } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
@@ -867,7 +868,8 @@ function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab:
   const tabs = [
     { id: 'passwords', label: 'Passwords' },
     { id: 'activity', label: 'Activity', hidden: isServerRuntime },
-    { id: 'sensitive', label: 'Sensitive details' }
+    { id: 'sensitive', label: 'Sensitive details' },
+    { id: 'hybrid', label: 'Hybrid compute', hidden: isServerRuntime }
   ]
   const cur = tabs.find((t) => t.id === tab && !t.hidden)?.id ?? 'passwords'
   return (
@@ -880,6 +882,7 @@ function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab:
         : <SecretVaultSettings embedded />}</div>}
       {cur === 'activity' && <div data-setting="activity"><ActivitySettings /></div>}
       {cur === 'sensitive' && <SensitiveDetails />}
+      {cur === 'hybrid' && <HybridComputeSettings />}
     </>
   )
 }
@@ -997,6 +1000,46 @@ export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what yo
             </Row>
           )
         })}
+      </div>
+    </Section>
+  )
+}
+
+/**
+ * Hybrid compute: cloud models plan and research while personal details stay on this Mac. Off until the user
+ * turns it on, on a Mac that meets the requirements; turning it on downloads PII-Tracer (the Privacy Gate).
+ */
+function HybridComputeSettings() {
+  const [st, setSt] = useState<PrivacyStatus | null>(null)
+  const [progress, setProgress] = useState<PrivacyInstallEvent | null>(null)
+  useEffect(() => { void api.privacy.status().then(setSt).catch(() => undefined) }, [])
+  useEffect(() => api.privacy.onInstall((e) => { setProgress(e); if (e.phase === 'done' || e.phase === 'error') void api.privacy.status().then(setSt) }), [])
+  const gb = st ? (st.downloadBytes / 1e9).toFixed(1) : '1.2'
+  const install = (): void => { setProgress({ phase: 'download', pct: 0 }); void api.privacy.install().then(setSt).catch((e) => { setProgress({ phase: 'error', error: clean(e) }) }) }
+  const busy = !!st?.installing || (!!progress && progress.phase !== 'done' && progress.phase !== 'error')
+  const turn = (on: boolean): void => {
+    void api.privacy.setEnabled(on).then((next) => { setSt(next); if (on && !next.installed && !busy) install() }).catch((e) => toast(clean(e), 'error'))
+  }
+  const r = st?.requirements
+  const macLine = !r ? 'Checking this Mac…'
+    : `This Mac: ${r.ramGB} GB memory, ${r.freeDiskGB} GB free disk. ` + (!r.meetsMinimum ? r.problem ?? '' : r.meetsBest ? 'Runs the top local models at full quality.' : `Meets the minimum. ${HYBRID_BEST.ramGB} GB memory and ${HYBRID_BEST.diskGB} GB free disk run the top local models at full quality.`)
+  const gate = !st ? 'Checking…'
+    : busy ? (progress?.phase === 'download' ? `Downloading PII-Tracer… ${progress.pct ?? 0}%` : progress?.phase === 'verify' ? 'Checking the download…' : 'Starting PII-Tracer…')
+    : !st.enabled ? 'Off'
+    : !st.installed ? `PII-Tracer isn't downloaded yet (${gb} GB).`
+    : !st.hybrid ? 'Ready. It starts checking once you have both a local model and a cloud model set up (Settings → Models).'
+    : 'On: checks every cloud request in chats on this Mac.'
+  return (
+    <Section sub="Cloud models plan, research and reason; anything personal stays on this Mac. Before a cloud model sees a request, the Privacy Gate checks it on this Mac with PII-Tracer. Names, contact details, account numbers, secrets and documents like bank statements or bills pause the chat and ask: process it on your Mac, let the cloud plan with stand-ins while a local model handles the details, share it, or skip it. Saved passwords and cards stay usable: the vault never shows their values to any model." testId="settings-hybrid">
+      <div data-setting="hybrid-compute">
+        <Row title="Hybrid compute" sub={macLine} info={`Minimum: Apple Silicon, ${HYBRID_MIN.ramGB} GB memory, ${HYBRID_MIN.diskGB} GB free disk for the local models and PII-Tracer. Best: ${HYBRID_BEST.ramGB} GB and ${HYBRID_BEST.diskGB} GB for the strongest local models at full quality.`} testId="hybrid-on">
+          <Toggle on={!!st?.enabled} disabled={!st || (!st.enabled && !r?.meetsMinimum)} onChange={turn} label="Hybrid compute" testId="hybrid-toggle" />
+        </Row>
+        <Row title="Privacy Gate" sub={<>{gate}{progress?.phase === 'error' ? <span className="ui-text-danger"> · {progress.error}</span> : null}</>} info="PII-Tracer is Perplexity's open-source 0.6B personal-data detector (MIT), run by llama.cpp on this Mac. Every file is checked against a pinned SHA-256. What it checks never leaves your Mac." testId="privacy-gate-model">
+          {st?.enabled && !st.installed && !busy && <button className="btn primary" onClick={install} data-testid="privacy-gate-install">Download ({gb} GB)</button>}
+          {st?.installed && !busy && !st.enabled && <button className="btn" onClick={() => void api.privacy.remove().then(setSt)} data-testid="privacy-gate-remove">Remove download</button>}
+        </Row>
+        {busy && progress?.phase === 'download' && <div className="meter" style={{ margin: '0 0 8px' }}><i style={{ width: `${progress.pct ?? 0}%` }} /></div>}
       </div>
     </Section>
   )

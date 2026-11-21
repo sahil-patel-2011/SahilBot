@@ -261,8 +261,8 @@ describe.skipIf(!process.env.LIVE_SWEEP)('live: connector readiness sweep', () =
   test('every catalog server still answers the way its preset expects', async () => {
     const all = PRESETS.filter((p) => /^https:\/\//.test(p.url) && p.auth !== 'browser' && p.auth !== 'app' && !isLocalPreset(p))
     const skipped = PRESETS.filter((p) => !all.includes(p))
-    // Every remote catalog server is probed; the only entries skipped are built in, browser, custom and local ones.
-    expect(skipped.filter((p) => !['browser', 'app'].includes(p.auth) && p.id !== 'custom' && !isLocalPreset(p)).map((p) => p.id)).toEqual([])
+    // Every remote catalog server is probed; the only entries skipped are built in (app: URLs), browser, custom and local ones.
+    expect(skipped.filter((p) => !['browser', 'app'].includes(p.auth) && !p.url.startsWith('app:') && p.id !== 'custom' && !isLocalPreset(p)).map((p) => p.id)).toEqual([])
     expect(skipped.filter(isLocalPreset).map((p) => p.id).sort()).toEqual(Object.keys(LOCAL_SERVERS).sort())
     const only = (process.env.LIVE_SWEEP_IDS ?? '').split(',').map((x) => x.trim()).filter(Boolean)
     const targets = only.length ? all.filter((p) => only.includes(p.id)) : all

@@ -74,10 +74,10 @@ export interface BrainAnswer {
  */
 const STRENGTH: Record<Slot, string> = {
   fable: 'complex reasoning, research synthesis and multi-step planning',
-  opus: 'hard agentic coding, computer use, multi-file changes and tool-heavy workflows',
-  sonnet: 'routine coding, code review, writing, office documents and everyday tool workflows',
+  opus: 'hard agentic coding, computer use, electrical engineering, multi-file changes, creative and hard business writing, tool-heavy workflows',
+  sonnet: 'routine coding, code review, business writing (emails, memos, proposals), office documents and everyday tool workflows',
   haiku: 'quick explanations, extraction and short tool workflows',
-  astra: 'demanding reasoning, architecture trade-offs, independent verification and research synthesis',
+  astra: 'demanding reasoning, architecture trade-offs, independent verification, research synthesis and pixel-level UI grounding',
   sol: 'research, coding, mathematical reasoning, visual analysis and implementation planning',
   terra: 'short coding tasks, editing and everyday questions',
   luna: 'quick facts, simple transformations and low-latency conversation',
@@ -164,6 +164,7 @@ Fields:
 - study: true for school work (homework, studying, a class, a test, a school subject).
 - image: true if the user wants a picture made or edited.
 - model: the id of the model that should do the work, from the list. Prefer ${pref}. Choose by the request's dependencies, difficulty and needed capabilities. Use a fast model when it can deliver the same quality. For difficult schoolwork, code, or consequential decisions choose enough reasoning and checking for the actual problem.
+- Daily models: Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.2 Sol. Hardest reasoning: Claude Fable 5.2 and GPT-6.2 Astra. Grok 4.7 sparingly, mainly as an independent reviewer. Strengths by work (from benchmarks): coding and computer use → Claude (Sonnet routine, Opus hard); business writing (emails, memos, proposals) → Claude (Sonnet, Opus for high stakes); electrical engineering → Opus, then Astra; research and math → Sol, Astra for the hardest. When a request spans two strengths (code plus a research question, a circuit plus its firmware, a design decision plus its implementation), use team "pair" or "plan" with one Claude and one GPT model so each does its part, and "review" with an independent model (Grok is a good reviewer) when a deliverable has stakes.
 - team: "solo" when one model can do it well. "pair" when two models together give a meaningfully better result: ideas, creative work, a tricky explanation, a plan worth a second opinion. Pair at the request's own level: two quick models (GPT-6 Luna with Claude Haiku 5.5) for light work, two strong ones (Claude Opus 5.5 with GPT-6.2 Astra) for hard work, from different providers when both are listed. "plan" when a hard multi-step task (difficulty 3) gains from a stronger model planning first. "review" when a deliverable with stakes gains from a second model checking it. "plan+review" only for the hardest, highest-stakes work. "debate" when the hard part is reasoning, not doing: a decision with real trade-offs, a strategy, a proof, the root cause of a tricky problem, where several models working in parallel and challenging each other's thinking gives a better answer.
 - partner: with "pair" or "debate", the second model's id (not the main model).
 - planner / reviewer: model ids from the list, only with those teams. The planner should be the strongest reasoner (it writes a plan only); the reviewer a strong model from a different provider than the executor when one is listed.
@@ -302,6 +303,8 @@ export interface PickLimits {
   preference: AutoPreference
   difficulty: Tier
   fableOn: boolean
+  /** The request's writing voice (task-classifier writingVoice). */
+  voice?: 'professional' | 'creative' | 'technical'
 }
 
 const cost = (m: ModelInfo): number => (m.price ? (3 * m.price.input + m.price.output) / 4 : 0)

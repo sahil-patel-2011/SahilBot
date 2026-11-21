@@ -98,6 +98,7 @@ Already use LM Studio or another OpenAI-compatible server? Turn it on under Sett
 - API keys and saved logins are encrypted with your macOS Keychain and are never shown to the model.
 - No telemetry and no analytics. Everything is stored in `~/Library/Application Support/Foreman` (SQLite database, bot prompts, browser profile). Delete that folder to reset SahilBot.
 - SahilBot asks before actions that send, buy, post or delete; you choose how much it may do on its own per chat (permission modes).
+- **Hybrid compute** (opt-in, Settings → Privacy & Security; 32 GB memory and 50 GB free disk minimum, 64 GB and 150 GB for the top local models): cloud models plan and research while personal details stay on your Mac. The Privacy Gate checks every cloud request on your Mac with [PII-Tracer](https://huggingface.co/perplexity-ai/PII-Tracer). Names, contact details, account numbers and documents like bank statements or bills pause the chat until you choose: process on your Mac, let the cloud work with stand-ins, share, or skip. See [docs/privacy-gate.md](docs/privacy-gate.md).
 
 ## Develop
 

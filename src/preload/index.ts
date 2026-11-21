@@ -37,6 +37,17 @@ const api: SahilBotApi = {
       return () => { ipcRenderer.removeListener('chatgptPlan:changed', h) }
     }
   },
+  privacy: {
+    status: call('privacy:status') as never,
+    install: call('privacy:install') as never,
+    setEnabled: call('privacy:setEnabled') as never,
+    remove: call('privacy:remove') as never,
+    onInstall: (cb) => {
+      const h = (_e: unknown, ev: import('@shared/privacy').PrivacyInstallEvent): void => cb(ev)
+      ipcRenderer.on('privacy:install', h)
+      return () => { ipcRenderer.removeListener('privacy:install', h) }
+    }
+  },
   grokPlan: {
     status: call('grokPlan:status') as never,
     configure: call('grokPlan:configure') as never,
@@ -76,6 +87,7 @@ const api: SahilBotApi = {
     open: call('files:open') as never,
     reveal: call('files:reveal') as never,
     recent: call('files:recent') as never,
+    artifacts: call('files:artifacts') as never,
     ideas: call('ideas:home') as never,
     snippet: call('files:snippet') as never
   },

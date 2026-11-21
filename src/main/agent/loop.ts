@@ -90,6 +90,8 @@ import { completionReport } from './runtime/verification'
 import { phaseTask } from './runtime/phase'
 import { taskGraphTool } from './runtime/graph'
 import { evaluationTool } from './runtime/evaluation'
+import { PRIVACY_DOCUMENT_TEXT, type PrivacyAnswer } from '@shared/privacy'
+import { StreamRestorer, applyAnswer, describe as describePrivate, detectInContext, documentFindings, emptyPrivacy, recordNotPersonal, findings as privacyFindings, markScanned, maskText, maskWire, parseAnswer, restoreText, segmentsOf, unscanned, type PrivacyThreadState } from '../privacy/gate'
 
 /**
  * No fixed step count: a run gets a budget that grows with the agent's own plan and with progress
@@ -108,6 +110,18 @@ export const PER_PLAN_ITEM = 10
 export const REMIND_EVERY = 10
 
 export interface AgentDeps {
+  /** Privacy Gate (src/main/privacy): whether it checks cloud requests right now, and PII-Tracer on this Mac. */
+  privacy?: {
+    active(): boolean
+    detect(text: string, signal?: AbortSignal): Promise<{ spans: import('@shared/privacy').PrivacySpan[]; sensitivity?: number }>
+    /** Starts PII-Tracer early so the first check of a request doesn't wait for it. */
+    warm?(): void
+    /**
+     * A larger local model's second look at finds PII-Tracer was unsure about, in context: the ids that are
+     * personal. undefined (no local model, or it failed): all stay on the card.
+     */
+    judge?(items: Array<{ id: string; label: string; value: string }>, context: string, signal: AbortSignal): Promise<Set<string> | undefined>
+  }
   memoryEmbedder?: () => Embedder | null
   recallFiles?: (query: string, threadId: string, signal: AbortSignal) => Promise<RecallHit[]>
   db: Db
@@ -1146,7 +1160,7 @@ export class Agent {
 
   /** Pins the <context> block on the message that opened this run (see pinRunContext). True when the state changed. */
   private pinContext(thread: Thread, state: ThreadState, messages: Message[], opener: Message, system: string, speaker?: Space, refresh = false): boolean {
-    return pinRunContext({ state, messages, openerId: opener.id, speakerId: speaker?.id, system, refresh, sections: () => this.contextSections(thread, speaker, opener.content, system.includes(FULL_SKILLS), opener.id) })
+    return pinRunContext({ state, messages, openerId: opener.id, speakerId: speaker?.id, system, refresh, sections: () => this.contextSections(thread, speaker, recallQuery(opener, messages), system.includes(FULL_SKILLS), opener.id) })
   }
 
   /** A chat (or routine, or helper) is running. */
@@ -1848,6 +1862,95 @@ export class Agent {
   }
 
   /** A line in the chat. internal: about models or thinking, shown only in Developer mode. */
+  /** This chat's Privacy Gate record when the gate is on and has something to mask or withhold. */
+  private privacyState(threadId: string): PrivacyThreadState | undefined {
+    if (!this.d.privacy?.active()) return undefined
+    const p = this.d.db.getState(threadId).privacy
+    return p && (p.items.some((i) => !i.share) || p.skipped.length) ? p : undefined
+  }
+
+  /** Text bound for a cloud model, with this chat's kept details masked. */
+  private privacyMask(threadId: string, text: string): string {
+    const p = this.privacyState(threadId)
+    return p ? maskText(text, p) : text
+  }
+
+  /** The strongest local model that can use tools: where "Process on my Mac" moves the task. */
+  private privacyLocalModel(): ModelInfo | undefined {
+    if (!this.d.privacy?.active()) return undefined
+    let usable: ModelInfo[] = []
+    try { usable = this.d.endpoints.usable() } catch { return undefined }
+    return usable.filter((m) => !isCloudInfo(m) && m.tools !== false).sort((a, b) => (b.tier ?? 0) - (a.tier ?? 0) || (b.requiredGB ?? 0) - (a.requiredGB ?? 0))[0]
+  }
+
+  /**
+   * The Privacy Gate before a cloud request: PII-Tracer checks every part of the conversation it hasn't
+   * checked yet, on this Mac. New personal details pause the chat on a card (unless the user said "Don't
+   * ask again for this chat"); the answer is remembered per detail. 'local': the user chose "Process on my
+   * Mac" and the caller moves the task to `local`. A check that fails stops the run: nothing unchecked
+   * goes to the cloud.
+   */
+  private async privacyGate(thread: Thread, run: Run, state: ThreadState, wire: WireMessage[], cloudModel: string, local: ModelInfo | undefined): Promise<'local' | 'go'> {
+    const gate = this.d.privacy
+    if (!gate?.active() || run.ctrl.signal.aborted) return 'go'
+    // The run's own state object: the loop saves it later, so the record must live on it.
+    const record = state.privacy ?? emptyPrivacy()
+    state.privacy = record
+    const all = segmentsOf(wire)
+    const todo = unscanned(record, all)
+    if (!todo.length) return 'go'
+    const found: Array<{ segment: (typeof todo)[number]; spans: Awaited<ReturnType<typeof gate.detect>>['spans'] }> = []
+    const sensitivity = new Map<string, number>()
+    try {
+      for (const segment of todo) {
+        const r = await detectInContext(all, segment, (text) => gate.detect(text, run.ctrl.signal))
+        found.push({ segment, spans: r.spans })
+        sensitivity.set(segment.key, r.sensitivity)
+      }
+    } catch (e) {
+      if (run.ctrl.signal.aborted) throw e
+      throw new Error(`The Privacy Gate couldn't check this request on your Mac (${(e as Error).message}), so nothing was sent to the cloud. Try again, use a local model, or turn hybrid compute off in Settings → Privacy & Security → Hybrid compute.`)
+    }
+    let items = privacyFindings(record, found)
+    // Not too strict: what PII-Tracer was unsure about gets a second look from a larger local model, in context.
+    const unsure = items.filter((i) => i.unsure)
+    if (unsure.length && gate.judge) {
+      const context = todo.map((s) => s.text).join('\n\n').slice(-6000)
+      const personal = await gate.judge(unsure.map(({ id, label, value }) => ({ id, label, value })), context, run.ctrl.signal).catch(() => undefined)
+      if (personal) {
+        const cleared = unsure.filter((i) => !personal.has(i.id))
+        recordNotPersonal(record, cleared)
+        items = items.filter((i) => !cleared.includes(i))
+      }
+    }
+    // Whole personal records (a bank statement, an internet bill) count even with few tagged details.
+    const docs = documentFindings(todo, sensitivity)
+    const save = (): void => this.d.db.setState(thread.id, state)
+    if (!items.length && !docs.length) { markScanned(record, todo); save(); return 'go' }
+    const label = (id: string): string => this.d.endpoints.last?.models.find((m) => m.id === id)?.label ?? id
+    let answer: PrivacyAnswer | undefined = record.remember ? { action: record.remember, notPersonal: [], remember: true } : undefined
+    if (answer?.action === 'local' && !local) answer = undefined
+    if (!answer) {
+      const raw = await this.ask(thread.id, run, {
+        kind: 'privacy', label: 'Privacy Gate', summary: [...docs.map((d) => PRIVACY_DOCUMENT_TEXT[d.kind]), describePrivate(items)].filter(Boolean).join(' · '),
+        privacy: { items: items.map(({ segment: _s, ...i }) => i), documents: docs.map(({ kind, source }) => ({ kind, source })), sources: [...new Set([...docs.map((d) => d.source), ...items.map((i) => i.source)])], localModel: local ? label(local.id) : undefined, cloudModel: label(cloudModel) }
+      })
+      if (run.ctrl.signal.aborted) throw Object.assign(new Error('Stopped'), { name: 'AbortError' })
+      const parsed = parseAnswer(raw)
+      answer = parsed.action === 'local' && !local ? { ...parsed, action: 'split' } : parsed
+    }
+    const chosen: PrivacyAnswer = answer
+    applyAnswer(record, items, chosen, docs)
+    markScanned(record, todo)
+    save()
+    const what = [...new Set(docs.map((d) => `a ${PRIVACY_DOCUMENT_TEXT[d.kind]}`)), describePrivate(items)].filter(Boolean).join(' and ')
+    this.notice(thread.id, chosen.action === 'local' ? `Privacy Gate: ${what} stay on this Mac. ${local ? label(local.id) : 'A local model'} takes over this task; cloud models see stand-ins like [PERSON_1] from now on.`
+      : chosen.action === 'split' ? `Privacy Gate: ${what} stay on this Mac. ${label(cloudModel)} sees stand-ins like [PERSON_1], and SahilBot puts the real details back here.`
+      : chosen.action === 'share' ? `Privacy Gate: ${what} shared with ${label(cloudModel)}${items.some((i) => i.strict && !chosen.notPersonal.includes(i.id)) ? ' (passwords, keys and account numbers stay masked)' : ''}.`
+      : `Privacy Gate: the content with ${what} is withheld from cloud models.`, { internal: false })
+    return chosen.action === 'local' ? 'local' : 'go'
+  }
+
   private notice(threadId: string, text: string, o: { internal?: boolean; publicText?: string } = {}): void {
     const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', ...(o.internal || o.publicText ? { meta: { internal: o.internal, publicText: o.publicText } } : {}) })
     this.d.emit({ threadId, type: 'message', message: m })
@@ -2047,7 +2150,10 @@ export class Agent {
     if (autoNow && last && skipRead && task.signals.quick && quickPick) task = { ...task, why: `${task.why} · no read needed` }
     const paidRead = spendingMode(s) !== 'none' && (this.d.endpoints.budgetLeft?.() ?? 1) > 0
     const explicitComputerPair = s.computerUse?.mode === 'pair' && !!s.computerUse.planner && task.category === 'computer-use'
-    const authorizedReaders = brainPool.filter((m) => paidRead || !payPerUse(m))
+    // With the Privacy Gate on, a cloud reader would see the request before the gate checked it: local readers only.
+    const privacyOn = !!this.d.privacy?.active()
+    if (privacyOn) this.d.privacy?.warm?.()
+    const authorizedReaders = brainPool.filter((m) => (paidRead || !payPerUse(m)) && (!privacyOn || !isCloudInfo(m)))
     const subscribedReaders = routingPrefs.preferSubscriptions ? authorizedReaders.filter(isSubscription) : []
     const thinker = autoNow && last && !isRelayed(last) && !thread.parentId && !this.runs.get(thread.id)?.group && !state.voice && !explicitComputerPair && !process.env.FOREMAN_NO_BRAIN && !skipRead
       ? this.routeReader(subscribedReaders.length ? subscribedReaders : authorizedReaders, preference === 'cheapest') : undefined
@@ -2142,7 +2248,7 @@ export class Agent {
       const allowed = available.filter((m) => m.tools !== false && (!task.needsVision || m.vision) && (!task.contextTokens || windowOf(m) >= task.contextTokens + 4096) &&
         !(noGrokFor(task) && (m.provider === 'xai' || m.provider === 'grok-plan')) &&
         (task.category !== 'computer-use' || base.provider === 'chatgpt' || m.provider !== 'chatgpt'))
-      const brainPick = acceptBrainModel(brain.model, { allowed, tablePick: base, preference: budgetTight ? 'cheapest' : preference, difficulty: task.difficulty, fableOn: routingPrefs.fableForHardest })
+      const brainPick = acceptBrainModel(brain.model, { allowed, tablePick: base, preference: budgetTight ? 'cheapest' : preference, difficulty: task.difficulty, fableOn: routingPrefs.fableForHardest, voice: task.voice })
       const initial = brainPick ?? base
       if (!isStudy(task)) measured = this.outcomes.pick(initial, allowed, task.category, preference)
       const executor = measured?.model ?? initial
@@ -2474,7 +2580,7 @@ export class Agent {
     let summarizedBy: string | undefined
     const makeCm = (): ContextManager => {
       const counter = this.d.counter?.(ep.baseUrl, model) ?? new ServerTokenCounter(ep.baseUrl, model)
-      return new ContextManager(counter, (text, maxTokens) => this.summarizeWith(model, text, maxTokens, run.ctrl.signal, { manual: !!routed?.manual, variant: routed?.variant, picked: (label) => { summarizedBy = label } }), results, {
+      return new ContextManager(counter, (text, maxTokens) => this.summarizeWith(model, isLocal(this.d.endpoints.for(model).baseUrl) ? text : this.privacyMask(thread.id, text), maxTokens, run.ctrl.signal, { manual: !!routed?.manual, variant: routed?.variant, picked: (label) => { summarizedBy = label } }), results, {
         // Before a client compaction moves the boundary: everything leaving the prompt is saved for good, and the
         // saved core rides in the task brief (agent/task-memory.ts).
         beforeBoundary: (o) => {
@@ -2489,14 +2595,16 @@ export class Agent {
     // rest of the run moves to the next stronger usable model. The history is re-read as is.
     const tried = new Set<string>([model])
     let switches = 0
-    const switchModel = (reason: string, sideways: boolean, err?: Error, o: { climb?: boolean } = {}): boolean => {
-      if (switches >= 2) return false
+    const switchModel = (reason: string, sideways: boolean, err?: Error, o: { climb?: boolean; to?: ModelInfo } = {}): boolean => {
+      // The Privacy Gate's "Process on my Mac" names the local model and isn't a fallback (no switch limit).
+      if (switches >= 2 && !o.to) return false
       const fromName = modelName()
       const now = settings.get()
       const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
       let next: ModelInfo | undefined
       let note: string | undefined
-      if (err && routed?.task) {
+      if (o.to) next = o.to
+      else if (err && routed?.task) {
         // A failed call: Auto's fallback for this request (llm/auto-route.ts planFallback): out of credit, a refused
         // key or the ChatGPT plan's limit rule out the provider, a too-long prompt needs a bigger window, a refusal
         // goes to another provider; then the routing table's next-best candidate, the same provider first mid-run.
@@ -2523,7 +2631,7 @@ export class Agent {
       }
       if (!next) return false
       tried.add(next.id)
-      switches++
+      if (!o.to) switches++
       model = next.id
       if (run.collaboration) this.publishCollaboration(thread.id, run, run.collaboration.steps.map((step) =>
         step.role === 'lead' ? { ...step, model: next.label ?? next.id } : step))
@@ -2872,6 +2980,14 @@ export class Agent {
           }
         }
 
+        // Privacy Gate: before a cloud model sees this request, PII-Tracer checks what it hasn't checked yet on
+        // this Mac. "Process on my Mac" moves the task to a local model and redoes the step there.
+        if (!isLocal(ep.baseUrl)) {
+          const local = this.privacyLocalModel()
+          if (await this.privacyGate(thread, run, state, prepared.wire, model, local) === 'local' && local
+            && switchModel('the Privacy Gate kept personal details on this Mac', false, undefined, { to: local })) { step--; continue }
+        }
+
         let assistant: Message
         try {
           assistant = await this.stream(thread.id, model, prepared.wire, wireTools, window, run, speaker, routed, effortNow())
@@ -3092,6 +3208,7 @@ export class Agent {
           const wrapTools = claude ? wireTools : []
           const wrap = await cm.prepare({ system, toolsJson: JSON.stringify(wrapTools), messages: withPinned(view(db.listMessages(thread.id)), state, speaker?.id), state, window, appendOnly: claude, allowCompact: !claude, serverCompaction: serverCompactFor(model, claude) })
           wrap.wire.push({ role: 'user', content: '[From the app] This run has used its step budget. Do not call tools. Reply with a short summary: what you finished, what is left, and what the user should say to continue.' })
+          if (!isLocal(ep.baseUrl)) await this.privacyGate(thread, run, state, wrap.wire, model, undefined)
           const last = await this.stream(thread.id, model, wrap.wire, wrapTools, window, run, speaker, routed, effortNow())
           // A tool call here can't run; the reply text is the summary.
           if (last.toolCalls?.length) { last.toolCalls = undefined; last.meta = { ...last.meta, raw: undefined }; db.updateMessage(last) }
@@ -3139,9 +3256,15 @@ export class Agent {
     }
   }
 
-  private async stream(threadId: string, model: string, wire: WireMessage[], tools: ReturnType<ToolRegistry['wire']>, window: number, run: Run, speaker?: Space, routed?: Routed, effort?: Effort): Promise<Message> {
+  private async stream(threadId: string, model: string, wireIn: WireMessage[], tools: ReturnType<ToolRegistry['wire']>, window: number, run: Run, speaker?: Space, routed?: Routed, effort?: Effort): Promise<Message> {
     const s = this.d.settings.get()
     const ep = this.d.endpoints.for(model)
+    // Privacy Gate: a cloud model sees stand-ins ([PERSON_1]) for the details kept on this Mac, and what it
+    // writes gets the real values back here (mask and restore), so tools and the user see the real text.
+    const privacy = !isLocal(ep.baseUrl) ? this.privacyState(threadId) : undefined
+    const wire = privacy ? maskWire(wireIn, privacy) : wireIn
+    const restorer = privacy ? new StreamRestorer(privacy) : undefined
+    const reasonRestorer = privacy ? new StreamRestorer(privacy) : undefined
     const meta = { ...(speaker ? botMeta(speaker) : {}), ...(routed && !routed.manual ? { routed } : {}), ...(effort ? { effort } : {}) }
     const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: '', kind: 'normal', status: 'streaming', model, meta: Object.keys(meta).length ? meta : undefined })
     this.d.emit({ threadId, type: 'message', message: m })
@@ -3191,18 +3314,20 @@ export class Agent {
         ...openaiRequest({ baseUrl: ep.baseUrl, model, threadId, window, voice: !!this.d.db.getState(threadId).voice, web: s.search?.provider !== 'none', long: !!run.helper || effort === 'xhigh' || effort === 'max' })
       })) {
         if (part.type === 'content') {
-          const text = takeHead(part.text)
+          const text = takeHead(restorer ? restorer.push(part.text) : part.text)
           if (text === null) continue
           m.content += text
           this.d.emit({ threadId, type: 'delta', messageId: m.id, content: text })
         } else if (part.type === 'reasoning') {
-          m.reasoning = (m.reasoning ?? '') + part.text
-          this.d.emit({ threadId, type: 'delta', messageId: m.id, reasoning: part.text })
+          const text = reasonRestorer ? reasonRestorer.push(part.text) : part.text
+          m.reasoning = (m.reasoning ?? '') + text
+          this.d.emit({ threadId, type: 'delta', messageId: m.id, reasoning: text })
         } else if (part.type === 'tool_calls') {
           // Some servers reuse ids like "call_0" every step; results are matched by id, so make them unique.
           // Claude's ids are already unique and must match its stored blocks exactly.
           // So are OpenAI's Responses call ids (call_…), which its replayed function_call items carry.
           m.toolCalls = part.calls.map((c) => (c.id.startsWith('toolu_') || (c.id && usesResponses(ep.baseUrl, model)) ? c : { ...c, id: `${c.id || 'call'}-${randomUUID().slice(0, 8)}` }))
+            .map((c) => (privacy ? { ...c, arguments: restoreText(c.arguments, privacy, true) } : c))
         } else if (part.type === 'tool_pending') {
           this.d.emit({ threadId, type: 'drafting', tool: part.name })
         } else if (part.type === 'reset') {
@@ -3233,6 +3358,11 @@ export class Agent {
           flushAt = Date.now()
         }
       }
+      // A stand-in held back at the very end of the reply.
+      const tail = restorer?.flush()
+      if (tail) { const text = takeHead(tail); if (text) { m.content += text; this.d.emit({ threadId, type: 'delta', messageId: m.id, content: text }) } }
+      const reasonTail = reasonRestorer?.flush()
+      if (reasonTail) m.reasoning = (m.reasoning ?? '') + reasonTail
       m.status = 'done'
       // Cut off by the output limit mid tool call: the arguments are incomplete, and a repair would turn
       // them into wrong-but-valid ones (an edit list short of items, a write without mode "append").
@@ -3279,7 +3409,8 @@ export class Agent {
     // A cloud summarizer only for a chat that is already on the cloud, or that Auto routes cloud-first.
     const curRemote = cur ? isRemoteModel(cur) : !isLocal(this.d.endpoints.for(current).baseUrl)
     // Auto (local) never sends the chat to the cloud; Auto (cloud) and cloud-first Auto may.
-    const cloudOk = !!s.cloud?.enabled && o.variant !== 'auto:local' && (curRemote || (!o.manual && (o.variant === 'auto:cloud' || claudeOptions(s).preferCloud)))
+    // The Privacy Gate keeps summaries on a local model when there is one (the chat's own cloud model gets the masked transcript).
+    const cloudOk = !!s.cloud?.enabled && o.variant !== 'auto:local' && !this.d.privacy?.active() && (curRemote || (!o.manual && (o.variant === 'auto:cloud' || claudeOptions(s).preferCloud)))
     const better = pickSummarizer(usable, current, { need, cloudOk, windowOf })
     if (better) {
       try {
@@ -3326,6 +3457,13 @@ export class Agent {
   private async executeAll(thread: Thread, run: Run, state: ThreadState, calls: ToolCall[], ctx: ExecCtx): Promise<Array<{ name: string; status: CallStatus }>> {
     const out: Array<{ name: string; status: CallStatus }> = []
     let i = 0
+    // A polling loop (the same step over and over, whatever it returns): nudge, then stop running it.
+    const poll = ctx.guard.step(calls, (name) => { const t = this.resolve({ id: '', name, arguments: '{}' }); return !!t && typeof t.effect === 'string' && t.effect === 'read' })
+    if (poll.stop) {
+      for (const call of calls) out.push({ name: call.name, status: this.commit(thread, { call, status: 'repeat', content: poll.stop, meta: { status: 'error', label: call.name, display: 'polling loop stopped' } }, ctx) })
+      return out
+    }
+    let nudged = false
     // Claude's computer toolset runs a turn's actions in order and stops at the first failure: the rest of
     // that turn's computer actions are answered with the toolset's halt text, never run.
     let computerFailed = false
@@ -3352,6 +3490,8 @@ export class Agent {
       const outcomes = group.length > 1
         ? await mapLimit(group, run.meter?.parallel(PARALLEL_TOOLS) ?? PARALLEL_TOOLS, (c) => this.perform(thread, run, state, c, ctx))
         : [await this.perform(thread, run, state, group[0], ctx)]
+      // The polling nudge rides on this step's last result (a tool result, not a fake user message).
+      if (poll.nudge && !nudged && i + group.length >= calls.length) { const o = outcomes[outcomes.length - 1]; o.content += poll.nudge; nudged = true }
       // Stored in the order the model asked for them: providers match results to calls by position too.
       for (const o of outcomes) {
         out.push({ name: o.call.name, status: this.commit(thread, o, ctx) })
@@ -3907,6 +4047,20 @@ export const isRemoteModel = (m: ModelInfo): boolean => m.note === 'remote' || !
  * first when equal). `sideways` also allows an equal or weaker one when nothing stronger exists
  * (a provider outage). Cloud models only when Cloud is on and the budget isn't the problem.
  */
+/**
+ * What memory, the vault and saved decisions are searched with for this message. A short follow-up or one that
+ * points back ("same as last time", "the usual", "like before", "that client") says little by itself, so the
+ * user's previous messages in the chat join the query: the user shouldn't have to repeat themselves.
+ */
+export function recallQuery(opener: Pick<Message, 'id' | 'content'>, messages: Array<Pick<Message, 'id' | 'role' | 'content' | 'meta'>>): string {
+  const text = opener.content ?? ''
+  const pointsBack = /\b(same (as|way|thing)|last time|the usual|as usual|like before|as before|again|that (one|client|project|file|person|place)|those|them|it)\b/i.test(text)
+  if (!pointsBack && text.split(/\s+/).filter(Boolean).length >= 12) return text
+  const at = messages.findIndex((m) => m.id === opener.id)
+  const earlier = messages.slice(0, at < 0 ? messages.length : at).filter((m) => m.role === 'user' && !m.meta?.hidden && m.content).slice(-2).map((m) => m.content.slice(0, 600))
+  return [text, ...earlier].join('\n')
+}
+
 export function nextStronger(models: ModelInfo[], current: string, o: { cloud: boolean; localOnly?: boolean; exclude?: Set<string>; sideways?: boolean; needsVision?: boolean; sameKind?: boolean; noPremium?: boolean }): ModelInfo | undefined {
   let pool = models.filter((m) => m.id !== current && !o.exclude?.has(m.id) && m.tools !== false && m.installed !== false)
   if (!o.cloud || o.localOnly) pool = pool.filter((m) => !isRemoteModel(m))

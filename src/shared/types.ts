@@ -173,6 +173,12 @@ export interface Settings {
   /** Cloud providers switched off in Settings: their models aren't used, and their keys stay saved. */
   disabledProviders?: ProviderId[]
   grokPlan?: { enabled: boolean; preferSubscriptions: boolean }
+  /**
+   * Hybrid compute (Settings → Privacy & Security → Hybrid compute): off until the user turns it on, on a Mac
+   * with 32 GB memory and 50 GB free disk. Then the Privacy Gate (PII-Tracer on this Mac) checks every cloud
+   * request in chats that have local and cloud models.
+   */
+  hybridCompute?: { enabled: boolean }
   /** A Cursor API key is saved: Cursor is connected (Cloud Agents). */
   hasCursorKey: boolean
   /** Also run Cursor's agent through its CLI on this Mac (off by default: Cursor connects by API key, for Cloud Agents). */
@@ -362,7 +368,9 @@ export interface SystemInfo {
 export interface PendingRequest {
   id: string
   threadId: string
-  kind: 'approval' | 'question' | 'connect' | 'questions' | 'plan' | 'purchase' | 'otp'
+  kind: 'approval' | 'question' | 'connect' | 'questions' | 'plan' | 'purchase' | 'otp' | 'privacy'
+  /** For 'privacy': personal details PII-Tracer found before a cloud request (the Privacy Gate card). */
+  privacy?: import('./privacy').PrivacyGateInfo
   /** For 'otp': which one-time code is about to be filled where (never the code itself). */
   otp?: OtpInfo
   /** For 'purchase': what the browser is about to buy, read by main from the page (never from the model). */
@@ -1239,6 +1247,7 @@ export interface SahilBotApi {
   /** ChatGPT plan (via Codex): Settings → Models. */
   chatgptPlan: import('./chatgpt-plan').ChatgptPlanApi & { onChanged(cb: () => void): () => void }
   grokPlan: import('./grok-plan').GrokPlanApi
+  privacy: import('./privacy').PrivacyApi
   settings: {
     get(): Promise<Settings>
     set(patch: Partial<Settings> & { apiKey?: string | null; braveKey?: string | null; cursorKey?: string | null; tbaKey?: string | null; setKeys?: Partial<Record<ProviderId, string | null>> }): Promise<Settings>
@@ -1294,6 +1303,8 @@ export interface SahilBotApi {
     snippet(path: string): Promise<string>
     /** Files SahilBot made, newest first. */
     recent(limit?: number): Promise<Array<{ path: string; name: string; size: number; threadId: string; threadTitle: string; createdAt: number; tool: string }>>
+    /** Artifacts: every file agents made (documents, decks, sheets, PDFs, images, audio), newest first. */
+    artifacts(limit?: number): Promise<Array<{ path: string; name: string; size: number; threadId: string; threadTitle: string; createdAt: number; tool: string }>>
     open(path: string): Promise<void>
     reveal(path: string): Promise<void>
   }

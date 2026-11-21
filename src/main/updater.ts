@@ -196,12 +196,12 @@ export class Updater {
 
   private set(s: UpdateStatus): UpdateStatus { this.status = s; const out = this.get(); this.d.emit(out); return out }
 
-  /** Checks shortly after start, then every 6 hours; a found update downloads in the background. */
+  /** Checks shortly after start, then every 20 minutes (and when the Mac wakes: index.ts); a found update downloads in the background. */
   start(): void {
     if (!this.d.packaged || process.platform !== 'darwin') return
     this.startup = setTimeout(() => { void this.check().catch(() => undefined); void this.maintainBackup() }, 45_000)
     this.backupTimer = setInterval(() => void this.maintainBackup(), 24 * 3600_000)
-    this.timer = setInterval(() => void this.check().catch(() => undefined), 6 * 3600_000)
+    this.timer = setInterval(() => void this.check().catch(() => undefined), 20 * 60_000)
   }
 
   stop(): void { if (this.timer) clearInterval(this.timer); if (this.startup) clearTimeout(this.startup); if (this.backupTimer) clearInterval(this.backupTimer) }

@@ -34,3 +34,10 @@
 @media (max-width: 720px) {
   .page-thumb { width: 84px; height: 54px; }
 }
+
+/* Artifacts page: kind filters */
+.artifact-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
+.artifact-chip { border: 1px solid var(--line); background: var(--chip); color: var(--text-2); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.artifact-chip span { color: var(--text-3); margin-left: 4px; }
+.artifact-chip.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.artifact-chip.on span { color: color-mix(in srgb, var(--bg) 70%, transparent); }

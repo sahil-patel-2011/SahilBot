@@ -133,6 +133,12 @@ export function fixName(name: string, known: Set<string>, disabled?: Set<string>
   return bestD <= 2 ? best : null
 }
 
+/** Arguments with object keys sorted, so {"a":1,"b":2} and {"b":2,"a":1} are the same call. */
+export function canonicalArgs(raw: string): string {
+  const sort = (v: unknown): unknown => Array.isArray(v) ? v.map(sort) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, sort((v as Record<string, unknown>)[k])])) : v
+  try { return JSON.stringify(sort(JSON.parse(raw))) } catch { return raw }
+}
+
 /**
  * Same call, same result, again and again: the signature of a stuck local model.
  * A repeated call whose result changes (a snapshot of a new page) is progress, not a loop.
@@ -140,6 +146,25 @@ export function fixName(name: string, known: Set<string>, disabled?: Set<string>
 export class LoopGuard {
   private last = new Map<string, { result: string; same: number }>()
   private errors = new Map<string, number>()
+  private stepKey = ''
+  private stepRuns = 0
+
+  /**
+   * Polling loops (adapted from Grok Build's turn loop, Apache-2.0): the same step, the same calls with the
+   * same arguments (keys sorted, call order ignored), again and again, even when the results change (a
+   * status that keeps saying "running"). Reads and plans get a nudge at 4 repeats and stop at 8; anything
+   * else at 8 and 12. Returns the nudge to append to this step's results, or the stop text to answer with.
+   */
+  step(calls: ToolCall[], isRead: (name: string) => boolean): { nudge?: string; stop?: string } {
+    if (!calls.length) return {}
+    const key = calls.map((c) => `${c.name}:${canonicalArgs(c.arguments)}`).sort().join('|')
+    this.stepRuns = key === this.stepKey ? this.stepRuns + 1 : 1
+    this.stepKey = key
+    const [nudgeAt, stopAt] = calls.every((c) => isRead(c.name)) ? [4, 8] : [8, 12]
+    if (this.stepRuns >= stopAt) return { stop: `Stopped: this exact step (${calls.map((c) => c.name).join(', ')}) ran ${this.stepRuns} times in a row. It was not run again. Change the approach: wait once (run_command "sleep 30") and check a single time, use different arguments, or tell the user what you're waiting for.` }
+    if (this.stepRuns === nudgeAt) return { nudge: `\n\n[From the app] You appear to be stuck in a polling loop: this exact step has run ${this.stepRuns} times in a row. If you're waiting on something, run a single sleep and then check once; do not poll in a tight loop. Otherwise change the approach.` }
+    return {}
+  }
 
   private key(call: ToolCall): string {
     let args = call.arguments

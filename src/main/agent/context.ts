@@ -472,6 +472,9 @@ const unpinned = (text: string): string => text.replace(/^<context[^>]*>[\s\S]*?
  * labelled as data. Only messages before `upTo` (an index into `ms`) are considered: later ones are still in
  * view verbatim. The room scales with the window (briefRoom). undefined: nothing to carry.
  */
+/** Tools whose path only points at what they read or looked at (not a change). */
+const READ_ONLY_TOOLS = new Set(['file_read', 'read_result', 'list_files', 'search_files', 'grep', 'glob', 'fetch_page', 'screenshot', 'computer', 'browser', 'file_info', 'open_file'])
+
 export function taskBrief(ms: Message[], state: Pick<ThreadState, 'todos' | 'notes' | 'taskNotes'>, o: { upTo?: number; window: number; checkpoint?: string; core?: string }): string | undefined {
   const own = ms.slice(0, o.upTo ?? ms.length).filter((m) => m.role === 'user' && !m.meta?.hidden)
   const clip = (t: string, n: number): string => (t.length > n ? `${t.slice(0, n)} …[cut]` : t)
@@ -499,6 +502,10 @@ export function taskBrief(ms: Message[], state: Pick<ThreadState, 'todos' | 'not
   if (notes) parts.push(`Your working notes (keep them current with the notes tool):\n${notes}`)
   // The durable memory's core (agent/task-memory.ts): saved before every compaction, never evicted.
   if (o.core?.trim()) parts.push(`Saved memory for this task${o.core.includes('(another chat in this project)') ? ' and project' : ''} (kept for good: written before every compaction; the notes tool's "recall" action searches everything saved, "memory" lists it):\n${o.core.trim()}`)
+  // Files this task changed (adapted from Grok Build's post-compaction state reminder): an exact list from the
+  // tool record, never from the summary, so the model re-reads them instead of trusting a paraphrase.
+  const edited = [...new Set(ms.filter((m) => m.role === 'tool' && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && !READ_ONLY_TOOLS.has(m.toolName ?? '')).map((m) => m.meta!.path as string))].slice(-30)
+  if (edited.length) parts.push(`Files changed in this task so far (exact paths from the tool record; read a file again before editing it, don't rely on the summary for its contents):\n${edited.map((f) => `- ${f}`).join('\n')}`)
   // After a server compaction: the exact identifiers and failed attempts the server's checkpoint doesn't
   // mention (an OpenAI checkpoint is opaque: everything). The client's summary gets them by repairSummary.
   if (o.checkpoint !== undefined) {
