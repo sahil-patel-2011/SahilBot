@@ -108,7 +108,7 @@ import { onshapeTool, testOnshapeKeys } from './agent/tools/onshape'
 import { freecadTool } from './agent/tools/freecad'
 import { findFreecadCmd } from './cad/freecad'
 import { cadDesignTool } from './cad/design-tool'
-import { Secrets } from './secrets'
+import { macKeyStore, Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { requestedModel } from './agent/choices'
 import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels } from './spaces'
@@ -359,7 +359,9 @@ app.whenReady().then(() => {
   const recovered = work.recover()
   /** The menu bar icon (created once the window and Quick Ask exist; never in hidden test runs). */
   let menuBar: MenuBarIcon | null = null
-  const secrets = new Secrets(db)
+  // On the Mac, keys are sealed with a Keychain key that survives updates (secrets.ts); test runs and the
+  // server keep safeStorage and never touch the Keychain.
+  const secrets = new Secrets(db, process.platform === 'darwin' && !isServer() && !HIDDEN && !process.env.VITEST ? macKeyStore(app.getName()) : null)
   const settings = new SettingsStore(db, secrets)
   // "Remember things automatically" (default on) shapes the prompts' memory guidance (agent/prompt.ts).
   setAutoMemory(settings.get().learning?.enabled !== false)
