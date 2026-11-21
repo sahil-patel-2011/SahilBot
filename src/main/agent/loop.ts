@@ -660,6 +660,12 @@ export class Agent {
       current.voice = !!input.voice
       this.d.db.setState(thread.id, current)
     }
+    // A "New bot" still being set up in its chat (spaces:startSetup): it can finish its own setup.
+    const setup = !!this.d.db.getSetting<boolean>(`setup:${thread.spaceId}`)
+    if (!!current.botSetup !== setup) {
+      current.botSetup = setup
+      this.d.db.setState(thread.id, current)
+    }
     if (!isRelayed({ meta: input.meta }) && !/^(?:continue|resume|keep going|go on|retry|try again|yes\b|proceed|fix (?:it|that)|also\b)/i.test(input.text.trim())) {
       const state = this.d.db.getState(thread.id); state.acceptance = undefined; state.taskPolicy = undefined; this.d.db.setState(thread.id, state)
     }
@@ -2796,6 +2802,8 @@ export class Agent {
     // Set by execute(): did this run change anything or research anything? Then it gets a self-check pass.
     // sawUntrusted: this run has untrusted content in view (memory saves that read like instructions ask);
     // web: it read outside content itself, so handoffs it sends count as tainted.
+    // Tests that timed out or were stopped once get another chance in a new run.
+    if (this.testMs.get(thread.id) === Number.POSITIVE_INFINITY) this.testMs.delete(thread.id)
     const track = {
       changed: false, researched: false,
       // Code changed and no passing test run since: the runtime runs the tests before accepting "done".
@@ -3211,6 +3219,13 @@ export class Agent {
             }
           }
           // Autonomy: a task stopped to ask "want me to…?" about its own next step. Do it (risky actions still ask).
+          // A reply the app sends back (it claimed, gave up or stopped short) is replaced by the next one, not left
+          // in the chat beside it.
+          const bounce = (): void => {
+            assistant.meta = { ...assistant.meta, superseded: true }
+            db.updateMessage(assistant)
+            this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
+          }
           // A real choice for the user ("Postgres or SQLite?", "which one…?") is left alone: that question is theirs.
           const finalAsk = assistant.content.trim()
           const asksToContinue = /\b(want me to|would you like me to|shall i|should i (go ahead|proceed|continue|start|do)|do you want me to|let me know if you(?:'d| would) like me to)\b[^?]{0,200}\?\s*(\((yes|y)\s*\/\s*(no|n)\))?\s*$/i.test(finalAsk) && !/\b(or|which|either)\b[^?]{0,120}\?\s*(\([^)]*\))?\s*$/i.test(finalAsk)
@@ -3218,6 +3233,7 @@ export class Agent {
             autonomyNudged = true
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself before anything risky (sending, buying, deleting). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
+            bounce()
             continue
           }
           // Said it, didn't do it (Grok Build's task discipline, Apache-2.0): a reply that announces an action
@@ -3227,6 +3243,7 @@ export class Agent {
             actionNudges++
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your reply says you are doing something (or will), but you made no tool call, so it did not happen. Do it now with the next concrete tool call, and keep going until it is actually done (the live link, the sent message, the saved file). If something truly blocks it, say plainly what.' })
+            bounce()
             continue
           }
           // The user's own limit ("under $200"): what the reply or a write chose is over it in the results.
@@ -3237,6 +3254,7 @@ export class Agent {
             constraintNudges++
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] The user asked for ${over.limitText}, but ${over.item} (${over.priceText} in the results) is over it. Fix the choice so it fits their limit (undo or change anything you already did for it), or say plainly why nothing fits.` })
+            bounce()
             continue
           }
           // Answered from the first page of a paged result ("page 1 of 3", "next_cursor=…"): get the rest first.
@@ -3246,6 +3264,7 @@ export class Agent {
             pageNudges++
             budget = Math.max(budget, step + 8)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] The last result says there's more (${more}). Fetch the remaining pages before answering, unless the first page alone fully answers the question.` })
+            bounce()
             continue
           }
           // Gave up after a tool failed ("I couldn't get it: the report doesn't exist"): try another way first
@@ -3259,6 +3278,7 @@ export class Agent {
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: giveUpNudges === 1
               ? '[From the app] A tool failed, but the task is not done. Before giving up, try another way you have: a different tool, data source, search or approach (find_tools lists more; the browser and the user\'s Mac can often do what an API can\'t). If nothing else can work, say exactly what blocked it and what the user could do.'
               : '[From the app] Still not done. Write down three other ways to get this done (other tools, the browser, the Mac, a different source, a workaround), pick the most promising, and do it now. Only if every one is truly impossible, say what you tried and exactly what the user would need to do.' })
+            bounce()
             continue
           }
           // "I don't have access to your files" without trying anything: it has tools for that. Try first (once).
@@ -3267,17 +3287,19 @@ export class Agent {
             cantNudges++
             budget = Math.max(budget, step + 8)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] You said you can\'t, but you haven\'t tried. You have tools: files and Terminal, the browser (it can sign in and use sites), Mac apps, the screen, connected apps, the user\'s Mac from a server (mac), and find_tools for more. Try the most direct one now. Only if it truly can\'t be done this way either, say what you tried and what the user can do.' })
+            bounce()
             continue
           }
           // Says it's done, but no tool ran at all in this task, or its last write failed and nothing succeeded since: a false
           // "I've saved it". Make it do it, or say plainly that it wasn't done (once per run).
           // (Not when the user asked about earlier work: "did you save it?" "Yes, I saved it earlier.")
           const askedAboutPast = /\?\s*$/.test(opener?.content ?? '') && /\b(did|have|has|was|were)\s+(you|it|they)\b/i.test(opener?.content ?? '')
-          if (this.feat.falseClaimNudge && !asksToContinue && ((actions === 0 && !track.changed) || (track.failedWrites?.size ?? 0) > 0) && finalNudges < 3 && claimNudges < 1 && !askedAboutPast && !opener?.meta?.questionAnswer && !opener?.meta?.approvalFor && !run.unattended && !chatRun && step < HARD_CAP && claimsDone(assistant.content)) {
+          if (this.feat.falseClaimNudge && !asksToContinue && (!track.changed || (track.failedWrites?.size ?? 0) > 0) && finalNudges < 3 && claimNudges < 1 && !askedAboutPast && !opener?.meta?.questionAnswer && !opener?.meta?.approvalFor && !run.unattended && !chatRun && step < HARD_CAP && claimsDone(assistant.content)) {
             finalNudges++
             claimNudges++
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your reply says it is done, but nothing in this task actually did it: no tool that changes anything has run. Do it now with the right tool, then confirm with what the tool returned (the link, the file, the confirmation). If it can\'t be done, say plainly that it wasn\'t done and why.' })
+            bounce()
             continue
           }
           // A steering message arrived while this answer was written: keep going with it.
@@ -4115,7 +4137,8 @@ export class Agent {
       if (tool.outputSchema) validateOutput(tool.outputSchema, out.data)
       if (this.d.redact) out = JSON.parse(this.d.redact(JSON.stringify(out))) as ToolOutput
       this.runtime.complete(preparedAction.record.id, out)
-      if (effect !== 'read') ctx.track.failedWrites?.delete(tool.name)
+      // Any action that went through means a claim may be true now (it sent through the browser after the API failed).
+      if (effect !== 'read') ctx.track.failedWrites?.clear()
       if (out.verification && !tool.untrusted) this.runtime.evidence(record.id, preparedAction.record.id, out.verification.criterion, out.verification.passed, out.verification.detail)
       if (out.data !== undefined || out.path) {
         const data = out.data ?? { path: out.path }

@@ -1161,11 +1161,27 @@ export interface VoiceStatus {
   sizes: { whisper: number; vad: number; kokoro: number }
 }
 
+/** Work a bot started from a voice conversation, running in its own chat while you keep talking. */
+export interface VoiceTask {
+  threadId: string
+  bot: string
+  botId: string
+  title: string
+  status: 'working' | 'needs-you' | 'done' | 'failed' | 'stopped'
+  startedAt: number
+  /** The result's first sentences, as said aloud. */
+  summary?: string
+}
+
 export type VoiceUiEvent =
   | { type: 'state'; state: 'idle' | 'listening' | 'hearing' | 'thinking' | 'speaking' }
   | { type: 'partial'; text: string }
   | { type: 'transcript'; text: string }
   | { type: 'reply'; text: string }
+  /** Said on its own between turns: a bot's work started in this voice chat finished or needs you. */
+  | { type: 'announce'; text: string }
+  /** The work started in this voice chat, for the voice screen. */
+  | { type: 'tasks'; tasks: VoiceTask[] }
   | { type: 'audio'; audio: Float32Array; rate: number }
   | { type: 'stop-audio' }
   | { type: 'metric'; name: string; ms: number }
@@ -1277,6 +1293,8 @@ export interface SahilBotApi {
     test(baseUrl: string, apiKey?: string): Promise<{ ok: boolean; count: number; error?: string }>
   }
   spaces: {
+    /** A "New bot" that sets itself up with you in its chat (or the one still being set up). */
+    startSetup(): Promise<{ space: Space; threadId: string }>
     list(): Promise<Space[]>
     create(input: { name?: string; color?: string; shape?: BotShape; kind?: 'bot' | 'group' | 'project'; members?: string[]; intro?: boolean; folder?: string }): Promise<{ space: Space; threadId: string }>
     update(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort'>>): Promise<Space>
@@ -1383,6 +1401,14 @@ export interface SahilBotApi {
     /** Read text aloud with the chosen voice; audio arrives as 'audio' events. */
     speak(text: string): Promise<void>
     stopSpeaking(): Promise<void>
+    /** Work started in the open voice chat (running, waiting on you, done). */
+    tasks(): Promise<VoiceTask[]>
+    /** The voice bar's settings: voices for the engine speaking now, speed and language. */
+    options?(): Promise<VoiceBarOptions>
+    setStyle?(patch: { voice?: string; speed?: number; language?: string; provider?: 'openai' | 'xai' }): Promise<VoiceBarOptions>
+    /** Says a short sample in that voice (doesn't choose it). */
+    preview?(voice: string): Promise<void>
+
     frame(samples: Float32Array): void
     onEvent(cb: (e: VoiceUiEvent) => void): () => void
   }
@@ -2989,6 +3015,8 @@ export interface Settings {
   local?: LocalSettings
   voiceOutput?: VoiceOutputSettings
   voiceInput?: VoiceInputSettings
+  /** The voice bar's voice, speed and language. */
+  voiceStyle?: VoiceStyle
 }
 
 export interface KnowledgeStatus {
@@ -3036,6 +3064,35 @@ export interface VoiceSpeechStatus {
 }
 
 /** Speech recognition preferences (Settings → Voice → Advanced). */
+/** How the voice sounds and listens (the voice bar's settings): per-engine voice, speed, and spoken language. */
+export interface VoiceStyle {
+  /** The chosen voice for each engine (ids differ by engine). */
+  voices?: Partial<Record<'kokoro' | 'openai' | 'xai' | 'say', string>>
+  /** 0.5 to 2 (1 = normal). */
+  speed?: number
+  /** 'auto' or a language code ('en', 'es', …) for speech recognition. */
+  language?: string
+}
+
+/** What the voice bar can offer now: the engine speaking, its voices, and the current choices. */
+export interface VoiceBarOptions {
+  engine: 'kokoro' | 'openai' | 'xai' | 'say'
+  engineLabel: string
+  voices: Array<{ id: string; label: string; desc: string }>
+  voice: string
+  speed: number
+  /** False when this engine can't change speed. */
+  speedOk: boolean
+  language: string
+  languages: Array<{ id: string; label: string }>
+  /** The cloud voices to pick from (ChatGPT's or Grok's) and whether each has its key. */
+  providers: Array<{ id: 'openai' | 'xai'; label: string; ready: boolean }>
+  provider: 'openai' | 'xai' | null
+}
+
+/** A finished voice conversation in a chat, folded into one line (the notice's meta.voiceSession). */
+export interface VoiceSession { startedAt: number; endedAt: number; title: string; seconds: number }
+
 export interface VoiceInputSettings {
   /** Transcribe with Whisper when local models and local speech are both enabled. */
   local?: boolean

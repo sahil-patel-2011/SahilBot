@@ -160,7 +160,7 @@ test('UI audit screenshots', async () => {
       await wait(page, 600)
       await shoot(page, 'onboard-2-connect')
       await page.click('[data-testid="onboarding-next"]')
-      await page.locator('[data-testid="onboarding-finish"]').waitFor()
+      await page.locator('[data-testid="onboarding-perms-next"]').waitFor()
       await wait(page, 600)
       await shoot(page, 'onboard-3-finish')
     })

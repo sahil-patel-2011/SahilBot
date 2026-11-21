@@ -196,7 +196,7 @@ export class LoopGuard {
     const seen = this.last.get(k)
     this.last.set(k, { result, same: seen && seen.result === result ? seen.same + 1 : 1 })
     const head = result.slice(0, 600)
-    this.lastPending = STATUS_LIKE.test(head) && STILL_RUNNING.test(head) && !/\b(live at|done|finished|succeeded|completed|ready at)\b/i.test(head)
+    this.lastPending = STATUS_LIKE.test(head) && STILL_RUNNING.test(head) && !/\b(live at|succeeded|completed|ready at)\b/i.test(head) && !/(?<!\bnot\s(?:yet\s)?)\b(done|finished)\b/i.test(head)
   }
 
   /** Counts repeated errors from the same tool; returns a nudge on the third. */

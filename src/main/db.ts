@@ -374,11 +374,12 @@ export class Db {
     const need = Math.min(2, words.length)
     const out: Array<{ threadId: string; title: string; text: string; at: number }> = []
     const perThread = new Map<string, number>()
-    const forgotten = this.forgottenNames()
+    const forgotten = this.forgottenNames().map((n) => new RegExp(`(^|[^\\p{L}\\p{N}])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}\\p{N}])`, 'iu'))
     for (const r of rows) {
       if (r.hits < need) continue
       // Someone the user told SahilBot to forget (People & Places) isn't brought back by quoting old messages.
-      if (forgotten.length) { const low = r.text.toLowerCase(); if (forgotten.some((n) => low.includes(n))) continue }
+      // Whole words, in the message and its chat's title ("Dinner with Priya"); "Ann" never matches "planning".
+      if (forgotten.length && forgotten.some((re) => re.test(r.text) || re.test(r.title ?? ''))) continue
       if ((perThread.get(r.threadId) ?? 0) >= 2) continue
       perThread.set(r.threadId, (perThread.get(r.threadId) ?? 0) + 1)
       out.push({ threadId: r.threadId, title: r.title, text: r.text.replace(/\s+/g, ' ').slice(0, 400), at: r.at })

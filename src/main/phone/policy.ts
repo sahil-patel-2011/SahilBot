@@ -58,6 +58,8 @@ const DENIED: Record<string, string> = {
 
 /** Whole areas that live on the Mac's screen, or never leave it. */
 const DENIED_PREFIX: Array<[string, string]> = [
+  // Whether the server may use this Mac is decided on the Mac only.
+  ['macLink:', 'Whether the server may use your Mac is set on the Mac itself: Settings → Phone & server.'],
   ['browser:', 'The built-in browser runs on your Mac. Links open in this phone’s browser instead.'],
   ['voice:', 'Voice uses your Mac’s microphone. Use the phone keyboard’s dictation instead.'],
   ['quick:', 'Quick Ask is a Mac shortcut.'],

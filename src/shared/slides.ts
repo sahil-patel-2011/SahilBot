@@ -119,6 +119,8 @@ export function deckReview(slides: Slide[]): string[] {
     const long = text.filter((p) => plainInline(p.text).length > 120)
     if (long.length) out.push(`Slide ${n} has ${long.length} point${long.length > 1 ? 's' : ''} over 120 characters: shorten to one line each, detail in the notes.`)
     if (statsOf(s).length > 5) out.push(`Slide ${n} has ${statsOf(s).length} big numbers: 5 fit on a slide.`)
+    const rows = (s.extra ?? []).find((b) => b.type === 'table' && b.rows?.length)?.rows?.length ?? 0
+    if (rows > 10) out.push(`Slide ${n}'s table has ${rows - 1} rows: the slide shows 9 (PowerPoint pages the rest). Keep the rows that matter, or split it across slides.`)
   })
   return out
 }

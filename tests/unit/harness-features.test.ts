@@ -66,3 +66,26 @@ test('"I can\'t access that" is a claim about ability (worth trying first); a sa
   for (const t of ['I don\'t have access to your files.', 'I can\'t browse the web, but here is what I know.', 'As an AI, I can\'t open apps on your Mac.', 'I\'m not able to read that PDF.']) expect(claimsCant(t), t).toBe(true)
   for (const t of ['I can\'t help with that.', 'I won\'t do that: it could hurt someone.', 'Here is the summary.', 'I can send it once you confirm.']) expect(claimsCant(t), t).toBe(false)
 })
+
+import { claimsCant as cant2, claimsDone as done2, givesUp as up2, morePages as pages2, overLimit as over2 } from '../../src/main/agent/harness-features'
+
+test('curly apostrophes, sentence scope, scaled limits and last pages (review fixes)', () => {
+  // Models often write ’: the checks read it like '.
+  expect(done2('I’ve sent the email.')).toBe(true)
+  expect(up2('I couldn’t find the report.')).toBe(true)
+  expect(cant2('I can’t access your files.')).toBe(true)
+  // A claim followed by an honest note or a question is still a claim; "nothing has been sent yet" isn't one.
+  expect(done2('I\'ve saved it. Nothing was deleted.')).toBe(true)
+  expect(done2('I\'ve sent it. Anything else?')).toBe(true)
+  expect(done2('Nothing has been sent yet.')).toBe(false)
+  expect(up2('I couldn\'t send it: the address bounced.')).toBe(true)
+  // "$2 million" isn't a $2 limit; totals and fees aren't choices.
+  expect(over2('find a house under $2 million', 'Villa A is a great pick.', 'Villa A - $1,900,000', '')).toBeUndefined()
+  expect(over2('a gift under $50', 'Your order total is ready.', 'Order total: $75\nCandle - $30', '')).toBeUndefined()
+  expect(over2('a gift under $50', 'I picked the Wool Scarf.', 'Wool Scarf - $80', '')).toMatchObject({ item: 'Wool Scarf' })
+  // A cursor of 0, or a next page past the last, isn't more pages.
+  expect(pages2('{"next_cursor": 0}')).toBeUndefined()
+  expect(pages2('{"next_page": 2, "total_pages": 1}')).toBeUndefined()
+  expect(pages2('{"next_page": 2, "total_pages": 3}')).toBeTruthy()
+  expect(pages2('{"next_cursor": "abc123"}')).toBeTruthy()
+})

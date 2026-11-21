@@ -104,7 +104,8 @@ export function inlineHtml(s: string): string {
   return esc(s)
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<i>$2</i>')
+    // *italic* hugs its words: "5 * 3 * 2" stays maths.
+    .replace(/(^|[^*\w])\*(?=\S)([^*]*?\S)\*(?![*\w])/g, '$1<i>$2</i>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
 }
 

@@ -3,7 +3,8 @@ import { blocksToSlides, deckReview } from '@shared/slides'
 import type { DocExportFormat, DocSnapshot } from '@shared/types'
 import type { ToolContext, ToolDef } from '../types'
 import { exportDoc, type CreateDocumentFn } from '../../docspace/export'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { resolvePath } from './files'
 import { markdownToBlocks, stripIdMarkers } from '../../docspace/markdown'
 import { DocConflictError, type DocStore } from '../../docspace/store'
@@ -31,6 +32,33 @@ export function checkImageSrc(src: string | undefined, workspace: string, roots:
   if (!s || /^data:image\/[\w+.-]+;base64,/i.test(s)) return
   if (/^[a-z][a-z0-9+.-]*:/i.test(s)) throw new Error(`Image "${s.slice(0, 80)}" is a web address; download it into the workspace first and use the file path. Nothing was applied.`)
   try { resolvePath(s, workspace, roots) } catch { throw new Error(`Image "${s.slice(0, 80)}" is outside the workspace and the folders attached to this chat. Nothing was applied.`) }
+}
+
+/**
+ * Web images in Markdown ("![](https://…)") are downloaded into the workspace's images folder and the Markdown
+ * points at the file, so decks and documents (and their exports) keep them. Only images, at most 25 MB each and
+ * 12 per call; one that can't be fetched stays as it was (the check then says why).
+ */
+export async function localizeImages(md: string | undefined, workspace: string, fetchImpl: typeof fetch = fetch): Promise<string | undefined> {
+  if (!md || !/!\[[^\]]*\]\(\s*https?:\/\//i.test(md)) return md
+  const urls = [...new Set([...md.matchAll(/!\[[^\]]*\]\(\s*(https?:\/\/[^\s)]+)/gi)].map((m) => m[1]))].slice(0, 12)
+  let out = md
+  for (const url of urls) {
+    try {
+      const res = await fetchImpl(url, { signal: AbortSignal.timeout(20_000), redirect: 'follow' })
+      const type = res.headers.get('content-type') ?? ''
+      if (!res.ok || !/^image\//i.test(type)) continue
+      const buf = Buffer.from(await res.arrayBuffer())
+      if (!buf.length || buf.length > 25_000_000) continue
+      const ext = /png/i.test(type) ? 'png' : /jpe?g/i.test(type) ? 'jpg' : /gif/i.test(type) ? 'gif' : /webp/i.test(type) ? 'webp' : /svg/i.test(type) ? 'svg' : 'img'
+      const dir = join(workspace, 'images')
+      mkdirSync(dir, { recursive: true })
+      const file = join(dir, `${createHash('sha256').update(url).digest('hex').slice(0, 16)}.${ext}`)
+      writeFileSync(file, buf)
+      out = out.split(url).join(file)
+    } catch { /* left as is: the image check explains */ }
+  }
+  return out
 }
 
 /** Every image a Markdown text would add. */
@@ -99,6 +127,7 @@ Returns the document with an [id] for every block; change it later with doc_edit
     },
     async run({ title, type = 'doc', markdown = '', summary }, ctx) {
       const threadId = chatOf(ctx)
+      if (type !== 'sheet') markdown = (await localizeImages(markdown, deps.workspace())) ?? ''
       if (type !== 'sheet') for (const src of imagesIn(markdown)) checkImageSrc(src, deps.workspace(), roots(ctx))
       const content = type === 'sheet'
         ? { blocks: [], sheet: sheetFromMarkdown(markdown) }
@@ -211,6 +240,7 @@ Optional "summary": a short note for the version history.`,
     },
     async run({ doc, base, ops, summary }, ctx) {
       const id = await resolve(doc, ctx)
+      for (const o of ops) if (o.markdown) o.markdown = await localizeImages(o.markdown, deps.workspace())
       for (const o of ops) for (const src of imagesIn(o.markdown)) checkImageSrc(src, deps.workspace(), roots(ctx))
       let res
       try {
@@ -266,9 +296,10 @@ Optional "summary": a short note for the version history.`,
         if (statSync(p).size > 25_000_000) throw new Error(`Image ${src} is larger than 25 MB.`)
         return readFileSync(p)
       }
-      const path = await exportDoc(snap, format, join(ws, 'exports'), { name, create: deps.create, readImage })
+      let notes: string[] = []
+      const path = await exportDoc(snap, format, join(ws, 'exports'), { name, create: deps.create, readImage, warnings: (w) => { notes = w } })
       const review = snap.content.kind === 'slides' ? deckReview(blocksToSlides(snap.content.blocks)) : []
-      return { text: `Exported "${snap.title}" (version ${snap.version}) to ${path}.${review.length ? `\nDeck check: ${review.join(' ')} Fix with doc_edit and export again if the user should get the polished version.` : ''}`, display: `exported ${path.split('/').pop()}`, path, meta: { ...card(snap), exported: path } }
+      return { text: `Exported "${snap.title}" (version ${snap.version}) to ${path}.${review.length ? `\nDeck check: ${review.join(' ')} Fix with doc_edit and export again if the user should get the polished version.` : ''}${notes.length ? `\nExport notes (tell the user, or fix and export again): ${notes.slice(0, 8).join(' ')}` : ''}`, display: `exported ${path.split('/').pop()}`, path, meta: { ...card(snap), exported: path } }
     }
   }
 

@@ -43,6 +43,8 @@ export function macEffect(tool: string, args: Record<string, unknown>): Effect {
   const t = MAC_TOOLS[tool]
   if (!t) return 'destructive'
   const action = typeof args.action === 'string' ? args.action.toLowerCase() : ''
+  // Opening, navigating or closing a tab isn't a read, even under a read-ish action.
+  if (tool === 'browser' && (typeof args.url === 'string' || /^(new|open|navigate|goto|close)$/i.test(String(args.op ?? '')))) return t.effect
   if (t.actions && action && t.actions.read.includes(action)) return 'read'
   if (tool === 'file_manage' && args.op === 'delete') return 'destructive'
   return t.effect
@@ -110,8 +112,12 @@ export class MacLinkHub {
     })
   }
 
-  /** The poll's connection closed before an answer: forget it (its jobs stay queued). */
-  dropPoll(): void { this.waiter = undefined }
+  /** The linked Mac's poll connection closed before an answer: forget it (its jobs stay queued). Another device can't. */
+  dropPoll(deviceId?: string): void {
+    const bound = this.boundId ?? this.o.bound?.get()
+    if (bound && deviceId !== bound) return
+    this.waiter = undefined
+  }
 
   private take(): MacJob[] {
     const out = this.queue.filter((p) => p.sentAt === undefined).slice(0, 4)
@@ -138,6 +144,8 @@ export class MacLinkHub {
     if (!this.online()) return Promise.resolve({ id: '', ok: false, text: 'Your Mac isn\'t connected right now (asleep, off, or SahilBot isn\'t open). Do what you can on the server, and tell the user to wake the Mac and open SahilBot (or turn on Settings → Phone & server → Keep this Mac awake) for the rest.' })
     if (!this.tools.has(tool)) return Promise.resolve({ id: '', ok: false, text: `The Mac doesn't allow "${tool}" for the server. The user can turn it on in SahilBot on the Mac: Settings → Phone & server → Let the server use this Mac.` })
     if (this.queue.length >= MAX_QUEUE) return Promise.resolve({ id: '', ok: false, text: 'Too many Mac jobs are waiting. Wait for them to finish.' })
+    // The Mac takes at most 256 KB per poll: a big job would block every job behind it.
+    if (JSON.stringify(args ?? {}).length > 100_000) return Promise.resolve({ id: '', ok: false, text: 'That job is too big to send to the Mac (over 100 KB). Send a smaller part, or have the Mac read the file itself.' })
     return new Promise((resolve) => {
       const job: MacJob = { id: randomUUID(), tool, args }
       const finish = (r: MacResult): void => { clearTimeout(p.timer); this.queue = this.queue.filter((x) => x !== p); resolve(r) }
@@ -179,8 +187,11 @@ export function macTool(hub: MacLinkHub): ToolDef<{ tool: string; args?: Record<
 /** Mac side: polls the server for jobs and runs them with this Mac's own tools (4 at a time, rate-limited). */
 export class MacLinkClient {
   private stopped = true
+  private gen = 0
   private backoff = 1000
   private inFlight = 0
+  /** Jobs this Mac already took (a job resent after a slow "got it" never runs twice). */
+  private seen = new Set<string>()
   private recent: Array<{ at: number; write: boolean }> = []
   constructor(private o: {
     /** POST to the server (the pinned, signed-in connection); the reply's status and JSON. */
@@ -195,28 +206,36 @@ export class MacLinkClient {
   }) {}
 
   running(): boolean { return !this.stopped }
-  start(): void { if (!this.stopped) return; this.stopped = false; void this.loop() }
-  stop(): void { this.stopped = true }
+  // Each start is a new generation: a loop from before a quick off/on stops at its next step (never two loops).
+  start(): void { if (!this.stopped) return; this.stopped = false; void this.loop(++this.gen) }
+  stop(): void { this.stopped = true; this.gen++ }
 
-  private async loop(): Promise<void> {
+  private async loop(gen: number): Promise<void> {
     const sleep = this.o.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
-    while (!this.stopped) {
+    const live = (): boolean => !this.stopped && gen === this.gen
+    while (live()) {
       try {
         // Busy with 4 jobs: check in without taking more (the server knows the Mac is still there).
         const r = await this.o.call('/api/mac/poll', { name: this.o.name(), tools: this.inFlight >= 4 ? [] : this.o.allowed() }, 40_000)
+        if (!live()) break
         if (r.status !== 200) throw new Error(String(r.json.error ?? `The server answered ${r.status}.`))
         this.backoff = 1000
         this.o.onStatus?.({ connected: true })
         const jobs = (Array.isArray(r.json.jobs) ? r.json.jobs : []) as MacJob[]
         for (const job of jobs) {
-          // "Got it" first, so the server doesn't hand the job to another poll; then run it without blocking polls.
-          await this.o.call('/api/mac/result', { id: job.id, ack: true }, 15_000).catch(() => undefined)
+          if (!job || typeof job.id !== 'string' || this.seen.has(job.id)) continue
+          // "Got it" first, so the server doesn't hand the job to another poll. No "got it", no run: the server
+          // sends it again, and it runs once.
+          const ack = await this.o.call('/api/mac/result', { id: job.id, ack: true }, 15_000).catch(() => undefined)
+          if (ack?.status !== 200 || !live()) continue
+          this.seen.add(job.id)
+          if (this.seen.size > 500) this.seen.delete(this.seen.values().next().value as string)
           this.inFlight++
           void this.handle(job).finally(() => { this.inFlight-- })
         }
       } catch (e) {
         this.o.onStatus?.({ connected: false, error: (e as Error).message })
-        if (this.stopped) break
+        if (!live()) break
         await sleep(this.backoff)
         this.backoff = Math.min(60_000, this.backoff * 2)
       }
@@ -235,7 +254,8 @@ export class MacLinkClient {
 
   private async handle(job: MacJob): Promise<void> {
     let result: MacResult
-    if (!this.o.allowed().includes(job.tool)) result = { id: job.id, ok: false, text: `This Mac doesn't let the server use "${job.tool}".` }
+    if (!job.args || typeof job.args !== 'object' || Array.isArray(job.args)) result = { id: job.id, ok: false, text: 'The job\'s arguments weren\'t an object.' }
+    else if (!this.o.allowed().includes(job.tool)) result = { id: job.id, ok: false, text: `This Mac doesn't let the server use "${job.tool}".` }
     else if (this.limited(job)) result = { id: job.id, ok: false, text: 'This Mac is limiting the server to 30 actions a minute (5 that change something). Wait a minute and try again.' }
     else {
       try { const out = await this.o.exec(job); result = { id: job.id, ok: true, text: out.text.slice(0, MAX_TEXT), display: out.display } } catch (e) { result = { id: job.id, ok: false, text: (e as Error).message } }

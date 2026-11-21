@@ -45,13 +45,14 @@ export function VoiceOutputRow({ s, patch }: { s: Settings; patch: (p: Partial<S
   return (
     <div className="set-row" data-testid="voice-output-row">
       <div className="set-row-text">
-        <div className="set-row-title">Speech provider</div>
-        <div className="set-row-sub">{nativeVoiceSite(preference) ? 'Talk opens the provider website. Select Voice there to use your account. That conversation stays with the provider.' : preference === 'off' ? 'Choose a provider for hands-free cloud voice.' : selected ? 'Microphone audio and spoken replies use your ' + (selected === 'xai' ? 'xAI' : 'OpenAI') + ' API key and monthly limit.' : 'Enable the provider and add its API key in Models & Keys.'}</div>
+        <div className="set-row-title">Voice</div>
+        <div className="set-row-sub">{nativeVoiceSite(preference) ? 'Talk opens the provider website. Select Voice there to use your account. That conversation stays with the provider.' : preference === 'off' ? 'Choose ChatGPT\'s or Grok\'s voice for talking with your bots.' : selected ? 'Microphone audio and spoken replies use your ' + (selected === 'xai' ? 'xAI' : 'OpenAI') + ' API key and monthly limit.' : 'Enable the provider and add its API key in Models & Keys.'}</div>
       </div>
       <select className="set-select" aria-label="Speech provider" data-testid="voice-provider" value={preference} onChange={(e) => void patch({ voiceOutput: { provider: e.target.value as CloudSpeechProvider } })}>
-        <option value="off">Cloud voice off</option><option value="auto">Auto (connected key)</option>
-        <option value="openai">OpenAI voice</option><option value="xai">Grok voice</option>
+        <option value="auto">Auto (the key you connected)</option>
+        <option value="openai">ChatGPT voice (OpenAI)</option><option value="xai">Grok voice (xAI)</option>
         <option value="chatgpt-app">ChatGPT in browser</option><option value="grok-app">Grok in browser</option>
+        <option value="off">Off</option>
       </select>
     </div>
   )

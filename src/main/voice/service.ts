@@ -5,10 +5,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline as streamPipeline } from 'node:stream/promises'
-import type { VoiceStatus } from '@shared/types'
+import type { VoiceBarOptions, VoiceStatus, VoiceStyle } from '@shared/types'
+import { LANGUAGES, VOICES, clampSpeed } from './voices'
 import { SentenceSplitter } from './audio'
 import { VoicePipeline, type VoiceEvent } from './pipeline'
-import { KokoroEngine, SayEngine, chooseTts, type TtsChoice, type TtsEngine } from './tts'
+import { KokoroEngine, SayEngine, type TtsChoice, type TtsEngine } from './tts'
 import { EnergyVad, SileroVad, type Vad } from './vad'
 import { chooseStt, type SttChoice, type SpeechToText } from './stt'
 import { WhisperServer } from './whisper'
@@ -71,6 +72,8 @@ export class VoiceService {
   private tts: TtsEngine | null = null
   private pipe: VoicePipeline | null = null
   private kokoroVoice = 'af_heart'
+  private style: VoiceStyle = {}
+  private stt: SpeechToText | null = null
   private prep: Prep | null = null
   private benching = false
   /** Files asked for this session (Settings → Voice and tests: only speech models, never an LLM). */
@@ -85,9 +88,12 @@ export class VoiceService {
 
   /** The voice replies are spoken with right now (tts.ts chooseTts). */
   private outputChoice(): TtsChoice {
+    // Spoken replies are cloud voices, for speed and quality: Grok's or ChatGPT's (OpenAI), whichever the user
+    // picked (Settings → Voice). The Mac's own voice is only the last resort, with no cloud voice connected.
     const o = this.hooks.output?.()
     if (o?.xai && !o.spendingNone) return 'xai'
-    return chooseTts({ localOn: o?.localOn ?? false, kokoroInstalled: this.kokoroInstalled(), openaiKey: !!o?.openai, openaiAllowed: !!o?.openai, spendingNone: o?.spendingNone })
+    if (o?.openai && !o.spendingNone) return 'openai'
+    return 'say'
   }
 
   private inputPrefs(): { local: boolean; choice: string; bench?: WhisperBench | null; hw: Hardware } {
@@ -130,6 +136,57 @@ export class VoiceService {
   }
 
   private engine(): TtsEngine {
+    const t = this.pickEngine()
+    this.styleTts(t)
+    return t
+  }
+
+  private engineKind(t: TtsEngine): TtsChoice {
+    return t instanceof KokoroEngine ? 'kokoro' : t instanceof SayEngine ? 'say' : t.name === 'Grok voice' ? 'xai' : 'openai'
+  }
+
+  /** The chosen voice and speed on whichever engine speaks. */
+  private styleTts(t: TtsEngine): void {
+    const kind = this.engineKind(t)
+    const v = this.style.voices?.[kind]
+    if (v && VOICES[kind].some((x) => x.id === v)) t.voice = v
+    else if (kind === 'kokoro') t.voice = this.kokoroVoice
+    if (kind !== 'xai') t.speed = clampSpeed(this.style.speed ?? 1)
+  }
+
+  /** The picked cloud voice changed: use it now, even in a conversation in progress (no restart). */
+  useEngineNow(): void {
+    const keep = this.pipe
+    const active = this.active
+    this.active = 'off'
+    let t: TtsEngine
+    try { t = this.engine() } finally { this.active = active }
+    if (keep) { keep.setTts(t); this.pipe = keep }
+  }
+
+  /** The voice bar's choices (Settings.voiceStyle); they apply to the conversation in progress too. */
+  setStyle(s: VoiceStyle): void {
+    this.style = s
+    if (this.tts) this.styleTts(this.tts)
+    if (this.stt) this.stt.language = s.language
+  }
+
+  options(): Omit<VoiceBarOptions, 'providers' | 'provider'> {
+    const t = this.engine()
+    const kind = this.engineKind(t)
+    return { engine: kind, engineLabel: t.name, voices: VOICES[kind], voice: t.voice ?? VOICES[kind][0].id, speed: clampSpeed(this.style.speed ?? 1), speedOk: kind !== 'xai', language: this.style.language ?? 'auto', languages: LANGUAGES }
+  }
+
+  /** A short sample in that voice, without choosing it. */
+  async preview(voice: string): Promise<void> {
+    const t = this.engine()
+    if (!VOICES[this.engineKind(t)].some((x) => x.id === voice)) throw new Error('That voice isn\'t available with this speech engine.')
+    const prev = t.voice
+    t.voice = voice
+    try { await this.speak('Hi! This is how I sound. Talk to me any time.') } finally { t.voice = prev }
+  }
+
+  private pickEngine(): TtsEngine {
     const want = this.outputChoice()
     const have: TtsChoice | null = this.tts instanceof KokoroEngine ? 'kokoro' : this.tts instanceof SayEngine ? 'say' : this.tts?.name === 'Grok voice' ? 'xai' : this.tts ? 'openai' : null
     // A conversation in progress keeps its voice; the next one picks again.
@@ -336,6 +393,8 @@ export class VoiceService {
     this.vad ??= this.inputPrefs().local && st.vad ? await SileroVad.load(join(this.dir, VAD.file)) : new EnergyVad()
     if (this.pipeStt !== choice.kind) { this.pipe = null; this.pipeStt = choice.kind }
     const tts = this.engine()
+    stt.language = this.style.language
+    this.stt = stt
     await Promise.all([stt.start(), tts.warm()])
     this.pipe ??= new VoicePipeline({ vad: this.vad, whisper: stt, tts, emit: (e) => this.hooks.emit(e), respond: (t, s, on) => this.hooks.respond(t, s, on) })
     return this.pipe
@@ -364,6 +423,13 @@ export class VoiceService {
   stop(): void {
     this.pipe?.stop()
     this.active = 'off'
+  }
+
+  /** In a voice conversation: say this in the next pause (a bot's work finished or needs you). */
+  announce(text: string): boolean {
+    if (this.active !== 'voice' || !this.pipe) return false
+    this.pipe.announce(text)
+    return true
   }
 
   private speaking = 0

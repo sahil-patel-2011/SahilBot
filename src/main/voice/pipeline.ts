@@ -8,6 +8,8 @@ export type VoiceEvent =
   | { type: 'partial'; text: string }
   | { type: 'transcript'; text: string }
   | { type: 'reply'; text: string }
+  /** Something said on its own, between turns (a bot finished work started in this conversation). */
+  | { type: 'announce'; text: string }
   | { type: 'audio'; audio: Float32Array; rate: number }
   | { type: 'stop-audio' }
   | { type: 'metric'; name: 'first_audio_ms' | 'stt_ms'; ms: number }
@@ -46,9 +48,16 @@ export class VoicePipeline {
   private dictation: Float32Array[] = []
   private lastPartialAt = 0
   private partialBusy = false
+  /** Turns being transcribed or answered (from the end of the user's speech to the end of the reply). */
+  private turns = 0
+  private announcements: string[] = []
+  private draining = false
   mode: 'voice' | 'dictation' = 'voice'
 
   constructor(private d: PipelineDeps) {}
+
+  /** A new voice mid-conversation (ChatGPT's ⇄ Grok's): the next sentence uses it. */
+  setTts(t: TtsEngine): void { this.d.tts = t }
 
   private now(): number {
     return this.d.now?.() ?? Date.now()
@@ -113,6 +122,59 @@ export class VoicePipeline {
   }
 
   private async utterance(): Promise<void> {
+    this.turns++
+    try { await this.turn() } finally { this.turns-- }
+  }
+
+  /**
+   * Says something on its own (a bot finished the work you asked for). It waits for a gap: never while you're
+   * talking, while your words are being answered, or while a reply is still playing. Talking over it stops it,
+   * like any reply.
+   */
+  announce(text: string): void {
+    if (this.mode !== 'voice' || !text.trim()) return
+    this.announcements.push(text.trim())
+    if (!this.draining) void this.drain()
+  }
+
+  private async drain(): Promise<void> {
+    this.draining = true
+    const stopped = this.stopped
+    try {
+      while (this.announcements.length && stopped === this.stopped) {
+        if (this.mode !== 'voice' || this.busy || this.turns > 0 || this.d.vad.isSpeaking || this.now() - this.lastVoiceAt < 1200) {
+          await new Promise((r) => setTimeout(r, 250))
+          continue
+        }
+        const text = this.announcements.shift()!
+        const ctrl = new AbortController()
+        this.reply = ctrl
+        this.d.emit({ type: 'announce', text })
+        this.d.emit({ type: 'state', state: 'speaking' })
+        const splitter = new SentenceSplitter()
+        try {
+          for (const s of [...splitter.push(text), ...splitter.flush()]) {
+            if (ctrl.signal.aborted) break
+            const { audio, rate } = await this.d.tts.synth(s)
+            if (ctrl.signal.aborted) break
+            this.audioUntil = Math.max(this.audioUntil, this.now()) + (audio.length / rate) * 1000
+            this.d.emit({ type: 'audio', audio, rate })
+          }
+        } catch (e) {
+          this.d.emit({ type: 'error', message: (e as Error).message })
+        } finally {
+          if (this.reply === ctrl) this.reply = null
+        }
+        if (!ctrl.signal.aborted) this.d.emit({ type: 'state', state: 'listening' })
+      }
+    } finally {
+      this.draining = false
+      // Something queued while the old loop was finishing (a quick stop and start): say it too.
+      if (this.announcements.length && stopped !== this.stopped) void this.drain()
+    }
+  }
+
+  private async turn(): Promise<void> {
     const endedAt = this.lastVoiceAt
     const t0 = this.now()
     const spec = this.speculative
@@ -189,6 +251,7 @@ export class VoicePipeline {
 
   stop(): void {
     this.stopped++
+    this.announcements = []
     this.bargeIn()
     this.d.vad.reset()
     this.speech = []

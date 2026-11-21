@@ -8,6 +8,8 @@ export interface SpeechToText {
   readonly cloud?: boolean
   start(): Promise<void>
   transcribe(samples: Float32Array, prompt?: string): Promise<string>
+  /** 'auto' or a language code. */
+  language?: string
 }
 
 export const NO_VOICE_INPUT = 'Choose an available speech provider in Settings → Voice and enable its API key in Models & Keys.'
@@ -39,8 +41,9 @@ export interface Transcribed { text: string; usage?: unknown; duration?: number 
  */
 export class OpenAISttEngine implements SpeechToText {
   readonly cloud = true
+  language?: string
   constructor(private o: {
-    transcribe: (file: { name: string; data: Buffer; mime: string }, prompt: string | undefined, signal: AbortSignal) => Promise<Transcribed>
+    transcribe: (file: { name: string; data: Buffer; mime: string }, prompt: string | undefined, signal: AbortSignal, language?: string) => Promise<Transcribed>
     guard?: (seconds: number) => void
     charged?: (seconds: number, t: Transcribed) => void
   }) {}
@@ -51,7 +54,7 @@ export class OpenAISttEngine implements SpeechToText {
     const seconds = samples.length / SAMPLE_RATE
     if (seconds < 0.25) return ''
     this.o.guard?.(seconds)
-    const t = await this.o.transcribe({ name: 'speech.wav', data: toWav(samples), mime: 'audio/wav' }, prompt, AbortSignal.timeout(60_000))
+    const t = await this.o.transcribe({ name: 'speech.wav', data: toWav(samples), mime: 'audio/wav' }, prompt, AbortSignal.timeout(60_000), this.language && this.language !== 'auto' ? this.language : undefined)
     this.o.charged?.(seconds, t)
     return (t.text ?? '').replace(/\s+/g, ' ').trim()
   }

@@ -68,27 +68,33 @@ export const PROFILES: Record<'sahilbot' | 'claude-code' | 'codex-cli' | 'grok-b
   'chat-agent': { ...NONE, waitForUser: true }
 }
 
+/** Curly apostrophes and quotes ("I’ve sent it", which models often write) read like straight ones. */
+export const straight = (t: string): string => (t ?? '').replace(/[\u2018\u2019\u02BC]/g, "'").replace(/[\u201C\u201D]/g, '"')
+
 /** "I've saved it", "It's been sent", "Done: created the event": a reply saying an action happened. */
 export function claimsDone(text: string): boolean {
-  const t = (text ?? '').trim()
+  const t = straight(text).trim()
   if (!t || t.length > 1500) return false
   // Verbs for actions in the world (not "I've written a summary below", which is the reply itself).
   const verbs = '(saved|sent|emailed|published|posted|deployed|uploaded|booked|scheduled|deleted|removed|filed|submitted|shared|moved|renamed|installed|ordered|paid|replied|messaged|texted)'
   const claim = new RegExp(`\\b(i('ve| have)?|we('ve| have)?)\\s+(just\\s+|now\\s+|already\\s+)?${verbs}\\b|\\b(it'?s|has|have|was|were)\\s+(now\\s+)?been\\s+${verbs}\\b|\\b(it'?s|it is|they'?re|they are)\\s+(now\\s+)?(live|saved|sent|published|posted|booked|scheduled|deployed)\\b`, 'i')
-  if (!claim.test(t)) return false
-  // "Nothing has been sent yet", "The file hasn't been saved": an honest failure report, not a claim.
-  if (new RegExp(`\\b(not|never|nothing|n't|yet to|unable|couldn'?t|wasn'?t)\\b[^.!?]{0,30}${verbs}`, 'i').test(t)) return false
-  // Not a claim about this run: conditionals, questions, quotes of the past ("you already saved…").
-  if (/\?\s*$/.test(t) || /\b(if you|once you|when you|you('ve| have)? (already )?(saved|sent|created))\b/i.test(t)) return false
-  return true
+  // Judged sentence by sentence: "I've saved it. Nothing was deleted." is a claim; "Nothing has been sent yet" isn't.
+  const negated = new RegExp(`\\b(not|never|nothing|n't|yet to|unable|couldn'?t|wasn'?t)\\b[^.!?]{0,30}${verbs}`, 'i')
+  for (const sentence of t.split(/(?<=[.!?])\s+/)) {
+    if (!claim.test(sentence) || negated.test(sentence)) continue
+    // Not a claim about this run: a question, a conditional, a quote of the past ("you already saved…").
+    if (/\?\s*$/.test(sentence) || /\b(if you|once you|when you|you('ve| have)? (already )?(saved|sent|created))\b/i.test(sentence)) continue
+    return true
+  }
+  return false
 }
 
 /** "I couldn't get the churn rate: the report doesn't exist." A reply that gives up on the task. */
 export function givesUp(text: string): boolean {
-  const t = (text ?? '').trim()
+  const t = straight(text).trim()
   if (!t || t.length > 2000) return false
   // "I couldn't get the report", not "I couldn't find a slot Tuesday, but Wednesday works".
-  const m = /\b(i (couldn'?t|could not|wasn'?t able to|was not able to|was unable to|am unable to|'m unable to)|unable to|(failed|failing) to)\s+(get|find|access|load|open|reach|complete|retrieve|fetch|pull|download)\b[^.!?]*/i.exec(t)
+  const m = /\b(i (couldn'?t|could not|wasn'?t able to|was not able to|was unable to|am unable to|'m unable to)|unable to|(failed|failing) to)\s+(get|find|access|load|open|reach|complete|retrieve|fetch|pull|download|send|log ?in|sign ?in|connect|create|book|run|verify|finish|submit|upload|save|install)\b[^.!?]*/i.exec(t)
   return !!m && !/\b(but|however|instead|so here'?s|here'?s)\b/i.test(m[0] + t.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 60))
 }
 
@@ -99,11 +105,12 @@ const money = (t: string): number => Number(t.replace(/[,$\s]/g, ''))
  * item the results priced over the limit that the reply names or a write's arguments mention.
  */
 export function overLimit(userText: string, reply: string, toolText: string, writeArgs: string): { limitText: string; item: string; priceText: string } | undefined {
+  userText = straight(userText)
   const m = /\b(under|below|less than|no more than|at most|max(?:imum)?|cheaper than|within|up to|budget(?: of| is)?)\s*(?:a |an )?\$\s?([\d,]+(?:\.\d+)?)|\b(under|below|less than|no more than|at most|max(?:imum)?|up to)\s*([\d,]+(?:\.\d+)?)\s*(?:dollars|usd)\b/i.exec(userText)
   if (!m) return undefined
   const limitRaw = m[2] ?? m[4]
   // "$2k", "$1.5m": not parsed here, so not checked (better silent than wrong).
-  if (new RegExp(`${limitRaw.replace(/[.$]/g, '\\$&')}\\s*[kmb]\\b`, 'i').test(userText)) return undefined
+  if (new RegExp(`${limitRaw.replace(/[.$]/g, '\\$&')}\\s*(k|m|mm|b|bn|thousand|million|billion|grand)\\b`, 'i').test(userText)) return undefined
   const limit = money(limitRaw)
   if (!(limit > 0)) return undefined
   const STOP = /^(price|prices|total|subtotal|shipping|tax|taxes|fee|fees|was|now|save|from|per|cost|costs|amount|balance|starting at|only)$/i
@@ -114,7 +121,8 @@ export function overLimit(userText: string, reply: string, toolText: string, wri
     if (!p) continue
     const price = money(p[2])
     const name = p[1].replace(/[\s,:–-]+$/, '').trim()
-    if (!(price > limit) || name.length < 4 || STOP.test(name)) continue
+    // Totals, fees and estimates aren't something chosen ("Order total: $75", "Shipping estimate $12").
+    if (!(price > limit) || name.length < 4 || STOP.test(name) || /\b(total|subtotal|fee|fees|tax|taxes|shipping|estimate|revenue|budget|balance|savings?)$/i.test(name)) continue
     const n = name.toLowerCase()
     // Chosen: in what a write did, or named in the reply without being set aside ("skipped X, it's over budget").
     const i = said.indexOf(n)
@@ -130,8 +138,12 @@ export function morePages(toolText: string): string | undefined {
   const t = toolText.slice(-4000)
   const page = /\bpage (\d+) of (\d+)\b/i.exec(t)
   if (page && Number(page[1]) < Number(page[2])) return page[0]
-  const cursor = /\b(next_cursor|next_page_token|nextPageToken|next_page)["']?\s*[:=]\s*["']?(?!null\b|none\b|undefined\b|false\b)[\w-]+/i.exec(t)
-  if (cursor) return cursor[0]
+  const cursor = /\b(next_cursor|next_page_token|nextPageToken|next_page)["']?\s*[:=]\s*["']?(?!null\b|none\b|undefined\b|false\b|0\b|["',}\s])([\w-]+)/i.exec(t)
+  if (cursor) {
+    // "next_page": 1 with "total_pages": 1 is the last page.
+    const total = /\b(total_pages|totalPages|page_count)["']?\s*[:=]\s*(\d+)/i.exec(t)
+    if (!(/^\d+$/.test(cursor[2]) && total && Number(cursor[2]) > Number(total[2]))) return cursor[0]
+  }
   const more = /\b(has_more|hasMore|more_results)["']?\s*[:=]\s*true\b|\bmore results (are )?available\b/i.exec(t)
   return more?.[0]
 }
@@ -141,7 +153,7 @@ export function morePages(toolText: string): string | undefined {
  * can't, about access or ability, not a refusal on safety grounds ("I can't help with that" is left alone).
  */
 export function claimsCant(text: string): boolean {
-  const t = (text ?? '').trim()
+  const t = straight(text).trim()
   if (!t || t.length > 2500) return false
   return /\b(i (don'?t|do not) have (the )?(ability|access|a way|permission|tools?)|i\s?(can'?t|cannot|am not able to|'m not able to|am unable to|'m unable to) (access|browse|open|see|view|read|reach|control|run|check|look at|search|get into|log ?in|send|use)|i have no (way|access|ability)|(beyond|outside) (my|of my) (capabilities|abilities|reach)|as an ai,? i (can'?t|cannot|don'?t))\b/i.test(t)
 }

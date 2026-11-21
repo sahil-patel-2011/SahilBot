@@ -39,3 +39,17 @@ test('someone the user forgot in People & Places isn\'t quoted back from old cha
   db.sql.prepare('UPDATE ce_trash SET restored_at = 2 WHERE id = ?').run('t1')
   expect(db.recallUserSaid('What does Priya like for her birthday? peonies?', here.id)).toHaveLength(2)
 })
+
+test('a forgotten name matches whole words only, and in the chat title too', () => {
+  const db = new Db(':memory:')
+  const space = db.listSpaces().find((s) => s.isMain) ?? db.createSpace('Main', '#000', { isMain: true })
+  const a = db.createThread(space.id, 'auto', null)
+  const b = db.createThread(space.id, 'auto', null)
+  const here = db.createThread(space.id, 'auto', null)
+  db.updateThread(a.id, { title: 'Dinner with Ann' })
+  db.insertMessage({ threadId: a.id, role: 'user', kind: 'normal', status: 'done', content: 'Book the dinner table for Friday night downtown' })
+  db.insertMessage({ threadId: b.id, role: 'user', kind: 'normal', status: 'done', content: 'Planning the dinner table seating for Friday night' })
+  db.sql.exec('CREATE TABLE IF NOT EXISTS ce_trash (id TEXT PRIMARY KEY, at INTEGER NOT NULL, label TEXT NOT NULL, payload TEXT NOT NULL, restored_at INTEGER)')
+  db.sql.prepare('INSERT INTO ce_trash(id, at, label, payload) VALUES(?,?,?,?)').run('t1', 1, 'Forgot Ann Lee', JSON.stringify({ entity: { name: 'Ann Lee', type: 'person' } }))
+  expect(db.recallUserSaid('dinner table Friday night', here.id).map((h) => h.text)).toEqual(['Planning the dinner table seating for Friday night'])
+})

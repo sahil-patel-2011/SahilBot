@@ -51,6 +51,8 @@ describe('cloud-first onboarding', () => {
 
     // The last step: Mac permissions and files anywhere.
 
+    await page.click('[data-testid="onboarding-perms-next"]')
+
     await page.click('[data-testid="onboarding-finish"]')
     await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
 
@@ -102,6 +104,7 @@ describe('cloud-first onboarding', () => {
     expect((await page.evaluate(() => window.foreman.settings.get())).local?.enabled).toBe(true)
     await page.click('[data-testid="onboarding-local-next"]')
     // The last step: Mac permissions and files anywhere.
+    await page.click('[data-testid="onboarding-perms-next"]')
     await page.click('[data-testid="onboarding-finish"]')
     await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
     expect((await page.evaluate(() => window.foreman.settings.get())).local?.enabled).toBe(true)

@@ -43,6 +43,8 @@ export function Sidebar(p: {
   onOpenChat: (id: string) => void
   onNew: () => void
   onNewBot: () => void
+  /** The empty list's "Make a bot": a New bot that sets itself up with you in its chat. */
+  onSetupBot?: () => void
   onSearch: () => void
   onView: (v: MainView) => void
   onCustomize: (s: Space) => void
@@ -348,7 +350,7 @@ export function Sidebar(p: {
           <div className="bot-list">
             {bots.map(botRow)}
             {!bots.length && (
-              <button className="bot-row ghost" onClick={p.onNewBot}>
+              <button className="bot-row ghost" onClick={p.onSetupBot ?? p.onNewBot} data-testid="sidebar-make-bot">
                 <span className="br-btn">
                   <span className="br-avatar ghost-avatar"><I.Plus size={18} /></span>
                   <span className="br-text"><span className="br-name">Make a bot</span><span className="br-preview">A teammate with its own job, e.g. “track my competitors weekly”</span></span>

@@ -68,7 +68,8 @@ const api: SahilBotApi = {
     getPrompt: call('spaces:getPrompt') as never,
     setPrompt: call('spaces:setPrompt') as never,
     promptPath: call('spaces:promptPath') as never,
-    library: call('spaces:library') as never
+    library: call('spaces:library') as never,
+    startSetup: call('spaces:startSetup') as never
   },
   threads: {
     list: call('threads:list') as never,
@@ -238,6 +239,10 @@ const api: SahilBotApi = {
     dictateStop: call('voice:dictateStop') as never,
     speak: call('voice:speak') as never,
     stopSpeaking: call('voice:stopSpeaking') as never,
+    tasks: call('voice:tasks') as never,
+    options: call('voice:options') as never,
+    setStyle: call('voice:setStyle') as never,
+    preview: call('voice:preview') as never,
     frame: (samples: Float32Array) => ipcRenderer.send('voice:frame', samples),
     onEvent(cb) {
       const fn = (_e: unknown, ev: VoiceUiEvent): void => cb(ev)

@@ -100,3 +100,49 @@ describe('thread view on long chats', () => {
     expect(tv.sameBlock(after[0], tv.blocks([asking, result])[0])).toBe(true)
   })
 })
+
+describe('voice conversations in the chat', () => {
+  it('a finished one folds into its named line (open it for the transcript); the live one shows only with the transcript on', () => {
+    const s0 = T0 + 50_000_000
+    const before = msg({ role: 'user', content: 'Typed before the call', createdAt: s0 - 5000 })
+    const said = msg({ role: 'user', content: 'Find me a flight to Lisbon', createdAt: s0 + 1000, meta: { voice: true } })
+    const reply = msg({ content: 'On it.', createdAt: s0 + 2000 })
+    const result = msg({ kind: 'notice', content: 'Two options found', createdAt: s0 + 3000, meta: { voiceResult: { bot: 'Scout', title: 'flights', files: [] } } })
+    const line = msg({ kind: 'notice', content: 'Voice chat: Find me a flight to Lisbon', createdAt: s0 + 5000, meta: { voiceSession: { startedAt: s0, endedAt: s0 + 4000, title: 'Find me a flight to Lisbon', seconds: 51 } } })
+    const after = msg({ role: 'user', content: 'Typed after', createdAt: s0 + 9000 })
+    const typedMid = msg({ role: 'user', content: 'Typed during the call', createdAt: s0 + 3500 })
+    const err = msg({ kind: 'error', content: 'The model failed', createdAt: s0 + 3600 })
+    const all = [before, said, reply, result, line, after]
+    expect(tv.foldVoice(all, new Set()).map((m) => m.id)).toEqual([before.id, result.id, line.id, after.id])
+    // A typed message or an error in the same minutes is never folded away.
+    expect(tv.foldVoice([said, reply, typedMid, err, line], new Set()).map((m) => m.id)).toEqual([typedMid.id, err.id, line.id])
+    // The live call in another chat doesn't hide anything here.
+    expect(tv.foldVoice([before, said, reply], new Set(), { since: s0, transcript: false, threadId: 'elsewhere' })).toHaveLength(3)
+    expect(tv.foldVoice(all, new Set([line.id])).map((m) => m.id)).toEqual(all.map((m) => m.id))
+    // A call in progress (no line yet): hidden until the transcript is on; notices always show.
+    const live = [before, said, reply, result]
+    expect(tv.foldVoice(live, new Set(), { since: s0, transcript: false }).map((m) => m.id)).toEqual([before.id, result.id])
+    expect(tv.foldVoice(live, new Set(), { since: s0, transcript: true })).toHaveLength(4)
+    expect(tv.clock(51)).toBe('0:51')
+    expect(tv.clock(3725)).toBe('1:02:05')
+  })
+
+  it('renders the line with its name, length and thumbs, and a result card from the bot with its files', () => {
+    const s0 = T0 + 60_000_000
+    const ms = [
+      msg({ role: 'user', content: 'Make the budget sheet', createdAt: s0 + 1000, meta: { voice: true } }),
+      msg({ role: 'tool', toolName: 'file_write', toolCallId: 'x', content: 'ok', createdAt: s0 + 2000, meta: { status: 'ok', path: '/Users/sam/Documents/Budget.xlsx' } }),
+      msg({ kind: 'notice', content: 'Voice chat', createdAt: s0 + 6000, meta: { voiceSession: { startedAt: s0, endedAt: s0 + 5000, title: 'Make the budget sheet', seconds: 51 } } }),
+      msg({ kind: 'notice', content: 'The deck is ready.', createdAt: s0 + 7000, meta: { voiceResult: { bot: 'Finance', title: 'the Q3 deck', files: ['/Users/sam/Documents/Q3.pptx'] } } })
+    ]
+    const html = renderToString(createElement(tv.ThreadView, { messages: ms, running: false, pending: [], actions }))
+    expect(html).toContain('Make the budget sheet')
+    expect(html).toContain('0:51')
+    expect(html).toContain('data-testid="voice-session"')
+    expect(html).toContain('Budget.xlsx')
+    expect(html.replace(/<!-- -->/g, '')).toContain('From Finance · the Q3 deck')
+    expect(html).toContain('Q3.pptx')
+    // The transcript itself is folded away.
+    expect(html).not.toContain('data-testid="user-bubble"')
+  })
+})

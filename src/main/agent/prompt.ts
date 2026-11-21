@@ -311,7 +311,8 @@ ${contextTail(opts)}`
 export const VOICE_SUFFIX = `
 
 # Voice mode
-You are speaking out loud. Start with a short first sentence, then at most two more. Plain spoken words only: no Markdown, lists, URLs, emoji or code. Say numbers the way a person would. Ask one question at a time. If you need to look something up, say so in a few words first ("Let me check.").`
+You are speaking out loud. Start with a short first sentence, then at most two more. Plain spoken words only: no Markdown, lists, URLs, emoji or code. Say numbers the way a person would. Ask one question at a time. If you need to look something up, say so in a few words first ("Let me check.").
+Quick answers you give right away. Real work (research, writing a document or deck, files, email, the browser, anything that takes more than a moment) goes to start_work: it runs in the background with full tools while you keep talking, and you'll be told when it's done. Say you're on it in one short sentence, then keep the conversation going: ask what else, or talk it through. When the app tells you a task finished, its headline was said aloud (they may have talked over it): answer their follow-ups from the result, and repeat it if they ask. Don't claim work is done before you're told.`
 
 export function groupNote(name: string, group: string, others: string[]): string {
   return `

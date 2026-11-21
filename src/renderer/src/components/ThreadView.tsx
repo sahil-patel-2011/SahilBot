@@ -1,5 +1,6 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember } from '@shared/types'
+import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
+import { filesFromMessages } from '../lib/ux'
 import { firstUnread } from '@shared/read-state'
 import { api } from '../api'
 import { ChatVaultOffers } from './VaultOffer'
@@ -45,6 +46,68 @@ export interface ThreadActions {
   onOpenFile: (path: string) => void
   /** Docs: opens a live document in the Document tab. */
   onOpenDoc?: (id: string) => void
+}
+
+/**
+ * Voice conversations in the chat: a finished one is folded into its one-line summary (open it to read the
+ * transcript); the one in progress shows only when its transcript is on. Notices (results from work the call
+ * started, handoffs) always show.
+ */
+export function foldVoice(messages: Message[], open: Set<string>, live?: { since: number; transcript: boolean; threadId?: string } | null): Message[] {
+  const sessions = messages.filter((m) => m.kind === 'notice' && m.meta?.voiceSession).map((m) => ({ id: m.id, ...(m.meta!.voiceSession as VoiceSession) }))
+  const hideLive = !!live && !live.transcript && (!live.threadId || live.threadId === messages[0]?.threadId)
+  if (!sessions.length && !hideLive) return messages
+  // Only the voice turns fold: what you said (meta.voice) and the replies and steps that answer it, never a typed
+  // message, an error or a failed step.
+  let voiceTurn = false
+  return messages.filter((m) => {
+    if (m.role === 'user' && !m.meta?.hidden) voiceTurn = !!m.meta?.voice
+    if (!voiceTurn || m.kind === 'notice' || m.kind === 'error' || m.status === 'error' || (m.role === 'tool' && m.meta?.status === 'error')) return true
+    const s = sessions.find((x) => m.createdAt >= x.startedAt && m.createdAt <= x.endedAt)
+    if (s) return open.has(s.id)
+    return !(hideLive && m.createdAt >= live!.since)
+  })
+}
+
+/** "0:51", "12:05", "1:02:09". */
+export function clock(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`
+}
+
+const VoiceFold = createContext<{ open: Set<string>; toggle: (id: string) => void; messages: Message[] }>({ open: new Set(), toggle: () => undefined, messages: [] })
+
+/** A finished voice conversation: its name and length (open it for the transcript), files it made, 👍 / 👎. */
+function VoiceSessionLine({ m, onReact, onOpenFile }: { m: Message; onReact: ThreadActions['onReact']; onOpenFile: (path: string) => void }) {
+  const fold = useContext(VoiceFold)
+  const s = m.meta!.voiceSession as VoiceSession
+  const open = fold.open.has(m.id)
+  const files = useMemo(() => filesFromMessages(fold.messages.filter((x) => x.createdAt >= s.startedAt && x.createdAt <= s.endedAt)), [fold.messages, s.startedAt, s.endedAt])
+  const mine = ((m.meta?.reactions ?? {}) as { user?: string }).user
+  return (
+    <div className="voice-session-wrap" data-testid="voice-session">
+      <div className="voice-session">
+        <button className="voice-session-open" onClick={() => fold.toggle(m.id)} aria-expanded={open} title={open ? 'Hide transcript' : 'Show transcript'} data-testid="voice-session-open">
+          <I.Wave size={14} /> <span>{s.title}</span> <span aria-hidden="true">·</span> <span>{clock(s.seconds)}</span>
+        </button>
+        <button className={`voice-session-react${mine === '👍' ? ' on' : ''}`} onClick={() => onReact(m.id, mine === '👍' ? null : '👍')} aria-label="Good conversation" aria-pressed={mine === '👍'}>👍</button>
+        <button className={`voice-session-react${mine === '👎' ? ' on' : ''}`} onClick={() => onReact(m.id, mine === '👎' ? null : '👎')} aria-label="Bad conversation" aria-pressed={mine === '👎'}>👎</button>
+      </div>
+      {!open && <MadeFiles files={files} onOpen={onOpenFile} />}
+    </div>
+  )
+}
+
+/** The result of work a voice chat started: from that bot, with the files it made. */
+function VoiceResultCard({ m, onOpenFile }: { m: Message; onOpenFile: (path: string) => void }) {
+  const v = m.meta!.voiceResult as { bot: string; title: string; files?: string[] }
+  return (
+    <div className="voice-result" data-testid="voice-result">
+      <div className="voice-result-from">From {v.bot} · {v.title}</div>
+      <div className="bubble ai"><Markdown text={m.content} /></div>
+      <MadeFiles files={(v.files ?? []).map((path) => ({ key: path, path }))} onOpen={onOpenFile} />
+    </div>
+  )
 }
 
 /** Groups consecutive tool calls into one activity block; text replies stay bubbles. */
@@ -384,8 +447,10 @@ export function windowLimit(limit: number, total: number, dividerAt: number): nu
   return dividerAt < 0 ? limit : Math.max(limit, total - dividerAt + DIVIDER_CONTEXT)
 }
 
-export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, ready = true, unreadAfter = null, onAtBottom }: {
+export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, ready = true, unreadAfter = null, onAtBottom, voiceLive }: {
   messages: Message[]
+  /** A voice conversation in progress (in this chat): its turns show only with its transcript on. */
+  voiceLive?: { since: number; transcript: boolean; threadId?: string } | null
   /** Live Team of Experts boards by agents call id. */
   teams?: Record<string, TeamMember[]>
   running: boolean
@@ -421,7 +486,10 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   }
   const dev = useDevMode()
   const hasDocs = !!actions.onOpenDoc
-  const all = useMemo(() => blocks(messages), [messages])
+  const [openVoice, setOpenVoice] = useState<Set<string>>(new Set())
+  const shown = useMemo(() => foldVoice(messages, openVoice, voiceLive), [messages, openVoice, voiceLive])
+  const fold = useMemo(() => ({ open: openVoice, messages, toggle: (id: string) => setOpenVoice((cur) => { const n = new Set(cur); if (n.has(id)) n.delete(id); else n.add(id); return n }) }), [openVoice, messages])
+  const all = useMemo(() => blocks(shown), [shown])
   // The quiet chat leaves out the plan, compaction markers, notes about models, and runs that left nothing to
   // show; Developer mode shows everything.
   const bs = useMemo(() => all.filter((b) => {
@@ -509,7 +577,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const lastUserId = (lastOf('user') as Extract<Block, { kind: 'user' }> | undefined)?.m.id
 
   return (
-    <>
+    <VoiceFold.Provider value={fold}>
       <div className="thread-scroll" ref={scroller} data-testid="thread"
         onScroll={(e) => {
           const el = e.currentTarget
@@ -581,7 +649,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
           </div>
         )}
       </div>
-    </>
+    </VoiceFold.Provider>
   )
 }
 
@@ -710,6 +778,10 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
           {videosFromSteps(b.steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
           {hasDocs && docsFromSteps(b.steps).map((d) => <DocCard key={d.key} doc={d.doc} at={d.at} exported={d.exported} onOpen={actions.onOpenDoc!} />)}
         </>
+      ) : b.kind === 'notice' && b.m.meta?.voiceSession ? (
+        <VoiceSessionLine m={b.m} onReact={actions.onReact} onOpenFile={actions.onOpenFile} />
+      ) : b.kind === 'notice' && b.m.meta?.voiceResult ? (
+        <VoiceResultCard m={b.m} onOpenFile={actions.onOpenFile} />
       ) : b.kind === 'notice' && videoOf(b.m) ? (
         <VideoCard data={videoOf(b.m)!} />
       ) : b.kind === 'notice' && maxOf(b.m) ? (

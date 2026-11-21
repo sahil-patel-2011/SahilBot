@@ -1,5 +1,6 @@
 import { marked, type Token, type Tokens } from 'marked'
 import type { ChartSpec } from './chart'
+import { chartKind, chartTable, numberOf } from '@shared/dashboard'
 
 // The document model every generator shares: a flat list of blocks with inline spans. Markdown is parsed
 // into it (with a few extensions: [TOC], page breaks, landscape sections, footnotes, captions, callouts),
@@ -162,7 +163,16 @@ export function parseChart(text: string): ChartSpec | undefined {
       if (c && typeof c === 'object' && Array.isArray(c.categories) && Array.isArray(c.series)) return { ...c, type: (c.type ?? 'column') as ChartSpec['type'] }
     } catch { /* next */ }
   }
-  return undefined
+  // The deck and dashboard format: CSV, a header row, then a label and numbers on each row.
+  const ct = chartTable(text)
+  if (!ct || ct.rows.length < 2) return undefined
+  const cols = ct.header.map((_, c) => c).filter((c) => c > 0 && ct.rows.some((r) => numberOf(r[c] ?? '') !== null))
+  if (!cols.length) return undefined
+  return {
+    type: chartKind(ct) === 'line' ? 'line' : 'column',
+    categories: ct.rows.map((r) => r[0] ?? ''),
+    series: cols.map((c) => ({ name: ct.header[c], values: ct.rows.map((r) => numberOf(r[c] ?? '')) }))
+  } as ChartSpec
 }
 
 /** Parses Markdown (with the extensions above) into blocks and footnotes. */

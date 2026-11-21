@@ -190,3 +190,36 @@ test('a result too large for the server comes back as a failure, not silence', a
   expect(r.text).toMatch(/too large to send/)
   client.stop()
 })
+
+test('a job resent after a lost "got it" runs once; no "got it", no run; too-big jobs and tab opens are refused or asked', async () => {
+  const ran: string[] = []
+  let acks = 0
+  let polls = 0
+  const job = { id: 'j1', tool: 'file_read', args: { path: 'a' } }
+  const client = new MacLinkClient({
+    call: async (path, body) => {
+      if (path === '/api/mac/poll') { polls++; if (polls > 3) { client.stop(); return { status: 200, json: { jobs: [] } } } return { status: 200, json: { jobs: [job] } } }
+      if ((body as { ack?: boolean }).ack) { acks++; return acks === 1 ? { status: 500, json: {} } : { status: 200, json: { ok: true } } }
+      return { status: 200, json: { ok: true } }
+    },
+    exec: async (j) => { ran.push(j.id); return { text: 'ok' } }, allowed: () => ['file_read'], name: () => 'Mac', sleep: async () => undefined
+  })
+  client.start()
+  await new Promise((r) => setTimeout(r, 40))
+  expect(ran).toEqual(['j1'])
+  const hub = new MacLinkHub({ pollMs: 10 })
+  await hub.poll({ tools: ['file_write'] })
+  expect((await hub.run('file_write', { path: 'big', content: 'x'.repeat(120_000) }, 100)).text).toMatch(/too big/)
+  expect(macEffect('browser', { action: 'tabs', op: 'new', url: 'https://evil.example/?q=secret' })).toBe('write_external')
+  expect(macEffect('browser', { action: 'tabs' })).toBe('read')
+})
+
+test('only the linked Mac can drop its waiting poll', async () => {
+  let saved: string | undefined = 'dev-a'
+  const hub = new MacLinkHub({ pollMs: 500, bound: { get: () => saved, set: (id) => { saved = id } } })
+  const waiting = hub.poll({ tools: ['file_read'] }, 'dev-a')
+  hub.dropPoll('dev-b')
+  const job = hub.run('file_read', { path: 'a' }, 300)
+  expect((await waiting).map((j) => j.tool)).toEqual(['file_read'])
+  void job
+})

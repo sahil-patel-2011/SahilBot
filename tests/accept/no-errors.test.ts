@@ -155,6 +155,7 @@ describe('no errors on a first run', () => {
       await settle(page)
       await page.click('[data-testid="onboarding-next"]')
       // The last step: Mac permissions and files anywhere.
+      await page.click('[data-testid="onboarding-perms-next"]')
       await page.click('[data-testid="onboarding-finish"]')
       await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
       expect((await page.evaluate(() => window.foreman.settings.get())).keys.anthropic).toBeTruthy()
@@ -225,6 +226,7 @@ describe('no errors on a first run', () => {
       await settle(page)
       await page.click('[data-testid="onboarding-next"]')
       // The last step: Mac permissions and files anywhere.
+      await page.click('[data-testid="onboarding-perms-next"]')
       await page.click('[data-testid="onboarding-finish"]')
       await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
       await settle(page)

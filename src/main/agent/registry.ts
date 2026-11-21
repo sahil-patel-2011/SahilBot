@@ -200,10 +200,14 @@ export class ToolRegistry {
   /** The built-in tools listed up front for this thread's mode and profile. */
   private visible(state: ThreadState): ToolDef[] {
     const core = this.core()
-    if (chatMode(state)) return core.filter((t) => CHAT.has(t.name))
-    if (state.toolProfile === 'tiny') return core.filter((t) => TINY.has(t.name))
-    if (state.toolProfile === 'small') return core.filter((t) => SMALL.has(t.name))
-    return core
+    const list = chatMode(state) ? core.filter((t) => CHAT.has(t.name))
+      : state.toolProfile === 'tiny' ? core.filter((t) => TINY.has(t.name))
+        : state.toolProfile === 'small' ? core.filter((t) => SMALL.has(t.name))
+          : core
+    // A voice chat stays quick (the chat set, a small window), so its way to real work is always there; a bot
+    // being set up can always finish its setup.
+    const extra = core.filter((t) => ((t.name === 'start_work' && state.voice) || (t.name === 'finish_setup' && state.botSetup)) && !list.includes(t))
+    return extra.length ? [...list, ...extra] : list
   }
 
   /**

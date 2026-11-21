@@ -817,7 +817,6 @@ function ConnectedPage({ s, patch }: P) {
 
 // ------------------------------------------------------------------ voice
 
-const VOICE_MODELS: Array<[string, string]> = [['af_heart', 'Heart'], ['af_bella', 'Bella'], ['af_nicole', 'Nicole'], ['af_sky', 'Sky'], ['am_michael', 'Michael'], ['am_adam', 'Adam'], ['bf_emma', 'Emma (UK)'], ['bm_george', 'George (UK)']]
 const WHISPER_CHOICES: Array<[string, string]> = [
   ['auto', 'Auto (best for this Mac)'], ['small-q5_1', 'Whisper small, 5-bit · 190 MB'], ['small-q8_0', 'Whisper small, 8-bit · 264 MB'],
   ['medium-q5_0', 'Whisper medium, 5-bit · 539 MB'], ['large-v3-turbo-q5_0', 'Whisper large-v3-turbo, 5-bit · 574 MB'], ['large-v3-turbo-q8_0', 'Whisper large-v3-turbo, 8-bit · 874 MB']
@@ -859,16 +858,7 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
         </Row>}
         <Row id="read-aloud" title="Read replies aloud" sub="Or press the speaker on any message."><Toggle on={s.speakReplies} onChange={(v) => void patch({ speakReplies: v })} label="Read replies aloud" testId="speak-replies" /></Row>
         <div data-setting="voice-openai"><VoiceOutputRow s={s} patch={patch} /></div>
-        {voice && localIsOn(s) && (
-          <Row id="speaking-voice" title="Voice" sub={voice.kokoro ? 'Kokoro, on this Mac.' : 'Kokoro (92 MB) downloads when you try it.'}>
-            <div className="key-edit">
-              <select className="set-select" value={voice.voice} aria-label="Voice" onChange={(e) => { void api.voice.setVoice(e.target.value); setVoice({ ...voice, voice: e.target.value }) }}>
-                {VOICE_MODELS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
-              </select>
-              <button className="btn" onClick={() => void (voice.kokoro ? api.voice.speak(`Hi${s.userName ? ` ${s.userName}` : ''}, this is how I sound.`) : api.voice.download('kokoro').catch((e) => toast(clean(e), 'error')))}>{voice.kokoro ? 'Try it' : 'Get voice'}</button>
-            </div>
-          </Row>
-        )}
+        <Row id="speaking-voice" title="Voices" sub="Pick a voice, its speed and your language in the voice bar: its settings button." />
       </Section>
       <Disclosure title="Advanced" sub="Speech model, local transcription and the voice model" testId="voice-advanced">
         <Section>

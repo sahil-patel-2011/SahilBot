@@ -7,6 +7,9 @@ import { fromWav } from './audio'
 /** Swappable text-to-speech engine. */
 export interface TtsEngine {
   readonly name: string
+  /** The voice id (per engine) and speed (1 = normal), when the engine supports them. */
+  voice?: string
+  speed?: number
   warm(): Promise<void>
   synth(text: string): Promise<{ audio: Float32Array; rate: number }>
 }
@@ -16,6 +19,7 @@ export class KokoroEngine implements TtsEngine {
   readonly name = 'Kokoro-82M'
   private tts: any = null
 
+  speed = 1
   constructor(private cacheDir: string, public voice = 'af_heart') {}
 
   async warm(): Promise<void> {
@@ -31,7 +35,7 @@ export class KokoroEngine implements TtsEngine {
 
   async synth(text: string): Promise<{ audio: Float32Array; rate: number }> {
     await this.warm()
-    const a = await this.tts.generate(text, { voice: this.voice })
+    const a = await this.tts.generate(text, { voice: this.voice, speed: this.speed })
     return { audio: a.audio as Float32Array, rate: a.sampling_rate as number }
   }
 }
@@ -39,12 +43,15 @@ export class KokoroEngine implements TtsEngine {
 /** Fallback when Kokoro isn't installed: macOS's built-in voices. */
 export class SayEngine implements TtsEngine {
   readonly name = 'macOS voice'
+  voice?: string
+  speed = 1
   async warm(): Promise<void> {}
   synth(text: string): Promise<{ audio: Float32Array; rate: number }> {
     const dir = mkdtempSync(join(tmpdir(), 'say-'))
     const out = join(dir, 'a.wav')
     return new Promise((ok, bad) => {
-      execFile('say', ['-o', out, '--data-format=LEI16@22050', text], (e) => {
+      const args = ['-o', out, '--data-format=LEI16@22050', ...(this.voice ? ['-v', this.voice] : []), ...(this.speed !== 1 ? ['-r', String(Math.round(185 * this.speed))] : []), text.replace(/^-+/, '')]
+      execFile('say', args, (e) => {
         if (e) return bad(e)
         try {
           const w = fromWav(readFileSync(out))
@@ -62,6 +69,8 @@ export class SayEngine implements TtsEngine {
  */
 export class OpenAITtsEngine implements TtsEngine {
   readonly name = 'OpenAI voice'
+  voice?: string
+  speed = 1
   constructor(private o: {
     baseUrl: string
     apiKey: () => string | undefined
@@ -81,7 +90,7 @@ export class OpenAITtsEngine implements TtsEngine {
     const res = await (this.o.fetch ?? fetch)(`${this.o.baseUrl.replace(/\/+$/, '')}/audio/speech`, {
       method: 'POST',
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: this.o.model ?? 'gpt-4o-mini-tts', voice: this.o.voice ?? 'alloy', input: text.slice(0, 4000), response_format: 'wav' }),
+      body: JSON.stringify({ model: this.o.model ?? 'gpt-4o-mini-tts', voice: this.voice ?? this.o.voice ?? 'alloy', input: text.slice(0, 4000), response_format: 'wav', ...(this.speed !== 1 ? { speed: this.speed } : {}) }),
       signal: AbortSignal.timeout(30_000)
     })
     if (!res.ok) throw new Error(`OpenAI voice answered ${res.status}`)

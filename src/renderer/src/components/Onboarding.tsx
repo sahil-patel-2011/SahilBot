@@ -181,7 +181,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
   return (
     <div className="scrim onboarding">
       <div className="modal onboard-card" data-testid="onboarding">
-        <div className="onboard-steps" aria-hidden>{(wantLocal ? [0, 1, 1.5, 2] : [0, 1, 2]).map((i) => <i key={i} className={i <= step ? 'on' : ''} />)}</div>
+        <div className="onboard-steps" aria-hidden>{(wantLocal ? [0, 1, 1.5, 2, 3] : [0, 1, 2, 3]).map((i) => <i key={i} className={i <= step ? 'on' : ''} />)}</div>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Mascot size={64} /></div>
         {step === 0 && (
           <>
@@ -189,7 +189,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             <p className="hint" style={{ textAlign: 'center' }}>An assistant that works on your Mac: it chats, researches, uses your apps and gets real work done. Your chats, files, memory and passwords stay here.</p>
             <div className="field"><label>What should I call you?</label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Your first name" onKeyDown={(e) => e.key === 'Enter' && setStep(1)} data-testid="onboarding-name" /></div>
             <div className="modal-actions"><button className="btn primary" onClick={() => setStep(1)} data-testid="onboarding-name-next">Continue</button></div>
-            <div className="hint onboard-time">Three steps, about a minute.</div>
+            <div className="hint onboard-time">Four short steps, about a minute.</div>
           </>
         )}
         {step === 1 && (
@@ -251,7 +251,22 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             </label>
             <div className="modal-actions">
               <button className="btn" onClick={() => setStep(wantLocal ? 1.5 : 1)}>Back</button>
-              <button className="btn primary" onClick={() => void api.settings.set({ advanced: { ...settings.advanced, filesAnywhere: anywhere } }).then(() => finish())} data-testid="onboarding-finish">Start using SahilBot</button>
+              <button className="btn primary" onClick={() => void api.settings.set({ advanced: { ...settings.advanced, filesAnywhere: anywhere } }).then(() => setStep(3))} data-testid="onboarding-perms-next">Continue</button>
+            </div>
+          </>
+        )}
+        {step === 3 && (
+          <>
+            <h2 style={{ textAlign: 'center' }}>Your first bot</h2>
+            <p className="hint" style={{ textAlign: 'center' }}>SahilBot works through bots: helpers that each have one job and keep at it.</p>
+            <div className="onboard-how" data-testid="onboarding-how">
+              <div><b>Give it a job</b><span>Your inbox, a project, research every morning, school. Say it in a sentence.</span></div>
+              <div><b>Talk or type</b><span>Press Talk and just say it. It works in the background and tells you when it's done.</span></div>
+              <div><b>It remembers</b><span>What you tell any bot is remembered, so you never repeat yourself.</span></div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => void finish()} data-testid="onboarding-finish">I'll look around first</button>
+              <button className="btn primary" onClick={() => void finish().then(() => window.dispatchEvent(new Event('sahilbot:start-setup')))} data-testid="onboarding-first-bot">Create my first bot</button>
             </div>
           </>
         )}
