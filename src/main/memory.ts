@@ -618,9 +618,11 @@ export class MemoryStore {
   teamSearch(query: string, spaceId: string | null | undefined, limit = 5, min = 0.4): Array<Memory & { from: string }> {
     const q = query.trim()
     if (!this.enabled || !this.shareAcrossBots || !q) return []
-    const rows = this.db.sql.prepare('SELECT * FROM memories WHERE scope IS NOT NULL AND scope != ? ORDER BY updated_at DESC LIMIT 2000').all(spaceId ?? '') as Row[]
+    // Only trusted memories cross bots: wording from web pages, email or other apps stays with the bot that read it
+    // (a planted instruction must not reach every other bot as a teammate's fact).
+    const rows = this.db.sql.prepare("SELECT * FROM memories WHERE scope IS NOT NULL AND scope != ? AND category != 'rule' AND (provenance IS NULL OR provenance != 'untrusted') ORDER BY updated_at DESC LIMIT 600").all(spaceId ?? '') as Row[]
     return rows.map(toMemory)
-      .filter((m) => m.category !== 'rule' && !!m.spaceId && !!this.nameOf?.(m.spaceId))
+      .filter((m) => m.category !== 'rule' && !isUntrusted(m) && !!m.spaceId && !!this.nameOf?.(m.spaceId))
       .map((m) => ({ m, s: Math.max(fuzzyScore(q, m.content), fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
       .filter((x) => x.s >= min)
       .sort((a, b) => b.s - a.s || b.m.updatedAt - a.m.updatedAt)

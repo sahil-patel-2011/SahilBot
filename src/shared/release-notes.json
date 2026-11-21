@@ -60,11 +60,11 @@
       {
         "title": "Bots that keep going",
         "items": [
-          "A bot that's still making progress keeps working past its usual step limit instead of stopping to ask you to say \"continue\" (your spending limit and the safety stops still apply)",
+          "In a chat you're in, a bot that's still making progress keeps working past its usual step limit instead of stopping to ask you to say \"continue\" (your spending limit and the safety stops still apply)",
           "Messages you send while a bot works reach it at its next step: it adjusts and keeps going, nothing stops",
-          "A routine that comes due while you're working with that bot waits for the current work (up to 10 minutes) instead of being skipped; if the bot is still busy, the routine is handed to it to do next",
+          "A routine that comes due while you're working with that bot waits its turn instead of being skipped, then runs on its own (it stops waiting if you pause or delete it)",
           "After each routine, a dated line about what it did goes into the bot's work log, so its next run, its chats and your other bots build on it",
-          "Bots share what they learn: any bot, chat or helper can read what your other bots learned and did, labeled with the bot. Each bot's own rules stay its own. Turn it off in Settings → Memory"
+          "Bots share what they learn: any bot, chat or helper can read what your other bots learned and did, labeled with the bot. Only trusted memories are shared (nothing worded from a web page or email), and each bot's own rules stay its own. Turn it off in Settings → Memory"
         ]
       },
       {

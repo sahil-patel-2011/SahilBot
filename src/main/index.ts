@@ -1864,17 +1864,16 @@ app.whenReady().then(() => {
       if (alertHit.fired && !priceAlert.repeat && !info.test) scheduler.update(task.id, { enabled: false })
       return { status: 'done', threadId }
     }
-    // The bot is busy (you're working with it, or another routine is running): never skip the routine. Wait for the
-    // current work to finish (up to 10 minutes), then run it; still busy after that, hand it to the running bot as
-    // information it acts on once its current work is done, without stopping that work.
-    if (chat.isRunning(threadId)) {
-      const until = Date.now() + (info.test ? 30_000 : 10 * 60_000)
-      while (chat.isRunning(threadId) && Date.now() < until) await new Promise((r) => setTimeout(r, 5000))
-      if (chat.isRunning(threadId)) {
-        await chat.steer(threadId, `⏰ ${task.title}\n\n${task.prompt}`, { scheduled: task.id, answerNote: `[This is the scheduled routine "${task.title}", due now. Don't drop what you're doing: finish it, then do this routine as its own task in this run.]` })
-        return { status: 'done: handed to the bot while it was busy', threadId }
-      }
+    // The bot is busy (you're working with it, or another routine is running): the routine waits its turn instead of
+    // being skipped, then runs as itself (unattended, with a routine's permissions), never mixed into your live run.
+    // It stops waiting if you pause routines or this one, delete it, or after two hours.
+    const until = Date.now() + (info.test ? 60_000 : 2 * 3600_000)
+    while ((chat.isRunning(threadId) || scheduledRuns.has(threadId)) && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 5000))
+      const cur = scheduler.get(task.id)
+      if (!info.test && (!cur || !cur.enabled || scheduler.paused())) return { status: 'skipped: paused or removed while it waited for the chat', threadId }
     }
+    if (chat.isRunning(threadId) || scheduledRuns.has(threadId)) return { status: 'skipped: the chat stayed busy for two hours', threadId }
     const startedAt = Date.now()
     scheduledRuns.add(threadId)
     let status: Awaited<Awaited<ReturnType<typeof chat.send>>['done']>
@@ -1893,9 +1892,10 @@ app.whenReady().then(() => {
     }
     // What the routine did goes in the bot's work log (memory), so its next run, the bot's chats and the other bots
     // can build on it without being told again. The work log keeps only the most recent entries per bot.
-    if (status === 'finished' && last?.content && !info.test) {
+    const gist = (last?.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 220)
+    // (A bare "Done." says nothing worth keeping.)
+    if (status === 'finished' && gist.length >= 24 && !/^(done|ok(ay)?|finished|all set|nothing (new|to report))\b[.!]?$/i.test(gist) && !info.test) {
       try {
-        const gist = last.content.replace(/\s+/g, ' ').trim().slice(0, 220)
         // Built from web pages, email or another app's output: kept as outside content, never a trusted fact.
         const tainted = after.some((m) => m.role === 'tool' && m.meta?.untrusted)
         memory.save(`${new Date().toISOString().slice(0, 10)}: routine "${task.title.replace(/^⏰\s*/, '')}" ran → ${gist}`, 'worklog', space.isMain ? null : space.id, 'chat', tainted ? 'untrusted' : 'trusted')

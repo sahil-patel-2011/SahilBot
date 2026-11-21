@@ -3470,9 +3470,10 @@ export class Agent {
         if (nowDone > doneItems) budget = Math.max(budget, Math.min(HARD_CAP, budget + (nowDone - doneItems) * 4))
         doneItems = nowDone
         // Still making progress (real work went through this step, nothing failing): keep going on its own instead of
-        // stopping to ask the user to say "continue". HARD_CAP, the loop guard and the spending limit still stop
+        // stopping to ask the user to say "continue". Only in a chat the user is in (routines and helpers keep the plan-
+        // based budget, so nothing unattended runs long on its own). HARD_CAP, the loop guard and the spending limit still stop
         // runaway work; twelve extensions of 12 steps at most per run.
-        if (step === budget && this.feat.autoContinue && step < HARD_CAP && autoExtends < 12 && failStreak < 2 && ran.some((r) => r.status === 'ok' && !BOOKKEEPING.has(r.name))) {
+        if (step === budget && this.feat.autoContinue && !run.unattended && !run.helper && step < HARD_CAP && autoExtends < 12 && failStreak < 2 && ran.some((r) => r.status === 'ok' && !BOOKKEEPING.has(r.name))) {
           autoExtends++
           budget = Math.min(HARD_CAP, budget + 12)
         }
