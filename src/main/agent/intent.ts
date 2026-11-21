@@ -36,6 +36,11 @@ const GROUPS: Array<{ tools: string[]; when: { test(text: string): boolean } }> 
     when: { test: (t: string) => /\b(stud(y|ies)|pubmed|clinical( trial)?s?|paper|papers|arxiv|doi|journal|peer[- ]reviewed|drug|dosage|fda|side effects?|medical|diagnos|symptom|research)\b/i.test(t) || isMedicalQuestion(t) }
   },
   {
+    // Travel and places (tools/maps.ts): trips, directions, distances, what's nearby, itineraries.
+    tools: ['maps'],
+    when: /\b(trips?|travel(l?ing)?|itinerar(y|ies)|vacation|getaway|road ?trip|directions?|route to|how (far|long does it take)|drive to|walk(ing)? to|commute|distance (from|to|between)|near me|nearby|close to|around here|restaurants?|cafes?|caf\u00e9s?|coffee shops?|hotels?|things to do|sights|sightseeing|attractions?|museums?|neighbou?rhoods?|google maps|maps?|where (is|can i)|places? to (eat|stay|visit|go)|ev charg\w*|gas station|pharmacy near|(good|best|cheap|late[- ]night) (food|eats|ramen|sushi|pizza|tacos|brunch|dinner|lunch|breakfast|bars?|coffee)|near (?!(the )?(future|term|end)\b)[a-z]+)\b/i
+  },
+  {
     tools: ['mail'],
     when: /\b(e-?mails?|inbox|gmail|mail app|apple mail|unread|reply to|draft (a|an|the)? ?(reply|email)|newsletter|unsubscribe)\b/i
   },

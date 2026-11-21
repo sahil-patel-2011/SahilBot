@@ -86,7 +86,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'background-model', page: 'models', title: 'Model for background jobs', words: 'task models background titles small jobs', keys: ['taskModels.background'], advanced: true },
   { anchor: 'computer-use', page: 'models', title: 'Computer use', words: 'computer use planner executor screen mouse keyboard', keys: ['computerUse'], advanced: true },
   { anchor: 'servers', page: 'models', title: 'Custom servers', words: 'openrouter openai base url gateway ollama lm studio custom server llama.cpp vllm address', keys: ['providers', 'baseUrl'], advanced: true },
-  { anchor: 'tool-keys', page: 'models', title: 'Keys for tools', words: 'market data stocks tiingo polygon alpha vantage finnhub quotes blue alliance frc tba onshape cad key pubmed ncbi medical research', keys: ['markets.quoteProvider', 'markets.secContact'], advanced: true },
+  { anchor: 'tool-keys', page: 'models', title: 'Keys for tools', words: 'market data stocks tiingo polygon alpha vantage finnhub quotes blue alliance frc tba onshape cad key pubmed ncbi medical research google maps places directions travel', keys: ['markets.quoteProvider', 'markets.secContact'], advanced: true },
 
   // Connected apps
   { anchor: 'connect-apps', page: 'connected', title: 'Connect apps', words: 'gmail calendar notion slack github drive connectors integrations mcp oauth cursor cloud agents api key', keys: ['cursorLocalAgent'] },
@@ -142,7 +142,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
 /** Settings keys that aren't user-facing settings (internal state, other screens own them). */
 export const NOT_IN_SETTINGS = new Set([
-  'hasApiKey', 'keys', 'keysSaved', 'hasCursorKey', 'hasTbaKey', 'hasNcbiKey', 'keysLocked', 'hasOnshapeKeys', 'onshapeKeyParts', 'onboarded', 'pinnedBots', 'search.hasBraveKey',
+  'hasApiKey', 'keys', 'keysSaved', 'hasCursorKey', 'hasTbaKey', 'hasNcbiKey', 'hasGoogleMapsKey', 'keysLocked', 'hasOnshapeKeys', 'onshapeKeyParts', 'onboarded', 'pinnedBots', 'search.hasBraveKey',
   'appearance', 'cloud', 'search', 'advanced', 'taskModels', 'learning', 'local', 'markets', 'voiceOutput',
   // Set from other screens: bot details, the composer, the menu bar, local model loading.
   'botAutonomy', 'botSwarm', 'localKeepAlive', 'advanced.sandboxCommands', 'local.migrated', 'learning.explicit', 'cloud.maxConsultsPerRequest',

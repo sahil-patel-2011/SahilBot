@@ -13,12 +13,19 @@ Dates or flexibility, origin, travelers (ages), budget (total or per day), pace 
 ## Research (cite sources and dates; prices change)
 - Getting there: compare 2-3 options (nonstop vs cheaper connection, train, drive) with total time and price. Note baggage fees.
 - Where to stay: 2-3 neighborhoods with why (walkability, safety, transit, price range); 3 lodging options each with price per night, cancellation policy and rating.
-- Things to do: 3-5 per day max, with opening hours, closed days, ticket needs (timed entry sells out), travel time between them (map tools if available).
+- Things to do: 3-5 per day max, with opening hours, closed days, ticket needs (timed entry sells out), travel time between them.
 - Practical: passport validity (many countries require 6 months), visa or e-travel authorization rules from official government sites, entry health requirements, travel advisories (US State Department travel.state.gov), local transit cards, tipping norms, plug type, weather for the dates.
 - Use agents in parallel for big multi-city trips.
 
+## Map it (maps tool: find_tools("maps"))
+- Find candidates: maps(action="nearby", category="attractions" | "museums" | "restaurants" | "parks", near="<neighborhood or hotel>") and maps(action="search", query="<specific want>", near=...). With the user's Google key you get ratings, prices and opening hours; without it, check hours on the place's site.
+- Cluster by area: use each result's distance (or geocode) so each day stays in one or two neighborhoods.
+- Check travel times with maps(action="distance_matrix", origins=[hotel options], destinations=[the must-sees], mode="walking" | "transit" | "driving"): pick the hotel that minimizes total time, and keep transfers under about 30 min.
+- Day route: maps(action="directions", origin, destination, waypoints=[stops in order]); give its Google Maps link so the user can open the whole day on their phone.
+- Put a Google Maps link next to every place and every day in the itinerary.
+
 ## Build
-1. Day-by-day itinerary table: time, activity, address, booking status, cost, backup for bad weather; group sights by area to cut transit.
+1. Day-by-day itinerary table: time, activity, address (Google Maps link), travel time from the previous stop, booking status, cost, backup for bad weather; group sights by area to cut transit.
 2. Budget spreadsheet: transport, lodging, food per day, activities, local transport, buffer (~10-15%).
 3. Bookings to make, with deadline and link (ordered by what sells out first).
 4. Packing list by weather and activities; documents checklist; offline copies.

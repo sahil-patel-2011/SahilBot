@@ -163,7 +163,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     if (p.id === 'gmail') { go('gmail'); return }
     // Native API-key apps (Resend): the key panel, to add, replace or forget the key.
     if (isNativeKeyApp(p)) { setKeyFor(p); go('key'); return }
-    if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : p.url === 'app:research' ? 'what do the latest guidelines and meta-analyses say about active surveillance for prostate cancer?' : 'add a reminder for tomorrow at 9'}".`); return }
+    if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : p.url === 'app:maps' ? 'plan a 2-day walking itinerary in Lisbon with travel times between stops' : p.url === 'app:research' ? 'what do the latest guidelines and meta-analyses say about active surveillance for prostate cancer?' : 'add a reminder for tomorrow at 9'}".`); return }
     const existing = configOf(p)
     // Google apps with no client at all (no built-in one, none of the user's own): set Google up first.
     if (p.auth === 'google' && !p.builtinClient && !google && !existing?.clientId && status(existing?.id ?? '')?.state !== 'connected') { setGoogleFor(p); go('google'); return }

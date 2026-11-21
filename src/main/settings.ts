@@ -13,7 +13,7 @@ import { isWhisperId } from './voice/models'
 import { migrateLocal } from '@shared/local-mode'
 import { hasLocalModels } from './local-detect'
 
-type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'hasNcbiKey' | 'keysLocked' | 'hasOnshapeKeys' | 'onshapeKeyParts' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
+type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'hasNcbiKey' | 'hasGoogleMapsKey' | 'keysLocked' | 'hasOnshapeKeys' | 'onshapeKeyParts' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
 
 export const DEFAULT_APPEARANCE: Appearance = { density: 'compact', chatWidth: 780, codeWrap: false, hue: 30, tint: 0, reduceTransparency: false, fontSize: 15 }
 
@@ -201,6 +201,8 @@ export type SettingsPatch = Partial<Settings> & {
   tbaKey?: string | null
   /** NCBI E-utilities API key (PubMed: 10 requests a second instead of 3); Keychain like the others, null removes. */
   ncbiKey?: string | null
+  /** Google Maps Platform API key (the maps tool: Places, Routes, Geocoding); Keychain like the others, null removes. */
+  googleMapsKey?: string | null
   /** Onshape API key pair (the onshape CAD tool; https://dev-portal.onshape.com/keys); Keychain like the others, null removes. */
   onshapeAccessKey?: string | null
   onshapeSecretKey?: string | null
@@ -276,6 +278,7 @@ export class SettingsStore {
       hasCursorKey: this.secrets.has('cursorKey'),
       hasTbaKey: this.secrets.has('tbaKey'),
       hasNcbiKey: this.secrets.has('ncbiKey'),
+      hasGoogleMapsKey: this.secrets.has('googleMapsKey'),
       hasOnshapeKeys: this.secrets.has('onshapeAccessKey') && this.secrets.has('onshapeSecretKey'),
       onshapeKeyParts: { access: this.secrets.has('onshapeAccessKey'), secret: this.secrets.has('onshapeSecretKey') },
       keysSaved: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers))])),
@@ -289,13 +292,14 @@ export class SettingsStore {
   }
 
   set(patch: SettingsPatch): Settings {
-    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, ncbiKey, marketKeys, hasApiKey: _a, keys: _k, keysSaved: _ks, hasCursorKey: _c, hasTbaKey: _t, hasNcbiKey: _n, keysLocked: _kl, onshapeAccessKey, onshapeSecretKey, hasOnshapeKeys: _o, onshapeKeyParts: _op, ...rest } = patch
+    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, ncbiKey, googleMapsKey, marketKeys, hasApiKey: _a, keys: _k, keysSaved: _ks, hasCursorKey: _c, hasTbaKey: _t, hasNcbiKey: _n, hasGoogleMapsKey: _g, keysLocked: _kl, onshapeAccessKey, onshapeSecretKey, hasOnshapeKeys: _o, onshapeKeyParts: _op, ...rest } = patch
     for (const [p, k] of Object.entries(marketKeys ?? {}) as Array<[MarketKeyProvider, string | null]>) {
       if (MARKET_KEY_PROVIDERS.includes(p)) this.secrets.set(marketKeyName(p), k ? k.trim() : null)
     }
     if (cursorKey !== undefined) this.secrets.set('cursorKey', cursorKey)
     if (tbaKey !== undefined) this.secrets.set('tbaKey', tbaKey ? tbaKey.trim() : null)
     if (ncbiKey !== undefined) this.secrets.set('ncbiKey', ncbiKey ? ncbiKey.trim() : null)
+    if (googleMapsKey !== undefined) this.secrets.set('googleMapsKey', googleMapsKey ? googleMapsKey.trim() : null)
     if (onshapeAccessKey !== undefined) this.secrets.set('onshapeAccessKey', onshapeAccessKey ? onshapeAccessKey.trim() : null)
     if (onshapeSecretKey !== undefined) this.secrets.set('onshapeSecretKey', onshapeSecretKey ? onshapeSecretKey.trim() : null)
     if (braveKey !== undefined) this.secrets.set('braveKey', braveKey)

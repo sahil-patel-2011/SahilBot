@@ -160,6 +160,8 @@ const CASES: Array<[string, string, boolean?]> = [
   ['is a second revision round in scope per our statement of work with Client C', 'business-contract-scope', true],
   ['brainstorm names for our new podcast', 'ideas-creative-methods', true],
   ['use SCAMPER and first principles to rethink our checkout flow', 'ideas-creative-methods', true],
+  ['date night ideas near us this Saturday', 'ideas-local-places', true],
+  ['find a team offsite venue within an hour of the office', 'ideas-local-places', true],
   ['build a three statement financial model with runway', 'financial-model', true],
   ['forecast our burn rate and cash runway for the next 18 months', 'financial-model', true],
   ['how does a SAFE note work and what will dilution look like on my cap table', 'business-fundraising', true],

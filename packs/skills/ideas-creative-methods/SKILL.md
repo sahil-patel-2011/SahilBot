@@ -22,6 +22,11 @@ Use 3-4 of these, labeled, so the user sees range:
 - Extremes and personas: the power user, the skeptic, the beginner, a competitor.
 For research-backed domains, quickly web_search what already exists so ideas are novel, and say which are known.
 
+### Lenses by domain (pick the ones that fit)
+- Business: jobs-to-be-done (what job is the customer hiring this for?), unbundle or rebundle an incumbent, a new channel or pricing model (subscription, usage, freemium), serve the non-consumer, borrow a business model from another industry.
+- Engineering: resolve the contradiction (make X better without making Y worse), change the material, process or energy source, move work to another time or place (precompute, cache, batch), remove a part entirely, design for the failure mode first.
+- Trips and outings: by theme (food, history, nature, nightlife), by time of day, by budget tier, "like a local" vs classic. Ground every idea in real places with maps(action="nearby" | "search"): see ideas-local-places.
+
 ## Converge
 1. Cluster similar ideas; name each cluster.
 2. Score the top 8-10 on impact, feasibility, cost, novelty, fit (simple 1-5 matrix, or impact vs effort 2x2).

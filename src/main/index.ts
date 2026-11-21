@@ -89,6 +89,7 @@ import { runUsage } from './run-usage'
 import { isPermissionMode, modeChangeAllowed } from './agent/permissions'
 import { codeTool, gitTool } from './agent/tools/code'
 import { researchTool } from './agent/tools/research'
+import { mapsTool } from './agent/tools/maps'
 import { phiTool } from './agent/tools/phi'
 import { agentsTool, swarmTool } from './agent/tools/agents'
 import { maxTool } from './agent/tools/max'
@@ -794,6 +795,8 @@ app.whenReady().then(() => {
     codeTool({ getWorkspace: () => settings.get().workspaceDir }),
     gitTool(),
     researchTool({ ncbiKey: () => secrets.get('ncbiKey') }),
+    // Maps and travel: Google Maps with the user's key, else OpenStreetMap; every result links to Google Maps.
+    mapsTool({ googleKey: () => secrets.get('googleMapsKey') }),
     // Patient data: find and redact the 18 HIPAA identifiers before text goes anywhere (local, read-only).
     phiTool(),
     maxTool(),

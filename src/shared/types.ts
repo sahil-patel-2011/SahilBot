@@ -192,6 +192,8 @@ export interface Settings {
   hasTbaKey?: boolean
   /** An NCBI API key (PubMed, faster and steadier medical research), kept in the Keychain. */
   hasNcbiKey?: boolean
+  /** A Google Maps Platform key (the maps tool), kept in the Keychain. */
+  hasGoogleMapsKey?: boolean
   /** Saved keys that can't be opened right now (macOS Keychain locked or didn't answer). They're kept, not lost. */
   keysLocked?: { count: number; reason: string }
   /** 'auto' routes each request to the right model for how hard it is. */
@@ -1277,7 +1279,7 @@ export interface SahilBotApi {
   privacy: import('./privacy').PrivacyApi
   settings: {
     get(): Promise<Settings>
-    set(patch: Partial<Settings> & { apiKey?: string | null; braveKey?: string | null; cursorKey?: string | null; tbaKey?: string | null; ncbiKey?: string | null; setKeys?: Partial<Record<ProviderId, string | null>> }): Promise<Settings>
+    set(patch: Partial<Settings> & { apiKey?: string | null; braveKey?: string | null; cursorKey?: string | null; tbaKey?: string | null; ncbiKey?: string | null; googleMapsKey?: string | null; setKeys?: Partial<Record<ProviderId, string | null>> }): Promise<Settings>
   }
   models: {
     list(): Promise<ModelList>
