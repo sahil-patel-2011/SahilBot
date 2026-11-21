@@ -90,6 +90,9 @@ import { completionReport } from './runtime/verification'
 import { phaseTask } from './runtime/phase'
 import { taskGraphTool } from './runtime/graph'
 import { evaluationTool } from './runtime/evaluation'
+import { detectProject } from '../code/project'
+import { runCheck } from '../code/checks'
+import { cwdFor } from './tools/shell'
 import { PRIVACY_DOCUMENT_TEXT, type PrivacyAnswer } from '@shared/privacy'
 import { StreamRestorer, applyAnswer, describe as describePrivate, detectInContext, documentFindings, emptyPrivacy, recordNotPersonal, findings as privacyFindings, markScanned, maskText, maskWire, parseAnswer, restoreText, segmentsOf, unscanned, type PrivacyThreadState } from '../privacy/gate'
 
@@ -1862,6 +1865,21 @@ export class Agent {
   }
 
   /** A line in the chat. internal: about models or thinking, shown only in Developer mode. */
+  /**
+   * The project's own test command (package.json, pytest, Cargo, go…), run in the chat's folder after code changed.
+   * undefined when there's no project or no test setup there (nothing to run, nothing blocks the answer).
+   */
+  private async runProjectTests(state: ThreadState, signal: AbortSignal): Promise<{ ok: boolean; command: string; text: string } | undefined> {
+    try {
+      const base = cwdFor(undefined, { state, workspaceDir: this.d.settings.get().workspaceDir })
+      const spec = detectProject(base).test
+      if (!spec) return undefined
+      const r = await runCheck({ cwd: base, kind: 'test', spec, timeoutMs: 600_000, signal })
+      if (r.stopped) return undefined
+      return { ok: r.ok, command: r.command, text: r.text.slice(-6000) }
+    } catch { return undefined }
+  }
+
   /** This chat's Privacy Gate record when the gate is on and has something to mask or withhold. */
   private privacyState(threadId: string): PrivacyThreadState | undefined {
     if (!this.d.privacy?.active()) return undefined
@@ -2708,6 +2726,8 @@ export class Agent {
     // web: it read outside content itself, so handoffs it sends count as tainted.
     const track = {
       changed: false, researched: false,
+      // Code changed and no passing test run since: the runtime runs the tests before accepting "done".
+      codeEdited: false, testsGreen: false, testRounds: 0,
       // A real change (not the plan, memory or a question) that nothing has looked at since: the double-check's reason.
       unchecked: false,
       // Research before asking: did this run look at anything yet, is it a task, was it nudged already.
@@ -3092,6 +3112,20 @@ export class Agent {
               this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
               db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: verifyNote({ changed: track.changed, researched: track.researched, actions, complex, goal }) + review })
               continue
+            }
+          }
+          // Test until green (the runtime's check, not a reminder): code changed and no passing test run since, so
+          // SahilBot runs the project's own test command; failures go back to the model to fix (3 rounds at most).
+          if (track.codeEdited && !track.testsGreen && track.testRounds < 3 && !chatRun && step < HARD_CAP) {
+            const verdict = await this.runProjectTests(state, run.ctrl.signal)
+            if (verdict) {
+              track.testRounds++
+              if (verdict.ok) track.testsGreen = true
+              else {
+                budget = Math.max(budget, step + 6)
+                db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] You changed code, so the app ran the project's tests (${verdict.command}). They fail:\n${verdict.text}\nFix the failures, then finish. The app runs the tests again before accepting the result.` })
+                continue
+              }
             }
           }
           // Autonomy: a task stopped to ask "want me to…?" about its own next step. Do it (risky actions still ask).
@@ -3938,6 +3972,9 @@ export class Agent {
     // Cloud windows hold bigger results whole (resultLimit); local models keep the 2K that keeps prefill fast.
     const off = await this.d.results.maybeOffload(out.text, id, counter, tool.name === 'agents' || tool.name === 'max' ? teamShare(ctx.window) : isLocal(cep.baseUrl) ? undefined : resultLimit(ctx.window))
     if (effect !== 'read') ctx.track.changed = true
+    // Code edits and test results, for the runtime's test-until-green rule.
+    if (effect !== 'read' && ((tool.name === 'code' && /"action"\s*:\s*"(edit|apply_patch)"/.test(call.arguments)) || ((tool.name === 'file_write' || tool.name === 'file_manage') && CODE_FILE.test(out.path ?? '')))) { ctx.track.codeEdited = true; ctx.track.testsGreen = false }
+    if (tool.name === 'code' && out.verification && /^tests\b/.test(out.verification.criterion)) ctx.track.testsGreen = out.verification.passed
     if (effect !== 'read' && !BOOKKEEPING.has(tool.name)) ctx.track.unchecked = true
     else if (effect === 'read' && LOOKS_AT_WORK.has(tool.name)) ctx.track.unchecked = false
     // A tool that wrote install config or git internals: this chat's installs and pulls ask again (shell.ts).
@@ -4013,7 +4050,7 @@ interface ExecCtx {
   untrusted: string[]
   userText: string
   guard: LoopGuard
-  track: { changed: boolean; researched: boolean; unchecked?: boolean; web: boolean; sawUntrusted: boolean; explored?: boolean; task?: boolean; askGated?: boolean }
+  track: { changed: boolean; researched: boolean; unchecked?: boolean; web: boolean; sawUntrusted: boolean; explored?: boolean; task?: boolean; askGated?: boolean; codeEdited?: boolean; testsGreen?: boolean; testRounds?: number }
   window: number
 }
 
@@ -4127,6 +4164,9 @@ export function promisesAction(text: string): boolean {
     || new RegExp(`\\b(${gerunds})\\b[^.!?\\n]{0,120}\\b(now|right away)\\b`, 'i').test(last)
     || /\b(send|share|post) (you )?(the|a) (live )?(link|url)\b[^.!?\n]{0,40}\b(once|when) (it'?s|it is) (up|live|done|ready|finished)\b/i.test(last)
 }
+
+/** Source files the test-until-green rule watches. */
+const CODE_FILE = /\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|scala|vue|svelte)$/i
 
 export function nextStronger(models: ModelInfo[], current: string, o: { cloud: boolean; localOnly?: boolean; exclude?: Set<string>; sideways?: boolean; needsVision?: boolean; sameKind?: boolean; noPremium?: boolean }): ModelInfo | undefined {
   let pool = models.filter((m) => m.id !== current && !o.exclude?.has(m.id) && m.tools !== false && m.installed !== false)

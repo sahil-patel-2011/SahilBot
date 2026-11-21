@@ -68,7 +68,9 @@ interface Scenario {
   prompt: string
   /** Fewest model steps a perfect run takes. */
   optimal: number
-  tools: (s: { done: boolean }) => ToolDef[]
+  /** Runs in a real project folder with a failing test (package.json "test"). */
+  project?: boolean
+  tools: (s: { done: boolean }, dir?: string) => ToolDef[]
   /** The scripted model: a reply from the request so far. */
   policy: (req: Record<string, any>, s: Record<string, number>) => { content?: string; toolCalls?: Array<{ name: string; arguments: string }> }
 }
@@ -126,6 +128,30 @@ const SCENARIOS: Scenario[] = [
     }
   },
   {
+    name: 'Bug fix that needs the tests (first fix is wrong, claims "Fixed!")',
+    prompt: 'Fix the add() bug in math.js so the tests pass.',
+    optimal: 3,
+    project: true,
+    tools: (s, dir) => [{
+      name: 'code', label: 'code', effect: 'write_local', description: 'code (benchmark tool): edit {path, content}',
+      parameters: { type: 'object', properties: { action: { type: 'string' }, path: { type: 'string' }, content: { type: 'string' } }, additionalProperties: true },
+      async run(a: { content?: string }) {
+        writeFileSync(join(dir!, 'math.js'), a.content ?? '')
+        s.done = (a.content ?? '').includes('a + b')
+        return { text: 'Edited math.js', path: join(dir!, 'math.js') }
+      }
+    } as ToolDef],
+    policy: (req) => {
+      const edits = called(req, 'code')
+      const out = [...req.messages].reverse().find((m: any) => m.role === 'user')
+      const failing = typeof out?.content === 'string' && /\[From the app\]/.test(out.content)
+      // Its first fix is wrong (a classic slip) and it says "Fixed!" without running anything.
+      if (edits === 0) return call('code', { action: 'edit', path: 'math.js', content: 'export const add = (a, b) => a - b + 0\n' })
+      if (edits === 1 && (failing || userTurns(req) > 1)) return call('code', { action: 'edit', path: 'math.js', content: 'export const add = (a, b) => a + b\n' })
+      return { content: 'Fixed! add() is correct now.' }
+    }
+  },
+  {
     name: 'Sign-in wall (the user signs in on the page a moment later)',
     prompt: 'Open my analytics dashboard and tell me this week\'s visitors.',
     optimal: 2,
@@ -152,14 +178,26 @@ async function runScenario(sc: Scenario): Promise<{ name: string; finished: bool
   const state = { done: false }
   const before = realRequests
   const results = new ResultStore(mkdtempSync(join(tmpdir(), 'bench-res-')))
+  // A real project: math.js with the bug, a test that checks add(2, 3) === 5, and "npm test" (a stand-in npm on PATH).
+  const dir = sc.project ? mkdtempSync(join(tmpdir(), 'bench-proj-')) : undefined
+  if (dir) {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'bench', type: 'module', scripts: { test: 'node test.js' } }))
+    writeFileSync(join(dir, 'math.js'), 'export const add = (a, b) => a - b\n')
+    writeFileSync(join(dir, 'test.js'), "import { add } from './math.js'\nif (add(2, 3) !== 5) { console.error('FAIL add(2, 3) should be 5, got ' + add(2, 3)); process.exit(1) }\nconsole.log('1 passed')\n")
+    const bin = mkdtempSync(join(tmpdir(), 'bench-bin-'))
+    writeFileSync(join(bin, 'npm'), '#!/bin/sh\nexec node test.js\n', { mode: 0o755 })
+    if (!process.env.PATH?.startsWith(bin)) process.env.PATH = `${bin}:${process.env.PATH}`
+  }
   const registry = new ToolRegistry()
-  registry.register(...coreTools(results), ...sc.tools(state))
+  registry.register(...coreTools(results), ...sc.tools(state, dir))
   const events: ChatEvent[] = []
   const last = { ok: true, models: [model], budgetGB: 32, totalGB: 64, providers: [] }
   let stepIns = 0
   let agent!: Agent
   const space = db.createSpace('Bench', '#000000')
   const thread = db.createThread(space.id, 'auto', model.id)
+  // The project folder attached to the chat, as a user would.
+  if (dir) { const st = db.getState(thread.id); st.folder = dir; st.roots = [dir]; db.setState(thread.id, st) }
   agent = new Agent({
     db, results, registry, docsDir: tmpdir(),
     settings: { get: () => settings, keyFor: () => undefined, apiKey: () => undefined } as never,
@@ -182,6 +220,7 @@ async function runScenario(sc: Scenario): Promise<{ name: string; finished: bool
   await (await agent.send({ threadId: thread.id, text: sc.prompt })).done
   // Stopped unfinished: the user has to say "go ahead" (up to twice).
   for (let i = 0; i < 2 && !state.done; i++) { stepIns++; await (await agent.send({ threadId: thread.id, text: 'Yes, go ahead and do it.' })).done }
+  if (process.env.HARNESS_BENCH_DEBUG) console.log(sc.name, JSON.stringify(db.listMessages(thread.id).map((m) => [m.role, m.kind, m.meta?.hidden ? 'H' : '', (m.content ?? '').slice(0, 90)])), JSON.stringify(events.filter((e) => e.type === 'pending').map((e) => (e as { request: { kind: string; tool?: string } }).request)))
   const steps = REAL ? realRequests - before : llm.requests.length
   const base = state.done ? (stepIns === 0 ? 100 : 50) : 0
   const score = Math.round(base * Math.min(1, sc.optimal / Math.max(1, steps)))
