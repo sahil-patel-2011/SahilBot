@@ -266,7 +266,11 @@ describe('pairing and removing phones (Phone access on 127.0.0.1, as hidden test
   })
 
   const port = (): number => phone.status().port
-  const codeOf = (): string => phone.status().pairing!.code
+  const codeOf = (): string => {
+    const st = phone.status()
+    if (!st.pairing) throw new Error(`No pairing code after turning Phone access on (error: ${st.error ?? 'none'}, running: ${st.running})`)
+    return st.pairing.code
+  }
   const pair = (code: string, headers: Record<string, string> = {}): Promise<Reply> => hit(port(), '/api/pair', { method: 'POST', body: { code, name: 'Test iPhone' }, headers: { Origin: `https://127.0.0.1:${port()}`, ...headers } })
 
   test('off by default; on, it listens with HTTPS and shows a QR code with the code and the certificate check', async () => {

@@ -155,7 +155,10 @@ export class PhoneAccess {
     if (on) {
       this.error = undefined
       try { await this.start() } catch (e) { this.error = (e as Error).message }
-      if (this.front && !this.pairing && this.devices?.active().length === 0) this.newCode()
+      // No phone paired yet: show a code right away (devices not loaded yet count as none).
+      if (this.front && !this.pairing && (this.devices?.active().length ?? 0) === 0) {
+        try { this.newCode() } catch (e) { this.error = (e as Error).message }
+      }
     } else await this.stop()
     this.changed()
     return this.status()
