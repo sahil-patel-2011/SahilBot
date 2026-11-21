@@ -2431,8 +2431,8 @@ export interface SahilBotApi {
     importFile(path: string, threadId?: string): Promise<{ docId: string; threadId: string }>
     /** The file a document was opened from, or null. */
     source(id: string): Promise<string | null>
-    /** Saves the document back over its file (backup first) or as a copy; returns the path written. */
-    saveBack(id: string, mode: 'replace' | 'copy'): Promise<string>
+    /** Saves the document back over its file (backup first) or as a copy: the path written, and whether it was the original. */
+    saveBack(id: string, mode: 'replace' | 'copy'): Promise<{ path: string; replaced: boolean }>
     /** Picks an image, copies it into the workspace and returns its path (null if cancelled). */
     addImage(): Promise<string | null>
     /** Tells main whether the editor holds unsaved edits (so the bot's next read waits for them). */

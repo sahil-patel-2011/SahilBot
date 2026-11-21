@@ -210,7 +210,10 @@ export function maskText(text: string, state: PrivacyThreadState, json = false):
   let out = text
   for (const i of masked(state)) {
     const needle = json ? JSON.stringify(i.value).slice(1, -1) : i.value
-    out = out.replace(new RegExp(escapeRe(needle), 'gi'), i.placeholder)
+    // Whole words only where the value starts or ends with a letter or digit ("Ann" never touches "annual").
+    const pre = /^[\p{L}\p{N}]/u.test(needle) ? '(?<![\\p{L}\\p{N}])' : ''
+    const post = /[\p{L}\p{N}]$/u.test(needle) ? '(?![\\p{L}\\p{N}])' : ''
+    out = out.replace(new RegExp(`${pre}${escapeRe(needle)}${post}`, 'giu'), i.placeholder)
   }
   return out
 }

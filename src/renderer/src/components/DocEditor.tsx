@@ -709,9 +709,10 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
     setMenu(null)
     try {
       await save()
-      const path = await api.docs.saveBack(id, mode)
+      const { path, replaced } = await api.docs.saveBack(id, mode)
       setExported(path)
-      toast(mode === 'replace' ? 'Saved to the original file (a backup of the old version was kept).' : 'Saved a copy.')
+      // Slides and plain text can't be written back in their own format: say where it went instead.
+      toast(replaced ? 'Saved to the original file (a backup of the old version was kept).' : `Saved as ${path.split('/').pop()} (the original ${source?.split('.').pop() ?? ''} file is unchanged).`)
       setTimeout(() => setExported((p) => (p === path ? null : p)), 10_000)
     } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') }
   }

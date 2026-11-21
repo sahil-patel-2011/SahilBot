@@ -227,6 +227,9 @@ let win: BrowserWindow | null = null
 let reopen: () => BrowserWindow | null = () => null
 
 /** Messages to the main window; dropped while it's closed. */
+/** Source code and config an agent edited while coding: not deliverables, so not on the Artifacts page. */
+const SOURCE_FILE = /\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|scala|vue|svelte|json|ya?ml|toml|lock|sh|css|scss|env|ini|cfg|gradle|xml|plist)$/i
+
 function toWin(channel: string, ...args: unknown[]): void {
   broadcast(channel, ...args)
 }
@@ -1604,7 +1607,7 @@ app.whenReady().then(() => {
       path = src
     }
     attachments.allow(path)
-    return path
+    return { path, replaced: path === src }
   })
   handle('docs:addImage', async () => {
     const opts: Electron.OpenDialogOptions = { title: 'Add an image', properties: ['openFile'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] }] }
@@ -1645,7 +1648,7 @@ app.whenReady().then(() => {
   })
   handle('files:recent', (limit?: number) => db.recentFiles(limit ?? 60).filter((f) => existsSync(f.path)).map((f) => ({ ...f, name: basename(f.path), size: statSync(f.path).size })))
   // Artifacts (sidebar): everything agents made, including images and audio, that still exists.
-  handle('files:artifacts', (limit?: number) => db.artifactFiles(Math.min(1000, limit ?? 300)).filter((f) => { try { return statSync(f.path).isFile() } catch { return false } }).map((f) => ({ ...f, name: basename(f.path), size: statSync(f.path).size })))
+  handle('files:artifacts', (limit?: number) => db.artifactFiles(Math.min(1000, limit ?? 300)).filter((f) => !SOURCE_FILE.test(f.path) && !/\/(node_modules|\.git|dist|build|out)\//.test(f.path)).filter((f) => { try { return statSync(f.path).isFile() } catch { return false } }).map((f) => ({ ...f, name: basename(f.path), size: statSync(f.path).size })))
   handle('files:reveal', (path: string) => attachments.reveal(path))
   handle('providers', () => PROVIDERS)
   handle('budget', () => budget.summary())

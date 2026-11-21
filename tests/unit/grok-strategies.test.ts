@@ -7,7 +7,7 @@ const call = (name: string, args: Record<string, unknown>) => ({ id: Math.random
 
 test('a polling loop is nudged, then stopped, even when its results change (Grok Build strategy)', () => {
   const g = new LoopGuard()
-  const isRead = (n: string): boolean => n === 'job_status'
+  const isRead = (c: { name: string }): boolean => c.name === 'job_status'
   const results: Array<ReturnType<LoopGuard['step']>> = []
   for (let i = 0; i < 8; i++) results.push(g.step([call('job_status', { id: 'j1', verbose: true })], isRead))
   expect(results.slice(0, 3)).toEqual([{}, {}, {}])
@@ -88,4 +88,18 @@ test('a reply that announces an action without doing it is caught; finished work
   // The gerund forms it used to miss.
   expect(promisesAction('Running the migration now.')).toBe(true)
   expect(promisesAction('Submitting the form now.')).toBe(true)
+})
+
+test('review fixes: masking keeps whole words, recall widens only on real back-references', async () => {
+  const { maskText, emptyPrivacy } = await import('../../src/main/privacy/gate')
+  const st = emptyPrivacy()
+  st.items.push({ value: 'Ann', label: 'private_person', placeholder: '[PERSON_1]', share: false })
+  expect(maskText('Ann asked about annual revenue; ANN agreed.', st)).toBe('[PERSON_1] asked about annual revenue; [PERSON_1] agreed.')
+  st.items.push({ value: 'ann@x.io', label: 'private_email', placeholder: '[EMAIL_1]', share: false })
+  expect(maskText('Mail ann@x.io today', st)).toBe('Mail [EMAIL_1] today')
+  const { recallQuery } = await import('../../src/main/agent/loop')
+  const history = [{ id: '1', role: 'user' as const, content: 'Our tax filing for the LLC', meta: {} }, { id: '2', role: 'user' as const, content: 'Write a cover letter for it, I want something warm and short', meta: {} }]
+  expect(recallQuery(history[1], history)).toBe(history[1].content)
+  const back = { id: '3', role: 'user' as const, content: 'Do it the same way as last time', meta: {} }
+  expect(recallQuery(back, [...history, back])).toContain('Our tax filing')
 })
