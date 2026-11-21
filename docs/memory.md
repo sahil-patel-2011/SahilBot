@@ -74,6 +74,10 @@ user manages it in Vault → People & Places (edit, merge, forget with Undo, pri
 Beyond memories, a vault of linked Markdown notes (people, projects, decisions, research, how-tos,
 chat digests) is kept for longer context. Relevant notes appear in the <context> block under "From
 your knowledge vault"; the vault tool searches, reads and writes them. See docs/vault.md.
+Every memory is also mirrored there as Obsidian notes: shared ones in `Shared/Memory/Memory — <Category>`,
+the user's decisions in `Shared/Decisions/Decision log` (newest first, by month, with earlier choices), and
+a bot's own in its area. The memory store stays the source: save, change and forget with this tool and the
+vault copy follows within seconds.
 
 ## Task memory (long tasks and projects)
 A long task's facts are never forgotten when older messages are summarized. Before every compaction the

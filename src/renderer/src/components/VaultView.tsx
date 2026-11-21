@@ -443,6 +443,10 @@ export function VaultSettings() {
             </div>
           </div>
         </div>
+        <div className="set-row">
+          <div className="set-row-text"><div className="set-row-title">Mirror memories and decisions into the vault</div><ClampText>Every saved memory goes in a note per category (Shared/Memory), and your decisions go in a dated Decision log (Shared/Decisions). A bot's own memories stay in its own area. Change memories in Memory; the vault copy follows.</ClampText></div>
+          <div className="set-row-ctl"><Toggle on={s.memories !== false} onChange={(v) => void set({ memories: v })} label="Mirror memories and decisions" testId="vault-memories" /></div>
+        </div>
         <Disclosure title="Advanced" sub="Folder and digests" testId="vault-advanced">
           <div className="set-row">
             <div className="set-row-text">

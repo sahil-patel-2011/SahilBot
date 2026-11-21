@@ -482,6 +482,7 @@ function toMemory(r: Row): Memory {
 
 export class MemoryStore {
   private removed = new Set<(m: Memory) => void>()
+  private changedCbs = new Set<() => void>()
 
   constructor(private db: Db) {
     db.sql.exec(`CREATE TABLE IF NOT EXISTS memory_history (
@@ -544,12 +545,14 @@ export class MemoryStore {
       const at = Math.max(now, dup.updatedAt)
       if (dup.content !== text) this.archive(dup, at)
       this.db.sql.prepare('UPDATE memories SET content = ?, category = ?, updated_at = ?, provenance = ? WHERE id = ?').run(text, kind, at, provenance, dup.id)
+      this.changed()
       return { memory: { ...dup, content: text, category: kind, updatedAt: at, provenance }, replaced: dup.content }
     }
     const m: Memory = { id: this.newId(), category: kind, content: text, spaceId, projectId: spaceId, source, provenance, createdAt: now, updatedAt: now }
     this.db.sql.prepare('INSERT INTO memories(id, category, content, created_at, updated_at, scope, source, provenance) VALUES(?,?,?,?,?,?,?,?)')
       .run(m.id, m.category, m.content, now, now, spaceId, source, provenance)
     if (kind === 'worklog') this.trimWorklog(spaceId)
+    this.changed()
     return { memory: m }
   }
 
@@ -567,6 +570,7 @@ export class MemoryStore {
     const prov = patch.provenance ?? cur.provenance ?? 'trusted'
     if (text !== cur.content || kind !== cur.category) this.archive(cur, Date.now())
     this.db.sql.prepare('UPDATE memories SET content = ?, category = ?, scope = ?, updated_at = ?, provenance = ? WHERE id = ?').run(text, kind, scope, Date.now(), prov, id)
+    this.changed()
     return this.get(id)
   }
 
@@ -574,7 +578,18 @@ export class MemoryStore {
   restore(m: Pick<Memory, 'id' | 'category' | 'content' | 'spaceId' | 'source' | 'createdAt' | 'updatedAt'> & { provenance?: MemoryProvenance }): Memory {
     this.db.sql.prepare('INSERT OR REPLACE INTO memories(id, category, content, created_at, updated_at, scope, source, provenance) VALUES(?,?,?,?,?,?,?,?)')
       .run(m.id, m.category, m.content, m.createdAt, m.updatedAt, m.spaceId, m.source, m.provenance === 'untrusted' ? 'untrusted' : 'trusted')
+    this.changed()
     return this.get(m.id)!
+  }
+
+  /** Called after any memory is saved, changed, restored or removed (the vault's memory mirror listens). */
+  onChange(cb: () => void): () => void {
+    this.changedCbs.add(cb)
+    return () => { this.changedCbs.delete(cb) }
+  }
+
+  private changed(): void {
+    for (const cb of this.changedCbs) { try { cb() } catch { /* a listener never blocks a save */ } }
   }
 
   /** Called with each memory removed (forgotten in Settings or by a bot, or tidied away). */
@@ -587,6 +602,7 @@ export class MemoryStore {
     const m = this.removed.size ? this.get(id) : undefined
     const ok = Number(this.db.sql.prepare('DELETE FROM memories WHERE id = ?').run(id).changes) > 0
     if (ok && m) for (const cb of this.removed) { try { cb(m) } catch { /* a listener never blocks a removal */ } }
+    if (ok) this.changed()
     return ok
   }
 

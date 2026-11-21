@@ -14,6 +14,8 @@ export interface VaultSettings {
   docs: boolean
   /** A daily digest of the activity timeline, only when "Let SahilBot learn from my activity" is also on (default on). */
   activity: boolean
+  /** Mirror saved memories and the user's decisions into notes (Shared/Memory, Shared/Decisions/Decision log; default on). */
+  memories: boolean
   /** Per bot (space id): vault on/off and its own level. */
   bots: Record<string, { enabled?: boolean; level?: VaultLevel }>
   /** "Use my Obsidian vault": SahilBot writes into a subfolder of the user's own vault and reads the rest. */
