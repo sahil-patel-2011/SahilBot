@@ -155,12 +155,12 @@ export class LoopGuard {
    * status that keeps saying "running"). Reads and plans get a nudge at 4 repeats and stop at 8; anything
    * else at 8 and 12. Returns the nudge to append to this step's results, or the stop text to answer with.
    */
-  step(calls: ToolCall[], isRead: (name: string) => boolean): { nudge?: string; stop?: string } {
+  step(calls: ToolCall[], isRead: (call: ToolCall) => boolean): { nudge?: string; stop?: string } {
     if (!calls.length) return {}
     const key = calls.map((c) => `${c.name}:${canonicalArgs(c.arguments)}`).sort().join('|')
     this.stepRuns = key === this.stepKey ? this.stepRuns + 1 : 1
     this.stepKey = key
-    const [nudgeAt, stopAt] = calls.every((c) => isRead(c.name)) ? [4, 8] : [8, 12]
+    const [nudgeAt, stopAt] = calls.every((c) => isRead(c)) ? [4, 8] : [8, 12]
     if (this.stepRuns >= stopAt) return { stop: `Stopped: this exact step (${calls.map((c) => c.name).join(', ')}) ran ${this.stepRuns} times in a row. It was not run again. Change the approach: wait once (a wait or sleep tool if you have one, or move on to other work first) and check a single time, use different arguments, or tell the user what you're waiting for.` }
     if (this.stepRuns === nudgeAt) return { nudge: `\n\n[From the app] You appear to be stuck in a polling loop: this exact step has run ${this.stepRuns} times in a row. If you're waiting on something, run a single sleep and then check once; do not poll in a tight loop. Otherwise change the approach.` }
     return {}

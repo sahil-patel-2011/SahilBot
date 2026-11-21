@@ -1869,20 +1869,22 @@ export class Agent {
    * The project's own test command (package.json, pytest, Cargo, go…), run in the chat's folder after code changed.
    * undefined when there's no project or no test setup there (nothing to run, nothing blocks the answer).
    */
-  private async runProjectTests(state: ThreadState, signal: AbortSignal): Promise<{ ok: boolean; command: string; text: string } | undefined> {
+  private async runProjectTests(threadId: string, state: ThreadState, signal: AbortSignal): Promise<{ ok: boolean; command: string; text: string } | undefined> {
     try {
       const base = cwdFor(undefined, { state, workspaceDir: this.d.settings.get().workspaceDir })
       const spec = detectProject(base).test
       if (!spec) return undefined
-      const r = await runCheck({ cwd: base, kind: 'test', spec, timeoutMs: 600_000, signal })
-      if (r.stopped) return undefined
+      // The chat shows it's running the tests (not a frozen reply), and a slow suite can't hold the answer for long.
+      this.d.emit({ threadId, type: 'drafting', tool: 'run_tests' })
+      const r = await runCheck({ cwd: base, kind: 'test', spec, timeoutMs: 300_000, signal, progress: () => this.d.emit({ threadId, type: 'drafting', tool: 'run_tests' }) })
+      if (r.stopped || r.timedOut) return undefined
       return { ok: r.ok, command: r.command, text: r.text.slice(-6000) }
-    } catch { return undefined }
+    } catch { return undefined } finally { this.d.emit({ threadId, type: 'drafting', tool: null }) }
   }
 
   /** This chat's Privacy Gate record when the gate is on and has something to mask or withhold. */
   private privacyState(threadId: string): PrivacyThreadState | undefined {
-    if (!this.d.privacy?.active()) return undefined
+    // A chat's earlier choices (masked details, withheld content) hold even after the gate is switched off.
     const p = this.d.db.getState(threadId).privacy
     return p && (p.items.some((i) => !i.share) || p.skipped.length) ? p : undefined
   }
@@ -3117,7 +3119,7 @@ export class Agent {
           // Test until green (the runtime's check, not a reminder): code changed and no passing test run since, so
           // SahilBot runs the project's own test command; failures go back to the model to fix (3 rounds at most).
           if (track.codeEdited && !track.testsGreen && track.testRounds < 3 && !chatRun && step < HARD_CAP) {
-            const verdict = await this.runProjectTests(state, run.ctrl.signal)
+            const verdict = stricterMode(this.d.db.getThread(thread.id)?.permissionMode ?? thread.permissionMode, run.modeCap) === 'ask' ? undefined : await this.runProjectTests(thread.id, state, run.ctrl.signal)
             if (verdict) {
               track.testRounds++
               if (verdict.ok) track.testsGreen = true
@@ -3514,7 +3516,12 @@ export class Agent {
     const out: Array<{ name: string; status: CallStatus }> = []
     let i = 0
     // A polling loop (the same step over and over, whatever it returns): nudge, then stop running it.
-    const poll = ctx.guard.step(calls, (name) => { const t = this.resolve({ id: '', name, arguments: '{}' }); return !!t && typeof t.effect === 'string' && t.effect === 'read' })
+    const poll = ctx.guard.step(calls, (c) => {
+      const t = this.resolve(c)
+      if (!t) return false
+      if (typeof t.effect === 'string') return t.effect === 'read'
+      try { return t.effect(JSON.parse(c.arguments || '{}'), { roots: state.roots ?? [], folder: state.folder ?? undefined }) === 'read' } catch { return false }
+    })
     if (poll.stop) {
       for (const call of calls) out.push({ name: call.name, status: this.commit(thread, { call, status: 'repeat', content: poll.stop, meta: { status: 'error', label: call.name, display: 'polling loop stopped' } }, ctx) })
       return out
@@ -3799,21 +3806,23 @@ export class Agent {
           while (Date.now() < until && !run.ctrl.signal.aborted) { if (await done().catch(() => false)) return 'done'; await sleep(every) }
           return 'timeout'
         }
-        const before = new Set(run.pending.keys())
+        // ask() puts the card on the asking chat when this run answers ask_bot (askVia): look for it there.
+        const host = run.askVia ? { run: run.askVia.run, threadId: run.askVia.threadId } : { run, threadId: thread.id }
+        const before = new Set(host.run.pending.keys())
         const answered = this.ask(thread.id, run, { kind: 'question', question, options: o.options ?? ['Done', 'Skip'] })
-        const id = [...run.pending.keys()].find((k) => !before.has(k))
+        const id = [...host.run.pending.keys()].find((k) => !before.has(k))
         let finished: string | undefined
         void answered.then((a) => { finished ??= a })
         while (!finished && Date.now() < until && !run.ctrl.signal.aborted) {
           if (await done().catch(() => false)) {
             // Done on the page: the card closes by itself, nobody has to say "go".
-            if (id && run.pending.has(id)) this.respond(thread.id, id, 'Done')
+            if (id && host.run.pending.has(id)) this.respond(host.threadId, id, 'Done')
             return 'done'
           }
           await sleep(every)
         }
         if (finished) return finished
-        if (id && run.pending.has(id)) this.respond(thread.id, id, 'timeout')
+        if (id && host.run.pending.has(id)) this.respond(host.threadId, id, 'timeout')
         return 'timeout'
       },
       askUser: run.unattended
@@ -4139,8 +4148,8 @@ export const isRemoteModel = (m: ModelInfo): boolean => m.note === 'remote' || !
  */
 export function recallQuery(opener: Pick<Message, 'id' | 'content'>, messages: Array<Pick<Message, 'id' | 'role' | 'content' | 'meta'>>): string {
   const text = opener.content ?? ''
-  const pointsBack = /\b(same (as|way|thing)|last time|the usual|as usual|like before|as before|again|that (one|client|project|file|person|place)|those|them|it)\b/i.test(text)
-  if (!pointsBack && text.split(/\s+/).filter(Boolean).length >= 12) return text
+  const pointsBack = /\b(same (as|way|thing)|last time|the usual|as usual|like before|as before|like last|that (one|client|project|file|person|place))\b/i.test(text)
+  if (!pointsBack && text.split(/\s+/).filter(Boolean).length >= 6) return text
   const at = messages.findIndex((m) => m.id === opener.id)
   const earlier = messages.slice(0, at < 0 ? messages.length : at).filter((m) => m.role === 'user' && !m.meta?.hidden && m.content).slice(-2).map((m) => m.content.slice(0, 600))
   return [text, ...earlier].join('\n')

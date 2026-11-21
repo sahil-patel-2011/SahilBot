@@ -63,7 +63,9 @@ interface Args {
 }
 
 /** A button that makes a new API key or access token (not one that deletes, rotates or changes account security). */
-const CREATES_KEY = /^(\+\s*)?(create|generate|new|add)\b.{0,30}\b(api[ -]?keys?|keys?|tokens?|access tokens?|personal access tokens?|secret keys?)\b|^(create|generate) (new )?(secret|key|token)$/i
+const CREATES_KEY = /^(\+\s*)?(create|generate|new|add)\b.{0,30}\b(api[ -]?keys?|api tokens?|access tokens?|personal access tokens?|secret keys?)\b/i
+/** Key buttons that change account security: never exempt (security / recovery / SSH / deploy keys, passkeys, 2FA). */
+const SECURITY_KEY = /\b(security|recovery|backup|ssh|gpg|signing|deploy|passkeys?|2fa|two[- ]factor|mfa|authenticator)\b/i
 
 export interface BrowserDeps {
   /** Purchase and one-time-code cards. Without one, purchases and codes are refused (fail closed). */
@@ -201,7 +203,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
       if (DESTRUCTIVE.test(r?.name ?? '') && /\b(permanent|forever|account)\b/i.test(r?.name ?? '')) return 'permanent delete'
       // Making an API key or token the user asked for is ordinary work (the key goes to the user, who can save it
       // to the vault); every other change on a security or account page still asks.
-      if (looksLikeSecurity(url, r?.name) && clickEffect(r) !== 'read' && !CREATES_KEY.test(r?.name ?? '')) return 'account or security settings'
+      if (looksLikeSecurity(url, r?.name) && clickEffect(r) !== 'read' && !(CREATES_KEY.test(r?.name ?? '') && !SECURITY_KEY.test(r?.name ?? ''))) return 'account or security settings'
     }
     return null
   }
