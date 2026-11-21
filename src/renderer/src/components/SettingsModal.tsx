@@ -69,6 +69,22 @@ export function resolvePage(id?: string): { page: Page; tab?: string } {
 
 // ------------------------------------------------------------------ building blocks
 
+/** Built-in skill groups (Settings → Rules & skills): each skill's category folds into one of these. */
+const BUILTIN_GROUPS: Array<{ id: string; label: string; what: string }> = [
+  { id: 'engineering', label: 'Engineering', what: 'coding, robotics, mechanical and electrical engineering' },
+  { id: 'office', label: 'Office', what: 'documents, business, email, research and everyday tasks' },
+  { id: 'medical', label: 'Medical', what: 'clinical work and health records' },
+  { id: 'health', label: 'Health', what: 'fitness, sleep, nutrition and wellbeing' }
+]
+function builtinGroup(category?: string): string | undefined {
+  const c = (category ?? '').toLowerCase()
+  if (c === 'redirects') return undefined
+  if (/medical|hipaa|clinical/.test(c)) return 'medical'
+  if (/health|fitness/.test(c)) return 'health'
+  if (/coding|frc|engineering|cad|code/.test(c)) return 'engineering'
+  return 'office'
+}
+
 function Section({ title, sub, children, testId }: { title?: string; sub?: ReactNode; children: ReactNode; testId?: string }) {
   return (
     <section className="set-section" data-testid={testId}>
@@ -1184,7 +1200,9 @@ function RulesSkills({ spaces }: { spaces: Space[] }) {
   const scopeName = (sc: string): string => sc === 'everywhere' ? 'All chats' : sc.startsWith('bot:') ? `Bot: ${spaces.find((x) => x.id === sc.slice(4))?.name ?? 'removed'}` : `Project: ${spaces.find((x) => x.id === sc.slice(8))?.name ?? 'removed'}`
   const cats = [...new Set(rules.map((r) => r.category))].sort((a, b) => a.localeCompare(b))
   const catOf = (k: Skill): string => k.source === 'builtin' ? k.category ?? 'Built in' : k.source === 'learned' ? 'Learned by SahilBot' : 'Yours'
-  const skillCats = [...new Set(skills.map(catOf))].sort((a, b) => a.localeCompare(b))
+  // Built-in skills show as a few groups with a count, nothing inside: the agent uses them on its own.
+  const builtinGroups = BUILTIN_GROUPS.map((g) => ({ ...g, n: skills.filter((k) => k.source === 'builtin' && builtinGroup(k.category) === g.id).length })).filter((g) => g.n > 0)
+  const skillCats = [...new Set(skills.filter((k) => k.source !== 'builtin').map(catOf))].sort((a, b) => a.localeCompare(b))
   return (
     <>
       <div className="set-sub" data-setting="rules">Rules are instructions every chat follows; skills are procedures a bot reads when a task calls for one. Changes apply to new chats.</div>
@@ -1220,6 +1238,14 @@ function RulesSkills({ spaces }: { spaces: Space[] }) {
       </Section>
       <Section title="Skills">
         <div data-setting="skills" />
+        {builtinGroups.map((g) => (
+          <div key={g.id} className="set-row" data-testid={`skill-group-${g.id}`}>
+            <div className="set-row-text">
+              <div className="set-row-title">{g.label} <span className="tier-badge">built in</span></div>
+              <div className="set-row-sub">{g.n} skill{g.n === 1 ? '' : 's'} for {g.what}. SahilBot uses them by itself when a task needs one.</div>
+            </div>
+          </div>
+        ))}
         {skillCats.map((c) => {
           const ks = skills.filter((k) => catOf(k) === c)
           return (

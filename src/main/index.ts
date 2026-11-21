@@ -563,9 +563,9 @@ app.whenReady().then(() => {
     // A chat finished while you were in another app: a quiet notification.
     if (e.type === 'run' && (e.status === 'finished' || e.status === 'error') && !fromQuick && !fromRoutine && !(quick && !quick.isDestroyed() && quick.isVisible()) &&
       !(win && !win.isDestroyed() && win.isFocused()) && !QUIET && Notification.isSupported() && botNotifies(e.spaceId ?? db.getThread(e.threadId)?.spaceId)) {
-      const n = new Notification({ title: e.status === 'error' ? 'SahilBot hit a problem' : 'SahilBot is done', body: (e.title ?? 'Your task').slice(0, 120), silent: false })
-      n.on('click', () => openThread(e.threadId))
-      n.show()
+      const who = botName(e.spaceId ?? db.getThread(e.threadId)?.spaceId)
+      // Held (showNote) so it isn't garbage-collected before macOS shows it, and it keeps the permission record current.
+      showNote(new Notification({ title: e.status === 'error' ? `${who} needs help` : `${who} is done`, body: (e.title ?? 'Your task').slice(0, 120), silent: false }), e.threadId)
     }
   }
 
@@ -1186,6 +1186,12 @@ app.whenReady().then(() => {
   handle('chatgptPlan:openInstallGuide', () => { void shell.openExternal(CODEX_INSTALL_URL) })
   app.on('before-quit', () => { void closeCodexRuns() })
   app.on('before-quit', () => piiTracer.stop())
+  // Notifications on by default: once, after setup, ask macOS (its prompt comes with SahilBot's first notification).
+  setTimeout(() => {
+    if (QUIET || !Notification.isSupported() || !settings.get().onboarded || db.getSetting<boolean>('notifications:asked') || notePermission.get() !== 'unknown') return
+    db.setSetting('notifications:asked', true)
+    void notePermission.request(new Notification({ title: 'SahilBot', body: 'Notifications are on: SahilBot tells you when a task is done, needs help or has a question.' }), 60_000)
+  }, 15_000)
   handle('privacy:status', () => privacyStatus())
   handle('privacy:install', async () => {
     await piiTracer.install((e) => toWin('privacy:install', e))

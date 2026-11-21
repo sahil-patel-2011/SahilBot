@@ -181,6 +181,8 @@ export class Updater {
   private staged?: { app: string; tag: string }
   private checking?: Promise<UpdateStatus>
   private timer?: ReturnType<typeof setInterval>
+  private etag?: string
+  private lastRelease?: unknown
   private startup?: ReturnType<typeof setTimeout>
   private backupTimer?: ReturnType<typeof setInterval>
   private backingUp = false
@@ -196,12 +198,12 @@ export class Updater {
 
   private set(s: UpdateStatus): UpdateStatus { this.status = s; const out = this.get(); this.d.emit(out); return out }
 
-  /** Checks shortly after start, then every 20 minutes (and when the Mac wakes: index.ts); a found update downloads in the background. */
+  /** Checks shortly after start, then every 5 minutes (and when the Mac wakes: index.ts); a found update downloads in the background. */
   start(): void {
     if (!this.d.packaged || process.platform !== 'darwin') return
-    this.startup = setTimeout(() => { void this.check().catch(() => undefined); void this.maintainBackup() }, 45_000)
+    this.startup = setTimeout(() => { void this.check().catch(() => undefined); void this.maintainBackup() }, 10_000)
     this.backupTimer = setInterval(() => void this.maintainBackup(), 24 * 3600_000)
-    this.timer = setInterval(() => void this.check().catch(() => undefined), 20 * 60_000)
+    this.timer = setInterval(() => void this.check().catch(() => undefined), 5 * 60_000)
   }
 
   stop(): void { if (this.timer) clearInterval(this.timer); if (this.startup) clearTimeout(this.startup); if (this.backupTimer) clearInterval(this.backupTimer) }
@@ -231,9 +233,13 @@ export class Updater {
     const f = this.d.fetch ?? fetch
     this.set({ state: 'checking' })
     try {
-      const res = await f(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'SahilBot' }, signal: AbortSignal.timeout(20_000) })
-      if (!res.ok) throw new Error(res.status === 404 ? 'No release is published yet.' : `GitHub answered ${res.status}.`)
-      const rel = await res.json() as { tag_name: string; body?: string; html_url?: string; assets: Array<{ name: string; browser_download_url: string; size: number }> }
+      // Conditional request: an unchanged release answers 304, which doesn't count against GitHub's hourly limit
+      // (so checking every few minutes is free).
+      const res = await f(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'SahilBot', ...(this.etag && this.lastRelease ? { 'if-none-match': this.etag } : {}) }, signal: AbortSignal.timeout(20_000) })
+      if (res.status !== 304 && !res.ok) throw new Error(res.status === 404 ? 'No release is published yet.' : `GitHub answered ${res.status}.`)
+      type Release = { tag_name: string; body?: string; html_url?: string; assets: Array<{ name: string; browser_download_url: string; size: number }> }
+      const rel = res.status === 304 && this.lastRelease ? this.lastRelease as Release : await res.json() as Release
+      if (res.status !== 304) { this.lastRelease = rel; this.etag = res.headers?.get?.('etag') ?? undefined }
       const next = parseTag(rel.tag_name)
       if (!next || !isNewer(next, this.current)) return this.set({ state: 'current', checkedAt: Date.now() })
       const zip = rel.assets.find((a) => a.name === ASSET)
