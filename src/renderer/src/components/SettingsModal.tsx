@@ -13,6 +13,7 @@ import { ModelContextSelect } from './ModelContextSelect'
 import { isAutoModel, recommendedRows } from '@shared/model-picker'
 import { MemoryPage } from './MemoryManager'
 import { SecretVaultSettings } from './VaultSettings'
+import { BackupSettings } from './BackupSettings'
 import { KnowledgeSettings } from './KnowledgeSettings'
 import { UsagePage } from './UsagePage'
 import { SpendingLimitSection } from './SpendingLimit'
@@ -890,6 +891,7 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
 function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab: (t: string) => void }) {
   const tabs = [
     { id: 'passwords', label: 'Passwords' },
+    { id: 'backups', label: 'Backups', hidden: isServerRuntime },
     { id: 'activity', label: 'Activity', hidden: isServerRuntime },
     { id: 'sensitive', label: 'Sensitive details' },
     { id: 'hybrid', label: 'Hybrid compute', hidden: isServerRuntime }
@@ -903,6 +905,7 @@ function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab:
       {cur === 'passwords' && <div data-setting="passwords">{onPhone
         ? <div className="set-sub" data-testid="vault-on-mac">Saved passwords, cards and authenticator codes stay on your Mac and are never sent to this phone. Manage them in SahilBot on the Mac.</div>
         : <SecretVaultSettings embedded />}</div>}
+      {cur === 'backups' && <div data-setting="backups"><BackupSettings /></div>}
       {cur === 'activity' && <div data-setting="activity"><ActivitySettings /></div>}
       {cur === 'sensitive' && <SensitiveDetails />}
       {cur === 'hybrid' && <HybridComputeSettings />}

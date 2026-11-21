@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { accessSync, constants, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, copyFileSync, cpSync, createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { Readable } from 'node:stream'
@@ -70,6 +70,8 @@ export function bundleBuild(bundle: string): number {
 }
 
 const run = (cmd: string, args: string[]): Promise<void> => new Promise((ok, fail) => execFile(cmd, args, { timeout: 10 * 60_000 }, (e, _o, err) => (e ? fail(new Error(String(err || e.message).trim().slice(0, 300))) : ok())))
+/** Copies a file or folder: ditto on the Mac (keeps extended attributes), plain fs elsewhere (Linux server, tests). */
+const copyTree = (from: string, to: string): Promise<void> => existsSync('/usr/bin/ditto') ? run('/usr/bin/ditto', [from, to]) : Promise.resolve(cpSync(from, to, { recursive: true, verbatimSymlinks: true }))
 
 async function sha256(path: string): Promise<string> {
   const h = createHash('sha256')
@@ -81,7 +83,13 @@ async function sha256(path: string): Promise<string> {
  * Copies the data folder to a dated backup (the database consistently, everything else as is, minus caches
  * and re-downloadable models) and keeps the newest KEEP_BACKUPS. Returns the backup's folder.
  */
-export async function backupData(dataDir: string, label: string, o: { vacuumInto?: (path: string) => void; now?: Date; to?: string; mirror?: string | null } = {}): Promise<string> {
+export async function backupData(dataDir: string, label: string, o: {
+  vacuumInto?: (path: string) => void; now?: Date; to?: string; mirror?: string | null
+  /** Adds what lives outside the data folder (backup.ts: the knowledge vault, a readable export, the key recovery file). */
+  extras?: (dest: string) => Promise<void> | void
+  /** A third copy in a folder the user picked (Settings → Backups), keeping its newest KEEP_MIRROR. */
+  extraMirror?: string
+} = {}): Promise<string> {
   const root = o.to ?? backupsDir()
   const stamp = (o.now ?? new Date()).toISOString().replace(/[:.]/g, '-')
   if (resolve(root) === resolve(dataDir) || resolve(root).startsWith(resolve(dataDir) + '/')) throw new Error('The backup location must be separate from the live data folder.')
@@ -89,7 +97,7 @@ export async function backupData(dataDir: string, label: string, o: { vacuumInto
   const dest = mkdtempSync(join(root, `${stamp} ${label}`.replace(/[^\w .-]+/g, '_') + '-'))
   for (const name of readdirSync(dataDir)) {
     if (SKIP.has(name) || /^foreman\.db(-wal|-shm)?$/.test(name) || name.startsWith('Singleton')) continue
-    await run('/usr/bin/ditto', [join(dataDir, name), join(dest, name)])
+    await copyTree(join(dataDir, name), join(dest, name))
     if (!existsSync(join(dest, name))) throw new Error(`Backup did not copy ${name}. The update has been stopped.`)
   }
   // The database: a consistent copy while it's open (VACUUM INTO), else the files themselves.
@@ -99,7 +107,8 @@ export async function backupData(dataDir: string, label: string, o: { vacuumInto
     o.vacuumInto(join(dest, 'foreman.db'))
     if (existsSync(db) && !existsSync(join(dest, 'foreman.db'))) throw new Error('The database backup was not created. Nothing has been updated.')
   } else for (const s of ['', '-wal', '-shm']) if (existsSync(db + s)) copyFileSync(db + s, join(dest, `foreman.db${s}`))
-  writeFileSync(join(dest, 'README.txt'), `A copy of SahilBot's data (${label}), made before an update. To restore it, quit SahilBot and copy these files back into:\n${dataDir}\n`)
+  if (o.extras) { try { await o.extras(dest) } catch (e) { console.error('[backup] extras:', (e as Error).message) } }
+  writeFileSync(join(dest, 'README.txt'), `A copy of SahilBot's data (${label}). To restore it, quit SahilBot and copy these files back into:\n${dataDir}\n`)
   writeFileSync(join(dest, '.complete.json'), JSON.stringify({ at: Date.now(), source: resolve(dataDir), label, entries: readdirSync(dest) }))
   pruneBackups(root)
   // The same backup in a second place, so losing one folder never loses the data.
@@ -107,9 +116,16 @@ export async function backupData(dataDir: string, label: string, o: { vacuumInto
   if (mirror && resolve(mirror) !== resolve(root)) {
     try {
       mkdirSync(mirror, { recursive: true })
-      await run('/usr/bin/ditto', [dest, join(mirror, basename(dest))])
+      await copyTree(dest, join(mirror, basename(dest)))
       pruneBackups(mirror, KEEP_MIRROR)
     } catch (e) { console.error('[backup] second copy failed:', (e as Error).message) }
+  }
+  if (o.extraMirror && ![root, mirror].some((m) => m && resolve(m) === resolve(o.extraMirror!))) {
+    try {
+      mkdirSync(o.extraMirror, { recursive: true })
+      await copyTree(dest, join(o.extraMirror, basename(dest)))
+      pruneBackups(o.extraMirror, KEEP_MIRROR)
+    } catch (e) { console.error('[backup] extra copy failed:', (e as Error).message) }
   }
   return dest
 }
@@ -195,6 +211,8 @@ export interface UpdaterDeps {
   openUrl(url: string): void
   /** A consistent copy of the open database (Db VACUUM INTO). */
   vacuumInto?(path: string): void
+  /** The daily backup goes through Settings → Backups (backup.ts), so it carries the vault, export and key recovery file. */
+  dailyBackup?(): Promise<unknown>
   fetch?: typeof fetch
 }
 
@@ -270,7 +288,7 @@ export class Updater {
     const completed = existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, '.complete.json'))).sort().at(-1) : undefined
     if (completed && Date.now() - statSync(join(root, completed, '.complete.json')).mtimeMs < 24 * 3600_000) return
     this.backingUp = true
-    try { await backupData(this.d.dataDir, 'daily profile copy', { vacuumInto: this.d.vacuumInto }) }
+    try { await (this.d.dailyBackup ? this.d.dailyBackup() : backupData(this.d.dataDir, 'daily profile copy', { vacuumInto: this.d.vacuumInto })) }
     catch (e) { console.error('[backup]', (e as Error).message) }
     finally { this.backingUp = false }
   }
