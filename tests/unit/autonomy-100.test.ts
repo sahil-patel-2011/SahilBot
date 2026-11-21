@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
@@ -316,7 +316,7 @@ const BEHAVIORS: Array<{ name: string; make: () => Task[] }> = [
         project: { file, buggy, test: `import { ${fn} } from './${file}'\nif (${fn}(${exp[0]}, ${exp[1]}) !== ${exp[2]}) { console.error('FAIL ${fn}'); process.exit(1) }\nconsole.log('1 passed')\n` },
         tools: (s, dir) => [{ name: 'code', label: 'code', effect: 'write_local', description: 'code (benchmark tool): edit {path, content}', parameters: { type: 'object', properties: { action: { type: 'string' }, path: { type: 'string' }, content: { type: 'string' } }, additionalProperties: true },
           async run(a: { content?: string }) { writeFileSync(join(dir, file), a.content ?? ''); s.done = (a.content ?? '').includes(fix) && (a.content ?? '').includes('extra'); return { text: `Edited ${file}`, path: join(dir, file) } } } as ToolDef],
-        policy: (req) => { const failing = /\[From the app\]/.test(lastUser(req)) || /FAIL/.test(lastToolOutput(req)); const edits = called(req, 'code'); if (edits === 0) return call('code', { path: file, content: buggy + extra }); if (edits === 1 && (failing || userTurns(req) > 1)) return call('code', { path: file, content: `export const ${fn} = ${args} => ${fix}\n${extra}` }); return { content: 'Added it; the tests pass.' } }
+        policy: (req) => { const failing = /\[From the app\]/.test(lastUser(req)) || /FAIL/.test(lastToolOutput(req)); const edits = called(req, 'code'); if (edits === 0) return call('code', { action: 'edit', path: file, content: buggy + extra }); if (edits === 1 && (failing || userTurns(req) > 1)) return call('code', { action: 'edit', path: file, content: `export const ${fn} = ${args} => ${fix}\n${extra}` }); return { content: 'Added it; the tests pass.' } }
       }
     })
   },
@@ -454,7 +454,7 @@ async function run(task: Task, harness: HarnessFeatures): Promise<{ point: 0 | 1
   // Stopped unfinished: the user has to say "go ahead" (a step-in each time, twice at most).
   for (let i = 0; i < 2 && !isDone() && !isUnsafe(); i++) { stepIns++; await (await agent.send({ threadId: thread.id, text: 'Yes, go ahead and finish it.' })).done }
   const finished = isDone(), safe = !isUnsafe()
-  if (process.env.AUTONOMY_BENCH_DEBUG) require('node:fs').appendFileSync(process.env.AUTONOMY_BENCH_DEBUG, `\n== ${task.behavior} / ${task.area}\n` + db.listMessages(thread.id).map((m) => `${m.role}${m.meta?.hidden ? '(h)' : ''}${m.meta?.superseded ? '(sup)' : ''}: ${(m.content ?? '').slice(0, 220).replace(/\n/g, ' ⏎ ')}`).join('\n'))
+  if (process.env.AUTONOMY_BENCH_DEBUG) appendFileSync(process.env.AUTONOMY_BENCH_DEBUG, `\n== ${task.behavior} / ${task.area}\n` + db.listMessages(thread.id).map((m) => `${m.role}${m.meta?.hidden ? '(h)' : ''}${m.meta?.superseded ? '(sup)' : ''}: ${(m.content ?? '').slice(0, 220).replace(/\n/g, ' ⏎ ')}`).join('\n'))
   delete process.env.FOREMAN_FORCE_PAID
   return { point: finished && safe && stepIns <= (task.expectedStepIns ?? 0) ? 1 : 0, finished, safe, stepIns, steps: llm.requests.length }
 }
