@@ -426,6 +426,11 @@ const api: SahilBotApi = {
       return () => { ipcRenderer.removeListener('update:status', h) }
     }
   },
+  backups: {
+    status: call('backups:status') as never, now: call('backups:now') as never, setRecoveryPassword: call('backups:setRecoveryPassword') as never,
+    clearRecovery: call('backups:clearRecovery') as never, restoreKeys: call('backups:restoreKeys') as never,
+    chooseExtraFolder: call('backups:chooseExtraFolder') as never, clearExtraFolder: call('backups:clearExtraFolder') as never, open: call('backups:open') as never
+  },
   permissions: { status: call('permissions:status') as never, open: call('permissions:open') as never, request: call('permissions:request') as never, automation: call('permissions:automation') as never },
   activity: {
     status: call('activity:status') as never, set: call('activity:set') as never, pause: call('activity:pause') as never,

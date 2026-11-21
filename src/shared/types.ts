@@ -1824,6 +1824,17 @@ export interface UpdateStatus {
   checkedAt?: number
 }
 
+/** Settings → Backups: where copies go, the newest one, and whether keys are restorable on another Mac. */
+export interface BackupStatus {
+  folders: Array<{ kind: 'main' | 'mirror' | 'extra'; path: string }>
+  last?: { at: number; path: string; bytes: number; label: string; includes: string[] }
+  running: boolean
+  /** A recovery password is set: each backup carries keys.sbrecovery. */
+  recoveryPassword: boolean
+  note?: string
+  error?: string
+}
+
 export interface SahilBotApi {
   /** Updates: status, check now, and install (backs up the data, quits, swaps the app, reopens it). */
   update: {
@@ -1835,6 +1846,19 @@ export interface SahilBotApi {
     /** "0.1.0-128" when this is the first start after updating from it, else null. */
     upgradedFrom(): Promise<string | null>
     onStatus(cb: (s: UpdateStatus) => void): () => void
+  }
+  /** Settings → Privacy & Security → Backups (main/backup.ts). Key values never come back to the window. */
+  backups: {
+    status(): Promise<BackupStatus>
+    now(): Promise<{ ok: boolean; path?: string; error?: string }>
+    setRecoveryPassword(password: string): Promise<{ ok: boolean; error?: string }>
+    clearRecovery(): Promise<{ ok: boolean }>
+    /** Asks for a .sbrecovery file, opens it with the password and saves the keys (existing ones kept unless replace). */
+    restoreKeys(password: string, replace?: boolean): Promise<{ ok: boolean; canceled?: boolean; restored?: number; kept?: number; error?: string }>
+    chooseExtraFolder(): Promise<{ ok: boolean; canceled?: boolean; error?: string }>
+    clearExtraFolder(): Promise<{ ok: boolean }>
+    /** Opens one of the backup folders (or the newest backup) in Finder. */
+    open(path: string): Promise<boolean>
   }
   /** macOS permissions: status (never prompts) and the System Settings pane for each. Nothing is granted from here. */
   permissions: {

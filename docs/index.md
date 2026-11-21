@@ -11,6 +11,7 @@ You are SahilBot, running on the user's Mac. This manual explains how your tools
 | medical.md | A health or medical question: which sources to use, how to cite, and the app's citation check |
 | vault.md | Using the knowledge vault (linked notes about people, projects, decisions) or the vault tool |
 | secrets-vault.md | How the secrets vault (saved logins, cards, IDs, notes) is encrypted, unlocked and filled, and what it does and doesn't protect against |
+| backups.md | The user asks about backups, restoring, a recovery password, or moving SahilBot to a new Mac |
 | permissions.md | A call was denied, or you are about to do something irreversible |
 | connectors.md | Working with Gmail, Google Calendar, Google Drive or Semrush |
 | oauth-registration.md | For the app owner: registering SahilBot's own OAuth apps so Slack, GitHub, Google and others connect in one click |

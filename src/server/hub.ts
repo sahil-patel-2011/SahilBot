@@ -24,7 +24,10 @@ export interface Session {
 export const DENIED_CHANNELS: Record<string, string> = {
   'vault:reveal': 'Showing saved passwords is turned off on SahilBot Server. Use the SahilBot Mac app.',
   'vault:totpCode': 'Showing authenticator codes is turned off on SahilBot Server. Use the SahilBot Mac app.',
-  'vault:exportBackup': 'Vault backups are made in the SahilBot Mac app.'
+  'vault:exportBackup': 'Vault backups are made in the SahilBot Mac app.',
+  'backups:setRecoveryPassword': 'The backup recovery password is set in the SahilBot Mac app.',
+  'backups:clearRecovery': 'The backup recovery password is changed in the SahilBot Mac app.',
+  'backups:restoreKeys': 'Keys are restored from a backup in the SahilBot Mac app.'
 }
 
 /** Calls that approve or answer something a bot asked, or change what a bot may do: written to the audit log (no answer text). */

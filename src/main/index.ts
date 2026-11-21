@@ -72,7 +72,8 @@ import { MemoryStore, similar, type ImportItemIn } from './memory'
 import { IMPORT_MAX_CHARS, ruleName } from './memory-import'
 import { MEMORY_IMPORT_PROMPT } from '@shared/memory-import'
 import { appRoot, dataDir, isPackaged, sub } from './paths'
-import { Updater, backupBeforeUpgrade, bundleBuild, bundleOf } from './updater'
+import { Updater, backupBeforeUpgrade, backupData, backupsDir, bundleBuild, bundleOf, mirrorBackupsDir } from './updater'
+import { BackupService, RecoveryError, secretNames } from './backup'
 /** The version this Mac ran before this start, when this is the first start of a new version. */
 let upgradedFrom: string | undefined
 import { SkillStore } from './skills'
@@ -3177,11 +3178,56 @@ app.whenReady().then(() => {
     return { loginItem, openedAtLogin, working: work.working().length, keepingAwake: awake.on, menuBarIcon: !!menuBar?.shown, routinesPaused: !!s.routinesPaused }
   }
   handle('alwaysOn:status', () => alwaysOnStatus())
+  // ---- Backups (main/backup.ts, docs/backups.md): the daily copy of the data folder plus the knowledge vault, a
+  // readable export of memories and decisions, and the API keys encrypted with the user's recovery password.
+  const vacuumInto = (path: string): void => { db.sql.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`) }
+  const backups = new BackupService({
+    dataDir: dataDir(), mainDir: backupsDir(), mirrorDir: mirrorBackupsDir(),
+    backupData: (o) => backupData(dataDir(), 'profile copy', { vacuumInto, extras: o.extras, extraMirror: o.extraMirror }),
+    vaultRoot: () => notesVault.root(),
+    memories: () => memory.list(),
+    spaceName: (id) => db.getSpace(id)?.name,
+    secrets: {
+      names: () => secretNames(db.sql.prepare(`SELECT key FROM settings WHERE key LIKE 'secret:%'`).all() as Array<{ key: string }>),
+      get: (n) => secrets.get(n), set: (n, v) => secrets.set(n, v), has: (n) => secrets.has(n)
+    },
+    getSetting: (k) => db.getSetting(k), setSetting: (k, v) => db.setSetting(k, v),
+    quickKdf: HIDDEN
+  })
+  handle('backups:status', () => backups.status())
+  handle('backups:now', async () => {
+    try { const path = await backups.backupNow(); return { ok: true, path } } catch (e) { return { ok: false, error: (e as Error).message } }
+  })
+  handle('backups:setRecoveryPassword', async (password: string) => {
+    try { await backups.setRecoveryPassword(String(password ?? '')); void backups.backupNow().catch(() => undefined); return { ok: true } } catch (e) { return { ok: false, error: (e as Error).message } }
+  })
+  handle('backups:clearRecovery', () => { backups.clearRecovery(); return { ok: true } })
+  handle('backups:restoreKeys', async (password: string, replace?: boolean) => {
+    const r = win ? await dialog.showOpenDialog(win, { properties: ['openFile'], defaultPath: backupsDir(), filters: [{ name: 'SahilBot recovery file', extensions: ['sbrecovery'] }] }) : { canceled: true, filePaths: [] }
+    if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true }
+    try {
+      const out = await backups.restoreKeys(readFileSync(r.filePaths[0], 'utf8'), String(password ?? ''), !!replace)
+      return { ok: true, ...out }
+    } catch (e) { return { ok: false, error: e instanceof RecoveryError ? e.message : 'The recovery file could not be read.' } }
+  })
+  handle('backups:chooseExtraFolder', async () => {
+    const r = win ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], message: 'Choose a folder for an extra copy of every backup (an external drive, for example)' }) : { canceled: true, filePaths: [] }
+    if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true }
+    return backups.setExtraDir(r.filePaths[0])
+  })
+  handle('backups:clearExtraFolder', () => backups.setExtraDir(null))
+  handle('backups:open', (path: string) => {
+    const known = backups.status()
+    if (!known.folders.some((f) => f.path === path) && known.last?.path !== path) return false
+    mkdirSync(path, { recursive: true })
+    if (!HIDDEN) void shell.openPath(path)
+    return true
+  })
   // ---- Updates (main/updater.ts): check, download and verify in the background; install on the user's click.
   const updater = new Updater({
     execPath: process.execPath, version: app.getVersion(), packaged: isPackaged(), dataDir: dataDir(),
     emit: (st) => toWin('update:status', st), quit: () => app.quit(), openUrl: (u) => void shell.openExternal(u),
-    vacuumInto: (path) => db.sql.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`)
+    vacuumInto, dailyBackup: () => backups.backupNow()
   })
   updater.start()
   // Back from sleep: look for a new build right away (the hourly timer may have slept through it).
