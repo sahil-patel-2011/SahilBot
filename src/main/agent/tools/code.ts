@@ -1,5 +1,6 @@
 import { shell } from 'electron'
 import { execFileSync } from 'node:child_process'
+import { noteSeen } from './freshness'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import type { ToolEffect } from '@shared/types'
@@ -19,7 +20,7 @@ import { classify, cwdFor } from './shell'
 // project folder (the first attached folder, else the workspace) and never leave the workspace or
 // the folders the user attached.
 
-type Ctx = Pick<ToolContext, 'state' | 'workspaceDir' | 'signal' | 'progress'>
+type Ctx = Pick<ToolContext, 'state' | 'workspaceDir' | 'signal' | 'progress'> & { threadId?: string }
 
 /** A path inside the project folder (relative) or inside the workspace/attached folders (absolute). */
 function resolveIn(base: string, p: string, ctx: Ctx): string {
@@ -231,6 +232,7 @@ function readNumbered(base: string, a: CodeArgs, ctx: Ctx): { text: string; disp
     return { text: entries.map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).join('\n') || '(empty folder)', display: `listed ${shown}`, path: full }
   }
   const text = readTextFile(full, shown)
+  noteSeen(ctx.threadId, full)
   const lines = text.split(/\r?\n/)
   if (lines.length && lines[lines.length - 1] === '') lines.pop()
   const total = lines.length
@@ -265,6 +267,7 @@ function edit(base: string, a: CodeArgs, ctx: Ctx, workspace: string): { text: s
   })
   backup(workspace, full)
   writeFileSync(full, content)
+  noteSeen(ctx.threadId, full)
   const d = unifiedDiff(shown, before, content)
   return {
     text: `Edited ${full} (${count} replacement${count === 1 ? '' : 's'}, +${d.added} −${d.removed})${notes.length ? `\nNote: ${notes.join('; ')}` : ''}\n${clipDiff(d.text)}`,

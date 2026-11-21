@@ -76,6 +76,29 @@ export const PROFILES: Record<'sahilbot' | 'claude-code' | 'codex-cli' | 'grok-b
 export const straight = (t: string): string => (t ?? '').replace(/[\u2018\u2019\u02BC]/g, "'").replace(/[\u201C\u201D]/g, '"')
 
 /** "I've saved it", "It's been sent", "Done: created the event": a reply saying an action happened. */
+/** Tool-name stems that do what a claimed verb says ("published" ↔ publish_post, "it's live" ↔ deploy). */
+const CLAIM_STEMS: Record<string, string[]> = {
+  saved: ['save', 'write', 'create', 'note'], sent: ['send', 'email', 'message', 'reply', 'post'], emailed: ['email', 'send', 'mail'],
+  published: ['publish', 'post', 'deploy', 'release'], posted: ['post', 'publish', 'send'], deployed: ['deploy', 'publish', 'release'],
+  uploaded: ['upload', 'put', 'save'], booked: ['book', 'reserve'], scheduled: ['schedule', 'create_event', 'calendar'],
+  deleted: ['delete', 'remove', 'trash'], removed: ['remove', 'delete', 'trash'], filed: ['file', 'create', 'submit'],
+  submitted: ['submit', 'send', 'post'], shared: ['share', 'send'], moved: ['move', 'rename'], renamed: ['rename', 'move'],
+  installed: ['install'], ordered: ['order', 'buy', 'purchase'], paid: ['pay', 'purchase'], replied: ['reply', 'send'],
+  messaged: ['message', 'send'], texted: ['text', 'send', 'message'], live: ['publish', 'deploy', 'post', 'launch', 'release']
+}
+
+/**
+ * A "done" claim that a successful tool of this run backs by its name: "Published at …" after publish_post, even
+ * when a connector labels that tool read-only (many do). Every verb the reply claims needs a matching tool.
+ */
+export function claimBacked(text: string, okTools: string[]): boolean {
+  const t = straight(text).toLowerCase()
+  const claimed = Object.keys(CLAIM_STEMS).filter((v) => new RegExp(`\\b${v}\\b`).test(t))
+  if (!claimed.length || !okTools.length) return false
+  const names = okTools.map((n) => n.toLowerCase())
+  return claimed.every((v) => CLAIM_STEMS[v].some((stem) => names.some((n) => n.split(/__|[^a-z]+/).some((part) => part.startsWith(stem)) || n.includes(stem))))
+}
+
 export function claimsDone(text: string): boolean {
   const t = straight(text).trim()
   if (!t || t.length > 1500) return false

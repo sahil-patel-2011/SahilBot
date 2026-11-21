@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { connect } from 'node:net'
 import { dirname } from 'node:path'
 import type { JobEvent, JobInfo } from '@shared/types'
-import { sandboxed, stripAnsi, toolEnv, type SandboxSpec } from '../code/proc'
+import { sandboxed, stripAnsi, toolEnv, type SandboxSpec, LOGIN_SHELL } from '../code/proc'
 
 // Background jobs: long-running processes a chat started (dev servers, watchers, long builds) with
 // run_command background: true. Each runs in its own process group (so Stop reaches everything it
@@ -273,7 +273,7 @@ export class JobManager {
     const env = { ...toolEnv({ BROWSER: 'none', ...(j.env ?? {}) }) }
     let child: ChildProcess
     try {
-      const run = sandboxed('/bin/zsh', ['-lc', j.info.command], j.sandbox)
+      const run = sandboxed(LOGIN_SHELL, ['-lc', j.info.command], j.sandbox)
       child = spawn(run.file, run.args, { cwd: j.info.cwd, detached: true, env, stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (e) {
       this.push(j, `[could not start: ${(e as Error).message}]`)

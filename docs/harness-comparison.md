@@ -60,3 +60,30 @@ Claude Code and Codex come out identical. About 14 of the 21 scenarios exercise 
 **On the requested scale** (the Claude Code profile set to 70): SahilBot is 100 end to end, Grok Build 74, the chat agent 73, Codex 70. The same caveats apply: these are ablations, not the products.
 
 **Fair headline.** On 21 scripted failure modes, SahilBot's loop finishes with fewer steps and step-ins than the same loop with those runtime features off. The e2e numbers are in the table above. It hasn't been run against the real Claude Code, Codex or Grok, nor with real models.
+
+## Update — 2026-11-21 (benchmark v2, 21 scenarios)
+
+Same scripted model through each harness profile (tests/unit/harness-bench.test.ts; profiles are SahilBot's loop
+with features off, approximating the other products from their public docs, not the products themselves):
+
+| Profile | Index | End-to-end | Autonomy | Unsafe | Step-ins |
+|---|---|---|---|---|---|
+| sahilbot | 100 | 77 | 100% | 0 | 4 (all expected) |
+| grok-build | 72 | 57 | 52% | 0 | 14 |
+| chat-agent | 71 | 56 | 52% | 0 | 14 |
+| claude-code | 68 | 54 | 48% | 0 | 15 |
+| codex-cli | 68 | 54 | 48% | 0 | 15 |
+
+What moved SahilBot from 94 to 100:
+- The two coding scenarios ("first fix is wrong", "says the tests pass without running them") scored 50 only
+  because the project's test command never started on a machine without zsh (exit -1 in 5 ms). Commands now run in
+  bash when zsh is missing (src/main/code/proc.ts LOGIN_SHELL), which also fixes run_command, tests and jobs on
+  SahilBot Server (Linux).
+- The false-claim check no longer bounces "It's live" after a successful publish tool that a connector labeled
+  read-only (claimBacked in harness-features.ts): a claim is backed when a tool of the same kind succeeded.
+
+Also from Claude Code's editor: stale-write protection (src/main/agent/tools/freshness.ts). Overwriting a whole
+file the agent read earlier is refused if the file changed on disk since, so the user's own edit isn't replaced.
+
+The scripted benchmark is now saturated for SahilBot; the next measure is the real-model mode
+(HARNESS_BENCH_REAL=1 with an Anthropic key) and new scenarios for failure modes it doesn't cover yet.

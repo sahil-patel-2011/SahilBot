@@ -1,4 +1,4 @@
-import { clip, runProcess, throttle } from './proc'
+import { clip, runProcess, throttle, LOGIN_SHELL } from './proc'
 import { type Check, type CommandSpec, type Diagnostic, detectProject, formatDiag, parseDiagnostics, parseTestOutput, suggestNext, testCommand } from './project'
 
 // Runs a project's tests, type checker or linter with streaming progress and a deadline, and turns the
@@ -44,7 +44,7 @@ export async function runCheck(o: CheckOptions): Promise<CheckResult> {
   const command = buildCommand(o, detectProject(o.cwd).packageManager)
   const tick = throttle<string>((l) => o.progress?.(l), 700)
   o.progress?.(`$ ${command}`)
-  const r = await runProcess('/bin/zsh', ['-lc', command], {
+  const r = await runProcess(LOGIN_SHELL, ['-lc', command], {
     cwd: o.cwd,
     timeoutMs: o.timeoutMs,
     signal: o.signal,

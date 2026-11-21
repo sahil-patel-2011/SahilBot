@@ -89,3 +89,12 @@ test('curly apostrophes, sentence scope, scaled limits and last pages (review fi
   expect(pages2('{"next_page": 2, "total_pages": 3}')).toBeTruthy()
   expect(pages2('{"next_cursor": "abc123"}')).toBeTruthy()
 })
+
+test('a "done" claim backed by a successful tool of the same kind is not challenged, even if the tool is labeled read-only', async () => {
+  const { claimBacked } = await import('../../src/main/agent/harness-features')
+  expect(claimBacked('It\'s live: https://blog.example/clicks', ['publish_post'])).toBe(true)
+  expect(claimBacked('I\'ve sent the email to Acme.', ['gmail__send_message'])).toBe(true)
+  expect(claimBacked('Published and emailed the link.', ['publish_post'])).toBe(false)
+  expect(claimBacked('I\'ve saved the summary to your notes.', ['web_search', 'fetch_page'])).toBe(false)
+  expect(claimBacked('I\'ve saved it.', [])).toBe(false)
+})
