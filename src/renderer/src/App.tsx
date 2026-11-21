@@ -900,7 +900,7 @@ export function App() {
           <div className="header-title">
             {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
           </div>
-          {chatBot && (thread || (isBot && view === 'home')) && (
+          {chatBot && !vaultOpen && (thread || (isBot && view === 'home')) && (
             <div className={`chat-pill${panel === 'details' ? ' on' : ''}`}>
               {renamingTitle && thread ? (
                 <input className="title-edit" autoFocus defaultValue={thread.title}

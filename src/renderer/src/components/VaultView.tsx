@@ -8,6 +8,7 @@ import { Toggle } from './Toggle'
 import '../styles-vault.css'
 import { ClampText, Disclosure } from './ui'
 import { PeopleView } from './PeopleView'
+import { ContextMenu } from './ContextMenu'
 
 // The Vault view: the notes your bots keep (src/main/vault), like a small Obsidian. A list with search
 // and area filters, the note itself with clickable [[links]] and its backlinks, a graph of how notes
@@ -51,6 +52,7 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
   const [path, setPath] = useState<string | null>(p.initialPath ?? null)
   const [note, setNote] = useState<VaultNoteFull | null>(null)
   const [tab, setTab] = useState<Tab>(p.initialTab ?? 'note')
+  const [more, setMore] = useState<{ x: number; y: number } | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [confirmTrash, setConfirmTrash] = useState(false)
   const [creating, setCreating] = useState<string | null>(null)
@@ -221,9 +223,13 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
           </div>
           <span className="grow" />
           {tab === 'people' && <button className="icon-btn" title="Close (Esc)" aria-label="Close vault" onClick={p.onClose}><I.Close size={15} /></button>}
-          <button className="mm-btn" onClick={() => void compile()} title="Compile recent chats and files into notes now">Compile now</button>
           <button className="mm-btn" onClick={() => void obsidian()} data-testid="vault-obsidian" title={status?.obsidian ? 'Open in Obsidian' : 'Obsidian isn\'t installed: shows the folder in Finder'}><I.External size={13} />{status?.obsidian ? 'Open in Obsidian' : 'Show in Finder'}</button>
-          <button className="mm-btn" onClick={() => void exportZip()} data-testid="vault-export"><I.Share size={13} />Export</button>
+          <button className="icon-btn" aria-label="More vault actions" title="More: compile now, export" data-testid="vault-more"
+            onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMore({ x: r.right - 200, y: r.bottom + 6 }) }}><I.More size={16} /></button>
+          {more && <ContextMenu x={more.x} y={more.y} onClose={() => setMore(null)} items={[
+            { label: 'Compile now', icon: <I.Sparkle size={15} />, run: () => void compile() },
+            { label: 'Export as zip', icon: <I.Share size={15} />, run: () => void exportZip() }
+          ]} />}
         </div>
 
         {tab === 'note' && (

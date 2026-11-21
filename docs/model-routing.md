@@ -204,6 +204,27 @@ Then the floors: Heavy at the hardest tier is Max; Council is Extra at least; a 
 
 The labels were written by hand to these rubrics. While writing the rubric, four labels were changed for consistency (multi-step coding to tier 3, purchases to tier 3, a business plan to tier 3, Council's Extra floor). A seeded sample of 60 items was then reviewed twice. The first pass flagged one borderline item ("Log into the Acme portal and send them a quote request", kept at tier 2, which added the rule "a login is not a step"). The second pass changed nothing.
 
+## Domain rules (medical, travel, business, engineering, coding agents)
+
+Added 2026-11-21 after a 40-request domain set (split `domains` in the routing eval) scored category 67.5%,
+difficulty 42.5% and ran 7 agent tasks as chats. With these rules: category 100%, chat-vs-agent 100%, difficulty
+97.5%; the 554 earlier items are unchanged. The set was tuned on, so it guards against regressions; it isn't blind.
+
+- **Clinical questions are the top tier.** A dose, an interaction ("can I take X with Y"), a lab value ("my
+  creatinine came back at 1.8"), warning signs, or a named drug with a clinical word: difficulty 3, so the strongest
+  model answers, with the medical sources (docs/medical.md). A definition ("explain what PSA density is") stays light.
+- **Medical literature is deep research.** Meta-analyses, systematic reviews, PMIDs, clinical trials, guidelines,
+  FDA labels and side-effect profiles: research, agent, difficulty 3. A single PMID lookup stays a quick chat.
+- **Coding agents are coding.** Handing work to Cursor (cloud or local agent), Codex or Claude Code, checking on one
+  or reviewing its PR: coding, agent. Several agents in parallel, a refactor or a change across the repo: tier 3.
+  A question about them is a chat; writing a brief for one is writing.
+- **Travel.** Directions, distances, "near me", "open now" and travel times are live lookups (tier 2). Comparing or
+  routing between several places ("which of these hotels is closest") is research with the maps tool, as the agent.
+  Booking a table, room or flight is computer use at tier 3. A trip with travel times or map links is tier 3.
+- **Engineering calculations are math** (deflection, stress, torque, loads), even with materials and shapes in the
+  words, unless a CAD tool or model is named.
+- **Patient-facing or cited documents** (a patient handout, a report with citations) are office work at tier 3.
+
 ## The classifier
 
 `classifyTask(text, ctx)` in `src/main/llm/task-classifier.ts` is the one decision for each request. It returns the category, difficulty, chat or agent, effort and a calibrated confidence. `agent/intent.ts` `classifyTask` (chat or agent) is the same decision: `loop.ts` passes it the routed decision (`route`), and called alone it runs the same function. So "coding" never runs as a chat, and `consistent()` checks this on every eval item.

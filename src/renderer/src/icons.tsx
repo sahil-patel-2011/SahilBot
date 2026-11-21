@@ -57,3 +57,5 @@ export const ChatDots = (p: P) => <svg {...base(p)}><path d="M4 12a8 8 0 1 1 3.3
 export const HangUp = (p: P) => <svg {...base(p)}><path d="M3.5 14.5c4.7-4.2 12.3-4.2 17 0l-1.8 2.3a1.4 1.4 0 0 1-1.8.3l-2-1.2a1.4 1.4 0 0 1-.6-1.4l.2-1.5a11 11 0 0 0-5 0l.2 1.5a1.4 1.4 0 0 1-.6 1.4l-2 1.2a1.4 1.4 0 0 1-1.8-.3Z" /></svg>
 /** A notebook with a bookmark: the knowledge vault. */
 export const Vault = (p: P) => <svg {...base(p)}><path d="M6 3.5h11a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a1.5 1.5 0 0 1-1.5-1.5v-14A1.5 1.5 0 0 1 6 3.5Z" /><path d="M8.5 3.5v17M12 8h4M12 11.5h4" /></svg>
+/** Three dots: more actions. */
+export const More = (p: P) => <svg {...base(p)}><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></svg>
