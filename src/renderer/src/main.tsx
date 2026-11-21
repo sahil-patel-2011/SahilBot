@@ -40,6 +40,8 @@ import './styles-ux.css'
 import './styles-chat.css'
 // Your brain (BrainView) and Agent mode's prompts.
 import './styles-brain.css'
+// The cleaner look (sidebar, home, banner): last, so it wins.
+import './styles-clean.css'
 
 // The same page serves the main window and the Quick Ask bar (#quick).
 const quick = location.hash === '#quick'

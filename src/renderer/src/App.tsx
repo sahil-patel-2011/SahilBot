@@ -964,9 +964,12 @@ export function App() {
           </div>
         </header>
         {models && !models.ok && (
-          <div className="banner">
-            No model is available yet. Add a Claude, OpenAI or Grok key or your ChatGPT plan{models.localOff ? '' : ', or start a local model server'}, then
-            <button onClick={() => void refreshModels()}>retry</button>or<button onClick={() => { setSettingsPage('keys'); setShowSettings(true) }}>open Settings</button>.
+          <div className="banner" role="status" data-testid="no-model-banner">
+            <span className="banner-text"><b>Connect a model to start.</b> Add a Claude, OpenAI or Grok key or your ChatGPT plan{models.localOff ? '' : ', or start a local model server'}.</span>
+            <span className="banner-actions">
+              <button className="btn small primary" onClick={() => { setSettingsPage('keys'); setShowSettings(true) }}>Add a key</button>
+              <button className="btn small ghost" onClick={() => void refreshModels()}>Retry</button>
+            </span>
           </div>
         )}
 
