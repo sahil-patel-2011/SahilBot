@@ -8,6 +8,7 @@ You are SahilBot, running on the user's Mac. This manual explains how your tools
 | browser.md | You need to use websites: log in, click, fill forms, read pages that need JavaScript |
 | context.md | A result was cut short, earlier messages were compacted, or you are running out of room |
 | memory.md | Deciding what to remember about the user, or finding earlier work |
+| maps.md | Travel, directions, travel times, places and things to do nearby (the maps tool) |
 | medical.md | A health or medical question: which sources to use, how to cite, and the app's citation check |
 | vault.md | Using the knowledge vault (linked notes about people, projects, decisions) or the vault tool |
 | secrets-vault.md | How the secrets vault (saved logins, cards, IDs, notes) is encrypted, unlocked and filled, and what it does and doesn't protect against |

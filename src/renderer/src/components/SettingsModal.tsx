@@ -764,7 +764,7 @@ function ToolKeys({ s, patch }: P) {
   const saveOnshape = (field: 'onshapeAccessKey' | 'onshapeSecretKey') => async (k: string | null): Promise<void> => { setMsg(null); await patch({ [field]: k } as never) }
   const market = [['tiingo', 'Tiingo', 'https://www.tiingo.com/account/api/token', 'Free: full daily price history'], ['polygon', 'Polygon', 'https://polygon.io/dashboard/api-keys', 'Daily history and delayed quotes'], ['alphavantage', 'Alpha Vantage', 'https://www.alphavantage.co/support/#api-key', 'Quotes and history'], ['finnhub', 'Finnhub', 'https://finnhub.io/dashboard', 'Live quotes and news']] as const
   return (
-    <Section title="Keys for tools" sub="Only for the tools that use them. SEC filings and medical research need no key.">
+    <Section title="Keys for tools" sub="Only for the tools that use them. SEC filings, medical research and maps need no key.">
       <div data-setting="tool-keys">
         {market.map(([id, name, url, sub]) => (
           <Row key={id} title={<a href={url} target="_blank" rel="noreferrer">{name}</a>} sub={sub}>
@@ -776,6 +776,7 @@ function ToolKeys({ s, patch }: P) {
             {['auto', 'none', 'tiingo', 'polygon', 'alphavantage', 'finnhub'].map((v) => <option key={v} value={v}>{v === 'auto' ? 'Auto' : v === 'none' ? 'Daily closes only' : v === 'alphavantage' ? 'Alpha Vantage' : v[0].toUpperCase() + v.slice(1)}</option>)}
           </select>
         </Row>
+        <Row title={<a href="https://console.cloud.google.com/google/maps-apis/credentials" target="_blank" rel="noreferrer">Google Maps</a>} info="Optional. Maps and travel work without it (OpenStreetMap). With a Google Maps Platform key, places get ratings, prices and opening hours, driving times include traffic, and transit directions work. Enable Places API (New), Routes API and Geocoding API for the key."><KeyField saved={!!s.hasGoogleMapsKey} placeholder="Google Maps API key" testId="key-google-maps" onSave={async (k) => { await patch({ googleMapsKey: k }) }} /></Row>
         <Row title={<a href="https://account.ncbi.nlm.nih.gov/settings/" target="_blank" rel="noreferrer">PubMed (NCBI)</a>} info="Optional. Medical research works without it; with a free NCBI key, PubMed answers faster and doesn't slow down on big research jobs (10 requests a second instead of 3). Account settings → API Key Management."><KeyField saved={!!s.hasNcbiKey} placeholder="NCBI API key" testId="key-ncbi" onSave={async (k) => { await patch({ ncbiKey: k }) }} /></Row>
         <Row title={<a href="https://www.thebluealliance.com/account" target="_blank" rel="noreferrer">The Blue Alliance</a>} sub="FRC match schedules, results and rankings."><KeyField saved={!!s.hasTbaKey} placeholder="TBA read key" testId="key-tba" onSave={async (k) => { await patch({ tbaKey: k }) }} /></Row>
         <Row title={<a href="https://dev-portal.onshape.com/keys" target="_blank" rel="noreferrer">Onshape access key</a>} info="Lets bots read your Onshape documents and, with your OK each time, change variables or configurations. Read scope to look; Write to change."><KeyField saved={!!s.onshapeKeyParts?.access} placeholder="Onshape access key" testId="key-onshape-access" onSave={saveOnshape('onshapeAccessKey')} /></Row>
