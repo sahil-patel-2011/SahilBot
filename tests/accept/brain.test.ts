@@ -15,7 +15,7 @@ afterAll(async () => { await llm.close() })
 describe('Your brain', () => {
   test('sources, first-read estimate, a sync into briefs with chips, Agent mode prompt in Needs you, Draft it', async () => {
     for (let i = 0; i < 80; i++) llm.script.push(brainReplies)
-    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64', SAHILBOT_BRAIN_FIXTURE: brainFixture() })
+    const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64', SAHILBOT_BRAIN_FIXTURE: brainFixture(), FOREMAN_IDLE_MS: '0' })
     try {
       await page.evaluate(() => window.foreman.settings.set({ local: { enabled: true }, userName: 'Sam' } as never))
       await page.evaluate(() => window.foreman.brain.setSettings({ quietHours: { start: '00:00', end: '00:00' } }))

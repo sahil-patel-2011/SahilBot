@@ -94,11 +94,13 @@ export class MacLinkHub {
   private bind(id: string): void { this.boundId = id; this.o.bound?.set(id) }
 
   /** The Mac asks for work: answered at once if any is queued, else after up to 25 seconds (long poll). */
-  poll(info: { name?: string; tools?: string[] }, deviceId?: string): Promise<MacJob[]> {
+  poll(info: { name?: string; tools?: string[]; busy?: boolean }, deviceId?: string): Promise<MacJob[]> {
     if (!this.allowed(deviceId)) return Promise.reject(Object.assign(new Error('Another Mac is linked to this server.'), { status: 403 }))
     this.lastSeen = this.now()
     if (info.name) this.macName = String(info.name).slice(0, 80)
     if (Array.isArray(info.tools)) this.tools = new Set(info.tools.filter((t) => typeof t === 'string' && t in MAC_TOOLS))
+    // Busy with four jobs: it's still there, but takes no more until one finishes (they wait in the queue).
+    if (info.busy) return new Promise((resolve) => setTimeout(() => resolve([]), Math.min(this.o.pollMs ?? 25_000, 3000)))
     // Jobs handed to a connection that never acknowledged them (it dropped) go out again.
     for (const p of this.queue) if (p.sentAt !== undefined && !p.acked && this.now() - p.sentAt > (this.o.ackMs ?? 15_000)) p.sentAt = undefined
     this.waiter?.([])
@@ -216,7 +218,7 @@ export class MacLinkClient {
     while (live()) {
       try {
         // Busy with 4 jobs: check in without taking more (the server knows the Mac is still there).
-        const r = await this.o.call('/api/mac/poll', { name: this.o.name(), tools: this.inFlight >= 4 ? [] : this.o.allowed() }, 40_000)
+        const r = await this.o.call('/api/mac/poll', { name: this.o.name(), tools: this.o.allowed(), ...(this.inFlight >= 4 ? { busy: true } : {}) }, 40_000)
         if (!live()) break
         if (r.status !== 200) throw new Error(String(r.json.error ?? `The server answered ${r.status}.`))
         this.backoff = 1000

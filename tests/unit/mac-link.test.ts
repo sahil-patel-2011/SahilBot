@@ -223,3 +223,23 @@ test('only the linked Mac can drop its waiting poll', async () => {
   expect((await waiting).map((j) => j.tool)).toEqual(['file_read'])
   void job
 })
+
+test('a busy Mac keeps its tools and isn\'t handed more jobs until one finishes', async () => {
+  const hub = new MacLinkHub({ pollMs: 50 })
+  await hub.poll({ tools: ['file_read'] })
+  const job = hub.run('file_read', { path: 'a' }, 500)
+  expect(await hub.poll({ tools: ['file_read'], busy: true })).toEqual([])
+  expect(hub.status().tools).toEqual(['file_read'])
+  const got = await hub.poll({ tools: ['file_read'] })
+  expect(got).toHaveLength(1)
+  hub.result({ id: got[0].id, ok: true, text: 'ok' })
+  expect((await job).text).toBe('ok')
+})
+
+import { homeGuarded } from '../../src/main/code/proc'
+test('protected places in the home folder ignore case on macOS (~/.ZSHRC is ~/.zshrc)', () => {
+  if (process.platform !== 'darwin') return
+  expect(homeGuarded('/Users/sam/.zshrc', '/Users/sam')).toBe(homeGuarded('/Users/sam/.ZSHRC', '/Users/sam'))
+  expect(homeGuarded('/Users/sam/.SSH/id_ed25519', '/Users/sam')).toBe(homeGuarded('/Users/sam/.ssh/id_ed25519', '/Users/sam'))
+  expect(homeGuarded('/Users/sam/.ssh/id_ed25519', '/Users/sam')).toBe(true)
+})

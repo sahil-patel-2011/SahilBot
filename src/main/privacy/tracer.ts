@@ -260,6 +260,8 @@ export interface Detection { spans: PrivacySpan[]; sensitivity: number }
 /** PII-Tracer on this Mac: install, a private llama-server, and detect(). */
 export class PiiTracer {
   private proc?: ChildProcess
+  /** The last server started (still known after it exits, for the one restart after a crash). */
+  private lastProc?: ChildProcess
   private port = 0
   private starting?: Promise<void>
   private heads?: { cls: Tensor; clsB: Tensor; sen: Tensor; senB: Tensor }
@@ -362,6 +364,7 @@ export class PiiTracer {
         '--embeddings', '--pooling', 'none', '-c', String(MAX_TOKENS), '-b', String(MAX_TOKENS), '-ub', String(MAX_TOKENS), '--parallel', '1', '--no-webui', '--log-disable'],
       { cwd: join(bin, '..'), stdio: 'ignore', env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME ?? '', TMPDIR: process.env.TMPDIR ?? '/tmp' } })
       this.proc = proc
+      this.lastProc = proc
       proc.once('exit', () => { if (this.proc === proc) { this.proc = undefined; this.starting = undefined } })
       const until = Date.now() + 90_000
       for (;;) {
@@ -406,11 +409,12 @@ export class PiiTracer {
   }
 
   private async detectNow(text: string, signal?: AbortSignal): Promise<Detection> {
-    const proc = this.proc
     try { return await this.detectOnce(text, signal) } catch (e) {
-      // The server died on its own mid-check (a crash, the Mac woke from sleep): start it again and check once
-      // more. Not after the gate was switched off, and not for a slow answer (the server is still running).
-      const died = !!proc && (proc.exitCode !== null || proc.killed) && this.proc !== proc
+      // The server died on its own mid-check (a crash, a signal, the Mac woke from sleep), even one this check
+      // started: start it again and check once more. Not after the gate was switched off, and not for a slow
+      // answer (the server is still running).
+      const proc = this.lastProc
+      const died = !!proc && (proc.exitCode !== null || proc.signalCode !== null || proc.killed) && this.proc !== proc
       if (signal?.aborted || this.halted || !died || !/ECONNREFUSED|ECONNRESET|fetch failed|socket|stopped|terminated/i.test(String((e as Error)?.message ?? e))) throw e
       this.stop()
       return this.detectOnce(text, signal)

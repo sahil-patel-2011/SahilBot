@@ -73,6 +73,8 @@ export class VoiceService {
   private pipe: VoicePipeline | null = null
   private kokoroVoice = 'af_heart'
   private style: VoiceStyle = {}
+  /** A voice being previewed (it isn't chosen). */
+  private previewing?: string
   private stt: SpeechToText | null = null
   private prep: Prep | null = null
   private benching = false
@@ -148,7 +150,7 @@ export class VoiceService {
   /** The chosen voice and speed on whichever engine speaks. */
   private styleTts(t: TtsEngine): void {
     const kind = this.engineKind(t)
-    const v = this.style.voices?.[kind]
+    const v = this.previewing ?? this.style.voices?.[kind]
     if (v && VOICES[kind].some((x) => x.id === v)) t.voice = v
     else if (kind === 'kokoro') t.voice = this.kokoroVoice
     if (kind !== 'xai') t.speed = clampSpeed(this.style.speed ?? 1)
@@ -181,9 +183,8 @@ export class VoiceService {
   async preview(voice: string): Promise<void> {
     const t = this.engine()
     if (!VOICES[this.engineKind(t)].some((x) => x.id === voice)) throw new Error('That voice isn\'t available with this speech engine.')
-    const prev = t.voice
-    t.voice = voice
-    try { await this.speak('Hi! This is how I sound. Talk to me any time.') } finally { t.voice = prev }
+    this.previewing = voice
+    try { await this.speak('Hi! This is how I sound. Talk to me any time.') } finally { this.previewing = undefined; this.styleTts(t) }
   }
 
   private pickEngine(): TtsEngine {

@@ -2480,7 +2480,8 @@ app.whenReady().then(() => {
     isLocal: (m) => isLocal(endpoints.for(m).baseUrl),
     app: () => { const s = settings.get(); const b = budget.summary(); return { localAllowed: localOn(s), me: [...(s.me?.emails ?? [])], mode: b.mode, cap: b.cap, spent: b.spent } },
     power: () => power,
-    idleMs: () => { try { return powerMonitor.getSystemIdleTime() * 1000 } catch { return 0 } },
+    // Test runs can fix how long the Mac has been idle (otherwise it depends on whoever is at the keyboard).
+    idleMs: () => { if (HIDDEN && process.env.FOREMAN_IDLE_MS) return Number(process.env.FOREMAN_IDLE_MS); try { return powerMonitor.getSystemIdleTime() * 1000 } catch { return 0 } },
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
     // Draft it: a new chat with the main bot at its usual level (Auto by default), the user's click as the request.
     startRun: async (o) => {
@@ -3311,7 +3312,7 @@ app.whenReady().then(() => {
           else if (typeof v === 'string' && v.startsWith('~/')) (job.args as Record<string, unknown>)[k] = join(homedir(), v.slice(2))
         }
         const sensitive = ['path', 'to'].map((k) => (job.args as Record<string, unknown>)[k]).filter((v): v is string => typeof v === 'string')
-          .find((p) => /\/(\.ssh|\.gnupg|\.aws|\.config\/gcloud|\.kube|\.docker|\.netrc|\.zshrc|\.zprofile|\.bash_profile|\.bashrc|\.profile|Library\/(Keychains|LaunchAgents|LaunchDaemons|Cookies|Application Support\/SahilBot|Mail|Messages\/chat\.db))(\/|$)/.test(p))
+          .find((p) => /\/(\.ssh|\.gnupg|\.aws|\.config\/gcloud|\.kube|\.docker|\.netrc|\.zshrc|\.zprofile|\.bash_profile|\.bashrc|\.profile|Library\/(Keychains|LaunchAgents|LaunchDaemons|Cookies|Application Support\/SahilBot|Mail|Messages\/chat\.db))(\/|$)/i.test(p))
         if (sensitive) throw new Error(`That's a protected place on this Mac (${sensitive.replace(homedir(), '~')}): keys, login items, mail or SahilBot's own data aren't reachable from the server.`)
         // This Mac's own hard stops (deleting, outside the home folder, protected places) need an OK on the Mac
         // itself: the server can't give it.

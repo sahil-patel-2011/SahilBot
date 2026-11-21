@@ -112,7 +112,7 @@ export function markdownToBlocks(md: string, opts: ParseOptions = {}): DocBlock[
 
     // Image on its own line
     // ![alt](path "Caption"): the caption is kept as the image's text when there's no alt.
-    const img = line.match(/^\s*!\[([^\]]*)\]\(\s*(<[^>]+>|[^\s)]+)(?:\s+["']([^"']*)["'])?\s*\)\s*$/)
+    const img = line.match(/^\s*!\[([^\]]*)\]\(\s*(<[^>]+>|.+?)(?:\s+["']([^"']*)["'])?\s*\)\s*$/)
     if (img) {
       const alt = img[1] || img[3]
       mk('image', { src: img[2].trim().replace(/^<|>$/g, ''), ...(alt ? { alt } : {}) }, marked)

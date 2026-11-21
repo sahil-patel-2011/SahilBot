@@ -55,7 +55,9 @@ export async function localizeImages(md: string | undefined, workspace: string, 
       mkdirSync(dir, { recursive: true })
       const file = join(dir, `${createHash('sha256').update(url).digest('hex').slice(0, 16)}.${ext}`)
       writeFileSync(file, buf)
-      out = out.split(url).join(file)
+      // Only where it's an image's address; a path with spaces goes in <brackets>.
+      const target = /\s/.test(file) ? `<${file}>` : file
+      out = out.replace(new RegExp(`(!\\[[^\\]]*\\]\\(\\s*)${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[\\s)])`, 'g'), (_m, pre: string) => pre + target)
     } catch { /* left as is: the image check explains */ }
   }
   return out
