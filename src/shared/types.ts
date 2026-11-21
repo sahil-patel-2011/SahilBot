@@ -192,6 +192,8 @@ export interface Settings {
   hasTbaKey?: boolean
   /** An NCBI API key (PubMed, faster and steadier medical research), kept in the Keychain. */
   hasNcbiKey?: boolean
+  /** Saved keys that can't be opened right now (macOS Keychain locked or didn't answer). They're kept, not lost. */
+  keysLocked?: { count: number; reason: string }
   /** 'auto' routes each request to the right model for how hard it is. */
   defaultModel: string
   /** Models switched off on the Models page (hidden from the picker and from Auto). */

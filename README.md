@@ -1,6 +1,6 @@
 # SahilBot
 
-A private, local-first AI assistant for your Mac. SahilBot chats, works as an agent with tools (files, documents, the built-in browser, your Mac's apps, connectors), talks with you by voice, and runs on models on your own Mac through Ollama or LM Studio. You can also add Claude, ChatGPT or OpenRouter with your own API key.
+A private, local-first AI assistant for your Mac. SahilBot chats, researches medical questions from PubMed, guidelines and FDA labels (checking every paper it cites), keeps everything it learns in an Obsidian-style vault, works as an agent with tools (files, documents, the built-in browser, your Mac's apps, connectors), talks with you by voice, and runs on models on your own Mac through Ollama or LM Studio. You can also add Claude, ChatGPT or OpenRouter with your own API key.
 
 ## Quick install
 
@@ -52,7 +52,9 @@ This link always gets the newest build. Every push to `main` builds and publishe
 
 After that it opens normally. Notarized builds open with a plain double-click.
 
-## Phone access
+## Phone access (preview)
+
+SahilBot is a desktop app first: phone access and the always-on server stay out of Settings until you turn on Developer mode (Settings → Advanced) or have already set one up.
 
 Use SahilBot from your phone: check on bots, answer approvals and questions, and chat, with notifications. Turn
 it on in **Settings → General → Phone access** and scan the QR code with your phone. The phone connects straight

@@ -38,7 +38,9 @@ export async function expandSteps(page: Page): Promise<void> {
 /** Opens a Settings page, first opening "More settings" when the page sits under it. Settings must be open. */
 export async function settingsPage(page: Page, id: string): Promise<void> {
   const item = page.locator(`[data-testid="settings-${id}"]`)
-  if (!(await item.count())) await page.click('[data-testid="settings-more"]')
+  // Settings lists every page in one flat list (the phone and server pages only once in use, or in Developer mode).
+  await page.locator('[data-testid="settings"] .set-nav').waitFor()
+  if (!(await item.count()) && (await page.locator('[data-testid="settings-more"]').count())) await page.click('[data-testid="settings-more"]')
   await item.click()
 }
 

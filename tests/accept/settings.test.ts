@@ -25,12 +25,10 @@ describe('Settings', () => {
       await page.keyboard.press('Meta+,')
       await page.locator('[data-testid="settings"]').waitFor()
 
-      // Simple first: five pages up front, the rest under "More settings".
-      const main = await page.locator('.set-nav .set-nav-item').allInnerTexts()
-      expect(main.map((t) => t.trim())).toEqual(['General', 'Models & Keys', 'Connected apps', 'Privacy & Security', 'Phone & server'])
-      await page.click('[data-testid="settings-more"]')
+      // One flat list, most-used first. Phone & server only shows once in use or in Developer mode (on in tests).
       const ids = await page.locator('.set-nav .set-nav-item').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
-      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-privacy', 'settings-server', 'settings-permissions', 'settings-memory', 'settings-voice', 'settings-usage', 'settings-advanced'])
+      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-memory', 'settings-privacy', 'settings-permissions', 'settings-voice', 'settings-usage', 'settings-server', 'settings-advanced'])
+      expect(await page.locator('[data-testid="settings-more"]').count()).toBe(0)
       // General: theme folded in; appearance details under More (closed).
       expect(await page.locator('[data-setting="theme"]').count()).toBe(1)
       expect(await page.locator('[data-testid="general-more"]').getAttribute('open')).toBeNull()
@@ -62,7 +60,7 @@ describe('Settings', () => {
       await page.fill('[data-testid="settings-search"]', 'approval')
       await page.click('[data-testid="settings-result-approval-rules"]')
       await expect.poll(() => page.locator('[data-testid="settings-permissions"]').getAttribute('class')).toContain(' on')
-      expect(await page.locator('[data-testid="rule-when"]').isVisible()).toBe(true)
+      await expect.poll(() => page.locator('[data-testid="rule-when"]').isVisible()).toBe(true)
 
       // Memory: one switch, a plain list with category chips, click to edit, delete with Undo.
       await page.click('[data-testid="settings-memory"]')

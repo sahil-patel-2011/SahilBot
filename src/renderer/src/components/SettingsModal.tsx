@@ -27,6 +27,7 @@ import { ActivitySettings } from './ActivitySettings'
 import { AlwaysOnServerPage, PhoneAccessSection, PhonePage, ServerPage } from './ServerSettings'
 import { ClampText, Disclosure, InfoTip, Segmented, SetTabs as Tabs } from './ui'
 import { addRule, loadRules, removeRule, RULE_LIMIT, RULE_MAX_CHARS } from '../lib/approvalRules'
+import { useDevMode } from '../lib/dev-mode'
 import { LEGACY_PAGES, PAGE_TITLES, SETTINGS_INDEX, searchSettings, type SettingEntry, type SettingsPage } from '../lib/settings-index'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
@@ -41,17 +42,19 @@ const PAGES: Array<{ id: Page; icon: ReactNode; color: string }> = [
   { id: 'general', icon: <I.Gear size={14} />, color: '#8e8e93' },
   { id: 'models', icon: <I.Cpu size={14} />, color: '#5856d6' },
   { id: 'connected', icon: <I.Plug size={14} />, color: '#007aff' },
-  { id: 'permissions', icon: <I.Shield size={14} />, color: '#34aadc' },
   { id: 'memory', icon: <I.Sparkle size={14} />, color: '#34c759' },
-  { id: 'voice', icon: <I.Mic size={14} />, color: '#ff2d55' },
   { id: 'privacy', icon: <I.Shield size={14} />, color: '#5ac8fa' },
+  { id: 'permissions', icon: <I.Shield size={14} />, color: '#34aadc' },
+  { id: 'voice', icon: <I.Mic size={14} />, color: '#ff2d55' },
   { id: 'usage', icon: <I.Clock size={14} />, color: '#ff6a1a' },
   // SahilBot Server: devices, pairing, notifications, audit (web UI); in the Mac app, the link to a server.
   { id: 'server', icon: <I.Globe size={14} />, color: '#1f8a5b' },
   { id: 'advanced', icon: <I.Sliders size={14} />, color: '#af52de' }
 ]
-/** The pages shown up front; the others sit under "More settings". */
-const MAIN_PAGES = new Set<Page>(['general', 'models', 'connected', 'privacy', 'server'])
+/**
+ * SahilBot is a desktop app first: the phone and always-on server pages only show once one is in use (or in
+ * Developer mode), so the list stays short. Everything else is one flat list; search finds any setting.
+ */
 /** A phone using the Mac (Phone access) sees its own page where SahilBot Server's browsers see the server's. */
 const onPhone = isServerRuntime && api?.serverHost === 'mac'
 const pageTitle = (id: Page): string => (id === 'server' && isServerRuntime ? (onPhone ? 'This phone' : 'Server') : PAGE_TITLES[id])
@@ -194,8 +197,15 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   const [find, setFind] = useState('')
   const [jump, setJump] = useState<string | null>(anchored?.anchor ?? null)
   const bodyRef = useRef<HTMLDivElement>(null)
-  const pages = PAGES.filter((x) => !isServerRuntime || x.id !== 'voice')
-  const [more, setMore] = useState(() => { try { return localStorage.getItem('sahilbot:settings-more') === '1' } catch { return false } })
+  const dev = useDevMode()
+  const [remoteInUse, setRemoteInUse] = useState(false)
+  useEffect(() => {
+    if (isServerRuntime) return
+    void Promise.all([api.phoneAccess?.status().then((x) => x.enabled).catch(() => false), api.remoteServer?.status().then((x) => x.linked).catch(() => false)])
+      .then(([a, b]) => setRemoteInUse(!!a || !!b))
+  }, [])
+  const showServer = isServerRuntime || dev || remoteInUse || page === 'server'
+  const pages = PAGES.filter((x) => (!isServerRuntime || x.id !== 'voice') && (x.id !== 'server' || showServer))
   const results = useMemo(() => searchSettings(find, { server: isServerRuntime }), [find])
   const [s, setS] = useState(settings)
   useEffect(() => setS(settings), [settings])
@@ -262,12 +272,7 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
               ))}
             </div>
           ) : <>
-            {/* Simple first: the five pages most people need, the rest one click away (search finds everything). */}
-            {pages.filter((p) => MAIN_PAGES.has(p.id)).map((p) => (
-              <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{pageTitle(p.id)}</button>
-            ))}
-            <button className="set-nav-more" onClick={() => { setMore((m) => { try { localStorage.setItem('sahilbot:settings-more', m ? '0' : '1') } catch { /* ignore */ } return !m }) }} aria-expanded={more || !MAIN_PAGES.has(page)} data-testid="settings-more">{more || !MAIN_PAGES.has(page) ? '▾' : '▸'} More settings</button>
-            {(more || !MAIN_PAGES.has(page)) && pages.filter((p) => !MAIN_PAGES.has(p.id)).map((p) => (
+            {pages.map((p) => (
               <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{pageTitle(p.id)}</button>
             ))}
           </>}
@@ -293,6 +298,14 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
 type P = { s: Settings; patch: (p: SettingsPatchUi) => Promise<Settings> }
 
 // ------------------------------------------------------------------ general
+
+/** Phone access (preview): shown once it's turned on, or in Developer mode. SahilBot is a desktop app first. */
+function PhoneAccessWhenUsed() {
+  const dev = useDevMode()
+  const [on, setOn] = useState(false)
+  useEffect(() => { void api.phoneAccess?.status().then((x) => setOn(x.enabled)).catch(() => undefined) }, [])
+  return dev || on ? <div data-setting="phone-access"><PhoneAccessSection /></div> : null
+}
 
 const CATCH_UP = [[0, 'Off'], [1, '1 hour'], [6, '6 hours'], [12, '12 hours'], [24, '1 day'], [72, '3 days'], [168, '1 week']] as const
 
@@ -334,7 +347,7 @@ function General({ s, patch }: P) {
         )}
       </Section>
 
-      {api.phoneAccess && <div data-setting="phone-access"><PhoneAccessSection /></div>}
+      {api.phoneAccess && <PhoneAccessWhenUsed />}
 
       <Disclosure title="More" sub="Appearance, routines and web search" testId="general-more">
         <Section title="Appearance">
@@ -462,7 +475,13 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
   return (
     <>
       <h2>Models &amp; Keys</h2>
-      <div className="set-sub">Connect at least one. Auto picks the right model for each request.</div>
+      <div className="set-sub">Connect at least one. Auto picks the right model for each request. Keys are encrypted with your Mac's Keychain and kept through updates.</div>
+      {s.keysLocked && (
+        <div className="banner" role="status" data-testid="keys-locked">
+          <span className="banner-text"><b>{s.keysLocked.count === 1 ? '1 saved key is' : `${s.keysLocked.count} saved keys are`} locked right now, not lost.</b> macOS Keychain didn't answer (it may still be locked after login). Don't re-enter them: unlock your Mac and press Retry.</span>
+          <span className="banner-actions"><button className="btn small primary" onClick={() => void api.settings.get().then((n) => { void patch({}); if (!n.keysLocked) toast('Your keys are back.', 'ok') })}>Retry</button></span>
+        </div>
+      )}
       <Section title="Connect" sub="Switch a provider off to stop using it. Its key stays saved.">
         <div data-setting="provider-switches" />
         <Row id="key-anthropic" title={<>Claude{status('anthropic')}</>} sub={<>Anthropic API key · <a href={link('anthropic') ?? 'https://console.anthropic.com/settings/keys'} target="_blank" rel="noreferrer">get one</a></>} info="Used for every model named “claude-…”. Spending counts toward your monthly limit.">
@@ -1351,7 +1370,7 @@ function Developer({ s, models, patch }: P & { models: ModelList | null }) {
   return (
     <>
       <Section>
-        <Row id="dev-mode" title="Developer mode" sub="Show detailed steps, tokens and cost in chats, and the models and thinking levels behind replies in every chat.">
+        <Row id="dev-mode" title="Developer mode" sub="Show detailed steps, tokens and cost in chats, the models and thinking levels behind replies, and the Phone &amp; server previews in Settings.">
           <Toggle on={!!s.advanced.devMode} onChange={(v) => void patch({ advanced: { ...s.advanced, devMode: v } })} label="Developer mode" testId="dev-mode" />
         </Row>
       </Section>

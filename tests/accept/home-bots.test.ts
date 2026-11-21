@@ -24,7 +24,8 @@ describe('Home: your bots first', () => {
     try {
       await page.locator('[data-testid="bot-deck"]').waitFor()
       expect(await page.locator('[data-testid="deck-make-bot"]').innerText()).toContain('New bot')
-      expect(await page.locator('.home-quick-head').innerText()).toContain('Quick question')
+      // The composer comes first now; the bot card sits below it (no separate "Quick question" header).
+      expect(await page.locator('.home-quick-head').count()).toBe(0)
       if (shots) await page.screenshot({ path: `${shots}/home-fresh.png` })
 
       await page.click('[data-testid="deck-setup"]')

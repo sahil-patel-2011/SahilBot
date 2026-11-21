@@ -13,7 +13,7 @@ import { isWhisperId } from './voice/models'
 import { migrateLocal } from '@shared/local-mode'
 import { hasLocalModels } from './local-detect'
 
-type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'hasNcbiKey' | 'hasOnshapeKeys' | 'onshapeKeyParts' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
+type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'hasNcbiKey' | 'keysLocked' | 'hasOnshapeKeys' | 'onshapeKeyParts' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
 
 export const DEFAULT_APPEARANCE: Appearance = { density: 'compact', chatWidth: 780, codeWrap: false, hue: 30, tint: 0, reduceTransparency: false, fontSize: 15 }
 
@@ -265,8 +265,9 @@ export class SettingsStore {
   }
 
   get(): Settings {
+    const locked = (): Settings['keysLocked'] => { const l = this.secrets.locked?.(); return l?.count ? { count: l.count, reason: l.reason } : undefined }
     const s = this.stored()
-    return {
+    const out: Settings = {
       ...s,
       // Env override keeps tests and power users off the real endpoint without touching saved settings.
       baseUrl: process.env.FOREMAN_BASE_URL || s.baseUrl,
@@ -280,12 +281,15 @@ export class SettingsStore {
       keysSaved: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers))])),
       keys: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers)) && !(s.disabledProviders ?? []).includes(d.id)])) as Record<ProviderId, boolean>,
       search: { ...s.search, hasBraveKey: this.secrets.has('braveKey') },
-      markets: { ...cleanMarkets(s.markets), keys: Object.fromEntries(MARKET_KEY_PROVIDERS.map((p) => [p, this.secrets.has(marketKeyName(p))])) as Record<MarketKeyProvider, boolean> }
+      markets: { ...cleanMarkets(s.markets), keys: Object.fromEntries(MARKET_KEY_PROVIDERS.map((p) => [p, this.secrets.has(marketKeyName(p))])) as Record<MarketKeyProvider, boolean> },
     }
+    // After the key checks above, which find out whether any saved key can't be opened right now.
+    out.keysLocked = locked()
+    return out
   }
 
   set(patch: SettingsPatch): Settings {
-    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, ncbiKey, marketKeys, hasApiKey: _a, keys: _k, keysSaved: _ks, hasCursorKey: _c, hasTbaKey: _t, hasNcbiKey: _n, onshapeAccessKey, onshapeSecretKey, hasOnshapeKeys: _o, onshapeKeyParts: _op, ...rest } = patch
+    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, ncbiKey, marketKeys, hasApiKey: _a, keys: _k, keysSaved: _ks, hasCursorKey: _c, hasTbaKey: _t, hasNcbiKey: _n, keysLocked: _kl, onshapeAccessKey, onshapeSecretKey, hasOnshapeKeys: _o, onshapeKeyParts: _op, ...rest } = patch
     for (const [p, k] of Object.entries(marketKeys ?? {}) as Array<[MarketKeyProvider, string | null]>) {
       if (MARKET_KEY_PROVIDERS.includes(p)) this.secrets.set(marketKeyName(p), k ? k.trim() : null)
     }
