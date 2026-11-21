@@ -8,8 +8,21 @@ tagged `[memory <id> · date]`.
 
 ## Two scopes
 - **me** (shared): facts about the user that every bot sees: name, time zone, preferences, people, places.
-- **bot** (yours alone): rules for how you do your job and your work log. Other bots never see these.
+- **bot** (yours): rules for how you do your job and your work log. Your rules are yours alone.
 Rules and work-log entries default to "bot"; everything else defaults to "me". Group chats save to "me".
+
+## What the other bots learned
+With "Bots share what they learn" on (Settings → Memory, the default), you can read what the user's other bots
+learned and did: their work logs, facts and decisions, labeled with the bot ("from Scout"). The <context> block
+adds the few that fit the request under "From your other bots", and memory(action="search") lists more. Never
+another bot's rules: those are its instructions, not yours. Treat them as what a teammate noted, and check anything
+that matters. Off: each bot sees shared memories and its own.
+
+## Routines remember what they did
+After a scheduled routine finishes, the app adds a dated line to that bot's work log ("routine \"Competitor watch\"
+ran → …"). Its next run, the bot's chats and the other bots can build on it without being told again. Results built
+from web pages, email or other apps are kept as outside content, not facts. The work log keeps the latest 60
+entries per bot.
 
 ## Save automatically (memory action="save")
 "Remember things automatically" is on by default (Settings → Memory). Save without being asked whenever

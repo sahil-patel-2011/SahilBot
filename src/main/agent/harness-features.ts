@@ -37,11 +37,13 @@ export interface HarnessFeatures {
   paginationCheck: boolean
   /** A medical answer's citations are checked against what was retrieved and against PubMed (exists, not retracted); a clinical answer needs research. */
   medicalCheck: boolean
+  /** A run that's still making progress when its step budget runs out keeps going instead of asking the user to say "continue". */
+  autoContinue: boolean
 }
 
 export const ALL_FEATURES: HarnessFeatures = {
   announceNudge: true, continueNudge: true, falseClaimNudge: true, pollingGuard: true, pendingPollNudge: true,
-  testsAtEnd: true, testsAfterEdit: true, waitForUser: true, toolRetry: true, planReminders: true, giveUpNudge: true, noBlindRepeat: true, cantNudge: true, constraintCheck: true, paginationCheck: true, medicalCheck: true
+  testsAtEnd: true, testsAfterEdit: true, waitForUser: true, toolRetry: true, planReminders: true, giveUpNudge: true, noBlindRepeat: true, cantNudge: true, constraintCheck: true, paginationCheck: true, medicalCheck: true, autoContinue: true
 }
 
 const NONE: HarnessFeatures = Object.fromEntries(Object.keys(ALL_FEATURES).map((k) => [k, false])) as unknown as HarnessFeatures

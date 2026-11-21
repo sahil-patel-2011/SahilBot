@@ -97,6 +97,7 @@ export function MemoryPage({ spaces, tab, onTab }: { spaces: Space[]; tab: strin
             </div>
             <div className="set-row-ctl"><Toggle on={auto} onChange={(v) => void setLearning({ enabled: v })} label="Remember things automatically" testId="memory-auto" /></div>
           </div>
+          <ShareAcrossBots />
         </div>
       </section>
       <SetTabs value={cur} tabs={tabs} onChange={onTab} label="Memory"
@@ -338,6 +339,22 @@ export function MemoryList({ spaces }: { spaces: Space[] }) {
           {list.length < shown.length && <button className="link-btn mm-more" onClick={() => setMore(true)}>Show all {shown.length}</button>}
         </div>
       </section>
+    </div>
+  )
+}
+
+/** "Bots share what they learn": every bot, chat and agent can read what the others learned (never their rules). */
+function ShareAcrossBots() {
+  const [on, setOn] = useState<boolean | null>(null)
+  useEffect(() => { void api.settings.get().then((x) => setOn(x.memorySharing !== false)) }, [])
+  if (on === null) return null
+  return (
+    <div className="set-row" data-setting="memory-sharing" data-testid="memory-sharing-row">
+      <div className="set-row-text">
+        <div className="set-row-title">Bots share what they learn</div>
+        <ClampText>{on ? 'Any bot, chat or helper can read what your other bots learned and did (labeled with the bot). Each bot\'s own rules stay its own.' : 'Off: each bot only sees shared memories and its own.'}</ClampText>
+      </div>
+      <div className="set-row-ctl"><Toggle on={on} onChange={(v) => { setOn(v); void api.settings.set({ memorySharing: v }) }} label="Bots share what they learn" testId="memory-sharing" /></div>
     </div>
   )
 }

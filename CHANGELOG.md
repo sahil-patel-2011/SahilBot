@@ -14,6 +14,7 @@ _2026-11-21_
 - **Auto now recognizes medical, travel, business, engineering and coding-agent requests and sends each to the right model and tools**
 - **Maps and travel: places, directions, travel times and things to do, with Google Maps links (a Google Maps key is optional)**
 - **SahilBot reads its own manual when it isn't sure how to do something, with new pages on business, engineering and coding agents**
+- **Bots keep working on their own: no need to say "continue", routines never get skipped, and every bot can read what the others learned**
 - **Talk to a bot and it goes off to do the work while you keep talking, then tells you out loud when it's done**
 - **Voices are ChatGPT's or Grok's: pick one, its speed and your language right in the voice bar**
 - **Click or hold ⌘D to dictate**
@@ -56,6 +57,14 @@ _2026-11-21_
 - The browser and side-panel buttons only show in a chat, where they do something
 - Settings is one short list with no "More settings" fold. Phone & server pages only show once you've turned one on: SahilBot is a desktop app first
 - The "no model yet" notice is a clear card with Add a key and Retry buttons
+
+### Bots that keep going
+
+- A bot that's still making progress keeps working past its usual step limit instead of stopping to ask you to say "continue" (your spending limit and the safety stops still apply)
+- Messages you send while a bot works reach it at its next step: it adjusts and keeps going, nothing stops
+- A routine that comes due while you're working with that bot waits for the current work (up to 10 minutes) instead of being skipped; if the bot is still busy, the routine is handed to it to do next
+- After each routine, a dated line about what it did goes into the bot's work log, so its next run, its chats and your other bots build on it
+- Bots share what they learn: any bot, chat or helper can read what your other bots learned and did, labeled with the bot. Each bot's own rules stay its own. Turn it off in Settings → Memory
 
 ### Auto, sharper on your kind of work
 

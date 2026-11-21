@@ -606,6 +606,28 @@ export class MemoryStore {
     return ok
   }
 
+  /** Bots read what the other bots learned (their work logs, facts, decisions; never another bot's rules). */
+  shareAcrossBots = true
+  /** A bot's name for labels ("from Inbox"); main wires it to the spaces table. */
+  nameOf?: (spaceId: string) => string | undefined
+
+  /**
+   * What the user's other bots and projects learned that matches `query` (not `spaceId`'s own, not shared ones,
+   * never their rules, which are that bot's instructions): read-only, for any bot, chat or agent.
+   */
+  teamSearch(query: string, spaceId: string | null | undefined, limit = 5, min = 0.4): Array<Memory & { from: string }> {
+    const q = query.trim()
+    if (!this.enabled || !this.shareAcrossBots || !q) return []
+    const rows = this.db.sql.prepare('SELECT * FROM memories WHERE scope IS NOT NULL AND scope != ? ORDER BY updated_at DESC LIMIT 2000').all(spaceId ?? '') as Row[]
+    return rows.map(toMemory)
+      .filter((m) => m.category !== 'rule' && !!m.spaceId && !!this.nameOf?.(m.spaceId))
+      .map((m) => ({ m, s: Math.max(fuzzyScore(q, m.content), fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
+      .filter((x) => x.s >= min)
+      .sort((a, b) => b.s - a.s || b.m.updatedAt - a.m.updatedAt)
+      .slice(0, limit)
+      .map((x) => ({ ...x.m, from: this.nameOf!(x.m.spaceId!)! }))
+  }
+
   /** Fuzzy search over shared memories plus `spaceId`'s (all memories when spaceId is undefined). */
   search(query: string, spaceId?: string | null, limit = 10): Memory[] {
     const q = query.trim()
@@ -659,7 +681,12 @@ export class MemoryStore {
       return renderBlock(this.list(null), { maxTokens: Math.round(maxChars / 4) })
     }
     const ctx = opts ?? this.inferContext()
-    return renderBlock(this.list(ctx.spaceId ?? null), ctx)
+    const own = renderBlock(this.list(ctx.spaceId ?? null), ctx)
+    // A few things the other bots learned that fit this request (labeled, read-only; their rules never come along).
+    const team = ctx.query ? this.teamSearch(ctx.query, ctx.spaceId ?? null, 3, 0.5) : []
+    if (!team.length) return own
+    const lines = team.map((m) => `- [${m.id}] (${m.category === 'worklog' ? 'work log' : KIND_LABEL[m.category]}, from ${m.from}, ${isoDay(m.updatedAt)}) ${m.content}`)
+    return `${own}${own ? '\n' : ''}From your other bots (what they learned; your own rules still apply):\n${lines.join('\n')}`
   }
 
   /**

@@ -402,6 +402,9 @@ app.whenReady().then(() => {
   }
 
   const memory = new MemoryStore(db)
+  // Every bot, chat and agent reads what the other bots learned (labeled; never their rules) unless the user turned it off.
+  memory.nameOf = (id) => db.getSpace(id)?.name
+  memory.shareAcrossBots = settings.get().memorySharing !== false
   const results = new ResultStore(sub('results'))
   const docsDir = join(appRoot(), 'docs')
   // Pages (create_page) live in the workspace's "pages" folder; the app manual in docsDir is read-only.
@@ -1124,6 +1127,7 @@ app.whenReady().then(() => {
   handle('settings:set', (patch: SettingsPatch) => {
     const wasLocal = localOn(settings.get())
     const s = settings.set(patch)
+    memory.shareAcrossBots = s.memorySharing !== false
     // Local models switched on or off: the model list (and Auto) follow at once.
     if (patch.local !== undefined && wasLocal !== localOn(s)) {
       // Turned on: an Ollama that's already installed starts (nothing is downloaded or installed here).
@@ -1860,7 +1864,17 @@ app.whenReady().then(() => {
       if (alertHit.fired && !priceAlert.repeat && !info.test) scheduler.update(task.id, { enabled: false })
       return { status: 'done', threadId }
     }
-    if (chat.isRunning(threadId)) return { status: 'skipped: the chat was busy', threadId }
+    // The bot is busy (you're working with it, or another routine is running): never skip the routine. Wait for the
+    // current work to finish (up to 10 minutes), then run it; still busy after that, hand it to the running bot as
+    // information it acts on once its current work is done, without stopping that work.
+    if (chat.isRunning(threadId)) {
+      const until = Date.now() + (info.test ? 30_000 : 10 * 60_000)
+      while (chat.isRunning(threadId) && Date.now() < until) await new Promise((r) => setTimeout(r, 5000))
+      if (chat.isRunning(threadId)) {
+        await chat.steer(threadId, `⏰ ${task.title}\n\n${task.prompt}`, { scheduled: task.id, answerNote: `[This is the scheduled routine "${task.title}", due now. Don't drop what you're doing: finish it, then do this routine as its own task in this run.]` })
+        return { status: 'done: handed to the bot while it was busy', threadId }
+      }
+    }
     const startedAt = Date.now()
     scheduledRuns.add(threadId)
     let status: Awaited<Awaited<ReturnType<typeof chat.send>>['done']>
@@ -1876,6 +1890,16 @@ app.whenReady().then(() => {
     if (space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) {
       const body = status === 'error' ? 'The routine hit a problem. Click to see what happened.' : (last?.content ?? 'Done').replace(/\s+/g, ' ').trim().slice(0, 140)
       showNote(new Notification({ title: `${space.isMain ? 'SahilBot' : space.name}: ${task.title.replace(/^⏰\s*/, '')}`, body }), threadId)
+    }
+    // What the routine did goes in the bot's work log (memory), so its next run, the bot's chats and the other bots
+    // can build on it without being told again. The work log keeps only the most recent entries per bot.
+    if (status === 'finished' && last?.content && !info.test) {
+      try {
+        const gist = last.content.replace(/\s+/g, ' ').trim().slice(0, 220)
+        // Built from web pages, email or another app's output: kept as outside content, never a trusted fact.
+        const tainted = after.some((m) => m.role === 'tool' && m.meta?.untrusted)
+        memory.save(`${new Date().toISOString().slice(0, 10)}: routine "${task.title.replace(/^⏰\s*/, '')}" ran → ${gist}`, 'worklog', space.isMain ? null : space.id, 'chat', tainted ? 'untrusted' : 'trusted')
+      } catch { /* the routine's result stands without the log entry */ }
     }
     if (status === 'finished') return { status: 'done', threadId }
     // Why it failed: the run's own error line, when it left one.

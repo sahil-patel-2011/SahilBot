@@ -2906,6 +2906,8 @@ export class Agent {
     let actionNudges = 0
     let linkChecked = false
     let medChecked = false
+    /** Times this run kept going past its step budget on its own because it was still making progress. */
+    let autoExtends = 0
     let verified = false
     /** The answer written before the double-check (kept when the check finds nothing to fix). */
     let verifyDraft: Message | undefined
@@ -3467,6 +3469,13 @@ export class Agent {
         if (state.todos.length) budget = Math.max(budget, Math.min(HARD_CAP, step + (state.todos.length - nowDone) * PER_PLAN_ITEM + 4))
         if (nowDone > doneItems) budget = Math.max(budget, Math.min(HARD_CAP, budget + (nowDone - doneItems) * 4))
         doneItems = nowDone
+        // Still making progress (real work went through this step, nothing failing): keep going on its own instead of
+        // stopping to ask the user to say "continue". HARD_CAP, the loop guard and the spending limit still stop
+        // runaway work; twelve extensions of 12 steps at most per run.
+        if (step === budget && this.feat.autoContinue && step < HARD_CAP && autoExtends < 12 && failStreak < 2 && ran.some((r) => r.status === 'ok' && !BOOKKEEPING.has(r.name))) {
+          autoExtends++
+          budget = Math.min(HARD_CAP, budget + 12)
+        }
 
         if (step === budget) {
           // Out of room: one text-only turn to report what's done and what's left (adapted from opencode max-steps, MIT).

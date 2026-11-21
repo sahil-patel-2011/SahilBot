@@ -74,6 +74,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'chatgpt-plan', page: 'models', title: 'ChatGPT plan (via Codex)', words: 'chatgpt plan subscription codex sign in plus pro' },
   { anchor: 'grok-plan', page: 'models', title: 'Grok subscription', words: 'grok build subscription sign in supergrok prefer plans first' },
   { anchor: 'auto-prefers', page: 'models', title: 'Auto prefers', words: 'auto routing best balanced cheapest cost quality', keys: ['cloud.autoPrefers'] },
+  { anchor: 'memory-sharing', page: 'memory', title: 'Bots share what they learn', words: 'share memory between bots other bots read memories team shared memory work log', keys: ['memorySharing'] },
   { anchor: 'monthly-limit', page: 'models', title: 'Monthly spending limit', words: 'budget cap spend spending limit money cost unlimited none dollars', keys: ['cloudBudgetUsd', 'spendingMode'] },
   { anchor: 'local-models', page: 'models', title: 'Local models', words: 'ollama lm studio local offline private download free', keys: ['local.enabled'] },
   { anchor: 'default-model', page: 'models', title: 'Model for new chats', words: 'default model auto picker', keys: ['defaultModel'], advanced: true },

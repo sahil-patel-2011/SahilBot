@@ -192,6 +192,8 @@ export interface Settings {
   hasTbaKey?: boolean
   /** An NCBI API key (PubMed, faster and steadier medical research), kept in the Keychain. */
   hasNcbiKey?: boolean
+  /** Bots read what the other bots learned (their work logs, facts and decisions; never their rules). Default on. */
+  memorySharing?: boolean
   /** A Google Maps Platform key (the maps tool), kept in the Keychain. */
   hasGoogleMapsKey?: boolean
   /** Saved keys that can't be opened right now (macOS Keychain locked or didn't answer). They're kept, not lost. */
