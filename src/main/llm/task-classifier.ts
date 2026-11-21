@@ -303,16 +303,16 @@ const TOOLS_ACT = /\b(snooze|mark (them |it )?(as )?read|star|flag|mute|message|
 const CONNECTED = /\b(in|on|from) (pagerduty|jira|linear|github|sentry|datadog|stripe|shopify|notion|asana|hubspot|salesforce)\b/
 
 // Documents and data
-const OFFICE_OBJ = /\b(brief|write-?up|google docs?|spreadsheets?|excel|xlsx|csv|google sheets?|sheets?|pivot( table)?|v?lookup|charts?|graphs?|dashboards?|slides?|slide deck|deck|powerpoint|pptx|presentations?|word (doc(ument)?|file)|docx|pdfs?|report|memo|invoices?|resume|cv|financial model|dcf|3-statement|gantt( chart)?|business plan|(launch|project|marketing|go-to-market|content|training|lesson) plan|one-pager|pitch deck|budget|tracker|totals?|columns?|data ?set|in word)\b/
+const OFFICE_OBJ = /\b(handouts?|leaflets?|brochures?|one-pagers?|brief|write-?up|google docs?|spreadsheets?|excel|xlsx|csv|google sheets?|sheets?|pivot( table)?|v?lookup|charts?|graphs?|dashboards?|slides?|slide deck|deck|powerpoint|pptx|presentations?|word (doc(ument)?|file)|docx|pdfs?|report|memo|invoices?|resume|cv|financial model|dcf|3-statement|gantt( chart)?|business plan|(launch|project|marketing|go-to-market|content|training|lesson) plan|one-pager|pitch deck|budget|tracker|totals?|columns?|data ?set|in word)\b/
 /** A document named by its file name (summary.md, notes.txt). */
 const FILE_NAME = /\b[\w-]+\.(md|txt|pdf|docx?|xlsx?|csv|pptx?|rtf|key|numbers|pages)\b/
 const OFFICE_MAKE = /\b(make|create|build|put together|turn|convert|draft|write|prepare|generate|design|analy[sz]e|summari[sz]e|clean up|add|fill|update|recalculate|format|export|tailor|extract|save)\b/
 
 // Research
-const RESEARCH = /\b(alternatives to|what people (recommend|say|think)|everything (you can find|there is to know)|all you can find|consensus|links to (studies|sources)|leading (suppliers|companies|players|vendors|makers|brands)|how do they compare|market leaders|dig (into|up)|find (\w+ ){0,2}(papers|studies|articles)|gather (everything|all)|everything (public|online|known)|dig up|compile (a list|everything)|research|deep dive|literature review|investigate|look into|find (out|sources|studies|papers)|studies|evidence|with (sources|citations)|use sources|sources|cite|citations?|market (scan|analysis|research|size)|competitive (analysis|landscape)|competitors?|competitor|state of the art|latest (developments|on|news|research)|what('?s| is| are) the (latest|current)|news (on|about)|briefing|top \d+|compare the top|ranked list|search for the best|(analysis|comparison) (of|comparing)|comparing (our|the|two|three|\d+))\b/
+const RESEARCH = /\b(meta-?analys[ie]s|systematic reviews?|clinical trials?|side effect profiles?|fda labels?|size the market|market size|alternatives to|what people (recommend|say|think)|everything (you can find|there is to know)|all you can find|consensus|links to (studies|sources)|leading (suppliers|companies|players|vendors|makers|brands)|how do they compare|market leaders|dig (into|up)|find (\w+ ){0,2}(papers|studies|articles)|gather (everything|all)|everything (public|online|known)|dig up|compile (a list|everything)|research|deep dive|literature review|investigate|look into|find (out|sources|studies|papers)|studies|evidence|with (sources|citations)|use sources|sources|cite|citations?|market (scan|analysis|research|size)|competitive (analysis|landscape)|competitors?|competitor|state of the art|latest (developments|on|news|research)|what('?s| is| are) the (latest|current)|news (on|about)|briefing|top \d+|compare the top|ranked list|search for the best|(analysis|comparison) (of|comparing)|comparing (our|the|two|three|\d+))\b/
 /** Research that is the hardest tier: a big synthesis, many options, a written deliverable. */
-const RESEARCH_HARD = /\b(consensus|competitors?|find (\w+ ){0,2}(papers|studies)|key findings|thorough|deep dive|literature review|investigate|market (analysis|research)|competitive (analysis|landscape)|briefing|citations|top \d+|compare the top|ranked list|find studies|evidence|comprehensive|in-depth|report|then)\b/
-const RESEARCH_DEEP = /\b(consensus|links to|how do they compare|leading \w+|dig into|find (\w+ ){0,2}(papers|studies|articles)|gather|everything|research|find out|deep dive|literature review|investigate|look into|market (analysis|research)|competitive (analysis|landscape)|briefing|citations|top \d+|compare the top|ranked list|with sources|use sources|find studies|search for the best|comprehensive|in-depth|report|then)\b/
+const RESEARCH_HARD = /\b(meta-?analys[ie]s|systematic reviews?|pmids?|clinical trials?|guidelines?|side effect profiles?|fda labels?|size the market|market size|consensus|competitors?|find (\w+ ){0,2}(papers|studies)|key findings|thorough|deep dive|literature review|investigate|market (analysis|research)|competitive (analysis|landscape)|briefing|citations|top \d+|compare the top|ranked list|find studies|evidence|comprehensive|in-depth|report|then)\b/
+const RESEARCH_DEEP = /\b(meta-?analys[ie]s|systematic reviews?|pmids?|clinical trials?|side effect profiles?|fda labels?|size the market|consensus|links to|how do they compare|leading \w+|dig into|find (\w+ ){0,2}(papers|studies|articles)|gather|everything|research|find out|deep dive|literature review|investigate|look into|market (analysis|research)|competitive (analysis|landscape)|briefing|citations|top \d+|compare the top|ranked list|with sources|use sources|find studies|search for the best|comprehensive|in-depth|report|then)\b/
 
 // Writing
 const WRITING = /\b(write|rewrite|re-write|draft|edit|proofread|polish|reword|rephrase|tighten|copy ?edit|essay|blog( post)?|article|story|poem|haiku|cover letter|bio|newsletter|speech|caption|taglines?|headline|press release|letter|(e-?mail) (to|for)|linkedin post|tweet|toast|eulogy|wedding|personal statement|statement of purpose|copy for|hero section|sound (less|more) \w+|cut it to|less formal|more formal|novel|lyrics|write about|(reply|respond) to this|help me (reply|respond|word|phrase))\b/
@@ -330,6 +330,26 @@ const STUDY = /\b(home ?work|hw|worksheets?|quiz(zes)?|exams?|midterms?|finals w
 const STUDY_ROLE = /\b(school|study|studying|student|homework|tutor|class(es)?|teacher)\b/
 
 const STAKES = /\b(legal|lawsuit|sue|lease|contract|landlord|security deposit|court|custody|immigration|visa|medical|diagnos\w*|symptoms?|side effects?|dosage|medication|worried|mole|rash|lump|tax(es)?|deduct\w*|w-2|1099|isos?|rsus?|investments?|invest|retirement|mortgage|emergency fund|t-bills|savings|production|customers|outage|security|bank|med school|investors|go(ing)?-concern|risks?)\b/
+
+/**
+ * A clinical question (doses, interactions, lab values, warning signs, a named drug): high stakes, so the
+ * strongest model and the medical sources. Definitions ("what is PSA density") stay light.
+ */
+const DRUG_NAME = /\b[a-z]{3,}(osin|olol|pril|sartan|statin|afil|mab|nib|cillin|mycin|floxacin|azole|prazole|gliflozin|gliptin|glutide|dronate|terol|lukast|oxetine|triptan|azepam|semide|thiazide|parin|xaban|gatran|profen|coxib|lutamide|steride|relix|relin|platin|taxel)\b|\b(ibuprofen|acetaminophen|tylenol|aspirin|metformin|insulin|warfarin|prednisone|oxybutynin|mirabegron|vibegron|botox|testosterone|estrogen|antibiotics?)\b/
+const CLINICAL_STRONG = /\b(creatinine|egfr|psa|a1c|hba1c|potassium|troponin|hemoglobin|platelets?|white (blood )?count|wbc|sepsis|septic|overdose|warning signs?|red flags?|came back (at|high|low|positive|negative))\b/
+const CLINICAL_WEAK = /\b(dos(e|es|ing|age)|starting dose|max(imum)? dose|interact\w*|together|take .{0,40}\b(with|and)\b|mix|contraindicat\w*|side effects?|safe (to|with|for)|allerg\w*|pregnan\w*|treat(ment)? for|first[- ]line)\b/
+const DEFINITION = /^((can you )?explain |tell me )?(what('?s| is| are| does)?|define|meaning of)\b(?!.{0,60}\b(my|i|dose|dosing|signs?|safe|take|interact\w*|together|treat\w*|normal|high|low)\b)/
+/** Medical literature: guidelines, trials, meta-analyses, PMIDs, FDA labels (the research tool's sources). */
+const MED_LIT = /\b(meta-?analys[ie]s|systematic reviews?|pmids?|pubmed|clinical trials?|rcts?|randomi[sz]ed trials?|guidelines?( recommendations)?|fda labels?|side effect profiles?|trials)\b/
+/** Coding agents SahilBot can drive: Cursor (cloud and local agents), Codex, Claude Code. */
+const CODING_AGENT = /\b(cursor('s)? (cloud |local |background )?agents?|codex|claude code|coding agents?|copilot (coding )?agent)\b|\bto cursor\b|\bcursor\b.{0,60}\b(pr|pull request|repo|diff|bug|branch|merge)\b|\b(pr|pull request|diff)\b.{0,60}\bcursor\b/
+/** Getting around: directions, distances, places nearby (the maps tool). */
+const TRAVEL = /\b(directions|driving|drive (from|to)|the drive|walk(ing)? (directions|from|to)|transit|how far|distance|travel times?|near(by| me)?|closest|nearest|open (now|tonight|today)|routes?|itinerary|things to do|weekend (in|near|trip))\b/
+/** Several places compared or routed between: research with the maps tool. */
+const TRAVEL_COMPARE = /\b(which of (these|the)|each of these|between (each|all) of|these \d+ \w+|compare (the )?(drive|travel|distance|commute))\b/
+const BOOKING = /\b(book|reserve) (a |me a |us a )?(table|room|flight|hotel|appointment|tickets?|reservation)\b|\bmake a reservation\b/
+/** An engineering calculation (structures, mechanisms) worked out, not a CAD model. */
+const ENG_CALC = /\b(calculate|compute|estimate|what('?s| is) the (max(imum)?|required)|how much)\b.{0,80}\b(deflection|stress|strain|torque|moment|bending|load|buckling|safety factor|shear|beam|cantilever|gear ratio)\b/
 const DECISION = /\b(is it legal|am i allowed|is it (safe|ok) to|can i be (sued|fired)|should i|should we|is it worth|walk me through|which is better|or stay|can my)\b/
 const LONG_OUTPUT = /\b(\d{1,2},?\d{3}[- ]words?|\d+k[- ]words?|novel|book|whole manual|comprehensive|full report|literature review|10\+? slides|\d{2} slides)\b/
 const MULTI = /\b(and then|after that|then|once (that'?s|it'?s) done|finally)\b|,\s*(and )?(then )?(make|email|send|build|write|add|open|create|draft|save|post|remind|report|compare) (it|them|this|that|the|a|an|me|my|to|everything)\b/
@@ -472,7 +492,9 @@ export const RULE_CONFIDENCE: Record<string, number> = {
   // Blind holdout 2 (written after tuning, measured before any fix): connector 2/4, writing 3/5.
   'agent-tools:connector': 0.75, writing: 0.8, 'office:weak': 0.6, 'agent-tools:weak': 0.6,
   // The fallbacks, where the rules run out (blind: chat 5/12, chat:question 5/9): below CONFIDENT.
-  imperative: 0.5, chat: 0.55, 'chat:question': 0.65
+  imperative: 0.5, chat: 0.55, 'chat:question': 0.65,
+  // Added with holdout 4 (medical, travel, business, engineering, coding agents).
+  booking: 0.85, 'math:engineering': 0.85, 'coding:agent': 0.85, 'research:travel': 0.75
 }
 
 interface Picked { category: TaskCategory; rule: string; why: string }
@@ -526,12 +548,19 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (!question && has(URL_OPEN, t)) return { category: 'computer-use', rule: 'computer-use:url', why: 'opens a page' }
     if (!question && has(COMPUTER, t) && !(has(CODE_STRONG, t) && !/\b(safari|chrome|browser|screen|click)\b/.test(t))) return { category: 'computer-use', rule: 'computer-use', why: 'uses the screen' }
     if (!question && has(SHOP, t) && !has(/\b(should i|which|what|best)\b/, t)) return { category: 'computer-use', rule: 'shopping', why: 'shopping' }
+    if (!question && has(BOOKING, t)) return { category: 'computer-use', rule: 'booking', why: 'books it' }
+    // A worked engineering calculation is math, even with materials and shapes in it (a CAD model is built below).
+    if (has(ENG_CALC, t) && !has(/\b(onshape|freecad|fusion|solidworks|cad|stl|step file|3d print|model it)\b/, t)) return { category: 'math', rule: 'math:engineering', why: 'an engineering calculation' }
     if (cad.build) return { category: 'cad', rule: 'cad', why: cad.assembly ? 'builds a CAD assembly' : 'builds in CAD' }
     if (has(CAD_STRONG, t) || ((t.match(new RegExp(CAD_WEAK.source, 'g')) ?? []).length >= 2 && (question || has(/\b(design|model|make|add|print|export|thick\w*|mount)\b/, t))) || (has(CAD_WEAK, t) && (/\b(\d+ ?mm|nema|bracket|enclosure|housing|gearbox|tolerance|press[- ]fit|infill|layer height|nozzle|(a|the|my|waterproof|pla|petg|resin) print)\b/.test(t)) && (has(/\b(design|model|make|add|print|export|fillet|extrude|thick|wall|holes?)\b/, t) || question))) return { category: 'cad', rule: 'cad', why: 'CAD work' }
     if (/\.(step|stp|stl|sldprt|f3d|fcstd|iges?)\b/.test(fileNames)) return { category: 'cad', rule: 'cad', why: 'a CAD file' }
     // A video made with the user's HeyGen app (tools/video.ts): credits and a file, so agent work.
     if (!question && has(VIDEO_RE, t)) return { category: 'agent-tools', rule: 'agent-tools:video', why: 'makes a video with HeyGen' }
     if (has(MESSAGE_ON, t)) return { category: 'agent-tools', rule: 'agent-tools:self', why: 'a message on a chat app' }
+    // Driving a coding agent (Cursor, Codex, Claude Code): coding work, unless it's only a question about them.
+    if (has(CODING_AGENT, t) && !/\b(write|draft) (a |the |me a )?(task )?(brief|prompt|spec)\b/.test(t) && !(question && !has(CODE_ACT, t) && !/\b(check|review|status|merge|safe to)\b/.test(t))) return { category: 'coding', rule: 'coding:agent', why: 'drives a coding agent' }
+    // Distances or routes between several places: research with the maps tool.
+    if (has(TRAVEL, t) && has(TRAVEL_COMPARE, t)) return { category: 'research', rule: 'research:travel', why: 'compares places on the map' }
     if (!officeFirst && (codeish || (ctx.codeProject && has(CODE_ACT, t) && !officeDeliverable && !has(WRITING, t)))) {
       const explainOnly = has(EXPLAIN_ONLY, t)
       const snippet = has(SNIPPET, t) && words <= 22 && !ctx.codeProject
@@ -551,6 +580,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (has(/(^|\s)(read|cat|open) (~|\/)[\w./-]+/, t)) return { category: 'agent-tools', rule: 'agent-tools:files', why: 'reads a file' }
     if (!officeFirst && has(RESEARCH, t) && (words > 6 || has(RESEARCH_DEEP, t)) && !(files && docFile && !has(RESEARCH_DEEP, t))) return { category: 'research', rule: 'research', why: 'research' }
     if (has(TOOLS_OBJ, t) && has(TOOLS_ACT, t) && !officeDeliverable && !(has(WRITING, t) && !/\b(send|post|forward|schedule|invite|archive|unsubscribe)\b/.test(t))) return { category: 'agent-tools', rule: 'agent-tools:connector', why: 'a connected app' }
+    if (has(/\b(task|project|creative|design) brief\b/, t) && !has(/\b(doc|document|pdf|word|file|google docs?)\b/, t)) return { category: 'writing', rule: 'writing', why: 'a brief in the reply' }
     if (officeDeliverable && !(question && !files)) return { category: 'office', rule: 'office', why: 'a document or data' }
     if (files && docFile && has(/\b(cover letter|essay|story|poem|speech|bio|personal statement|letter|blog post|article)\b/, t) && !has(/\b(spreadsheet|sheet|deck|slides|chart|table|pdf)\b/, t)) return { category: 'writing', rule: 'writing', why: 'edits an attached piece of writing' }
     if (files && (docFile || !images)) return { category: 'office', rule: 'office:file', why: 'reads attached files' }
@@ -592,6 +622,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
         return has(SELF, t) || has(MINE_MAIL, t) || has(LIVE, t) || /\b(timer|alarm|remind)\b/.test(t) ? 2 : 1
       case 'long-context': return 3
       case 'coding':
+        if (pick.rule === 'coding:agent' && /\b(parallel|several|multiple|three|four|five|\d+ (agents|issues|tasks)|across (my|the|our) (repo|codebase|app))\b/.test(t)) return 3
         if (pick.rule === 'incident' || hard || multi || words > 60 || /\b(in|across|under) (src|lib|app|packages)\/[\w/-]+(?=\s|$)|\b(all|every) (the )?\w+s\b/.test(t) || (has(BIG_CODE, t) && !quick) || /\b(and update|and store|and add|and fix)\b/.test(t)) return 3
         return 2
       case 'code-quick': return /\b(examples|theorem|in depth|in-depth|pros and cons|best way|trade-?offs|architecture|structure|vs\.?|versus|compare)\b/.test(t) ? 2 : 1
@@ -605,14 +636,17 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
         if (has(MATH_HARD, t) && !/\bexplain the\b/.test(t)) return 3
         if (words <= 14 && !/\b(show|explain|step|why|derivative|integral|limit|eigen\w*|probability|expected|solutions?|solve|x)\b|[a-z]\^/.test(t) && /(%|percent|\d+\s*[-+*/]\s*\d+|how (much|many) .{0,20}\bfor\b)/.test(t)) return 1
         return 2
-      case 'research': return (has(RESEARCH_HARD, t) && !(question && words <= 12)) || hard || multi ? 3 : 2
+      case 'research':
+        if (pick.rule === 'research:travel') return 2
+        return (has(RESEARCH_HARD, t) && !(question && words <= 12)) || hard || multi || (has(MED_LIT, t) && words > 8) ? 3 : 2
       case 'writing':
         if (longOutput || /\b(perfect|personal statement|novel)\b/.test(t)) return 3
         if (question) return 1
         if (has(WRITING_SHORT, t) && !files && !/\bfor my (wife|husband|mom|mum|dad|brother|sister|partner|boss|grand\w+|best friend)\b/.test(t)) return 1
         return 2
       case 'office':
-        if (hard || longOutput || multi || (stakes && files > 0)) return 3
+        // A patient-facing or cited document is high stakes (a wrong fact reaches someone who relies on it).
+        if (hard || longOutput || multi || (stakes && files > 0) || /\b(patients?|clinical|citations?|cited)\b/.test(t)) return 3
         if (/^convert\b/.test(t) && words <= 12) return 1
         return 2
       case 'agent-tools':
@@ -622,9 +656,13 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
         if (has(/\b(mole|rash|lump|get (it |this )?checked|infected|swollen)\b/, t)) return 3
         return /\b(why|where should|how (should|can|do) i|should i|suggest|improve|what'?s wrong|explain|is (it|this) safe|safe for|identify|what plant|wiring|chart|graph|error|diagnos\w*)\b/.test(t) ? 2 : 1
       case 'chat': {
+        // A clinical question (a dose, an interaction, a lab value, warning signs) is high stakes; a definition isn't.
+        if (!has(DEFINITION, t) && (has(CLINICAL_STRONG, t) || (has(CLINICAL_WEAK, t) && (has(DRUG_NAME, t) || has(STAKES, t))))) return 3
+        // A trip planned with travel times or map links is several deliverables.
+        if (has(/\b(itinerary|trip|plan)\b/, t) && has(/\b(travel times?|google maps|day[- ]by[- ]day|map links?)\b/, t)) return 3
         if (has(DECISION, t) && (stakes || words > 25)) return 3
         if ((stakes || /\b(legal|illegal|allowed|deduct\w*)\b/.test(t)) && /\b(should|worried|can my|can i|do i have to|am i|implications|is it worth|is it legal|allowed|diagnosed)\b/.test(t)) return 3
-        if (has(LIVE, t) || has(CONNECTED, t) || has(ADVICE, t) || stakes) return 2
+        if (has(LIVE, t) || has(CONNECTED, t) || has(ADVICE, t) || stakes || has(TRAVEL, t) || /\b(pmid|doi|retract\w*)\b/.test(t) || /\b(rank|score|prioriti[sz]e) (them|these|the list)\b/.test(t)) return 2
         if (ctx.group || roleCat) return 1
         return words > 60 ? 2 : 1
       }
@@ -666,7 +704,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
       case 'coding': case 'computer-use': case 'long-context': case 'agent-tools': case 'office':
         return { kind: 'agent', why: KIND_WHY[category] ?? 'agent work' }
       case 'cad': return !cad.build && question && !has(/\b(design|model|make)\b/, t) ? { kind: 'chat', why: 'a question about a design' } : { kind: 'agent', why: KIND_WHY.cad ?? 'agent work' }
-      case 'research': return has(RESEARCH_DEEP, t) || difficulty >= 3 ? { kind: 'agent', why: 'researches several sources' } : { kind: 'chat', why: 'a question with a quick lookup' }
+      case 'research': return has(RESEARCH_DEEP, t) || difficulty >= 3 || pick.rule === 'research:travel' ? { kind: 'agent', why: 'researches several sources' } : { kind: 'chat', why: 'a question with a quick lookup' }
       case 'voice': return has(SELF, t) || has(MINE_MAIL, t) || /\b(timer|alarm|remind|play|call|text|message|navigate|directions|read me|my (latest|last) e-?mail)\b/.test(t) ? { kind: 'agent', why: 'uses apps by voice' } : { kind: 'chat', why: 'a voice conversation' }
       case 'writing': return /\b(save (it|this|them)|as a (file|document|doc|pdf)|send (it|this)|post (it|this) (to|on)|(in|to|into) (my|the) (workspace|files|documents|desktop|folder|notes))\b/.test(t) ? { kind: 'agent', why: 'saves or sends it' } : { kind: 'chat', why: 'writing in the reply' }
       default: return { kind: 'chat', why: question ? 'a question' : category === 'chat' ? 'conversation' : 'answers in the reply' }
