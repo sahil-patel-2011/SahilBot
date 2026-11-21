@@ -16,7 +16,7 @@ import { CONSEQUENTIAL, looksLikePayment, looksLikeSecurity, OTP_STOP, PURCHASE_
 import type { ToolContext, ToolDef, ToolOutput } from '../types'
 import { resolvePath } from './files'
 
-type Action = 'navigate' | 'snapshot' | 'click' | 'type' | 'select' | 'fill_secret' | 'fill_payment' | 'fill_address' | 'fill_otp' | 'wallet' | 'upload' | 'downloads' | 'wait'
+type Action = 'navigate' | 'snapshot' | 'click' | 'type' | 'select' | 'fill_secret' | 'fill_payment' | 'fill_address' | 'fill_otp' | 'wallet' | 'upload' | 'downloads' | 'wait' | 'wait_for_signin'
   | 'scroll' | 'screenshot' | 'get_text' | 'tabs' | 'dialog' | 'fill_form' | 'recording' | 'find' | 'extract' | 'expand' | 'next_page' | 'key' | 'back' | 'forward' | 'hover'
   /** Internal only (never in the schema): Enter in a field whose text was already typed. */
   | 'enter'
@@ -61,6 +61,9 @@ interface Args {
   /** expand: the first hidden line to show (paging through a long list). */
   start?: number
 }
+
+/** A button that makes a new API key or access token (not one that deletes, rotates or changes account security). */
+const CREATES_KEY = /^(\+\s*)?(create|generate|new|add)\b.{0,30}\b(api[ -]?keys?|keys?|tokens?|access tokens?|personal access tokens?|secret keys?)\b|^(create|generate) (new )?(secret|key|token)$/i
 
 export interface BrowserDeps {
   /** Purchase and one-time-code cards. Without one, purchases and codes are refused (fail closed). */
@@ -196,7 +199,9 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     if (a.action === 'click' || (a.action === 'type' && a.submit) || a.action === 'enter') {
       if (looksLikePayment(r?.name, url)) return 'payment or checkout'
       if (DESTRUCTIVE.test(r?.name ?? '') && /\b(permanent|forever|account)\b/i.test(r?.name ?? '')) return 'permanent delete'
-      if (looksLikeSecurity(url, r?.name) && clickEffect(r) !== 'read') return 'account or security settings'
+      // Making an API key or token the user asked for is ordinary work (the key goes to the user, who can save it
+      // to the vault); every other change on a security or account page still asks.
+      if (looksLikeSecurity(url, r?.name) && clickEffect(r) !== 'read' && !CREATES_KEY.test(r?.name ?? '')) return 'account or security settings'
     }
     return null
   }
@@ -223,6 +228,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
       case 'upload': return `Upload ${(a.paths ?? []).join(', ')} into ${el}${on}`
       case 'downloads': return a.op === 'save' ? `Save download ${a.index ?? 1} into the workspace` : 'List offered downloads'
       case 'wait': return `Wait for ${a.text ? `"${a.text}"` : a.url ? `the address to contain "${a.url}"` : 'the page to settle'}`
+      case 'wait_for_signin': return 'Wait for you to sign in'
       case 'wallet': return 'List saved cards and addresses (nicknames only)'
       case 'navigate': return `Open ${a.url}`
       case 'select': return `Choose "${a.option}" in ${el}${on}`
@@ -268,7 +274,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
       if (a.action === 'fill_secret') return !standingRule(a)
       if (a.action === 'dialog') return CONSEQUENTIAL.test(b.pendingDialog?.message ?? '')
       if (a.action === 'fill_form') { const s = a.submit_ref ? b.refInfo(a.submit_ref) : undefined; return !!a.submit_ref && (!s || !benignClickLabel(s.name)) }
-      if (a.action === 'wait' || a.action === 'wallet' || (a.action === 'downloads' && a.op !== 'save') || ['find', 'extract', 'expand', 'next_page', 'snapshot', 'get_text', 'screenshot'].includes(a.action)) return false
+      if (a.action === 'wait' || a.action === 'wait_for_signin' || a.action === 'wallet' || (a.action === 'downloads' && a.op !== 'save') || ['find', 'extract', 'expand', 'next_page', 'snapshot', 'get_text', 'screenshot'].includes(a.action)) return false
       return true
     },
     untrusted: true,
@@ -294,6 +300,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
 - upload {ref, paths}: attach files from the workspace or attached folders to a file field (asks first)
 - downloads {op: list|save, index?}: view offered files or save one. Auto can save small same-site HTTPS text, CSV, and raster image files into Downloads. Other downloads need approval.
 - wait {text?, url?, timeout?}: wait for text to appear, the address to change, or the page to settle
+- wait_for_signin: the page needs the user's own sign-in and there is no saved login for fill_secret. Opens the page for the user and waits (up to 10 minutes) until the sign-in form is gone, then carries on by itself: don't end your turn or ask the user to say when they're done.
 - scroll {direction, amount?} or {ref}: amount is in screens (default 1); ref scrolls that element into view
 - screenshot: image of the visible page
 - get_text: readable text of the page
@@ -306,7 +313,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['navigate', 'snapshot', 'click', 'type', 'select', 'fill_secret', 'fill_payment', 'fill_address', 'fill_otp', 'wallet', 'upload', 'downloads', 'wait', 'scroll', 'screenshot', 'get_text', 'tabs', 'dialog', 'fill_form', 'recording', 'find', 'extract', 'expand', 'next_page', 'key', 'back', 'forward', 'hover'] },
+        action: { type: 'string', enum: ['navigate', 'snapshot', 'click', 'type', 'select', 'fill_secret', 'fill_payment', 'fill_address', 'fill_otp', 'wallet', 'upload', 'downloads', 'wait', 'wait_for_signin', 'scroll', 'screenshot', 'get_text', 'tabs', 'dialog', 'fill_form', 'recording', 'find', 'extract', 'expand', 'next_page', 'key', 'back', 'forward', 'hover'] },
         query: { type: 'string' },
         kind: { type: 'string', enum: ['auto', 'table', 'list', 'cards'] },
         max: { type: 'integer', minimum: 1, maximum: 200 },
@@ -401,7 +408,10 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         if (code) return { ...out, text: `${out.text}${tail}`, display: `${out.display ?? ''} · needs a sign-in code` }
         // A human check is the user's to pass: hand it over right here (the panel is open and the
         // "needs you" notification fires), then carry on. SahilBot never solves or gets around it.
-        const answer = await ctx.askUser(`This page is showing a ${check}. Please complete it in the browser panel, then press Done.`, ['Done', 'Skip'])
+        // Watched, not just asked: once the check is gone the run carries on by itself.
+        const answer = ctx.waitForUser
+          ? await ctx.waitForUser(`This page is showing a ${check}. Please complete it in the browser panel; SahilBot continues by itself when it's done.`, async () => !(await b.humanCheck()), { options: ['Done', 'Skip'] })
+          : await ctx.askUser(`This page is showing a ${check}. Please complete it in the browser panel, then press Done.`, ['Done', 'Skip'])
         const still = /^done/i.test(answer) ? await b.humanCheck() : check
         const after = /^done/i.test(answer)
           ? still
@@ -938,6 +948,16 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
       }
       case 'wait':
         return { text: await b.waitFor({ text: a.text, url: a.url, timeoutMs: Math.round((a.timeout ?? 10) * 1000) }), display: 'waited' }
+      case 'wait_for_signin': {
+        if (!(await b.signInShown())) return { text: 'No sign-in form is showing on this page. Take a snapshot and continue.', display: 'no sign-in needed' }
+        b.showToUser()
+        const question = `Please sign in on ${safeHost(b.pageUrl()) || 'this page'} in the browser panel. SahilBot continues by itself once you're signed in.`
+        if (!ctx) throw new Error('wait_for_signin needs a chat to wait in.')
+        const answer = ctx.waitForUser ? await ctx.waitForUser(question, async () => !(await b.signInShown()), { options: ['Done', 'Skip'] }) : await ctx.askUser(question, ['Done', 'Skip'])
+        if (/^done/i.test(answer) && !(await b.signInShown())) return { text: 'The user signed in. Take a snapshot and continue the task.', display: 'you signed in' }
+        if (/^skip/i.test(answer)) return { text: 'The user skipped signing in. Continue with what you can do without it and say what needed the sign-in.', display: 'sign-in skipped' }
+        return { text: 'The sign-in form is still showing. Continue with what you can do and tell the user this site still needs them to sign in.', display: 'still waiting for sign-in' }
+      }
       case 'scroll':
         if (a.ref) return { text: await b.scrollTo(a.ref), display: 'scrolled into view' }
         return { text: await b.scroll(a.direction ?? 'down', a.amount), display: `scrolled ${a.direction ?? 'down'}` }

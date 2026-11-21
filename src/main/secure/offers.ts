@@ -44,6 +44,23 @@ const hostOf = (origin: string): string => { try { return new URL(origin).host }
 const slug = (s: string): string => String(s ?? '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
 const clip = (v: unknown, n: number): string => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, n)
 
+/** Where an API key with a well-known prefix comes from ('' when the prefix isn't one of these). */
+export function keySite(value: string): string {
+  const v = String(value ?? '').trim()
+  const sites: Array<[RegExp, string]> = [
+    [/^sk-ant-/, 'https://console.anthropic.com'], [/^sk-or-/, 'https://openrouter.ai'], [/^sk-(proj-|svcacct-)?[A-Za-z0-9_-]{20,}/, 'https://platform.openai.com'],
+    [/^xai-/, 'https://console.x.ai'], [/^(gh[pousr]_|github_pat_)/, 'https://github.com'], [/^glpat-/, 'https://gitlab.com'],
+    [/^(AKIA|ASIA)[A-Z0-9]{16}/, 'https://console.aws.amazon.com'], [/^AIza/, 'https://console.cloud.google.com'], [/^xox[abprs]-/, 'https://api.slack.com'],
+    [/^(sk|rk|pk)_(live|test)_/, 'https://dashboard.stripe.com'], [/^hf_/, 'https://huggingface.co'], [/^re_[A-Za-z0-9]{8,}/, 'https://resend.com'],
+    [/^(r8_)/, 'https://replicate.com'], [/^SG\./, 'https://app.sendgrid.com'], [/^npm_/, 'https://www.npmjs.com'], [/^pplx-/, 'https://www.perplexity.ai'],
+    [/^gsk_/, 'https://console.groq.com'], [/^tvly-/, 'https://app.tavily.com'], [/^fc-/, 'https://www.firecrawl.dev']
+  ]
+  return sites.find(([re]) => re.test(v))?.[1] ?? ''
+}
+
+/** Whether a chat offer can be saved without asking anything (the site is known; a card has its expiry). */
+export const savesWithoutAsking = (o: VaultSaveOffer): boolean => !(o.needs ?? []).some((n) => n !== 'holder')
+
 export class SaveOffers {
   private held = new Map<string, Held>()
   private browserId: string | null = null
@@ -177,8 +194,10 @@ export class SaveOffers {
     return { text: redactFound(t, found), offers }
   }
 
-  private chatOffer(f: FoundSecret, ordinal: number, threadId?: string): VaultSaveOffer {
-    const kind: VaultSaveOffer['kind'] = f.kind === 'password' ? 'login' : f.kind
+  private chatOffer(found: FoundSecret, ordinal: number, threadId?: string): VaultSaveOffer {
+    const kind: VaultSaveOffer['kind'] = found.kind === 'password' ? 'login' : found.kind
+    // An API key with no site named next to it: its well-known prefix says whose it is.
+    const f = !found.site && kind === 'api_key' ? { ...found, site: keySite(found.value) } : found
     const host = f.site ? hostOf(f.site) : ''
     const needs: VaultSaveOffer['needs'] = []
     if ((kind === 'login' || kind === 'api_key') && !f.site) needs.push('site')

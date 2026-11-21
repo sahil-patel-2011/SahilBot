@@ -95,6 +95,12 @@ export interface ToolContext {
    * doing right now). Optional: tools must work without it. Shown on the tool's chip while it runs.
    */
   progress?(text: string): void
+  /**
+   * Waits for the user to do something on their side (sign in, pass a check) without them having to say so:
+   * shows the question card and also polls `done`; when `done` turns true the card closes by itself and this
+   * resolves 'done'. Resolves the user's own answer if they answer first, or 'timeout'.
+   */
+  waitForUser?(question: string, done: () => Promise<boolean>, o?: { everyMs?: number; timeoutMs?: number; options?: string[] }): Promise<string>
   /** The user approved this exact call (an approval card), so commands it runs aren't sandboxed. */
   approved?: boolean
   /** Run terminal commands under the write sandbox (advanced.sandboxCommands; default on). */

@@ -1732,6 +1732,16 @@ export class BrowserManager {
    * A human check (CAPTCHA, "verify you are human") on the page, if any. SahilBot never solves these:
    * the browser comes forward so the user can, and the agent waits.
    */
+  /** Whether the page still shows a sign-in form (a visible password field). */
+  async signInShown(): Promise<boolean> {
+    const wc = this.view?.webContents
+    if (!wc || wc.isDestroyed()) return false
+    try {
+      const r = await this.cdp<{ result: { value: boolean } }>(wc, 'Runtime.evaluate', { returnByValue: true, expression: `[...document.querySelectorAll('input[type=password]')].some((i) => i.getClientRects().length > 0)` })
+      return r.result.value === true
+    } catch { return false }
+  }
+
   async humanCheck(): Promise<string | null> {
     const wc = this.view?.webContents
     if (!wc || wc.isDestroyed()) return null

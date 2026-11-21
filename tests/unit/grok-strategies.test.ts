@@ -58,3 +58,16 @@ test('benchmark-based rows: business writing and electrical engineering get thei
   const poem = classifyTask('Write a short poem about autumn in Vermont')
   expect(routeFor(poem.category, poem)).toBe(ROUTING_TABLE.writing)
 })
+
+test('a pasted API key with a well-known prefix knows its site, so it saves to the vault without asking', async () => {
+  const { keySite, savesWithoutAsking } = await import('../../src/main/secure/offers')
+  expect(keySite('sk-ant-api03-abcdefghijklmnopqrstuvwxyz')).toBe('https://console.anthropic.com')
+  expect(keySite('sk-proj-abcdefghijklmnopqrstuvwxyz012345')).toBe('https://platform.openai.com')
+  expect(keySite('ghp_abcdefghijklmnopqrstuvwxyz0123456789')).toBe('https://github.com')
+  expect(keySite('xai-abcdefghijklmnopqrstuvwxyz')).toBe('https://console.x.ai')
+  expect(keySite('totally-unknown-token')).toBe('')
+  const base = { id: 'o', source: 'chat' as const, kind: 'api_key' as const, title: '', site: '', origin: '', name: 'k', label: 'API key', status: 'pending' as const }
+  expect(savesWithoutAsking({ ...base })).toBe(true)
+  expect(savesWithoutAsking({ ...base, needs: ['site'] })).toBe(false)
+  expect(savesWithoutAsking({ ...base, kind: 'card', needs: ['holder'] })).toBe(true)
+})
