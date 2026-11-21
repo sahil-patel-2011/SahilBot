@@ -2351,7 +2351,9 @@ export class Agent {
   }
 
   private publishCollaboration(threadId: string, run: Run, steps: CollaborationStep[]): void {
-    const meta = { collaboration: steps }
+    // Only a second model checking the work (lead + reviewer): not shown in the chat (Developer mode still shows it).
+    const reviewOnly = steps.every((step) => step.role === 'lead' || step.role === 'reviewer')
+    const meta = { collaboration: steps, ...(reviewOnly ? { internal: true } : {}) }
     const status = steps.some((step) => step.status === 'working' || step.status === 'queued') ? 'streaming' : 'done'
     const previous = run.collaboration?.message
     const message: Message = previous ? { ...previous, status, meta }
@@ -2782,6 +2784,8 @@ export class Agent {
     let nudged = false
     let teamNudged = false
     let autonomyNudged = false
+    /** Nudges for an announced action with no tool call (promisesAction). */
+    let actionNudges = 0
     let linkChecked = false
     let verified = false
     /** The answer written before the double-check (kept when the check finds nothing to fix). */
@@ -3089,6 +3093,15 @@ export class Agent {
             autonomyNudged = true
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself before anything risky (sending, buying, deleting). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
+            continue
+          }
+          // Said it, didn't do it (Grok Build's task discipline, Apache-2.0): a reply that announces an action
+          // ("Publishing the post now", "I'll send you the link once it's up") with no tool call means the action
+          // never happened. Make it happen (twice per run at most).
+          if (!asksToContinue && promisesAction(assistant.content) && actionNudges < 2 && !run.unattended && !chatRun && step < HARD_CAP) {
+            actionNudges++
+            budget = Math.max(budget, step + 6)
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your reply says you are doing something (or will), but you made no tool call, so it did not happen. Do it now with the next concrete tool call, and keep going until it is actually done (the live link, the sent message, the saved file). If something truly blocks it, say plainly what.' })
             continue
           }
           // A steering message arrived while this answer was written: keep going with it.
@@ -4085,6 +4098,20 @@ export function recallQuery(opener: Pick<Message, 'id' | 'content'>, messages: A
   const at = messages.findIndex((m) => m.id === opener.id)
   const earlier = messages.slice(0, at < 0 ? messages.length : at).filter((m) => m.role === 'user' && !m.meta?.hidden && m.content).slice(-2).map((m) => m.content.slice(0, 600))
   return [text, ...earlier].join('\n')
+}
+
+/**
+ * A final reply that announces an action instead of doing it: "Publishing the clicks post now.", "I'll send you
+ * the live link once it's up", "Let me deploy it". Questions and past tense ("I published it") don't count.
+ */
+export function promisesAction(text: string): boolean {
+  const t = (text ?? '').trim()
+  if (!t || /\?\s*$/.test(t)) return false
+  const tail = t.slice(-400)
+  const verbs = 'send|publish|post|deploy|create|build|make|upload|check|open|sign in|log in|run|fix|write|draft|update|share|schedule|start|generate|render|submit|install|push|merge|book|order|email|message|save|export'
+  return new RegExp(`\\b(i'll|i will|i'm going to|i am going to|let me|i'm now|now i'll|next,? i'll|going to)\\s+(now\\s+|go ahead and\\s+|quickly\\s+|also\\s+)?(${verbs})\\b`, 'i').test(tail)
+    || new RegExp(`\\b(${verbs.split('|').map((v) => v.replace(/ .*/, '').replace(/e$/, '') + 'ing').join('|')})\\b[^.!?\\n]{0,120}\\b(now|right away)\\b`, 'i').test(tail)
+    || /\b(once|when) (it'?s|it is) (up|live|done|ready|finished)\b/i.test(tail)
 }
 
 export function nextStronger(models: ModelInfo[], current: string, o: { cloud: boolean; localOnly?: boolean; exclude?: Set<string>; sideways?: boolean; needsVision?: boolean; sameKind?: boolean; noPremium?: boolean }): ModelInfo | undefined {

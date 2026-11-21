@@ -139,8 +139,10 @@ export const ROUTING_TABLE: Record<TaskCategory, CategoryRoute> = {
   // Grok 4.7 (its relative strength): GDPval-AA 1695 on AA's launch chart, where Astra had 1542 and Fable 5.1 1735
   // (an older board than v2.1 above: compared within its own chart only); Snorkel Underwrite 2.0 #1 (30.5%) and
   // Finance 2.0 #3 (IND); Vals Legal Index #10/38 but Finance Agent #26/40 → after Opus / Sonnet, ahead of GPT.
+  // Documents, decks and sheets that ship (tier 2+): Opus first, the GDPval-AA leader (1866 vs Sonnet 1838; AA-Briefcase
+  // has them level the other way, 1800 vs 1815), for the formatting and visuals a finished file needs.
   office: {
-    tiers: [['haiku', 'sonnet', 'terra'], ['sonnet', 'haiku', 'grok', 'sol', 'terra'], ['sonnet', 'opus', 'grok', 'sol', 'astra'], ['opus', 'sonnet', 'grok', 'sol', 'astra']],
+    tiers: [['haiku', 'sonnet', 'terra'], ['sonnet', 'haiku', 'grok', 'sol', 'terra'], ['opus', 'sonnet', 'grok', 'sol', 'astra'], ['opus', 'sonnet', 'grok', 'sol', 'astra']],
     fable: false,
     // GDPval-AA v2.1: 6.1 Sol 1607, Astra 1587.
     ties: [['astra', 'sol']]

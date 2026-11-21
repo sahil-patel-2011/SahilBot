@@ -236,7 +236,8 @@ describe('routeTask: Claude and OpenAI keys', () => {
     expect(routed('Write a cover letter for a product manager role at a startup', 'both')).toMatch(/^claude-(opus|sonnet)-5-5$/)
     expect(routed('Proofread my essay and polish the tone', 'openai')).toMatch(/^gpt-/)
     expect(routed('Make a spreadsheet tracking my monthly budget with formulas', 'both')).toBe('claude-opus-5-5')
-    expect(routed('Make a spreadsheet tracking my monthly budget with formulas', 'both', {}, { preference: 'balanced' })).toBe('claude-sonnet-5-5')
+    // Balanced too: a document that ships goes to Opus, the GDPval-AA leader.
+    expect(routed('Make a spreadsheet tracking my monthly budget with formulas', 'both', {}, { preference: 'balanced' })).toBe('claude-opus-5-5')
   })
   test('math and reasoning: GPT (Astra on Best result for the hardest, Sol for the rest); Claude-only gets Opus', () => {
     expect(routed('Prove that there are infinitely many primes', 'both')).toBe('gpt-6.2-astra')
