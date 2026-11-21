@@ -1,8 +1,8 @@
 # Connector readiness
 
-Swept 2026-11-16 by `tests/live/connectors-sweep.test.ts` (read-only: an unauthenticated MCP `initialize`, RFC 9728 protected-resource metadata, RFC 8414/OIDC authorization-server metadata, and a DNS lookup of each icon domain; no client was registered and nothing signed in).
+Swept 2026-11-21 by `tests/live/connectors-sweep.test.ts` (read-only: an unauthenticated MCP `initialize`, RFC 9728 protected-resource metadata, RFC 8414/OIDC authorization-server metadata, and a DNS lookup of each icon domain; no client was registered and nothing signed in).
 
-**188 servers checked:** 183 ok, 5 warn, 0 broken, 0 unreachable. 10 catalog entries have no https server to probe (built in, browser, custom, and local servers on this Mac, which run only their allowlisted command or loopback address).
+**200 servers checked:** 194 ok, 4 warn, 0 broken, 2 unreachable. 11 catalog entries have no https server to probe (built in, browser, custom, and local servers on this Mac, which run only their allowlisted command or loopback address).
 
 Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/connectors-sweep.test.ts`
 
@@ -28,7 +28,7 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Fireflies (`fireflies`) | oauth | ok | oauth-dcr · 401 | mcp.fireflies.ai/register | true | true | initialize error: "invalid_token" |
 | Jotform (`jotform`) | oauth | ok | oauth-dcr · 401 | oauth2.jotform.com/register-public-client | true | true | - |
 | Docusign (`docusign`) | oauth-static | ok | oauth-no-dcr · 401 | - | true | true | - |
-| Trello (`trello`) | oauth | ok | oauth-dcr · 401 | auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3/dcr/register | true | true | initialize error: "invalid_token" |
+| Trello (`trello`) | oauth | unreachable | unreachable | - | - | - | initialize failed: UND_ERR_CONNECT_TIMEOUT |
 | Coda (Superhuman Docs) (`coda`) | oauth | ok | oauth-dcr · 401 | id.superhuman.com/tokens/v4/api/oauth2/register | true | false | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that); no refresh_token grant listed: sign-in may be needed again when the token expires |
 | Readwise (`readwise`) | oauth | ok | oauth-dcr · 401 | readwise.io/o/register/ | true | true | - |
 | Egnyte (`egnyte`) | oauth | ok | oauth-dcr · 401 | mcp-oauth.egnyte.com/clients | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
@@ -42,7 +42,7 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Livestorm (`livestorm`) | oauth | ok | oauth-dcr · 401 | mcp.livestorm.co/register | true | true | initialize error: "invalid_token" |
 | Bird (`bird`) | oauth | ok | oauth-dcr · 401 | platform.bird.com/v1/oauth/register | true | true | - |
 | Superhuman Mail (`superhuman-mail`) | oauth | ok | oauth-dcr · 401 | mcp.auth.mail.superhuman.com/oauth2/register | true | true | - |
-| Mailchimp Transactional (`mandrill`) | apikey | ok | key · 200 | - | - | - | initialize error: Authorization: Bearer <api_key> required; re-checked 2026-11-16 |
+| Mailchimp Transactional (`mandrill`) | apikey | ok | key · 200 | - | - | - | initialize error: Authorization: Bearer <api_key> required |
 | Chatbase (`chatbase`) | oauth | ok | oauth-dcr · 401 | www.chatbase.co/api/oauth/register | true | true | initialize error: Provide a valid OAuth access token as a bearer token. See the WWW-Authenticate header to discover the authorization server. |
 | Help Scout (`helpscout`) | oauth | ok | oauth-dcr · 401 | mcp.helpscout.net/oauth/register | true | true | initialize error: "invalid_token" |
 | Front (`front`) | oauth-static | ok | oauth-no-dcr · 401 | - | true | true | initialize error: "Missing authentication token." |
@@ -51,11 +51,13 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Miro (`miro`) | oauth | ok | oauth-dcr · 401 | mcp.miro.com/register | true | true | initialize error: "Authentication required"; token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
 | Gamma (`gamma`) | oauth | ok | oauth-dcr · 401 | auth.gamma.app/oauth/register | true | true | initialize error: "Authentication required" |
 | HeyGen (`heygen`) | oauth | ok | oauth-dcr · 401 | api2.heygen.com/v1/oauth/register | true | true | initialize error: "invalid_token" |
-| HyperFrames by HeyGen (`hyperframes`) | oauth | warn | oauth-dcr · 401 | api2.heygen.com/v1/oauth/register | true | true | initialize followed a redirect to https://mcp.heygen.com/mcp/hyperframes/; initialize error: "invalid_token" |
+| HyperFrames by HeyGen (`hyperframes`) | oauth | ok | oauth-dcr · 401 | api2.heygen.com/v1/oauth/register | true | true | initialize error: "invalid_token" |
 | Webflow (`webflow`) | oauth | ok | oauth-dcr · 401 | mcp.webflow.com/oauth/register | true | true | initialize error: "invalid_token" |
 | Wix (`wix`) | oauth | ok | oauth-dcr · 401 | mcp.wix.com/register | true | true | initialize error: "invalid_token" |
 | Frontify (`frontify`) | oauth | ok | oauth-dcr · 401 | mcp.frontify-integrations.com/oauth/register | true | true | initialize error: Unauthorized: OAuth authentication required |
-| Higgsfield (`higgsfield`) | oauth | ok | oauth-dcr · 401 | clerk.higgsfield.ai/oauth/register | true | true | initialize error: "Unauthorized" |
+| Higgsfield (`higgsfield`) | oauth | ok | oauth-dcr · 401 | higgsfield.ai/_clerk/oauth/register | true | true | initialize error: "Unauthorized" |
+| invideo AI (`invideo`) | oauth | ok | oauth-dcr · 401 | pro-api-auth.invideo.io/oauth/register | true | true | - |
+| Vimeo (`vimeo`) | oauth | ok | oauth-dcr · 401 | mcp.vimeo.com/register | true | false | no refresh_token grant listed: sign-in may be needed again when the token expires |
 | Descript (`descript`) | oauth | ok | oauth-dcr · 401 | auth.descript.com/v1/oauth2/register | true | true | initialize error: "Unauthorized" |
 | Picsart Media Studio (`picsart`) | oauth | ok | oauth-dcr · 401 | auth.picsart.com/api/oauth2/register | true | true | initialize error: Authentication required |
 | HubSpot (`hubspot`) | oauth-static | ok | oauth-no-dcr · 401 | - | true | true | - |
@@ -70,7 +72,7 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Similarweb (`similarweb`) | oauth | ok | oauth-dcr · 401 | mcp-auth.similarweb.com/register | true | true | initialize error: "invalid_request" |
 | Crunchbase (`crunchbase`) | oauth-static | ok | oauth-no-dcr · 401 | - | true | true | - |
 | Buffer (`buffer`) | oauth | ok | oauth-dcr · 401 | auth.buffer.com/reg | true | true | initialize error: "Authorization header is required" |
-| Brevo (`brevo`) | apikey | warn | oauth-dcr · 401 | mcp.brevo.com/oauth/register | true | true | initialize error: "invalid_token"; server now also offers OAuth with DCR + PKCE S256 (public clients): could become one click if the vendor documents it; re-checked 2026-11-16 |
+| Brevo (`brevo`) | apikey | warn | oauth-dcr · 401 | mcp.brevo.com/oauth/register | true | true | initialize error: "invalid_token"; server now also offers OAuth with DCR + PKCE S256 (public clients): could become one click if the vendor documents it |
 | Supermetrics (`supermetrics`) | oauth | ok | oauth-dcr · 401 | api.supermetrics.com/oauth/register | true | true | initialize error: "invalid_token" |
 | Crustdata (`crustdata`) | oauth | ok | oauth-dcr · 401 | mcp.crustdata.com/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
 | Replicate (`replicate`) | oauth | ok | oauth-dcr · 401 | mcp.replicate.com/register | true | true | initialize error: "invalid_token" |
@@ -95,11 +97,21 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Cloudflare (`cloudflare`) | oauth | ok | oauth-dcr · 401 | mcp.cloudflare.com/register | true | true | - |
 | Cloudflare Observability (`cloudflare-observability`) | oauth | ok | oauth-dcr · 401 | observability.mcp.cloudflare.com/register | true | true | - |
 | Cloudflare Docs (`cloudflare-docs`) | none | ok | open · 200 · docs-ai-search | - | - | - | - |
+| Cloudflare Browser Rendering (`cloudflare-browser`) | oauth | ok | oauth-dcr · 401 | browser.mcp.cloudflare.com/register | true | true | - |
+| Cloudflare Workers Builds (`cloudflare-builds`) | oauth | ok | oauth-dcr · 401 | builds.mcp.cloudflare.com/register | true | true | - |
+| Cloudflare AI Gateway (`cloudflare-ai-gateway`) | oauth | ok | oauth-dcr · 401 | ai-gateway.mcp.cloudflare.com/register | true | true | - |
+| Cloudflare AutoRAG (`cloudflare-autorag`) | oauth | ok | oauth-dcr · 401 | autorag.mcp.cloudflare.com/register | true | true | - |
+| Cloudflare Audit Logs (`cloudflare-auditlogs`) | oauth | ok | oauth-dcr · 401 | auditlogs.mcp.cloudflare.com/register | true | true | - |
+| Cloudflare DNS Analytics (`cloudflare-dns-analytics`) | oauth | ok | oauth-dcr · 401 | dns-analytics.mcp.cloudflare.com/register | true | true | - |
+| Cloudflare Logpush (`cloudflare-logpush`) | oauth | ok | oauth-dcr · 401 | logs.mcp.cloudflare.com/register | true | true | - |
+| Cloudflare GraphQL (`cloudflare-graphql`) | oauth | ok | oauth-dcr · 401 | graphql.mcp.cloudflare.com/register | true | true | - |
+| Cloudflare Containers (`cloudflare-containers`) | oauth | ok | oauth-dcr · 401 | containers.mcp.cloudflare.com/register | true | true | - |
+| Cloudflare CASB (`cloudflare-casb`) | oauth | ok | oauth-dcr · 401 | casb.mcp.cloudflare.com/register | true | true | - |
 | Supabase (`supabase`) | oauth | ok | oauth-dcr · 401 | api.supabase.com/platform/oauth/apps/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
 | Neon (`neon`) | oauth | ok | oauth-dcr · 401 | mcp.neon.tech/api/register | true | true | initialize error: "invalid_token" |
-| Hugging Face (`huggingface`) | oauth | ok | open+oauth-dcr · 200 · huggingface.co/mcp | huggingface.co/oauth/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that); re-checked 2026-11-16 |
+| Hugging Face (`huggingface`) | oauth | ok | open+oauth-dcr · 200 · huggingface.co/mcp | huggingface.co/oauth/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
 | DeepWiki (`deepwiki`) | none | ok | open · 200 · DeepWiki | - | - | - | - |
-| Context7 (`context7`) | none | ok | open+oauth-dcr · 200 · Context7 | clerk.context7.com/oauth/register | true | true | open, and also offers OAuth with DCR (clerk.context7.com): stays no sign-in; re-checked 2026-11-16 |
+| Context7 (`context7`) | none | ok | open+oauth-dcr · 200 · Context7 | clerk.context7.com/oauth/register | true | true | open, and also offers OAuth with DCR (clerk.context7.com): stays no sign-in |
 | Microsoft Learn (`mslearn`) | none | ok | open · 200 · Microsoft Learn MCP Server | - | - | - | - |
 | Railway (`railway`) | oauth | ok | oauth-dcr · 401 | backboard.railway.com/oauth/register | true | true | initialize error: "Authentication required" |
 | Postman (`postman`) | oauth | ok | oauth-dcr · 401 | mcp.postman.com/register | true | true | initialize error: Invalid Request: API key required |
@@ -113,8 +125,8 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Buildkite (`buildkite`) | oauth | ok | oauth-dcr · 401 | mcp.buildkite.com/oauth/register | true | true | initialize error: "access_denied" |
 | Prisma Postgres (`prisma`) | oauth | ok | oauth-dcr · 401 | auth.prisma.io/register | true | unlisted | initialize error: "invalid_token" |
 | Datadog (`datadog`) | oauth | ok | oauth-dcr · 401 | app.datadoghq.com/api/v2/oauth2/register | true | true | - |
-| Render (`render`) | apikey | ok | oauth-no-dcr · 401 | - | true | true | OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app); re-checked 2026-11-16 |
-| PagerDuty (`pagerduty`) | apikey | ok | oauth-no-dcr · 401 | - | true | true | initialize error: "invalid_token"; OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app); re-checked 2026-11-16 |
+| Render (`render`) | apikey | ok | oauth-no-dcr · 401 | - | true | true | OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app) |
+| PagerDuty (`pagerduty`) | apikey | ok | oauth-no-dcr · 401 | - | true | true | initialize error: "invalid_token"; OAuth metadata but no self-registration (stays an API key unless SahilBot registers its own app) |
 | PostHog (`posthog`) | oauth | ok | oauth-dcr · 401 | oauth.posthog.com/oauth/register/ | true | true | - |
 | Amplitude (`amplitude`) | oauth | ok | oauth-dcr · 401 | mcp.amplitude.com/register | true | true | initialize error: "invalid_request" |
 | Mixpanel (`mixpanel`) | oauth | ok | oauth-dcr · 401 | mixpanel.com/oauth/mcp/register/ | true | true | - |
@@ -124,7 +136,7 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Alpha Vantage (`alphavantage`) | oauth | ok | oauth-dcr · 401 | mcp.alphavantage.co/register | true | true | initialize error: "invalid_request" |
 | Hex (`hex`) | oauth | ok | oauth-dcr · 401 | auth.app.hex.tech/oauth2/register | true | true | - |
 | Pendo (`pendo`) | oauth | ok | oauth-dcr · 401 | app.pendo.io/oauth/v1/register | true | true | - |
-| Exa search (`exa`) | none | ok | open+oauth-dcr · 200 · exa-search-server | auth.exa.ai/api/oauth/register | true | true | open, and also offers OAuth with DCR (auth.exa.ai): stays no sign-in; re-checked 2026-11-16 |
+| Exa search (`exa`) | none | ok | open+oauth-dcr · 200 · exa-search-server | auth.exa.ai/api/oauth/register | true | true | open, and also offers OAuth with DCR (auth.exa.ai): stays no sign-in |
 | Perplexity (`perplexity`) | oauth | ok | oauth-dcr · 401 | api.perplexity.ai/oauth/register | true | true | initialize error: Invalid API key provided. Ensure your API key is correct and active. |
 | Tavily (`tavily`) | oauth | ok | oauth-dcr · 401 | mcp.tavily.com/register | true | true | - |
 | Firecrawl (`firecrawl`) | oauth | ok | oauth-dcr · 401 | www.firecrawl.dev/api/oauth/register | true | true | initialize error: "invalid_token" |
@@ -150,13 +162,13 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | DigitalOcean (`digitalocean`) | oauth | ok | oauth-dcr · 401 | cloud.digitalocean.com/v1/oauth/register | true | true | - |
 | Fly.io (`fly`) | oauth | ok | oauth-dcr · 401 | fly.io/mcp/oauth/register | true | true | initialize error: "authentication failed" |
 | Sanity (`sanity`) | oauth | ok | oauth-dcr · 401 | mcp.sanity.io/register | true | true | initialize error: "invalid_token" |
-| WorkOS (`workos`) | oauth | ok | oauth-dcr · 401 | signin.workos.com/oauth2/register | true | true | initialize error: "unauthorized" |
+| WorkOS (`workos`) | oauth | unreachable | unreachable | - | - | - | initialize failed: ECONNRESET |
 | Rootly (`rootly`) | oauth | ok | oauth-dcr · 401 | rootly.com/oauth/register | true | true | initialize error: "unauthorized" |
 | BrowserStack (`browserstack`) | oauth | ok | oauth-dcr · 401 | mcp.browserstack.com/auth/oauth2/register | true | true | - |
 | Mintlify (`mintlify`) | oauth | ok | oauth-dcr · 401 | mcp.mintlify.com/oauth/register | true | true | initialize error: Missing or invalid authorization header |
 | AWS Knowledge (`aws-knowledge`) | none | warn | open · 200 · AWSKnowledgeMCP | - | - | - | PRM https://knowledge-mcp.global.api.aws/.well-known/oauth-protected-resource redirects to another site (https://github.com) |
 | Svelte docs (`svelte`) | none | warn | open · 200 · Svelte MCP | - | - | - | PRM https://mcp.svelte.dev/.well-known/oauth-protected-resource/mcp redirects to another site (https://svelte.dev); PRM https://mcp.svelte.dev/.well-known/oauth-protected-resource redirects to another site (https://svelte.dev) |
-| Twilio Docs (`twilio-docs`) | none | ok | open · 200 · twilio-docs-mcp | - | - | - | - |
+| Twilio Docs (`twilio-docs`) | none | ok | open+oauth-no-dcr · 200 · twilio-docs-mcp | - | true | true | - |
 | ClickHouse (`clickhouse`) | oauth | ok | oauth-dcr · 401 | mcp.clickhouse.cloud/register | true | true | initialize error: "Authentication required" |
 | MotherDuck (`motherduck`) | oauth | ok | oauth-dcr · 401 | mcp-auth.motherduck.com/register | true | true | initialize error: Authentication required. Please authenticate using OAuth or provide a Bearer token. |
 | ThoughtSpot (`thoughtspot`) | oauth | ok | oauth-dcr · 401 | agent.thoughtspot.app/register | true | true | initialize error: "invalid_token" |
@@ -170,9 +182,9 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | beehiiv (`beehiiv`) | oauth | ok | oauth-dcr · 401 | mcp.beehiiv.com/register | true | true | initialize error: "unauthorized" |
 | Windsor.ai (`windsor`) | oauth | ok | oauth-dcr · 401 | mcp.windsor.ai/register | true | true | - |
 | vidIQ (`vidiq`) | oauth | ok | oauth-dcr · 401 | mcp.vidiq.com/mcp/register | true | true | - |
-| Airwallex (`airwallex`) | oauth | ok | oauth-dcr · 401 | mcp.airwallex.com/mcp/register | true | true | - |
+| Airwallex (`airwallex`) | oauth | ok | oauth-dcr · 401 | mcp.airwallex.com/mcp/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
 | Paddle (`paddle`) | oauth | ok | oauth-dcr · 401 | id.paddle.com/oauth2/register | true | true | initialize error: "No token provided." |
-| Checkout.com (`checkout`) | oauth | ok | oauth-dcr · 401 | access.mcp.checkout.com/payment-operations/register | true | true | initialize error: Missing Bearer token |
+| Checkout.com (`checkout`) | oauth | ok | oauth-dcr · 401 | access.mcp.checkout.com/payment-operations-v2/register | true | true | initialize error: Missing Bearer token |
 | Morningstar (`morningstar`) | oauth | ok | oauth-dcr · 401 | mcp.morningstar.com/oauth-issuer/register | true | true | - |
 | FactSet (`factset`) | oauth | ok | oauth-dcr · 401 | auth.factset.com/as/clients.oauth2 | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
 | PitchBook (`pitchbook`) | oauth | ok | oauth-dcr · 401 | mcp.pitchbook.com/auth/register | true | true | - |
@@ -183,18 +195,18 @@ Re-run: `LIVE_SWEEP=1 npx vitest run --config vitest.live.config.mts tests/live/
 | Remote (`remote`) | oauth | ok | oauth-dcr · 401 | api.employ.remote.com/oauth/register | true | true | - |
 | Indeed (`indeed`) | oauth | ok | oauth-dcr · 401 | secure.indeed.com/oauth/v2/register | true | true | initialize error: "invalid_token" |
 | Dice (`dice`) | none | ok | open · 200 · Job Search MCP Server | - | - | - | - |
-| PandaDoc (`pandadoc`) | oauth | ok | oauth-dcr · 401 | mcp.pandadoc.com/register | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
+| PandaDoc (`pandadoc`) | oauth | ok | oauth-dcr · 401 | mcp.pandadoc.com/register | true | true | - |
 | Clio (`clio`) | oauth | ok | oauth-dcr · 401 | mcp.api.clio.com/register | true | true | initialize error: "unauthorized" |
 | Midpage (`midpage`) | oauth | ok | oauth-dcr · 401 | app.midpage.ai/oauth/register | true | true | initialize error: "invalid_token" |
 | Kiwi.com (`kiwi`) | none | ok | open · 200 · kiwicom-flight-search | - | - | - | - |
 | trivago (`trivago`) | none | ok | open · 200 · trivago Accommodation Search | - | - | - | - |
 | Zillow (`zillow`) | none | ok | open · 200 · fastmcp-external-gateway-pioneer | - | - | - | - |
 | BiggerPockets (`biggerpockets`) | oauth | ok | oauth-dcr · 401 | www.biggerpockets.com/oauth/registration | true | true | token endpoint does not list "none" auth (DCR may hand out a client secret; the SDK handles that) |
-| Wolfram (`wolfram`) | none | warn | open · 200 · Wolfram | - | - | - | PRM https://agenttools.wolfram.com/.well-known/oauth-protected-resource/mcp redirects to another site (https://www.wolframcloud.com); PRM https://agenttools.wolfram.com/.well-known/oauth-protected-resource redirects to another site (https://www.wolframcloud.com) |
+| Wolfram (`wolfram`) | none | warn | open · 200 · Wolfram | - | - | - | PRM https://agenttools.wolfram.com/.well-known/oauth-protected-resource/mcp redirects to another site (https://www.wolframcloud.com) |
 | Consensus (`consensus`) | oauth | ok | oauth-dcr · 401 | consensus.app/oauth/register/ | true | true | initialize error: "unauthorized" |
 | Scite (`scite`) | oauth | ok | oauth-dcr · 401 | api.scite.ai/mcp/oauth/register | true | true | initialize error: Authentication required. Please sign in to scite.ai to use MCP tools. |
 | Wiley Scholar Gateway (`wiley`) | oauth | ok | oauth-dcr · 401 | connector.scholargateway.ai/register | true | true | - |
 | Udemy Business (`udemy`) | oauth | ok | oauth-dcr · 401 | api.udemy.com/auth/external/oidc/dynamic-client/register | true | true | - |
 | Strava (`strava`) | oauth | ok | oauth-dcr · 401 | www.strava.com/oauth/mcp/register_client | unlisted | true | PKCE methods not listed (SahilBot sends S256 anyway) |
 
-Not probed (no server URL): `cursor-app`, `apple-notes`, `apple-mail`, `gmail-web`, `gcal-web`, `gdrive-web`, `linkedin-web`, `xcode`, `figma-desktop`, `custom`.
+Not probed (no server URL): `cursor-app`, `apple-notes`, `apple-mail`, `gmail-web`, `gcal-web`, `gdrive-web`, `linkedin-web`, `xcode`, `figma-desktop`, `resend`, `custom`.

@@ -147,6 +147,8 @@ export interface TodoItem {
 }
 
 export interface ThreadState {
+  /** Privacy Gate: personal details found in this chat and what the user chose for each (src/main/privacy/gate.ts). */
+  privacy?: import('../privacy/gate').PrivacyThreadState
   subscriptionRevision?: number
   workerFolder?: string
   taskPolicy?: import('./runtime/store').TaskPolicy

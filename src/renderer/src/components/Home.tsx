@@ -97,16 +97,40 @@ export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, 
 }
 
 /** Everything SahilBot has made, newest first. */
+/** Artifact kinds by file extension (the filter chips on the Artifacts page). */
+export const ARTIFACT_KINDS = [
+  { id: 'docs', label: 'Documents', ext: ['docx', 'doc', 'md', 'txt', 'rtf', 'odt', 'pages', 'html', 'htm'] },
+  { id: 'pdf', label: 'PDFs', ext: ['pdf'] },
+  { id: 'slides', label: 'Presentations', ext: ['pptx', 'ppt', 'key', 'odp'] },
+  { id: 'sheets', label: 'Spreadsheets', ext: ['xlsx', 'xls', 'csv', 'numbers', 'ods', 'tsv'] },
+  { id: 'images', label: 'Images', ext: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic', 'avif'] },
+  { id: 'media', label: 'Audio & video', ext: ['mp3', 'wav', 'm4a', 'aac', 'mp4', 'mov', 'webm'] }
+] as const
+export const artifactKind = (name: string): string => {
+  const ext = name.split('.').pop()?.toLowerCase() ?? ''
+  return ARTIFACT_KINDS.find((k) => (k.ext as readonly string[]).includes(ext))?.id ?? 'other'
+}
+
+/** Artifacts: every file SahilBot's agents made (documents, PDFs, decks, sheets, images, audio), filterable by kind. */
 export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: string) => void; onOpenChat: (threadId: string) => void }) {
   const [files, setFiles] = useState<RecentFile[] | null>(null)
   const [q, setQ] = useState('')
-  useEffect(() => { void api.files.recent(200).then(setFiles) }, [])
-  const shown = (files ?? []).filter((f) => !q || `${f.name} ${f.threadTitle}`.toLowerCase().includes(q.toLowerCase()))
+  const [kind, setKind] = useState('all')
+  useEffect(() => { void (api.files.artifacts ? api.files.artifacts(500) : api.files.recent(200)).then(setFiles) }, [])
+  const counts = new Map<string, number>()
+  for (const f of files ?? []) counts.set(artifactKind(f.name), (counts.get(artifactKind(f.name)) ?? 0) + 1)
+  const chips = [{ id: 'all', label: 'All', n: files?.length ?? 0 }, ...ARTIFACT_KINDS.map((k) => ({ id: k.id as string, label: k.label as string, n: counts.get(k.id) ?? 0 })), { id: 'other', label: 'Other', n: counts.get('other') ?? 0 }].filter((c) => c.id === 'all' || c.n > 0)
+  const shown = (files ?? []).filter((f) => (kind === 'all' || artifactKind(f.name) === kind) && (!q || `${f.name} ${f.threadTitle}`.toLowerCase().includes(q.toLowerCase())))
   return (
     <div className="page" data-testid="files-view">
-      <div className="page-head"><h1>Files</h1><input className="set-input page-search" placeholder="Search files" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-      <div className="set-sub">Documents, decks, spreadsheets and other files SahilBot made for you. Click one to preview it; the link under it opens the chat it came from.</div>
-      {files === null ? <div className="hint">Loading…</div> : shown.length === 0 ? <div className="empty-state"><I.File size={22} /><div>Nothing yet. Ask for a report, a deck or a spreadsheet and it shows up here.</div></div> : (
+      <div className="page-head"><h1>Artifacts</h1><input className="set-input page-search" placeholder="Search artifacts" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+      <div className="set-sub">Documents, PDFs, presentations, spreadsheets, images and audio your agents made. Click one to preview it; the link under it opens the chat it came from.</div>
+      {chips.length > 2 && (
+        <div className="artifact-chips" role="tablist" aria-label="Kind" data-testid="artifact-kinds">
+          {chips.map((c) => <button key={c.id} role="tab" aria-selected={kind === c.id} className={`artifact-chip${kind === c.id ? ' on' : ''}`} onClick={() => setKind(c.id)} data-testid={`artifact-kind-${c.id}`}>{c.label} <span>{c.n}</span></button>)}
+        </div>
+      )}
+      {files === null ? <div className="hint">Loading…</div> : shown.length === 0 ? <div className="empty-state"><I.File size={22} /><div>{files.length ? 'Nothing matches.' : 'Nothing yet. Ask for a report, a deck, a spreadsheet or an image and it shows up here.'}</div></div> : (
         <div className="file-grid">
           {shown.map((f) => (
             <div key={f.path} className="file-wrap">

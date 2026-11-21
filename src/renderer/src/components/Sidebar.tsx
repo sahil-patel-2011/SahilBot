@@ -173,7 +173,7 @@ export function Sidebar(p: {
         { label: spendLabel(spend), icon: <I.Clock size={15} />, run: openUsageGlance },
         'sep',
         { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects') },
-        { label: 'Files', icon: <I.File size={15} />, run: () => p.onView('files') },
+        { label: 'Artifacts', icon: <I.Layers size={15} />, run: () => p.onView('files') },
         { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled },
         { label: 'Tasks', icon: <Target size={15} />, run: () => p.onView('tasks') },
         { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect },
@@ -325,6 +325,7 @@ export function Sidebar(p: {
           aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
           <I.Inbox size={17} />{goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
         </button>
+        <button className={`sb-circle${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Artifacts: documents, PDFs, presentations and images your agents made" aria-label="Artifacts" data-testid="nav-artifacts"><I.Layers size={17} /></button>
         <button className={`sb-circle${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="Your brain: what SahilBot knows from your connected accounts, and Agent mode" aria-label="Your brain" data-testid="nav-brain"><BrainIcon size={17} /></button>
         <button className="sb-circle" onClick={p.onNewBot} title="New bot: a teammate with its own job and chat" aria-label="New bot" data-testid="new-bot"><I.Plus size={18} /></button>
       </div>
@@ -374,7 +375,7 @@ export function Sidebar(p: {
             </>
           ), (
             <>
-              <button className={`nav-add${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Files SahilBot made" aria-label="Files SahilBot made" data-testid="nav-files"><I.File size={14} /></button>
+              <button className={`nav-add${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Artifacts SahilBot made" aria-label="Artifacts SahilBot made" data-testid="nav-files"><I.File size={14} /></button>
               <button className="nav-add" onClick={p.onScheduled} title="Scheduled: routines and reminders" aria-label="Scheduled routines" data-testid="nav-scheduled"><I.Clock size={14} /></button>
               <button className="nav-add" onClick={p.onNew} title="New chat (⌘N)" aria-label="New chat (⌘N)" data-testid="new-chat"><I.Edit size={14} /></button>
             </>

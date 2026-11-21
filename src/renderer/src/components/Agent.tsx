@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import type { PendingRequest } from '@shared/types'
+import { PRIVACY_DOCUMENT_TEXT, PRIVACY_LABEL_TEXT, type PrivacyAction, type PrivacyAnswer } from '@shared/privacy'
 import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
@@ -8,6 +9,7 @@ import { approvalView, type ApprovalPreview } from '../lib/approval-view'
 import { Markdown } from './Markdown'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
+import '../styles-privacy.css'
 // Lazy: Connect Apps is its own chunk; only a card for an app that still needs its setup (or a key) uses it.
 import { ApiKeyPanel, AppSetup, GoogleSetup, Lazy } from '../lazy'
 import { folderName } from '../lib/plain-approval'
@@ -332,6 +334,93 @@ function OtpCard({ req }: { req: PendingRequest }) {
   )
 }
 
+/** "1 name · 2 email addresses". */
+function privacyCounts(items: Array<{ label: keyof typeof PRIVACY_LABEL_TEXT }>): string {
+  const n = new Map<keyof typeof PRIVACY_LABEL_TEXT, number>()
+  for (const i of items) n.set(i.label, (n.get(i.label) ?? 0) + 1)
+  return [...n].map(([l, c]) => `${c} ${c === 1 ? PRIVACY_LABEL_TEXT[l].one : PRIVACY_LABEL_TEXT[l].many}`).join(' · ')
+}
+
+/**
+ * Privacy Gate: PII-Tracer found personal details before a cloud request. The chat waits here until the
+ * user picks how to handle them (1–3, or Esc to skip the content), and can untick anything misread.
+ */
+function PrivacyCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+  const p = req.privacy!
+  const [open, setOpen] = useState(false)
+  const [notPersonal, setNotPersonal] = useState<Set<string>>(new Set())
+  const [remember, setRemember] = useState(false)
+  const [sending, setSending] = useState(false)
+  const flagged = p.items.filter((i) => !notPersonal.has(i.id))
+  const docs = p.documents ?? []
+  const strictLeft = flagged.some((i) => i.strict)
+  const options: Array<{ action: PrivacyAction; title: string; sub: string; recommended?: boolean }> = [
+    ...(p.localModel ? [{ action: 'local' as const, title: 'Process on my Mac', sub: `Keep this content private: ${p.localModel} handles this task on your device.`, recommended: true }] : []),
+    { action: 'split', title: 'Split: cloud plans, Mac keeps the details', sub: `${p.cloudModel} sees stand-ins like [${PRIVACY_LABEL_TEXT[p.items[0]?.label ?? 'private_person'].placeholder}_1]${docs.length ? ` and a note in place of the ${docs.length === 1 ? 'document' : 'documents'}` : ''}, and asks the model on your Mac about them; the real details go back in on this Mac.`, recommended: !p.localModel },
+    { action: 'share', title: 'Share anyway', sub: strictLeft ? 'Send the content as is. Passwords, keys and account numbers stay masked.' : 'Send the content as is.' }
+  ]
+  const send = (action: PrivacyAction): void => {
+    if (sending) return
+    setSending(true)
+    const answer: PrivacyAnswer = { action, notPersonal: [...notPersonal], remember }
+    void Promise.resolve(onRespond(req.id, JSON.stringify(answer))).finally(() => setSending(false))
+  }
+  // 1–3 pick an option and Esc skips, unless the user is typing somewhere.
+  const sendRef = useRef(send)
+  sendRef.current = send
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const el = document.activeElement as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) && !el.closest('.privacy-card')) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === 'Escape') { e.preventDefault(); sendRef.current('skip'); return }
+      const n = Number(e.key)
+      if (n >= 1 && n <= options.length) { e.preventDefault(); sendRef.current(options[n - 1].action) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [options.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  const toggle = (id: string): void => setNotPersonal((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  return (
+    <div className="pending privacy-card" data-testid="privacy-card" data-id={req.id}>
+      <div className="pv-title">Privacy Gate found personal information in this content. How do you want to handle it?</div>
+      <div className="pv-source">
+        <div className="pv-source-name">{p.sources.slice(0, 3).join(', ')}{p.sources.length > 3 ? ` and ${p.sources.length - 3} more` : ''}</div>
+        {docs.length > 0 && <div className="pv-doc" data-testid="privacy-documents">Looks like {[...new Set(docs.map((d) => `a ${PRIVACY_DOCUMENT_TEXT[d.kind]}`))].join(' and ')}</div>}
+        <div className="pv-source-sub">
+          {[privacyCounts(flagged.length ? flagged : p.items)].filter(Boolean).join('')}{p.items.length > 0 && <> · <button className="link-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="privacy-view">{open ? 'Hide items' : 'View items'}</button></>}
+        </div>
+        {open && (
+          <div className="pv-items" data-testid="privacy-items">
+            <div className="pv-items-hint">Is this correct? Untick anything that isn't personal; it's sent as is.</div>
+            {p.items.map((i) => (
+              <label key={i.id} className={`pv-item${notPersonal.has(i.id) ? ' off' : ''}`}>
+                <input type="checkbox" checked={!notPersonal.has(i.id)} onChange={() => toggle(i.id)} data-testid={`privacy-item-${i.id}`} />
+                <span className={`pv-chip${i.strict ? ' strict' : ''}`}>{PRIVACY_LABEL_TEXT[i.label].one}</span>
+                <code className="pv-value">{i.value}</code>
+                <span className="pv-where">{i.source}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="pv-options" role="group" aria-label="How to handle it">
+        {options.map((o, n) => (
+          <button key={o.action} className="pv-option" disabled={sending} onClick={() => send(o.action)} data-testid={`privacy-${o.action}`}>
+            <span className="pv-n">{n + 1}</span>
+            <span className="pv-text"><span className="pv-option-title">{o.title}</span><span className="pv-option-sub">{o.sub}</span></span>
+            {o.recommended && <span className="pv-rec"><I.Shield size={13} /> Recommended</span>}
+          </button>
+        ))}
+      </div>
+      <div className="pv-foot">
+        <label className="pv-remember"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} data-testid="privacy-remember" /> Don't ask again for this chat</label>
+        <button className="btn" disabled={sending} onClick={() => send('skip')} data-testid="privacy-skip">Skip content <kbd>Esc</kbd></button>
+      </div>
+    </div>
+  )
+}
+
 export function PendingCard({ req, onRespond, thumb }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown>; thumb?: string }) {
   if (req.kind === 'purchase' && req.purchase) return <PurchaseCard req={req} />
   if (req.kind === 'otp' && req.otp) return <OtpCard req={req} />
@@ -339,6 +428,7 @@ export function PendingCard({ req, onRespond, thumb }: { req: PendingRequest; on
   if (req.kind === 'questions' && req.questions) return <QuestionsCard req={req} onRespond={onRespond} />
   if (req.kind === 'plan' && req.plan) return <PlanApprovalCard req={req} onRespond={onRespond} />
   if (req.kind === 'question') return <QuestionCard req={req} onRespond={onRespond} />
+  if (req.kind === 'privacy' && req.privacy) return <PrivacyCard req={req} onRespond={onRespond} />
   return <ApprovalCard req={req} onRespond={onRespond} thumb={thumb} />
 }
 

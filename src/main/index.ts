@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut,
 import { autoPool, autoVariant } from './llm/router'
 import { execFileSync } from 'node:child_process'
 import { homedir, tmpdir, totalmem, userInfo } from 'node:os'
-import { writeFileSync } from 'node:fs'
+import { statfsSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { homeIdeas } from './ideas'
 import { classifyTask, type TaskCategory } from './llm/task-classifier'
@@ -91,6 +91,9 @@ import { handoffTool } from './agent/tools/handoff'
 import { computerTool } from './agent/tools/computer'
 import { createOverlay } from './computer/overlay-window'
 import { consultTool } from './agent/tools/consult'
+import { askOnMacTool } from './agent/tools/ask-on-mac'
+import { PiiTracer, DOWNLOAD_BYTES as PII_TRACER_BYTES } from './privacy/tracer'
+import { HYBRID_BEST, HYBRID_MIN } from '@shared/privacy'
 import { checkpointTool, createCua } from './agent/cua'
 import { frcCodeTool } from './agent/tools/frc_code'
 import { frcMechTool } from './agent/tools/frc_mech'
@@ -660,6 +663,40 @@ app.whenReady().then(() => {
   const skills = new SkillStore(sub('skills'), join(appRoot(), 'packs', 'skills'))
   const rules = new RuleStore(sub('rules'), join(appRoot(), 'packs', 'rules'))
   const registry = new ToolRegistry()
+  // Privacy Gate (src/main/privacy): PII-Tracer on this Mac checks what a cloud model would see when a chat
+  // uses local and cloud models together. On once PII-Tracer is downloaded, unless switched off.
+  const piiTracer = new PiiTracer(join(dataDir(), 'pii-tracer'))
+  let hybridAt = 0
+  let hybridNow = false
+  const privacyHybrid = (): boolean => {
+    if (Date.now() - hybridAt < 5000) return hybridNow
+    hybridAt = Date.now()
+    try {
+      const usable = endpoints.usable()
+      const local = (id: string): boolean => isLocal(endpoints.for(id).baseUrl)
+      hybridNow = usable.some((m) => local(m.id)) && usable.some((m) => !local(m.id))
+    } catch { hybridNow = false }
+    return hybridNow
+  }
+  /** What hybrid compute needs: Apple Silicon, 32 GB memory and 50 GB free disk (64 GB and 150 GB for the top local models). */
+  const hybridRequirements = (): import('@shared/privacy').HybridRequirements => {
+    const ramGB = Math.round((Number(process.env.FOREMAN_RAM_GB) || totalmem() / 1024 ** 3))
+    let freeDiskGB = 0
+    try { const f = statfsSync(dataDir()); freeDiskGB = Math.floor((f.bavail * f.bsize) / 1e9) } catch { /* unknown: reads as 0 */ }
+    const appleSilicon = process.platform === 'darwin' && process.arch === 'arm64'
+    const problem = !appleSilicon ? 'Hybrid compute needs a Mac with Apple Silicon.'
+      : ramGB < HYBRID_MIN.ramGB ? `This Mac has ${ramGB} GB of memory; hybrid compute needs at least ${HYBRID_MIN.ramGB} GB.`
+      : freeDiskGB < HYBRID_MIN.diskGB ? `${freeDiskGB} GB of disk space is free; hybrid compute needs at least ${HYBRID_MIN.diskGB} GB for the local models and PII-Tracer.`
+      : undefined
+    return { ramGB, freeDiskGB, appleSilicon, meetsMinimum: !problem, meetsBest: !problem && ramGB >= HYBRID_BEST.ramGB && freeDiskGB >= HYBRID_BEST.diskGB, ...(problem ? { problem } : {}) }
+  }
+  // Memory doesn't change while the app runs; disk is checked when the user turns hybrid compute on.
+  const hybridRamOk = (): boolean => process.arch === 'arm64' && (Number(process.env.FOREMAN_RAM_GB) || totalmem() / 1024 ** 3) >= HYBRID_MIN.ramGB - 0.5
+  const privacyActive = (): boolean => settings.get().hybridCompute?.enabled === true && hybridRamOk() && piiTracer.installed() && privacyHybrid()
+  const privacyStatus = (): import('@shared/privacy').PrivacyStatus => {
+    hybridAt = 0
+    return { installed: piiTracer.installed(), installing: piiTracer.installingNow(), enabled: settings.get().hybridCompute?.enabled === true, requirements: hybridRequirements(), hybrid: privacyHybrid(), active: privacyActive(), downloadBytes: PII_TRACER_BYTES }
+  }
   // The context engine (People & Places), set up with the knowledge vault below; the memory tool's "about" uses it.
   const worldRef: { current?: ContextEngine } = {}
   /** Your brain (src/main/brain), set up after the context engine; Needs you lists its prompts. */
@@ -724,6 +761,22 @@ app.whenReady().then(() => {
           rects: wins.map((w) => w.getBounds())
         }
       }
+    }),
+    askOnMacTool({
+      active: privacyActive,
+      localModel: () => {
+        try {
+          return endpoints.usable().filter((m) => isLocal(endpoints.for(m.id).baseUrl) && m.tools !== false).sort((a, b) => (b.tier ?? 0) - (a.tier ?? 0) || (b.requiredGB ?? 0) - (a.requiredGB ?? 0))[0]?.id
+        } catch { return undefined }
+      },
+      isCloud: (m) => !isLocal(endpoints.for(m).baseUrl),
+      transcript: (threadId) => db.listMessages(threadId).filter((m) => !m.meta?.hidden && m.content && (m.role === 'user' || m.role === 'assistant' || m.role === 'tool'))
+        .map((m) => `${m.role === 'user' ? 'User' : m.role === 'tool' ? `Tool result (${m.toolName ?? 'tool'})` : 'Assistant'}: ${m.content}`).join('\n\n'),
+      ask: async (model, system, user, signal) => {
+        const ep = endpoints.for(model)
+        return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, settings.get().sampling), maxTokens: 2000, effort: 'medium', signal }))
+      },
+      detect: (text, signal) => piiTracer.detect(text, signal)
     }),
     consultTool({
       advisor: () => endpoints.advisor(),
@@ -896,6 +949,23 @@ app.whenReady().then(() => {
   // The card shows for a while when you're looking at the bot's chat; otherwise it goes to Needs you at once.
   const questionHost = createQuestionHost({ db, settings, queue: questions, learner, grace: (threadId) => (mainFocused() && viewingThread === threadId ? ATTENDED_GRACE_MS : 0) })
   const chat = new Agent({
+    privacy: {
+      active: privacyActive,
+      detect: (text, signal) => piiTracer.detect(text, signal),
+      warm: () => piiTracer.warm(),
+      judge: async (items, context, signal) => {
+        // The strongest local model that fits: never a cloud model, the finds stay on this Mac.
+        const model = (() => { try { return endpoints.usable().filter((m) => isLocal(endpoints.for(m.id).baseUrl)).sort((a, b) => (b.tier ?? 0) - (a.tier ?? 0) || (b.requiredGB ?? 0) - (a.requiredGB ?? 0))[0]?.id } catch { return undefined } })()
+        if (!model) return undefined
+        const ep = endpoints.for(model)
+        const system = 'You check a privacy filter\'s uncertain finds. Personal information means details about a private individual: their name, contact details, home address, account or ID numbers, personal dates (birthdays, appointments), secrets. Not personal: public figures, companies and brands, countries, cities or regions on their own, product names, generic dates ("tomorrow", "Q3"), examples and placeholders. Use the conversation to decide. Reply with only JSON: {"personal": ["id", ...]} listing the finds that are personal.'
+        const user = `Conversation:\n${context}\n\nFinds:\n${items.map((i) => `${i.id}: ${i.label} "${i.value}"`).join('\n')}`
+        const reply = await collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, settings.get().sampling), maxTokens: 400, effort: 'low', signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]) }))
+        const json = /\{[\s\S]*\}/.exec(reply)?.[0]
+        const ids = json ? (JSON.parse(json) as { personal?: unknown }).personal : undefined
+        return Array.isArray(ids) ? new Set(ids.filter((x): x is string => typeof x === 'string')) : undefined
+      }
+    },
     memoryEmbedder: () => knowledge.recallEmbedder(),
     recallFiles: async (query, threadId, signal) => {
       const state = db.getState(threadId), spaceId = db.getThread(threadId)?.spaceId ?? null
@@ -1094,6 +1164,22 @@ app.whenReady().then(() => {
   })
   handle('chatgptPlan:openInstallGuide', () => { void shell.openExternal(CODEX_INSTALL_URL) })
   app.on('before-quit', () => { void closeCodexRuns() })
+  app.on('before-quit', () => piiTracer.stop())
+  handle('privacy:status', () => privacyStatus())
+  handle('privacy:install', async () => {
+    await piiTracer.install((e) => toWin('privacy:install', e))
+    return privacyStatus()
+  })
+  handle('privacy:setEnabled', (enabled: boolean) => {
+    if (enabled === true) {
+      const req = hybridRequirements()
+      if (!req.meetsMinimum) throw new Error(req.problem ?? 'This Mac doesn\'t meet hybrid compute\'s requirements.')
+    }
+    settings.set({ hybridCompute: { enabled: enabled === true } })
+    if (enabled === true) piiTracer.warm(); else piiTracer.stop()
+    return privacyStatus()
+  })
+  handle('privacy:remove', () => { piiTracer.remove(); return privacyStatus() })
   // Check in the background at start when it's switched on (the model list waits for a stale check anyway).
   if (chatgptPlan.prefs().enabled) void chatgptPlan.refresh().then(() => endpoints.list()).catch(() => undefined)
 
@@ -1492,6 +1578,8 @@ app.whenReady().then(() => {
     return homeIdeas({ recent, apps, made, projects }, 5)
   })
   handle('files:recent', (limit?: number) => db.recentFiles(limit ?? 60).filter((f) => existsSync(f.path)).map((f) => ({ ...f, name: basename(f.path), size: statSync(f.path).size })))
+  // Artifacts (sidebar): everything agents made, including images and audio, that still exists.
+  handle('files:artifacts', (limit?: number) => db.artifactFiles(Math.min(1000, limit ?? 300)).filter((f) => { try { return statSync(f.path).isFile() } catch { return false } }).map((f) => ({ ...f, name: basename(f.path), size: statSync(f.path).size })))
   handle('files:reveal', (path: string) => attachments.reveal(path))
   handle('providers', () => PROVIDERS)
   handle('budget', () => budget.summary())
@@ -2784,6 +2872,8 @@ app.whenReady().then(() => {
     vacuumInto: (path) => db.sql.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`)
   })
   updater.start()
+  // Back from sleep: look for a new build right away (the hourly timer may have slept through it).
+  powerMonitor.on('resume', () => { setTimeout(() => void updater.check().catch(() => undefined), 20_000) })
   app.on('will-quit', () => updater.stop())
   handle('update:status', () => updater.get())
   handle('update:check', () => updater.check())

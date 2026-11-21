@@ -119,6 +119,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'files-anywhere', page: 'permissions', title: 'Read and edit files anywhere', words: 'files folders anywhere full disk read edit write without asking approve documents desktop', keys: ['advanced.filesAnywhere'] },
   { anchor: 'mac-permissions', page: 'permissions', title: 'Mac permissions', words: 'accessibility screen recording microphone full disk access automation notifications system settings' },
   { anchor: 'activity', page: 'privacy', tab: 'activity', title: 'Know what I\'m working on', words: 'activity window titles browser tabs timeline context share cloud exclude apps sites' },
+  { anchor: 'hybrid-compute', page: 'privacy', tab: 'hybrid', title: 'Hybrid compute and Privacy Gate', words: 'hybrid local cloud privacy gate pii tracer personal information phi mask redact bank statement bill on my mac perplexity' },
   { anchor: 'sensitive', page: 'privacy', tab: 'sensitive', title: 'Sensitive details', words: 'health money finance religion politics children sexuality government id sensitive categories privacy' },
 
   // Usage, server

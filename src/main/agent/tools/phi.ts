@@ -7,8 +7,8 @@ import type { ToolDef } from '../types'
 // no network: the same text always gives the same findings. It is a safety net, not a guarantee: free
 // text clues, unusual names and images are not caught, so a person still reviews the output.
 //
-// Not wired into the agent yet: register phiTool() in index.ts (next to researchTool) to offer it
-// through find_tools("phi"). The hipaa-* skills call it as phi_scan.
+// Registered in index.ts (found with find_tools("phi")); the hipaa-* skills call it as phi_scan. The Privacy
+// Gate (src/main/privacy/gate.ts phiSpans) also uses its high-confidence identifiers next to PII-Tracer.
 
 /** The Safe Harbor identifier categories (45 CFR 164.514(b)(2)) this detector can find in text. */
 export type PhiType =

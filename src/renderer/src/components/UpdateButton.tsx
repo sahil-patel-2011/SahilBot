@@ -18,6 +18,12 @@ export function UpdateButton({ busy = 0 }: { busy?: number }) {
       if (s.state === 'error' && s.detail && s.version) toast(s.detail, 'error')
     })
   }, [])
+  // Shown as soon as a new build is found: downloading (with progress), then ready to install.
+  if (st?.state === 'downloading') return (
+    <button className="sb-update" disabled data-testid="sidebar-update-downloading" title={`Downloading ${st.version ?? 'the new version'}. The Update button appears when it's ready.`}>
+      <span className="spin" /><span>Downloading update</span><span className="sb-update-v">{Math.round(st.progress ?? 0)}%</span>
+    </button>
+  )
   if (!st || (st.state !== 'ready' && st.state !== 'installing')) return null
   const installing = st.state === 'installing'
   return (
