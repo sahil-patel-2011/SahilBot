@@ -156,8 +156,14 @@ export async function openRecovery(text: string, password: string): Promise<Reco
   let f: RecoveryFileJson
   try { f = JSON.parse(text) as RecoveryFileJson } catch { throw new RecoveryError('That isn\'t a SahilBot recovery file.', 'format') }
   if (f?.format !== RECOVERY_FORMAT || f.v !== 1 || !f.kdf || typeof f.data !== 'string') throw new RecoveryError('That isn\'t a SahilBot recovery file (or it was made by a newer version).', 'format')
-  if (f.kdf.alg === 'scrypt' && (f.kdf.N > 2 ** 21 || f.kdf.r > 32 || f.kdf.p > 16)) throw new RecoveryError('This recovery file asks for unsafe settings, so it wasn\'t opened.', 'format')
-  const key = await deriveFromPassword(String(password ?? ''), f.kdf)
+  // Recovery files are only ever written with scrypt. A file asking for anything else, or for more than 1 GiB of
+  // scrypt memory, is refused before any work (a crafted file must not exhaust memory or hang the app).
+  const k = f.kdf as unknown as { alg?: unknown; N?: unknown; r?: unknown; p?: unknown; salt?: unknown }
+  const int = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x > 0
+  if (k.alg !== 'scrypt' || !int(k.N) || !int(k.r) || !int(k.p) || (k.N & (k.N - 1)) !== 0 || k.N < 2 ** 10 || 128 * k.N * k.r > 2 ** 30 || k.p > 4 || typeof k.salt !== 'string' || k.salt.length < 16 || k.salt.length > 128)
+    throw new RecoveryError('This recovery file asks for unsafe settings, so it wasn\'t opened.', 'format')
+  let key: Buffer
+  try { key = await deriveFromPassword(String(password ?? ''), f.kdf) } catch { throw new RecoveryError('This recovery file couldn\'t be opened.', 'format') }
   let plain: Buffer | undefined
   try {
     plain = open(key, unb64(f.data), headerAad(f))
@@ -265,11 +271,16 @@ export class BackupService {
     const rk = keyFromJson(this.d.secrets.get(RECOVERY_SECRET))
     if (!rk) return undefined
     const entries: Record<string, string> = {}
+    let missing = 0
     for (const n of this.d.secrets.names()) {
       if (excludedFromRecovery(n)) continue
       const v = this.d.secrets.get(n)
       if (v) entries[n] = v
+      else missing++
     }
+    // A key that couldn't be read right now (the Keychain is locked) would be silently left out: say so instead of
+    // writing a file that looks complete.
+    if (missing) { wipe(rk.key); throw new Error(`${missing} saved key${missing === 1 ? '' : 's'} couldn't be read (is the Keychain locked?), so the recovery file wasn't updated this time`) }
     try { return sealRecovery(rk, entries, this.now()) } finally { wipe(rk.key) }
   }
 

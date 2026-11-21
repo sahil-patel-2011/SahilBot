@@ -80,3 +80,32 @@ test('only a Keychain that truly has no key gets a new one', () => {
   expect(kc.st.created).toBe(1)
   expect(s.get('ncbiKey')).toBe('n-1')
 })
+
+test('after the Keychain unlocks, the same session reads the keys and stops reporting them locked', async () => {
+  const db = new Db(':memory:')
+  const kc = keychain()
+  new Secrets(db, kc.ks).set('braveKey', 'b-1')
+  kc.st.locked = true
+  const s = new Secrets(db, kc.ks)
+  expect(s.get('braveKey')).toBeUndefined()
+  expect(s.locked().count).toBe(1)
+  kc.st.locked = false
+  vi.useFakeTimers({ now: Date.now() + 61_000 })
+  try {
+    expect(s.get('braveKey')).toBe('b-1')
+    expect(s.locked().count).toBe(0)
+  } finally { vi.useRealTimers() }
+})
+
+test('a primary key that differs from the backup still opens values sealed with the backup key, and re-seals them', () => {
+  const db = new Db(':memory:')
+  const kc = keychain()
+  new Secrets(db, kc.ks).set('tbaKey', 't-1')
+  // An older build replaced the primary item with a different key; the backup still has the original.
+  kc.st.primary = Buffer.alloc(32, 42)
+  const s = new Secrets(db, kc.ks)
+  expect(s.get('tbaKey')).toBe('t-1')
+  // Re-sealed with the primary: it opens even without the backup now.
+  kc.st.backup = undefined
+  expect(new Secrets(db, kc.ks).get('tbaKey')).toBe('t-1')
+})

@@ -126,6 +126,8 @@ export class Secrets {
   private master?: Buffer | null
   /** The old item's password, asked for at most once a session. */
   private legacy?: string | null
+  /** A second key found in the backup item when it differs from the primary (values sealed with it still open). */
+  private alt?: Buffer
   /** After the Keychain didn't answer: when to ask again (never sooner, so a locked Keychain isn't hammered). */
   private retryAt = 0
   /** Why the key couldn't be read last time ('' when it's fine). */
@@ -149,19 +151,30 @@ export class Secrets {
         const b = this.keys.getBackup()
         if (b) { try { this.keys.restore?.(b) } catch { /* use it this session anyway */ } k = b }
       }
+      let orphaned = false
       if (!k) {
-        if (this.hasSealed()) console.warn('[secrets] the Keychain has no SahilBot key but sealed keys exist; making a new key (the old ones stay saved and come back if the key does)')
+        // Sealed values with no key anywhere (both items deleted, or this data folder came from another Mac): they stay
+        // saved, and Settings says to restore them from a recovery file instead of calling them merely locked.
+        orphaned = this.hasSealed()
+        if (orphaned) console.warn('[secrets] the Keychain has no SahilBot key but sealed keys exist; making a new key (the old ones stay saved and come back if the key does)')
         k = this.keys.create()
-      } else if (this.keys.saveBackup) {
-        try { const b = this.keys.getBackup?.(); if (!b) this.keys.saveBackup(k) } catch { /* try again next launch */ }
+      } else if (this.keys.getBackup) {
+        try {
+          const b = this.keys.getBackup()
+          if (!b) this.keys.saveBackup?.(k)
+          // The primary item holds a different key than the backup (an older build replaced it): keep both, so values
+          // sealed with either still open (get() tries the other one and re-seals with the primary).
+          else if (!b.equals(k)) this.alt = b
+        } catch { /* try again next launch */ }
       }
       this.master = k
-      this.lastKeyError = ''
+      this.lastKeyError = orphaned ? 'Your keys were saved under a key this Mac no longer has. Restore them from a recovery file (Settings → Privacy & Security → Backups) or enter them again.' : ''
       return k
     } catch (e) {
       // Not "no key": the Keychain didn't answer. Nothing is created or overwritten; ask again in a bit.
       this.lastKeyError = (e as Error).message
-      this.retryAt = Date.now() + 15_000
+      // A minute, so a Keychain prompt the user dismissed doesn't pop up again and again.
+      this.retryAt = Date.now() + 60_000
       return undefined
     }
   }
@@ -194,7 +207,17 @@ export class Secrets {
     if (!enc) return undefined
     if (enc.startsWith(V2)) {
       const k = this.key()
-      try { if (k) return open(k, enc) } catch { /* another key: unreadable below */ }
+      if (k) {
+        try { const v = open(k, enc); this.unreadable.delete(name); return v } catch { /* another key: try the backup's */ }
+        if (this.alt) {
+          try {
+            const v = open(this.alt, enc)
+            try { this.db.setSetting(`secret:${name}`, seal(k, v)) } catch { /* stays as it was */ }
+            this.unreadable.delete(name)
+            return v
+          } catch { /* unreadable below */ }
+        }
+      }
       this.unreadable.add(name)
       return undefined
     }

@@ -189,3 +189,14 @@ describe('BackupService', () => {
     expect(svc.status().folders.map((f) => f.kind)).toEqual(['main', 'mirror', 'extra'])
   })
 })
+
+import { openRecovery as openRec, RecoveryError as RecErr } from '../../src/main/backup'
+test('a crafted recovery file asking for huge or foreign KDF settings is refused before any work', async () => {
+  const base = { format: 'sahilbot-recovery', v: 1, created: '2026-01-01', count: 1, data: 'AAAA' }
+  for (const kdf of [
+    { alg: 'scrypt', N: 2 ** 21, r: 32, p: 1, salt: 'c2FsdHNhbHRzYWx0c2FsdA==' },
+    { alg: 'argon2id', memory: 2 ** 30, passes: 99, parallelism: 64, salt: 'c2FsdHNhbHRzYWx0c2FsdA==' },
+    { alg: 'scrypt', N: 1000, r: 8, p: 1, salt: 'c2FsdHNhbHRzYWx0c2FsdA==' },
+    { alg: 'scrypt', N: '16384', r: 8, p: 1, salt: 'c2FsdHNhbHRzYWx0c2FsdA==' }
+  ]) await expect(openRec(JSON.stringify({ ...base, kdf }), 'whatever-password')).rejects.toBeInstanceOf(RecErr)
+})
