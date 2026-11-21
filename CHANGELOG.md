@@ -11,6 +11,9 @@ _2026-11-21_
 - **Everything SahilBot remembers, including your decisions, is now organized in your vault like Obsidian**
 - **A copy of everything (data, memories, vault notes and your keys, encrypted) goes to a separate backup folder every day**
 - **A cleaner sidebar, home screen and Settings, with fewer buttons**
+- **Auto now recognizes medical, travel, business, engineering and coding-agent requests and sends each to the right model and tools**
+- **Maps and travel: places, directions, travel times and things to do, with Google Maps links (a Google Maps key is optional)**
+- **SahilBot reads its own manual when it isn't sure how to do something, with new pages on business, engineering and coding agents**
 - **Talk to a bot and it goes off to do the work while you keep talking, then tells you out loud when it's done**
 - **Voices are ChatGPT's or Grok's: pick one, its speed and your language right in the voice bar**
 - **Click or hold ⌘D to dictate**
@@ -53,6 +56,28 @@ _2026-11-21_
 - The browser and side-panel buttons only show in a chat, where they do something
 - Settings is one short list with no "More settings" fold. Phone & server pages only show once you've turned one on: SahilBot is a desktop app first
 - The "no model yet" notice is a clear card with Add a key and Retry buttons
+
+### Auto, sharper on your kind of work
+
+- Clinical questions (doses, drug interactions, lab results, warning signs) go to the strongest model with the medical sources; a simple definition stays quick
+- Literature questions (meta-analyses, trials, guidelines, PMIDs, FDA labels) run as deep research
+- Handing work to Cursor, Codex or Claude Code runs as coding work and loads the Cursor, code and git tools; several agents at once or a repo-wide change gets the strongest model
+- Directions and "near me" are quick live lookups; comparing several places runs as research with maps; booking a table, room or flight is treated as a booking
+- Engineering calculations (deflection, stress, torque) are worked as math, not CAD
+- Measured on 40 new requests across these areas: the right kind of work went from 67.5% to 100%, and no task runs as a plain chat any more
+
+### Maps and travel
+
+- Search places, get details, directions (driving, walking, cycling, transit), travel times between several places, and what's nearby (restaurants, sights, pharmacies, urgent care, EV charging and more)
+- Every answer has Google Maps links you can click. Without a key SahilBot uses OpenStreetMap; with a Google Maps key (Settings → Keys for tools) it uses Google's places and routes, including transit
+- Trip planning groups sights by area, checks travel times and gives one route link per day; new idea skills cover business, engineering, trips and local places
+- Maps & travel is listed under Connect apps → Built in
+
+### SahilBot's own manual
+
+- When SahilBot isn't sure how a feature or tool works, it searches its manual before guessing or asking you
+- New pages: business (models, decks, research, recurring work), engineering (CAD, calculations, electronics, FRC, software) and coding agents (when to hand off to Cursor, writing the brief, reviewing the result)
+- The tools page now lists every tool SahilBot has
 
 ### Bots you can talk to
 

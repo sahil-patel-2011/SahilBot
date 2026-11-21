@@ -46,6 +46,8 @@ const GROUPS: Array<{ tools: string[]; when: { test(text: string): boolean } }> 
   },
   // CAD (src/main/cad/cad-intent.ts owns the words): the design workflow, Onshape, and FreeCAD when installed.
   { tools: ['cad_design', 'onshape', 'freecad'], when: CAD_RE },
+  // Coding agents (docs/coding-agents.md): Cursor's cloud and local agents, with the code and git tools to review their work.
+  { tools: ['cursor', 'code', 'git'], when: /\b(cursor('s)? (cloud |local |background )?agents?|coding agents?|to cursor|codex|claude code)\b|\bcursor\b.{0,60}\b(pr|pull request|repo|diff|bug|branch|merge)\b/i },
   // Videos through the user's HeyGen connectors (tools/video.ts): avatar videos, dubbing, motion graphics.
   { tools: ['video'], when: VIDEO_RE },
   // Pictures: the GPT image models (tools/media.ts).
