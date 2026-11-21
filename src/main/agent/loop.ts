@@ -537,6 +537,8 @@ export class Agent {
   private testMs = new Map<string, number>()
   constructor(private d: AgentDeps) {
     this.feat = { ...ALL_FEATURES, ...(d.harness ?? {}) }
+    // A harness without an on-device privacy gate (the benchmark's other profiles) sends everything to the cloud model.
+    if (!this.feat.privacyGate && d.privacy) this.d = { ...d, privacy: undefined }
     this.runtime = new RuntimeStore(d.db)
     this.runtime.recover()
     this.memorySystem = new MemorySystem(d.db, d.memory)
