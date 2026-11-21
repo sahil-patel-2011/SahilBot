@@ -6,6 +6,7 @@ Every SahilBot update, newest first. The same notes show in the app (Settings â†
 
 _2026-11-21_
 
+- **Your API keys stay saved through updates. Keys the last update lost come back after you allow one macOS prompt**
 - **Talk to a bot and it goes off to do the work while you keep talking, then tells you out loud when it's done**
 - **Home shows your bots first, and a new bot sets itself up with you in its chat**
 - **Voices are ChatGPT's or Grok's: pick one, its speed and your language right in the voice bar**
@@ -81,6 +82,11 @@ _2026-11-21_
 ### Simpler Settings
 
 - Five main pages up front (General, Models, Connected apps, Privacy, Phone & server), with everything else under More settings. Search still finds every setting
+
+### Fixes
+
+- API keys and other secrets are now sealed with SahilBot's own Keychain key, which stays the same across updates, so an update never asks you to enter them again
+- Keys saved before this update are moved over the first time they're read. If macOS asks whether "security" may use "SahilBot Safe Storage", enter your Mac password and choose Always Allow; your keys come back. If you choose Deny, they're kept, and you can allow it later
 
 ### Coming next
 
