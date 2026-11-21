@@ -8,8 +8,8 @@ own the outcome: nothing is "done" until a diff has been read and the checks hav
   need to look around, anything in a folder the user attached to this chat, and anything where the user is
   watching and wants to steer.
 - **Cursor, on this Mac** (cursor agent): a well-scoped change in a local project that Cursor's agent is
-  good at, while you keep supervising. Needs Cursor's `cursor-agent` installed and "Also run Cursor's agent
-  through its CLI on this Mac" switched on (Settings → Connected apps → Cursor).
+  good at, while you keep supervising. Needs Cursor's `cursor-agent` installed and "Also run Cursor on
+  this Mac" switched on (Settings → Connected apps → Cursor).
 - **Cursor cloud agents** (cursor cloud_launch): work on a GitHub repo that should end as a branch and pull
   request, or several independent tasks at once. Needs the user's Cursor API key (Settings → Connected
   apps → Cursor). Launching, follow-ups and stopping always ask the user.

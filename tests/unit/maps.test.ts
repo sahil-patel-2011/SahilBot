@@ -59,7 +59,8 @@ describe('provider shapes', () => {
     ] }, at)
     expect(places.map((p) => p.name)).toEqual(['Near Café', 'Far Café'])
     expect(formatPlaces(places, 'Cafés')).toContain('Hours: Mo-Su 08:00-18:00')
-    expect(overpassQuery('cafes', at, 800, 5)).toBe('[out:json][timeout:25];(nwr["amenity"="cafe"]["name"](around:800,48.8566,2.3522););out center tags 20;')
+    // Overpass caps by id, not distance: fetch plenty, then the code sorts nearest first and keeps `max` (review fix).
+    expect(overpassQuery('cafes', at, 800, 5)).toBe('[out:json][timeout:25];(nwr["amenity"="cafe"]["name"](around:800,48.8566,2.3522););out center tags 400;')
   })
   test('Routes API: totals, legs, transit steps and the route link', () => {
     const t = formatGoogleRoute({ routes: [{ distanceMeters: 21_500, duration: '2460s', description: 'US-101 S', legs: [{ distanceMeters: 21_500, duration: '2460s', steps: [

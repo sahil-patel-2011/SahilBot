@@ -10,8 +10,12 @@
 // Problems go back to the model with exactly what to fix; it answers again. A network failure never blocks an
 // answer: what couldn't be checked is skipped.
 
-/** Words that make a request a health question (clinical terms, drugs, doses, conditions). */
-const MEDICAL = /\b(medical|medicine|medication|meds?|drugs?|dos(e|es|age|ing)|mg\b|mcg\b|tablets?|prescri\w*|side[- ]effects?|adverse|contraindicat\w*|interact\w*|symptoms?|diagnos\w*|prognos\w*|treat(s|ed|ment|ments|ing)?|therap\w*|surgery|surgical|procedures?|clinical|patients?|disease|disorders?|syndrome|infection|cancer|tumou?r|oncolog\w*|carcinoma|lymphoma|leukemia|chemo\w*|radiation therapy|immunotherap\w*|biops\w*|psa\b|prostat\w*|kidney|renal|bladder|urolog\w*|urinary|uti\b|testicular|erectile|incontinence|cardiac|heart|hypertension|blood pressure|diabetes|insulin|a1c|cholesterol|statins?|stroke|asthma|copd|pneumonia|sepsis|antibiotics?|vaccines?|pregnan\w*|pediatric|guidelines?|trials?|pubmed|meta-analys\w*|systematic review|randomi[sz]ed|efficacy|mortality|survival|risk of|screening|mri|ct scan|ultrasound|lab (results?|values?)|egfr|creatinine|hemoglobin|platelets?)\b/i
+/**
+ * Words that make a request a health question: conditions, organs, drugs, doses, clinical literature. Generic words
+ * ("treat null as zero", "be patient", "style guidelines", "free trials", "interact with the API", "risk of ruin")
+ * don't count on their own.
+ */
+const MEDICAL = /\b(medical|medicine|medications?|meds|drugs?|dos(e|es|age|ing)|\d+ ?(mg|mcg)|prescri\w*|side[- ]effects?|adverse (events?|effects?|reactions?)|contraindicat\w*|symptoms?|diagnos\w*|prognos\w*|disease|syndrome|infections?|cancer|tumou?r|oncolog\w*|carcinoma|lymphoma|leukemia|chemo(therapy)?|radiation therapy|immunotherap\w*|biops\w*|psa|prostat\w*|kidney|renal|bladder|urolog\w*|urinary|uti|testicular|erectile|incontinence|cardiac|hypertension|blood pressure|diabetes|insulin|a1c|cholesterol|stroke|asthma|copd|pneumonia|sepsis|antibiotics?|vaccines?|pregnan\w*|pediatric|pubmed|meta-analys\w*|systematic reviews?|randomi[sz]ed (controlled )?trials?|clinical trials?|egfr|creatinine|surgery|surgical|patients with|a patient (with|who|has)|treatment (for|of)|therapy for|mortality|survival rates?)\b/i
 
 /** Common drug-name endings (tamsulosin, lisinopril, atorvastatin, sildenafil, pembrolizumab…). */
 const DRUG = /\b[a-z]{3,}(osin|olol|pril|sartan|statin|afil|mab|nib|cillin|mycin|floxacin|azole|prazole|gliflozin|gliptin|glutide|dronate|terol|lukast|oxetine|triptan|azepam|tadine|semide|thiazide|parin|xaban|gatran|caine|profen|coxib|lamide|tidine|vir|mustine|platin|taxel|rubicin|lutamide|relix|relin)\b/i
@@ -30,7 +34,8 @@ export function extractCitations(text: string): Citations {
     ...[...text.matchAll(/\bPMID[:\s#]*(\d{4,9})\b/gi)].map((m) => m[1]),
     ...[...text.matchAll(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d{4,9})/gi)].map((m) => m[1])
   ]
-  const dois = [...text.matchAll(/\b(10\.\d{4,9}\/[^\s"'<>()[\]{}]+)/g)].map((m) => m[1].replace(/[.,;:]+$/, '').toLowerCase())
+  // Markdown and punctuation around a DOI (**bold**, a table's |, a dash, a closing bracket) aren't part of it.
+  const dois = [...text.matchAll(/\b(10\.\d{4,9}\/[^\s"'<>()[\]{}|]+)/g)].map((m) => m[1].replace(/[*_`|\u2014\u2013\u2026.,;:!?>]+$/, '').toLowerCase())
   const ncts = [...text.matchAll(/\b(NCT\d{8})\b/gi)].map((m) => m[1].toUpperCase())
   return { pmids: uniq(pmids), dois: uniq(dois), ncts: uniq(ncts) }
 }
@@ -118,10 +123,13 @@ const NCBI = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
  * `researched` whether this run looked anything up. Network trouble skips the PubMed part.
  */
 export async function checkMedicalAnswer(o: {
+  /** This turn's request only (not the whole conversation's text). */
   question: string
   answer: string
   seen: string
   researched: boolean
+  /** Whether an answer with no research may be sent back to research (false in quick chats and helpers). */
+  nudge?: boolean
   fetchJson: JsonFetcher
   signal: AbortSignal
   apiKey?: string
@@ -132,7 +140,7 @@ export async function checkMedicalAnswer(o: {
   if (!medical) return { unretrieved: empty, unresearched: false }
   const f: MedicalFindings = {
     unretrieved: unretrieved(cites, o.seen),
-    unresearched: !o.researched && !hasCitations(cites) && isMedicalQuestion(o.question) && clinicalAnswer(o.answer)
+    unresearched: o.nudge !== false && !o.researched && !hasCitations(cites) && isMedicalQuestion(o.question) && clinicalAnswer(o.answer)
   }
   const pmids = cites.pmids.slice(0, 40)
   if (pmids.length) {

@@ -3179,8 +3179,11 @@ export class Agent {
           // exist in PubMed and not be retracted, and a clinical answer needs research behind it. Once per run.
           if (this.feat.medicalCheck && !medChecked && step < HARD_CAP && finalNudges < 3 && (this.d.medical?.fetchJson || !process.env.FOREMAN_NO_VERIFY)) {
             medChecked = true
+            // This turn's request, not the whole chat's text (an early "treat null as zero" isn't a health question).
+            const turnText = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !isRelayed(m))?.content ?? ''
             const findings = await checkMedicalAnswer({
-              question: userText, answer: assistant.content, seen, researched: track.researched,
+              question: turnText, answer: assistant.content, seen, researched: track.researched,
+              nudge: !chatRun && !run.helper && registry.all().some((x) => x.name === 'research'),
               fetchJson: this.d.medical?.fetchJson ?? (async (url, signal) => { const r = await fetch(url, { headers: { 'user-agent': 'SahilBot/1.0', accept: 'application/json' }, signal }); if (!r.ok) throw new Error(String(r.status)); return r.json() }),
               signal: run.ctrl.signal, apiKey: this.d.medical?.apiKey?.()
             }).catch(() => undefined)

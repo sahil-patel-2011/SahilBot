@@ -207,22 +207,28 @@ The labels were written by hand to these rubrics. While writing the rubric, four
 ## Domain rules (medical, travel, business, engineering, coding agents)
 
 Added 2026-11-21 after a 40-request domain set (split `domains` in the routing eval) scored category 67.5%,
-difficulty 42.5% and ran 7 agent tasks as chats. With these rules: category 100%, chat-vs-agent 100%, difficulty
-97.5%; the 554 earlier items are unchanged. The set was tuned on, so it guards against regressions; it isn't blind.
+difficulty 42.5% and ran 7 agent tasks as chats. An independent review then ran ~215 everyday prompts and found
+the first version of these rules over-matched (red flags in a contract, potassium in a banana, a server's "load",
+"what is a meta-analysis"); the rules now need real context, and 39 of those everyday prompts are in the same split
+as negatives that must route exactly as before. Now: category 100%, chat-vs-agent 100%, difficulty 98.7% on the 79
+items; the 554 earlier items are unchanged. The split was tuned on, so it guards against regressions; it isn't blind.
 
-- **Clinical questions are the top tier.** A dose, an interaction ("can I take X with Y"), a lab value ("my
-  creatinine came back at 1.8"), warning signs, or a named drug with a clinical word: difficulty 3, so the strongest
-  model answers, with the medical sources (docs/medical.md). A definition ("explain what PSA density is") stays light.
-- **Medical literature is deep research.** Meta-analyses, systematic reviews, PMIDs, clinical trials, guidelines,
-  FDA labels and side-effect profiles: research, agent, difficulty 3. A single PMID lookup stays a quick chat.
+- **Clinical questions are the top tier.** A dose, an interaction ("can I take X with Y"), a lab value with a number
+  or "my" ("my creatinine came back at 1.8"), or warning signs, each with a named drug or a medical context (surgery,
+  symptoms, a disease, an organ, medication): difficulty 3, so the strongest model answers, with the medical sources
+  (docs/medical.md). Definitions, school work, food, games and gardens stay ordinary questions.
+- **Medical literature is deep research** when something is asked of it (summarize, find, compare, cite, the
+  latest, recruiting): meta-analyses, systematic reviews, PMIDs, clinical trials, guidelines, FDA labels. Research,
+  agent, difficulty 3. "What is a meta-analysis" and a single PMID lookup stay quick chats.
 - **Coding agents are coding.** Handing work to Cursor (cloud or local agent), Codex or Claude Code, checking on one
-  or reviewing its PR: coding, agent. Several agents in parallel, a refactor or a change across the repo: tier 3.
+  or reviewing its PR (a hand-off verb is needed: hand, send, have, use, run, check, review): coding, agent. Several agents in parallel, a refactor or a change across the repo: tier 3.
   A question about them is a chat; writing a brief for one is writing.
-- **Travel.** Directions, distances, "near me", "open now" and travel times are live lookups (tier 2). Comparing or
-  routing between several places ("which of these hotels is closest") is research with the maps tool, as the agent.
-  Booking a table, room or flight is computer use at tier 3. A trip with travel times or map links is tier 3.
-- **Engineering calculations are math** (deflection, stress, torque, loads), even with materials and shapes in the
-  words, unless a CAD tool or model is named.
+- **Travel.** Directions, "near me", "open now", travel times and the closest of a kind of place are live lookups
+  (tier 2); "how far is the moon" stays trivia. Comparing or routing between several named places ("which of these
+  hotels is closest") is research with the maps tool, as the agent. Booking a table, room or flight is computer use
+  at tier 3 (asking for options or recommendations isn't a booking). A trip with travel times or map links is tier 3.
+- **Engineering calculations are math** (deflection, stress, torque) when they come with numbers and units or a
+  material or member (steel, beam, shaft), and aren't about code or a CAD model.
 - **Patient-facing or cited documents** (a patient handout, a report with citations) are office work at tier 3.
 
 ## The classifier

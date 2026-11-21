@@ -191,3 +191,19 @@ describe('the agent loop runs the medical check before a medical answer reaches 
     expect(msgs.filter((m) => m.role === 'assistant' && !m.meta?.superseded).at(-1)?.meta?.medicalChecked).toEqual({ verified: 1 })
   })
 })
+
+describe('the medical check stays out of non-medical work (review fixes)', () => {
+  test('generic words are not health questions', () => {
+    for (const t of ['Treat null as zero in this function', 'follow the style guidelines for the API', 'free trials of the product', 'interact with the REST API', 'be patient with me', 'risk of ruin in poker', 'write a stored procedure'])
+      expect(isMedicalQuestion(t), t).toBe(false)
+    expect(isMedicalQuestion('What is the first-line treatment for overactive bladder?')).toBe(true)
+  })
+  test('markdown and table punctuation around a DOI are not part of it', () => {
+    expect(extractCitations('See **10.1056/NEJMoa2034577** and | 10.1001/jama.2020.1234| — 10.1016/x.y—').dois).toEqual(['10.1056/nejmoa2034577', '10.1001/jama.2020.1234', '10.1016/x.y'])
+  })
+  test('no research nudge where research is not possible (quick chats, helpers)', async () => {
+    const answer = `${'Overactive bladder is common. '.repeat(15)}First-line treatment is behavioral therapy; mirabegron 25 mg daily is recommended next.`
+    const f = await checkMedicalAnswer({ question: 'What is the treatment for overactive bladder?', answer, seen: '', researched: false, nudge: false, fetchJson: async () => ({}), signal: new AbortController().signal })
+    expect(f.unresearched).toBe(false)
+  })
+})

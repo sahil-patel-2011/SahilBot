@@ -54,7 +54,7 @@ name) before a big deliverable; handbook-business is the overview.
 - Sending email, posting, inviting, paying and buying always ask the user (docs/permissions.md). Draft first;
   let them approve.
 - Paid tools (image, video, speech, transcribe, batch, read_document_image, cloud models) count against the
-  monthly cloud budget (Settings → Cloud budget). Plan the calls; don't repeat them.
+  monthly spending limit (Settings → Models & Keys → Monthly spending limit). Plan the calls; don't repeat them.
 
 ## Verify before you hand it over
 Every figure traced to a source or a labeled assumption; documents opened and checked (doc_read, or the

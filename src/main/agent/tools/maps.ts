@@ -55,7 +55,8 @@ const OSRM_TABLE: Record<Exclude<TravelMode, 'transit'>, string> = {
 
 // ---------------------------------------------------------------- links (exported for tests)
 
-const enc = encodeURIComponent
+/** encodeURIComponent plus ( ) ! * ' so a place like "Joe's (Original) Pizza" can't break a Markdown link. */
+const enc = (x: string): string => encodeURIComponent(x).replace(/[()!*']/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
 
 /** A Google Maps search link for a place (its place id makes it exact). */
 export function placeLink(query: string, placeId?: string): string {
@@ -237,7 +238,7 @@ export function readGoogleMatrix(rows: Array<{ originIndex?: number; destination
 export function overpassQuery(cat: string, at: { lat: number; lng: number }, radius: number, max: number): string {
   const tags = CATEGORIES[cat].osm
   const parts = tags.map(([k, v]) => `nwr["${k}"="${v}"]["name"](around:${Math.round(radius)},${at.lat},${at.lng});`).join('')
-  return `[out:json][timeout:25];(${parts});out center tags ${Math.min(200, max * 4)};`
+  return `[out:json][timeout:25];(${parts});out center tags 400;`
 }
 
 // ---------------------------------------------------------------- the tool
@@ -257,7 +258,10 @@ export function mapsTool(deps: MapsDeps = {}): ToolDef<Args> {
     for (let attempt = 0; ; attempt++) {
       const res = await f(url, { ...init, headers: { 'user-agent': UA, ...(init.headers ?? {}) }, signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]) })
       if (attempt >= 2 || ![429, 502, 503, 504].includes(res.status)) return res
-      await new Promise((r) => setTimeout(r, 800 * (attempt + 1)))
+      // Nominatim blocks clients that retry a 429 quickly (its usage policy): don't retry it there at all.
+      if (res.status === 429 && url.startsWith(NOMINATIM)) return res
+      const after = Number(res.headers.get('retry-after'))
+      await new Promise((r) => setTimeout(r, Number.isFinite(after) && after > 0 && after <= 10 ? after * 1000 : 2000 * (attempt + 1)))
       if (signal.aborted) return res
     }
   }
@@ -282,6 +286,8 @@ export function mapsTool(deps: MapsDeps = {}): ToolDef<Args> {
     if (key()) {
       const r = await json<{ status?: string; error_message?: string; results?: Array<{ formatted_address?: string; geometry?: { location?: { lat: number; lng: number } } }> }>(`${GEOCODE}?address=${enc(where)}&key=${enc(key()!)}`, {}, signal)
       if (r.status === 'REQUEST_DENIED') throw new Error(`Google Maps refused the request: ${r.error_message ?? 'check the key'}. Enable the Geocoding API for this key.`)
+      if (r.status === 'OVER_QUERY_LIMIT' || r.status === 'OVER_DAILY_LIMIT') throw new Error('Google Maps says this key is over its quota right now. Try again later, or raise the quota in Google Cloud.')
+      if (r.status === 'UNKNOWN_ERROR') throw new Error('Google Maps had a temporary error. Try again.')
       const g = r.results?.[0]?.geometry?.location
       if (g) return { lat: g.lat, lng: g.lng, label: r.results![0].formatted_address ?? where }
     } else {

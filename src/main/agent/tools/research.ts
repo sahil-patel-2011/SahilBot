@@ -83,6 +83,8 @@ async function getText(url: string, signal: AbortSignal): Promise<string> {
   if (!res.ok) throw new Error(`${new URL(url).host} answered ${res.status}.`)
   return res.text()
 }
+/** openFDA, Crossref and ClinicalTrials.gov answer 404 for "none"; anything else (busy, down) is a real failure. */
+const notFound = (e: unknown): boolean => (e as Error)?.message === 'Nothing found.'
 const q = encodeURIComponent
 const clip = (s: unknown, n: number): string => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n)
 
@@ -314,7 +316,16 @@ export function researchTool(deps: ResearchDeps = {}): ToolDef<Args> {
               const t = m.title?.[0] ?? doi
               lines.push(`${retraction ? '⚠' : '✓'} DOI ${doi}: "${t}" (${m['container-title']?.[0] ?? ''} ${m.issued?.['date-parts']?.[0]?.[0] ?? ''})${retraction ? ` — RETRACTED (notice ${retraction.DOI ?? ''})` : concern ? ' — expression of concern' : ''}`)
               sources.push({ title: t, url: `https://doi.org/${doi}` })
-            } catch { lines.push(`✗ DOI ${doi}: not found at Crossref. Check it.`) }
+            } catch (e) {
+              if (!notFound(e)) { lines.push(`? DOI ${doi}: couldn't check right now (${(e as Error).message.slice(0, 80)}). Not evidence it's wrong.`); continue }
+              // Not at Crossref: DataCite registers the rest (Zenodo, figshare, many datasets and preprints).
+              try {
+                const dc = await getJson<{ data?: { attributes?: { titles?: Array<{ title?: string }>; publisher?: string; publicationYear?: number } } }>(`https://api.datacite.org/dois/${q(doi)}`, sig)
+                const t = dc.data?.attributes?.titles?.[0]?.title ?? doi
+                lines.push(`✓ DOI ${doi}: "${t}" (${dc.data?.attributes?.publisher ?? ''} ${dc.data?.attributes?.publicationYear ?? ''}, DataCite)`)
+                sources.push({ title: t, url: `https://doi.org/${doi}` })
+              } catch (e2) { lines.push(notFound(e2) ? `✗ DOI ${doi}: not registered at Crossref or DataCite. This citation is likely wrong.` : `? DOI ${doi}: couldn't check right now. Not evidence it's wrong.`) }
+            }
           }
           for (const id of ncts) {
             try {
@@ -322,7 +333,7 @@ export function researchTool(deps: ResearchDeps = {}): ToolDef<Args> {
               const t = r.protocolSection?.identificationModule?.briefTitle ?? id
               lines.push(`✓ ${id}: "${t}" (${r.protocolSection?.statusModule?.overallStatus ?? 'status n/a'})`)
               sources.push({ title: t, url: `https://clinicaltrials.gov/study/${id}` })
-            } catch { lines.push(`✗ ${id}: no such trial on ClinicalTrials.gov.`) }
+            } catch (e) { lines.push(notFound(e) ? `✗ ${id}: no such trial on ClinicalTrials.gov.` : `? ${id}: couldn't check right now. Not evidence it's wrong.`) }
           }
           const other = ids.filter((x) => !pmids.includes(x.replace(/\D/g, '')) && !ncts.includes(x.toUpperCase()) && !dois.some((d) => x.endsWith(d)))
           for (const x of other) lines.push(`? ${x}: not a PMID, DOI or NCT ID.`)
@@ -337,7 +348,7 @@ export function researchTool(deps: ResearchDeps = {}): ToolDef<Args> {
           const name = a.query!.replace(/"/g, '')
           let r: { results?: Array<Record<string, any>> } = {}
           for (const field of ['openfda.brand_name', 'openfda.generic_name', 'openfda.substance_name']) {
-            try { r = await getJson(`https://api.fda.gov/drug/label.json?limit=1&search=${field}:"${q(name)}"`, sig) } catch { r = {} }
+            try { r = await getJson(`https://api.fda.gov/drug/label.json?limit=1&search=${field}:"${q(name)}"`, sig) } catch (e) { if (!notFound(e)) throw e; r = {} }
             if (r.results?.length) break
           }
           const f = formatLabel(r)
@@ -348,7 +359,7 @@ export function researchTool(deps: ResearchDeps = {}): ToolDef<Args> {
           let r: { results?: Array<{ term: string; count: number }> } = {}
           let field = ''
           for (const f of ['patient.drug.openfda.generic_name', 'patient.drug.openfda.brand_name']) {
-            try { r = await getJson(`https://api.fda.gov/drug/event.json?search=${f}:"${q(name)}"&count=patient.reaction.reactionmeddrapt.exact&limit=${Math.min(max * 2, 25)}`, sig) } catch { r = {} }
+            try { r = await getJson(`https://api.fda.gov/drug/event.json?search=${f}:"${q(name)}"&count=patient.reaction.reactionmeddrapt.exact&limit=${Math.min(max * 2, 25)}`, sig) } catch (e) { if (!notFound(e)) throw e; r = {} }
             if (r.results?.length) { field = f; break }
           }
           let total: number | undefined
