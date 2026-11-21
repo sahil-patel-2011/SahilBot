@@ -1,5 +1,42 @@
 [
   {
+    "version": "26.11.21",
+    "date": "2026-11-21",
+    "title": "A sharper agent loop, chart slides, and project instructions",
+    "highlights": [
+      "The agent tries another way when a tool fails, instead of giving up",
+      "It never re-sends something whose first send may have gone through, and it won't claim it did something it didn't",
+      "Slides can hold charts that export to PowerPoint as real, editable charts",
+      "Reads AGENTS.md and CLAUDE.md in your project folder, the way Codex does"
+    ],
+    "sections": [
+      {
+        "title": "Agent loop",
+        "items": [
+          "When a tool fails and the agent starts to give up, it's sent to try another source or approach first, and it says plainly what blocked it if nothing works",
+          "A reply that says something was saved, sent or published when no tool ran gets challenged: it does it, or says it wasn't done",
+          "If a send times out, SahilBot won't repeat it (or ask you to approve a repeat) until the agent checks whether it already went through",
+          "After a code edit, the project's tests run right away on fast suites, so a wrong fix is caught before it's announced",
+          "A job that says it's still building gets a single wait instead of a tight polling loop",
+          "Project instructions in AGENTS.md (or CLAUDE.md / GROK.md) from your folder up to the repo root go into the agent's context, like Codex",
+          "If you set a limit (\"under $200\"), what the agent picks is checked against it, and it fixes a choice that's over",
+          "It reads every page of a paged result before answering, instead of stopping at page 1",
+          "A write that fails outright (bad input, no permission) no longer counts as \"may have happened\", so a corrected retry goes straight through"
+        ]
+      },
+      {
+        "title": "Slides, documents and dashboards",
+        "items": [
+          "Chart slides: a chart block on a slide draws in the deck's colors and exports to PowerPoint as a native chart you can edit",
+          "Share tables (Channel / Share) draw as donut charts on slides and dashboards",
+          "A deck check after the agent makes or exports a deck: too many points, long lines, missing or long titles get fixed before you see it",
+          "Documents show their word count and reading time next to the save state",
+          "Typing fast on a slide (Tab, Enter, then straight on) never drops a keystroke or undoes the step before"
+        ]
+      }
+    ]
+  },
+  {
     "version": "26.11.20",
     "date": "2026-11-20",
     "title": "Native decks, documents and dashboards, a smarter Auto, and Hybrid compute",

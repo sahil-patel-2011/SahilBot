@@ -98,3 +98,25 @@ export const textPoints = (s: Slide): Slide['points'] => s.points.filter((p) => 
 
 /** Plain text of inline Markdown (bold, italics, links, code) for thumbnails and exports. */
 export const plainInline = (s: string): string => s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/[*_`~]/g, '')
+
+/**
+ * What a presenter would fix before sending a deck: overloaded slides, long points, missing or long titles,
+ * a title slide with no title. Empty when it's fine. The doc tools hand these back to the agent.
+ */
+export function deckReview(slides: Slide[]): string[] {
+  const out: string[] = []
+  if (!slides.length) return ['The deck has no slides.']
+  if (slides.length > 30) out.push(`${slides.length} slides is long for a deck: merge or cut to the ones that carry the story.`)
+  slides.forEach((s, i) => {
+    const n = i + 1
+    const text = textPoints(s)
+    const title = plainInline(s.title).trim()
+    if (!title) out.push(`Slide ${n} has no title.`)
+    else if (title.length > 70) out.push(`Slide ${n}'s title is ${title.length} characters: keep it under about 60 (a headline that states the point).`)
+    if (text.length > 6) out.push(`Slide ${n} has ${text.length} points: keep 3 to 5 (split it, or move detail to the speaker notes).`)
+    const long = text.filter((p) => plainInline(p.text).length > 120)
+    if (long.length) out.push(`Slide ${n} has ${long.length} point${long.length > 1 ? 's' : ''} over 120 characters: shorten to one line each, detail in the notes.`)
+    if (statsOf(s).length > 5) out.push(`Slide ${n} has ${statsOf(s).length} big numbers: 5 fit on a slide.`)
+  })
+  return out
+}

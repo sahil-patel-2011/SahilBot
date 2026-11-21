@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { blocksToSlides, deckReview } from '@shared/slides'
 import type { DocExportFormat, DocSnapshot } from '@shared/types'
 import type { ToolContext, ToolDef } from '../types'
 import { exportDoc, type CreateDocumentFn } from '../../docspace/export'
@@ -89,7 +90,7 @@ Returns the document with an [id] for every block; change it later with doc_edit
       type: 'object',
       properties: {
         title: { type: 'string', maxLength: 200 },
-        type: { type: 'string', enum: ['doc', 'sheet', 'slides', 'dashboard'], default: 'doc', description: 'slides: a native deck in the slide editor. "### Label" (optional kicker) then "## Title" starts a slide; - lines are its points (two-space indent = sub-point); "- **130** Steps" is a big-number stat; > lines are speaker notes; ![](/path.png) its picture. The first slide is the dark title slide. Export with doc_export pptx, pptx_pictures, odp, pdf or png. dashboard: a native dashboard: ## sections, "- **$4.2M** Revenue · up 12%" stat tiles, Markdown tables (first column labels, number columns are charted), short notes. Exports to pdf or html.' },
+        type: { type: 'string', enum: ['doc', 'sheet', 'slides', 'dashboard'], default: 'doc', description: 'slides: a native deck in the slide editor. "### Label" (optional kicker) then "## Title" starts a slide; - lines are its points (two-space indent = sub-point); "- **130** Steps" is a big-number stat; > lines are speaker notes; ![](/path.png) its picture; a ```chart block (CSV: header row, then label, number… rows) draws a chart (a Label/Share table draws a donut), exported as a native PowerPoint chart. The first slide is the dark title slide. The result lists a deck check: fix what it flags. Export with doc_export pptx, pptx_pictures, odp, pdf or png. dashboard: a native dashboard: ## sections, "- **$4.2M** Revenue · up 12%" stat tiles, Markdown tables (first column labels, number columns are charted), short notes. Exports to pdf or html.' },
         markdown: { type: 'string', description: 'Initial content as Markdown (sheet: a Markdown table or CSV)' },
         summary: { type: 'string', maxLength: 200, description: 'Optional one-line note for the version history' }
       },
@@ -108,8 +109,9 @@ Returns the document with an [id] for every block; change it later with doc_edit
           : { blocks: withoutTitleHeading(markdownToBlocks(stripIdMarkers(markdown)), title) }
       const snap = store.create({ threadId, spaceId: deps.spaceOf?.(threadId), title, type: type === 'sheet' ? 'sheet' : 'doc', content, author: 'bot', summary })
       store.markSeen(snap.id, snap.version)
+      const review = type === 'slides' ? deckReview(blocksToSlides(snap.content.blocks)) : []
       return {
-        text: `Created and opened it beside the chat; the user can edit it too. Change it with doc_edit(doc "${snap.id}", base ${snap.version}, ops).\n\n${readView(snap)}\n\n${DATA_NOTE}`,
+        text: `Created and opened it beside the chat; the user can edit it too. Change it with doc_edit(doc "${snap.id}", base ${snap.version}, ops).${review.length ? `\n\nDeck check (fix these with doc_edit before exporting):\n- ${review.join('\n- ')}` : ''}\n\n${readView(snap)}\n\n${DATA_NOTE}`,
         display: `created “${snap.title}”`,
         meta: card(snap)
       }
@@ -265,7 +267,8 @@ Optional "summary": a short note for the version history.`,
         return readFileSync(p)
       }
       const path = await exportDoc(snap, format, join(ws, 'exports'), { name, create: deps.create, readImage })
-      return { text: `Exported "${snap.title}" (version ${snap.version}) to ${path}.`, display: `exported ${path.split('/').pop()}`, path, meta: { ...card(snap), exported: path } }
+      const review = snap.content.kind === 'slides' ? deckReview(blocksToSlides(snap.content.blocks)) : []
+      return { text: `Exported "${snap.title}" (version ${snap.version}) to ${path}.${review.length ? `\nDeck check: ${review.join(' ')} Fix with doc_edit and export again if the user should get the polished version.` : ''}`, display: `exported ${path.split('/').pop()}`, path, meta: { ...card(snap), exported: path } }
     }
   }
 

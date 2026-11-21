@@ -123,6 +123,10 @@ describe('slides: a native deck the bot and the user both edit', () => {
       expect(statSync(dpdf).size).toBeGreaterThan(5_000)
       await page.locator('[data-testid="dash-edit"]').click()
       expect(await page.locator('[data-testid="doc-block"]').count()).toBeGreaterThan(3)
-    } catch (e) { await shot(page, 'failure'); throw e } finally { await app.close() }
+    } catch (e) {
+      await shot(page, 'failure')
+      if (process.env.SLIDES_DEBUG) { const { writeFileSync } = await import('node:fs'); const id = await page.locator('[data-testid="doc-editor"]').getAttribute('data-doc'); writeFileSync(process.env.SLIDES_DEBUG, JSON.stringify(await page.evaluate((x) => window.foreman.docs.get(x!), id), null, 1)) }
+      throw e
+    } finally { await app.close() }
   }, 120_000)
 })

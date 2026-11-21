@@ -139,3 +139,31 @@ test('native sheets work out the functions people expect: IF, SUMIF, VLOOKUP, te
   expect(v.C7.error).toBeTruthy()
   expect(v.C8.error).toBe('#DIV/0!')
 })
+
+test('a chart block on a slide draws as a chart, a share table as a donut, and the deck check flags overloaded slides', async () => {
+  const { slideChartHtml, deckLook } = await import('../../src/shared/slide-render')
+  const { deckReview } = await import('../../src/shared/slides')
+  const s = blocksToSlides([
+    { id: 'h', type: 'h2', text: 'Revenue grew every quarter' },
+    { id: 'c', type: 'code', lang: 'chart', text: 'Quarter, Revenue, Costs\nQ1, 120, 80\nQ2, 150, 90\nQ3, 190, 95' },
+    { id: 'h2', type: 'h2', text: 'Where customers come from' },
+    { id: 'c2', type: 'code', lang: 'chart', text: '| Channel | Share |\n|---|---|\n| Search | 45% |\n| Referral | 30% |\n| Ads | 25% |' }
+  ])
+  expect(slideChartHtml(s[0], deckLook()).match(/<rect /g)?.length).toBe(6)
+  expect(slideChartHtml(s[1], deckLook())).toContain('db-donut')
+  const heavy = blocksToSlides([{ id: 'h', type: 'h2', text: 'x'.repeat(80) }, ...Array.from({ length: 8 }, (_, i) => ({ id: `p${i}`, type: 'bullet' as const, text: `Point ${i}` }))])
+  const review = deckReview(heavy)
+  expect(review.join(' ')).toMatch(/8 points/)
+  expect(review.join(' ')).toMatch(/title is 80 characters/)
+  expect(deckReview(blocksToSlides(deck))).toEqual([])
+})
+
+test('a chart slide exports as a native, editable PowerPoint chart', async () => {
+  const { execFileSync } = await import('node:child_process')
+  const dir = mkdtempSync(join(tmpdir(), 'slides-chart-'))
+  const blocks: DocBlock[] = [{ id: 't', type: 'h2', text: 'Deck' }, { id: 'h', type: 'h2', text: 'Revenue grew' }, { id: 'p', type: 'bullet', text: 'Up 58% in three quarters' }, { id: 'c', type: 'code', lang: 'chart', text: 'Quarter, Revenue\nQ1, 120\nQ2, 150\nQ3, 190' }]
+  const snap = { id: 'd1', threadId: 't', title: 'Deck', type: 'doc', version: 1, createdAt: 0, updatedAt: 0, lastAuthor: 'user', lastSummary: '', content: { title: 'Deck', blocks, kind: 'slides' } } as never
+  const path = await exportDoc(snap, 'pptx', dir)
+  const names = execFileSync('/usr/bin/unzip', ['-Z1', path]).toString()
+  expect(names).toMatch(/ppt\/charts\/chart\d+\.xml/)
+}, 60_000)

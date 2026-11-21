@@ -782,6 +782,9 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
   const dashView = isDashboard && dashMode === 'view'
   const untitled = isSheet ? 'Untitled sheet' : isSlides ? 'Untitled deck' : isDashboard ? 'Untitled dashboard' : 'Untitled'
   const statusText = status === 'saving' ? 'Saving…' : status === 'unsaved' ? 'Editing…' : status === 'error' ? "Couldn't save" : 'Saved'
+  // Words in a document (or a deck's slides), shown next to the save state.
+  const words = isSheet ? 0 : content.blocks.reduce((n, b) => n + (inlinePlain(b.type === 'table' ? (b.rows ?? []).flat().join(' ') : b.text ?? '').match(/\S+/g)?.length ?? 0), 0)
+  const wordsText = !isSheet && words ? ` · ${words.toLocaleString()} word${words === 1 ? '' : 's'}${!isSlides && words > 250 ? ` · ${Math.max(1, Math.round(words / 230))} min read` : ''}` : ''
   const style = { '--doc-bot': botColor || 'var(--accent)' } as React.CSSProperties
 
   // Blocks with the deleted ones fading out where they were.
@@ -811,7 +814,7 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
           </select>
         ) : <span className="doc-top-title" title={content.title}>{content.title}</span>}
         <span className={`doc-status s-${status}`} data-testid="doc-status" aria-live="polite">
-          {botNote ? <><span className="doc-presence" />{botName} edited · {botNote.summary}</> : <>{statusText} · v{snap.version}</>}
+          {botNote ? <><span className="doc-presence" />{botName} edited · {botNote.summary}</> : <>{statusText} · v{snap.version}{wordsText}</>}
         </span>
         <div className="doc-top-actions">
           <div className="doc-menu-wrap">

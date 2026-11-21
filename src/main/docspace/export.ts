@@ -6,6 +6,7 @@ import { blocksToMarkdown, listNumbers } from './markdown'
 import { sheetRows, toCsv } from './sheet'
 import { blocksToSlides, plainInline } from '@shared/slides'
 import { slidePieces } from '@shared/slide-render'
+import { chartTable, donutSvg, numberOf } from '@shared/dashboard'
 import { dashboardPage, dashboardPdf, deckOdp, deckPdf, deckPngFolder, deckPptxPictures } from './deck-export'
 
 // doc_export and the editor's Export menu: Word and PDF through the app's document generators
@@ -183,14 +184,24 @@ export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: st
         const p = slidePieces(s, i)
         const bullets = p.bullets.map((b) => `${'  '.repeat(b.indent ?? 0)}${plainInline(b.text)}`)
         const stats = p.stats.map((x) => ({ value: plainInline(x.value), label: plainInline(x.label) }))
+        // A ```chart block: PowerPoint's own chart (editable data), the points as the takeaway beside it.
+        const fence = (s.extra ?? []).find((x) => x.type === 'code' && /^chart$/i.test(x.lang ?? ''))
+        const ct = fence ? chartTable(fence.text ?? '') : null
+        const nums = ct ? ct.header.map((_, c) => c).filter((c) => c > 0 && ct.rows.some((r) => numberOf(r[c] ?? '') !== null)) : []
+        const chart = ct && nums.length ? {
+          type: (donutSvg(ct, ['#000']) ? 'doughnut' : ct.rows.length >= 7 || /^(date|day|week|month|year|quarter|q\d|period|time)/i.test(ct.header[0] ?? '') && ct.rows.length >= 5 ? 'line' : 'column') as 'doughnut' | 'line' | 'column',
+          categories: ct.rows.map((r) => r[0] ?? ''),
+          series: nums.map((c) => ({ name: ct.header[c], values: ct.rows.map((r) => numberOf(r[c] ?? '')) }))
+        } : undefined
         // Light slides with big numbers use PowerPoint's stats layout (numbers on cards, points underneath).
-        const layout = p.layout === 'bullets' && stats.length ? 'stats' : p.layout
+        const layout = chart && !p.dark ? 'chart' : p.layout === 'bullets' && stats.length ? 'stats' : p.layout
         const desc = p.description.map(plainInline)
         return {
           title: plainInline(s.title) || (i === 0 ? d.title : ' '), layout,
           ...(s.kicker?.trim() ? { kicker: plainInline(s.kicker) } : {}),
           ...(p.dark ? { ...(p.subtitle ? { subtitle: plainInline(p.subtitle) } : {}), ...(desc.length ? { bullets: desc } : {}) } : bullets.length ? { bullets } : {}),
-          ...(stats.length ? { stats } : {}),
+          ...(stats.length && layout !== 'chart' ? { stats } : {}),
+          ...(chart && layout === 'chart' ? { chart } : {}),
           ...(s.image ? { image: s.image } : {}), ...(s.notes ? { notes: s.notes } : {})
         }
       })

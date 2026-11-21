@@ -48,3 +48,13 @@ export function recoveryPlan(tool: string, error: string, effect: string): { kin
   if (/not found|404|stale|detached|no such element/i.test(error)) return { kind: 'stale', instruction: 'Refresh the listing, page snapshot or object identity, then use the current identifier. Do not guess a replacement.', retry: false }
   return { kind: 'alternate', instruction: `Stop repeating ${tool}. Diagnose the error, then try a different authorized interface (connector, browser or computer) and verify the result.`, retry: false }
 }
+
+/**
+ * An error that says the action did not happen (bad input, a refusal, a missing thing): the write is failed,
+ * not "uncertain". Timeouts, dropped connections and server errors stay uncertain (it may have happened).
+ */
+export function definiteFailure(error: string): boolean {
+  if (/timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|EPIPE|deadline exceeded|fetch failed|\b5\d\d\b|unavailable|gateway|network|aborted|partial|of \d+ (items|messages|rows)/i.test(error)) return false
+  // Refused before anything was sent: bad input, no permission, a read-only target.
+  return /^(invalid|validation)|\b(must be|must use|use YYYY|is required|required (field|parameter|argument|property)|missing (required )?(field|parameter|argument|property)|EACCES|EPERM|permission denied|operation not permitted|read-only file system|400 bad request|422 unprocessable|401 unauthori[sz]ed|403 forbidden)\b/i.test(error.trim())
+}
