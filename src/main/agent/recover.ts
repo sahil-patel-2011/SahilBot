@@ -161,7 +161,7 @@ export class LoopGuard {
     this.stepRuns = key === this.stepKey ? this.stepRuns + 1 : 1
     this.stepKey = key
     const [nudgeAt, stopAt] = calls.every((c) => isRead(c.name)) ? [4, 8] : [8, 12]
-    if (this.stepRuns >= stopAt) return { stop: `Stopped: this exact step (${calls.map((c) => c.name).join(', ')}) ran ${this.stepRuns} times in a row. It was not run again. Change the approach: wait once (run_command "sleep 30") and check a single time, use different arguments, or tell the user what you're waiting for.` }
+    if (this.stepRuns >= stopAt) return { stop: `Stopped: this exact step (${calls.map((c) => c.name).join(', ')}) ran ${this.stepRuns} times in a row. It was not run again. Change the approach: wait once (a wait or sleep tool if you have one, or move on to other work first) and check a single time, use different arguments, or tell the user what you're waiting for.` }
     if (this.stepRuns === nudgeAt) return { nudge: `\n\n[From the app] You appear to be stuck in a polling loop: this exact step has run ${this.stepRuns} times in a row. If you're waiting on something, run a single sleep and then check once; do not poll in a tight loop. Otherwise change the approach.` }
     return {}
   }

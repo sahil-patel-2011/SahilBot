@@ -1909,6 +1909,11 @@ export class Agent {
       }
     } catch (e) {
       if (run.ctrl.signal.aborted) throw e
+      // Nothing unchecked goes to the cloud; with a local model the task carries on there instead of stopping.
+      if (local) {
+        this.notice(thread.id, `Privacy Gate couldn't check this request (${(e as Error).message}), so ${this.d.endpoints.last?.models.find((m) => m.id === local.id)?.label ?? local.id} on this Mac carries on with it.`, { internal: false })
+        return 'local'
+      }
       throw new Error(`The Privacy Gate couldn't check this request on your Mac (${(e as Error).message}), so nothing was sent to the cloud. Try again, use a local model, or turn hybrid compute off in Settings → Privacy & Security → Hybrid compute.`)
     }
     let items = privacyFindings(record, found)
@@ -1930,6 +1935,8 @@ export class Agent {
     const label = (id: string): string => this.d.endpoints.last?.models.find((m) => m.id === id)?.label ?? id
     let answer: PrivacyAnswer | undefined = record.remember ? { action: record.remember, notPersonal: [], remember: true } : undefined
     if (answer?.action === 'local' && !local) answer = undefined
+    // Nobody to answer a card (a routine, a goal running in the background): the safe choice, without waiting.
+    if (!answer && run.unattended) answer = { action: local ? 'local' : 'split', notPersonal: [], remember: false }
     if (!answer) {
       const raw = await this.ask(thread.id, run, {
         kind: 'privacy', label: 'Privacy Gate', summary: [...docs.map((d) => PRIVACY_DOCUMENT_TEXT[d.kind]), describePrivate(items)].filter(Boolean).join(' · '),
@@ -3088,7 +3095,9 @@ export class Agent {
             }
           }
           // Autonomy: a task stopped to ask "want me to…?" about its own next step. Do it (risky actions still ask).
-          const asksToContinue = /\b(want me to|would you like me to|shall i|should i (go ahead|proceed|continue|start|do)|do you want me to|let me know if you(?:'d| would) like me to)\b[^?]{0,200}\?\s*$/i.test(assistant.content.trim())
+          // A real choice for the user ("Postgres or SQLite?", "which one…?") is left alone: that question is theirs.
+          const finalAsk = assistant.content.trim()
+          const asksToContinue = /\b(want me to|would you like me to|shall i|should i (go ahead|proceed|continue|start|do)|do you want me to|let me know if you(?:'d| would) like me to)\b[^?]{0,200}\?\s*(\((yes|y)\s*\/\s*(no|n)\))?\s*$/i.test(finalAsk) && !/\b(or|which|either)\b[^?]{0,120}\?\s*(\([^)]*\))?\s*$/i.test(finalAsk)
           if (asksToContinue && (actions > 0 || open.length > 0 || routed?.task?.rule === 'semantic') && !autonomyNudged && !run.unattended && !chatRun && step < HARD_CAP) {
             autonomyNudged = true
             budget = Math.max(budget, step + 6)
@@ -4108,10 +4117,15 @@ export function promisesAction(text: string): boolean {
   const t = (text ?? '').trim()
   if (!t || /\?\s*$/.test(t)) return false
   const tail = t.slice(-400)
-  const verbs = 'send|publish|post|deploy|create|build|make|upload|check|open|sign in|log in|run|fix|write|draft|update|share|schedule|start|generate|render|submit|install|push|merge|book|order|email|message|save|export'
-  return new RegExp(`\\b(i'll|i will|i'm going to|i am going to|let me|i'm now|now i'll|next,? i'll|going to)\\s+(now\\s+|go ahead and\\s+|quickly\\s+|also\\s+)?(${verbs})\\b`, 'i').test(tail)
-    || new RegExp(`\\b(${verbs.split('|').map((v) => v.replace(/ .*/, '').replace(/e$/, '') + 'ing').join('|')})\\b[^.!?\\n]{0,120}\\b(now|right away)\\b`, 'i').test(tail)
-    || /\b(once|when) (it'?s|it is) (up|live|done|ready|finished)\b/i.test(tail)
+  // Ordinary closers that promise nothing to do now ("I'll update you if anything changes", "let me run through
+  // what I found", "I'll check in tomorrow") never count.
+  const last = tail.split(/(?<=[.!])\s+/).slice(-2).join(' ')
+  if (/\b(update you|keep you posted|let you know|check in|run through|walk you through|follow up (later|tomorrow|next)|if anything changes|tomorrow|next week|later today)\b/i.test(last)) return false
+  const verbs = 'send|publish|post|deploy|create|build|make|upload|open|sign in|log in|run|fix|write|draft|schedule|start|generate|render|submit|install|push|merge|book|order|email|export'
+  const gerunds = 'sending|publishing|posting|deploying|creating|building|making|uploading|opening|signing in|logging in|running|fixing|writing|drafting|scheduling|starting|generating|rendering|submitting|installing|pushing|merging|booking|ordering|emailing|exporting'
+  return new RegExp(`\\b(i'll|i will|i'm going to|i am going to|let me|i'm now|now i'll|next,? i'll)\\s+(now\\s+|go ahead and\\s+|quickly\\s+|also\\s+)?(${verbs})\\b`, 'i').test(last)
+    || new RegExp(`\\b(${gerunds})\\b[^.!?\\n]{0,120}\\b(now|right away)\\b`, 'i').test(last)
+    || /\b(send|share|post) (you )?(the|a) (live )?(link|url)\b[^.!?\n]{0,40}\b(once|when) (it'?s|it is) (up|live|done|ready|finished)\b/i.test(last)
 }
 
 export function nextStronger(models: ModelInfo[], current: string, o: { cloud: boolean; localOnly?: boolean; exclude?: Set<string>; sideways?: boolean; needsVision?: boolean; sameKind?: boolean; noPremium?: boolean }): ModelInfo | undefined {
