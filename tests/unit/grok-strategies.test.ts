@@ -71,3 +71,14 @@ test('a pasted API key with a well-known prefix knows its site, so it saves to t
   expect(savesWithoutAsking({ ...base, needs: ['site'] })).toBe(false)
   expect(savesWithoutAsking({ ...base, kind: 'card', needs: ['holder'] })).toBe(true)
 })
+
+test('a reply that announces an action without doing it is caught; finished work and questions are not', async () => {
+  const { promisesAction } = await import('../../src/main/agent/loop')
+  expect(promisesAction("Publishing the clicks post now. I'll send you the live link once it's up.")).toBe(true)
+  expect(promisesAction("Got it. I'll deploy it to Vercel and send you the URL.")).toBe(true)
+  expect(promisesAction('Let me create the presentation for you.')).toBe(true)
+  expect(promisesAction('I published the post: https://example.com/clicks')).toBe(false)
+  expect(promisesAction('Done. The deck is saved to ~/SahilBot/Decks/q4.pptx.')).toBe(false)
+  expect(promisesAction('Want me to publish it?')).toBe(false)
+  expect(promisesAction('Here is the summary of the article you asked about.')).toBe(false)
+})
