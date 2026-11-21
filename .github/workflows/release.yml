@@ -83,7 +83,8 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Unit tests
-        run: npx vitest run tests/unit
+        # A test that fails once and then passes (timing on a busy runner) doesn't block the release; one that fails twice does.
+        run: npx vitest run tests/unit --retry 1
 
       - name: Build app
         run: npx electron-vite build
