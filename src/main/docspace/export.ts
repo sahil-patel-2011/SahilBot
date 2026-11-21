@@ -4,6 +4,7 @@ import type { DocBlock, DocExportFormat, DocSnapshot } from '@shared/types'
 import { escapeHtml, inlineToHtml } from './inline'
 import { blocksToMarkdown, listNumbers } from './markdown'
 import { sheetRows, toCsv } from './sheet'
+import { blocksToSlides, plainInline, slideLayout } from '@shared/slides'
 
 // doc_export and the editor's Export menu: Word and PDF through the app's document generators
 // (src/main/docs/create.ts), Markdown and HTML written here, and xlsx/csv for sheets.
@@ -12,7 +13,7 @@ import { sheetRows, toCsv } from './sheet'
 export type ReadImageFn = (src: string) => Buffer
 
 /** The generator API this uses (src/main/docs/create.ts `createDocument`), injectable for tests. */
-export type CreateDocumentFn = (fullPath: string, spec: { path: string; title?: string; markdown?: string; font?: string; font_size?: number; theme?: 'modern' | 'classic' | 'minimal'; sheets?: Array<{ name: string; rows: Array<Array<string | number | boolean | null>>; header?: boolean }> }, o?: { readImage?: ReadImageFn }) => Promise<unknown>
+export type CreateDocumentFn = (fullPath: string, spec: { path: string; title?: string; markdown?: string; font?: string; font_size?: number; theme?: 'modern' | 'classic' | 'minimal'; slides?: Array<Record<string, unknown>>; sheets?: Array<{ name: string; rows: Array<Array<string | number | boolean | null>>; header?: boolean }> }, o?: { readImage?: ReadImageFn }) => Promise<unknown>
 
 const defaultCreate: CreateDocumentFn = async (fullPath, spec, o) => {
   const { createDocument } = await import('../docs/create')
@@ -144,7 +145,7 @@ ${body}
  * `readImage` (default: the folder `dir` is in, i.e. the workspace for <workspace>/exports).
  */
 export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: string, o: { name?: string; create?: CreateDocumentFn; readImage?: ReadImageFn } = {}): Promise<string> {
-  const allowed = d.type === 'sheet' ? SHEET_FORMATS : DOC_FORMATS
+  const allowed = d.type === 'sheet' ? SHEET_FORMATS : d.content.kind === 'slides' ? [...DOC_FORMATS, 'pptx' as const] : DOC_FORMATS
   if (!allowed.includes(format)) throw new Error(`A ${d.type === 'sheet' ? 'sheet' : 'document'} exports to ${allowed.join(', ')}; not ${format}.`)
   const create = o.create ?? defaultCreate
   const readImage = o.readImage ?? folderImageReader([dirname(resolve(dir))])
@@ -159,6 +160,17 @@ export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: st
       const raw = sheetRows(d.content.sheet ?? { rows: 0, cols: 0, cells: {} })
       const rows = raw.map((r) => r.map((c): string | number | null => (c === '' ? null : c.trim().startsWith('=') ? c.trim() : /^-?\d+(\.\d+)?$/.test(c.trim()) ? Number(c) : c)))
       await create(path, { path, title: d.title, sheets: [{ name: d.title.slice(0, 31) || 'Sheet1', rows: rows.length ? rows : [[null]], header: !!d.content.sheet?.header }] }, { readImage })
+      break
+    }
+    case 'pptx': {
+      // A native deck as PowerPoint: one slide per heading, its points, picture and speaker notes.
+      const st = d.content.style
+      const slides = blocksToSlides(d.content.blocks).map((s, i) => {
+        const layout = slideLayout(s, i)
+        const points = s.points.map((p) => `${'  '.repeat(p.indent ?? 0)}${plainInline(p.text)}`)
+        return { title: plainInline(s.title) || (i === 0 ? d.title : ' '), layout, ...(layout === 'title' && points[0] ? { subtitle: points[0] } : points.length ? { bullets: points } : {}), ...(s.image ? { image: s.image } : {}), ...(s.notes ? { notes: s.notes } : {}) }
+      })
+      await create(path, { path, title: d.title, slides: slides.length ? slides : [{ title: d.title, layout: 'title' }], ...(st?.font ? { font: st.font } : {}), ...(st?.theme ? { theme: st.theme } : {}) }, { readImage })
       break
     }
     case 'docx':

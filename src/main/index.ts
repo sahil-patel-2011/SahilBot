@@ -1550,10 +1550,16 @@ app.whenReady().then(() => {
   // ---- Docs IPC (the Document tab) ----
   handle('docs:list', (threadId: string) => docs.list(threadId))
   handle('docs:get', (id: string) => docs.get(id))
-  handle('docs:create', (threadId: string, title: string, type?: 'doc' | 'sheet') => {
+  /** A new blank document, deck (a document of slides) or sheet. */
+  const blankDoc = (kind: 'doc' | 'slides' | 'sheet'): { type: 'doc' | 'sheet'; content: Omit<import('@shared/types').DocContent, 'title'> } =>
+    kind === 'sheet' ? { type: 'sheet', content: { blocks: [] } }
+      : kind === 'slides' ? { type: 'doc', content: { kind: 'slides', blocks: [{ id: 'b000', type: 'h2', text: '' }, { id: 'b001', type: 'bullet', text: '' }] } }
+        : { type: 'doc', content: { blocks: [{ id: 'b000', type: 'p', text: '' }] } }
+  handle('docs:create', (threadId: string, title: string, type?: 'doc' | 'sheet' | 'slides') => {
     const t = db.getThread(threadId)
     if (!t) throw new Error('Thread not found')
-    return docs.create({ threadId, spaceId: t.spaceId, title: title || 'Untitled', type, content: { blocks: type === 'sheet' ? [] : [{ id: 'b000', type: 'p', text: '' }] }, author: 'user' })
+    const b = blankDoc(type ?? 'doc')
+    return docs.create({ threadId, spaceId: t.spaceId, title: title || 'Untitled', type: b.type, content: b.content, author: 'user' })
   })
   handle('docs:save', (id: string, base: number, content: import('@shared/types').DocContent) => {
     const snap = docs.saveUser(id, Number(base), content)
@@ -1589,6 +1595,18 @@ app.whenReady().then(() => {
     return { docId: snap.id, threadId: t.id }
   })
   handle('docs:source', (id: string) => docSources()[String(id)] ?? null)
+  handle('docs:recent', (limit?: number) => docs.recent(Number(limit) || 24))
+  /** Make something new (Artifacts): a blank document, deck or sheet in its own new chat with SahilBot. */
+  handle('docs:createNew', (kind: 'doc' | 'slides' | 'sheet') => {
+    const main = db.listSpaces().find((s) => s.isMain)
+    if (!main) throw new Error('SahilBot\'s main chat space is missing.')
+    const title = kind === 'slides' ? 'Untitled deck' : kind === 'sheet' ? 'Untitled sheet' : 'Untitled document'
+    const t = db.updateThread(db.createThread(main.id, 'auto', null).id, { title })
+    const b = blankDoc(kind)
+    const snap = docs.create({ threadId: t.id, spaceId: main.id, title, type: b.type, content: b.content, author: 'user' })
+    emit({ threadId: t.id, type: 'thread' } as never)
+    return { docId: snap.id, threadId: t.id }
+  })
   /** Writes the document back over its file (a copy of the original goes to <folder>/.sahilbot-backups first), or next to it. */
   handle('docs:saveBack', async (id: string, mode: 'replace' | 'copy') => {
     const src = docSources()[String(id)]

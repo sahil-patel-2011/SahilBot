@@ -8,9 +8,11 @@ export function tempProfile(): string {
 }
 
 export async function launch(dataDir: string, baseUrl: string, extraEnv: Record<string, string> = {}): Promise<{ app: ElectronApplication; page: Page }> {
+  // Not as plain Node, even when the test runner itself runs on Electron's Node (ELECTRON_RUN_AS_NODE).
+  const { ELECTRON_RUN_AS_NODE: _asNode, ...parentEnv } = process.env
   const app = await electron.launch({
     args: [resolve(process.env.LIVE_MAIN ?? 'out/main/index.js')],
-    env: { ...process.env, FOREMAN_DATA_DIR: dataDir, FOREMAN_BASE_URL: baseUrl, FOREMAN_SKIP_ONBOARDING: '1', FOREMAN_NO_AUTOTITLE: '1', FOREMAN_NO_VERIFY: '1', FOREMAN_NO_BRAIN: '1', SAHILBOT_HIDDEN: '1', ...extraEnv } as Record<string, string>
+    env: { ...parentEnv, FOREMAN_DATA_DIR: dataDir, FOREMAN_BASE_URL: baseUrl, FOREMAN_SKIP_ONBOARDING: '1', FOREMAN_NO_AUTOTITLE: '1', FOREMAN_NO_VERIFY: '1', FOREMAN_NO_BRAIN: '1', SAHILBOT_HIDDEN: '1', ...extraEnv } as Record<string, string>
   })
   const page = await app.firstWindow()
   await page.waitForSelector('[data-testid="composer-input"]')

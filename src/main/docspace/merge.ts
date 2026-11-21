@@ -64,7 +64,8 @@ export function merge3(base: DocContent, theirs: DocContent, mine: DocContent): 
   }
   // The look: mine when I changed it, else theirs.
   const style = JSON.stringify(mine.style ?? null) !== JSON.stringify(base.style ?? null) ? mine.style : theirs.style
-  return { title, blocks, ...(sheet ? { sheet } : {}), ...(style ? { style } : {}) }
+  const kind = mine.kind !== base.kind ? mine.kind : theirs.kind
+  return { title, blocks, ...(sheet ? { sheet } : {}), ...(style ? { style } : {}), ...(kind ? { kind } : {}) }
 }
 
 function insertAfterPred(order: string[], ref: string[], id: string): void {

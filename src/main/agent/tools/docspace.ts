@@ -76,7 +76,7 @@ export function docTools(deps: DocToolDeps): ToolDef[] {
   }
   const roots = (ctx: ToolContext): string[] => ctx.state.roots ?? []
 
-  const docCreate: ToolDef<{ title: string; type?: 'doc' | 'sheet'; markdown?: string; summary?: string }> = {
+  const docCreate: ToolDef<{ title: string; type?: 'doc' | 'sheet' | 'slides'; markdown?: string; summary?: string }> = {
     name: 'doc_create',
     label: 'Document',
     core: false,
@@ -89,7 +89,7 @@ Returns the document with an [id] for every block; change it later with doc_edit
       type: 'object',
       properties: {
         title: { type: 'string', maxLength: 200 },
-        type: { type: 'string', enum: ['doc', 'sheet'], default: 'doc' },
+        type: { type: 'string', enum: ['doc', 'sheet', 'slides'], default: 'doc', description: 'slides: a native deck the user edits in the slide editor. Each # or ## heading starts a slide; - lines are its points (indent for sub-points); > lines are speaker notes; ![alt](/path.png) adds its picture. Exports to PowerPoint with doc_export format pptx.' },
         markdown: { type: 'string', description: 'Initial content as Markdown (sheet: a Markdown table or CSV)' },
         summary: { type: 'string', maxLength: 200, description: 'Optional one-line note for the version history' }
       },
@@ -101,8 +101,10 @@ Returns the document with an [id] for every block; change it later with doc_edit
       if (type !== 'sheet') for (const src of imagesIn(markdown)) checkImageSrc(src, deps.workspace(), roots(ctx))
       const content = type === 'sheet'
         ? { blocks: [], sheet: sheetFromMarkdown(markdown) }
-        : { blocks: withoutTitleHeading(markdownToBlocks(stripIdMarkers(markdown)), title) }
-      const snap = store.create({ threadId, spaceId: deps.spaceOf?.(threadId), title, type, content, author: 'bot', summary })
+        : type === 'slides'
+          ? { blocks: markdownToBlocks(stripIdMarkers(markdown)), kind: 'slides' as const }
+          : { blocks: withoutTitleHeading(markdownToBlocks(stripIdMarkers(markdown)), title) }
+      const snap = store.create({ threadId, spaceId: deps.spaceOf?.(threadId), title, type: type === 'sheet' ? 'sheet' : 'doc', content, author: 'bot', summary })
       store.markSeen(snap.id, snap.version)
       return {
         text: `Created and opened it beside the chat; the user can edit it too. Change it with doc_edit(doc "${snap.id}", base ${snap.version}, ops).\n\n${readView(snap)}\n\n${DATA_NOTE}`,
@@ -243,7 +245,7 @@ Optional "summary": a short note for the version history.`,
       type: 'object',
       properties: {
         doc: { type: 'string' },
-        format: { type: 'string', enum: ['docx', 'pdf', 'md', 'html', 'xlsx', 'csv'] },
+        format: { type: 'string', enum: ['docx', 'pdf', 'md', 'html', 'xlsx', 'csv', 'pptx'] },
         name: { type: 'string', maxLength: 100 }
       },
       required: ['format'],

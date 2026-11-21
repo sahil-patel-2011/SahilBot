@@ -35,7 +35,7 @@ test('CSV opens as a sheet (quoted commas kept), Markdown as blocks, and files s
   writeFileSync(md, '# Plan\n\n1. Draft\n2. Review\n')
   expect((await importFile(md)).content.blocks.map((b) => b.type)).toEqual(['h1', 'numbered', 'numbered'])
   expect(saveFormat('/x/a.docx')).toBe('docx')
-  expect(saveFormat('/x/a.pptx')).toBe('docx')
+  expect(saveFormat('/x/a.pptx')).toBe('pptx')
   expect(saveFormat('/x/a.txt')).toBe('md')
   expect(saveFormat('/x/a.xlsx')).toBe('xlsx')
   expect(isEditable('/x/a.key')).toBe(false)

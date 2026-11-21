@@ -138,6 +138,8 @@ const api: SahilBotApi = {
     export: call('docs:export') as never,
     importFile: call('docs:importFile') as never,
     source: call('docs:source') as never,
+    createNew: call('docs:createNew') as never,
+    recent: call('docs:recent') as never,
     saveBack: call('docs:saveBack') as never,
     addImage: call('docs:addImage') as never,
     dirty: call('docs:dirty') as never,

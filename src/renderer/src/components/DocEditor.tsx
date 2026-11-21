@@ -8,6 +8,7 @@ import { inlinePlain } from '../../../main/docspace/inline'
 import { merge3 } from '../../../main/docspace/merge'
 import { BlockBody, BlockStatic, TYPE_LABEL, type BlockCtx } from './doc/Blocks'
 import { SheetView } from './doc/SheetView'
+import { SlidesView } from './doc/SlidesView'
 import { ago, DocIcon, useThreadDocs } from './doc/DocCard'
 import { caretOffset, caretOnEdgeLine, deleteLeading, htmlToInline, isCollapsed, selectionTextIn, setCaret, splitAtCaret, textLength } from './doc/dom'
 
@@ -54,7 +55,8 @@ const SLASH: Array<{ type: DocBlockType; hint: string; keys: string }> = [
   { type: 'image', hint: 'A picture from your Mac', keys: 'image picture photo' }
 ]
 
-const EXPORTS: Record<'doc' | 'sheet', Array<{ f: DocExportFormat; label: string }>> = {
+const EXPORTS: Record<'doc' | 'sheet' | 'slides', Array<{ f: DocExportFormat; label: string }>> = {
+  slides: [{ f: 'pptx', label: 'PowerPoint (.pptx)' }, { f: 'pdf', label: 'PDF' }, { f: 'md', label: 'Markdown (.md)' }],
   doc: [{ f: 'docx', label: 'Word (.docx)' }, { f: 'pdf', label: 'PDF' }, { f: 'md', label: 'Markdown (.md)' }, { f: 'html', label: 'Web page (.html)' }],
   sheet: [{ f: 'xlsx', label: 'Excel (.xlsx)' }, { f: 'csv', label: 'CSV' }, { f: 'pdf', label: 'PDF' }, { f: 'md', label: 'Markdown table' }]
 }
@@ -71,9 +73,9 @@ export function DocPane({ threadId, docId, onDocId, onAsk, botColor, botName }: 
 }) {
   const docs = useThreadDocs(threadId)
   const current = docId ?? docs[0]?.id ?? null
-  const create = async (type: 'doc' | 'sheet'): Promise<void> => {
+  const create = async (type: 'doc' | 'sheet' | 'slides'): Promise<void> => {
     if (!threadId) return
-    try { onDocId((await api.docs.create(threadId, type === 'sheet' ? 'Untitled sheet' : 'Untitled', type)).id) } catch (e) { toast((e as Error).message, 'error') }
+    try { onDocId((await api.docs.create(threadId, type === 'sheet' ? 'Untitled sheet' : type === 'slides' ? 'Untitled deck' : 'Untitled', type)).id) } catch (e) { toast((e as Error).message, 'error') }
   }
   if (!threadId) return <div className="right-body">Open a chat to work on documents with SahilBot.</div>
   if (!current) {
@@ -84,6 +86,7 @@ export function DocPane({ threadId, docId, onDocId, onAsk, botColor, botName }: 
         <span>Ask {botName ?? 'SahilBot'} to draft one (“write a project plan we can edit together”), or start one yourself. You both edit the same document, live.</span>
         <div className="row">
           <button className="btn primary" onClick={() => void create('doc')} data-testid="doc-new">New document</button>
+          <button className="btn" onClick={() => void create('slides')} data-testid="doc-new-slides">New deck</button>
           <button className="btn" onClick={() => void create('sheet')}>New sheet</button>
         </div>
       </div>
@@ -96,7 +99,7 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
   id: string
   docs: DocInfo[]
   onDocId: (id: string) => void
-  onNew: (type: 'doc' | 'sheet') => Promise<void>
+  onNew: (type: 'doc' | 'sheet' | 'slides') => Promise<void>
   onAsk: (text: string, title: string) => void
   botColor?: string | null
   botName: string
@@ -745,6 +748,8 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
   if (!snap || !content) return <div className="right-body"><span className="spin" /></div>
 
   const isSheet = snap.type === 'sheet'
+  const isSlides = !isSheet && content.kind === 'slides'
+  const untitled = isSheet ? 'Untitled sheet' : isSlides ? 'Untitled deck' : 'Untitled'
   const statusText = status === 'saving' ? 'Saving…' : status === 'unsaved' ? 'Editing…' : status === 'error' ? "Couldn't save" : 'Saved'
   const style = { '--doc-bot': botColor || 'var(--accent)' } as React.CSSProperties
 
@@ -783,6 +788,7 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
             {menu === 'new' && (
               <div className="doc-menu" role="menu">
                 <button role="menuitem" onClick={() => { setMenu(null); void onNew('doc') }}><DocIcon size={14} /> New document</button>
+                <button role="menuitem" onClick={() => { setMenu(null); void onNew('slides') }}><SlidesIcon /> New deck</button>
                 <button role="menuitem" onClick={() => { setMenu(null); void onNew('sheet') }}><DocIcon size={14} sheet /> New sheet</button>
               </div>
             )}
@@ -798,7 +804,7 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
             </button>
             {menu === 'export' && (
               <div className="doc-menu right" role="menu">
-                {EXPORTS[isSheet ? 'sheet' : 'doc'].map((x) => <button key={x.f} role="menuitem" onClick={() => void doExport(x.f)} data-testid={`doc-export-${x.f}`}>{x.label}</button>)}
+                {EXPORTS[isSheet ? 'sheet' : isSlides ? 'slides' : 'doc'].map((x) => <button key={x.f} role="menuitem" onClick={() => void doExport(x.f)} data-testid={`doc-export-${x.f}`}>{x.label}</button>)}
                 {source && <button role="menuitem" onClick={() => void saveBack('copy')} data-testid="doc-save-copy">Save a copy next to the original</button>}
               </div>
             )}
@@ -806,7 +812,20 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
         </div>
       </div>
 
-      {!isSheet && !viewing && (
+      {isSlides && !viewing && (
+        <div className="doc-toolbar" role="toolbar" aria-label="Deck style">
+          <select className="doc-style doc-font" aria-label="Font" title="Font for the slides and the PowerPoint file" value={content.style?.font ?? ''} disabled={readOnly} onChange={(e) => setStyle({ font: e.target.value || undefined })} data-testid="doc-font">
+            <option value="">Theme font</option>
+            {DOC_FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
+          </select>
+          <select className="doc-style doc-theme" aria-label="Theme" title="Colors and type for the slides and the PowerPoint file" value={content.style?.theme ?? ''} disabled={readOnly} onChange={(e) => setStyle({ theme: (e.target.value || undefined) as DocStyle['theme'] })} data-testid="doc-theme">
+            <option value="">Theme: Modern</option><option value="classic">Classic</option><option value="minimal">Minimal</option>
+          </select>
+          <span className="muted small" title="Ask SahilBot in the chat to draft, rework or add slides">Type on a slide to edit it</span>
+        </div>
+      )}
+
+      {!isSheet && !isSlides && !viewing && (
         <div className="doc-toolbar" role="toolbar" aria-label="Formatting">
           <select className="doc-style" aria-label="Text style" value={curBlock && ['p', 'h1', 'h2', 'h3'].includes(curBlock.type) ? curBlock.type : ''}
             onChange={(e) => { const bid = target(); if (bid && e.target.value) setType(bid, e.target.value as DocBlockType) }}>
@@ -861,17 +880,21 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
       )}
 
       <div className="doc-main">
-        <div className="doc-scroll" ref={body} onMouseDown={(e) => { if (e.target === e.currentTarget && content.blocks.length) { e.preventDefault(); const last = content.blocks[content.blocks.length - 1]; if (TEXTY.has(last.type)) focusBlock(last.id, 'end'); else addAfter(last.id) } }}>
+        <div className="doc-scroll" ref={body} onMouseDown={(e) => { if (e.target === e.currentTarget && !isSlides && content.blocks.length) { e.preventDefault(); const last = content.blocks[content.blocks.length - 1]; if (TEXTY.has(last.type)) focusBlock(last.id, 'end'); else addAfter(last.id) } }}>
           {viewing ? (
             <VersionView id={id} n={viewing.n} current={snap.version} against={viewing.against} onAgainst={(a) => setViewing({ ...viewing, against: a })}
               onRestore={() => void restore(viewing.n)} onClose={() => setViewing(null)} isSheet={isSheet} />
           ) : (
-            <div className="doc-paper">
-              <input className={`doc-title${flash.title ? ` doc-flash-${flash.title % 2}` : ''}`} value={content.title === 'Untitled' || content.title === 'Untitled sheet' ? '' : content.title} placeholder={isSheet ? 'Untitled sheet' : 'Untitled'}
+            <div className={`doc-paper${isSlides ? ' deck' : ''}`}>
+              <input className={`doc-title${flash.title ? ` doc-flash-${flash.title % 2}` : ''}`} value={content.title === untitled || content.title === 'Untitled' ? '' : content.title} placeholder={untitled}
                 aria-label="Title" data-testid="doc-title"
-                onChange={(e) => change({ ...content, title: e.target.value || (isSheet ? 'Untitled sheet' : 'Untitled') }, 'type')}
-                onKeyDown={(e) => { if (e.key === 'Enter' || (e.key === 'ArrowDown' && !isSheet)) { e.preventDefault(); const first = content.blocks[0]; if (first) focusBlock(first.id, 'start') } }} />
-              {isSheet ? (
+                onChange={(e) => change({ ...content, title: e.target.value || untitled }, 'type')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || (e.key === 'ArrowDown' && !isSheet && !isSlides)) { e.preventDefault(); const first = content.blocks[0]; if (first && !isSlides) focusBlock(first.id, 'start') } }} />
+              {isSlides ? (
+                <SlidesView blocks={content.blocks} style={content.style} flash={flash} readOnly={readOnly} imageUrl={imageUrl}
+                  onChange={(bs, mode) => setBlocks(bs, mode)}
+                  addImage={() => api.docs.addImage().catch((e: Error) => { toast(e.message, 'error'); return null })} />
+              ) : isSheet ? (
                 <SheetView sheet={content.sheet ?? { rows: 20, cols: 6, cells: {}, header: true }} flash={flash} readOnly={readOnly}
                   onChange={(next, structural) => change({ ...content, sheet: next }, structural ? 'struct' : 'type')} />
               ) : (
@@ -1052,3 +1075,7 @@ const TableIcon = () => (
     <rect x="3.5" y="4.5" width="17" height="15" rx="2" /><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15M15 4.5v15" />
   </svg>
 )
+
+function SlidesIcon() {
+  return <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M12 17v3M8 21h8" /></svg>
+}

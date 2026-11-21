@@ -2331,6 +2331,8 @@ export interface DocContent {
   sheet?: DocSheet
   /** How the document looks, in the editor and in Word / PDF / HTML exports. */
   style?: DocStyle
+  /** 'slides': a native deck (each heading starts a slide; src/shared/slides.ts). */
+  kind?: 'slides'
 }
 
 /** A document's look: its font, text size and theme (src/main/docs/theme.ts). */
@@ -2407,7 +2409,7 @@ export interface DocDiff {
   cells?: Array<{ addr: string; before: string; after: string }>
 }
 
-export type DocExportFormat = 'docx' | 'pdf' | 'md' | 'html' | 'xlsx' | 'csv'
+export type DocExportFormat = 'docx' | 'pdf' | 'md' | 'html' | 'xlsx' | 'csv' | 'pptx'
 
 /** Library items can be live documents (opened in the Document tab). */
 export interface LibraryItem {
@@ -2419,7 +2421,7 @@ export interface SahilBotApi {
     /** Documents in a chat, newest change first. */
     list(threadId: string): Promise<DocInfo[]>
     get(id: string): Promise<DocSnapshot>
-    create(threadId: string, title: string, type?: DocType): Promise<DocSnapshot>
+    create(threadId: string, title: string, type?: DocType | 'slides'): Promise<DocSnapshot>
     /** Saves the user's edits made on top of version `base` (merged with any newer bot edit). */
     save(id: string, base: number, content: DocContent): Promise<DocSnapshot>
     versions(id: string): Promise<DocVersionInfo[]>
@@ -2431,6 +2433,10 @@ export interface SahilBotApi {
     importFile(path: string, threadId?: string): Promise<{ docId: string; threadId: string }>
     /** The file a document was opened from, or null. */
     source(id: string): Promise<string | null>
+    /** A blank document, deck or sheet in a new chat (Artifacts → Make something new). */
+    createNew(kind: 'doc' | 'slides' | 'sheet'): Promise<{ docId: string; threadId: string }>
+    /** Documents across every chat, newest change first; `slides` marks decks. */
+    recent(limit?: number): Promise<Array<DocInfo & { slides: boolean }>>
     /** Saves the document back over its file (backup first) or as a copy: the path written, and whether it was the original. */
     saveBack(id: string, mode: 'replace' | 'copy'): Promise<{ path: string; replaced: boolean }>
     /** Picks an image, copies it into the workspace and returns its path (null if cancelled). */

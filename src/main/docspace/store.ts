@@ -101,6 +101,12 @@ export class DocStore {
     return (this.sql.prepare('SELECT * FROM docspace_docs WHERE thread_id = ? ORDER BY updated_at DESC').all(threadId) as Row[]).map((r) => this.toInfo(r))
   }
 
+  /** Documents across every chat, newest change first (Artifacts → Your documents). */
+  recent(limit = 24): Array<DocInfo & { slides: boolean }> {
+    return (this.sql.prepare(`SELECT *, json_extract(content, '$.kind') = 'slides' AS is_slides FROM docspace_docs ORDER BY updated_at DESC LIMIT ?`).all(Math.max(1, Math.min(200, limit))) as Row[])
+      .map((r) => ({ ...this.toInfo(r), slides: r.is_slides === 1 }))
+  }
+
   /** The chat's most recently changed document. */
   latest(threadId: string): DocInfo | undefined {
     return this.list(threadId)[0]
@@ -139,7 +145,11 @@ export class DocStore {
     const id = `d${randomUUID().replace(/-/g, '').slice(0, 10)}`
     const type: DocType = o.type === 'sheet' ? 'sheet' : 'doc'
     const title = cleanTitle(o.content.title ?? o.title)
-    const content: DocContent = { title, blocks: type === 'sheet' ? [] : o.content.blocks ?? [], ...(type === 'sheet' ? { sheet: fitSheet(o.content.sheet ?? emptySheet()) } : {}) }
+    const style = normalizeStyle(o.content.style)
+    const content: DocContent = {
+      title, blocks: type === 'sheet' ? [] : o.content.blocks ?? [], ...(type === 'sheet' ? { sheet: fitSheet(o.content.sheet ?? emptySheet()) } : {}),
+      ...(style ? { style } : {}), ...(type !== 'sheet' && o.content.kind === 'slides' ? { kind: 'slides' as const } : {})
+    }
     const json = this.check(content)
     const at = this.now()
     const summary = o.summary?.trim() || (o.author === 'bot' ? 'Created the document' : 'Created')
@@ -334,7 +344,7 @@ export function normalizeContent(c: unknown, type: DocType): DocContent {
     sheet = fitSheet({ rows: Math.min(MAX_ROWS, Math.max(1, Number(sh.rows) || 1)), cols: Math.min(MAX_COLS, Math.max(1, Number(sh.cols) || 1)), cells, header: sh.header !== false })
   }
   const style = normalizeStyle(x.style)
-  return { title: cleanTitle(x.title), blocks, ...(sheet ? { sheet } : {}), ...(style ? { style } : {}) }
+  return { title: cleanTitle(x.title), blocks, ...(sheet ? { sheet } : {}), ...(style ? { style } : {}), ...(type !== 'sheet' && x.kind === 'slides' ? { kind: 'slides' as const } : {}) }
 }
 
 /** A document style with only allowed values (an unknown font, size or theme is dropped). */
