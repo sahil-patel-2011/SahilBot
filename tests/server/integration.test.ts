@@ -102,6 +102,34 @@ describe('SahilBot Server', () => {
     c.ws.close()
   })
 
+  test('the Mac link: a paired Mac polls, the server\'s agent reads a file on it, the result comes back', async () => {
+    expect((await fetch(`${srv.url}/api/mac/poll`, { method: 'POST' })).status).toBe(401)
+    const paired = await fetch(`${srv.url}/api/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: srv.codes.create().code, mode: 'token', name: 'Mac link test' }) })
+    const { token } = await paired.json()
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const post = (path: string, body: unknown) => fetch(`${srv.url}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }).then((r) => r.json())
+    // The Mac checks in (no work yet: the long poll answers empty), so the server's agent can see the mac tool.
+    const first = post('/api/mac/poll', { name: 'Test Mac', tools: ['file_read', 'file_manage'] })
+    const c = await connect()
+    await until(() => true)
+    const spaces = await c.call('spaces:list')
+    const main = spaces.find((x: any) => x.isMain)
+    const thread = await c.call('threads:create', main.id)
+    llm.script.push({ toolCalls: [{ name: 'mac', arguments: JSON.stringify({ tool: 'file_read', args: { path: '~/Documents/notes.txt' } }) }], delay: 0 }, { content: 'Your notes say: hello from the Mac.', delay: 0 })
+    const started = c.events.length
+    await c.call('chat:send', { threadId: thread.id, text: 'Read my notes.txt on my Mac' })
+    // The job reaches the Mac on its poll; the Mac answers with the file's text.
+    let job: any
+    for (let i = 0; i < 20 && !job; i++) { const r = i === 0 ? await first : await post('/api/mac/poll', { name: 'Test Mac', tools: ['file_read', 'file_manage'] }); job = r.jobs?.[0] }
+    expect(job).toMatchObject({ tool: 'file_read', args: { path: '~/Documents/notes.txt' } })
+    expect(await post('/api/mac/result', { id: job.id, ok: true, text: 'hello from the Mac' })).toMatchObject({ ok: true })
+    await until(() => c.events.slice(started).some((e) => e.ch === 'chat:event' && e.args[0].threadId === thread.id && e.args[0].status === 'finished'), 20_000)
+    const msgs = await c.call('threads:messages', thread.id)
+    expect(msgs.some((m: any) => m.role === 'tool' && /hello from the Mac/.test(m.content))).toBe(true)
+    expect(msgs.some((m: any) => m.role === 'assistant' && /hello from the Mac/.test(m.content ?? ''))).toBe(true)
+    c.ws.close()
+  }, 60_000)
+
   test('boots headless: Electron-only services off, secrets sealed, the web UI served', async () => {
     expect(srv.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
     expect(srv.firstCode).toMatch(/^[2-9A-Z]{10}$/)

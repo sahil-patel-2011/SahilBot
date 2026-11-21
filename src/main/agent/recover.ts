@@ -143,7 +143,13 @@ export function canonicalArgs(raw: string): string {
  * Same call, same result, again and again: the signature of a stuck local model.
  * A repeated call whose result changes (a snapshot of a new page) is progress, not a loop.
  */
+const STILL_RUNNING = /\b(building|running|pending|queued|in progress|processing|deploying|starting|not (yet )?(ready|done|finished|live))\b/i
+const STATUS_LIKE = /^\W*(status|state|job|build|deploy(ment)?|task|run|pipeline|workflow|export|upload|render)\b|\b(job|build|deploy(ment)?|pipeline|workflow|task) [\w#-]+:/i
+
 export class LoopGuard {
+  constructor(private o: { pendingNudge?: boolean } = {}) {}
+  /** The last recorded result said the job is still going ("building (42%)"). */
+  private lastPending = false
   private last = new Map<string, { result: string; same: number }>()
   private errors = new Map<string, number>()
   private stepKey = ''
@@ -160,7 +166,12 @@ export class LoopGuard {
     const key = calls.map((c) => `${c.name}:${canonicalArgs(c.arguments)}`).sort().join('|')
     this.stepRuns = key === this.stepKey ? this.stepRuns + 1 : 1
     this.stepKey = key
-    const [nudgeAt, stopAt] = calls.every((c) => isRead(c)) ? [4, 8] : [8, 12]
+    // A status check that just said "still building": checking again right away is a poll, so the wait-once
+    // nudge comes on the second identical check instead of the fourth.
+    const reads = calls.every((c) => isRead(c))
+    const [nudgeAt, stopAt] = reads ? [this.o.pendingNudge && this.lastPending ? 2 : 4, 8] : [8, 12]
+    if (this.o.pendingNudge && this.lastPending && reads && this.stepRuns === 4) return { nudge: `\n\n[From the app] You appear to be stuck in a polling loop: this exact step has run ${this.stepRuns} times in a row. If you're waiting on something, run a single sleep and then check once; do not poll in a tight loop. Otherwise change the approach.` }
+    if (this.o.pendingNudge && this.lastPending && reads && this.stepRuns === 2 && nudgeAt === 2) return { nudge: `\n\n[From the app] This check said the job is still running a moment ago, and you checked again right away. Wait once (a sleep or wait tool, about as long as the job needs) and then check a single time; don't poll in a tight loop.` }
     if (this.stepRuns >= stopAt) return { stop: `Stopped: this exact step (${calls.map((c) => c.name).join(', ')}) ran ${this.stepRuns} times in a row. It was not run again. Change the approach: wait once (a wait or sleep tool if you have one, or move on to other work first) and check a single time, use different arguments, or tell the user what you're waiting for.` }
     if (this.stepRuns === nudgeAt) return { nudge: `\n\n[From the app] You appear to be stuck in a polling loop: this exact step has run ${this.stepRuns} times in a row. If you're waiting on something, run a single sleep and then check once; do not poll in a tight loop. Otherwise change the approach.` }
     return {}
@@ -184,6 +195,8 @@ export class LoopGuard {
     const k = this.key(call)
     const seen = this.last.get(k)
     this.last.set(k, { result, same: seen && seen.result === result ? seen.same + 1 : 1 })
+    const head = result.slice(0, 600)
+    this.lastPending = STATUS_LIKE.test(head) && STILL_RUNNING.test(head) && !/\b(live at|succeeded|completed|ready at)\b/i.test(head) && !/(?<!\bnot\s(?:yet\s)?)\b(done|finished)\b/i.test(head)
   }
 
   /** Counts repeated errors from the same tool; returns a nudge on the third. */

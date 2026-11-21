@@ -8,6 +8,8 @@ export class Mic {
   private node: ScriptProcessorNode | null = null
   private pending = new Float32Array(0)
   level = 0
+  /** Muted: nothing goes to main (the bot keeps talking). */
+  muted = false
 
   async start(): Promise<void> {
     this.stream = await navigator.mediaDevices.getUserMedia({
@@ -18,6 +20,7 @@ export class Mic {
     const src = this.ctx.createMediaStreamSource(this.stream)
     this.node = this.ctx.createScriptProcessor(512, 1, 1)
     this.node.onaudioprocess = (e) => {
+      if (this.muted) { this.level = 0; this.pending = new Float32Array(0); return }
       const input = e.inputBuffer.getChannelData(0)
       let sum = 0
       for (let i = 0; i < input.length; i++) sum += input[i] * input[i]

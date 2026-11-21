@@ -6,7 +6,7 @@
 
 /** Who is calling: the transport, plus what it knows about the caller (never trusted for auth on its own). */
 export interface RpcContext {
-  transport: 'electron' | 'ws' | 'worker' | 'test'
+  transport: 'electron' | 'ws' | 'worker' | 'mac' | 'test'
   /** Electron: the sending WebContents. */
   sender?: unknown
   /** Electron: the sending frame. */

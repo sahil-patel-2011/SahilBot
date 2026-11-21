@@ -33,11 +33,12 @@ export function grokSpeech(o: {
   })
   const voice: TtsEngine = {
     name: 'Grok voice',
+    voice: 'eve',
     async warm() {},
     async synth(text) {
       const usd = Array.from(text).length * 15 / 1_000_000
       o.before('grok-tts', usd)
-      const response = await request('tts', JSON.stringify({ text, language: 'auto', voice_id: 'eve', output_format: { codec: 'wav' } }), AbortSignal.timeout(30_000))
+      const response = await request('tts', JSON.stringify({ text, language: 'auto', voice_id: voice.voice ?? 'eve', output_format: { codec: 'wav' } }), AbortSignal.timeout(30_000))
       o.after('grok-tts', usd)
       const wav = response.headers.get('content-type')?.includes('application/json')
         ? Buffer.from((await response.json()).audio, 'base64') : Buffer.from(await response.arrayBuffer())

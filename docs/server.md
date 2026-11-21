@@ -61,6 +61,64 @@ already signed in.
 **Finish setup in the web UI:** Settings → API Keys & Servers (a Claude or OpenAI key), or Settings → Models
 → ChatGPT plan. Then create bots and routines as usual.
 
+## On a VPS (DigitalOcean), with your iPhone and your Mac
+
+Your bots run 24/7 on a small cloud server. Your iPhone uses them from Safari as a Home Screen app. The server can use your Mac for what only the Mac can do.
+
+**Which Droplet.** Create it at DigitalOcean → Droplets → Create:
+
+| | Recommended | Lighter |
+|---|---|---|
+| Plan | Basic, Regular, 2 vCPU, **4 GB RAM**, 80 GB SSD | Basic, Regular, 1 vCPU, 2 GB RAM, 50 GB SSD |
+| Good for | Several always-on bots, routines, connectors, documents | One or two bots, light routines |
+| Price (check DigitalOcean's page) | about $24 a month | about $12 a month |
+
+- **Image:** Ubuntu 24.04 LTS x64.
+- **Region:** the one closest to you.
+- **Authentication:** an SSH key.
+- **Options:** turn on weekly backups (about 20% more) and monitoring (free).
+- **Models:** use cloud models (Claude, OpenAI or your ChatGPT plan). Local models need far more memory, and they stay on your Mac.
+
+**Set it up.** Over SSH, as a non-root user with sudo:
+
+```sh
+curl -fsSLO https://github.com/sahil-patel-2011/SahilBot/releases/latest/download/SahilBot-server-linux-x64.tar.gz
+tar -xzf SahilBot-server-linux-x64.tar.gz && ./sahilbot-server/install.sh
+curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
+sudo tailscale serve --bg 8787
+```
+
+Install Tailscale on your Mac and your iPhone, signed in to the same account. Nothing is open to the public internet: only your own devices can reach the server.
+
+**iPhone.** Open `https://<droplet-name>.<your-tailnet>.ts.net` in Safari and enter the pairing code from `sahilbot-server pair`. Then use Share → Add to Home Screen. For notifications, open it from the Home Screen first, then go to Settings → Phone & server → This device → Turn on.
+
+**Mac.** In SahilBot, go to Settings → Phone & server. Enter the server's address and a pairing code, then choose **Link**.
+
+**Let the server use this Mac.** Turn on **Use this Mac from the server**. At first the server can only find and read files in your home folder. Turn on more tools one at a time:
+
+- write, move and copy files
+- Terminal
+- Messages, Mail, Notes and Calendar
+- the browser you're signed in to
+- the screen
+
+How it stays safe:
+
+- **No open ports.** The Mac connects out to the server, so nothing on the Mac is opened to the internet.
+- **Asks before changes.** Reads run without asking. Anything that changes something asks you first on whatever device you're using, such as sending a text, writing a file, running a command or clicking.
+- **Some things need you at the Mac.** These are refused from the server:
+  - deleting
+  - anything outside your home folder
+  - the places SahilBot protects
+- **The Mac checks its own list.** It runs only the tools you turned on, whatever the server asks for.
+- **Limits.** The Mac takes at most 30 actions a minute, and at most 5 of them can change something.
+- **Notifications and a log.** The Mac shows a notification for each change. **What the server did here** lists the last 100 actions.
+- **One linked Mac.** Only the Mac you linked can take work from the server. Another Mac can take over only after the linked one has been offline for 10 minutes.
+
+**Keep the Mac reachable.** Turn on **Keep this Mac awake**. While the Mac is plugged in (or above 20% battery), it stays awake for the server and the display still turns off.
+
+A Mac that's asleep can only wake for the server if System Settings → Battery → Options → **Wake for network access** is on, and even then it's not guaranteed. A Mac that's shut down can't be reached. While the Mac is away, the server does everything it can on its own and tells you what's waiting for the Mac.
+
 ## Assign bots to worker machines
 
 1. Run SahilBot Server on each Pi, VM, or computer. For separate instances on one computer, use separate VMs or containers with their own data volumes and addresses. Start each instance with a fresh data directory.

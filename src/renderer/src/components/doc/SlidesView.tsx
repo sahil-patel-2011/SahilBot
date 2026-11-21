@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import type { DocBlock, DocStyle } from '@shared/types'
 import { blocksToSlides, plainInline, slidesToBlocks, statOf, type Slide, type SlidePoint } from '@shared/slides'
-import { deckCss, deckLook, inlineHtml, slideHtml, slidePieces, slideTablesHtml, SLIDE_H, SLIDE_W } from '@shared/slide-render'
+import { deckCss, deckLook, type DeckLook, inlineHtml, slideChartHtml, slideHtml, slidePieces, slideTablesHtml, SLIDE_H, SLIDE_W } from '@shared/slide-render'
 import { newId } from '../../../../main/docspace/markdown'
 import * as I from '../../icons'
 
@@ -39,8 +40,8 @@ function Stage({ children, className, onClick, label, fit }: { children: ReactNo
 }
 
 /** Static slide HTML (thumbnails, grid, Present). The text is escaped by inlineHtml. */
-function StaticSlide({ s, i, total, title, img }: { s: Slide; i: number; total: number; title: string; img: (src: string) => string | null | undefined }) {
-  return <div className="sbdeck" dangerouslySetInnerHTML={{ __html: slideHtml(s, i, { total, deckTitle: title, img }) }} />
+function StaticSlide({ s, i, total, title, img, look }: { s: Slide; i: number; total: number; title: string; img: (src: string) => string | null | undefined; look?: DeckLook }) {
+  return <div className="sbdeck" dangerouslySetInnerHTML={{ __html: slideHtml(s, i, { total, deckTitle: title, img, look }) }} />
 }
 
 /**
@@ -126,7 +127,8 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
   const focusNext = useRef<{ key: string; at: 'start' | 'end' } | null>(null)
   const at = Math.min(sel, Math.max(0, slides.length - 1))
   const cur = slides[at]
-  const css = useMemo(() => deckCss(deckLook(style)), [style])
+  const look = useMemo(() => deckLook(style), [style])
+  const css = useMemo(() => deckCss(look), [look])
   const dragFrom = useRef<number | null>(null)
   const [dropAt, setDropAt] = useState<number | null>(null)
 
@@ -157,10 +159,20 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
   const frozen = useRef<{ slideId: string; layout: ReturnType<typeof slidePieces>['layout']; stats: Set<string> } | null>(null)
   const [, thaw] = useState(0)
 
-  const taken = (): Set<string> => new Set(blocks.map((b) => b.id))
+  // The deck as of the last edit made here, even before the parent re-renders: two quick keystrokes (Shift-Tab
+  // then Enter) must build on each other, not on the slide as last drawn (which would undo the first one).
+  const live = useRef(blocks)
+  const seen = useRef(blocks)
+  if (seen.current !== blocks) { seen.current = blocks; live.current = blocks }
+  const liveCur = (): Slide | undefined => { const all = blocksToSlides(live.current); return (cur && all.find((x) => x.id === cur.id)) ?? all[at] }
+  const taken = (): Set<string> => new Set(live.current.map((b) => b.id))
   const fresh = (t: Set<string>): string => { const id = newId(t); t.add(id); return id }
-  const commit = (next: Slide[], mode: Mode): void => { const t = taken(); onChange(slidesToBlocks(next, () => fresh(t)), mode) }
-  const edit = (patch: Partial<Slide>, mode: Mode = 'type'): void => { if (cur) commit(slides.map((s, i) => (i === at ? { ...s, ...patch } : s)), mode) }
+  const commit = (next: Slide[], mode: Mode): void => { const t = taken(); const nb = slidesToBlocks(next, () => fresh(t)); live.current = nb; onChange(nb, mode) }
+  const edit = (patch: Partial<Slide>, mode: Mode = 'type'): void => {
+    const all = blocksToSlides(live.current)
+    const me = liveCur()
+    if (me) commit(all.map((s) => (s.id === me.id ? { ...s, ...patch } : s)), mode)
+  }
   const setPoints = (points: SlidePoint[], mode: Mode = 'type'): void => edit({ points }, mode)
   const reg = (key: string) => (el: HTMLElement | null): void => { if (el) els.current.set(key, el); else els.current.delete(key) }
 
@@ -169,7 +181,7 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
   const blank = (t: Set<string>): Slide => ({ id: fresh(t), title: '', points: [], notes: '' })
   const add = (after = at): void => {
     const t = taken()
-    const next = [...slides]
+    const next = blocksToSlides(live.current)
     const s = blank(t)
     next.splice(after + 1, 0, s)
     commit(next, 'struct')
@@ -179,21 +191,22 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
   }
   const duplicate = (i = at): void => {
     const t = taken()
-    const s = slides[i]
+    const s = blocksToSlides(live.current)[i]
     const copy: Slide = { ...s, id: fresh(t), kickerId: undefined, points: s.points.map((p) => ({ ...p, id: fresh(t) })), notesId: undefined, imageId: undefined }
-    const next = [...slides]
+    const next = blocksToSlides(live.current)
     next.splice(i + 1, 0, copy)
     commit(next, 'struct')
     setSel(i + 1)
   }
   const remove = (i = at): void => {
-    if (slides.length <= 1) { commit([{ ...slides[0], kicker: undefined, title: '', points: [], notes: '', image: undefined, imageId: undefined }], 'struct'); return }
-    commit(slides.filter((_, k) => k !== i), 'struct')
+    const all = blocksToSlides(live.current)
+    if (all.length <= 1) { commit([{ ...all[0], kicker: undefined, title: '', points: [], notes: '', image: undefined, imageId: undefined }], 'struct'); return }
+    commit(all.filter((_, k) => k !== i), 'struct')
     setSel(Math.max(0, i - 1))
   }
   const move = (i: number, to: number): void => {
-    if (to < 0 || to >= slides.length || to === i) return
-    const next = [...slides]
+    if (to < 0 || to >= blocksToSlides(live.current).length || to === i) return
+    const next = blocksToSlides(live.current)
     const [s] = next.splice(i, 1)
     next.splice(to, 0, s)
     commit(next, 'struct')
@@ -204,37 +217,42 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
   // ---------------------------------------------------------------- points (on the selected slide)
 
   const insertPoint = (afterId: string | null, text = '', indent = 0): void => {
+    const cur = liveCur()
     if (!cur) return
     const id = fresh(taken())
     const k = afterId ? cur.points.findIndex((p) => p.id === afterId) : cur.points.length - 1
     const next = [...cur.points]
     next.splice(k + 1, 0, { id, text, ...(indent ? { indent } : {}) })
-    setPoints(next, 'struct')
-    focusNext.current = { key: `pt:${id}`, at: 'end' }
+    // Drawn now and focused now, so the next keystroke lands in the new point, not the one before it.
+    flushSync(() => setPoints(next, 'struct'))
+    if (!focusKey(`pt:${id}`)) focusNext.current = { key: `pt:${id}`, at: 'end' }
   }
   const pointKeys = (p: SlidePoint, list: SlidePoint[]) => (e: React.KeyboardEvent<HTMLElement>): void => {
+    const cur = liveCur()
     if (!cur) return
     const i = list.findIndex((x) => x.id === p.id)
     if (e.key === 'Enter') { e.preventDefault(); insertPoint(p.id, '', p.indent ?? 0); return }
     if (e.key === 'Tab') {
       e.preventDefault()
-      setPoints(cur.points.map((x) => (x.id === p.id ? { ...x, indent: Math.max(0, Math.min(3, (x.indent ?? 0) + (e.shiftKey ? -1 : 1))) || undefined } : x)), 'struct')
-      focusNext.current = { key: `pt:${p.id}`, at: 'end' }
+      flushSync(() => setPoints(cur.points.map((x) => (x.id === p.id ? { ...x, indent: Math.max(0, Math.min(3, (x.indent ?? 0) + (e.shiftKey ? -1 : 1))) || undefined } : x)), 'struct'))
+      if (!focusKey(`pt:${p.id}`)) focusNext.current = { key: `pt:${p.id}`, at: 'end' }
       return
     }
     if (e.key === 'Backspace' && caretAtStart() && !(e.currentTarget.textContent ?? '')) {
       e.preventDefault()
       const prev = list[i - 1]
-      setPoints(cur.points.filter((x) => x.id !== p.id), 'struct')
-      focusNext.current = prev ? { key: `pt:${prev.id}`, at: 'end' } : { key: `title:${cur.id}`, at: 'end' }
+      flushSync(() => setPoints(cur.points.filter((x) => x.id !== p.id), 'struct'))
+      const back = prev ? `pt:${prev.id}` : `title:${cur.id}`
+      if (!focusKey(back)) focusNext.current = { key: back, at: 'end' }
       return
     }
     if (e.key === 'ArrowUp' && i > 0) { e.preventDefault(); focusKey(`pt:${list[i - 1].id}`) }
     if (e.key === 'ArrowUp' && i === 0) { e.preventDefault(); focusKey(`title:${cur.id}`) }
     if (e.key === 'ArrowDown' && i < list.length - 1) { e.preventDefault(); focusKey(`pt:${list[i + 1].id}`) }
   }
-  const setPoint = (id: string, text: string): void => { if (cur) setPoints(cur.points.map((x) => (x.id === id ? { ...x, text } : x))) }
+  const setPoint = (id: string, text: string): void => { const cur = liveCur(); if (cur) setPoints(cur.points.map((x) => (x.id === id ? { ...x, text } : x))) }
   const addStat = (): void => {
+    const cur = liveCur()
     if (!cur) return
     const id = fresh(taken())
     setPoints([...cur.points, { id, text: '**0** Label' }], 'struct')
@@ -242,6 +260,7 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
     focusNext.current = { key: `sv:${id}`, at: 'end' }
   }
   const setStat = (id: string, part: 'value' | 'label', v: string): void => {
+    const cur = liveCur()
     if (!cur) return
     const p = cur.points.find((x) => x.id === id)
     const st = p ? looseStat(p.text) : undefined
@@ -302,7 +321,7 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
         return (
           <div key={x.id} className="sl-stat">
             <Editable tag="b" className="" value={st.value} placeholder="0" readOnly={readOnly} register={reg(`sv:${x.id}`)} onChange={(v) => setStat(x.id, 'value', v)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); els.current.get(`sl:${x.id}`)?.focus() } if (e.key === 'Backspace' && !(e.currentTarget.textContent ?? '')) { e.preventDefault(); setPoints(cur.points.filter((y) => y.id !== x.id), 'struct') } }} />
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); els.current.get(`sl:${x.id}`)?.focus() } if (e.key === 'Backspace' && !(e.currentTarget.textContent ?? '')) { e.preventDefault(); const c = liveCur(); if (c) setPoints(c.points.filter((y) => y.id !== x.id), 'struct') } }} />
             <Editable tag="span" className="" value={st.label} placeholder="Label" readOnly={readOnly} register={reg(`sl:${x.id}`)} onChange={(v) => setStat(x.id, 'label', v)}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addStat() } }} />
           </div>
@@ -331,7 +350,7 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
     )
   } else {
     const list = <ul className="sl-pts">{text.map((x) => bullet(x, text))}{!readOnly && !text.length && <li className="i0 deck-placeholder" onClick={() => insertPoint(null)}>Add a point</li>}</ul>
-    const tablesHtml = slideTablesHtml(cur)
+    const tablesHtml = slideChartHtml(cur, look) + slideTablesHtml(cur)
     const tables = tablesHtml ? <div title="Ask SahilBot to change this table" dangerouslySetInnerHTML={{ __html: tablesHtml }} /> : null
     const pic = cur.image && <figure className="sl-img">{img ? <img src={img} alt="" draggable={false} /> : <div className="doc-image-missing">{img === undefined ? 'Loading picture…' : 'Picture not available'}</div>}</figure>
     body = p.layout === 'image_text'
@@ -352,7 +371,7 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
         onDragEnd={() => { dragFrom.current = null; setDropAt(null) }}
         onDrop={(e) => { e.preventDefault(); if (dragFrom.current !== null) move(dragFrom.current, i); dragFrom.current = null; setDropAt(null) }}>
         <span className="slide-num">{i + 1}</span>
-        <Stage className="slide-thumb" label={`Slide ${i + 1}: ${plainInline(s.title) || 'Untitled'}`}><StaticSlide s={s} i={i} total={slides.length} title={title} img={imageUrl} /></Stage>
+        <Stage className="slide-thumb" label={`Slide ${i + 1}: ${plainInline(s.title) || 'Untitled'}`}><StaticSlide s={s} i={i} total={slides.length} title={title} img={imageUrl} look={look} /></Stage>
       </div>
     )
   })
@@ -425,10 +444,10 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
 
       {presenting !== null && slides[presenting] && presenter && (
         <div className="deck-presenter" role="dialog" aria-label="Presenter view">
-          <div className="deck-presenter-main"><Stage fit="contain"><StaticSlide s={slides[presenting]} i={presenting} total={slides.length} title={title} img={imageUrl} /></Stage></div>
+          <div className="deck-presenter-main"><Stage fit="contain"><StaticSlide s={slides[presenting]} i={presenting} total={slides.length} title={title} img={imageUrl} look={look} /></Stage></div>
           <aside className="deck-presenter-side">
             <div className="deck-presenter-meta"><b>{presenting + 1} / {slides.length}</b><Elapsed /></div>
-            <div className="deck-presenter-next">{slides[presenting + 1] ? <><span>Next</span><Stage><StaticSlide s={slides[presenting + 1]} i={presenting + 1} total={slides.length} title={title} img={imageUrl} /></Stage></> : <span>Last slide</span>}</div>
+            <div className="deck-presenter-next">{slides[presenting + 1] ? <><span>Next</span><Stage><StaticSlide s={slides[presenting + 1]} i={presenting + 1} total={slides.length} title={title} img={imageUrl} look={look} /></Stage></> : <span>Last slide</span>}</div>
             <div className="deck-presenter-notes" data-testid="presenter-notes">{slides[presenting].notes.trim() || <span className="muted">No notes for this slide.</span>}</div>
             <div className="deck-presenter-keys">← → move · P audience view · Esc stop</div>
           </aside>
@@ -436,7 +455,7 @@ export function SlidesView({ blocks, style, title, flash, readOnly, onChange, im
       )}
       {presenting !== null && slides[presenting] && !presenter && (
         <div className="deck-present" role="dialog" aria-label="Presenting" onClick={() => setPresenting((n) => (n === null ? n : n + 1 >= slides.length ? null : n + 1))}>
-          <Stage fit="contain" className="deck-present-stage"><StaticSlide s={slides[presenting]} i={presenting} total={slides.length} title={title} img={imageUrl} /></Stage>
+          <Stage fit="contain" className="deck-present-stage"><StaticSlide s={slides[presenting]} i={presenting} total={slides.length} title={title} img={imageUrl} look={look} /></Stage>
           <div className="deck-present-bar" onClick={(e) => e.stopPropagation()}>
             <button onClick={() => setPresenting((n) => Math.max(0, (n ?? 0) - 1))} aria-label="Previous slide">‹</button>
             <span>{presenting + 1} / {slides.length}</span>

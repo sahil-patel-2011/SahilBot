@@ -2,8 +2,9 @@ import { useEffect, useState, type ReactNode } from 'react'
 import type { DocInfo, FilePreview, HomeIdea, Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
-import { Mascot } from '../brand'
+import { Mascot, SpaceAvatar } from '../brand'
 import * as I from '../icons'
+import { BotStatusLine } from './FunctionBots'
 
 export type RecentFile = Awaited<ReturnType<typeof api.files.recent>>[number]
 
@@ -64,7 +65,64 @@ const ICON: Record<HomeIdea['icon'], ReactNode> = {
   inbox: <I.Inbox size={14} />, users: <I.Users size={14} />, listicon: <I.ListIcon size={14} />, bolt: <I.Bolt size={14} />, folder: <I.Folder size={14} />
 }
 
-export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, onIdea }: {
+/**
+ * Your bots, first thing: each one's state, a Talk button (a voice conversation with that bot: it can go do the
+ * work and tell you when it's done) and Open (its ongoing chat).
+ */
+export function BotDeck({ bots, needSpaces, onOpen, onTalk, onNewBot, onSetup }: {
+  bots: Space[]
+  needSpaces?: Set<string>
+  onOpen: (id: string) => void
+  onTalk: (id: string) => void
+  onNewBot?: () => void
+  /** A "New bot" that sets itself up with you in its chat (talk: by voice). */
+  onSetup?: (talk: boolean) => void
+}) {
+  const list = bots.filter((b) => b.kind === 'bot' && !b.hidden && !b.isMain)
+  return (
+    <section className="bot-deck" data-testid="bot-deck">
+      <div className="home-files-head"><span>Your bots</span>{(onSetup || onNewBot) && <button className="link-btn" onClick={() => (onSetup ? onSetup(false) : onNewBot?.())} data-testid="deck-new-bot">New bot</button>}</div>
+      {list.length === 0 ? (
+        <div className="bot-card setup" data-testid="deck-make-bot">
+          <button className="bot-card-main" onClick={() => (onSetup ? onSetup(false) : onNewBot?.())} title="Set up your first bot">
+            <span className="bot-card-new" aria-hidden="true"><I.Plus size={18} /></span>
+            <span className="bot-card-text">
+              <b>New bot</b>
+              <small className="wrap">Tell it what you want done, by typing or talking. It names itself, writes its own instructions with you, then keeps working and remembers what you say.</small>
+            </span>
+          </button>
+          <div className="bot-card-actions">
+            <button className="btn small primary" onClick={() => onSetup?.(true)} data-testid="deck-setup-talk" disabled={!onSetup}><I.Wave size={14} /> Talk</button>
+            <button className="btn small ghost" onClick={() => (onSetup ? onSetup(false) : onNewBot?.())} data-testid="deck-setup">Set up</button>
+          </div>
+        </div>
+      ) : (
+        <div className="bot-grid">
+          {list.map((b) => (
+            <div key={b.id} className={`bot-card${needSpaces?.has(b.id) ? ' needs' : ''}`} data-testid="bot-card" data-id={b.id}>
+              <button className="bot-card-main" onClick={() => onOpen(b.id)} title={`Open ${b.name}`}>
+                <SpaceAvatar color={b.color} shape={b.shape} size={34} />
+                <span className="bot-card-text">
+                  <b>{b.name}</b>
+                  {b.label && <small>{b.label}</small>}
+                  {needSpaces?.has(b.id) ? <span className="bot-card-need">Needs you</span> : <BotStatusLine space={b} />}
+                </span>
+              </button>
+              <div className="bot-card-actions">
+                <button className="btn small primary" onClick={() => onTalk(b.id)} data-testid="bot-talk" aria-label={`Talk to ${b.name}`}><I.Wave size={14} /> Talk</button>
+                <button className="btn small ghost" onClick={() => onOpen(b.id)} data-testid="bot-open">Open</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, onIdea, deck }: {
+  /** The bot cards (BotDeck), shown above the quick question box. */
+  deck?: ReactNode
   onIdea?: (text: string, deep?: boolean) => void
   userName: string
   onOpenFile: (path: string) => void
@@ -80,6 +138,8 @@ export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, 
     <div className="home">
       <div className="home-hero">
         <div className="welcome"><Mascot size={46} /><h1>{greeting(userName)}</h1></div>
+        {deck}
+        {deck && <div className="home-quick-head"><span>Quick question</span><small>For one-off things. What you say here is remembered, so your bots know it too.</small></div>}
         {composer}
         {onIdea && (
           <div className="ideas" data-testid="ideas">

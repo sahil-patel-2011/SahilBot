@@ -44,6 +44,9 @@ const DENIED: Record<string, string> = {
   'grokPlan:signIn': 'Sign in to your Grok subscription on your Mac.',
   'privacy:install': 'Download PII-Tracer on your Mac: Settings → Privacy Gate.',
   'privacy:remove': 'Remove PII-Tracer on your Mac: Settings → Privacy Gate.',
+  'privacy:setEnabled': 'Turn hybrid compute on or off on your Mac: Settings → Privacy Gate.',
+  'privacy:setMode': 'Change how the Privacy Gate decides on your Mac: Settings → Privacy Gate.',
+  'privacy:forgetNotPersonal': 'Clear the remembered details on your Mac: Settings → Privacy Gate.',
   'grokPlan:installInTerminal': 'Install Grok Build on your Mac: Terminal opens there.',
   'grokPlan:openInstallGuide': 'Set up your Grok subscription on your Mac.',
   'connectors:connect': 'Connect apps on your Mac: the sign-in page opens there.',
@@ -55,6 +58,8 @@ const DENIED: Record<string, string> = {
 
 /** Whole areas that live on the Mac's screen, or never leave it. */
 const DENIED_PREFIX: Array<[string, string]> = [
+  // Whether the server may use this Mac is decided on the Mac only.
+  ['macLink:', 'Whether the server may use your Mac is set on the Mac itself: Settings → Phone & server.'],
   ['browser:', 'The built-in browser runs on your Mac. Links open in this phone’s browser instead.'],
   ['voice:', 'Voice uses your Mac’s microphone. Use the phone keyboard’s dictation instead.'],
   ['quick:', 'Quick Ask is a Mac shortcut.'],

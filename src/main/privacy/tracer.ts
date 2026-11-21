@@ -260,6 +260,8 @@ export interface Detection { spans: PrivacySpan[]; sensitivity: number }
 /** PII-Tracer on this Mac: install, a private llama-server, and detect(). */
 export class PiiTracer {
   private proc?: ChildProcess
+  /** The last server started (still known after it exits, for the one restart after a crash). */
+  private lastProc?: ChildProcess
   private port = 0
   private starting?: Promise<void>
   private heads?: { cls: Tensor; clsB: Tensor; sen: Tensor; senB: Tensor }
@@ -280,7 +282,7 @@ export class PiiTracer {
   installingNow(): boolean { return !!this.installing }
 
   /** Starts the server in the background (the first check then doesn't wait for the model to load). */
-  warm(): void { if (this.installed() && !this.installing) void this.ensure().catch(() => undefined) }
+  warm(): void { this.halted = false; if (this.installed() && !this.installing) void this.ensure().catch(() => undefined) }
 
   /** Downloads llama-server and the model (about 1.2 GB), each checked against its pinned SHA-256. */
   install(emit: (e: PrivacyInstallEvent) => void, signal?: AbortSignal): Promise<void> {
@@ -336,6 +338,10 @@ export class PiiTracer {
     this.starting = undefined
   }
 
+  /** Switched off (or removed): stop, and don't come back by a retry until warmed again. */
+  private halted = false
+  halt(): void { this.halted = true; this.stop() }
+
   private loadHeads(): NonNullable<PiiTracer['heads']> {
     if (this.heads) return this.heads
     const t = parseSafetensors(readFileSync(this.modelPath('heads.safetensors')))
@@ -358,6 +364,7 @@ export class PiiTracer {
         '--embeddings', '--pooling', 'none', '-c', String(MAX_TOKENS), '-b', String(MAX_TOKENS), '-ub', String(MAX_TOKENS), '--parallel', '1', '--no-webui', '--log-disable'],
       { cwd: join(bin, '..'), stdio: 'ignore', env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME ?? '', TMPDIR: process.env.TMPDIR ?? '/tmp' } })
       this.proc = proc
+      this.lastProc = proc
       proc.once('exit', () => { if (this.proc === proc) { this.proc = undefined; this.starting = undefined } })
       const until = Date.now() + 90_000
       for (;;) {
@@ -402,6 +409,19 @@ export class PiiTracer {
   }
 
   private async detectNow(text: string, signal?: AbortSignal): Promise<Detection> {
+    try { return await this.detectOnce(text, signal) } catch (e) {
+      // The server died on its own mid-check (a crash, a signal, the Mac woke from sleep), even one this check
+      // started: start it again and check once more. Not after the gate was switched off, and not for a slow
+      // answer (the server is still running).
+      const proc = this.lastProc
+      const died = !!proc && (proc.exitCode !== null || proc.signalCode !== null || proc.killed) && this.proc !== proc
+      if (signal?.aborted || this.halted || !died || !/ECONNREFUSED|ECONNRESET|fetch failed|socket|stopped|terminated/i.test(String((e as Error)?.message ?? e))) throw e
+      this.stop()
+      return this.detectOnce(text, signal)
+    }
+  }
+
+  private async detectOnce(text: string, signal?: AbortSignal): Promise<Detection> {
     if (!text.trim()) return { spans: [], sensitivity: 0 }
     await this.ensure()
     const heads = this.loadHeads()

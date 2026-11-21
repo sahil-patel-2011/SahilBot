@@ -25,11 +25,12 @@ describe('Settings', () => {
       await page.keyboard.press('Meta+,')
       await page.locator('[data-testid="settings"]').waitFor()
 
-      // The pages, in order, each with something on it.
+      // Simple first: five pages up front, the rest under "More settings".
+      const main = await page.locator('.set-nav .set-nav-item').allInnerTexts()
+      expect(main.map((t) => t.trim())).toEqual(['General', 'Models & Keys', 'Connected apps', 'Privacy & Security', 'Phone & server'])
+      await page.click('[data-testid="settings-more"]')
       const ids = await page.locator('.set-nav .set-nav-item').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
-      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-permissions', 'settings-memory', 'settings-voice', 'settings-privacy', 'settings-usage', 'settings-server', 'settings-advanced'])
-      const titles = await page.locator('.set-nav .set-nav-item').allInnerTexts()
-      expect(titles.map((t) => t.trim())).toEqual(['General', 'Models & Keys', 'Connected apps', 'Permissions', 'Memory', 'Voice', 'Privacy & Security', 'Usage', 'Always-on server', 'Advanced'])
+      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-privacy', 'settings-server', 'settings-permissions', 'settings-memory', 'settings-voice', 'settings-usage', 'settings-advanced'])
       // General: theme folded in; appearance details under More (closed).
       expect(await page.locator('[data-setting="theme"]').count()).toBe(1)
       expect(await page.locator('[data-testid="general-more"]').getAttribute('open')).toBeNull()

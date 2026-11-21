@@ -76,6 +76,11 @@ export class RuntimeStore {
   actions(runId: string): ActionRecord[] { return (this.db.sql.prepare('SELECT * FROM agent_actions WHERE run_id = ? ORDER BY rowid').all(runId) as Row[]).map(action) }
   getAction(id: string, threadId: string): ActionRecord | undefined { const r = this.db.sql.prepare('SELECT * FROM agent_actions WHERE id = ? AND thread_id = ?').get(id, threadId) as Row | undefined; return r ? action(r) : undefined }
   uncertain(threadId: string): ActionRecord[] { return (this.db.sql.prepare("SELECT * FROM agent_actions WHERE thread_id = ? AND status = 'uncertain' ORDER BY at").all(threadId) as Row[]).map(action) }
+  /** An earlier identical write whose outcome is uncertain (it may already have happened): never repeat it blind. */
+  uncertainDuplicate(threadId: string, tool: string, args: unknown, runId?: string): ActionRecord | undefined {
+    const fingerprint = digest({ tool, args })
+    return this.uncertain(threadId).find((a) => a.fingerprint === fingerprint && (!runId || a.runId === runId))
+  }
   begin(r: RunRecord, callId: string, tool: string, args: unknown, effect: ToolEffect, storedArgs = canonical(args)): { record: ActionRecord; replay?: ToolOutput; blocked?: string } {
     const old = this.db.sql.prepare('SELECT * FROM agent_actions WHERE run_id = ? AND call_id = ?').get(r.id, callId) as Row | undefined
     if (old) {

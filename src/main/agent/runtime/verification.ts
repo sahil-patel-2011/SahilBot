@@ -3,6 +3,15 @@ import { basename, isAbsolute } from 'node:path'
 import type { ResearchClaim } from './research'
 import type { RuntimeStore } from './store'
 
+/** A read that can check a write: the same connector ("gmail__…"), or a shared name stem ("send_invoice" / "list_sent_invoices"). */
+export function sameThing(write: string, read: string): boolean {
+  const conn = (t: string): string | undefined => (t.includes('__') ? t.split('__')[0] : undefined)
+  if (conn(write) && conn(write) === conn(read)) return true
+  const stems = (t: string): string[] => t.toLowerCase().split(/__|[_\-.\s]+/).filter((w) => w.length >= 4 && !['send', 'list', 'make', 'create', 'update', 'delete', 'post', 'read', 'fetch', 'with', 'from'].includes(w)).map((w) => w.slice(0, 5))
+  const r = new Set(stems(read))
+  return stems(write).some((w) => r.has(w))
+}
+
 export interface VerificationReport { status: 'verified' | 'unverified' | 'blocked'; issues: string[]; checks: number; passed: number }
 export function completionReport(store: RuntimeStore, runId: string, o: { required?: boolean; criteria?: string[]; files?: string[]; claims?: ResearchClaim[] } = {}): VerificationReport {
   const checks = store.checks(runId), latest = new Map(checks.map((c) => [c.criterion, c]))
@@ -20,7 +29,12 @@ export function completionReport(store: RuntimeStore, runId: string, o: { requir
     if (!saved) issues.push(`No saved workspace file named ${name} was verified. Use the workspace file or export tool to save it and check the result.`)
   }
   if (checks.length && Math.max(...checks.map((c) => c.at)) < lastMutation) issues.push('The work changed after its last verification; check it again.')
-  for (const a of store.uncertain(store.get(runId)?.threadId ?? '')) issues.push(`${a.tool}: uncertain outcome (${a.id})`)
+  // An uncertain write blocks completion until the agent has looked at the state since (a read that ran after
+  // it in this run). It stays uncertain, so repeating the same write is still refused.
+  for (const a of store.uncertain(store.get(runId)?.threadId ?? '')) {
+    const checkedSince = a.runId === runId && actions.some((x) => x.status === 'done' && x.effect === 'read' && x.at >= a.at && x.id !== a.id && x.tool !== 'agent_control' && sameThing(a.tool, x.tool))
+    if (!checkedSince) issues.push(`${a.tool}: uncertain outcome (${a.id}). Check its current state with a read of the same service before finishing, or reconcile it with agent_control.`)
+  }
   for (const c of o.claims ?? []) if (c.consequential && ['unsupported', 'disputed', 'stale'].includes(c.status)) issues.push(`Research claim is ${c.status}: ${c.text}`)
   if (o.required && !checks.length) issues.push('This task requires evidence-backed verification before completion.')
   const passed = [...latest.values()].filter((c) => c.passed).length

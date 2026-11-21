@@ -1,5 +1,7 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import { isAbsolute, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join, resolve } from 'node:path'
 
 // Image bytes and natural size for embedding in documents and decks, without an image library.
 
@@ -53,8 +55,18 @@ export function loadImage(src: string, baseDir?: string, read?: (path: string) =
     if (statSync(p).size > 25_000_000) throw new Error(`Image ${src} is larger than 25 MB.`)
     data = readFileSync(p)
   }
-  const type = imageType(data)
-  if (!type) throw new Error(`"${src.slice(0, 80)}" is not a PNG, JPEG, GIF or BMP image.`)
+  let type = imageType(data)
+  // WebP and HEIC (web and iPhone pictures): converted to PNG with the Mac's own sips.
+  if (!type && process.platform === 'darwin' && (data.subarray(8, 12).toString('latin1') === 'WEBP' || /^ftyp(heic|heix|mif1|avif)/.test(data.subarray(4, 12).toString('latin1')))) {
+    const dir = mkdtempSync(join(tmpdir(), 'sahilbot-img-'))
+    try {
+      writeFileSync(join(dir, 'in'), data)
+      execFileSync('/usr/bin/sips', ['-s', 'format', 'png', join(dir, 'in'), '--out', join(dir, 'out.png')], { timeout: 20_000, stdio: 'ignore' })
+      data = readFileSync(join(dir, 'out.png'))
+      type = imageType(data)
+    } catch { /* not convertible: the error below says so */ } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
+  if (!type) throw new Error(`"${src.slice(0, 80)}" is not a PNG, JPEG, GIF, BMP, WebP or HEIC image.`)
   const size = imageSize(data) ?? { width: 800, height: 600 }
   return { data, type, ...size }
 }

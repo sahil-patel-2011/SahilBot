@@ -34,3 +34,16 @@ export async function expandSteps(page: Page): Promise<void> {
     await closed.first().click({ timeout: 3000 })
   }
 }
+
+/** Opens a Settings page, first opening "More settings" when the page sits under it. Settings must be open. */
+export async function settingsPage(page: Page, id: string): Promise<void> {
+  const item = page.locator(`[data-testid="settings-${id}"]`)
+  if (!(await item.count())) await page.click('[data-testid="settings-more"]')
+  await item.click()
+}
+
+/** Opens "More settings" in the Settings nav if it's closed, so every page is listed. */
+export async function expandMoreSettings(page: Page): Promise<void> {
+  const more = page.locator('[data-testid="settings-more"]')
+  if ((await more.count()) && (await more.getAttribute('aria-expanded')) !== 'true') await more.click()
+}

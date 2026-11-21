@@ -1,5 +1,6 @@
 import type { DocStyle } from './types'
 import { slideLayout, statsOf, textPoints, type Slide } from './slides'
+import { chartSvg, chartTable, donutSvg } from './dashboard'
 
 // One look for a deck everywhere: the editor's canvas, the thumbnails, Present, and the PDF, PNG and
 // picture-PowerPoint exports all draw slides from this file at 1280 × 720 (16:9), so what you see while
@@ -67,10 +68,24 @@ export function deckCss(look: DeckLook): string {
 .sbdeck .sl-foot { position:absolute; left:96px; right:64px; bottom:30px; display:flex; justify-content:space-between; font-size:13px; color:var(--m); letter-spacing:.04em; }
 .sbdeck .sl.dark .sl-foot { color:var(--dm); }
 .sbdeck .sl b, .sbdeck .sl strong { font-weight:700; }
+.sbdeck .sl-chart { margin-top:22px; flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; font-size:15px; }
+.sbdeck .sl-chart svg { width:100%; max-height:400px; }
+.sbdeck .sl-chart .db-legend { display:flex; gap:18px; font-size:15px; color:var(--m); margin-bottom:8px; flex-wrap:wrap; }
+.sbdeck .sl-chart .db-legend i { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+.sbdeck .sl-chart .db-donut { display:flex; align-items:center; gap:40px; } .sbdeck .sl-chart .db-donut svg { width:340px; height:340px; flex:none; } .sbdeck .sl-chart .db-legend-col { flex-direction:column; font-size:22px; color:var(--i); }
 .sbdeck .sl-table { margin-top:26px; border-collapse:collapse; font-size:22px; width:100%; }
 .sbdeck .sl-table th { text-align:left; font-weight:700; border-bottom:2px solid var(--a); padding:10px 14px; }
 .sbdeck .sl-table td { border-bottom:1px solid var(--ln); padding:10px 14px; }
 `
+}
+
+/** A slide's chart (a ```chart block with CSV or a Markdown table) as SVG, in the deck's colors. */
+export function slideChartHtml(s: Slide, look: DeckLook): string {
+  const b = (s.extra ?? []).find((x) => x.type === 'code' && /^chart$/i.test(x.lang ?? ''))
+  const t = b ? chartTable(b.text ?? '') : null
+  if (!t) return ''
+  const colors = [look.accent, look.kicker, '#2F6FD6', '#1F8A4C', '#7C3AED']
+  return `<div class="sl-chart">${donutSvg(t, colors) ?? chartSvg(t, colors) ?? ''}</div>`
 }
 
 /** A slide's tables (kept in slide.extra) as HTML. */
@@ -89,7 +104,8 @@ export function inlineHtml(s: string): string {
   return esc(s)
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<i>$2</i>')
+    // *italic* hugs its words: "5 * 3 * 2" stays maths.
+    .replace(/(^|[^*\w])\*(?=\S)([^*]*?\S)\*(?![*\w])/g, '$1<i>$2</i>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
 }
 
@@ -113,7 +129,7 @@ export function slidePieces(s: Slide, index: number): SlidePieces {
 }
 
 /** One slide as static HTML (thumbnails, Present, exports). `img` turns a picture's path into a URL. */
-export function slideHtml(s: Slide, index: number, o: { total: number; deckTitle: string; img?: (src: string) => string | undefined | null }): string {
+export function slideHtml(s: Slide, index: number, o: { total: number; deckTitle: string; img?: (src: string) => string | undefined | null; look?: DeckLook }): string {
   const p = slidePieces(s, index)
   const k = s.kicker?.trim() ? `<div class="sl-k">${inlineHtml(s.kicker)}</div>` : ''
   const h = `<h1 class="sl-h">${inlineHtml(s.title) || '&nbsp;'}</h1>`
@@ -126,7 +142,7 @@ export function slideHtml(s: Slide, index: number, o: { total: number; deckTitle
     body = `${k}${h}${p.subtitle ? `<div class="sl-sub">${inlineHtml(p.subtitle)}</div>` : ''}${p.description.length ? `<div class="sl-desc">${p.description.map(inlineHtml).join('<br>')}</div>` : ''}${stats}`
   } else {
     const list = p.bullets.length ? `<ul class="sl-pts">${p.bullets.map((b) => `<li class="i${Math.min(3, b.indent ?? 0)}">${inlineHtml(b.text)}</li>`).join('')}</ul>` : ''
-    const tables = slideTablesHtml(s)
+    const tables = slideChartHtml(s, o.look ?? deckLook()) + slideTablesHtml(s)
     body = p.layout === 'image_text' ? `<div class="sl-cols"><div class="sl-text">${k}${h}${list}${tables}${stats}</div>${pic}</div>` : `${k}${h}${list}${tables}${p.layout === 'image' ? pic : ''}${stats}`
   }
   return `<section class="sl sl-${p.layout}${p.dark ? ' dark' : ''}">${body}${foot}</section>`
@@ -135,7 +151,7 @@ export function slideHtml(s: Slide, index: number, o: { total: number; deckTitle
 /** The whole deck as a printable page: one 1280 × 720 page per slide (PDF export). */
 export function deckDocument(slides: Slide[], o: { title: string; style?: DocStyle; img?: (src: string) => string | undefined | null }): string {
   const look = deckLook(o.style)
-  const pages = slides.map((s, i) => slideHtml(s, i, { total: slides.length, deckTitle: o.title, img: o.img })).join('\n')
+  const pages = slides.map((s, i) => slideHtml(s, i, { total: slides.length, deckTitle: o.title, img: o.img, look })).join('\n')
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(o.title)}</title><style>
 @page { size: ${SLIDE_W}px ${SLIDE_H}px; margin: 0; }
 html, body { margin:0; padding:0; background:#fff; }
@@ -146,5 +162,5 @@ ${deckCss(look)}</style></head><body><div class="sbdeck">${pages}</div></body></
 
 /** A single slide as its own page (PNG export). */
 export function slideDocument(s: Slide, index: number, o: { total: number; title: string; style?: DocStyle; img?: (src: string) => string | undefined | null }): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html, body { margin:0; padding:0; overflow:hidden; } ${deckCss(deckLook(o.style))}</style></head><body><div class="sbdeck">${slideHtml(s, index, { total: o.total, deckTitle: o.title, img: o.img })}</div></body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><style>html, body { margin:0; padding:0; overflow:hidden; } ${deckCss(deckLook(o.style))}</style></head><body><div class="sbdeck">${slideHtml(s, index, { total: o.total, deckTitle: o.title, img: o.img, look: deckLook(o.style) })}</div></body></html>`
 }

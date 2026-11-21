@@ -53,3 +53,5 @@ export const Bolt = (p: P) => <svg {...base(p)}><path d="M13 2 5 13.5h6L10 22l8.
 export const Inbox = (p: P) => <svg {...base(p)}><path d="M4 13.5 6.2 6a2 2 0 0 1 1.9-1.5h7.8A2 2 0 0 1 17.8 6l2.2 7.5" /><path d="M4 13.5V18a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4.5h-4.5a3.5 3.5 0 0 1-7 0Z" /></svg>
 /** Show in Finder: a folder with an arrow. */
 export const Reveal = (p: P) => <svg {...base(p)}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><path d="M10 14h5M13 11.5 15.5 14 13 16.5" /></svg>
+export const ChatDots = (p: P) => <svg {...base(p)}><path d="M4 12a8 8 0 1 1 3.3 6.5L4 20l1.2-3.4A7.9 7.9 0 0 1 4 12Z" /><path d="M8.5 12h.01M12 12h.01M15.5 12h.01" /></svg>
+export const HangUp = (p: P) => <svg {...base(p)}><path d="M3.5 14.5c4.7-4.2 12.3-4.2 17 0l-1.8 2.3a1.4 1.4 0 0 1-1.8.3l-2-1.2a1.4 1.4 0 0 1-.6-1.4l.2-1.5a11 11 0 0 0-5 0l.2 1.5a1.4 1.4 0 0 1-.6 1.4l-2 1.2a1.4 1.4 0 0 1-1.8-.3Z" /></svg>

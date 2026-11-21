@@ -5,7 +5,7 @@ import { api } from './api'
 import { readableOn, SpaceAvatar } from './brand'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
-import { FilesView, Home, ProjectsView } from './components/Home'
+import { BotDeck, FilesView, Home, ProjectsView } from './components/Home'
 import { WhatsNewOnce } from './components/WhatsNew'
 import { pruneDrafts } from './lib/drafts'
 import { installFocusTrap } from './lib/focus-trap'
@@ -101,6 +101,12 @@ export function App() {
   // Opening a chat, a bot or another view leaves the vault.
   useEffect(() => { setVaultOpen(null) }, [thread?.id, spaceId, view])
   const [voiceOn, setVoiceOn] = useState(false)
+  /** ⌘D held or tapped (App's key handler). */
+  const holdD = useRef<{ done: boolean; held: boolean; timer?: ReturnType<typeof setTimeout> } | null>(null)
+  /** The voice conversation in progress: when it started and whether its transcript shows in the chat. */
+  const [voiceLive, setVoiceLive] = useState<{ since: number; transcript: boolean; threadId?: string } | null>(null)
+  /** A new voice conversation (Talk on another bot): the bar starts over with that bot. */
+  const [voiceKey, setVoiceKey] = useState(0)
   const [showScheduled, setShowScheduled] = useState(false)
   // Model and mode picked on the home screen before a chat exists.
   // mode null: the bot's own autonomy level (BotDetails), else the app default (Settings → Advanced).
@@ -418,10 +424,23 @@ export function App() {
     // sahilbot:// links: the composer shows where the text came from (main/mcp-server/url-scheme.ts).
     const fillLink = (e: Event): void => { const t = (e as CustomEvent<unknown>).detail; if (typeof t === 'string') composer.current?.prefillFromLink(t); requestAnimationFrame(() => composer.current?.focus()) }
     const watch = (): void => setPanel('watchlist')
+    // An idea card's "Do it": send it as your message.
+    // Only into the chat the card is in, and not while that chat is working or asking (then it waits in the box).
+    const sendText = (e: Event): void => {
+      const d = (e as CustomEvent<{ text?: unknown; threadId?: unknown; done?: (ok: boolean) => void }>).detail
+      const text = typeof d?.text === 'string' ? d.text.trim() : ''
+      if (!text || d?.threadId !== threadRef.current || ideaBusyRef.current) {
+        if (text) { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }
+        d?.done?.(false)
+        return
+      }
+      void sendRef.current({ text, images: [], attachments: [] } as never).then((ok) => d?.done?.(ok), () => d?.done?.(false))
+    }
+    window.addEventListener('sahilbot:send-text', sendText)
     window.addEventListener('sahilbot:compose', fill)
     window.addEventListener('sahilbot:compose-link', fillLink)
     window.addEventListener('sahilbot:open-watchlist', watch)
-    return () => { window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch) }
+    return () => { window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch); window.removeEventListener('sahilbot:send-text', sendText) }
   }, [])
 
   // Slash commands from the message box (lib/slash.ts).
@@ -448,6 +467,15 @@ export function App() {
       if (e.metaKey && e.key === ',') { e.preventDefault(); setShowSettings(true) }
       if (e.metaKey && e.key === '\\') { e.preventDefault(); setPanel((p) => (p && p !== 'details' ? null : 'progress')) }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); composer.current?.toggleDictation() }
+      // ⌘D: a tap starts or stops dictation; holding it talks until you let go.
+      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'd') {
+        e.preventDefault()
+        if (e.repeat || holdD.current) return
+        if (composer.current?.isDictating()) { composer.current.toggleDictation(); holdD.current = { done: true, held: false }; return }
+        const h: { done: boolean; held: boolean; timer?: ReturnType<typeof setTimeout> } = { done: false, held: false }
+        h.timer = setTimeout(() => { h.held = true; composer.current?.toggleDictation() }, 280)
+        holdD.current = h
+      }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setVoiceOn(true) }
       // Max for the next message (the composer's Modes menu has it too).
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'm') { e.preventDefault(); composer.current?.toggleMax() }
@@ -462,7 +490,17 @@ export function App() {
       void api.chat.stop(threadRef.current)
     }
     window.addEventListener('keydown', k)
-    return () => window.removeEventListener('keydown', k)
+    // ⌘D let go: a quick tap starts dictation, a hold stops it (the words go in the box).
+    const up = (e: KeyboardEvent): void => {
+      const h = holdD.current
+      if (!h || (e.key.toLowerCase() !== 'd' && e.key !== 'Meta')) return
+      holdD.current = null
+      if (h.done) return
+      clearTimeout(h.timer)
+      composer.current?.toggleDictation()
+    }
+    window.addEventListener('keyup', up)
+    return () => { window.removeEventListener('keydown', k); window.removeEventListener('keyup', up) }
   }, [])
 
   const openMain = (): void => { setVaultOpen(null); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
@@ -474,6 +512,26 @@ export function App() {
     setThread(t)
     setView('home')
   }
+  /** Onboarding's "Create my first bot": the New bot's chat opens. */
+  const startSetupRef = useRef<(talk: boolean) => Promise<void>>(async () => undefined)
+  useEffect(() => {
+    const on = (): void => { void startSetupRef.current(false) }
+    window.addEventListener('sahilbot:start-setup', on)
+    return () => window.removeEventListener('sahilbot:start-setup', on)
+  }, [])
+  /** A "New bot" that sets itself up with you in its chat; Talk does it by voice. */
+  const startSetup = async (talk: boolean): Promise<void> => {
+    try {
+      const r = await api.spaces.startSetup()
+      await refreshSpaces()
+      const t = (await api.threads.list(r.space.id)).find((x) => x.id === r.threadId)
+      setView('home')
+      setSpaceId(r.space.id)
+      if (t) setThread(t)
+      if (talk) { setVoiceKey((k) => k + 1); setVoiceOn(true) }
+    } catch (e) { toast((e as Error).message, 'error') }
+  }
+  startSetupRef.current = startSetup
   /** A bot has one ongoing conversation (created on first open). */
   const openBot = async (id: string): Promise<void> => {
     setView('home')
@@ -606,6 +664,10 @@ export function App() {
   }, [thread?.id])
   useEffect(() => { pruneDrafts(); return installFocusTrap() }, [])
   const openDocRef = useRef<(d: { docId: string; threadId: string }) => void>(() => undefined)
+  /** The current send (an idea card's "Do it" uses it from a window event). */
+  const sendRef = useRef<(o: Outgoing) => Promise<boolean>>(async () => false)
+  /** The open chat is working or asking: an idea waits in the message box instead of sending. */
+  const ideaBusyRef = useRef(false)
   useEffect(() => {
     const on = (e: Event): void => { const d = (e as CustomEvent<{ docId: string; threadId: string }>).detail; if (d?.docId) openDocRef.current(d) }
     window.addEventListener('sahilbot:open-doc', on)
@@ -681,6 +743,9 @@ export function App() {
   }
 
 
+  // The current send, for an idea card's "Do it" (set on every render, so it's this chat's).
+  sendRef.current = send
+  ideaBusyRef.current = !!question || (!!thread && running.has(thread.id))
   const openFile = (p: string): void => { setFile(p); setPanel('file') }
   const openDoc = (id: string): void => { setDocId(id); setPanel('doc') }
   // The bot's Library opens a document in its chat (hooks are above, before the early return).
@@ -803,6 +868,7 @@ export function App() {
         onOpenChat={(id) => void openChat(id)}
         onNew={openMain}
         onNewBot={() => setEditor({ space: null, mode: 'bot' })}
+        onSetupBot={() => void startSetup(false)}
         onSearch={() => setPalette(true)}
         view={view}
         onView={(v) => { setView(v); setThread(null) }}
@@ -824,6 +890,12 @@ export function App() {
         onPinned={(ids) => void api.settings.set({ pinnedBots: ids }).then(setSettings)}
       />
       <main className={`main chat-root${isBot && !dev ? ' quiet-bot-chat' : ''}`} style={chatStyle}>
+        {voiceOn && (
+          <Lazy>
+            <VoiceMode key={voiceKey} threadId={thread?.id ?? null} space={space} onClose={() => setVoiceOn(false)} onLive={setVoiceLive}
+              onThread={(id) => { if (thread?.id !== id) void api.threads.list(space?.id).then((ts) => { const t = ts.find((x) => x.id === id); if (t) { setView('home'); setThread(t) } }) }} />
+          </Lazy>
+        )}
         <header className="main-header drag">
           <div className="header-title">
             {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
@@ -910,7 +982,7 @@ export function App() {
           <ProjectsView spaces={spaces} onOpen={(id) => void openBot(id)} onNew={() => setEditor({ space: null, mode: 'project' })} />
         ) : thread ? (
           <>
-            <ThreadView key={thread.id} messages={messages} running={isRunning} pending={pending} teams={teams}
+            <ThreadView key={thread.id} messages={messages} running={isRunning} pending={pending} teams={teams} voiceLive={voiceOn ? voiceLive : null}
               ready={ready} onAtBottom={onAtBottom}
               unreadAfter={opened?.id === thread.id && dividerKind({ space: spaces.find((s) => s.id === thread.spaceId), thread, messages }) ? opened.readAt : null}
               drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id] ?? null}
@@ -940,6 +1012,8 @@ export function App() {
           <ProjectHome project={space} onOpen={(t) => setThread(t)} onEdit={() => setEditor({ space, mode: 'project' })} composer={composerEl} />
         ) : (
           <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={chatInput} refreshKey={running.size}
+            deck={<BotDeck bots={spaces} needSpaces={needSpaces} onOpen={(id) => void openBot(id)} onNewBot={() => setEditor({ space: null, mode: 'bot' })}
+              onTalk={(id) => { setSpaceId(id); setThread(null); setVoiceKey((k) => k + 1); setVoiceOn(true) }} onSetup={(talk) => void startSetup(talk)} />}
             onIdea={(text, deep) => { composer.current?.replace(text); composer.current?.setDeep(!!deep) }} />
         )}
       </main>
@@ -959,12 +1033,6 @@ export function App() {
           onAsk={(text, title) => { composer.current?.insert(`About this part of “${title}”:\n> ${text.replace(/\s+/g, ' ').slice(0, 800)}\n`); composer.current?.focus() }} />
       )}
       {!settings.onboarded && <Lazy><Onboarding settings={settings} onDone={(s) => { setSettings(s); void refreshModels() }} /></Lazy>}
-      {voiceOn && (
-        <Lazy>
-          <VoiceMode threadId={thread?.id ?? null} space={space} onClose={() => setVoiceOn(false)}
-            onThread={(id) => { if (thread?.id !== id) void api.threads.list(space?.id).then((ts) => { const t = ts.find((x) => x.id === id); if (t) setThread(t) }) }} />
-        </Lazy>
-      )}
       {bypassAsk && (
         <ConfirmDialog title="Turn on Bypass?" confirm="Turn on Bypass" danger testId="bypass-confirm"
           onCancel={() => setBypassAsk(null)}

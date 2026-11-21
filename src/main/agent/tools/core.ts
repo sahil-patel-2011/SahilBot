@@ -189,5 +189,40 @@ export function coreTools(results: ResultStore): ToolDef[] {
     }
   }
 
-  return [findTools, connectApp, readResult, todo, notesTool(), askUser, proposePlan]
+  /**
+   * A better way, or the obvious next step, offered as a card with "Do it": the agent says what it would do
+   * differently and why, and the user decides. Never runs anything itself; one idea per task.
+   */
+  const proposeIdea: ToolDef<{ idea: string; why: string }> = {
+    name: 'propose_idea',
+    label: 'Idea',
+    core: true,
+    effect: 'read',
+    description: 'Offer ONE idea the user can start with a click: a meaningfully better approach than the one they asked for, or the most valuable next step after the task. Use it when you genuinely think so (not as a habit, at most once per task), after doing what was asked (or before, if their way would clearly fail; then say so plainly in your reply too). It does nothing by itself: the user sees a card with "Do it". idea: what to do, written as the user would ask it ("Turn the deck into a 2-minute video"). why: one sentence on the benefit.',
+    parameters: {
+      type: 'object',
+      properties: {
+        idea: { type: 'string', description: 'The request the user can send with one click, in their words.' },
+        why: { type: 'string', description: 'One sentence: why it is better or worth doing next.' }
+      },
+      required: ['idea', 'why'],
+      additionalProperties: false
+    },
+    async run(a, ctx) {
+      // One line each: no control or direction-changing characters (a card shows exactly what it would send).
+      const clean = (t: unknown): string => String(t ?? '').replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300)
+      const idea = clean(a.idea)
+      const why = clean(a.why)
+      if (!idea) throw new Error('Say the idea.')
+      const st = ctx.state as { ideas?: number }
+      if ((st.ideas ?? 0) >= 1) throw new Error('One idea per task: keep the best one.')
+      st.ideas = (st.ideas ?? 0) + 1
+      // After reading outside content (a web page, email, a file), the idea could have been planted there: the card
+      // only puts it in the message box to read first, never one-click.
+      const outside = !!ctx.tainted
+      return { text: 'Shown to the user as a card. Do not start it yourself; finish your reply.', display: 'suggested an idea', meta: { idea: { idea, why, outside } } }
+    }
+  }
+
+  return [findTools, connectApp, readResult, todo, notesTool(), askUser, proposePlan, proposeIdea]
 }

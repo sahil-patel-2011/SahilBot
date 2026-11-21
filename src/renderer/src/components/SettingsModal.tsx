@@ -49,6 +49,8 @@ const PAGES: Array<{ id: Page; icon: ReactNode; color: string }> = [
   { id: 'server', icon: <I.Globe size={14} />, color: '#1f8a5b' },
   { id: 'advanced', icon: <I.Sliders size={14} />, color: '#af52de' }
 ]
+/** The pages shown up front; the others sit under "More settings". */
+const MAIN_PAGES = new Set<Page>(['general', 'models', 'connected', 'privacy', 'server'])
 /** A phone using the Mac (Phone access) sees its own page where SahilBot Server's browsers see the server's. */
 const onPhone = isServerRuntime && api?.serverHost === 'mac'
 const pageTitle = (id: Page): string => (id === 'server' && isServerRuntime ? (onPhone ? 'This phone' : 'Server') : PAGE_TITLES[id])
@@ -192,6 +194,7 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   const [jump, setJump] = useState<string | null>(anchored?.anchor ?? null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const pages = PAGES.filter((x) => !isServerRuntime || x.id !== 'voice')
+  const [more, setMore] = useState(() => { try { return localStorage.getItem('sahilbot:settings-more') === '1' } catch { return false } })
   const results = useMemo(() => searchSettings(find, { server: isServerRuntime }), [find])
   const [s, setS] = useState(settings)
   useEffect(() => setS(settings), [settings])
@@ -257,9 +260,16 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
                 </button>
               ))}
             </div>
-          ) : pages.map((p) => (
-            <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{pageTitle(p.id)}</button>
-          ))}
+          ) : <>
+            {/* Simple first: the five pages most people need, the rest one click away (search finds everything). */}
+            {pages.filter((p) => MAIN_PAGES.has(p.id)).map((p) => (
+              <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{pageTitle(p.id)}</button>
+            ))}
+            <button className="set-nav-more" onClick={() => { setMore((m) => { try { localStorage.setItem('sahilbot:settings-more', m ? '0' : '1') } catch { /* ignore */ } return !m }) }} aria-expanded={more || !MAIN_PAGES.has(page)} data-testid="settings-more">{more || !MAIN_PAGES.has(page) ? '▾' : '▸'} More settings</button>
+            {(more || !MAIN_PAGES.has(page)) && pages.filter((p) => !MAIN_PAGES.has(p.id)).map((p) => (
+              <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{pageTitle(p.id)}</button>
+            ))}
+          </>}
           {sys && <div className="set-nav-foot">{sys.chip}<br />{sys.totalGB} GB RAM · SahilBot {sys.appVersion}</div>}
         </nav>
         <div className="set-body" ref={bodyRef} data-page={page}>
@@ -807,7 +817,6 @@ function ConnectedPage({ s, patch }: P) {
 
 // ------------------------------------------------------------------ voice
 
-const VOICE_MODELS: Array<[string, string]> = [['af_heart', 'Heart'], ['af_bella', 'Bella'], ['af_nicole', 'Nicole'], ['af_sky', 'Sky'], ['am_michael', 'Michael'], ['am_adam', 'Adam'], ['bf_emma', 'Emma (UK)'], ['bm_george', 'George (UK)']]
 const WHISPER_CHOICES: Array<[string, string]> = [
   ['auto', 'Auto (best for this Mac)'], ['small-q5_1', 'Whisper small, 5-bit · 190 MB'], ['small-q8_0', 'Whisper small, 8-bit · 264 MB'],
   ['medium-q5_0', 'Whisper medium, 5-bit · 539 MB'], ['large-v3-turbo-q5_0', 'Whisper large-v3-turbo, 5-bit · 574 MB'], ['large-v3-turbo-q8_0', 'Whisper large-v3-turbo, 8-bit · 874 MB']
@@ -849,16 +858,7 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
         </Row>}
         <Row id="read-aloud" title="Read replies aloud" sub="Or press the speaker on any message."><Toggle on={s.speakReplies} onChange={(v) => void patch({ speakReplies: v })} label="Read replies aloud" testId="speak-replies" /></Row>
         <div data-setting="voice-openai"><VoiceOutputRow s={s} patch={patch} /></div>
-        {voice && localIsOn(s) && (
-          <Row id="speaking-voice" title="Voice" sub={voice.kokoro ? 'Kokoro, on this Mac.' : 'Kokoro (92 MB) downloads when you try it.'}>
-            <div className="key-edit">
-              <select className="set-select" value={voice.voice} aria-label="Voice" onChange={(e) => { void api.voice.setVoice(e.target.value); setVoice({ ...voice, voice: e.target.value }) }}>
-                {VOICE_MODELS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
-              </select>
-              <button className="btn" onClick={() => void (voice.kokoro ? api.voice.speak(`Hi${s.userName ? ` ${s.userName}` : ''}, this is how I sound.`) : api.voice.download('kokoro').catch((e) => toast(clean(e), 'error')))}>{voice.kokoro ? 'Try it' : 'Get voice'}</button>
-            </div>
-          </Row>
-        )}
+        <Row id="speaking-voice" title="Voices" sub="Pick a voice, its speed and your language in the voice bar: its settings button." />
       </Section>
       <Disclosure title="Advanced" sub="Speech model, local transcription and the voice model" testId="voice-advanced">
         <Section>
@@ -1070,6 +1070,20 @@ function HybridComputeSettings() {
           {st?.installed && !busy && !st.enabled && <button className="btn" onClick={() => void api.privacy.remove().then(setSt)} data-testid="privacy-gate-remove">Remove download</button>}
         </Row>
         {test && !test.running && <div className={`hint${test.error ? ' ui-text-danger' : ''}`} style={{ margin: '0 0 10px' }} data-testid="privacy-gate-test-result">{test.error ?? test.text}</div>}
+        {st?.enabled && st.installed && (
+          <Row title="When it finds personal details" sub={st.mode === 'auto'
+            ? 'Protect automatically: cloud models get stand-ins like [PERSON_1] (a personal record like a bank statement moves to the model on your Mac), the chat carries on, and a note says what was protected.'
+            : 'Ask me: the chat pauses on a card so you choose for each new detail.'} testId="privacy-gate-mode">
+            <Segmented value={st.mode} options={[{ id: 'ask', label: 'Ask me' }, { id: 'auto', label: 'Protect automatically' }]} onChange={(m) => void api.privacy.setMode(m).then(setSt).catch((e) => toast(clean(e), 'error'))} label="When it finds personal details" testIdPrefix="privacy-mode" />
+          </Row>
+        )}
+        {st?.enabled && st.installed && (
+          <Row title="Today" sub={st.today.requests
+            ? `Checked ${st.today.checked.toLocaleString()} new part${st.today.checked === 1 ? '' : 's'} of conversations in ${st.today.requests.toLocaleString()} check${st.today.requests === 1 ? '' : 's'} on this Mac · asked you ${st.today.asked} time${st.today.asked === 1 ? '' : 's'} · protected ${st.today.protected} automatically · ${st.today.cleared} cleared as not personal (by you before, or the model on your Mac)${st.today.errors ? ` · ${st.today.errors} check${st.today.errors === 1 ? '' : 's'} failed (nothing unchecked was sent)` : ''}`
+            : 'Nothing checked yet today.'} testId="privacy-gate-today">
+            {st.remembered > 0 && <button className="btn" onClick={() => void api.privacy.forgetNotPersonal().then(setSt)} title="Details you marked as not personal are shared without asking in every chat" data-testid="privacy-forget">Forget {st.remembered} “not personal”</button>}
+          </Row>
+        )}
         {busy && progress?.phase === 'download' && <div className="meter" style={{ margin: '0 0 8px' }}><i style={{ width: `${progress.pct ?? 0}%` }} /></div>}
       </div>
     </Section>

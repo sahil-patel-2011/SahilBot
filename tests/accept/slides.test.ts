@@ -43,13 +43,18 @@ describe('slides: a native deck the bot and the user both edit', () => {
       expect(await page.locator('[data-testid="slide-point"]').allTextContents()).toEqual(['1,000 sign-ups', 'Two partners', 'One retailer'])
       expect(await page.locator('[data-testid="slide-notes"]').inputValue()).toBe('Keep this under a minute.')
       await page.locator('[data-testid="slide-title"]').click()
+      await expect.poll(() => page.evaluate(() => document.activeElement?.closest('[data-testid]')?.getAttribute('data-testid') ?? '')).toBe('slide-title')
       await page.keyboard.press('End')
       await page.keyboard.type(' for 2027')
       await page.locator('[data-testid="slide-point"]').last().click()
+      await expect.poll(() => page.evaluate(() => document.activeElement?.closest('[data-testid]')?.getAttribute('data-testid') ?? '')).toBe('slide-point')
       await page.keyboard.press('End')
       await page.keyboard.press('Shift+Tab')
+      await expect.poll(() => page.evaluate(() => document.activeElement?.textContent ?? '')).toBe('One retailer')
       await page.keyboard.press('End')
       await page.keyboard.press('Enter')
+      // The new, empty point has the caret before typing (as when a person types).
+      await expect.poll(() => page.evaluate(() => { const a = document.activeElement; return a?.getAttribute('data-testid') === 'slide-point' && !a.textContent })).toBe(true)
       await page.keyboard.type('Press coverage')
       await page.locator('[data-testid="slide-add-stat"]').click()
       await page.keyboard.press('Meta+a')
@@ -123,6 +128,10 @@ describe('slides: a native deck the bot and the user both edit', () => {
       expect(statSync(dpdf).size).toBeGreaterThan(5_000)
       await page.locator('[data-testid="dash-edit"]').click()
       expect(await page.locator('[data-testid="doc-block"]').count()).toBeGreaterThan(3)
-    } catch (e) { await shot(page, 'failure'); throw e } finally { await app.close() }
+    } catch (e) {
+      await shot(page, 'failure')
+      if (process.env.SLIDES_DEBUG) { const { writeFileSync } = await import('node:fs'); const id = await page.locator('[data-testid="doc-editor"]').getAttribute('data-doc'); writeFileSync(process.env.SLIDES_DEBUG, JSON.stringify(await page.evaluate((x) => window.foreman.docs.get(x!), id), null, 1)) }
+      throw e
+    } finally { await app.close() }
   }, 120_000)
 })

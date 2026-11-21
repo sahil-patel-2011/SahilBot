@@ -57,6 +57,12 @@ const PALETTE: Record<'modern' | 'classic' | 'minimal', string[]> = {
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 const short = (n: number): string => Math.abs(n) >= 1e9 ? `${+(n / 1e9).toFixed(1)}B` : Math.abs(n) >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : Math.abs(n) >= 1e4 ? `${+(n / 1e3).toFixed(1)}k` : `${+n.toFixed(2)}`
 
+/** Line or bars for a table: 12+ rows, or 7+ rows under a time column (Month, Quarter…), is a line. Shared with the PowerPoint export. */
+export function chartKind(t: DashTable): 'line' | 'column' {
+  const n = t.rows.length
+  return (n >= 7 && /^(date|day|week|month|year|quarter|q\d|period|time)/i.test(t.header[0] ?? '')) || n >= 12 ? 'line' : 'column'
+}
+
 /** A chart (SVG) of a table's number columns: a line for 7+ rows over time, otherwise bars. */
 export function chartSvg(t: DashTable, colors: string[]): string | null {
   const cols = t.header.map((_, c) => c).filter((c) => c > 0 && t.rows.length > 0 && t.rows.every((r) => r[c] === undefined || r[c].trim() === '' || numberOf(r[c]) !== null) && t.rows.some((r) => numberOf(r[c] ?? '') !== null)).slice(0, 4)
@@ -69,7 +75,7 @@ export function chartSvg(t: DashTable, colors: string[]): string | null {
   const span = max - min || 1
   const y = (v: number): number => T + (H - T - B) * (1 - (v - min) / span)
   const n = t.rows.length
-  const line = n >= 7 && /^(date|day|week|month|year|quarter|q\d|period|time)/i.test(t.header[0] ?? '') || n >= 12
+  const line = chartKind(t) === 'line'
   const step = (W - L - R) / n
   const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => { const v = min + span * f; return `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e5e7eb"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="#6b7280">${esc(short(v))}</text>` }).join('')
   const every = Math.ceil(n / 12)
@@ -106,6 +112,7 @@ export function dashboardCss(style?: DocStyle): string {
 .sbdash .db-card { border:1px solid #e5e7eb; border-radius:14px; padding:14px 16px; background:#fff; margin-bottom:12px; break-inside:avoid; }
 .sbdash .db-card svg { width:100%; height:auto; display:block; }
 .sbdash .db-legend { display:flex; gap:14px; font-size:12px; color:#374151; margin-bottom:6px; flex-wrap:wrap; }
+.sbdash .db-donut { display:flex; align-items:center; gap:24px; } .sbdash .db-donut svg { width:200px; height:200px; flex:none; } .sbdash .db-legend-col { flex-direction:column; gap:6px; font-size:13px; }
 .sbdash .db-legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
 .sbdash table { width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
 .sbdash th { text-align:left; font-weight:600; color:#6b7280; border-bottom:1px solid #e5e7eb; padding:6px 8px; }
@@ -123,7 +130,7 @@ export function dashboardHtml(title: string, blocks: DocBlock[], o: { style?: Do
   const sections = blocksToDashboard(blocks).map((s) => {
     const tiles = s.tiles.length ? `<div class="db-tiles">${s.tiles.map((t) => `<div class="db-tile"><b>${inlineHtml(t.value)}</b><span>${inlineHtml(t.label)}</span>${t.note ? `<em>${inlineHtml(t.note)}</em>` : ''}</div>`).join('')}</div>` : ''
     const tables = s.tables.map((t) => {
-      const chart = chartSvg(t, colors)
+      const chart = donutSvg(t, colors) ?? chartSvg(t, colors)
       const num = t.header.map((_, c) => c > 0 && t.rows.every((r) => !r[c]?.trim() || numberOf(r[c]) !== null))
       const table = `<table><thead><tr>${t.header.map((h, c) => `<th${num[c] ? ' class="n"' : ''}>${inlineHtml(h)}</th>`).join('')}</tr></thead><tbody>${t.rows.map((r) => `<tr>${t.header.map((_, c) => `<td${num[c] ? ' class="n"' : ''}>${inlineHtml(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table>`
       return `<div class="db-card">${chart ?? ''}${table}</div>`
@@ -140,4 +147,33 @@ export function dashboardHtml(title: string, blocks: DocBlock[], o: { style?: Do
 export function dashboardDocument(title: string, blocks: DocBlock[], o: { style?: DocStyle; img?: (src: string) => string | null | undefined } = {}): string {
   const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>@page { size: letter landscape; margin: 0.5in; } html, body { margin:0; background:#fff; } body { padding: 0; } ${dashboardCss(o.style)}</style></head><body>${dashboardHtml(title, blocks, { ...o, subtitle: `Updated ${date}` })}</body></html>`
+}
+
+/** A chart fence's data ("Quarter, Revenue\nQ1, 120" or a Markdown table) as a table; null if it isn't one. */
+export function chartTable(text: string): DashTable | null {
+  const rows = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^\|?\s*:?-{2,}/.test(l))
+    .map((l) => (l.includes('|') ? l.replace(/^\||\|$/g, '').split('|') : l.split(/,|\t/)).map((c) => c.trim()))
+  if (rows.length < 3 || rows[0].length < 2) return null
+  const [header, ...body] = rows
+  return { header, rows: body }
+}
+
+/** A share chart (one number column, 2 to 6 rows, header like Share / % / Mix): a donut with a legend. */
+export function donutSvg(t: DashTable, colors: string[]): string | null {
+  if (t.header.length !== 2 || t.rows.length < 2 || t.rows.length > 6 || !/share|%|percent|mix|split|breakdown|portion/i.test(t.header[1] + ' ' + t.header[0])) return null
+  const vals = t.rows.map((r) => numberOf(r[1] ?? '') ?? 0)
+  const total = vals.reduce((a, b) => a + b, 0)
+  if (total <= 0 || vals.some((v) => v < 0)) return null
+  let a0 = -Math.PI / 2
+  const R = 90, r = 54, C = 110
+  const arcs = vals.map((v, i) => {
+    const a1 = a0 + (v / total) * Math.PI * 2
+    const big = a1 - a0 > Math.PI ? 1 : 0
+    const p = (a: number, rad: number): string => `${(C + rad * Math.cos(a)).toFixed(1)},${(C + rad * Math.sin(a)).toFixed(1)}`
+    const d = `M${p(a0, R)} A${R},${R} 0 ${big} 1 ${p(a1, R)} L${p(a1, r)} A${r},${r} 0 ${big} 0 ${p(a0, r)} Z`
+    a0 = a1
+    return `<path d="${d}" fill="${colors[i % colors.length]}"/>`
+  }).join('')
+  const legend = t.rows.map((row, i) => `<span><i style="background:${colors[i % colors.length]}"></i>${esc(row[0] ?? '')} · ${esc(row[1] ?? '')}</span>`).join('')
+  return `<div class="db-donut"><svg viewBox="0 0 220 220" role="img" aria-label="${esc(t.header[1])} by ${esc(t.header[0])}">${arcs}</svg><div class="db-legend db-legend-col">${legend}</div></div>`
 }

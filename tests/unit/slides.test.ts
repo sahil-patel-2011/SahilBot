@@ -139,3 +139,50 @@ test('native sheets work out the functions people expect: IF, SUMIF, VLOOKUP, te
   expect(v.C7.error).toBeTruthy()
   expect(v.C8.error).toBe('#DIV/0!')
 })
+
+test('a chart block on a slide draws as a chart, a share table as a donut, and the deck check flags overloaded slides', async () => {
+  const { slideChartHtml, deckLook } = await import('../../src/shared/slide-render')
+  const { deckReview } = await import('../../src/shared/slides')
+  const s = blocksToSlides([
+    { id: 'h', type: 'h2', text: 'Revenue grew every quarter' },
+    { id: 'c', type: 'code', lang: 'chart', text: 'Quarter, Revenue, Costs\nQ1, 120, 80\nQ2, 150, 90\nQ3, 190, 95' },
+    { id: 'h2', type: 'h2', text: 'Where customers come from' },
+    { id: 'c2', type: 'code', lang: 'chart', text: '| Channel | Share |\n|---|---|\n| Search | 45% |\n| Referral | 30% |\n| Ads | 25% |' }
+  ])
+  expect(slideChartHtml(s[0], deckLook()).match(/<rect /g)?.length).toBe(6)
+  expect(slideChartHtml(s[1], deckLook())).toContain('db-donut')
+  const heavy = blocksToSlides([{ id: 'h', type: 'h2', text: 'x'.repeat(80) }, ...Array.from({ length: 8 }, (_, i) => ({ id: `p${i}`, type: 'bullet' as const, text: `Point ${i}` }))])
+  const review = deckReview(heavy)
+  expect(review.join(' ')).toMatch(/8 points/)
+  expect(review.join(' ')).toMatch(/title is 80 characters/)
+  expect(deckReview(blocksToSlides(deck))).toEqual([])
+})
+
+test('a chart slide exports as a native, editable PowerPoint chart', async () => {
+  const { execFileSync } = await import('node:child_process')
+  const dir = mkdtempSync(join(tmpdir(), 'slides-chart-'))
+  const blocks: DocBlock[] = [{ id: 't', type: 'h2', text: 'Deck' }, { id: 'h', type: 'h2', text: 'Revenue grew' }, { id: 'p', type: 'bullet', text: 'Up 58% in three quarters' }, { id: 'c', type: 'code', lang: 'chart', text: 'Quarter, Revenue\nQ1, 120\nQ2, 150\nQ3, 190' }]
+  const snap = { id: 'd1', threadId: 't', title: 'Deck', type: 'doc', version: 1, createdAt: 0, updatedAt: 0, lastAuthor: 'user', lastSummary: '', content: { title: 'Deck', blocks, kind: 'slides' } } as never
+  const path = await exportDoc(snap, 'pptx', dir)
+  const names = execFileSync('/usr/bin/unzip', ['-Z1', path]).toString()
+  expect(names).toMatch(/ppt\/charts\/chart\d+\.xml/)
+}, 60_000)
+
+test('the PowerPoint chart is the same kind as the slide\'s (one rule), and blanks stay gaps', async () => {
+  const { chartKind } = await import('../../src/shared/dashboard')
+  const t = (n: number, h = 'Month') => ({ header: [h, 'Sales'], rows: Array.from({ length: n }, (_, i) => [`m${i}`, String(i)]) })
+  expect([chartKind(t(5)), chartKind(t(7)), chartKind(t(8, 'Region')), chartKind(t(12, 'Region'))]).toEqual(['column', 'line', 'column', 'line'])
+  const { execFileSync } = await import('node:child_process')
+  const dir = mkdtempSync(join(tmpdir(), 'slides-kind-'))
+  const rows = ['Month, Sales', ...Array.from({ length: 6 }, (_, i) => `M${i}, ${i === 3 ? '' : 10 + i}`)].join('\n')
+  const blocks: DocBlock[] = [{ id: 't', type: 'h2', text: 'Deck' }, { id: 'h', type: 'h2', text: 'Sales' }, { id: 'c', type: 'code', lang: 'chart', text: rows }]
+  const path = await exportDoc({ id: 'd', threadId: 't', title: 'Deck', type: 'doc', version: 1, createdAt: 0, updatedAt: 0, lastAuthor: 'user', lastSummary: '', content: { title: 'Deck', blocks, kind: 'slides' } } as never, 'pptx', dir)
+  // pptxgenjs numbers chart parts across the whole process, so find this deck's one by listing.
+  const part = execFileSync('/usr/bin/unzip', ['-Z1', path]).toString().split('\n').find((n) => /^ppt\/charts\/chart\d+\.xml$/.test(n))!
+  const chartXml = execFileSync('/usr/bin/unzip', ['-p', path, part]).toString()
+  // Six months is bars in the editor (chartKind), so bars in PowerPoint too; the blank month is a gap, not 0;
+  // and a slide with only a title and a chart keeps its chart (it isn't a section slide).
+  expect(chartXml).toContain('<c:barChart>')
+  expect(chartXml).toMatch(/<c:dispBlanksAs val="gap"\/>/)
+  expect(chartXml).toContain('<c:v></c:v>')
+}, 60_000)

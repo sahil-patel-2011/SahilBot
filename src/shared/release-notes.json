@@ -1,5 +1,111 @@
 [
   {
+    "version": "26.11.21",
+    "date": "2026-11-21",
+    "title": "Talk to your bots, a sharper agent, and business-grade decks",
+    "highlights": [
+      "Talk to a bot and it goes off to do the work while you keep talking, then tells you out loud when it's done",
+      "Home shows your bots first, and a new bot sets itself up with you in its chat",
+      "Voices are ChatGPT's or Grok's: pick one, its speed and your language right in the voice bar",
+      "Click or hold ⌘D to dictate",
+      "Decks and documents keep tables, web pictures and charts in every export",
+      "The agent catches more false \"done\" claims and gives up less",
+      "The Privacy Gate is out of beta, and your server can use your Mac safely"
+    ],
+    "sections": [
+      {
+        "title": "Bots you can talk to",
+        "items": [
+          "In a voice chat, real work (research, a document, files, email, the browser) runs in the background in the bot's own chat, and the conversation keeps going",
+          "When the work finishes, the bot says the result in the next pause, if voice is still open. Ask follow-up questions about it right away",
+          "If the work needs your OK, the bot says so and the card shows on the voice screen. You tap to approve: a misheard \"yes\" never sends or buys anything",
+          "Voice is a bar at the top of the chat you're in, opened from the voice button in the message box: settings, transcript, mute and hang up",
+          "Pick a voice (hear each one first), the speaking speed and the language you speak",
+          "When you hang up, the conversation folds into one line named after what you talked about, with its length. Open it to read the transcript. What you said is remembered like anything you type",
+          "The voice bar lists what's running, what needs you and what's done",
+          "Home starts with your bots: each one's state, Talk for a voice conversation with it, and Open for its chat. The box below is for quick one-off questions, and what you say there is remembered",
+          "A new bot sets itself up with you in its chat, typed or by voice: it asks what you want done, suggests a name, writes its own instructions, and saves them when you agree",
+          "Spoken replies use cloud voices for speed and quality: ChatGPT's (OpenAI) or Grok's (xAI). Switch between them in the voice bar, even mid-conversation",
+          "Dictate with the microphone button: click to start and stop, or hold ⌘D and let go when you're done",
+          "First run ends with \"Your first bot\": how bots work in three short cards, then your first bot opens ready to set up"
+        ]
+      },
+      {
+        "title": "Your iPhone, a server and your Mac",
+        "items": [
+          "Run your bots around the clock on a small cloud server (DigitalOcean's 4 GB Droplet is about $24 a month) and use them from your iPhone as a Home Screen app",
+          "The server can use your Mac. At first it can only find and read your files. You can turn on Terminal, Messages, Mail, Notes, Calendar, the browser and the screen. Anything that changes something asks you first",
+          "Only the Mac you linked can take work from the server. Your Mac limits how fast the server can act and logs what it did",
+          "Your Mac connects out to the server, so nothing on your Mac is opened to the internet",
+          "Keep this Mac awake: while it's plugged in, your phone can always reach it (the display still turns off)",
+          "Setup steps are in the server guide (docs/server.md)",
+          "Keys, login items, mail and SahilBot's own data on your Mac are never reachable from the server, however a path is written",
+          "An action the server sends runs once, even if the connection hiccups; turning the link off stops it at once",
+          "Only your Mac can turn the link on or off"
+        ]
+      },
+      {
+        "title": "Agent loop",
+        "items": [
+          "When a tool fails and the agent starts to give up, it's sent to try another source or approach first, and it says plainly what blocked it if nothing works",
+          "A reply that says something was saved, sent or published when no tool ran gets challenged: it does it, or says it wasn't done",
+          "If a send times out, SahilBot won't repeat it (or ask you to approve a repeat) until the agent checks whether it already went through",
+          "After a code edit, the project's tests run right away on fast suites, so a wrong fix is caught before it's announced",
+          "A job that says it's still building gets a single wait instead of a tight polling loop",
+          "Project instructions in AGENTS.md (or CLAUDE.md / GROK.md) from your folder up to the repo root go into the agent's context, like Codex",
+          "If you set a limit (\"under $200\"), what the agent picks is checked against it, and it fixes a choice that's over",
+          "It reads every page of a paged result before answering, instead of stopping at page 1",
+          "A write that fails outright (bad input, no permission) no longer counts as \"may have happened\", so a corrected retry goes straight through",
+          "When the agent sees a better way or the obvious next step, it offers it as an idea card with \"Do it\". It never starts the idea on its own",
+          "It won't say \"I can't access that\" without trying the tools it has, and after a second failure it lists other ways and tries the best one",
+          "It reads curly apostrophes (I’ve, couldn’t) like straight ones, so its checks for false \"done\" claims and giving up always work",
+          "A reply the app sends back (it said it was done but wasn't, or gave up) is replaced by the next one instead of staying in the chat",
+          "Fewer false alarms on budgets (\"under $2 million\"), totals and fees, and on results that have no more pages"
+        ]
+      },
+      {
+        "title": "Slides, documents and dashboards",
+        "items": [
+          "Chart slides: a chart block on a slide draws in the deck's colors and exports to PowerPoint as a native chart you can edit",
+          "Share tables (Channel / Share) draw as donut charts on slides and dashboards",
+          "A deck check after the agent makes or exports a deck: too many points, long lines, missing or long titles get fixed before you see it",
+          "Documents show their word count and reading time next to the save state",
+          "Typing fast on a slide (Tab, Enter, then straight on) never drops a keystroke or undoes the step before",
+          "Tables on slides export to PowerPoint as real, editable tables",
+          "Pictures from the web are saved into your workspace, and WebP and iPhone (HEIC) pictures work in every export",
+          "Charts written as CSV work in documents too, not only in decks",
+          "If an export had to leave something out (a missing picture, text cut to fit), the bot tells you",
+          "Image captions are kept, italics no longer catch maths like 5 * 3, and long tables get a warning"
+        ]
+      },
+      {
+        "title": "Privacy Gate, out of beta",
+        "items": [
+          "Protect automatically (Settings → Hybrid compute): personal details get stand-ins for cloud models without pausing the chat, and a note says what was protected",
+          "Anything you mark \"not personal\" is remembered for every chat (never passwords, keys or account numbers), and Forget clears the list",
+          "See what the gate did today: requests checked, times it asked, details protected, and finds the model on your Mac cleared",
+          "PII-Tracer tests itself after the download, and restarts on its own if it stops mid-check"
+        ]
+      },
+      {
+        "title": "Simpler Settings",
+        "items": [
+          "Five main pages up front (General, Models, Connected apps, Privacy, Phone & server), with everything else under More settings. Search still finds every setting"
+        ]
+      },
+      {
+        "title": "Coming next",
+        "items": [
+          "Accounts with Google sign-in, so several people can share one server privately",
+          "Your own checks that run before a bot says it's done (like Claude Code's hooks)",
+          "Picking up a long task exactly where it stopped after a crash or restart",
+          "Brand themes for decks and documents (your colors, font and logo), plus two-column and quote slides",
+          "Approving the server's actions on your Mac itself, for the most sensitive tools"
+        ]
+      }
+    ]
+  },
+  {
     "version": "26.11.20",
     "date": "2026-11-20",
     "title": "Native decks, documents and dashboards, a smarter Auto, and Hybrid compute",

@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { launch, tempProfile } from './app'
+import { launch, tempProfile, settingsPage } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 
 // Cloud first, local opt-in: first-run setup leads with cloud connections and asks one question about
@@ -51,6 +51,8 @@ describe('cloud-first onboarding', () => {
 
     // The last step: Mac permissions and files anywhere.
 
+    await page.click('[data-testid="onboarding-perms-next"]')
+
     await page.click('[data-testid="onboarding-finish"]')
     await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
 
@@ -70,7 +72,7 @@ describe('cloud-first onboarding', () => {
     expect(await page.locator('[data-testid="local-turn-on"]').count()).toBe(1)
     for (const sel of ['[data-testid="recommended-row"]', '[data-testid^="pull-"]', '[data-testid="ollama-setup"]', '.install-ollama']) expect(await page.locator(sel).count()).toBe(0)
     // Cloud-only includes voice, even when the user requests a local speech download.
-    await page.click('[data-testid="settings-voice"]')
+    await settingsPage(page, 'voice')
     await page.locator('[data-testid="voice-provider"]').waitFor()
     const st = await page.evaluate(() => window.foreman.voice.status())
     expect(st.speech).toMatchObject({ local: false, requested: [] })
@@ -102,6 +104,7 @@ describe('cloud-first onboarding', () => {
     expect((await page.evaluate(() => window.foreman.settings.get())).local?.enabled).toBe(true)
     await page.click('[data-testid="onboarding-local-next"]')
     // The last step: Mac permissions and files anywhere.
+    await page.click('[data-testid="onboarding-perms-next"]')
     await page.click('[data-testid="onboarding-finish"]')
     await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
     expect((await page.evaluate(() => window.foreman.settings.get())).local?.enabled).toBe(true)

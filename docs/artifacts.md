@@ -42,6 +42,14 @@ Write Markdown. Each slide is:
 ![](/Users/me/Desktop/photo.png)       ← the slide's picture (right side, or full if no points)
 ```
 
+- A chart: put a fenced `chart` block on the slide with CSV (header row, then one row per label). It's drawn in the slide's colors and exported to PowerPoint as a native chart the user can edit. A two-column Label/Share (or %) table with 2 to 6 rows draws as a donut. 7+ rows, or a time column (Month, Quarter…), draws as a line.
+
+  ```chart
+  Quarter, Revenue, Costs
+  Q1, 120, 80
+  Q2, 150, 90
+  ```
+- `doc_create` and `doc_export` return a deck check: slides with more than 6 points, points over 120 characters, titles over 70 characters or missing. Fix what it flags with `doc_edit` before sending.
 - The first slide is the dark title slide. A slide with only a title is a dark section slide. The others are light, with the deck title and the page number in the footer.
 - Write a headline title that states the point, then 3 to 5 short points. Put the detail in the notes.
 - The editor, Present, PDF, PNG and "PowerPoint (pictures)" all come from one renderer (`src/shared/slide-render.ts`), so what the user sees is what they send.

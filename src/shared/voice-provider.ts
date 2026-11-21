@@ -3,7 +3,8 @@ import type { Settings } from './types'
 export type CloudSpeechProvider = 'auto' | 'openai' | 'xai' | 'off' | 'chatgpt-app' | 'grok-app'
 
 export function voicePreference(s: Pick<Settings, 'voiceOutput'>): CloudSpeechProvider {
-  return s.voiceOutput?.provider ?? (s.voiceOutput?.openai ? 'openai' : 'off')
+  // Not chosen yet: Auto, the cloud voice of whichever key is connected (ChatGPT's or Grok's).
+  return s.voiceOutput?.provider ?? (s.voiceOutput?.openai ? 'openai' : s.voiceOutput?.openai === false ? 'off' : 'auto')
 }
 
 export function connectedVoice(preference: CloudSpeechProvider, keys: { openai: boolean; xai: boolean }): 'openai' | 'xai' | undefined {

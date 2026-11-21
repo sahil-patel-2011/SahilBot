@@ -75,9 +75,11 @@ const TASKS: Task[] = [
         m.screen('onboarding: workspace')
         await m.click('[data-testid="onboarding-workspace-next"]')
         m.screen('onboarding: import memory')
+        await m.click('[data-testid="onboarding-perms-next"]')
         await m.click('[data-testid="onboarding-finish"]')
-      } else if (await page.locator('[data-testid="onboarding-finish"]').count()) {
+      } else if (await page.locator('[data-testid="onboarding-perms-next"]').count()) {
         m.screen('onboarding: ready')
+        await m.click('[data-testid="onboarding-perms-next"]')
         await m.click('[data-testid="onboarding-finish"]')
       }
       await page.locator('[data-testid="onboarding"]').waitFor({ state: 'detached', timeout: 10_000 })

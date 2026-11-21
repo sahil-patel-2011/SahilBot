@@ -1,0 +1,168 @@
+# Changelog
+
+Every SahilBot update, newest first. The same notes show in the app (Settings → Updates → What's new) and on each GitHub release. Versions are dates (YY.MM.DD).
+
+## 26.11.21 · Talk to your bots, a sharper agent, and business-grade decks
+
+_2026-11-21_
+
+- **Talk to a bot and it goes off to do the work while you keep talking, then tells you out loud when it's done**
+- **Home shows your bots first, and a new bot sets itself up with you in its chat**
+- **Voices are ChatGPT's or Grok's: pick one, its speed and your language right in the voice bar**
+- **Click or hold ⌘D to dictate**
+- **Decks and documents keep tables, web pictures and charts in every export**
+- **The agent catches more false "done" claims and gives up less**
+- **The Privacy Gate is out of beta, and your server can use your Mac safely**
+
+### Bots you can talk to
+
+- In a voice chat, real work (research, a document, files, email, the browser) runs in the background in the bot's own chat, and the conversation keeps going
+- When the work finishes, the bot says the result in the next pause, if voice is still open. Ask follow-up questions about it right away
+- If the work needs your OK, the bot says so and the card shows on the voice screen. You tap to approve: a misheard "yes" never sends or buys anything
+- Voice is a bar at the top of the chat you're in, opened from the voice button in the message box: settings, transcript, mute and hang up
+- Pick a voice (hear each one first), the speaking speed and the language you speak
+- When you hang up, the conversation folds into one line named after what you talked about, with its length. Open it to read the transcript. What you said is remembered like anything you type
+- The voice bar lists what's running, what needs you and what's done
+- Home starts with your bots: each one's state, Talk for a voice conversation with it, and Open for its chat. The box below is for quick one-off questions, and what you say there is remembered
+- A new bot sets itself up with you in its chat, typed or by voice: it asks what you want done, suggests a name, writes its own instructions, and saves them when you agree
+- Spoken replies use cloud voices for speed and quality: ChatGPT's (OpenAI) or Grok's (xAI). Switch between them in the voice bar, even mid-conversation
+- Dictate with the microphone button: click to start and stop, or hold ⌘D and let go when you're done
+- First run ends with "Your first bot": how bots work in three short cards, then your first bot opens ready to set up
+
+### Your iPhone, a server and your Mac
+
+- Run your bots around the clock on a small cloud server (DigitalOcean's 4 GB Droplet is about $24 a month) and use them from your iPhone as a Home Screen app
+- The server can use your Mac. At first it can only find and read your files. You can turn on Terminal, Messages, Mail, Notes, Calendar, the browser and the screen. Anything that changes something asks you first
+- Only the Mac you linked can take work from the server. Your Mac limits how fast the server can act and logs what it did
+- Your Mac connects out to the server, so nothing on your Mac is opened to the internet
+- Keep this Mac awake: while it's plugged in, your phone can always reach it (the display still turns off)
+- Setup steps are in the server guide (docs/server.md)
+- Keys, login items, mail and SahilBot's own data on your Mac are never reachable from the server, however a path is written
+- An action the server sends runs once, even if the connection hiccups; turning the link off stops it at once
+- Only your Mac can turn the link on or off
+
+### Agent loop
+
+- When a tool fails and the agent starts to give up, it's sent to try another source or approach first, and it says plainly what blocked it if nothing works
+- A reply that says something was saved, sent or published when no tool ran gets challenged: it does it, or says it wasn't done
+- If a send times out, SahilBot won't repeat it (or ask you to approve a repeat) until the agent checks whether it already went through
+- After a code edit, the project's tests run right away on fast suites, so a wrong fix is caught before it's announced
+- A job that says it's still building gets a single wait instead of a tight polling loop
+- Project instructions in AGENTS.md (or CLAUDE.md / GROK.md) from your folder up to the repo root go into the agent's context, like Codex
+- If you set a limit ("under $200"), what the agent picks is checked against it, and it fixes a choice that's over
+- It reads every page of a paged result before answering, instead of stopping at page 1
+- A write that fails outright (bad input, no permission) no longer counts as "may have happened", so a corrected retry goes straight through
+- When the agent sees a better way or the obvious next step, it offers it as an idea card with "Do it". It never starts the idea on its own
+- It won't say "I can't access that" without trying the tools it has, and after a second failure it lists other ways and tries the best one
+- It reads curly apostrophes (I’ve, couldn’t) like straight ones, so its checks for false "done" claims and giving up always work
+- A reply the app sends back (it said it was done but wasn't, or gave up) is replaced by the next one instead of staying in the chat
+- Fewer false alarms on budgets ("under $2 million"), totals and fees, and on results that have no more pages
+
+### Slides, documents and dashboards
+
+- Chart slides: a chart block on a slide draws in the deck's colors and exports to PowerPoint as a native chart you can edit
+- Share tables (Channel / Share) draw as donut charts on slides and dashboards
+- A deck check after the agent makes or exports a deck: too many points, long lines, missing or long titles get fixed before you see it
+- Documents show their word count and reading time next to the save state
+- Typing fast on a slide (Tab, Enter, then straight on) never drops a keystroke or undoes the step before
+- Tables on slides export to PowerPoint as real, editable tables
+- Pictures from the web are saved into your workspace, and WebP and iPhone (HEIC) pictures work in every export
+- Charts written as CSV work in documents too, not only in decks
+- If an export had to leave something out (a missing picture, text cut to fit), the bot tells you
+- Image captions are kept, italics no longer catch maths like 5 * 3, and long tables get a warning
+
+### Privacy Gate, out of beta
+
+- Protect automatically (Settings → Hybrid compute): personal details get stand-ins for cloud models without pausing the chat, and a note says what was protected
+- Anything you mark "not personal" is remembered for every chat (never passwords, keys or account numbers), and Forget clears the list
+- See what the gate did today: requests checked, times it asked, details protected, and finds the model on your Mac cleared
+- PII-Tracer tests itself after the download, and restarts on its own if it stops mid-check
+
+### Simpler Settings
+
+- Five main pages up front (General, Models, Connected apps, Privacy, Phone & server), with everything else under More settings. Search still finds every setting
+
+### Coming next
+
+- Accounts with Google sign-in, so several people can share one server privately
+- Your own checks that run before a bot says it's done (like Claude Code's hooks)
+- Picking up a long task exactly where it stopped after a crash or restart
+- Brand themes for decks and documents (your colors, font and logo), plus two-column and quote slides
+- Approving the server's actions on your Mac itself, for the most sensitive tools
+
+## 26.11.20 · Native decks, documents and dashboards, a smarter Auto, and Hybrid compute
+
+_2026-11-20_
+
+- **Make slides, documents, dashboards and sheets right in SahilBot, edit them with your agent, and export to PowerPoint, Keynote/ODP, PDF, Word or images**
+- **Hybrid compute: personal details stay on your Mac while cloud models do the heavy lifting**
+- **Auto picks models from benchmark results for each kind of task, and pulls in a second model when two are better than one**
+- **Updates show their size, keep one copy of SahilBot installed, and back up your data in two places first**
+
+### Slides, documents and dashboards
+
+- New slide editor: click any text on a slide to type, add, duplicate and reorder slides, add big numbers, pictures and speaker notes, and present full screen
+- Slides look the same everywhere: the editor, Present, PDF, PNG and PowerPoint (pictures) are drawn by one renderer
+- Export a deck as editable PowerPoint, PowerPoint with exact fonts, OpenDocument (Keynote, LibreOffice, Google Slides), PDF or PNG images
+- New native dashboards: stat tiles, charts drawn from your tables, sections and notes
+- Artifacts page: start a Doc, Deck, Sheet or Dashboard in one click, and see the documents you're working on
+- Your agent now makes editable documents first and exports a PDF, Word or PowerPoint file when you want one
+- Open Word, PDF, PowerPoint, Excel and CSV files in the editor, change fonts and text, and save back to the original
+- Presenter view: your notes, the next slide and a timer while you present (press P)
+- Native sheets work out IF, SUMIF, VLOOKUP, XLOOKUP, text and date functions
+- Tables, numbered lists and checklists on a slide are kept when you edit it, and slides show their tables
+
+### A more capable agent
+
+- Shows its plan as a live checklist and keeps it current as it works, so you can see where it is
+- Does what it says it will do, keeps going until the task is finished, and runs your tests until they pass after code changes
+- Says so plainly when it disagrees, and gives its reasons and the approach it would take
+- Remembers what you've said in your other chats with the same bot (only your own words), so answers fit you better
+- Plans and makes videos end to end: research, brief, shot list and the right platform at its best settings
+- Waits for you to sign in or type a code in the browser, then carries on by itself
+- Paste an API key or password into the chat and it goes straight into your vault
+
+### Chat
+
+- Type / in the message box for commands: /new, /doc, /deck, /dashboard, /sheet, /research, /max, /plan, /voice, /artifacts, /settings, /whatsnew
+- Code in replies is syntax-colored; wide tables scroll and copy straight into Numbers or Excel
+- Inline citations like [1] link to their sources, numbered the same as the source chips
+- Press ↑ in an empty message box to edit your last message
+- Errors are in plain words with the next step, with the details a click away
+- If a message fails to send, your text comes back into the box
+
+### Auto model routing
+
+- Each kind of task has its own model order, taken from published benchmarks: Opus 5.5, Sonnet 5.5 and GPT-6.2 Sol for daily work, GPT-6.2 Astra and Fable 5.2 for the hardest problems, Haiku 5.5 and GPT-6.1 Terra for quick ones, and GPT-6 Luna for a quick hello
+- Harder tasks get a stronger model, or two models working together when that's better
+- Context carries over perfectly when the model changes mid-chat
+
+### Privacy and Hybrid compute
+
+- Hybrid compute on Macs with at least 32 GB of memory and 50 GB free (64 GB and 150 GB are best)
+- A local Privacy Gate (PII-Tracer) checks each cloud request on your Mac and asks before personal details leave it
+- Choose to process on your Mac, split the work (the cloud plans, your Mac keeps the details), share, or skip
+
+### Everyday polish
+
+- What you type and don't send stays in the box, even after you quit or update. Sending or clearing it forgets it
+- Updates show how big they are, back up your data in two folders first, and remove the old version once the new one runs cleanly (it rolls back if the new one fails to start)
+- Checks for updates every 5 minutes and when your Mac wakes
+- More one-click connectors, including Cloudflare, Vimeo, Semrush, HeyGen and Higgsfield
+- Mac notifications are on by default. Built-in skills are grouped as Medical, Office, Engineering and Health
+- MIT License and a one-command Quick install in the README
+- Keyboard focus stays inside dialogs and returns where you were, and animations respect Reduce motion
+
+## 26.11.19 · Better Auto routing and teamwork between bots
+
+_2026-11-19_
+
+- **Auto routing picks better models and lets bots work together**
+- **Bots work more quietly on their own**
+
+### Auto and bots
+
+- Auto routing chooses models more accurately for each request
+- Bots can hand work to each other and collaborate on a task
+- Work can run on the best place available (this Mac, a server or the cloud)
+- Bots that run on their own interrupt you less

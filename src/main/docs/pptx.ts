@@ -367,7 +367,8 @@ export async function buildPptx(input: SlideSpec[], o: DeckOptions = {}): Promis
         if (c?.categories?.length && c.series?.length) {
           const type = c.type === 'column' ? 'bar' : c.type
           const pie = type === 'pie' || type === 'doughnut'
-          const series = (pie ? c.series.slice(0, 1) : c.series).map((x) => ({ name: x.name, labels: c.categories.map(String), values: c.categories.map((_, k) => Number(x.values[k] ?? 0)) }))
+          // A blank cell stays a gap (not a zero) in lines and bars; pie slices need numbers.
+          const series = (pie ? c.series.slice(0, 1) : c.series).map((x) => ({ name: x.name, labels: c.categories.map(String), values: c.categories.map((_, k) => (x.values[k] === null || x.values[k] === undefined ? (pie ? 0 : null) : Number(x.values[k]))) as never }))
           const fmt = c.number_format
           sl.addChart(type as never, series, {
             ...box,
@@ -375,6 +376,7 @@ export async function buildPptx(input: SlideSpec[], o: DeckOptions = {}): Promis
             barDir: c.type === 'bar' ? 'bar' : 'col',
             barGrouping: c.stacked ? 'stacked' : 'clustered',
             barGapWidthPct: 60,
+            displayBlanksAs: 'gap',
             showLegend: pie || series.length > 1,
             legendPos: pie ? 'r' : 'b',
             legendFontSize: 12,

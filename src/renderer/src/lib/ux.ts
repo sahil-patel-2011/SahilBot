@@ -44,3 +44,15 @@ export function filesFromSteps(steps: Array<{ call: Pick<ToolCall, 'id' | 'name'
   return [...out.values()]
 }
 
+
+/** Files written in these messages (file_write / create_document results), oldest first, without repeats. */
+export function filesFromMessages(messages: Array<Pick<Message, 'role' | 'toolName' | 'meta' | 'id'>>): Array<{ key: string; path: string }> {
+  const out = new Map<string, { key: string; path: string }>()
+  for (const m of messages) {
+    const path = m.meta?.path
+    if (m.role !== 'tool' || !m.toolName || !FILE_TOOLS.has(m.toolName) || m.meta?.status !== 'ok' || typeof path !== 'string' || /\.html?$/i.test(path)) continue
+    out.delete(path)
+    out.set(path, { key: m.id, path })
+  }
+  return [...out.values()]
+}

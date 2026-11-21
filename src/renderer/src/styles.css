@@ -475,6 +475,18 @@ kbd { font: 12px var(--font); color: var(--text-2); background: var(--hover); bo
 .voice-lines { max-width: 640px; text-align: center; display: flex; flex-direction: column; gap: 10px; min-height: 80px; }
 .voice-you { color: var(--text-3); font-size: 15px; }
 .voice-reply { font-size: 19px; line-height: 1.5; }
+.voice-update-label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+.voice-cards { width: min(560px, 100%); display: flex; flex-direction: column; gap: 10px; max-height: 40vh; overflow: auto; }
+.voice-tasks { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 720px; }
+.voice-task { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
+.voice-task span:last-child { color: var(--text-2); }
+.voice-task-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.voice-task.working .voice-task-dot { animation: voice-pulse 1.2s ease-in-out infinite; }
+.voice-task.needs-you .voice-task-dot { background: var(--danger); }
+.voice-task.done .voice-task-dot { background: var(--ok); }
+.voice-task.failed .voice-task-dot, .voice-task.stopped .voice-task-dot { background: var(--text-3); }
+@keyframes voice-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .voice-task.working .voice-task-dot { animation: none; } }
 .voice-end { display: flex; gap: 8px; align-items: center; padding: 12px 26px; border-radius: 30px; background: var(--danger); color: white; font-weight: 600; font-size: 15px; }
 .conn-search { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); }
 .conn-search input { flex: 1; border: 0; outline: 0; background: transparent; }
@@ -757,6 +769,25 @@ a.btn { text-decoration: none; color: inherit; display: inline-block; }
 .welcome h1 { font-family: var(--serif); font-weight: 400; font-size: 40px; letter-spacing: -0.015em; margin: 0; }
 .home .composer-inner { max-width: none; }
 .home-files { margin-top: 56px; }
+.bot-deck { margin-bottom: 30px; }
+.bot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.bot-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); text-align: left; }
+.bot-card.needs { border-color: var(--accent); }
+.bot-card.setup { border-style: dashed; max-width: 460px; }
+.bot-card-new { width: 34px; height: 34px; border-radius: 50%; background: var(--hover); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.bot-card-text small.wrap { white-space: normal; line-height: 1.4; }
+.bot-card.empty { flex-direction: row; align-items: flex-start; gap: 12px; cursor: pointer; width: 100%; color: inherit; font: inherit; }
+.bot-card.empty small { display: block; color: var(--text-2); margin-top: 4px; line-height: 1.4; }
+.bot-card-main { display: flex; gap: 10px; align-items: flex-start; background: none; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; min-width: 0; }
+.bot-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bot-card-text b, .bot-card-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-card-text small { color: var(--text-2); font-size: 12px; }
+.bot-card-need { font-size: 12px; color: var(--accent); font-weight: 600; }
+.bot-card-actions { display: flex; gap: 6px; }
+.bot-card-actions .btn { display: inline-flex; align-items: center; gap: 5px; }
+.home-quick-head { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 8px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+.home-quick-head small { font-weight: 400; color: var(--text-3); }
+@media (max-width: 560px) { .home-quick-head { flex-direction: column; gap: 2px; } }
 .home-files-head { display: flex; justify-content: space-between; align-items: center; color: var(--text-2); font-size: 14px; padding: 0 4px 12px; }
 
 /* message box */
@@ -1028,3 +1059,65 @@ a.btn { text-decoration: none; color: inherit; display: inline-block; }
 .block .bubble.ai .md { white-space: normal; }
 .setup-pick-list.later .setup-pick { opacity: .7; padding: 9px 14px; }
 .onboard-card { max-height: 92vh; overflow-y: auto; }
+
+/* The voice bar (VoiceMode.tsx): a conversation at the top of the chat you're in. */
+.voice-bar-wrap { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 45; display: flex; flex-direction: column; align-items: center; gap: 8px; width: min(560px, calc(100% - 32px)); pointer-events: none; }
+.voice-bar-wrap > * { pointer-events: auto; }
+.vb-name { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; background: var(--panel); box-shadow: var(--shadow); font-size: 13px; }
+.voice-bar { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 30px; box-shadow: 0 10px 30px rgba(0,0,0,.12); overflow: hidden; }
+.voice-bar.open { border-radius: 22px; }
+.vb-row { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; }
+.vb-avatar { display: inline-flex; transition: transform .2s; }
+.vb-avatar.speaking { transform: scale(1.08); }
+.vb-wave { flex: 1; display: flex; align-items: center; justify-content: flex-start; gap: 4px; height: 34px; min-width: 0; overflow: hidden; }
+.vb-dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-3); flex: none; }
+.vb-bar { width: 4px; border-radius: 3px; background: var(--text); flex: none; transition: height .08s; }
+.vb-btn { width: 42px; height: 42px; border-radius: 50%; border: 0; background: var(--hover); color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+.vb-btn:hover, .vb-btn.on { background: var(--selected); }
+.vb-btn.muted { color: var(--danger); }
+.vb-end { width: 46px; height: 46px; border-radius: 50%; border: 0; background: var(--danger); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+.vb-btn:focus-visible, .vb-end:focus-visible, .vb-voice:focus-visible, .vb-play:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.vb-panel { border-top: 1px solid var(--line); padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow: auto; }
+.vb-providers { display: flex; gap: 4px; padding: 3px; background: var(--hover); border-radius: 12px; }
+.vb-provider { flex: 1; border: 0; background: none; padding: 7px 10px; border-radius: 9px; font: inherit; font-size: 14px; color: var(--text-2); cursor: pointer; }
+.vb-provider.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
+.vb-provider:disabled { opacity: .45; cursor: not-allowed; }
+.vb-speed, .vb-lang { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.vb-speed input { flex: 1; accent-color: var(--accent); }
+.vb-speed-val { width: 36px; text-align: right; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.vb-lang { justify-content: space-between; }
+.vb-lang select { padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
+.vb-voices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.vb-voice { position: relative; text-align: left; padding: 12px 40px 12px 12px; border: 1px solid var(--line); border-radius: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.vb-voice.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.vb-voice small { color: var(--text-2); font-size: 12px; }
+.vb-play { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 50%; border: 0; background: var(--hover); color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.vb-note { font-size: 12px; color: var(--text-3); }
+.vb-caption { max-width: 100%; padding: 8px 14px; border-radius: 14px; background: var(--panel); box-shadow: var(--shadow); font-size: 14px; line-height: 1.45; color: var(--text); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.vb-caption.err { color: var(--danger); }
+.vb-update { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+.voice-bar-wrap .voice-cards { width: 100%; }
+.voice-bar-wrap .voice-tasks { justify-content: center; }
+@media (max-width: 640px) { .vb-voices { grid-template-columns: 1fr; } .vb-btn { width: 38px; height: 38px; } }
+
+/* A finished voice conversation, folded into one line in the chat. */
+.voice-session { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-2); font-size: 13.5px; margin: 6px 0; }
+.voice-session-open { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 4px 6px; border-radius: 8px; }
+.voice-session-open:hover { background: var(--hover); }
+.voice-session-react { background: none; border: 0; cursor: pointer; padding: 3px; border-radius: 6px; color: var(--text-3); font-size: 14px; }
+.voice-session-react.on, .voice-session-react:hover { color: var(--text); background: var(--hover); }
+.voice-result { display: flex; flex-direction: column; gap: 6px; }
+.voice-result-from { align-self: center; font-size: 13px; color: var(--text-2); }
+
+/* A small tooltip with keys (the dictate button: "Click or hold ⌘ D to dictate"). */
+.tip-wrap { position: relative; display: inline-flex; }
+.tip { position: absolute; bottom: calc(100% + 10px); right: -6px; white-space: nowrap; padding: 7px 11px; border-radius: 10px; background: var(--panel); color: var(--text); border: 1px solid var(--line); box-shadow: var(--shadow); font-size: 13px; opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity .12s, transform .12s; z-index: 30; display: inline-flex; align-items: center; gap: 4px; }
+.tip kbd { font: inherit; font-size: 12px; min-width: 20px; padding: 1px 6px; border-radius: 5px; background: var(--hover); color: var(--text-2); text-align: center; }
+.tip-wrap:hover .tip, .tip-wrap:focus-within .tip { opacity: 1; transform: none; transition-delay: .35s; }
+@media (prefers-reduced-motion: reduce) { .tip { transition: none; } }
+
+/* Onboarding's last step: how bots work, in three short cards. */
+.onboard-how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0 6px; }
+.onboard-how > div { border: 1px solid var(--line); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+.onboard-how span { font-size: 13px; color: var(--text-2); line-height: 1.4; }
+@media (max-width: 640px) { .onboard-how { grid-template-columns: 1fr; } }

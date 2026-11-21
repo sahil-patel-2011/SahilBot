@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { PhoneAccessStatus, PhoneHostInfo, RemoteServerStatus, ServerAuditEntry, ServerDeviceInfo, ServerInfo, Space, WorkerApi, WorkerPlacement, WorkerView } from '@shared/types'
+import type { PhoneAccessStatus, PhoneHostInfo, RemoteServerStatus, ServerAuditEntry, ServerDeviceInfo, ServerInfo, Space, WorkerApi, WorkerPlacement, WorkerView, MacLinkStatus } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
 import { Toggle } from './Toggle'
@@ -143,7 +143,7 @@ export function AlwaysOnServerPage() {
   }
   return (
     <div data-testid="always-on-settings">
-      <h2>Always-on server</h2>
+      <h2>Phone & server</h2>
       <Section title="SahilBot Server" sub="Run your bots around the clock on a Raspberry Pi 5, a small VM or a Mac mini, and reach them from this Mac or your phone, even while traveling. Setting one up takes about five minutes.">
         {st?.linked ? <>
           <Row title={st.url} sub={st.online === false ? `Can’t reach it right now${st.error ? `: ${st.error}` : ''}.` : st.info ? `Online · SahilBot ${st.info.version} on ${st.info.platform} ${st.info.arch} · up ${uptime(st.info.uptime)} · ${st.info.bots} bots, ${st.info.routines} routines · ${st.info.running} running${st.info.queued ? `, ${st.info.queued} waiting` : ''} · ${st.info.rssMB} MB` : 'Checking…'} testId="remote-status">
@@ -168,8 +168,45 @@ export function AlwaysOnServerPage() {
         </>}
         {err && <Row title={<span className="conn bad">{err}</span>} />}
       </Section>
+      {st?.linked && <MacLinkSection />}
       {api.workers && api.runtime !== 'server' && <WorkersSection workersApi={api.workers} />}
     </div>
+  )
+}
+
+/**
+ * The Mac link: the server (and your phone through it) can use this Mac for what only the Mac can do: its files,
+ * Terminal, Messages, Mail, Mac apps, the signed-in browser and the screen. The Mac connects out to the server,
+ * so nothing here is opened to the internet. Anything that changes something asks you first, on whatever device
+ * you're using.
+ */
+function MacLinkSection() {
+  const remote = api.remoteServer!
+  const [st, setSt] = useState<MacLinkStatus | null>(null)
+  const load = (): void => { void remote.macLink?.().then(setSt).catch(() => undefined) }
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t) }, [])
+  if (!st || st.server || !remote.setMacLink) return null
+  const set = (patch: { allow?: boolean; keepAwake?: boolean; tools?: string[] }): void => { void remote.setMacLink!(patch).then(load) }
+  const tools = new Set(st.tools ?? [])
+  return (
+    <Section title="Let the server use this Mac" sub="From your phone or the server's bots: find and read files here, run commands, read and send Messages, Mail, Notes and Calendar, the browser you're signed in to, and the screen. This Mac connects out to the server, so nothing is opened to the internet. Anything that changes something asks you first, on whatever device you're on.">
+      <Row title="Use this Mac from the server" sub={!st.allow ? 'Off: the server can\'t reach this Mac.' : st.connected ? 'Connected: the server can use this Mac now.' : `Connecting…${st.error ? ` (${st.error})` : ''}`} testId="mac-link-allow">
+        <Toggle on={!!st.allow} onChange={(v) => set({ allow: v })} label="Use this Mac from the server" testId="mac-link-toggle" />
+      </Row>
+      {st.allow && (
+        <Row title="Keep this Mac awake" sub={`While it's plugged in (or above 20% battery), so your phone can reach it any time. The display still turns off. ${st.awake ? 'Awake now.' : ''} A Mac that's asleep or shut down can't be reached; for wake from sleep, also turn on System Settings → Battery → Options → Wake for network access.`} testId="mac-link-awake">
+          <Toggle on={!!st.keepAwake} onChange={(v) => set({ keepAwake: v })} label="Keep this Mac awake" testId="mac-link-awake-toggle" />
+        </Row>
+      )}
+      {st.allow && !!st.log?.length && (
+        <Row title="What the server did here" sub={st.log.slice(0, 6).map((l) => `${new Date(l.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} ${l.what}${l.ok ? '' : ' (failed)'}`).join(' · ')} testId="mac-link-log" />
+      )}
+      {st.allow && (st.available ?? []).map((t) => (
+        <Row key={t.id} title={t.id.replace(/_/g, ' ')} sub={t.what}>
+          <Toggle on={tools.has(t.id)} onChange={(v) => set({ tools: v ? [...tools, t.id] : [...tools].filter((x) => x !== t.id) })} label={`Allow ${t.id}`} testId={`mac-link-tool-${t.id}`} />
+        </Row>
+      ))}
+    </Section>
   )
 }
 

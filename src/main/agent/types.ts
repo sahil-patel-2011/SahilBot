@@ -179,6 +179,8 @@ export interface ThreadState {
   folder?: string
   /** A voice conversation: spoken-style prompt and a 16k window. */
   voice?: boolean
+  /** This chat's bot is still being set up (a "New bot"): finish_setup is offered. */
+  botSetup?: boolean
   /** Messages up to and including `boundaryId` are represented by `summary`. */
   /** tainted: the summarized turns held outside content; the summary is shown as untrusted data. */
   /** brief: the task brief written with it (context.ts taskBrief): the user's summarized messages verbatim, plan, notes. */

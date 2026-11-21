@@ -32,6 +32,8 @@ export interface ComposerHandle {
   toggleMax(): void
   focus(): void
   toggleDictation(): void
+  /** Dictating now (⌘D: a tap toggles, holding talks until you let go). */
+  isDictating(): boolean
   attach(items: Attachment[]): void
 }
 
@@ -107,6 +109,8 @@ export const Composer = forwardRef<ComposerHandle, {
 }>(function Composer(p, ref) {
   const dev = useDevMode()
   const [dictating, setDictating] = useState(false)
+  const dictatingRef = useRef(false)
+  dictatingRef.current = dictating
   const [dictError, setDictError] = useState<string | null>(null)
   const mic = useRef<Mic | null>(null)
   const base = useRef('')
@@ -163,6 +167,7 @@ export const Composer = forwardRef<ComposerHandle, {
     },
     focus() { ta.current?.focus() },
     toggleDictation() { void toggleRef.current() },
+    isDictating() { return dictatingRef.current },
     attach(items: Attachment[]) { addRef.current(items) }
   }))
   const addRef = useRef<(xs: Attachment[]) => void>(() => undefined)
@@ -390,7 +395,10 @@ export const Composer = forwardRef<ComposerHandle, {
               {Math.floor((Date.now() - dictSince) / 1000)}s
             </span>
           )}
-          <button className={`c-btn${dictating ? ' recording' : ''}`} title={dictating ? 'Stop dictation (⌘⇧D) · Esc cancels' : 'Dictate (⌘⇧D)'} onClick={() => void toggleDictation()} data-testid="dictate"><I.Mic /></button>
+          <span className="tip-wrap">
+            <button className={`c-btn${dictating ? ' recording' : ''}`} aria-label={dictating ? 'Stop dictation' : 'Dictate'} aria-keyshortcuts="Meta+D" onClick={() => void toggleDictation()} data-testid="dictate"><I.Mic /></button>
+            <span className="tip" role="tooltip">{dictating ? <>Click or let go of <kbd>⌘</kbd><kbd>D</kbd> to stop · Esc cancels</> : <>Click or hold <kbd>⌘</kbd><kbd>D</kbd> to dictate</>}</span>
+          </span>
           {p.running && !p.answering && !canSend ? (
             <button className="c-btn primary stop" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
           ) : canSend ? (

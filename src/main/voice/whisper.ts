@@ -43,12 +43,16 @@ export class WhisperServer {
     return this.ready
   }
 
+  /** 'auto' or a language code (Settings: the voice bar). */
+  language?: string
+
   async transcribe(samples: Float32Array, prompt?: string): Promise<string> {
     const form = new FormData()
     form.append('file', new Blob([new Uint8Array(toWav(samples))], { type: 'audio/wav' }), 'a.wav')
     form.append('response_format', 'json')
     form.append('temperature', '0')
     if (prompt) form.append('prompt', prompt)
+    if (this.language && this.language !== 'auto') form.append('language', this.language)
     const r = await fetch(`http://127.0.0.1:${this.port}/inference`, { method: 'POST', body: form })
     if (!r.ok) throw new Error(`whisper-server ${r.status}`)
     const j = (await r.json()) as { text?: string }

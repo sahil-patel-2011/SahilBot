@@ -105,7 +105,10 @@ export const HOME_GUARDED = {
 export function homeGuarded(p: string, home: string): boolean {
   const rel = relative(home, p)
   if (!rel || rel.startsWith('..') || resolve(home, rel) !== resolve(p)) return false
-  return HOME_GUARDED.files.includes(rel) || HOME_GUARDED.dirs.some((d) => rel === d || rel.startsWith(`${d}/`))
+  // macOS disks ignore case: ~/.ZSHRC is ~/.zshrc, so the guard does too.
+  const r = process.platform === 'darwin' || process.platform === 'win32' ? rel.toLowerCase() : rel
+  const same = (x: string): string => (r === rel ? x : x.toLowerCase())
+  return HOME_GUARDED.files.some((f) => same(f) === r) || HOME_GUARDED.dirs.some((d) => r === same(d) || r.startsWith(`${same(d)}/`))
 }
 
 export const SANDBOX_EXEC = '/usr/bin/sandbox-exec'

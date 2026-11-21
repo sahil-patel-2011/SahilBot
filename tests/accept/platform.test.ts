@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Page } from 'playwright'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
-import { launch, tempProfile } from './app'
+import { launch, tempProfile, settingsPage } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 
 // End to end through the real UI and main process, with a scripted model: templates, bot-to-bot
@@ -134,7 +134,7 @@ describe('platform: templates, handoffs, pages, rules, routines, memory', () => 
     const { app, page } = await launch(tempProfile(), llm.url)
     await page.evaluate(() => window.foreman.memory.add('Lives in Atlanta, GA', null))
     await page.click('[data-testid="profile"]')
-    await page.click('[data-testid="settings-memory"]')
+    await settingsPage(page, 'memory')
     await page.click('[data-testid="memory-import-open"]')
     await page.fill('[data-testid="memory-import-text"]', "Here's what I remember about you:\n- Prefers concise answers\n- Lives in Atlanta, GA\n- Always ask before sending email\n- Sister Priya is a nurse")
     await page.click('[data-testid="memory-import-preview"]')

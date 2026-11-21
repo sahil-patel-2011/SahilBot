@@ -1,16 +1,16 @@
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, shell, systemPreferences } from 'electron'
 import { autoPool, autoVariant } from './llm/router'
 import { execFileSync } from 'node:child_process'
-import { homedir, tmpdir, totalmem, userInfo } from 'node:os'
+import { homedir, hostname, tmpdir, totalmem, userInfo } from 'node:os'
 import { statfsSync, writeFileSync } from 'node:fs'
-import { basename, dirname, extname, join } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join } from 'node:path'
 import { homeIdeas } from './ideas'
 import { classifyTask, type TaskCategory } from './llm/task-classifier'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
 import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, SendInput, Settings, Space, UsageRow } from '@shared/types'
-import type { GoalPatch, MemoryItem } from '@shared/types'
+import type { GoalPatch, MemoryItem, VoiceBarOptions, VoiceSession, VoiceStyle } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 // Cloud first, local opt-in (shared/local-mode.ts); attached folders are counted and indexed (knowledge/folder-scan.ts).
 import { localOff, localOn } from '@shared/local-mode'
@@ -22,7 +22,7 @@ import { DEFAULT_TRANSCRIBE_MODEL, speechUsd, transcribe as openaiTranscribe, tr
 import { OpenAISttEngine } from './voice/stt'
 import { hookSpend } from './apis/spend'
 import { INTRO, autoMemoryOn, setAutoMemory } from './agent/prompt'
-import { updateBotTool } from './agent/tools/bots'
+import { finishSetupTool, SETUP_GREETING, SETUP_PROMPT, updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
 import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff, speedOptions } from './llm/fast-mode'
@@ -40,10 +40,12 @@ import { Scheduler } from './scheduler'
 import { buildMenu, setupApp, windowState } from './shell'
 import { scheduleTool } from './agent/tools/schedule'
 import { ResultStore } from './agent/context'
-import { Agent } from './agent/loop'
+import { Agent, isRelayed } from './agent/loop'
 import { ToolRegistry } from './agent/registry'
 import { browserTool } from './agent/tools/browser'
 import { workerBrowserTool } from './agent/tools/worker-browser'
+import { DEFAULT_MAC_TOOLS, MAC_TOOLS, MacLinkClient, MacLinkHub, macEffect, macTool } from './mac-link'
+import { linkedServerCall } from './remote-server'
 import { sitesTool } from './agent/tools/sites'
 import { SiteStore } from './sites/store'
 import { setSiteHintProvider } from './sites/hint'
@@ -90,7 +92,9 @@ import { phiTool } from './agent/tools/phi'
 import { agentsTool, swarmTool } from './agent/tools/agents'
 import { maxTool } from './agent/tools/max'
 import { askBotTool } from './agent/tools/ask-bot'
-import { handoffTool } from './agent/tools/handoff'
+import { findBot, handoffTool } from './agent/tools/handoff'
+import { startWorkTool, voiceTitle, VoiceWork } from './voice/work'
+import { LANGUAGES, clampSpeed } from './voice/voices'
 import { computerTool } from './agent/tools/computer'
 import { createOverlay } from './computer/overlay-window'
 import { consultTool } from './agent/tools/consult'
@@ -131,7 +135,7 @@ import { findOllamaBinary, setupOllama, startOllama, stopOllama } from './ollama
 import { needsYouBody } from './needs-you'
 import { MenuBarIcon, type TrayItem } from './tray'
 import { KeepAwake, RESUME_NEXT_NOTE, RESUME_NOTE, WorkTracker, wantAwake } from './resume'
-import { LidAwake } from './lid-awake'
+import { LidAwake, LOW_BATTERY, parseBattery, run as runPmset } from './lid-awake'
 import type { MenuAction } from './shell'
 import { getWatchlist, setWatchlist } from './watchlist'
 import { MarketData } from './markets/data'
@@ -725,9 +729,25 @@ app.whenReady().then(() => {
   // Memory doesn't change while the app runs; disk is checked when the user turns hybrid compute on.
   const hybridRamOk = (): boolean => process.arch === 'arm64' && (Number(process.env.FOREMAN_RAM_GB) || totalmem() / 1024 ** 3) >= HYBRID_MIN.ramGB - 0.5
   const privacyActive = (): boolean => settings.get().hybridCompute?.enabled === true && hybridRamOk() && piiTracer.installed() && privacyHybrid()
+  /** Today's Privacy Gate numbers (kept in the database, a new day starts at zero). */
+  const privacyToday = (): import('@shared/privacy').PrivacyDayStats => {
+    const now = new Date()
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const s = db.getSetting<import('@shared/privacy').PrivacyDayStats>('privacy:today')
+    return s && s.day === day ? s : { day, requests: 0, checked: 0, asked: 0, protected: 0, cleared: 0, errors: 0 }
+  }
+  const privacyCount = (what: 'requests' | 'checked' | 'asked' | 'protected' | 'cleared' | 'errors', n = 1): void => {
+    const s = privacyToday()
+    s[what] += n
+    db.setSetting('privacy:today', s)
+  }
+  const hybridSettings = (): NonNullable<import('@shared/types').Settings['hybridCompute']> => settings.get().hybridCompute ?? { enabled: false }
+  /** Details the user said aren't personal, as "label:value" (lowercased, spaces collapsed), newest last, at most 500. */
+  const notPersonalList = (): string[] => db.getSetting<string[]>('privacy:notPersonal') ?? []
   const privacyStatus = (): import('@shared/privacy').PrivacyStatus => {
     hybridAt = 0
-    return { installed: piiTracer.installed(), installing: piiTracer.installingNow(), enabled: settings.get().hybridCompute?.enabled === true, requirements: hybridRequirements(), hybrid: privacyHybrid(), active: privacyActive(), downloadBytes: PII_TRACER_BYTES }
+    const h = hybridSettings()
+    return { installed: piiTracer.installed(), installing: piiTracer.installingNow(), enabled: h.enabled === true, mode: h.mode === 'auto' ? 'auto' : 'ask', remembered: notPersonalList().length, today: privacyToday(), requirements: hybridRequirements(), hybrid: privacyHybrid(), active: privacyActive(), downloadBytes: PII_TRACER_BYTES }
   }
   // The context engine (People & Places), set up with the knowledge vault below; the memory tool's "about" uses it.
   const worldRef: { current?: ContextEngine } = {}
@@ -820,6 +840,7 @@ app.whenReady().then(() => {
       }
     }),
     updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
+    finishSetupTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
     // FRC robot software: logs, vendordeps, project scan, scouting (found with find_tools).
     frcCodeTool({ workspace: () => settings.get().workspaceDir, tbaKey: () => secrets.get('tbaKey') ?? undefined }),
     // FRC mechanical design math: motors, mechanisms, ratios, belt/chain centers, beams, weight (found with find_tools).
@@ -985,6 +1006,15 @@ app.whenReady().then(() => {
       active: privacyActive,
       detect: (text, signal) => piiTracer.detect(text, signal),
       warm: () => piiTracer.warm(),
+      mode: () => (hybridSettings().mode === 'auto' ? 'auto' : 'ask'),
+      notPersonal: () => new Set(notPersonalList()),
+      rememberNotPersonal: (keys) => {
+        // Re-confirming an old one moves it to the end, so the newest 500 are kept.
+        const add = keys.filter((k) => k.length >= 4 && k.length <= 220)
+        const next = [...notPersonalList().filter((k) => !add.includes(k)), ...add].slice(-500)
+        db.setSetting('privacy:notPersonal', next)
+      },
+      count: privacyCount,
       judge: async (items, context, signal) => {
         // The strongest local model that fits: never a cloud model, the finds stay on this Mac.
         const model = (() => { try { return endpoints.usable().filter((m) => isLocal(endpoints.for(m.id).baseUrl)).sort((a, b) => (b.tier ?? 0) - (a.tier ?? 0) || (b.requiredGB ?? 0) - (a.requiredGB ?? 0))[0]?.id } catch { return undefined } })()
@@ -1206,6 +1236,20 @@ app.whenReady().then(() => {
   handle('privacy:status', () => privacyStatus())
   handle('privacy:install', async () => {
     await piiTracer.install((e) => toWin('privacy:install', e))
+    // Proves it works right after the download: a made-up sample must come back with its details found (a cold
+    // start can take a while on a slow disk, so the wait is generous).
+    try {
+      const { spans } = await piiTracer.detect('Hi, I\'m Jordan Ellis, jordan.ellis@example.com, (404) 555-0182.', AbortSignal.timeout(150_000))
+      if (!spans.length) toWin('privacy:install', { phase: 'error', error: 'PII-Tracer downloaded, but its self-test found nothing in a sample with a name, email and phone. Remove the download and try again.' })
+    } catch (e) { toWin('privacy:install', { phase: 'error', error: `PII-Tracer downloaded, but it didn't start: ${(e as Error).message}` }) }
+    return privacyStatus()
+  })
+  handle('privacy:setMode', (mode: 'ask' | 'auto') => {
+    settings.set({ hybridCompute: { ...hybridSettings(), mode: mode === 'auto' ? 'auto' : 'ask' } })
+    return privacyStatus()
+  })
+  handle('privacy:forgetNotPersonal', () => {
+    db.setSetting('privacy:notPersonal', [])
     return privacyStatus()
   })
   handle('privacy:setEnabled', (enabled: boolean) => {
@@ -1213,11 +1257,11 @@ app.whenReady().then(() => {
       const req = hybridRequirements()
       if (!req.meetsMinimum) throw new Error(req.problem ?? 'This Mac doesn\'t meet hybrid compute\'s requirements.')
     }
-    settings.set({ hybridCompute: { enabled: enabled === true } })
-    if (enabled === true) piiTracer.warm(); else piiTracer.stop()
+    settings.set({ hybridCompute: { ...hybridSettings(), enabled: enabled === true } })
+    if (enabled === true) piiTracer.warm(); else piiTracer.halt()
     return privacyStatus()
   })
-  handle('privacy:remove', () => { piiTracer.remove(); return privacyStatus() })
+  handle('privacy:remove', () => { piiTracer.halt(); piiTracer.remove(); return privacyStatus() })
   /** Settings → Hybrid compute → Test: a made-up sample through PII-Tracer on this Mac, and what it caught. */
   handle('privacy:selfTest', async () => {
     const sample = 'Hi, I\'m Jordan Ellis. Email me at jordan.ellis@example.com or call (404) 555-0182. My card ends 4242 4242 4242 4242 and I live at 18 Peachtree St, Atlanta.'
@@ -1367,10 +1411,30 @@ app.whenReady().then(() => {
     }
     return { space, threadId: thread.id }
   })
+  // A "New bot" that sets itself up with you in its chat (agent/tools/bots.ts SETUP_PROMPT, finish_setup). One at a
+  // time: a bot still being set up is reopened instead of making another.
+  handle('spaces:startSetup', () => {
+    const waiting = db.listSpaces().find((x) => x.kind === 'bot' && !x.isMain && db.getSetting<boolean>(`setup:${x.id}`))
+    if (waiting) {
+      const t = [...db.listThreads(waiting.id)].sort((x, y) => y.updatedAt - x.updatedAt)[0] ?? db.createThread(waiting.id, botLevel(settings.get(), waiting), null)
+      return { space: waiting, threadId: t.id }
+    }
+    const space = db.createSpace('New bot', pick(SPACE_COLORS.slice(2)), { kind: 'bot', shape: pick(SHAPES), members: [] })
+    spaces.setPrompt(space.id, SETUP_PROMPT + '\n')
+    db.setSetting(`setup:${space.id}`, true)
+    const thread = db.createThread(space.id, botLevel(settings.get(), space), null)
+    db.updateThread(thread.id, { title: 'New bot' })
+    const hello = db.insertMessage({ threadId: thread.id, role: 'assistant', kind: 'normal', status: 'done', content: SETUP_GREETING })
+    emit({ threadId: thread.id, type: 'message', message: hello })
+    emit({ threadId: '', type: 'spaces' })
+    return { space, threadId: thread.id }
+  })
   handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'label' | 'notify' | 'effort'>>) => {
     // A bot's model and thinking are never set per bot: it chooses by itself for each request (agent/choices.ts).
     const { model: _m, effort: _e, ...rest } = patch
     const s = db.updateSpace(id, rest)
+    // Renamed by the user: a New bot being set up counts as set up.
+    if (patch.name && db.getSetting<boolean>(`setup:${id}`)) db.setSetting(`setup:${id}`, false)
     // Keep a bot's one conversation titled after it.
     if (patch.name && s.kind === 'bot' && !s.isMain) for (const t of db.listThreads(id)) db.updateThread(t.id, { title: s.name })
     return s
@@ -1389,7 +1453,11 @@ app.whenReady().then(() => {
     for (const g of db.listSpaces().filter((x) => x.kind === 'group' && x.members.includes(id))) db.updateSpace(g.id, { members: g.members.filter((m) => m !== id) })
   })
   handle('spaces:getPrompt', (id: string) => spaces.getPrompt(id))
-  handle('spaces:setPrompt', (id: string, text: string) => spaces.setPrompt(id, text))
+  handle('spaces:setPrompt', (id: string, text: string) => {
+    spaces.setPrompt(id, text)
+    // Instructions written by the user: a New bot being set up counts as set up.
+    if (db.getSetting<boolean>(`setup:${id}`)) db.setSetting(`setup:${id}`, false)
+  })
   handle('spaces:promptPath', (id: string) => spaces.path(id))
   // Bot details → Library: files this bot made (that still exist) and links from its chats.
   handle('spaces:library', (id: string) => [...db.spaceLibrary(id).filter((x) => x.kind !== 'file' || (!!x.path && existsSync(x.path))), ...docs.libraryItems(id)].sort((a, b) => b.at - a.at))
@@ -2412,7 +2480,8 @@ app.whenReady().then(() => {
     isLocal: (m) => isLocal(endpoints.for(m).baseUrl),
     app: () => { const s = settings.get(); const b = budget.summary(); return { localAllowed: localOn(s), me: [...(s.me?.emails ?? [])], mode: b.mode, cap: b.cap, spent: b.spent } },
     power: () => power,
-    idleMs: () => { try { return powerMonitor.getSystemIdleTime() * 1000 } catch { return 0 } },
+    // Test runs can fix how long the Mac has been idle (otherwise it depends on whoever is at the keyboard).
+    idleMs: () => { if (HIDDEN && process.env.FOREMAN_IDLE_MS) return Number(process.env.FOREMAN_IDLE_MS); try { return powerMonitor.getSystemIdleTime() * 1000 } catch { return 0 } },
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
     // Draft it: a new chat with the main bot at its usual level (Auto by default), the user's click as the request.
     startRun: async (o) => {
@@ -2510,10 +2579,10 @@ app.whenReady().then(() => {
   })
   // Voice input with local models off: OpenAI transcription (same switch, same monthly limit); never a Whisper download.
   const openaiEars = new OpenAISttEngine({
-    transcribe: (file, prompt, signal) => {
+    transcribe: (file, prompt, signal, language) => {
       const c = apiAccess(settings).openai()
       if (!c) throw new Error('No OpenAI key is saved for voice input.')
-      return openaiTranscribe(c, { model: DEFAULT_TRANSCRIBE_MODEL, file, prompt }, signal)
+      return openaiTranscribe(c, { model: DEFAULT_TRANSCRIBE_MODEL, file, prompt, language }, signal)
     },
     guard: (seconds) => hookSpend.beforeUsd(OPENAI_URL, DEFAULT_TRANSCRIBE_MODEL, transcribeUsd(DEFAULT_TRANSCRIBE_MODEL, undefined, seconds) * 1.5),
     charged: (seconds, t) => hookSpend.afterUsd(OPENAI_URL, DEFAULT_TRANSCRIBE_MODEL, transcribeUsd(DEFAULT_TRANSCRIBE_MODEL, t as never, seconds))
@@ -2559,7 +2628,7 @@ app.whenReady().then(() => {
       }
       listeners.add(l)
       signal.addEventListener('abort', () => { chat.stop(tid); off(); resolve() })
-      chat.send({ threadId: tid, text, voice: true }).catch((err: Error) => { off(); reject(err) })
+      chat.send({ threadId: tid, text, voice: true, meta: { voice: true } }).catch((err: Error) => { off(); reject(err) })
     })
   }, { download: HIDDEN ? 'stub' : 'real' })
   // Speech recognition downloads itself in the background once set up (never in test runs: 'stub').
@@ -2574,17 +2643,140 @@ app.whenReady().then(() => {
   handle('voice:status', () => voice.status())
   handle('voice:download', (kind: 'whisper' | 'vad' | 'kokoro') => voice.download(kind))
   handle('voice:setVoice', (v: string) => voice.setVoice(v))
+  // The voice bar's voice, speed and language (Settings.voiceStyle), applied to the conversation in progress too.
+  voice.setStyle(settings.get().voiceStyle ?? {})
+  const voiceBarOptions = (): VoiceBarOptions => {
+    const keys = apiAccess(settings)
+    const ready = { openai: !!keys.openai(), xai: !!keys.xai() }
+    const provider = connectedVoice(voicePreference(settings.get()), ready) ?? null
+    return { ...voice.options(), providers: [{ id: 'openai', label: 'ChatGPT', ready: ready.openai }, { id: 'xai', label: 'Grok', ready: ready.xai }], provider }
+  }
+  handle('voice:options', () => voiceBarOptions())
+  handle('voice:setStyle', (patch: { voice?: string; speed?: number; language?: string; provider?: 'openai' | 'xai' }) => {
+    // ChatGPT's or Grok's voice: kept as the Voice choice in Settings, used from the next sentence.
+    if (patch?.provider === 'openai' || patch?.provider === 'xai') {
+      const keys = apiAccess(settings)
+      if (!(patch.provider === 'openai' ? keys.openai() : keys.xai())) throw new Error(`Add your ${patch.provider === 'openai' ? 'OpenAI' : 'xAI'} key in Settings → Models & Keys to use ${patch.provider === 'openai' ? 'ChatGPT' : 'Grok'}'s voice.`)
+      settings.set({ voiceOutput: { ...settings.get().voiceOutput, provider: patch.provider } })
+      voice.useEngineNow()
+    }
+    const cur = settings.get().voiceStyle ?? {}
+    const o = voice.options()
+    const next: VoiceStyle = {
+      ...cur,
+      ...(typeof patch?.speed === 'number' ? { speed: clampSpeed(patch.speed) } : {}),
+      ...(typeof patch?.language === 'string' && LANGUAGES.some((l) => l.id === patch.language) ? { language: patch.language } : {}),
+      ...(typeof patch?.voice === 'string' && o.voices.some((v) => v.id === patch.voice) ? { voices: { ...cur.voices, [o.engine]: patch.voice } } : {})
+    }
+    settings.set({ voiceStyle: next })
+    voice.setStyle(next)
+    return voiceBarOptions()
+  })
+  handle('voice:preview', (id: string) => voice.preview(String(id ?? '')))
+  // A voice conversation happens in the chat you're in. When it ends it's folded into one named line
+  // ("Find the cheapest flight to Lisbon · 0:51"), and what you said goes to memory like anything you type.
+  let voiceSession: { threadId: string; startedAt: number; created: boolean } | null = null
+  const endVoiceSession = async (): Promise<void> => {
+    const s = voiceSession
+    voiceSession = null
+    if (!s || !db.getThread(s.threadId)) return
+    voiceWork.prune(s.threadId)
+    // The reply that was cut off lands first, so the folded line comes after the whole conversation.
+    await chat.handoffHost().whenIdle(s.threadId, AbortSignal.timeout(6000), 5000).catch(() => undefined)
+    const said = db.listMessages(s.threadId).filter((m) => m.createdAt >= s.startedAt && m.role === 'user' && m.kind === 'normal' && !m.meta?.hidden && !isRelayed(m) && !!m.content.trim()).map((m) => m.content)
+    if (!said.length) return
+    const endedAt = Date.now()
+    const title = voiceTitle(said)
+    const session: VoiceSession = { startedAt: s.startedAt, endedAt, title, seconds: Math.max(1, Math.round((endedAt - s.startedAt) / 1000)) }
+    const n = db.insertMessage({ threadId: s.threadId, role: 'assistant', kind: 'notice', status: 'done', content: `Voice chat: ${title}`, meta: { voiceSession: session } })
+    emit({ threadId: s.threadId, type: 'message', message: n })
+    const t = db.getThread(s.threadId)
+    if (t && (s.created || /^Voice chat · /.test(t.title) || t.title === 'New thread')) emit({ threadId: t.id, type: 'thread', thread: db.updateThread(t.id, { title }) })
+    try { if (learning.enabled()) void learning.extractMemories().catch(() => undefined) } catch { /* learning is off or busy: the next pass reads it */ }
+  }
   handle('voice:start', async (threadId: string | null, spaceId: string) => {
     await voice.startVoice()
+    const created = !threadId
     if (!threadId) {
       const t = db.createThread(spaceId, 'auto', null)
       db.updateThread(t.id, { title: `Voice chat · ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` })
       threadId = t.id
     }
+    if (voiceSession && voiceSession.threadId !== threadId) void endVoiceSession()
+    if (!voiceSession) voiceSession = { threadId, startedAt: Date.now(), created }
     voiceThread = threadId
     return threadId
   })
-  handle('voice:stop', () => { voice.stop(); voiceThread = null })
+  handle('voice:stop', () => { voice.stop(); voiceThread = null; void endVoiceSession() })
+  // Work started from a voice chat (voice/work.ts): a full run in its own chat while the conversation goes
+  // on; said aloud in the next pause when it finishes or needs you, if the voice chat is still open.
+  const voiceWork = new VoiceWork({
+    announce: (text) => voice.announce(text),
+    voiceThread: () => voiceThread,
+    lastReply: (threadId, since) => [...db.listMessages(threadId)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && !!m.content && !m.meta?.superseded && !m.meta?.hidden && m.createdAt >= since)?.content,
+    files: (threadId, since) => [...new Set(db.listMessages(threadId).filter((m) => m.role === 'tool' && m.createdAt >= since && (m.toolName === 'file_write' || m.toolName === 'create_document') && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && !/\.html?$/i.test(m.meta.path as string)).map((m) => m.meta!.path as string))],
+    record: (vt, line, context, result) => {
+      if (!db.getThread(vt)) return
+      // Done: the result itself, with its files, from that bot (a notice: kept out of the model's history, which
+      // gets the hidden context below instead).
+      const m = result
+        ? db.insertMessage({ threadId: vt, role: 'assistant', content: result.text, kind: 'notice', status: 'done', meta: { voiceResult: { bot: result.bot, title: result.title, threadId: result.threadId, files: result.files } } })
+        : db.insertMessage({ threadId: vt, role: 'assistant', content: line, kind: 'notice', status: 'done' })
+      emit({ threadId: vt, type: 'message', message: m })
+      // The result as context for follow-ups; while the voice chat is answering, it waits for that turn to end
+      // (never between a tool call and its result).
+      const note = `[From the app] ${context}`
+      if (chat.handoffHost().isRunning(vt)) voiceNotes.set(vt, [...(voiceNotes.get(vt) ?? []), note])
+      else db.insertMessage({ threadId: vt, role: 'user', kind: 'normal', status: 'done', content: note, meta: voiceNoteMeta(result?.bot) })
+    },
+    changed: (tasks) => toWin('voice:event', { type: 'tasks', tasks })
+  })
+  const voiceNotes = new Map<string, string[]>()
+  // Another run's work (it may have read web pages or email): relayed, so it's untrusted text in the voice chat,
+  // never the user's words.
+  function voiceNoteMeta(bot?: string): Record<string, unknown> { return { hidden: true, handoff: true, from: `${bot ?? 'A bot'} (background work)` } }
+  listeners.add((e) => {
+    voiceWork.onEvent(e)
+    if (e.type === 'run' && e.status !== 'started' && voiceNotes.has(e.threadId)) {
+      for (const note of voiceNotes.get(e.threadId) ?? []) db.insertMessage({ threadId: e.threadId, role: 'user', kind: 'normal', status: 'done', content: note, meta: voiceNoteMeta() })
+      voiceNotes.delete(e.threadId)
+    }
+  })
+  registry.register(startWorkTool(() => ({
+    running: () => voiceWork.running(),
+    start: async ({ fromThreadId, task, title, bot }) => {
+      const from = db.getThread(fromThreadId)
+      if (!from) throw new Error('The voice chat is gone.')
+      const home = db.getSpace(from.spaceId)
+      const bots = db.listSpaces().filter((s) => s.kind === 'bot')
+      let target = home?.kind === 'bot' ? home : bots.find((b) => b.isMain) ?? bots[0]
+      if (bot?.trim()) {
+        const named = findBot(bots.filter((b) => !b.hidden), bot) ?? findBot(bots, bot)
+        if (!named) throw new Error(`There's no bot named "${bot}". The user's bots: ${bots.filter((b) => !b.hidden).map((b) => b.name).join(', ')}.`)
+        target = named
+      }
+      if (!target) throw new Error('There is no bot to run it.')
+      const info = chat.handoffHost().runInfo(fromThreadId)
+      const mode = info?.mode ?? from.permissionMode
+      const t = db.createThread(target.id, mode === 'ask' ? 'ask' : 'auto', null)
+      db.updateThread(t.id, { title: title.charAt(0).toUpperCase() + title.slice(1) })
+      emit({ threadId: t.id, type: 'thread', thread: db.getThread(t.id) ?? t })
+      const said = [...db.listMessages(fromThreadId)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.content ?? ''
+      // The brief is the voice model's words, so it's relayed like a handoff (taint rules apply); the user's
+      // own words ride along to check it against.
+      const meta = { from: `${home?.name ?? 'SahilBot'} (voice chat)`, fromBotId: home?.id, fromThreadId, handoff: true, hops: 1, voiceTask: true, mode, ...(info?.tainted ? { tainted: true } : {}) }
+      const note = `[Started from a voice conversation: the user asked for this out loud${said ? ` (their words: "${said.slice(0, 500)}")` : ''} and the voice assistant wrote this brief. Check it against their words; it isn't their own text. Do the whole task with your tools; the user's rules and approvals apply as usual. Begin your final reply with one or two plain sentences that can be read aloud as the result, then the details.]`
+      voiceWork.track({ threadId: t.id, bot: target.name, botId: target.id, title, from: fromThreadId })
+      try {
+        await chat.handoffHost().send({ threadId: t.id, text: task, note, meta }, {})
+      } catch (e) {
+        voiceWork.untrack(t.id)
+        throw e
+      }
+      return { bot: target.name, threadId: t.id }
+    }
+  })))
+  handle('voice:tasks', () => voiceWork.list(voiceThread))
   handle('voice:speak', (text: string) => voice.speak(String(text).slice(0, 20_000)))
   handle('voice:stopSpeaking', () => voice.stopSpeaking())
   handle('voice:dictateStart', () => voice.startDictation())
@@ -3063,6 +3255,112 @@ app.whenReady().then(() => {
   registerProtocolClient(HIDDEN)
   // Settings → Always-on server: this Mac's link to a SahilBot Server (src/main/remote-server.ts).
   setupRemoteServer({ db, secrets, openExternal: (u) => { if (/^https?:\/\//.test(u)) void shell.openExternal(u) } })
+  // The Mac link (src/main/mac-link.ts). On the server: the job hub and the agent's `mac` tool. On the Mac: the
+  // poller, the tools it allows, and keeping the Mac awake while linked (on power).
+  if (isServer()) {
+    // Bound to the one Mac that links (kept across restarts).
+    const hub = new MacLinkHub({ bound: { get: () => db.getSetting<string>('macLink:device'), set: (id) => db.setSetting('macLink:device', id) } })
+    registry.register(macTool(hub))
+    registerHandler('macLink:request', (ctx, action, body) => {
+      if (ctx.transport !== 'mac') throw new Error('Use the paired Mac app connection.')
+      if (action === 'poll') return hub.poll((body ?? {}) as { name?: string; tools?: string[] }, ctx.deviceId).then((jobs) => ({ jobs }))
+      if (action === 'result') return { ok: hub.result(body as never, ctx.deviceId) }
+      if (action === 'dropPoll') { hub.dropPoll(ctx.deviceId); return { ok: true } }
+      throw new Error('Unknown Mac link action.')
+    })
+    registerHandler('macLink:status', () => ({ server: true, ...hub.status() }))
+  } else {
+    type MacLinkPrefs = { allow: boolean; tools: string[]; keepAwake: boolean }
+    const prefs = (): MacLinkPrefs => ({ allow: false, tools: DEFAULT_MAC_TOOLS, keepAwake: false, ...(db.getSetting<Partial<MacLinkPrefs>>('macLink') ?? {}) })
+    let linkState: { connected: boolean; error?: string } = { connected: false }
+    let blocker: number | undefined
+    const awake = async (): Promise<void> => {
+      // Awake while linked, allowed and plugged in (or above 20% on battery); the display can still sleep.
+      const want = prefs().allow && prefs().keepAwake && client.running() && linkState.connected
+      let power = { onBattery: false, percent: null as number | null }
+      try { power = parseBattery((await runPmset('/usr/bin/pmset', ['-g', 'batt'])).out) } catch { /* unknown: assume power */ }
+      const ok = want && (!power.onBattery || (power.percent ?? 100) > LOW_BATTERY)
+      if (ok && blocker === undefined) blocker = powerSaveBlocker.start('prevent-app-suspension')
+      if (!ok && blocker !== undefined) { powerSaveBlocker.stop(blocker); blocker = undefined }
+    }
+    const client = new MacLinkClient({
+      call: async (path, body, timeoutMs) => {
+        const call = linkedServerCall({ db, secrets })
+        if (!call) throw new Error('This Mac isn\'t linked to a server.')
+        return call(path, body, timeoutMs)
+      },
+      // Off means off: an in-flight poll's jobs are refused too.
+      allowed: () => (prefs().allow ? prefs().tools.filter((t) => t in MAC_TOOLS && (t === 'find_files' || !!registry.get(t))) : []),
+      name: () => hostname().replace(/\.local$/, ''),
+      onStatus: (s) => { linkState = s },
+      exec: async (job) => {
+        // find_files: Spotlight by name in the home folder (read-only, no shell).
+        if (job.tool === 'find_files') {
+          const q = String(job.args.query ?? job.args.name ?? '').trim().slice(0, 200)
+          if (!q) throw new Error('Say what file to find.')
+          const out = await new Promise<string>((resolve, reject) => execFile('/usr/bin/mdfind', ['-onlyin', homedir(), '-name', q], { timeout: 20_000, maxBuffer: 4_000_000 }, (e, so) => (e && !so ? reject(e) : resolve(so))))
+          const hits = out.split('\n').filter((l) => l && !/\/(\.Trash|Library\/(Caches|Containers|Group Containers|Application Support\/SahilBot))\//.test(l)).slice(0, 50)
+          return { text: hits.length ? `Found ${hits.length} file${hits.length === 1 ? '' : 's'} named like "${q}":\n${hits.join('\n')}` : `No files named like "${q}" in the home folder.`, display: `found ${hits.length} file${hits.length === 1 ? '' : 's'}` }
+        }
+        const tool = registry.get(job.tool)
+        if (!tool) throw new Error(`This Mac has no ${job.tool} tool.`)
+        // Paths are made absolute (from the home folder) before any check, so a relative ".ssh/id_ed25519" or
+        // "Library/LaunchAgents/x.plist" meets the same protected-place stops as the full path.
+        for (const k of ['path', 'to', 'cwd', 'dir', 'folder']) {
+          const v = (job.args as Record<string, unknown>)[k]
+          if (typeof v === 'string' && v && !isAbsolute(v) && !v.startsWith('~')) (job.args as Record<string, unknown>)[k] = join(homedir(), v)
+          else if (typeof v === 'string' && v.startsWith('~/')) (job.args as Record<string, unknown>)[k] = join(homedir(), v.slice(2))
+        }
+        const sensitive = ['path', 'to'].map((k) => (job.args as Record<string, unknown>)[k]).filter((v): v is string => typeof v === 'string')
+          .find((p) => /\/(\.ssh|\.gnupg|\.aws|\.config\/gcloud|\.kube|\.docker|\.netrc|\.zshrc|\.zprofile|\.bash_profile|\.bashrc|\.profile|Library\/(Keychains|LaunchAgents|LaunchDaemons|Cookies|Application Support\/SahilBot|Mail|Messages\/chat\.db))(\/|$)/i.test(p))
+        if (sensitive) throw new Error(`That's a protected place on this Mac (${sensitive.replace(homedir(), '~')}): keys, login items, mail or SahilBot's own data aren't reachable from the server.`)
+        // This Mac's own hard stops (deleting, outside the home folder, protected places) need an OK on the Mac
+        // itself: the server can't give it.
+        const stop = tool.hardStop?.(job.args as never, { roots: [homedir()], folder: homedir() })
+        if (stop) throw new Error(`This Mac asks for your OK right here for this (${typeof stop === 'string' ? stop : 'a protected action'}), so it wasn't done from the server.`)
+        // No background jobs from the server: nothing outlives the call.
+        if (job.tool === 'run_command' && 'background' in job.args) delete (job.args as { background?: unknown }).background
+        const state = db.getState('mac-link')
+        state.folder = homedir()
+        state.roots = [homedir()]
+        const ctx = {
+          threadId: 'mac-link', signal: AbortSignal.timeout(280_000), workspaceDir: settings.get().workspaceDir, docsDir, state,
+          askUser: async () => { throw new Error('The Mac can\'t ask here: the server already asked the user. Decide from what you have.') },
+          loadTools: () => [], searchTools: () => [], readResult: () => undefined, roots: [homedir()], folder: homedir()
+        }
+        // Every change the server makes on this Mac is logged and announced here (reads are only logged).
+        const effect = macEffect(job.tool, job.args)
+        const action = typeof job.args.action === 'string' ? job.args.action : ''
+        const what = `${job.tool.replace(/_/g, ' ')}${action ? ` · ${action}` : ''}`
+        const log = (ok: boolean, note: string): void => {
+          const entries = db.getSetting<Array<{ at: number; what: string; effect: string; ok: boolean; note: string }>>('macLink:log') ?? []
+          db.setSetting('macLink:log', [...entries, { at: Date.now(), what, effect, ok, note: note.slice(0, 160) }].slice(-100))
+        }
+        if (effect !== 'read' && Notification.isSupported()) new Notification({ title: 'Your server used this Mac', body: what, silent: true }).show()
+        try {
+          const out = await tool.run(job.args as never, ctx as never)
+          log(true, out.display ?? '')
+          return { text: out.text ?? '', display: out.display }
+        } catch (e) { log(false, (e as Error).message); throw e }
+      }
+    })
+    const sync = (): void => { if (prefs().allow && linkedServerCall({ db, secrets })) client.start(); else client.stop(); void awake() }
+    app.on('will-quit', () => { client.stop(); if (blocker !== undefined) { powerSaveBlocker.stop(blocker); blocker = undefined } })
+    sync()
+    setInterval(() => { sync() }, 120_000).unref?.()
+    registerHandler('macLink:status', () => ({ server: false, linked: !!linkedServerCall({ db, secrets }), ...prefs(), connected: client.running() && linkState.connected, error: linkState.error, awake: blocker !== undefined, available: Object.entries(MAC_TOOLS).map(([id, t]) => ({ id, what: t.what })), log: (db.getSetting<Array<{ at: number; what: string; effect: string; ok: boolean; note: string }>>('macLink:log') ?? []).slice(-20).reverse() }))
+    registerHandler('macLink:set', (_ctx, patch) => {
+      const p = (patch ?? {}) as Partial<MacLinkPrefs>
+      const cur = prefs()
+      db.setSetting('macLink', {
+        allow: typeof p.allow === 'boolean' ? p.allow : cur.allow,
+        keepAwake: typeof p.keepAwake === 'boolean' ? p.keepAwake : cur.keepAwake,
+        tools: Array.isArray(p.tools) ? p.tools.filter((t) => typeof t === 'string' && t in MAC_TOOLS) : cur.tools
+      })
+      sync()
+      return { ok: true }
+    })
+  }
   const workerPlacement = {
     db,
     isBusy: (id: string) => chat.busyInSpace(id) || jobs.running().some((job) => db.getThread(job.threadId)?.spaceId === id),

@@ -6,6 +6,7 @@ import { blocksToMarkdown, listNumbers } from './markdown'
 import { sheetRows, toCsv } from './sheet'
 import { blocksToSlides, plainInline } from '@shared/slides'
 import { slidePieces } from '@shared/slide-render'
+import { chartKind, chartTable, donutSvg, numberOf } from '@shared/dashboard'
 import { dashboardPage, dashboardPdf, deckOdp, deckPdf, deckPngFolder, deckPptxPictures } from './deck-export'
 
 // doc_export and the editor's Export menu: Word and PDF through the app's document generators
@@ -148,11 +149,18 @@ ${body}
  * Writes the document to `dir` in `format` and returns the file's path. Images come only through
  * `readImage` (default: the folder `dir` is in, i.e. the workspace for <workspace>/exports).
  */
-export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: string, o: { name?: string; create?: CreateDocumentFn; readImage?: ReadImageFn } = {}): Promise<string> {
+export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: string, o: { name?: string; create?: CreateDocumentFn; readImage?: ReadImageFn; warnings?: (w: string[]) => void } = {}): Promise<string> {
   const deck = d.type !== 'sheet' && d.content.kind === 'slides'
   const allowed = d.type === 'sheet' ? SHEET_FORMATS : deck ? DECK_FORMATS : DOC_FORMATS
   if (!allowed.includes(format)) throw new Error(`A ${d.type === 'sheet' ? 'sheet' : 'document'} exports to ${allowed.join(', ')}; not ${format}.`)
-  const create = o.create ?? defaultCreate
+  const make = o.create ?? defaultCreate
+  // What the generator couldn't keep (a missing picture, text cut to fit) goes back to whoever asked for the export.
+  const create: CreateDocumentFn = async (...a) => {
+    const r = await make(...a) as { warnings?: unknown } | undefined
+    const w = Array.isArray(r?.warnings) ? (r!.warnings as unknown[]).map(String).filter(Boolean) : []
+    if (w.length) o.warnings?.(w)
+    return r
+  }
   const readImage = o.readImage ?? folderImageReader([dirname(resolve(dir))])
   const name = slug(o.name?.replace(/\.[a-z0-9]{2,5}$/i, '') || d.title)
   const ext = format === 'pptx_pictures' ? 'pptx' : format === 'png' ? '' : format
@@ -183,15 +191,31 @@ export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: st
         const p = slidePieces(s, i)
         const bullets = p.bullets.map((b) => `${'  '.repeat(b.indent ?? 0)}${plainInline(b.text)}`)
         const stats = p.stats.map((x) => ({ value: plainInline(x.value), label: plainInline(x.label) }))
+        // A ```chart block: PowerPoint's own chart (editable data), the points as the takeaway beside it.
+        const fence = (s.extra ?? []).find((x) => x.type === 'code' && /^chart$/i.test(x.lang ?? ''))
+        const ct = fence ? chartTable(fence.text ?? '') : null
+        const nums = ct ? ct.header.map((_, c) => c).filter((c) => c > 0 && ct.rows.some((r) => numberOf(r[c] ?? '') !== null)) : []
+        const chart = ct && nums.length ? {
+          // The same rule as the slide's own chart (dashboard.ts chartKind), so the file matches the editor.
+          type: (donutSvg(ct, ['#000']) ? 'doughnut' : chartKind(ct)) as 'doughnut' | 'line' | 'column',
+          categories: ct.rows.map((r) => r[0] ?? ''),
+          series: nums.map((c) => ({ name: ct.header[c], values: ct.rows.map((r) => numberOf(r[c] ?? '')) }))
+        } : undefined
+        // A table on the slide: PowerPoint's own table (editable), paged when long. Its points go in the notes.
+        const tb = (s.extra ?? []).find((x) => x.type === 'table' && x.rows?.length)
+        const table = tb && !chart && !p.dark ? tb.rows!.map((r) => r.map((c) => plainInline(c))) : undefined
         // Light slides with big numbers use PowerPoint's stats layout (numbers on cards, points underneath).
-        const layout = p.layout === 'bullets' && stats.length ? 'stats' : p.layout
+        const layout = chart && !p.dark ? 'chart' : table ? 'table' : p.layout === 'bullets' && stats.length ? 'stats' : p.layout
         const desc = p.description.map(plainInline)
         return {
           title: plainInline(s.title) || (i === 0 ? d.title : ' '), layout,
           ...(s.kicker?.trim() ? { kicker: plainInline(s.kicker) } : {}),
           ...(p.dark ? { ...(p.subtitle ? { subtitle: plainInline(p.subtitle) } : {}), ...(desc.length ? { bullets: desc } : {}) } : bullets.length ? { bullets } : {}),
-          ...(stats.length ? { stats } : {}),
-          ...(s.image ? { image: s.image } : {}), ...(s.notes ? { notes: s.notes } : {})
+          ...(stats.length && layout !== 'chart' ? { stats } : {}),
+          ...(chart && layout === 'chart' ? { chart } : {}),
+          ...(table ? { table } : {}),
+          ...(s.image ? { image: s.image } : {}),
+          ...(table && bullets.length ? { notes: [`Key points:\n${bullets.map((b) => `- ${b.trim()}`).join('\n')}`, s.notes].filter(Boolean).join('\n\n') } : s.notes ? { notes: s.notes } : {})
         }
       })
       await create(path, { path, title: d.title, slides: slides.length ? slides : [{ title: d.title, layout: 'title' }], ...(st?.font ? { font: st.font } : {}), ...(st?.theme ? { theme: st.theme } : {}) }, { readImage })

@@ -171,6 +171,9 @@ export async function detectInContext(all: Segment[], segment: Segment, detect: 
   return { spans: mergeSpans(mine, phiSpans(segment.text)), sensitivity: sensitivity ?? 0 }
 }
 
+/** How a "not personal" answer is remembered across chats: the label and the value, case and spacing ignored. */
+export const notPersonalKey = (label: PrivacyLabel | string, value: string): string => `${label}:${value.trim().toLowerCase().replace(/\s+/g, ' ')}`
+
 /** Finds the local model judged not personal: remembered as shareable, so they aren't asked about again. */
 export function recordNotPersonal(state: PrivacyThreadState, found: Finding[]): void {
   for (const f of found) state.items.push({ value: f.value, label: f.label, placeholder: '', share: true })
