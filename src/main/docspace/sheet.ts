@@ -1,7 +1,9 @@
 import type { DocCellValue, DocSheet } from '@shared/types'
+import { Engine, XLError, type Book } from '../docs/formula'
 
 // A small spreadsheet engine: typed cells (numbers, text, formulas) and formulas with + - * / ^, unary
-// minus, parentheses, cell refs (A1, $B$2), ranges (A1:B3) and SUM / AVERAGE / MIN / MAX / COUNT.
+// minus, parentheses, cell refs (A1, $B$2), ranges (A1:B3) and SUM / AVERAGE / MIN / MAX / COUNT; anything else
+// (IF, SUMIF, VLOOKUP, XLOOKUP, text and date functions, comparisons) goes to the full engine in docs/formula.ts.
 // Pure: the editor computes values live with the same code the bot's doc_read uses.
 
 export const MAX_ROWS = 1000
@@ -199,6 +201,21 @@ class CellError extends Error {
  * Computes every non-empty cell. Formulas in a reference cycle (and formulas that read them) are "#CYCLE!";
  * other errors propagate to the formulas that read the cell.
  */
+/** The sheet's cells as a one-sheet workbook for the full formula engine (docs/formula.ts, 1-based rows and columns). */
+function bookOver(cells: Record<string, string>): Book {
+  let rows = 0, cols = 0
+  for (const k of Object.keys(cells)) { const p = parseAddr(k); if (p) { rows = Math.max(rows, p.r + 1); cols = Math.max(cols, p.c + 1) } }
+  return {
+    sheet: () => 'Sheet1',
+    cell: (_s, row, col) => {
+      const raw = cells[addr(col - 1, row - 1)]
+      if (raw === undefined || raw === '') return undefined
+      return isFormula(raw) ? { formula: raw.trim().slice(1) } : { value: literal(raw) }
+    },
+    size: () => ({ rows, cols })
+  }
+}
+
 export function evaluateSheet(cells: Record<string, string>): Record<string, DocCellValue> {
   const parsed = new Map<string, Expr>()
   for (const [a, raw] of Object.entries(cells)) if (isFormula(raw)) parsed.set(a, parseFormula(raw))
@@ -243,9 +260,25 @@ export function evaluateSheet(cells: Record<string, string>): Record<string, Doc
         const code = e instanceof CellError ? e.code : ERR.parse
         out = { value: code, error: code }
       }
+      // A function or syntax this quick engine doesn't know (IF, SUMIF, VLOOKUP, XLOOKUP, text and date
+      // functions, comparisons…): the full spreadsheet engine the Excel exports use works it out.
+      if (out.error === ERR.name || out.error === ERR.parse) out = fullEngine(a) ?? out
     }
     memo.set(a, out)
     return out
+  }
+  let engine: Engine | undefined
+  const fullEngine = (a: string): DocCellValue | undefined => {
+    const at = parseAddr(a)
+    if (!at) return undefined
+    engine ??= new Engine(bookOver(cells))
+    try {
+      const v = engine.cellValue('Sheet1', at.r + 1, at.c + 1)
+      if (v instanceof XLError) return { value: v.code, error: v.code }
+      if (typeof v === 'boolean') return { value: v ? 'TRUE' : 'FALSE' }
+      if (v === null) return { value: '' }
+      return typeof v === 'number' && !Number.isFinite(v) ? { value: ERR.div0, error: ERR.div0 } : { value: v }
+    } catch { return undefined }
   }
   const scalar = (e: Expr): number | string => {
     if (e.k === 'range') throw new CellError(ERR.value)

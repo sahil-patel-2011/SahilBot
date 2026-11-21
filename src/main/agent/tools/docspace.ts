@@ -76,7 +76,7 @@ export function docTools(deps: DocToolDeps): ToolDef[] {
   }
   const roots = (ctx: ToolContext): string[] => ctx.state.roots ?? []
 
-  const docCreate: ToolDef<{ title: string; type?: 'doc' | 'sheet' | 'slides'; markdown?: string; summary?: string }> = {
+  const docCreate: ToolDef<{ title: string; type?: 'doc' | 'sheet' | 'slides' | 'dashboard'; markdown?: string; summary?: string }> = {
     name: 'doc_create',
     label: 'Document',
     core: false,
@@ -89,7 +89,7 @@ Returns the document with an [id] for every block; change it later with doc_edit
       type: 'object',
       properties: {
         title: { type: 'string', maxLength: 200 },
-        type: { type: 'string', enum: ['doc', 'sheet', 'slides'], default: 'doc', description: 'slides: a native deck the user edits in the slide editor. Each # or ## heading starts a slide; - lines are its points (indent for sub-points); > lines are speaker notes; ![alt](/path.png) adds its picture. Exports to PowerPoint with doc_export format pptx.' },
+        type: { type: 'string', enum: ['doc', 'sheet', 'slides', 'dashboard'], default: 'doc', description: 'slides: a native deck in the slide editor. "### Label" (optional kicker) then "## Title" starts a slide; - lines are its points (two-space indent = sub-point); "- **130** Steps" is a big-number stat; > lines are speaker notes; ![](/path.png) its picture. The first slide is the dark title slide. Export with doc_export pptx, pptx_pictures, odp, pdf or png. dashboard: a native dashboard: ## sections, "- **$4.2M** Revenue · up 12%" stat tiles, Markdown tables (first column labels, number columns are charted), short notes. Exports to pdf or html.' },
         markdown: { type: 'string', description: 'Initial content as Markdown (sheet: a Markdown table or CSV)' },
         summary: { type: 'string', maxLength: 200, description: 'Optional one-line note for the version history' }
       },
@@ -103,6 +103,8 @@ Returns the document with an [id] for every block; change it later with doc_edit
         ? { blocks: [], sheet: sheetFromMarkdown(markdown) }
         : type === 'slides'
           ? { blocks: markdownToBlocks(stripIdMarkers(markdown)), kind: 'slides' as const }
+          : type === 'dashboard'
+          ? { blocks: withoutTitleHeading(markdownToBlocks(stripIdMarkers(markdown)), title), kind: 'dashboard' as const }
           : { blocks: withoutTitleHeading(markdownToBlocks(stripIdMarkers(markdown)), title) }
       const snap = store.create({ threadId, spaceId: deps.spaceOf?.(threadId), title, type: type === 'sheet' ? 'sheet' : 'doc', content, author: 'bot', summary })
       store.markSeen(snap.id, snap.version)
@@ -245,7 +247,7 @@ Optional "summary": a short note for the version history.`,
       type: 'object',
       properties: {
         doc: { type: 'string' },
-        format: { type: 'string', enum: ['docx', 'pdf', 'md', 'html', 'xlsx', 'csv', 'pptx'] },
+        format: { type: 'string', enum: ['docx', 'pdf', 'md', 'html', 'xlsx', 'csv', 'pptx', 'pptx_pictures', 'odp', 'png'], description: 'Decks: pptx (editable PowerPoint), pptx_pictures (each slide a picture: exact fonts and look), odp (Keynote, LibreOffice, Google Slides), pdf, png (a folder of slide images). Documents: docx or pdf. Sheets: xlsx or csv.' },
         name: { type: 'string', maxLength: 100 }
       },
       required: ['format'],

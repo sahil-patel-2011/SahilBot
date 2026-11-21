@@ -42,6 +42,7 @@ const api: SahilBotApi = {
     install: call('privacy:install') as never,
     setEnabled: call('privacy:setEnabled') as never,
     remove: call('privacy:remove') as never,
+    selfTest: call('privacy:selfTest') as never,
     onInstall: (cb) => {
       const h = (_e: unknown, ev: import('@shared/privacy').PrivacyInstallEvent): void => cb(ev)
       ipcRenderer.on('privacy:install', h)
@@ -411,7 +412,7 @@ const api: SahilBotApi = {
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
   alwaysOn: { status: call('alwaysOn:status') as never, pauseRoutines: call('alwaysOn:pauseRoutines') as never, setLidAwake: call('alwaysOn:setLidAwake') as never },
   update: {
-    status: call('update:status') as never, check: call('update:check') as never, install: call('update:install') as never,
+    status: call('update:status') as never, check: call('update:check') as never, install: call('update:install') as never, history: call('update:history') as never, upgradedFrom: call('update:upgradedFrom') as never,
     onStatus: (cb) => {
       const h = (_e: unknown, st: Parameters<typeof cb>[0]): void => cb(st)
       ipcRenderer.on('update:status', h)

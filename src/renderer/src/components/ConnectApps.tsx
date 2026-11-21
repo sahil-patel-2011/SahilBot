@@ -583,7 +583,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal connect-modal ca" data-testid="connect-apps-modal" role="dialog" aria-label={title}>
+      <div className="modal connect-modal ca" data-testid="connect-apps-modal" role="dialog" aria-modal="true" aria-label={title}>
         <header className="ca-head">
           {view !== 'browse' && (
             <button className="icon-btn ca-back" aria-label="Back" onClick={() => { setForm(null); setSetupFor(null); setKeyFor(null); go('browse') }}>

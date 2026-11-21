@@ -52,5 +52,6 @@ checked against the official SHA-256. Until it's ready, OpenAI transcribes when 
 - computer-use.md: using the screen, mouse and keyboard
 - agents.md: Max (many agents at once: a team, a swarm, judged attempts or a mix) and helper agents
 - coding.md: terminal, git, tests, Cursor
+- artifacts.md: how agents make and change documents, decks, dashboards and sheets (native first, then export)
 - office.md: PDFs, Word, PowerPoint, Excel
 - Built-in skills (the <context> block suggests the ones that fit; read with memory(action="read_skill", name); format and selection: docs/skills.md): engineering (electrical, mechanical, calculations, reports), coding (TypeScript, Python, SQL, Swift, Docker, CI, security, performance, Cursor handoff), office documents, business (plans, financial models, market research, pitch decks, marketing, SEO, pricing, email, meeting notes), medical (evidence lookup, drug information, patient education, compliant marketing, coding and billing, research summaries) and research and browsing.

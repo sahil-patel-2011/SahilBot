@@ -9,6 +9,7 @@ import { merge3 } from '../../../main/docspace/merge'
 import { BlockBody, BlockStatic, TYPE_LABEL, type BlockCtx } from './doc/Blocks'
 import { SheetView } from './doc/SheetView'
 import { SlidesView } from './doc/SlidesView'
+import { dashboardCss, dashboardHtml } from '@shared/dashboard'
 import { ago, DocIcon, useThreadDocs } from './doc/DocCard'
 import { caretOffset, caretOnEdgeLine, deleteLeading, htmlToInline, isCollapsed, selectionTextIn, setCaret, splitAtCaret, textLength } from './doc/dom'
 
@@ -55,10 +56,34 @@ const SLASH: Array<{ type: DocBlockType; hint: string; keys: string }> = [
   { type: 'image', hint: 'A picture from your Mac', keys: 'image picture photo' }
 ]
 
-const EXPORTS: Record<'doc' | 'sheet' | 'slides', Array<{ f: DocExportFormat; label: string }>> = {
-  slides: [{ f: 'pptx', label: 'PowerPoint (.pptx)' }, { f: 'pdf', label: 'PDF' }, { f: 'md', label: 'Markdown (.md)' }],
-  doc: [{ f: 'docx', label: 'Word (.docx)' }, { f: 'pdf', label: 'PDF' }, { f: 'md', label: 'Markdown (.md)' }, { f: 'html', label: 'Web page (.html)' }],
-  sheet: [{ f: 'xlsx', label: 'Excel (.xlsx)' }, { f: 'csv', label: 'CSV' }, { f: 'pdf', label: 'PDF' }, { f: 'md', label: 'Markdown table' }]
+type ExportRow = { f: DocExportFormat; label: string; hint: string; tag: string }
+const EXPORTS: Record<'doc' | 'sheet' | 'slides' | 'dashboard', ExportRow[]> = {
+  dashboard: [
+    { f: 'pdf', label: 'PDF', hint: 'The dashboard as shown, landscape', tag: 'PDF' },
+    { f: 'html', label: 'Web page', hint: 'A standalone .html to share or host', tag: 'HTML' },
+    { f: 'docx', label: 'Word', hint: 'The sections, numbers and tables as a document', tag: 'DOC' },
+    { f: 'md', label: 'Markdown', hint: 'Plain text', tag: 'MD' }
+  ],
+  slides: [
+    { f: 'pdf', label: 'PDF', hint: 'Exactly as shown, for sharing and printing', tag: 'PDF' },
+    { f: 'pptx', label: 'PowerPoint', hint: 'Editable .pptx: text, points and notes', tag: 'PPT' },
+    { f: 'pptx_pictures', label: 'PowerPoint (pictures)', hint: 'Each slide as a picture: same fonts everywhere', tag: 'PPT' },
+    { f: 'odp', label: 'OpenDocument', hint: '.odp for Keynote, LibreOffice and Google Slides', tag: 'ODP' },
+    { f: 'png', label: 'PNG images', hint: 'A folder with one 1920 × 1080 image per slide', tag: 'PNG' },
+    { f: 'md', label: 'Markdown', hint: 'The outline as plain text', tag: 'MD' }
+  ],
+  doc: [
+    { f: 'docx', label: 'Word', hint: 'Editable .docx with your fonts', tag: 'DOC' },
+    { f: 'pdf', label: 'PDF', hint: 'For sharing and printing', tag: 'PDF' },
+    { f: 'md', label: 'Markdown', hint: 'Plain text with formatting marks', tag: 'MD' },
+    { f: 'html', label: 'Web page', hint: '.html for a browser or email', tag: 'HTML' }
+  ],
+  sheet: [
+    { f: 'xlsx', label: 'Excel', hint: 'Editable .xlsx with your formulas', tag: 'XLS' },
+    { f: 'csv', label: 'CSV', hint: 'Values only, for other apps', tag: 'CSV' },
+    { f: 'pdf', label: 'PDF', hint: 'The table for sharing and printing', tag: 'PDF' },
+    { f: 'md', label: 'Markdown table', hint: 'Plain text', tag: 'MD' }
+  ]
 }
 
 /** The Document tab: the chat's documents (a switcher when there are several) and the editor. */
@@ -73,9 +98,9 @@ export function DocPane({ threadId, docId, onDocId, onAsk, botColor, botName }: 
 }) {
   const docs = useThreadDocs(threadId)
   const current = docId ?? docs[0]?.id ?? null
-  const create = async (type: 'doc' | 'sheet' | 'slides'): Promise<void> => {
+  const create = async (type: 'doc' | 'sheet' | 'slides' | 'dashboard'): Promise<void> => {
     if (!threadId) return
-    try { onDocId((await api.docs.create(threadId, type === 'sheet' ? 'Untitled sheet' : type === 'slides' ? 'Untitled deck' : 'Untitled', type)).id) } catch (e) { toast((e as Error).message, 'error') }
+    try { onDocId((await api.docs.create(threadId, type === 'sheet' ? 'Untitled sheet' : type === 'slides' ? 'Untitled deck' : type === 'dashboard' ? 'Untitled dashboard' : 'Untitled', type)).id) } catch (e) { toast((e as Error).message, 'error') }
   }
   if (!threadId) return <div className="right-body">Open a chat to work on documents with SahilBot.</div>
   if (!current) {
@@ -99,7 +124,7 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
   id: string
   docs: DocInfo[]
   onDocId: (id: string) => void
-  onNew: (type: 'doc' | 'sheet' | 'slides') => Promise<void>
+  onNew: (type: 'doc' | 'sheet' | 'slides' | 'dashboard') => Promise<void>
   onAsk: (text: string, title: string) => void
   botColor?: string | null
   botName: string
@@ -720,14 +745,18 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
     } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') }
   }
 
+  const [exporting, setExporting] = useState<DocExportFormat | null>(null)
+  /** Dashboards: the drawn dashboard, or its data in the block editor. */
+  const [dashMode, setDashMode] = useState<'view' | 'edit'>('view')
   const doExport = async (f: DocExportFormat): Promise<void> => {
-    setMenu(null)
+    setExporting(f)
     try {
       await save()
       const path = await api.docs.export(id, f)
+      setMenu(null)
       setExported(path)
-      setTimeout(() => setExported((p) => (p === path ? null : p)), 10_000)
-    } catch (e) { toast((e as Error).message, 'error') }
+      setTimeout(() => setExported((p) => (p === path ? null : p)), 15_000)
+    } catch (e) { toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error') } finally { setExporting(null) }
   }
 
   const restore = async (n: number): Promise<void> => {
@@ -749,7 +778,9 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
 
   const isSheet = snap.type === 'sheet'
   const isSlides = !isSheet && content.kind === 'slides'
-  const untitled = isSheet ? 'Untitled sheet' : isSlides ? 'Untitled deck' : 'Untitled'
+  const isDashboard = !isSheet && content.kind === 'dashboard'
+  const dashView = isDashboard && dashMode === 'view'
+  const untitled = isSheet ? 'Untitled sheet' : isSlides ? 'Untitled deck' : isDashboard ? 'Untitled dashboard' : 'Untitled'
   const statusText = status === 'saving' ? 'Saving…' : status === 'unsaved' ? 'Editing…' : status === 'error' ? "Couldn't save" : 'Saved'
   const style = { '--doc-bot': botColor || 'var(--accent)' } as React.CSSProperties
 
@@ -790,6 +821,7 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
                 <button role="menuitem" onClick={() => { setMenu(null); void onNew('doc') }}><DocIcon size={14} /> New document</button>
                 <button role="menuitem" onClick={() => { setMenu(null); void onNew('slides') }}><SlidesIcon /> New deck</button>
                 <button role="menuitem" onClick={() => { setMenu(null); void onNew('sheet') }}><DocIcon size={14} sheet /> New sheet</button>
+                <button role="menuitem" onClick={() => { setMenu(null); void onNew('dashboard') }}><DocIcon size={14} /> New dashboard</button>
               </div>
             )}
           </div>
@@ -803,8 +835,15 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
               <I.Share size={13} /> Export
             </button>
             {menu === 'export' && (
-              <div className="doc-menu right" role="menu">
-                {EXPORTS[isSheet ? 'sheet' : isSlides ? 'slides' : 'doc'].map((x) => <button key={x.f} role="menuitem" onClick={() => void doExport(x.f)} data-testid={`doc-export-${x.f}`}>{x.label}</button>)}
+              <div className="doc-menu right doc-export-panel" role="menu" aria-label="Export">
+                <div className="doc-export-head">Export “{content.title}”</div>
+                {EXPORTS[isSheet ? 'sheet' : isSlides ? 'slides' : isDashboard ? 'dashboard' : 'doc'].map((x) => (
+                  <button key={x.f} role="menuitem" className="doc-export-row" onClick={() => void doExport(x.f)} data-testid={`doc-export-${x.f}`} disabled={!!exporting}>
+                    <span className={`doc-export-tag t-${x.tag.toLowerCase()}`}>{x.tag}</span>
+                    <span className="doc-export-text"><b>{x.label}</b><span>{exporting === x.f ? 'Exporting…' : x.hint}</span></span>
+                    <I.Download size={15} />
+                  </button>
+                ))}
                 {source && <button role="menuitem" onClick={() => void saveBack('copy')} data-testid="doc-save-copy">Save a copy next to the original</button>}
               </div>
             )}
@@ -812,8 +851,14 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
         </div>
       </div>
 
-      {isSlides && !viewing && (
-        <div className="doc-toolbar" role="toolbar" aria-label="Deck style">
+      {(isSlides || isDashboard) && !viewing && (
+        <div className="doc-toolbar" role="toolbar" aria-label={isSlides ? 'Deck style' : 'Dashboard'}>
+          {isDashboard && (
+            <div className="doc-seg" role="tablist" aria-label="Dashboard mode">
+              <button role="tab" aria-selected={dashMode === 'view'} className={dashMode === 'view' ? 'on' : ''} onClick={() => setDashMode('view')} data-testid="dash-view">Dashboard</button>
+              <button role="tab" aria-selected={dashMode === 'edit'} className={dashMode === 'edit' ? 'on' : ''} onClick={() => setDashMode('edit')} data-testid="dash-edit">Edit data</button>
+            </div>
+          )}
           <select className="doc-style doc-font" aria-label="Font" title="Font for the slides and the PowerPoint file" value={content.style?.font ?? ''} disabled={readOnly} onChange={(e) => setStyle({ font: e.target.value || undefined })} data-testid="doc-font">
             <option value="">Theme font</option>
             {DOC_FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
@@ -821,11 +866,10 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
           <select className="doc-style doc-theme" aria-label="Theme" title="Colors and type for the slides and the PowerPoint file" value={content.style?.theme ?? ''} disabled={readOnly} onChange={(e) => setStyle({ theme: (e.target.value || undefined) as DocStyle['theme'] })} data-testid="doc-theme">
             <option value="">Theme: Modern</option><option value="classic">Classic</option><option value="minimal">Minimal</option>
           </select>
-          <span className="muted small" title="Ask SahilBot in the chat to draft, rework or add slides">Type on a slide to edit it</span>
         </div>
       )}
 
-      {!isSheet && !isSlides && !viewing && (
+      {!isSheet && !isSlides && !dashView && !viewing && (
         <div className="doc-toolbar" role="toolbar" aria-label="Formatting">
           <select className="doc-style" aria-label="Text style" value={curBlock && ['p', 'h1', 'h2', 'h3'].includes(curBlock.type) ? curBlock.type : ''}
             onChange={(e) => { const bid = target(); if (bid && e.target.value) setType(bid, e.target.value as DocBlockType) }}>
@@ -885,15 +929,20 @@ function DocEditor({ id, docs, onDocId, onNew, onAsk, botColor, botName }: {
             <VersionView id={id} n={viewing.n} current={snap.version} against={viewing.against} onAgainst={(a) => setViewing({ ...viewing, against: a })}
               onRestore={() => void restore(viewing.n)} onClose={() => setViewing(null)} isSheet={isSheet} />
           ) : (
-            <div className={`doc-paper${isSlides ? ' deck' : ''}`}>
+            <div className={`doc-paper${isSlides ? ' deck' : dashView ? ' dash' : ''}`}>
               <input className={`doc-title${flash.title ? ` doc-flash-${flash.title % 2}` : ''}`} value={content.title === untitled || content.title === 'Untitled' ? '' : content.title} placeholder={untitled}
                 aria-label="Title" data-testid="doc-title"
                 onChange={(e) => change({ ...content, title: e.target.value || untitled }, 'type')}
                 onKeyDown={(e) => { if (e.key === 'Enter' || (e.key === 'ArrowDown' && !isSheet && !isSlides)) { e.preventDefault(); const first = content.blocks[0]; if (first && !isSlides) focusBlock(first.id, 'start') } }} />
               {isSlides ? (
-                <SlidesView blocks={content.blocks} style={content.style} flash={flash} readOnly={readOnly} imageUrl={imageUrl}
+                <SlidesView blocks={content.blocks} style={content.style} title={content.title} flash={flash} readOnly={readOnly} imageUrl={imageUrl}
                   onChange={(bs, mode) => setBlocks(bs, mode)}
                   addImage={() => api.docs.addImage().catch((e: Error) => { toast(e.message, 'error'); return null })} />
+              ) : dashView ? (
+                <div className="doc-dashboard" data-testid="dashboard" onDoubleClick={() => setDashMode('edit')} title="Double-click to edit the data">
+                  <style>{dashboardCss(content.style)}</style>
+                  <div dangerouslySetInnerHTML={{ __html: dashboardHtml(content.title, content.blocks, { style: content.style, img: imageUrl }) }} />
+                </div>
               ) : isSheet ? (
                 <SheetView sheet={content.sheet ?? { rows: 20, cols: 6, cells: {}, header: true }} flash={flash} readOnly={readOnly}
                   onChange={(next, structural) => change({ ...content, sheet: next }, structural ? 'struct' : 'type')} />

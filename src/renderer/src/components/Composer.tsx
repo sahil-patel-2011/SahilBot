@@ -3,6 +3,8 @@ import type { Attachment, EffortChoice, ModelList, PermissionMode } from '@share
 import { api } from '../api'
 import * as I from '../icons'
 import { Mic } from '../lib/audio'
+import { clearDraft, loadDraft, saveDraft } from '../lib/drafts'
+import { slashMatches, type SlashCommand } from '../lib/slash'
 import { Popover } from './Popover'
 import { modeFlags } from '../lib/swarm-view'
 // Model, thinking and permissions: one picker under the box (components/ComposerPicker.tsx).
@@ -61,7 +63,8 @@ export interface Outgoing {
 
 export const Composer = forwardRef<ComposerHandle, {
   running: boolean
-  onSend: (o: Outgoing) => void
+  /** Resolves false when the message didn't go through: the text comes back into the box. */
+  onSend: (o: Outgoing) => void | Promise<boolean | void>
   onStop: () => void
   models: ModelList | null
   model: string
@@ -118,6 +121,27 @@ export const Composer = forwardRef<ComposerHandle, {
   /** Text a sahilbot:// link put in the box (null: none). Cleared when the box is emptied or sent. */
   const [linkText, setLinkText] = useState<string | null>(null)
   const ta = useRef<HTMLTextAreaElement>(null)
+  const [slashAt, setSlashAt] = useState(0)
+  const [slashClosed, setSlashClosed] = useState<string | null>(null)
+  const slash = slashClosed === text ? [] : slashMatches(text)
+  const runSlash = (c: SlashCommand): void => {
+    setText('')
+    setSlashAt(0)
+    if (c.id === 'research') { setDeep(true); toast('Deep research is on for your next message.') }
+    else if (c.id === 'max') { setMaxOn(true); toast('Max is on for your next message.') }
+    else if (c.id === 'plan') { setText('Plan this first, then ask me before doing it: '); requestAnimationFrame(() => ta.current?.focus()) }
+    else window.dispatchEvent(new CustomEvent('sahilbot:command', { detail: c.id }))
+  }
+  // Unsent text survives switching chats, quitting and updating (lib/drafts.ts). The key changes with the
+  // chat before the text does, so one chat's draft is never saved under another's.
+  const draftKey = useRef<string | undefined>(p.threadId)
+  useEffect(() => {
+    draftKey.current = p.threadId
+    setText(loadDraft(p.threadId))
+  }, [p.threadId])
+  // While a send is in flight its draft is kept (the box looks empty): it's dropped only once the send worked.
+  const sending = useRef(0)
+  useEffect(() => { if (!(sending.current && !text)) saveDraft(draftKey.current, text) }, [text])
 
   useImperativeHandle(ref, () => ({
     replace(t: string) {
@@ -218,13 +242,25 @@ export const Composer = forwardRef<ComposerHandle, {
     // Sent exactly as the link had it: not the user's own words (the agent treats it as relayed text).
     const fromLink = linkText !== null && text.trim() === linkText.trim()
     // Council replaces the other modes for this message (see modeFlags); Max goes with Plan first and Deep Research.
-    p.onSend({ text: text.trim(), images, attachments: atts, ...(draftFolder && !p.threadId ? { workingFolder: draftFolder } : {}), ...modeFlags({ deep: deep || (!fromLink && requestStrategy(text).kind === 'research'), planFirst: !fromLink && requestStrategy(text).kind === 'plan', max: maxOn || (!fromLink && requestStrategy(text).kind === 'swarm') }), queue, ...(fromLink ? { fromLink } : {}) })
+    const sentText = text, sentImages = images, sentAtts = atts, sentKey = draftKey.current
+    sending.current++
+    const result = p.onSend({ text: text.trim(), images, attachments: atts, ...(draftFolder && !p.threadId ? { workingFolder: draftFolder } : {}), ...modeFlags({ deep: deep || (!fromLink && requestStrategy(text).kind === 'research'), planFirst: !fromLink && requestStrategy(text).kind === 'plan', max: maxOn || (!fromLink && requestStrategy(text).kind === 'swarm') }), queue, ...(fromLink ? { fromLink } : {}) })
     setDeep(false)
     setMaxOn(false)
     setLinkText(null)
     setText('')
     setImages([])
     setAtts([])
+    void Promise.resolve(result).then((ok) => {
+      sending.current--
+      if (ok === false) {
+        // Didn't go through: put it back (unless something new was typed meanwhile).
+        setText((cur) => (cur ? cur : sentText))
+        setImages((cur) => (cur.length ? cur : sentImages))
+        setAtts((cur) => (cur.length ? cur : sentAtts))
+        saveDraft(sentKey, sentText)
+      } else clearDraft(sentKey)
+    }, () => { sending.current--; setText((cur) => (cur ? cur : sentText)); saveDraft(sentKey, sentText) })
   }
 
   const addAtts = (xs: Attachment[]): void => setAtts((cur) => mergeAttachments(cur, xs))
@@ -288,15 +324,33 @@ export const Composer = forwardRef<ComposerHandle, {
         <AttachmentChips images={images} atts={atts}
           onRemoveImage={(i) => setImages((xs) => xs.filter((_, j) => j !== i))}
           onRemove={(path) => setAtts((xs) => xs.filter((x) => x.path !== path))} />
+        {slash.length > 0 && (
+          <div className="slash-menu" role="listbox" aria-label="Commands" data-testid="slash-menu">
+            {slash.map((c, i) => (
+              <button key={c.id} role="option" aria-selected={i === Math.min(slashAt, slash.length - 1)} className={`slash-item${i === Math.min(slashAt, slash.length - 1) ? ' on' : ''}`}
+                onMouseEnter={() => setSlashAt(i)} onMouseDown={(e) => { e.preventDefault(); runSlash(c) }} data-testid={`slash-${c.id}`}>
+                <b>{c.name}</b><span>{c.hint}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
           ref={ta}
           rows={p.big ? 2 : 1}
           value={text}
           placeholder={p.answering ? 'Type your answer, or talk about something else' : p.placeholder ?? 'Message SahilBot'}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => { setText(e.target.value); setSlashAt(0) }}
           onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.key === 'Escape' && dictating) { e.preventDefault(); e.stopPropagation(); void cancelDictation(); return }
+            if (slash.length) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashAt((i) => (i + 1) % slash.length); return }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashAt((i) => (i - 1 + slash.length) % slash.length); return }
+              if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { e.preventDefault(); runSlash(slash[Math.min(slashAt, slash.length - 1)]); return }
+              if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSlashClosed(text); return }
+            }
+            // ↑ in an empty box: edit your last message (like ChatGPT and Claude).
+            if (e.key === 'ArrowUp' && !text && !images.length && !atts.length && !p.running) { e.preventDefault(); window.dispatchEvent(new CustomEvent('sahilbot:edit-last')); return }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               // Enter while dictating: finish dictation first, then send what was said.
@@ -358,7 +412,7 @@ export const Composer = forwardRef<ComposerHandle, {
         <ComposerPicker key={p.showModelThinking === false ? 'permissions' : 'full'} models={p.models} model={p.model} onModel={p.onModel} onAuto={p.onAuto} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
           thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} showModelThinking={p.showModelThinking} />
       </div>
-      {dev && p.running && !p.answering && (
+      {p.running && !p.answering && (
         <div className="steer-hint" data-testid="steer-hint">
           <kbd>Enter</kbd> send now (SahilBot adjusts) · <kbd>⌘Enter</kbd> send after it finishes
           {p.steering ? <span className="steering"> · <span className="spin" /> adjusting at its next step…</span> : null}

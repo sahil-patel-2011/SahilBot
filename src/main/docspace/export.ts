@@ -4,7 +4,9 @@ import type { DocBlock, DocExportFormat, DocSnapshot } from '@shared/types'
 import { escapeHtml, inlineToHtml } from './inline'
 import { blocksToMarkdown, listNumbers } from './markdown'
 import { sheetRows, toCsv } from './sheet'
-import { blocksToSlides, plainInline, slideLayout } from '@shared/slides'
+import { blocksToSlides, plainInline } from '@shared/slides'
+import { slidePieces } from '@shared/slide-render'
+import { dashboardPage, dashboardPdf, deckOdp, deckPdf, deckPngFolder, deckPptxPictures } from './deck-export'
 
 // doc_export and the editor's Export menu: Word and PDF through the app's document generators
 // (src/main/docs/create.ts), Markdown and HTML written here, and xlsx/csv for sheets.
@@ -45,6 +47,8 @@ export function folderImageReader(folders: string[]): ReadImageFn {
 
 export const DOC_FORMATS: DocExportFormat[] = ['docx', 'pdf', 'md', 'html']
 export const SHEET_FORMATS: DocExportFormat[] = ['xlsx', 'csv', 'md', 'html', 'pdf', 'docx']
+/** A deck: PowerPoint (editable or as pictures with exact fonts), OpenDocument, PDF, PNG images, Markdown. */
+export const DECK_FORMATS: DocExportFormat[] = ['pptx', 'pptx_pictures', 'odp', 'pdf', 'png', 'md', 'html', 'docx']
 
 export function slug(t: string): string {
   const s = t.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '')
@@ -55,7 +59,7 @@ export function slug(t: string): string {
 export function freePath(dir: string, name: string, ext: string): string {
   mkdirSync(dir, { recursive: true })
   for (let i = 1; i < 1000; i++) {
-    const p = join(dir, `${name}${i === 1 ? '' : `-${i}`}.${ext}`)
+    const p = join(dir, `${name}${i === 1 ? '' : `-${i}`}${ext ? `.${ext}` : ''}`)
     if (!existsSync(p)) return p
   }
   return join(dir, `${name}-${Date.now()}.${ext}`)
@@ -145,13 +149,23 @@ ${body}
  * `readImage` (default: the folder `dir` is in, i.e. the workspace for <workspace>/exports).
  */
 export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: string, o: { name?: string; create?: CreateDocumentFn; readImage?: ReadImageFn } = {}): Promise<string> {
-  const allowed = d.type === 'sheet' ? SHEET_FORMATS : d.content.kind === 'slides' ? [...DOC_FORMATS, 'pptx' as const] : DOC_FORMATS
+  const deck = d.type !== 'sheet' && d.content.kind === 'slides'
+  const allowed = d.type === 'sheet' ? SHEET_FORMATS : deck ? DECK_FORMATS : DOC_FORMATS
   if (!allowed.includes(format)) throw new Error(`A ${d.type === 'sheet' ? 'sheet' : 'document'} exports to ${allowed.join(', ')}; not ${format}.`)
   const create = o.create ?? defaultCreate
   const readImage = o.readImage ?? folderImageReader([dirname(resolve(dir))])
   const name = slug(o.name?.replace(/\.[a-z0-9]{2,5}$/i, '') || d.title)
-  const path = freePath(dir, name, format)
+  const ext = format === 'pptx_pictures' ? 'pptx' : format === 'png' ? '' : format
+  const path = format === 'png' ? freePath(dir, `${name}-slides`, '') : freePath(dir, format === 'pptx_pictures' ? `${name}-pictures` : name, ext)
+  const deckIn = { title: d.title, blocks: d.content.blocks, style: d.content.style }
+  if (deck && format === 'pdf') { mkdirSync(dir, { recursive: true }); await deckPdf(path, deckIn, readImage); return done(path, format) }
+  const dashboard = d.type !== 'sheet' && d.content.kind === 'dashboard'
+  if (dashboard && format === 'pdf') { mkdirSync(dir, { recursive: true }); await dashboardPdf(path, deckIn, readImage); return done(path, format) }
+  if (dashboard && format === 'html') { writeFileSync(path, dashboardPage(deckIn, readImage)); return done(path, format) }
   switch (format) {
+    case 'png': await deckPngFolder(path, deckIn, readImage); break
+    case 'pptx_pictures': mkdirSync(dir, { recursive: true }); await deckPptxPictures(path, deckIn, readImage); break
+    case 'odp': mkdirSync(dir, { recursive: true }); await deckOdp(path, deckIn, readImage); break
     case 'md': writeFileSync(path, exportMarkdown(d)); break
     case 'html': writeFileSync(path, exportHtml(d)); break
     case 'csv': writeFileSync(path, toCsv(sheetRows(d.content.sheet ?? { rows: 0, cols: 0, cells: {} }, d.computed ?? {}))); break
@@ -166,9 +180,19 @@ export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: st
       // A native deck as PowerPoint: one slide per heading, its points, picture and speaker notes.
       const st = d.content.style
       const slides = blocksToSlides(d.content.blocks).map((s, i) => {
-        const layout = slideLayout(s, i)
-        const points = s.points.map((p) => `${'  '.repeat(p.indent ?? 0)}${plainInline(p.text)}`)
-        return { title: plainInline(s.title) || (i === 0 ? d.title : ' '), layout, ...(layout === 'title' && points[0] ? { subtitle: points[0] } : points.length ? { bullets: points } : {}), ...(s.image ? { image: s.image } : {}), ...(s.notes ? { notes: s.notes } : {}) }
+        const p = slidePieces(s, i)
+        const bullets = p.bullets.map((b) => `${'  '.repeat(b.indent ?? 0)}${plainInline(b.text)}`)
+        const stats = p.stats.map((x) => ({ value: plainInline(x.value), label: plainInline(x.label) }))
+        // Light slides with big numbers use PowerPoint's stats layout (numbers on cards, points underneath).
+        const layout = p.layout === 'bullets' && stats.length ? 'stats' : p.layout
+        const desc = p.description.map(plainInline)
+        return {
+          title: plainInline(s.title) || (i === 0 ? d.title : ' '), layout,
+          ...(s.kicker?.trim() ? { kicker: plainInline(s.kicker) } : {}),
+          ...(p.dark ? { ...(p.subtitle ? { subtitle: plainInline(p.subtitle) } : {}), ...(desc.length ? { bullets: desc } : {}) } : bullets.length ? { bullets } : {}),
+          ...(stats.length ? { stats } : {}),
+          ...(s.image ? { image: s.image } : {}), ...(s.notes ? { notes: s.notes } : {})
+        }
       })
       await create(path, { path, title: d.title, slides: slides.length ? slides : [{ title: d.title, layout: 'title' }], ...(st?.font ? { font: st.font } : {}), ...(st?.theme ? { theme: st.theme } : {}) }, { readImage })
       break
@@ -180,6 +204,10 @@ export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: st
       break
     }
   }
+  return done(path, format)
+}
+
+function done(path: string, format: DocExportFormat): string {
   if (!existsSync(path)) throw new Error(`The ${format} export didn't produce a file.`)
   return path
 }

@@ -577,3 +577,33 @@
 /* Settings → Usage: the month card and the charts are content cards too (the scale's top label needs room). */
 .settings-page .set-card.ud-month { padding: 14px var(--sp-4); }
 .settings-page .set-card.ud-card { padding: 20px 14px 12px var(--sp-4); }
+
+/* The working run's plan, pinned at the bottom of the chat (ThreadView LivePlan). */
+.live-plan { position: sticky; bottom: 8px; z-index: 4; margin: 10px 0 4px; border: 1px solid var(--card-line, var(--line)); border-radius: 14px; background: var(--card, var(--bg)); box-shadow: 0 6px 22px rgba(0, 0, 0, .1); overflow: hidden; }
+.live-plan-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: none; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.live-plan-head .spin { flex: none; }
+.live-plan-step { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-plan-head .plan-bar { flex: 0 0 90px; margin-left: 0; }
+.live-plan .plan-steps { margin: 0; padding: 10px 14px 4px; max-height: 40vh; overflow-y: auto; border-bottom: 1px solid var(--line); }
+
+/* Chat markdown: syntax colors (lib/highlight.ts), scrolling tables with Copy, inline citation links. */
+.md .tk-kw { color: #a626a4; } .md .tk-str { color: #50a14f; } .md .tk-com { color: #a0a1a7; font-style: italic; }
+.md .tk-num { color: #986801; } .md .tk-fn { color: #4078f2; } .md .tk-type { color: #c18401; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .md .tk-kw { color: #c678dd; } :root:not([data-theme="light"]) .md .tk-str { color: #98c379; } :root:not([data-theme="light"]) .md .tk-com { color: #7f848e; } :root:not([data-theme="light"]) .md .tk-num { color: #d19a66; } :root:not([data-theme="light"]) .md .tk-fn { color: #61afef; } :root:not([data-theme="light"]) .md .tk-type { color: #e5c07b; } }
+:root[data-theme="dark"] .md .tk-kw { color: #c678dd; } :root[data-theme="dark"] .md .tk-str { color: #98c379; } :root[data-theme="dark"] .md .tk-com { color: #7f848e; } :root[data-theme="dark"] .md .tk-num { color: #d19a66; } :root[data-theme="dark"] .md .tk-fn { color: #61afef; } :root[data-theme="dark"] .md .tk-type { color: #e5c07b; }
+.md .table-wrap { position: relative; overflow-x: auto; margin: 10px 0; max-width: 100%; }
+.md .table-wrap > table { margin: 0; }
+.md .table-wrap > [data-copy-table] { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .15s; font: inherit; font-size: 11.5px; padding: 3px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--card, var(--bg)); color: var(--muted); cursor: pointer; }
+.md .table-wrap:hover > [data-copy-table], .md .table-wrap > [data-copy-table]:focus-visible { opacity: 1; }
+.md a.cite { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; padding: 0 4px; margin: 0 1px; border-radius: 6px; font-size: 10.5px; font-weight: 600; line-height: 1; vertical-align: 2px; text-decoration: none; background: var(--tint-2, rgba(0,0,0,.07)); color: var(--text); }
+.md a.cite:hover { background: var(--accent); color: #fff; }
+.source-more { cursor: pointer; border: none; font: inherit; }
+/* Motion: one switch for everything that spins, shimmers or slides. */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; } }
+@media (forced-colors: active) { .plan-bar i, .meter i { background: Highlight; } .live-plan, .wn-release, .doc-export-panel { border: 1px solid CanvasText; } }
+/* Slash commands (Composer + lib/slash.ts) */
+.slash-menu { position: absolute; left: 10px; right: 10px; bottom: calc(100% + 6px); z-index: 20; max-height: 300px; overflow-y: auto; padding: 5px; border-radius: 14px; border: 1px solid var(--card-line, var(--line)); background: var(--card, var(--bg)); box-shadow: 0 12px 32px rgba(0, 0, 0, .14); display: flex; flex-direction: column; }
+.slash-item { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; border: none; border-radius: 9px; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.slash-item b { min-width: 92px; font-weight: 600; }
+.slash-item span { color: var(--muted); }
+.slash-item.on { background: var(--hover, rgba(0, 0, 0, .06)); }

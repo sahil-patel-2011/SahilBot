@@ -100,5 +100,7 @@ export interface PrivacyApi {
   install(): Promise<PrivacyStatus>
   setEnabled(enabled: boolean): Promise<PrivacyStatus>
   remove(): Promise<PrivacyStatus>
+  /** Runs a made-up sample through PII-Tracer on this Mac: what it caught and how long it took. */
+  selfTest(): Promise<{ sample: string; ms: number; found: Array<{ label: PrivacyLabel; text: string }> }>
   onInstall(cb: (e: PrivacyInstallEvent) => void): () => void
 }

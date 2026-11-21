@@ -52,11 +52,11 @@ describe('backups', () => {
 })
 
 describe('swap script', () => {
-  const sh = (app: string, next: string, log: string): void => {
+  const sh = (app: string, next: string, log: string, check = 'true'): void => {
     const script = join(mkdtempSync(join(tmpdir(), 'sb-swap-')), 'swap.sh')
     writeFileSync(script, swapScript(), { mode: 0o755 })
     // PID 999999 doesn't exist: no wait. SAHILBOT_OPEN=true: don't launch anything.
-    execFileSync('/bin/sh', [script, '999999', app, next, log], { env: { ...process.env, SAHILBOT_OPEN: 'true' } })
+    execFileSync('/bin/sh', [script, '999999', app, next, log], { env: { ...process.env, SAHILBOT_OPEN: 'true', SAHILBOT_SETTLE: '0', SAHILBOT_CHECK: check } })
   }
   test('replaces the app bundle with the new one', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sb-apps-'))
@@ -65,8 +65,18 @@ describe('swap script', () => {
     mkdirSync(next, { recursive: true }); writeFileSync(join(next, 'v'), 'new')
     sh(app, next, join(dir, 'log'))
     expect(readFileSync(join(app, 'v'), 'utf8')).toBe('new')
+    // The old copy stays until the new version has run cleanly for a minute (Updater.markHealthy removes it).
     expect(readFileSync(join(`${app}.previous`, 'v'), 'utf8')).toBe('old')
     expect(readFileSync(join(dir, 'log'), 'utf8')).toMatch(/updated/)
+  })
+  test('a new version that exits right after launch is rolled back to the old one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sb-apps-'))
+    const app = join(dir, 'SahilBot.app'), next = join(dir, 'stage', 'SahilBot.app')
+    mkdirSync(app); writeFileSync(join(app, 'v'), 'old')
+    mkdirSync(next, { recursive: true }); writeFileSync(join(next, 'v'), 'new')
+    sh(app, next, join(dir, 'log'), 'false')
+    expect(readFileSync(join(app, 'v'), 'utf8')).toBe('old')
+    expect(readFileSync(join(dir, 'log'), 'utf8')).toMatch(/exited right after launch, restoring/)
   })
   test('a failed swap puts the old app back', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sb-apps-'))
@@ -78,6 +88,19 @@ describe('swap script', () => {
   })
 })
 
+
+describe('backups in two places', () => {
+  test('each backup is copied to a second folder, which keeps its newest three', async () => {
+    const data = mkdtempSync(join(tmpdir(), 'sb-two-data-')), to = mkdtempSync(join(tmpdir(), 'sb-two-a-')), mirror = mkdtempSync(join(tmpdir(), 'sb-two-b-'))
+    writeFileSync(join(data, 'settings.json'), '{"x":1}')
+    for (let i = 0; i < 5; i++) await backupData(data, `copy ${i}`, { to, mirror, now: new Date(Date.UTC(2026, 10, 20, 10, i)) })
+    const a = readdirSync(to).filter((n) => /^\d{4}/.test(n)), b = readdirSync(mirror).filter((n) => /^\d{4}/.test(n))
+    expect(a).toHaveLength(5)
+    expect(b).toHaveLength(3)
+    expect(b.every((n) => a.includes(n))).toBe(true)
+    expect(readFileSync(join(mirror, b[2], 'settings.json'), 'utf8')).toBe('{"x":1}')
+  })
+})
 
 describe('backup failures and legacy upgrade protection', () => {
   test('a failed SQLite snapshot stops backup instead of copying an inconsistent live WAL', async () => {

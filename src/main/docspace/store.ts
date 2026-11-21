@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
-import { DOC_FONTS, type DocAuthor, type DocBlock, type DocContent, type DocSheet, type DocDiff, type DocEvent, type DocInfo, type DocSnapshot, type DocStyle, type DocType, type DocVersionInfo, type LibraryItem } from '@shared/types'
+import { DOC_FONTS, DOC_KINDS, type DocAuthor, type DocBlock, type DocContent, type DocKind, type DocSheet, type DocDiff, type DocEvent, type DocInfo, type DocSnapshot, type DocStyle, type DocType, type DocVersionInfo, type LibraryItem } from '@shared/types'
 import { changeKeys, diffContent, diffView, isEmptyDelta, summarize } from './diff'
 import { preview } from './inline'
 import { merge3 } from './merge'
@@ -102,9 +102,9 @@ export class DocStore {
   }
 
   /** Documents across every chat, newest change first (Artifacts → Your documents). */
-  recent(limit = 24): Array<DocInfo & { slides: boolean }> {
-    return (this.sql.prepare(`SELECT *, json_extract(content, '$.kind') = 'slides' AS is_slides FROM docspace_docs ORDER BY updated_at DESC LIMIT ?`).all(Math.max(1, Math.min(200, limit))) as Row[])
-      .map((r) => ({ ...this.toInfo(r), slides: r.is_slides === 1 }))
+  recent(limit = 24): Array<DocInfo & { slides: boolean; kind?: DocKind }> {
+    return (this.sql.prepare(`SELECT *, json_extract(content, '$.kind') AS doc_kind FROM docspace_docs ORDER BY updated_at DESC LIMIT ?`).all(Math.max(1, Math.min(200, limit))) as Row[])
+      .map((r) => { const kind = DOC_KINDS.find((k) => k === r.doc_kind); return { ...this.toInfo(r), slides: kind === 'slides', ...(kind ? { kind } : {}) } })
   }
 
   /** The chat's most recently changed document. */
@@ -148,7 +148,7 @@ export class DocStore {
     const style = normalizeStyle(o.content.style)
     const content: DocContent = {
       title, blocks: type === 'sheet' ? [] : o.content.blocks ?? [], ...(type === 'sheet' ? { sheet: fitSheet(o.content.sheet ?? emptySheet()) } : {}),
-      ...(style ? { style } : {}), ...(type !== 'sheet' && o.content.kind === 'slides' ? { kind: 'slides' as const } : {})
+      ...(style ? { style } : {}), ...(type !== 'sheet' && o.content.kind && DOC_KINDS.includes(o.content.kind) ? { kind: o.content.kind } : {})
     }
     const json = this.check(content)
     const at = this.now()
@@ -344,7 +344,7 @@ export function normalizeContent(c: unknown, type: DocType): DocContent {
     sheet = fitSheet({ rows: Math.min(MAX_ROWS, Math.max(1, Number(sh.rows) || 1)), cols: Math.min(MAX_COLS, Math.max(1, Number(sh.cols) || 1)), cells, header: sh.header !== false })
   }
   const style = normalizeStyle(x.style)
-  return { title: cleanTitle(x.title), blocks, ...(sheet ? { sheet } : {}), ...(style ? { style } : {}), ...(type !== 'sheet' && x.kind === 'slides' ? { kind: 'slides' as const } : {}) }
+  return { title: cleanTitle(x.title), blocks, ...(sheet ? { sheet } : {}), ...(style ? { style } : {}), ...(type !== 'sheet' && x.kind && DOC_KINDS.includes(x.kind) ? { kind: x.kind } : {}) }
 }
 
 /** A document style with only allowed values (an unknown font, size or theme is dropped). */

@@ -2,7 +2,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { accessSync, constants, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { UpdateStatus } from '@shared/types'
@@ -26,6 +26,9 @@ export const KEEP_BACKUPS = 5
 const SKIP = new Set(['models', 'Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'Crashpad', 'ShaderCache', 'blob_storage', 'logs'])
 
 export const backupsDir = (): string => join(homedir(), 'Library', 'Application Support', 'SahilBot Backups')
+/** The second copy of every backup, in a separate folder (your home folder, not iCloud-synced Documents). */
+export const mirrorBackupsDir = (): string => join(homedir(), 'SahilBot Backups')
+export const KEEP_MIRROR = 3
 const updatesDir = (): string => join(homedir(), 'Library', 'Application Support', 'SahilBot Updates')
 
 /** "v0.1.0-128" → { version: '0.1.0', build: 128 }. */
@@ -78,7 +81,7 @@ async function sha256(path: string): Promise<string> {
  * Copies the data folder to a dated backup (the database consistently, everything else as is, minus caches
  * and re-downloadable models) and keeps the newest KEEP_BACKUPS. Returns the backup's folder.
  */
-export async function backupData(dataDir: string, label: string, o: { vacuumInto?: (path: string) => void; now?: Date; to?: string } = {}): Promise<string> {
+export async function backupData(dataDir: string, label: string, o: { vacuumInto?: (path: string) => void; now?: Date; to?: string; mirror?: string | null } = {}): Promise<string> {
   const root = o.to ?? backupsDir()
   const stamp = (o.now ?? new Date()).toISOString().replace(/[:.]/g, '-')
   if (resolve(root) === resolve(dataDir) || resolve(root).startsWith(resolve(dataDir) + '/')) throw new Error('The backup location must be separate from the live data folder.')
@@ -99,6 +102,15 @@ export async function backupData(dataDir: string, label: string, o: { vacuumInto
   writeFileSync(join(dest, 'README.txt'), `A copy of SahilBot's data (${label}), made before an update. To restore it, quit SahilBot and copy these files back into:\n${dataDir}\n`)
   writeFileSync(join(dest, '.complete.json'), JSON.stringify({ at: Date.now(), source: resolve(dataDir), label, entries: readdirSync(dest) }))
   pruneBackups(root)
+  // The same backup in a second place, so losing one folder never loses the data.
+  const mirror = o.mirror === undefined ? (o.to ? undefined : mirrorBackupsDir()) : o.mirror || undefined
+  if (mirror && resolve(mirror) !== resolve(root)) {
+    try {
+      mkdirSync(mirror, { recursive: true })
+      await run('/usr/bin/ditto', [dest, join(mirror, basename(dest))])
+      pruneBackups(mirror, KEEP_MIRROR)
+    } catch (e) { console.error('[backup] second copy failed:', (e as Error).message) }
+  }
   return dest
 }
 
@@ -146,12 +158,22 @@ if ! mv "$APP" "$OLD"; then
 fi
 if mv "$NEW" "$APP"; then
   xattr -dr com.apple.quarantine "$APP" 2>/dev/null
-  echo "updated $(date); previous app retained at $OLD" >> "$LOG"
+  echo "updated $(date)" >> "$LOG"
+  CHECK="\${SAHILBOT_CHECK:-pgrep -f}"
   if ! "$OPEN" "$APP"; then
     mv "$APP" "$NEW.failed"
     mv "$OLD" "$APP"
     echo "launch failed, restoring $(date)" >> "$LOG"
     "$OPEN" "$APP"
+  else
+    # Still running after a while? If the new version quit or crashed straight away, put the old one back.
+    # (Once it has run cleanly for a minute, the new app removes the old copy itself: Updater.markHealthy.)
+    sleep "\${SAHILBOT_SETTLE:-25}"
+    if ! $CHECK "$APP/Contents/MacOS/" >/dev/null 2>&1; then
+      echo "new version exited right after launch, restoring $(date)" >> "$LOG"
+      rm -rf "$NEW.failed"
+      mv "$APP" "$NEW.failed" && mv "$OLD" "$APP" && "$OPEN" "$APP"
+    fi
   fi
 else
   echo "update failed, restoring $(date)" >> "$LOG"
@@ -175,6 +197,8 @@ export interface UpdaterDeps {
   vacuumInto?(path: string): void
   fetch?: typeof fetch
 }
+
+export interface ReleaseSize { version: string; build: number; size: number; date: string }
 
 export class Updater {
   private status: UpdateStatus = { state: 'idle' }
@@ -201,12 +225,43 @@ export class Updater {
   /** Checks shortly after start, then every 5 minutes (and when the Mac wakes: index.ts); a found update downloads in the background. */
   start(): void {
     if (!this.d.packaged || process.platform !== 'darwin') return
+    this.cleanup()
+    this.healthTimer = setTimeout(() => this.markHealthy(), 60_000)
     this.startup = setTimeout(() => { void this.check().catch(() => undefined); void this.maintainBackup() }, 10_000)
     this.backupTimer = setInterval(() => void this.maintainBackup(), 24 * 3600_000)
     this.timer = setInterval(() => void this.check().catch(() => undefined), 5 * 60_000)
   }
 
-  stop(): void { if (this.timer) clearInterval(this.timer); if (this.startup) clearTimeout(this.startup); if (this.backupTimer) clearInterval(this.backupTimer) }
+  /**
+   * Leftovers from earlier updates: the old "SahilBot.app.previous" next to the app (it showed up in
+   * Spotlight as a second SahilBot), staging copies, and downloads of versions already installed.
+   */
+  cleanup(): void {
+    const installed = bundleOf(this.d.execPath)
+    for (const p of [`${installed}.update-staging`, `${installed}.update-staging.failed`]) {
+      try { if (existsSync(p)) rmSync(p, { recursive: true, force: true }) } catch { /* not ours to remove */ }
+    }
+    try {
+      const dir = updatesDir()
+      for (const n of existsSync(dir) ? readdirSync(dir) : []) {
+        const t = parseTag(n)
+        if (t && !isNewer(t, this.current)) rmSync(join(dir, n), { recursive: true, force: true })
+      }
+    } catch { /* ignore */ }
+  }
+
+  private healthTimer?: ReturnType<typeof setTimeout>
+  /**
+   * This version has run cleanly for a minute: remove the copy of the previous version the update kept for
+   * rollback, so only one SahilBot is installed (and Spotlight shows one).
+   */
+  markHealthy(): void {
+    const prev = `${bundleOf(this.d.execPath)}.previous`
+    try { if (existsSync(prev)) rmSync(prev, { recursive: true, force: true }) } catch { /* not ours to remove */ }
+  }
+
+  stop(): void {
+    if (this.healthTimer) clearTimeout(this.healthTimer); if (this.timer) clearInterval(this.timer); if (this.startup) clearTimeout(this.startup); if (this.backupTimer) clearInterval(this.backupTimer) }
 
   /** Keep a recent secondary copy even between app updates. Failure never replaces the live profile. */
   private async maintainBackup(): Promise<void> {
@@ -218,6 +273,25 @@ export class Updater {
     try { await backupData(this.d.dataDir, 'daily profile copy', { vacuumInto: this.d.vacuumInto }) }
     catch (e) { console.error('[backup]', (e as Error).message) }
     finally { this.backingUp = false }
+  }
+
+  private historyCache?: { at: number; list: ReleaseSize[] }
+  /** Published versions with their download size (Settings → What's new), cached for 10 minutes. */
+  async history(): Promise<ReleaseSize[]> {
+    if (this.historyCache && Date.now() - this.historyCache.at < 10 * 60_000) return this.historyCache.list
+    const f = this.d.fetch ?? fetch
+    try {
+      const res = await f(`https://api.github.com/repos/${REPO}/releases?per_page=40`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'SahilBot' }, signal: AbortSignal.timeout(15_000) })
+      if (!res.ok) return this.historyCache?.list ?? []
+      const rels = await res.json() as Array<{ tag_name: string; published_at?: string; assets: Array<{ name: string; size: number }> }>
+      const list = rels.flatMap((r) => {
+        const t = parseTag(r.tag_name)
+        const zip = r.assets.find((a) => a.name === ASSET)
+        return t && zip ? [{ version: t.version, build: t.build, size: zip.size, date: r.published_at ?? '' }] : []
+      })
+      this.historyCache = { at: Date.now(), list }
+      return list
+    } catch { return this.historyCache?.list ?? [] }
   }
 
   check(): Promise<UpdateStatus> {
@@ -253,14 +327,14 @@ export class Updater {
       const want = sumFor(await (await f(sums.browser_download_url, { signal: AbortSignal.timeout(30_000) })).text(), ASSET)
       if (!want) throw new Error('The release has no checksum for the Mac app.')
       if (!existsSync(file) || statSync(file).size !== zip.size || (await sha256(file)) !== want) {
-        this.set({ state: 'downloading', version: label, notes, progress: 0 })
+        this.set({ state: 'downloading', version: label, notes, progress: 0, size: zip.size })
         const dl = await f(zip.browser_download_url, { signal: AbortSignal.timeout(30 * 60_000) })
         if (!dl.ok || !dl.body) throw new Error(`The download failed (${dl.status}).`)
         let got = 0
         const counted = Readable.fromWeb(dl.body as never).on('data', (c: Buffer) => {
           got += c.length
           const p = Math.min(99, Math.floor((got / Math.max(1, zip.size)) * 100))
-          if (p !== this.status.progress) this.set({ state: 'downloading', version: label, notes, progress: p })
+          if (p !== this.status.progress) this.set({ state: 'downloading', version: label, notes, progress: p, size: zip.size })
         })
         await pipeline(counted, createWriteStream(file))
         if ((await sha256(file)) !== want) { rmSync(file, { force: true }); throw new Error('The download didn\'t match its checksum, so it wasn\'t used.') }
@@ -275,7 +349,7 @@ export class Updater {
       await run('/usr/bin/codesign', ['--verify', '--deep', app]).catch((e: Error) => { throw new Error(`The new app's signature didn't check out (${e.message}).`) })
       if (bundleBuild(app) !== next.build) throw new Error(`The download is build ${bundleBuild(app)}, not ${next.build}.`)
       this.staged = { app, tag: rel.tag_name }
-      return this.set({ state: 'ready', version: label, notes })
+      return this.set({ state: 'ready', version: label, notes, size: zip.size })
     } catch (e) {
       return this.set({ state: 'error', detail: (e as Error).message })
     }

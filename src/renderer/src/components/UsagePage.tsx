@@ -208,7 +208,7 @@ export function UsageGlanceHost() {
   const max = Math.max(1, ...(g?.days ?? []))
   return (
     <div className="ug-scrim" onClick={() => setOpen(false)} data-testid="usage-glance">
-      <div className="ug-card" role="dialog" aria-label="Usage" onClick={(e) => e.stopPropagation()}>
+      <div className="ug-card" role="dialog" aria-modal="true" aria-label="Usage" onClick={(e) => e.stopPropagation()}>
         <div className="ug-head"><b>Usage</b><button className="icon-btn" aria-label="Close" onClick={() => setOpen(false)}><I.Close size={14} /></button></div>
         {!g ? <div className="us-empty">Loading…</div> : (
           <>

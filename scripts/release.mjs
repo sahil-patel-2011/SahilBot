@@ -63,11 +63,22 @@ export function findArtifacts(files, version, build) {
   return { dmg: pick('dmg'), zip: pick('zip') }
 }
 
+/** This version's "What's new" (src/shared/release-notes.json) as Markdown, or '' if it has none. */
+export function whatsNew(version, file = new URL('../src/shared/release-notes.json', import.meta.url)) {
+  let all = []
+  try { all = JSON.parse(readFileSync(file, 'utf8')) } catch { return '' }
+  const r = all.find((x) => x.version === version)
+  if (!r) return ''
+  return [`## What's new in ${r.version}: ${r.title}`, '', ...r.highlights.map((h) => `- **${h}**`), ...r.sections.flatMap((s) => ['', `### ${s.title}`, ...s.items.map((i) => `- ${i}`)])].join('\n')
+}
+
 export function releaseNotes({ version, build, sha, signing, repo, server }) {
   const base = repo ? `https://github.com/${repo}` : ''
   const link = repo ? `${base}/releases/latest/download/${STABLE.dmg}` : STABLE.dmg
+  const notes = whatsNew(version)
   const lines = [
     `SahilBot ${version}, build ${build} (${sha.slice(0, 7)}). Apple Silicon (M1 or newer), macOS 13 Ventura or later.`,
+    ...(notes ? ['', notes] : []),
     '',
     `**Always-current download:** ${link}`,
     '',
@@ -154,8 +165,25 @@ export function plan({ version, build, sha, files, notesFile, rollingNotesFile, 
   return steps
 }
 
+/**
+ * Every release ships with its notes: the version is a date (YY.MM.DD) no more than two days old, and
+ * src/shared/release-notes.json has an entry for it. Returns the problem, or '' when it's fine.
+ * (SAHILBOT_ALLOW_STALE_NOTES=1 lets an urgent fix out under yesterday's notes.)
+ */
+export function notesProblem(version, today = new Date(), file) {
+  const m = /^(\d{2})\.(\d{1,2})\.(\d{1,2})$/.exec(version)
+  if (!m) return `The version ${version} isn't a date (YY.MM.DD). Set package.json's version to today's date and add What's new notes.`
+  if (!whatsNew(version, file)) return `src/shared/release-notes.json has no notes for ${version}. Add what changed before releasing.`
+  const day = Date.UTC(2000 + Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  const age = (Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) - day) / 86_400_000
+  if (age > 2) return `The newest notes are for ${version}, ${age} days ago. Add an entry for today's changes (and set package.json's version to it) before releasing.`
+  return ''
+}
+
 function main() {
   const o = parseArgs(process.argv.slice(2))
+  const problem = notesProblem(o.version)
+  if (problem && process.env.SAHILBOT_ALLOW_STALE_NOTES !== '1') throw new Error(problem)
   const repo = o.repo || process.env.GITHUB_REPOSITORY || ''
   const files = prepare(o)
   const notesFile = join(files.out, 'NOTES.md')

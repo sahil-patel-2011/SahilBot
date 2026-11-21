@@ -1,0 +1,26 @@
+import { expect, test } from 'vitest'
+import { Db } from '../../src/main/db'
+
+test('the agent sees what the user said in their other chats with the same bot: never hidden or relayed text, never another bot\'s chats', () => {
+  const db = new Db(':memory:')
+  const space = db.listSpaces().find((s) => s.isMain) ?? db.createSpace('Main', '#000', { isMain: true })
+  const a = db.createThread(space.id, 'auto', null)
+  const b = db.createThread(space.id, 'auto', null)
+  const here = db.createThread(space.id, 'auto', null)
+  db.updateThread(a.id, { title: 'Ranger drone build' })
+  db.insertMessage({ threadId: a.id, role: 'user', kind: 'normal', status: 'done', content: 'My Ranger drone frame uses carbon tubes and PETG printed parts, keep the weight under 1.2 kg' })
+  db.insertMessage({ threadId: a.id, role: 'user', kind: 'normal', status: 'done', content: '[From the app] hidden reminder about drone carbon weight', meta: { hidden: true } })
+  db.insertMessage({ threadId: b.id, role: 'user', kind: 'normal', status: 'done', content: 'A relayed note about the drone carbon frame weight', meta: { fromLink: 'x' } })
+  db.insertMessage({ threadId: b.id, role: 'user', kind: 'normal', status: 'done', content: 'Plan a birthday dinner for Friday' })
+  db.insertMessage({ threadId: b.id, role: 'user', kind: 'normal', status: 'done', content: 'Connected app says the drone carbon frame weight is fine', meta: { fromApp: 'zapier' } })
+  db.insertMessage({ threadId: b.id, role: 'user', kind: 'normal', status: 'done', content: 'Another bot handed off: drone carbon frame weight notes', meta: { handoff: { from: 'x' } } })
+  const other = db.createSpace('Other bot', '#111')
+  const o = db.createThread(other.id, 'auto', null)
+  db.insertMessage({ threadId: o.id, role: 'user', kind: 'normal', status: 'done', content: 'Private to the other bot: drone carbon frame weight is secret' })
+  db.insertMessage({ threadId: here.id, role: 'user', kind: 'normal', status: 'done', content: 'Ranger drone weight budget and carbon frame plan' })
+  const hits = db.recallUserSaid('What should the weight budget be for the drone carbon frame?', here.id)
+  expect(hits.map((h) => h.text)).toEqual(['My Ranger drone frame uses carbon tubes and PETG printed parts, keep the weight under 1.2 kg'])
+  expect(hits[0].title).toBe('Ranger drone build')
+  expect(db.recallUserSaid('hi', here.id)).toEqual([])
+  expect(db.recallUserSaid("100% off_the_shelf 'quotes'", here.id)).toEqual([])
+})

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ComputerUseSetting } from './ComputerUseSetting'
+import { bytesText } from '@shared/bytes'
+import { WhatsNewList } from './WhatsNew'
 import type { ConnectorStatus, ModelInfo, ModelList, PermissionKind, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, UpdateStatus, VoiceStatus } from '@shared/types'
 import { SENSITIVE_CATEGORIES, type ContextEngineStatus } from '@shared/context-engine'
 import { HYBRID_BEST, HYBRID_MIN, type PrivacyInstallEvent, type PrivacyStatus } from '@shared/privacy'
@@ -381,24 +383,29 @@ function General({ s, patch }: P) {
 /** Settings → General: this version, and the newer one when there is one (downloaded and checked in the background). */
 function UpdatesRow() {
   const [st, setSt] = useState<UpdateStatus | null>(null)
+  const [notes, setNotes] = useState(false)
   useEffect(() => {
     void api.update.status().then(setSt).catch(() => undefined)
     return api.update.onStatus(setSt)
   }, [])
   const text = !st ? 'Checking…'
     : st.state === 'checking' ? 'Checking for a new version…'
-    : st.state === 'downloading' ? `Downloading ${st.version}… ${st.progress ?? 0}%`
-    : st.state === 'ready' ? `${st.version} is ready. Your chats, bots, connected apps and settings stay as they are, and a copy of your data is saved first.`
+    : st.state === 'downloading' ? `Downloading ${st.version}${st.size ? ` (${bytesText(st.size)})` : ''}… ${st.progress ?? 0}%`
+    : st.state === 'ready' ? `${st.version}${st.size ? ` (${bytesText(st.size)})` : ''} is ready. The old version is removed once the new one has run for a minute, so only one SahilBot stays installed. Your chats, bots, connected apps and settings stay as they are, and a copy of your data is saved first.`
     : st.state === 'installing' ? 'Backing up your data and restarting…'
     : st.state === 'error' || st.state === 'unsupported' ? st.detail ?? 'Couldn\'t check for updates.'
     : st.state === 'idle' ? `SahilBot ${st.current ?? ''}. New versions are checked for and downloaded on their own.`
     : `SahilBot ${st.current ?? ''} is up to date.`
   return (
-    <Row id="updates" title="Updates" sub={text} testId="updates-row">
-      {st?.state === 'ready'
-        ? <button className="btn primary" onClick={() => void api.update.install().then(setSt).catch((e: Error) => toast(clean(e), 'error'))} data-testid="update-install">Restart to update</button>
-        : <button className="btn" disabled={st?.state === 'checking' || st?.state === 'downloading' || st?.state === 'installing' || st?.state === 'unsupported'} onClick={() => void api.update.check().then(setSt)} data-testid="update-check">Check now</button>}
-    </Row>
+    <>
+      <Row id="updates" title="Updates" sub={text} testId="updates-row">
+        {st?.state === 'ready'
+          ? <button className="btn primary" onClick={() => void api.update.install().then(setSt).catch((e: Error) => toast(clean(e), 'error'))} data-testid="update-install">Restart to update</button>
+          : <button className="btn" disabled={st?.state === 'checking' || st?.state === 'downloading' || st?.state === 'installing' || st?.state === 'unsupported'} onClick={() => void api.update.check().then(setSt)} data-testid="update-check">Check now</button>}
+        <button className="btn" onClick={() => setNotes((v) => !v)} aria-expanded={notes} data-testid="whats-new-toggle">{notes ? 'Hide what\'s new' : 'What\'s new'}</button>
+      </Row>
+      {notes && <WhatsNewList current={st?.current} />}
+    </>
   )
 }
 
@@ -1028,6 +1035,7 @@ export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what yo
 function HybridComputeSettings() {
   const [st, setSt] = useState<PrivacyStatus | null>(null)
   const [progress, setProgress] = useState<PrivacyInstallEvent | null>(null)
+  const [test, setTest] = useState<{ running?: boolean; text?: string; error?: string } | null>(null)
   useEffect(() => { void api.privacy.status().then(setSt).catch(() => undefined) }, [])
   useEffect(() => api.privacy.onInstall((e) => { setProgress(e); if (e.phase === 'done' || e.phase === 'error') void api.privacy.status().then(setSt) }), [])
   const gb = st ? (st.downloadBytes / 1e9).toFixed(1) : '1.2'
@@ -1053,8 +1061,15 @@ function HybridComputeSettings() {
         </Row>
         <Row title="Privacy Gate" sub={<>{gate}{progress?.phase === 'error' ? <span className="ui-text-danger"> · {progress.error}</span> : null}</>} info="PII-Tracer is Perplexity's open-source 0.6B personal-data detector (MIT), run by llama.cpp on this Mac. Every file is checked against a pinned SHA-256. What it checks never leaves your Mac." testId="privacy-gate-model">
           {st?.enabled && !st.installed && !busy && <button className="btn primary" onClick={install} data-testid="privacy-gate-install">Download ({gb} GB)</button>}
+          {st?.installed && !busy && st.enabled && (
+            <button className="btn" disabled={test?.running} data-testid="privacy-gate-test" title="Runs a made-up sample (a name, email, phone, card and address) through PII-Tracer on this Mac"
+              onClick={() => { setTest({ running: true }); void api.privacy.selfTest().then((r) => setTest({ text: r.found.length ? `Caught ${r.found.length} in ${(r.ms / 1000).toFixed(1)} s: ${r.found.map((f) => `${f.label.toLowerCase().replace(/_/g, ' ')} “${f.text}”`).join(', ')}` : 'It caught nothing in the sample: the gate may not be working. Remove the download and download it again.' })).catch((e) => setTest({ error: clean(e) })) }}>
+              {test?.running ? 'Testing…' : 'Test'}
+            </button>
+          )}
           {st?.installed && !busy && !st.enabled && <button className="btn" onClick={() => void api.privacy.remove().then(setSt)} data-testid="privacy-gate-remove">Remove download</button>}
         </Row>
+        {test && !test.running && <div className={`hint${test.error ? ' ui-text-danger' : ''}`} style={{ margin: '0 0 10px' }} data-testid="privacy-gate-test-result">{test.error ?? test.text}</div>}
         {busy && progress?.phase === 'download' && <div className="meter" style={{ margin: '0 0 8px' }}><i style={{ width: `${progress.pct ?? 0}%` }} /></div>}
       </div>
     </Section>
