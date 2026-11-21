@@ -21,3 +21,10 @@ describe('on-demand tools from the request', () => {
     expect(intentTools('Fix the bug', new Set(['code']))).toEqual(['code'])
   })
 })
+
+import { intentTools as loadFor } from '../../src/main/agent/intent'
+test('handing work to a coding agent loads the Cursor tool with code and git', () => {
+  const known = new Set(['cursor', 'code', 'git', 'maps', 'research'])
+  expect(loadFor('Hand this bug to Cursor and have it open a PR', known)).toEqual(expect.arrayContaining(['cursor', 'code', 'git']))
+  expect(loadFor('Move the cursor on the screen', known)).not.toContain('cursor')
+})

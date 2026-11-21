@@ -234,13 +234,13 @@ export function Sidebar(p: {
       }}>
       {renaming === s.id ? (
         <>
-          <span className="pw-avatar">{avatar(s, 64)}</span>
+          <span className="pw-avatar">{avatar(s, 26)}</span>
           {renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v }))}
         </>
       ) : (
         <button className="pw-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.lastPreview ? `${s.name}: ${s.lastPreview.slice(0, 120)}` : s.name}>
           <span className="pw-avatar">
-            {avatar(s, 64)}
+            {avatar(s, 26)}
             {s.isMain && s.shape !== 'mascot' && <span className="pw-star"><Star /></span>}
             {(working(s) || needs(s) || (s.unread && !isActive(s))) && <span className="pw-status">{status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}</span>}
           </span>
@@ -255,12 +255,12 @@ export function Sidebar(p: {
     <div key={s.id} className={`bot-row${isActive(s) ? ' active' : ''}`} onContextMenu={(e) => spaceMenu(s, e)} {...drag('space', s.id)}>
       {renaming === s.id ? (
         <div className="br-btn">
-          <span className="br-avatar">{avatar(s, 40)}</span>
+          <span className="br-avatar">{avatar(s, 28)}</span>
           {renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v }))}
         </div>
       ) : (
         <button className="br-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.lastPreview ? `${s.name}: ${s.lastPreview.replace(/\s+/g, ' ').slice(0, 160)}` : s.name}>
-          <span className="br-avatar">{avatar(s, 40)}</span>
+          <span className="br-avatar">{avatar(s, 28)}</span>
           <span className="br-text">
             <span className={`br-name${runName(working(s), needs(s))}`}>{s.name}</span>
             {(() => {
@@ -321,18 +321,26 @@ export function Sidebar(p: {
   return (
     <aside className={`sidebar sb2${dragging ? ' is-dragging' : ''}`} onDragOver={(e) => { if (dragging) e.preventDefault() }}>
       <div className="sb-top drag">
-        <button className="sb-circle" onClick={p.onSearch} title="Search bots, chats, commands and settings (⌘K)" aria-label="Search (⌘K)" data-testid="nav-search"><I.Search size={17} /></button>
-        <button className={`sb-circle tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
-          title={goalsNeedYou ? `Needs you (${goalsNeedYou}): your bots' questions and approvals, and their long-running tasks` : 'Needs you & tasks: your bots\' questions, approvals and long-running goals'}
-          aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
-          <I.Inbox size={17} />{goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
-        </button>
-        <button className={`sb-circle${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Artifacts: documents, PDFs, presentations and images your agents made" aria-label="Artifacts" data-testid="nav-artifacts"><I.Layers size={17} /></button>
-        <button className={`sb-circle${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="Your brain: what SahilBot knows from your connected accounts, and Agent mode" aria-label="Your brain" data-testid="nav-brain"><BrainIcon size={17} /></button>
-        <button className="sb-circle" onClick={p.onNewBot} title="New bot: a teammate with its own job and chat" aria-label="New bot" data-testid="new-bot"><I.Plus size={18} /></button>
+        <button className="sb-circle" onClick={p.onSearch} title="Search bots, chats, commands and settings (⌘K)" aria-label="Search (⌘K)" data-testid="nav-search"><I.Search size={16} /></button>
       </div>
+      {/* Claude-style: one clear way to start, then the few places you go, then your bots and chats. */}
+      <nav className="sb-nav" aria-label="Main">
+        <button className="sb-nav-item sb-new" onClick={p.onNew} title="New chat (⌘N)" data-testid="new-chat"><span className="sb-nav-icon new"><I.Plus size={15} /></span><span>New chat</span><kbd>⌘N</kbd></button>
+        <button className={`sb-nav-item tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
+          title="Your bots' questions, approvals and long-running goals" aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
+          <span className="sb-nav-icon"><I.Inbox size={16} /></span><span>Needs you</span>
+          {goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
+        </button>
+        <button className="sb-nav-item" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-vault', { detail: { path: null } }))} title="Your knowledge vault: linked notes, memories and decisions (opens in Obsidian too)" data-testid="nav-vault"><span className="sb-nav-icon"><I.Vault size={16} /></span><span>Vault</span></button>
+        <button className={`sb-nav-item${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Documents, decks, sheets and images your bots made" data-testid="nav-artifacts"><span className="sb-nav-icon" data-testid="nav-files"><I.Layers size={16} /></span><span>Artifacts</span></button>
+        <button className={`sb-nav-item${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="What SahilBot knows from your connected accounts" data-testid="nav-brain"><span className="sb-nav-icon"><BrainIcon size={16} /></span><span>Brain</span></button>
+      </nav>
 
       <div className="side-scroll">
+        <div className="nav-label sb-bots-label">
+          <span>Bots</span>
+          <span className="nav-label-actions"><button className="nav-add" onClick={p.onNewBot} title="New bot: a teammate with its own job and chat" aria-label="New bot" data-testid="new-bot"><I.Plus size={14} /></button></span>
+        </div>
         <div className={`pin-grid${over === 'pinned' ? ' drop' : ''}${dragging?.kind === 'space' || dragging?.kind === 'chat' ? ' dragging' : ''}${pinnedSpaces.length ? '' : ' empty'}`} data-testid="pinned-top"
           onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('pinned') } }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(null) }}
@@ -353,7 +361,7 @@ export function Sidebar(p: {
               <button className="bot-row ghost" onClick={p.onSetupBot ?? p.onNewBot} data-testid="sidebar-make-bot">
                 <span className="br-btn">
                   <span className="br-avatar ghost-avatar"><I.Plus size={18} /></span>
-                  <span className="br-text"><span className="br-name">Make a bot</span><span className="br-preview">A teammate with its own job, e.g. “track my competitors weekly”</span></span>
+                  <span className="br-text"><span className="br-name">New bot</span></span>
                 </span>
               </button>
             )}
@@ -370,16 +378,14 @@ export function Sidebar(p: {
             </>
           ))}
 
-          {section('recents', 'Chats', (
+          {section('recents', 'Recents', (
             <>
               {pinnedChats.map(chatRow)}
               {recents.map(chatRow)}
             </>
           ), (
             <>
-              <button className={`nav-add${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Artifacts SahilBot made" aria-label="Artifacts SahilBot made" data-testid="nav-files"><I.File size={14} /></button>
               <button className="nav-add" onClick={p.onScheduled} title="Scheduled: routines and reminders" aria-label="Scheduled routines" data-testid="nav-scheduled"><I.Clock size={14} /></button>
-              <button className="nav-add" onClick={p.onNew} title="New chat (⌘N)" aria-label="New chat (⌘N)" data-testid="new-chat"><I.Edit size={14} /></button>
             </>
           ))}
 

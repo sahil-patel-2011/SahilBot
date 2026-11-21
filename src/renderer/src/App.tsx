@@ -900,7 +900,7 @@ export function App() {
           <div className="header-title">
             {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
           </div>
-          {chatBot && (thread || (isBot && view === 'home')) && (
+          {chatBot && !vaultOpen && (thread || (isBot && view === 'home')) && (
             <div className={`chat-pill${panel === 'details' ? ' on' : ''}`}>
               {renamingTitle && thread ? (
                 <input className="title-edit" autoFocus defaultValue={thread.title}
@@ -955,18 +955,25 @@ export function App() {
                 </span>
               )
             })()}
+            {(thread || isBot || !!browser?.tabs.length || panel === 'browser') && (
             <button className={`icon-btn globe${panel === 'browser' ? ' on' : ''}`} title={browser?.controlling ? 'Browser: SahilBot is using it now (click to watch)' : 'Browser: the web pages SahilBot opens'} aria-label="Browser" onClick={() => setPanel((p) => (p === 'browser' ? null : 'browser'))} data-testid="toggle-browser">
               <I.Globe size={17} />
               {!!browser?.tabs.length && <span className={`globe-dot${browser.controlling ? ' live' : ''}`} />}
             </button>
+            )}
+            {(thread || isBot) && (
             <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Side panel: progress, files and documents (⌘\)" aria-label="Side panel" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
+            )}
             <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={() => setShowSettings(true)} data-testid="header-settings"><I.Gear size={17} /></button>
           </div>
         </header>
         {models && !models.ok && (
-          <div className="banner">
-            No model is available yet. Add a Claude, OpenAI or Grok key or your ChatGPT plan{models.localOff ? '' : ', or start a local model server'}, then
-            <button onClick={() => void refreshModels()}>retry</button>or<button onClick={() => { setSettingsPage('keys'); setShowSettings(true) }}>open Settings</button>.
+          <div className="banner" role="status" data-testid="no-model-banner">
+            <span className="banner-text"><b>Connect a model to start.</b> Add a Claude, OpenAI or Grok key or your ChatGPT plan{models.localOff ? '' : ', or start a local model server'}.</span>
+            <span className="banner-actions">
+              <button className="btn small primary" onClick={() => { setSettingsPage('keys'); setShowSettings(true) }}>Add a key</button>
+              <button className="btn small ghost" onClick={() => void refreshModels()}>Retry</button>
+            </span>
           </div>
         )}
 

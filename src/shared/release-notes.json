@@ -2,11 +2,18 @@
   {
     "version": "26.11.21",
     "date": "2026-11-21",
-    "title": "Talk to your bots, a sharper agent, and business-grade decks",
+    "title": "Medical research you can trust, a cleaner look, and keys that stay put",
     "highlights": [
-      "Your API keys stay saved through updates. Keys the last update lost come back after you allow one macOS prompt",
+      "API keys no longer disappear when macOS Keychain is slow or still locked, and a backup copy of the key brings them back if it's deleted",
+      "Medical answers come from PubMed, guidelines and FDA labels, and every cited paper is checked before you see the answer",
+      "Everything SahilBot remembers, including your decisions, is now organized in your vault like Obsidian",
+      "A copy of everything (data, memories, vault notes and your keys, encrypted) goes to a separate backup folder every day",
+      "A cleaner sidebar, home screen and Settings, with fewer buttons",
+      "Auto now recognizes medical, travel, business, engineering and coding-agent requests and sends each to the right model and tools",
+      "Maps and travel: places, directions, travel times and things to do, with Google Maps links (a Google Maps key is optional)",
+      "SahilBot reads its own manual when it isn't sure how to do something, with new pages on business, engineering and coding agents",
+      "Bots keep working on their own: no need to say \"continue\", routines never get skipped, and every bot can read what the others learned",
       "Talk to a bot and it goes off to do the work while you keep talking, then tells you out loud when it's done",
-      "Home shows your bots first, and a new bot sets itself up with you in its chat",
       "Voices are ChatGPT's or Grok's: pick one, its speed and your language right in the voice bar",
       "Click or hold ⌘D to dictate",
       "Decks and documents keep tables, web pictures and charts in every export",
@@ -14,6 +21,90 @@
       "The Privacy Gate is out of beta, and your server can use your Mac safely"
     ],
     "sections": [
+      {
+        "title": "Your keys stay put",
+        "items": [
+          "The real cause of keys vanishing is fixed: when macOS Keychain didn't answer in time (still locked after login, a slow prompt), SahilBot made a new encryption key and saved keys became unreadable. Now it only makes a new key when the Keychain truly has none, and never overwrites one",
+          "A second Keychain item keeps a backup copy of the encryption key, so a deleted key is restored instead of replaced",
+          "If the Keychain is locked, Settings → Models & Keys says your keys are locked, not lost, with a Retry button. Don't re-enter them",
+          "A key you type while the Keychain is locked is no longer stored the old way that broke on the next update: you're asked to unlock and try again"
+        ]
+      },
+      {
+        "title": "Medical research",
+        "items": [
+          "PubMed searches can filter by evidence (guidelines, systematic reviews, meta-analyses, randomized trials) and date, and every result shows its evidence level",
+          "Retracted papers and expressions of concern are flagged",
+          "New sources: MeSH headings, Europe PMC (preprints marked as not peer reviewed, citation counts), open-access full text, FDA adverse event reports and MedlinePlus",
+          "Before a medical answer reaches you, SahilBot checks it: every cited PMID, DOI and trial ID must come from what it actually read, must exist in PubMed and must not be retracted. A clinical answer with no research behind it is sent back to check the evidence first",
+          "PubMed & medical sources is listed under Connect apps → Built in. No sign-in. An optional free NCBI key (Settings → Keys for tools) makes big research jobs faster"
+        ]
+      },
+      {
+        "title": "Your vault, organized like Obsidian",
+        "items": [
+          "Every memory is mirrored into the vault as linked notes: Shared/Memory has one note per category (About you, Preferences, People, Places, Projects…) with links to people and project notes",
+          "Your decisions get their own Decision log (Shared/Decisions), newest first and grouped by month, with what you chose over what",
+          "A bot's own memories go to that bot's area only. Text you write around the mirrored part is kept, every change can be undone, and secrets are never written",
+          "Vault is in the sidebar now (it was only in ⌘K)"
+        ]
+      },
+      {
+        "title": "A copy of everything, in a separate place",
+        "items": [
+          "The daily backup now includes your knowledge vault notes and a readable export of your memories and decisions",
+          "Set a recovery password (Settings → Privacy & Security → Backups) and each backup also holds your API keys, encrypted with it, so you can restore them on any Mac",
+          "Back up now, see the last backup, open both backup folders, or add an extra folder such as an external drive"
+        ]
+      },
+      {
+        "title": "Bots that keep going",
+        "items": [
+          "In a chat you're in, a bot that's still making progress keeps working past its usual step limit instead of stopping to ask you to say \"continue\" (your spending limit and the safety stops still apply)",
+          "Messages you send while a bot works reach it at its next step: it adjusts and keeps going, nothing stops",
+          "A routine that comes due while you're working with that bot waits its turn instead of being skipped, then runs on its own (it stops waiting if you pause or delete it)",
+          "After each routine, a dated line about what it did goes into the bot's work log, so its next run, its chats and your other bots build on it",
+          "Bots share what they learn: any bot, chat or helper can read what your other bots learned and did, labeled with the bot. Only trusted memories are shared (nothing worded from a web page or email), and each bot's own rules stay its own. Turn it off in Settings → Memory"
+        ]
+      },
+      {
+        "title": "Auto, sharper on your kind of work",
+        "items": [
+          "Clinical questions (doses, drug interactions, lab results, warning signs) go to the strongest model with the medical sources; a simple definition stays quick",
+          "Literature questions (meta-analyses, trials, guidelines, PMIDs, FDA labels) run as deep research",
+          "Handing work to Cursor, Codex or Claude Code runs as coding work and loads the Cursor, code and git tools; several agents at once or a repo-wide change gets the strongest model",
+          "Directions and \"near me\" are quick live lookups; comparing several places runs as research with maps; booking a table, room or flight is treated as a booking",
+          "Engineering calculations (deflection, stress, torque) are worked as math, not CAD",
+          "Measured on 40 new requests across these areas: the right kind of work went from 67.5% to 100%, and no task runs as a plain chat any more"
+        ]
+      },
+      {
+        "title": "Maps and travel",
+        "items": [
+          "Search places, get details, directions (driving, walking, cycling, transit), travel times between several places, and what's nearby (restaurants, sights, pharmacies, urgent care, EV charging and more)",
+          "Every answer has Google Maps links you can click. Without a key SahilBot uses OpenStreetMap; with a Google Maps key (Settings → Keys for tools) it uses Google's places and routes, including transit",
+          "Trip planning groups sights by area, checks travel times and gives one route link per day; new idea skills cover business, engineering, trips and local places",
+          "Maps & travel is listed under Connect apps → Built in"
+        ]
+      },
+      {
+        "title": "SahilBot's own manual",
+        "items": [
+          "When SahilBot isn't sure how a feature or tool works, it searches its manual before guessing or asking you",
+          "New pages: business (models, decks, research, recurring work), engineering (CAD, calculations, electronics, FRC, software) and coding agents (when to hand off to Cursor, writing the brief, reviewing the result)",
+          "The tools page now lists every tool SahilBot has"
+        ]
+      },
+      {
+        "title": "Simpler to use",
+        "items": [
+          "The sidebar has one New chat button, then Needs you, Vault, Artifacts and Brain, then your bots, projects and recent chats as quiet single rows",
+          "Home puts the message box first, with four suggestions and a small bot card below it",
+          "The browser and side-panel buttons only show in a chat, where they do something",
+          "Settings is one short list with no \"More settings\" fold. Phone & server pages only show once you've turned one on: SahilBot is a desktop app first",
+          "The \"no model yet\" notice is a clear card with Add a key and Retry buttons"
+        ]
+      },
       {
         "title": "Bots you can talk to",
         "items": [
@@ -24,7 +115,7 @@
           "Pick a voice (hear each one first), the speaking speed and the language you speak",
           "When you hang up, the conversation folds into one line named after what you talked about, with its length. Open it to read the transcript. What you said is remembered like anything you type",
           "The voice bar lists what's running, what needs you and what's done",
-          "Home starts with your bots: each one's state, Talk for a voice conversation with it, and Open for its chat. The box below is for quick one-off questions, and what you say there is remembered",
+          "A new bot sets itself up with you in its chat",
           "A new bot sets itself up with you in its chat, typed or by voice: it asks what you want done, suggests a name, writes its own instructions, and saves them when you agree",
           "Spoken replies use cloud voices for speed and quality: ChatGPT's (OpenAI) or Grok's (xAI). Switch between them in the voice bar, even mid-conversation",
           "Dictate with the microphone button: click to start and stop, or hold ⌘D and let go when you're done",

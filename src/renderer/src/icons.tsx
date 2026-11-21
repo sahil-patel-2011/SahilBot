@@ -55,3 +55,7 @@ export const Inbox = (p: P) => <svg {...base(p)}><path d="M4 13.5 6.2 6a2 2 0 0 
 export const Reveal = (p: P) => <svg {...base(p)}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><path d="M10 14h5M13 11.5 15.5 14 13 16.5" /></svg>
 export const ChatDots = (p: P) => <svg {...base(p)}><path d="M4 12a8 8 0 1 1 3.3 6.5L4 20l1.2-3.4A7.9 7.9 0 0 1 4 12Z" /><path d="M8.5 12h.01M12 12h.01M15.5 12h.01" /></svg>
 export const HangUp = (p: P) => <svg {...base(p)}><path d="M3.5 14.5c4.7-4.2 12.3-4.2 17 0l-1.8 2.3a1.4 1.4 0 0 1-1.8.3l-2-1.2a1.4 1.4 0 0 1-.6-1.4l.2-1.5a11 11 0 0 0-5 0l.2 1.5a1.4 1.4 0 0 1-.6 1.4l-2 1.2a1.4 1.4 0 0 1-1.8-.3Z" /></svg>
+/** A notebook with a bookmark: the knowledge vault. */
+export const Vault = (p: P) => <svg {...base(p)}><path d="M6 3.5h11a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a1.5 1.5 0 0 1-1.5-1.5v-14A1.5 1.5 0 0 1 6 3.5Z" /><path d="M8.5 3.5v17M12 8h4M12 11.5h4" /></svg>
+/** Three dots: more actions. */
+export const More = (p: P) => <svg {...base(p)}><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></svg>

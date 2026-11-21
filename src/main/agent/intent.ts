@@ -1,4 +1,5 @@
 import { CAD_RE } from '../cad/cad-intent'
+import { isMedicalQuestion } from './medical-check'
 import { VIDEO_RE } from './video-intent'
 import { IMAGE_RE, classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
 
@@ -12,7 +13,7 @@ import { IMAGE_RE, classifyTask as classifyRequest, type TaskCategory as RouteCa
 
 export { IMAGE_RE, VIDEO_RE }
 
-const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
+const GROUPS: Array<{ tools: string[]; when: { test(text: string): boolean } }> = [
   {
     tools: ['code', 'git', 'jobs'],
     when: /\b(code|coding|bug|bugs|debug|tests?|unit test|repo|repository|git|commit|branch|pull request|\bPR\b|merge|function|class|compile|build|lint|typecheck|npm|pnpm|yarn|pip|python|typescript|javascript|java|kotlin|swift|rust|golang|c\+\+|refactor|stack ?trace|exception|deploy|dev server|localhost|api endpoint|wpilib|gradle|robot code)\b/i
@@ -31,7 +32,13 @@ const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
   },
   {
     tools: ['research'],
-    when: /\b(stud(y|ies)|pubmed|clinical( trial)?s?|paper|papers|arxiv|doi|journal|peer[- ]reviewed|drug|dosage|fda|side effects?|medical|diagnos|symptom|research)\b/i
+    // Any health question (medical-check.ts: clinical terms, conditions, doses, drug names) gets the medical sources.
+    when: { test: (t: string) => /\b(stud(y|ies)|pubmed|clinical( trial)?s?|paper|papers|arxiv|doi|journal|peer[- ]reviewed|drug|dosage|fda|side effects?|medical|diagnos|symptom|research)\b/i.test(t) || isMedicalQuestion(t) }
+  },
+  {
+    // Travel and places (tools/maps.ts): trips, directions, distances, what's nearby, itineraries.
+    tools: ['maps'],
+    when: /\b(trips?|travel(l?ing)?|itinerar(y|ies)|vacation|getaway|road ?trip|directions?|route to|how (far|long does it take)|drive to|walk(ing)? to|commute|distance (from|to|between)|near me|nearby|close to|around here|restaurants?|cafes?|caf\u00e9s?|coffee shops?|hotels?|things to do|sights|sightseeing|attractions?|museums?|neighbou?rhoods?|google maps|maps?|where (is|can i)|places? to (eat|stay|visit|go)|ev charg\w*|gas station|pharmacy near|(good|best|cheap|late[- ]night) (food|eats|ramen|sushi|pizza|tacos|brunch|dinner|lunch|breakfast|bars?|coffee)|near (?!(the )?(future|term|end)\b)[a-z]+)\b/i
   },
   {
     tools: ['mail'],
@@ -39,6 +46,8 @@ const GROUPS: Array<{ tools: string[]; when: RegExp }> = [
   },
   // CAD (src/main/cad/cad-intent.ts owns the words): the design workflow, Onshape, and FreeCAD when installed.
   { tools: ['cad_design', 'onshape', 'freecad'], when: CAD_RE },
+  // Coding agents (docs/coding-agents.md): Cursor's cloud and local agents, with the code and git tools to review their work.
+  { tools: ['cursor', 'code', 'git'], when: /\b(cursor('s)? (cloud |local |background )?agents?|coding agents?|to cursor|codex|claude code)\b|\bcursor\b.{0,60}\b(pr|pull request|repo|diff|bug|branch|merge)\b/i },
   // Videos through the user's HeyGen connectors (tools/video.ts): avatar videos, dubbing, motion graphics.
   { tools: ['video'], when: VIDEO_RE },
   // Pictures: the GPT image models (tools/media.ts).

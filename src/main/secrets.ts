@@ -1,5 +1,5 @@
 import { safeStorage } from 'electron'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from 'node:crypto'
 import type { Db } from './db'
 
@@ -17,33 +17,79 @@ import type { Db } from './db'
 
 const V2 = 'v2:'
 
-/** Where the secrets key lives (the Mac's Keychain, through /usr/bin/security). */
+/**
+ * Where the secrets key lives (the Mac's Keychain, through /usr/bin/security).
+ *
+ * The one rule that keeps keys from vanishing: a new key is made ONLY when the Keychain says the item doesn't
+ * exist. Any other failure (Keychain still locked after login, a slow answer, a dismissed prompt) throws, and
+ * nothing is created or overwritten; the next read tries again. A second Keychain item holds a backup copy of
+ * the key, so even a deleted primary item is restored instead of replaced.
+ */
 export interface KeyStore {
-  /** The key, if one was made before. */
+  /** The key; undefined only when the Keychain says there is none. Throws when the Keychain didn't answer properly. */
   get(): Buffer | undefined
-  /** Makes and saves a new key. */
+  /** Makes and saves a new key (never overwriting an existing item). */
   create(): Buffer
+  /** The backup copy (undefined: none). Throws when the Keychain didn't answer properly. */
+  getBackup?(): Buffer | undefined
+  /** Writes the backup copy (when missing or different). */
+  saveBackup?(k: Buffer): void
+  /** Puts the key back in the primary item (it was missing). */
+  restore?(k: Buffer): void
   /** The password of the old safeStorage item (macOS asks the user to allow it once), to move old entries over. */
   legacyPassword(): string | undefined
 }
 
 const SECURITY = '/usr/bin/security'
 const SERVICE = 'SahilBot Secrets Key'
+const BACKUP_SERVICE = 'SahilBot Secrets Key (backup copy)'
 const ACCOUNT = 'SahilBot'
+/** security's exit code for errSecItemNotFound, and for errSecDuplicateItem. */
+const NOT_FOUND = 44
+const DUPLICATE = 45
+
+/** Thrown when the Keychain didn't give a clear answer: nothing is created, the next read tries again. */
+export class KeychainUnavailable extends Error {}
+
+/** Reads one item: the key, undefined when the item doesn't exist, or throws on any other failure. */
+function readItem(service: string): Buffer | undefined {
+  const r = spawnSync(SECURITY, ['find-generic-password', '-s', service, '-a', ACCOUNT, '-w'], { encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'ignore'] })
+  if (r.status === NOT_FOUND) return undefined
+  if (r.status !== 0 || r.error) throw new KeychainUnavailable(`The Keychain didn't answer (${r.error ? r.error.message : `status ${r.status}`}).`)
+  const hex = String(r.stdout ?? '').trim()
+  if (!/^[0-9a-f]{64}$/.test(hex)) throw new KeychainUnavailable('The Keychain item holds something unexpected; leaving it alone.')
+  return Buffer.from(hex, 'hex')
+}
+
+/** Adds an item (never -U: an existing item is never overwritten). Returns false when one already exists. */
+function addItem(service: string, k: Buffer, comment: string): boolean {
+  const r = spawnSync(SECURITY, ['add-generic-password', '-s', service, '-a', ACCOUNT, '-l', service, '-j', comment, '-w', k.toString('hex'), '-T', SECURITY], { timeout: 20_000, stdio: 'ignore' })
+  if (r.status === DUPLICATE) return false
+  if (r.status !== 0 || r.error) throw new KeychainUnavailable(`The Keychain refused to save (${r.error ? r.error.message : `status ${r.status}`}).`)
+  return true
+}
 
 export function macKeyStore(appName = 'SahilBot'): KeyStore {
+  const note = 'SahilBot encrypts your API keys with this. Deleting it makes saved keys unreadable.'
   return {
-    get() {
-      try {
-        const hex = execFileSync(SECURITY, ['find-generic-password', '-s', SERVICE, '-a', ACCOUNT, '-w'], { encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-        return /^[0-9a-f]{64}$/.test(hex) ? Buffer.from(hex, 'hex') : undefined
-      } catch { return undefined }
-    },
+    get: () => readItem(SERVICE),
     create() {
       const k = randomBytes(32)
-      execFileSync(SECURITY, ['add-generic-password', '-U', '-s', SERVICE, '-a', ACCOUNT, '-l', SERVICE, '-j', 'SahilBot encrypts your API keys with this. Deleting it makes saved keys unreadable.', '-w', k.toString('hex'), '-T', SECURITY], { timeout: 15_000, stdio: 'ignore' })
+      if (!addItem(SERVICE, k, note)) {
+        // Someone made it between our read and now: use theirs.
+        const existing = readItem(SERVICE)
+        if (existing) return existing
+        throw new KeychainUnavailable('The Keychain says the key exists but won\'t return it.')
+      }
+      try { addItem(BACKUP_SERVICE, k, 'A backup copy of the SahilBot Secrets Key.') } catch { /* the primary is saved; the backup is written on a later read */ }
       return k
     },
+    getBackup: () => readItem(BACKUP_SERVICE),
+    saveBackup(k) {
+      // Only written when missing: an existing backup is never replaced (it may be the only copy of an older key).
+      addItem(BACKUP_SERVICE, k, 'A backup copy of the SahilBot Secrets Key.')
+    },
+    restore(k) { addItem(SERVICE, k, note) },
     legacyPassword() {
       try {
         return execFileSync(SECURITY, ['find-generic-password', '-s', `${appName} Safe Storage`, '-w'], { encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || undefined
@@ -76,19 +122,61 @@ export function openLegacy(enc: Buffer, password: string): string {
 }
 
 export class Secrets {
-  /** The secrets key: undefined until first needed, null when there's none (no Keychain, or it refused). */
+  /** The secrets key: undefined until found, null when there's no Keychain at all (tests, the server). */
   private master?: Buffer | null
   /** The old item's password, asked for at most once a session. */
   private legacy?: string | null
+  /** A second key found in the backup item when it differs from the primary (values sealed with it still open). */
+  private alt?: Buffer
+  /** After the Keychain didn't answer: when to ask again (never sooner, so a locked Keychain isn't hammered). */
+  private retryAt = 0
+  /** Why the key couldn't be read last time ('' when it's fine). */
+  lastKeyError = ''
 
   constructor(private db: Db, private keys: KeyStore | null = null) {}
 
+  /** Secrets sealed with SahilBot's own key are saved (so a brand-new key would orphan them). */
+  private hasSealed(): boolean {
+    try { return this.db.settingKeys('secret:').some((k) => String(this.db.getSetting<string | null>(k) ?? '').startsWith(V2)) } catch { return false }
+  }
+
   private key(): Buffer | undefined {
-    if (this.master === undefined) {
-      if (!this.keys) this.master = null
-      else { try { this.master = this.keys.get() ?? this.keys.create() } catch { this.master = null } }
+    if (this.master !== undefined) return this.master ?? undefined
+    if (!this.keys) { this.master = null; return undefined }
+    if (Date.now() < this.retryAt) return undefined
+    try {
+      let k = this.keys.get()
+      if (!k && this.keys.getBackup) {
+        // The primary item is gone: the backup copy brings it back (instead of a new key that can't open anything).
+        const b = this.keys.getBackup()
+        if (b) { try { this.keys.restore?.(b) } catch { /* use it this session anyway */ } k = b }
+      }
+      let orphaned = false
+      if (!k) {
+        // Sealed values with no key anywhere (both items deleted, or this data folder came from another Mac): they stay
+        // saved, and Settings says to restore them from a recovery file instead of calling them merely locked.
+        orphaned = this.hasSealed()
+        if (orphaned) console.warn('[secrets] the Keychain has no SahilBot key but sealed keys exist; making a new key (the old ones stay saved and come back if the key does)')
+        k = this.keys.create()
+      } else if (this.keys.getBackup) {
+        try {
+          const b = this.keys.getBackup()
+          if (!b) this.keys.saveBackup?.(k)
+          // The primary item holds a different key than the backup (an older build replaced it): keep both, so values
+          // sealed with either still open (get() tries the other one and re-seals with the primary).
+          else if (!b.equals(k)) this.alt = b
+        } catch { /* try again next launch */ }
+      }
+      this.master = k
+      this.lastKeyError = orphaned ? 'Your keys were saved under a key this Mac no longer has. Restore them from a recovery file (Settings → Privacy & Security → Backups) or enter them again.' : ''
+      return k
+    } catch (e) {
+      // Not "no key": the Keychain didn't answer. Nothing is created or overwritten; ask again in a bit.
+      this.lastKeyError = (e as Error).message
+      // A minute, so a Keychain prompt the user dismissed doesn't pop up again and again.
+      this.retryAt = Date.now() + 60_000
+      return undefined
     }
-    return this.master ?? undefined
   }
 
   set(name: string, value: string | null): void {
@@ -99,7 +187,10 @@ export class Secrets {
     }
     const k = this.key()
     if (k) this.db.setSetting(`secret:${name}`, seal(k, value))
-    else {
+    else if (this.keys) {
+      // On the Mac, never fall back to safeStorage (it breaks on the next update): say so and keep nothing half-saved.
+      throw new Error(`macOS Keychain didn't answer, so the key wasn't saved. Unlock your Mac's Keychain and try again.${this.lastKeyError ? ` (${this.lastKeyError})` : ''}`)
+    } else {
       if (!safeStorage.isEncryptionAvailable()) throw new Error('Keychain encryption is unavailable; refusing to store a secret in plain text.')
       this.db.setSetting(`secret:${name}`, safeStorage.encryptString(value).toString('base64'))
     }
@@ -116,7 +207,17 @@ export class Secrets {
     if (!enc) return undefined
     if (enc.startsWith(V2)) {
       const k = this.key()
-      try { if (k) return open(k, enc) } catch { /* another key: unreadable below */ }
+      if (k) {
+        try { const v = open(k, enc); this.unreadable.delete(name); return v } catch { /* another key: try the backup's */ }
+        if (this.alt) {
+          try {
+            const v = open(this.alt, enc)
+            try { this.db.setSetting(`secret:${name}`, seal(k, v)) } catch { /* stays as it was */ }
+            this.unreadable.delete(name)
+            return v
+          } catch { /* unreadable below */ }
+        }
+      }
       this.unreadable.add(name)
       return undefined
     }
@@ -151,4 +252,9 @@ export class Secrets {
 
   /** Secrets that exist but couldn't be decrypted this session. */
   readonly unreadable = new Set<string>()
+
+  /** Saved keys that can't be read right now (the Keychain is locked or didn't answer): they're kept, not lost. */
+  locked(): { count: number; reason: string } {
+    return { count: this.unreadable.size, reason: this.lastKeyError }
+  }
 }

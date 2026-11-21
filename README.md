@@ -1,6 +1,6 @@
 # SahilBot
 
-A private, local-first AI assistant for your Mac. SahilBot chats, works as an agent with tools (files, documents, the built-in browser, your Mac's apps, connectors), talks with you by voice, and runs on models on your own Mac through Ollama or LM Studio. You can also add Claude, ChatGPT or OpenRouter with your own API key.
+A private, local-first AI assistant for your Mac. SahilBot chats, researches medical questions from PubMed, guidelines and FDA labels (checking every paper it cites), keeps everything it learns in an Obsidian-style vault, works as an agent with tools (files, documents, the built-in browser, your Mac's apps, connectors), talks with you by voice, and runs on models on your own Mac through Ollama or LM Studio. You can also add Claude, ChatGPT or OpenRouter with your own API key.
 
 ## Quick install
 
@@ -52,7 +52,9 @@ This link always gets the newest build. Every push to `main` builds and publishe
 
 After that it opens normally. Notarized builds open with a plain double-click.
 
-## Phone access
+## Phone access (preview)
+
+SahilBot is a desktop app first: phone access and the always-on server stay out of Settings until you turn on Developer mode (Settings → Advanced) or have already set one up.
 
 Use SahilBot from your phone: check on bots, answer approvals and questions, and chat, with notifications. Turn
 it on in **Settings → General → Phone access** and scan the QR code with your phone. The phone connects straight
@@ -96,6 +98,7 @@ Already use LM Studio or another OpenAI-compatible server? Turn it on under Sett
 - Voice: speech recognition (Whisper) and speech (Kokoro) run on this Mac. Audio is never sent anywhere.
 - Cloud models only get what you send them, and only when you've added a key and picked (or let Auto pick) a cloud model.
 - API keys and saved logins are encrypted with your macOS Keychain and are never shown to the model.
+- **Backups:** every day SahilBot copies everything (chats, settings, memories, your decisions, your knowledge vault notes and your API keys, encrypted) to two folders separate from where it runs, plus an extra folder you can pick, like an external drive. Set a recovery password in Settings → Privacy & Security → Backups and your keys can be restored on any Mac. See [docs/backups.md](docs/backups.md).
 - No telemetry and no analytics. Everything is stored in `~/Library/Application Support/Foreman` (SQLite database, bot prompts, browser profile). Delete that folder to reset SahilBot.
 - SahilBot asks before actions that send, buy, post or delete; you choose how much it may do on its own per chat (permission modes).
 - **Hybrid compute** (opt-in, Settings → Privacy & Security; 32 GB memory and 50 GB free disk minimum, 64 GB and 150 GB for the top local models): cloud models plan and research while personal details stay on your Mac. The Privacy Gate checks every cloud request on your Mac with [PII-Tracer](https://huggingface.co/perplexity-ai/PII-Tracer). Names, contact details, account numbers and documents like bank statements or bills pause the chat until you choose: process on your Mac, let the cloud work with stand-ins, share, or skip. See [docs/privacy-gate.md](docs/privacy-gate.md).

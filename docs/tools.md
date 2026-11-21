@@ -9,7 +9,8 @@ Built-in tools are always available (no limit on how many). Connected apps' tool
 | ask_user(question, options) | A decision only the user can make | read |
 | web_search(query, count) | Finding pages (falls back across engines automatically) | read |
 | fetch_page(url, chunk) | Reading any page's text in ~1.5k-token chunks | read |
-| research(source, query/ids) | PubMed (search, abstracts), ClinicalTrials.gov, FDA drug labels, Wikipedia, arXiv, DOI citations via official APIs | read |
+| research(source, query/ids) | Medical: PubMed (search with evidence filters and date ranges, abstracts), MeSH headings, Europe PMC (preprints, citation counts), open-access full text, verify (PMIDs, DOIs, NCT IDs exist? retracted?), ClinicalTrials.gov, FDA drug labels and adverse events, MedlinePlus. Also Wikipedia, arXiv, DOI citations. Official APIs; see docs/medical.md | read |
+| maps(action, …) | Places (search, details), directions (driving, walking, cycling, transit), travel-time grids, what's nearby, geocoding; Google Maps with the user's key, else OpenStreetMap; every result has Google Maps links. See docs/maps.md | read |
 | browser(action, …) | Real browsing: logins, clicks, forms (`fill_form` does a whole form at once). See browser.md | read → write_external |
 | file_read / file_write / file_manage | Files in the workspace and attached folders (delete always asks) | read / write_local / destructive |
 | create_document(path, …) | .pdf, .docx, .pptx, .xlsx. See office.md | write_local |
@@ -23,6 +24,39 @@ Built-in tools are always available (no limit on how many). Connected apps' tool
 | consult(question, context) | Ask a stronger cloud model (hybrid mode, limited per request) | read |
 | find_tools(query) | Tools of connected apps (Gmail, Notion, Slack, GitHub…) | read |
 | read_result(id, start, end) | The rest of a long result | read |
+| manual(action, query / page) | This manual: search it, or read a page or section. Use it before guessing how something works | read |
+
+## More tools
+Some are listed from the start; the rest load with find_tools (by name or by what you need).
+| Tool | Use for |
+|---|---|
+| code / git | Code projects: project facts, search, symbols, exact edits, patches, tests, typecheck, lint, build; git status, diff, branch, commit (secret scan), push, PR. See coding.md |
+| jobs | Background jobs started with run_command background: true (dev servers, watchers, long builds): list, output, wait, stop |
+| doc_create / doc_read / doc_edit / doc_export | Live documents beside the chat: doc, slides, dashboard, sheet; export to docx, pdf, pptx, xlsx, csv… See artifacts.md |
+| create_page / update_page | Interactive HTML pages (calculators, charts, visual reports) |
+| office | Excel in place (sheet_read, sheet_write, sheet_summarize, csv_to_xlsx), PDF forms and edits (fill, merge, split, stamp, page numbers), file batches. See office.md |
+| review_document | Check a finished .docx, .xlsx, .pptx or .pdf before presenting it |
+| read_document_image | OCR and field extraction from photos and scans with Claude vision (paid) |
+| knowledge_search / knowledge_status | Search the user's own files and notes (the knowledge base) |
+| vault | The knowledge vault of linked notes: search, read, write, link. See vault.md |
+| about | What's known about a person, place or thing in the user's life, with sources |
+| chat_history | Exact earlier messages of this chat after compaction |
+| mail | Apple Mail (every account): search, read, move, flag, drafts; sending asks. See connectors.md |
+| max / agents / swarm | Many agents at once: team, swarm, heavy, hybrid. See agents.md |
+| message_bot | Hand a task to another of the user's bots |
+| goal / follow_up | Multi-day goals with milestones, and the next wake-up |
+| research | Official research APIs: PubMed and other medical sources, trials, FDA, arXiv, Wikipedia, DOI. See medical.md |
+| phi_scan | Find or redact HIPAA identifiers before text leaves the Mac |
+| ask_on_mac | Ask the Mac's local model about details the Privacy Gate kept on the Mac |
+| api_request | A service's REST API with a named key from the encrypted vault (each request asks) |
+| batch | Large repetitive jobs at half price through Anthropic's Batches API |
+| image / video / speech / transcribe | Pictures (OpenAI or xAI), HeyGen videos, text to speech, speech to text (paid) |
+| cad_design / onshape / freecad | CAD: the design workflow, Onshape documents, local CAD files. See cad.md and engineering.md |
+| frc_mech / frc_code | FRC robot mechanisms and code (see below) |
+| stock_quote … price_alert | Market data (see below) |
+| sites | What SahilBot learned about each website (playbooks) |
+| propose_plan / propose_idea | Show a plan and wait; offer one idea the user can start with a click |
+| connect_app | A Connect tile when the app you need isn't connected |
 
 ## Choosing
 - Facts on the open web: `web_search`, then `fetch_page` on the 1-3 best results. Cite the URLs you used.

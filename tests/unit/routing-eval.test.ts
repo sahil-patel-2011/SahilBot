@@ -15,7 +15,7 @@ import { classifyTask as classifyKind } from '../../src/main/agent/intent'
 //   difficulty 61.5% · effort exact 60.3%, within one 95.9%, under-effort 28.0%.
 
 interface EvalItem {
-  id: string; split: 'dev' | 'holdout' | 'holdout2' | 'holdout3'; text: string
+  id: string; split: 'dev' | 'holdout' | 'holdout2' | 'holdout3' | 'domains'; text: string
   ctx?: {
     files?: Array<{ name: string; tokens?: number }>; folders?: number; images?: number; voice?: boolean; codeProject?: boolean; openPlan?: boolean
     flags?: Record<string, boolean>; prev?: { category: TaskCategory; difficulty: Tier; kind: 'chat' | 'agent'; effort: Effort; text?: string }
@@ -101,7 +101,7 @@ describe('routing eval set', () => {
 
 describe('routing eval: accuracy per field', () => {
   test('report (per split, confusion matrix, misses)', () => {
-    for (const split of ['dev', 'holdout', 'holdout2', 'holdout3'] as const) {
+    for (const split of ['dev', 'holdout', 'holdout2', 'holdout3', 'domains'] as const) {
       const items = EVAL.items.filter((i) => i.split === split)
       if (items.length) console.log(`[routing-eval] ${split}`, JSON.stringify(score(items).r))
     }
@@ -115,6 +115,16 @@ describe('routing eval: accuracy per field', () => {
   })
 
   test('category ≥ 92%', () => expect(ALL.r.category).toBeGreaterThanOrEqual(92))
+  // The domain set (medical, travel, business, engineering, coding agents) scored category 67.5%, difficulty 42.5%
+  // and ran 7 agent tasks as chats before its rules; it was tuned on, so this guards against regressions only.
+  test('domain set: no agent work as chat, category ≥ 95%, clinical questions at the top tier', () => {
+    const r = score(EVAL.items.filter((i) => i.split === 'domains')).r
+    expect(r.agentToChat).toBe(0)
+    expect(r.category).toBeGreaterThanOrEqual(95)
+    for (const t of ["What's the usual starting dose of tamsulosin?", 'Can I take finasteride and tamsulosin together?', 'My creatinine came back at 1.8, what does that mean?']) expect(classifyTask(t, {}).difficulty, t).toBe(3)
+    expect(classifyTask('Explain what PSA density is', {}).difficulty).toBe(1)
+    expect(classifyTask('Hand this bug to Cursor: the login page crashes. Have it open a PR', {}).category).toBe('coding')
+  })
   test('chat vs agent ≥ 95% (running a chat as the agent counts as acceptable), and not everything as the agent', () => {
     expect(ALL.r.kindLenient).toBeGreaterThanOrEqual(95)
     expect(ALL.r.kindStrict).toBeGreaterThanOrEqual(88)

@@ -204,6 +204,33 @@ Then the floors: Heavy at the hardest tier is Max; Council is Extra at least; a 
 
 The labels were written by hand to these rubrics. While writing the rubric, four labels were changed for consistency (multi-step coding to tier 3, purchases to tier 3, a business plan to tier 3, Council's Extra floor). A seeded sample of 60 items was then reviewed twice. The first pass flagged one borderline item ("Log into the Acme portal and send them a quote request", kept at tier 2, which added the rule "a login is not a step"). The second pass changed nothing.
 
+## Domain rules (medical, travel, business, engineering, coding agents)
+
+Added 2026-11-21 after a 40-request domain set (split `domains` in the routing eval) scored category 67.5%,
+difficulty 42.5% and ran 7 agent tasks as chats. An independent review then ran ~215 everyday prompts and found
+the first version of these rules over-matched (red flags in a contract, potassium in a banana, a server's "load",
+"what is a meta-analysis"); the rules now need real context, and 39 of those everyday prompts are in the same split
+as negatives that must route exactly as before. Now: category 100%, chat-vs-agent 100%, difficulty 98.7% on the 79
+items; the 554 earlier items are unchanged. The split was tuned on, so it guards against regressions; it isn't blind.
+
+- **Clinical questions are the top tier.** A dose, an interaction ("can I take X with Y"), a lab value with a number
+  or "my" ("my creatinine came back at 1.8"), or warning signs, each with a named drug or a medical context (surgery,
+  symptoms, a disease, an organ, medication): difficulty 3, so the strongest model answers, with the medical sources
+  (docs/medical.md). Definitions, school work, food, games and gardens stay ordinary questions.
+- **Medical literature is deep research** when something is asked of it (summarize, find, compare, cite, the
+  latest, recruiting): meta-analyses, systematic reviews, PMIDs, clinical trials, guidelines, FDA labels. Research,
+  agent, difficulty 3. "What is a meta-analysis" and a single PMID lookup stay quick chats.
+- **Coding agents are coding.** Handing work to Cursor (cloud or local agent), Codex or Claude Code, checking on one
+  or reviewing its PR (a hand-off verb is needed: hand, send, have, use, run, check, review): coding, agent. Several agents in parallel, a refactor or a change across the repo: tier 3.
+  A question about them is a chat; writing a brief for one is writing.
+- **Travel.** Directions, "near me", "open now", travel times and the closest of a kind of place are live lookups
+  (tier 2); "how far is the moon" stays trivia. Comparing or routing between several named places ("which of these
+  hotels is closest") is research with the maps tool, as the agent. Booking a table, room or flight is computer use
+  at tier 3 (asking for options or recommendations isn't a booking). A trip with travel times or map links is tier 3.
+- **Engineering calculations are math** (deflection, stress, torque) when they come with numbers and units or a
+  material or member (steel, beam, shaft), and aren't about code or a CAD model.
+- **Patient-facing or cited documents** (a patient handout, a report with citations) are office work at tier 3.
+
 ## The classifier
 
 `classifyTask(text, ctx)` in `src/main/llm/task-classifier.ts` is the one decision for each request. It returns the category, difficulty, chat or agent, effort and a calibrated confidence. `agent/intent.ts` `classifyTask` (chat or agent) is the same decision: `loop.ts` passes it the routed decision (`route`), and called alone it runs the same function. So "coding" never runs as a chat, and `consistent()` checks this on every eval item.

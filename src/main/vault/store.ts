@@ -502,7 +502,8 @@ export class VaultStore {
    * older, its title becomes an alias, and it goes to the trash. Returns the merges made.
    */
   mergeDuplicates(info: ChangeInfo): number {
-    const notes = this.list().filter((n) => !n.generated)
+    // The memory mirror's notes (vault/memory-mirror.ts) are rebuilt from Memory: never merged either way.
+    const notes = this.list().filter((n) => !n.generated && !n.tags.includes('sahilbot/memory'))
     const bySection = new Map<string, VaultNoteMeta[]>()
     for (const n of notes) bySection.set(`${n.section}|${n.type}`, [...(bySection.get(`${n.section}|${n.type}`) ?? []), n])
     let merges = 0
@@ -558,6 +559,9 @@ export class VaultStore {
         if (!ns.length) continue
         lines.push(`## ${TYPE_LABEL[t]}`, ...ns.map((n) => `- [[${n.title}]]${n.summary ? ` · ${n.summary.slice(0, 100)}` : ''}`), '')
       }
+      // Maps of content kept as notes (e.g. "Memory — Overview"): listed so the area's index reaches them.
+      const maps = mine.filter((n) => n.type === 'index').sort((a, b) => a.title.localeCompare(b.title))
+      if (maps.length) lines.push('## Maps', ...maps.map((n) => `- [[${n.title}]]${n.summary ? ` · ${n.summary.slice(0, 100)}` : ''}`), '')
       if (!mine.length) lines.push('_Nothing here yet. Notes appear as you chat; SahilBot compiles them while the app is idle._', '')
       this.writeGenerated(`${s}/Index.md`, `${fmFor(`${name} index`)}${lines.join('\n')}`)
     }

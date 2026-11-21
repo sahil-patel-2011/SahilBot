@@ -13,7 +13,7 @@ import { isWhisperId } from './voice/models'
 import { migrateLocal } from '@shared/local-mode'
 import { hasLocalModels } from './local-detect'
 
-type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'hasOnshapeKeys' | 'onshapeKeyParts' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
+type Stored = Omit<Settings, 'hasApiKey' | 'keys' | 'hasCursorKey' | 'hasTbaKey' | 'hasNcbiKey' | 'hasGoogleMapsKey' | 'keysLocked' | 'hasOnshapeKeys' | 'onshapeKeyParts' | 'search'> & { search: Omit<Settings['search'], 'hasBraveKey'> }
 
 export const DEFAULT_APPEARANCE: Appearance = { density: 'compact', chatWidth: 780, codeWrap: false, hue: 30, tint: 0, reduceTransparency: false, fontSize: 15 }
 
@@ -199,6 +199,10 @@ export type SettingsPatch = Partial<Settings> & {
   cursorKey?: string | null
   /** The Blue Alliance read API key (FRC scouting in the frc_code tool); kept in the Keychain like the others. */
   tbaKey?: string | null
+  /** NCBI E-utilities API key (PubMed: 10 requests a second instead of 3); Keychain like the others, null removes. */
+  ncbiKey?: string | null
+  /** Google Maps Platform API key (the maps tool: Places, Routes, Geocoding); Keychain like the others, null removes. */
+  googleMapsKey?: string | null
   /** Onshape API key pair (the onshape CAD tool; https://dev-portal.onshape.com/keys); Keychain like the others, null removes. */
   onshapeAccessKey?: string | null
   onshapeSecretKey?: string | null
@@ -263,8 +267,9 @@ export class SettingsStore {
   }
 
   get(): Settings {
+    const locked = (): Settings['keysLocked'] => { const l = this.secrets.locked?.(); return l?.count ? { count: l.count, reason: l.reason } : undefined }
     const s = this.stored()
-    return {
+    const out: Settings = {
       ...s,
       // Env override keeps tests and power users off the real endpoint without touching saved settings.
       baseUrl: process.env.FOREMAN_BASE_URL || s.baseUrl,
@@ -272,22 +277,29 @@ export class SettingsStore {
       hasApiKey: !!this.keyFor(process.env.FOREMAN_BASE_URL || s.baseUrl),
       hasCursorKey: this.secrets.has('cursorKey'),
       hasTbaKey: this.secrets.has('tbaKey'),
+      hasNcbiKey: this.secrets.has('ncbiKey'),
+      hasGoogleMapsKey: this.secrets.has('googleMapsKey'),
       hasOnshapeKeys: this.secrets.has('onshapeAccessKey') && this.secrets.has('onshapeSecretKey'),
       onshapeKeyParts: { access: this.secrets.has('onshapeAccessKey'), secret: this.secrets.has('onshapeSecretKey') },
       keysSaved: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers))])),
       keys: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers)) && !(s.disabledProviders ?? []).includes(d.id)])) as Record<ProviderId, boolean>,
       search: { ...s.search, hasBraveKey: this.secrets.has('braveKey') },
-      markets: { ...cleanMarkets(s.markets), keys: Object.fromEntries(MARKET_KEY_PROVIDERS.map((p) => [p, this.secrets.has(marketKeyName(p))])) as Record<MarketKeyProvider, boolean> }
+      markets: { ...cleanMarkets(s.markets), keys: Object.fromEntries(MARKET_KEY_PROVIDERS.map((p) => [p, this.secrets.has(marketKeyName(p))])) as Record<MarketKeyProvider, boolean> },
     }
+    // After the key checks above, which find out whether any saved key can't be opened right now.
+    out.keysLocked = locked()
+    return out
   }
 
   set(patch: SettingsPatch): Settings {
-    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, marketKeys, hasApiKey: _a, keys: _k, keysSaved: _ks, hasCursorKey: _c, hasTbaKey: _t, onshapeAccessKey, onshapeSecretKey, hasOnshapeKeys: _o, onshapeKeyParts: _op, ...rest } = patch
+    const { apiKey, setKeys, braveKey, cursorKey, tbaKey, ncbiKey, googleMapsKey, marketKeys, hasApiKey: _a, keys: _k, keysSaved: _ks, hasCursorKey: _c, hasTbaKey: _t, hasNcbiKey: _n, hasGoogleMapsKey: _g, keysLocked: _kl, onshapeAccessKey, onshapeSecretKey, hasOnshapeKeys: _o, onshapeKeyParts: _op, ...rest } = patch
     for (const [p, k] of Object.entries(marketKeys ?? {}) as Array<[MarketKeyProvider, string | null]>) {
       if (MARKET_KEY_PROVIDERS.includes(p)) this.secrets.set(marketKeyName(p), k ? k.trim() : null)
     }
     if (cursorKey !== undefined) this.secrets.set('cursorKey', cursorKey)
     if (tbaKey !== undefined) this.secrets.set('tbaKey', tbaKey ? tbaKey.trim() : null)
+    if (ncbiKey !== undefined) this.secrets.set('ncbiKey', ncbiKey ? ncbiKey.trim() : null)
+    if (googleMapsKey !== undefined) this.secrets.set('googleMapsKey', googleMapsKey ? googleMapsKey.trim() : null)
     if (onshapeAccessKey !== undefined) this.secrets.set('onshapeAccessKey', onshapeAccessKey ? onshapeAccessKey.trim() : null)
     if (onshapeSecretKey !== undefined) this.secrets.set('onshapeSecretKey', onshapeSecretKey ? onshapeSecretKey.trim() : null)
     if (braveKey !== undefined) this.secrets.set('braveKey', braveKey)

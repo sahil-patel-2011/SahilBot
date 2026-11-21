@@ -150,6 +150,9 @@ checks, with time, item name, site and outcome. Never values. The last 5,000 ent
   Mac's Keychain. Written with owner-only permissions. Needs the vault unlocked and a re-authentication.
 - **Import**: every item is decrypted and checked before anything is written (a wrong password or a
   changed file imports nothing); items already saved are skipped.
+- **The daily app backup** (backups.md) copies the vault's database rows, still sealed by this Mac's
+  Keychain. Its key recovery file (`keys.sbrecovery`) holds API keys and connector tokens only, never the
+  vault's own keys (`vault2:*`), so a backup plus the recovery password can't open saved passwords or cards.
 - **CSV import** from Chrome, Safari, 1Password, Bitwarden, LastPass, Firefox or Dashlane exports
   (`url` and `password` columns, plus name, username, totp and notes when present). SahilBot then tells
   the user to delete the CSV and empty the Trash.

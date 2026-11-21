@@ -190,6 +190,14 @@ export interface Settings {
   cursorLocalAgent?: boolean
   /** The Blue Alliance read key (FRC scouting), kept in the Keychain. */
   hasTbaKey?: boolean
+  /** An NCBI API key (PubMed, faster and steadier medical research), kept in the Keychain. */
+  hasNcbiKey?: boolean
+  /** Bots read what the other bots learned (their work logs, facts and decisions; never their rules). Default on. */
+  memorySharing?: boolean
+  /** A Google Maps Platform key (the maps tool), kept in the Keychain. */
+  hasGoogleMapsKey?: boolean
+  /** Saved keys that can't be opened right now (macOS Keychain locked or didn't answer). They're kept, not lost. */
+  keysLocked?: { count: number; reason: string }
   /** 'auto' routes each request to the right model for how hard it is. */
   defaultModel: string
   /** Models switched off on the Models page (hidden from the picker and from Auto). */
@@ -1273,7 +1281,7 @@ export interface SahilBotApi {
   privacy: import('./privacy').PrivacyApi
   settings: {
     get(): Promise<Settings>
-    set(patch: Partial<Settings> & { apiKey?: string | null; braveKey?: string | null; cursorKey?: string | null; tbaKey?: string | null; setKeys?: Partial<Record<ProviderId, string | null>> }): Promise<Settings>
+    set(patch: Partial<Settings> & { apiKey?: string | null; braveKey?: string | null; cursorKey?: string | null; tbaKey?: string | null; ncbiKey?: string | null; googleMapsKey?: string | null; setKeys?: Partial<Record<ProviderId, string | null>> }): Promise<Settings>
   }
   models: {
     list(): Promise<ModelList>
@@ -1822,6 +1830,17 @@ export interface UpdateStatus {
   checkedAt?: number
 }
 
+/** Settings → Backups: where copies go, the newest one, and whether keys are restorable on another Mac. */
+export interface BackupStatus {
+  folders: Array<{ kind: 'main' | 'mirror' | 'extra'; path: string }>
+  last?: { at: number; path: string; bytes: number; label: string; includes: string[] }
+  running: boolean
+  /** A recovery password is set: each backup carries keys.sbrecovery. */
+  recoveryPassword: boolean
+  note?: string
+  error?: string
+}
+
 export interface SahilBotApi {
   /** Updates: status, check now, and install (backs up the data, quits, swaps the app, reopens it). */
   update: {
@@ -1833,6 +1852,19 @@ export interface SahilBotApi {
     /** "0.1.0-128" when this is the first start after updating from it, else null. */
     upgradedFrom(): Promise<string | null>
     onStatus(cb: (s: UpdateStatus) => void): () => void
+  }
+  /** Settings → Privacy & Security → Backups (main/backup.ts). Key values never come back to the window. */
+  backups: {
+    status(): Promise<BackupStatus>
+    now(): Promise<{ ok: boolean; path?: string; error?: string }>
+    setRecoveryPassword(password: string): Promise<{ ok: boolean; error?: string }>
+    clearRecovery(): Promise<{ ok: boolean }>
+    /** Asks for a .sbrecovery file, opens it with the password and saves the keys (existing ones kept unless replace). */
+    restoreKeys(password: string, replace?: boolean): Promise<{ ok: boolean; canceled?: boolean; restored?: number; kept?: number; error?: string }>
+    chooseExtraFolder(): Promise<{ ok: boolean; canceled?: boolean; error?: string }>
+    clearExtraFolder(): Promise<{ ok: boolean }>
+    /** Opens one of the backup folders (or the newest backup) in Finder. */
+    open(path: string): Promise<boolean>
   }
   /** macOS permissions: status (never prompts) and the System Settings pane for each. Nothing is granted from here. */
   permissions: {

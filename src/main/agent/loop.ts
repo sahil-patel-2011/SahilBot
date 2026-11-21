@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { projectInstructions } from './project-instructions'
+import { checkMedicalAnswer, medicalNote } from './medical-check'
 import { ALL_FEATURES, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
 import { definiteFailure } from './runtime/policy'
 import { existsSync } from 'node:fs'
@@ -171,6 +172,8 @@ export interface AgentDeps {
   onUnattendedAsk?: (threadId: string, info: { tool: string; label: string; summary?: string; reason?: string }) => string | undefined
   /** Computer use as Planner + executor (agent/cua): the planner plans and checks; this loop runs the executor. */
   cua?: import('./cua/session').CuaOrchestrator
+  /** The medical accuracy check's PubMed lookups (tests inject a fetcher) and the user's optional NCBI key. */
+  medical?: { fetchJson?: import('./medical-check').JsonFetcher; apiKey?: () => string | undefined }
   /** The knowledge vault's notes for a request (src/main/vault), sized to the run's model; null when none. */
   vaultContext?: (o: { spaceId: string | null; query: string; model?: string; local: boolean; threadId: string }) => ContextSection | null
   /**
@@ -2902,6 +2905,9 @@ export class Agent {
     /** Nudges for an announced action with no tool call (promisesAction). */
     let actionNudges = 0
     let linkChecked = false
+    let medChecked = false
+    /** Times this run kept going past its step budget on its own because it was still making progress. */
+    let autoExtends = 0
     let verified = false
     /** The answer written before the double-check (kept when the check finds nothing to fix). */
     let verifyDraft: Message | undefined
@@ -3171,6 +3177,33 @@ export class Agent {
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
             continue
           }
+          // Medical accuracy (medical-check.ts): cited PMIDs/DOIs/NCT IDs must come from what was retrieved, PMIDs must
+          // exist in PubMed and not be retracted, and a clinical answer needs research behind it. Once per run.
+          if (this.feat.medicalCheck && !medChecked && step < HARD_CAP && finalNudges < 3 && (this.d.medical?.fetchJson || !process.env.FOREMAN_NO_VERIFY)) {
+            medChecked = true
+            // This turn's request, not the whole chat's text (an early "treat null as zero" isn't a health question).
+            const turnText = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !isRelayed(m))?.content ?? ''
+            const findings = await checkMedicalAnswer({
+              question: turnText, answer: assistant.content, seen, researched: track.researched,
+              nudge: !chatRun && !run.helper && registry.all().some((x) => x.name === 'research'),
+              fetchJson: this.d.medical?.fetchJson ?? (async (url, signal) => { const r = await fetch(url, { headers: { 'user-agent': 'SahilBot/1.0', accept: 'application/json' }, signal }); if (!r.ok) throw new Error(String(r.status)); return r.json() }),
+              signal: run.ctrl.signal, apiKey: this.d.medical?.apiKey?.()
+            }).catch(() => undefined)
+            const note = findings ? medicalNote(findings) : ''
+            if (note) {
+              finalNudges++
+              budget = Math.max(budget, step + 6)
+              db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, medicalCheck: true, ...mine }, content: note })
+              assistant.meta = { ...assistant.meta, superseded: true }
+              db.updateMessage(assistant)
+              this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
+              continue
+            }
+            if (findings?.pubmed?.ok.length) {
+              assistant.meta = { ...assistant.meta, medicalChecked: { verified: findings.pubmed.ok.length } }
+              db.updateMessage(assistant)
+            }
+          }
           // Sources this run read (or found) ride along for the UI's source pills.
           // (Server web search / fetch sources from this run's earlier steps and this reply are added after them.)
           const srcs = [...sourcesSince(all, runStart), ...all.filter((m) => m.role === 'assistant' && m.createdAt >= runStart && Array.isArray(m.meta?.serverSources)).flatMap((m) => m.meta!.serverSources as Array<{ title: string; url: string }>), ...((assistant.meta?.serverSources as Array<{ title: string; url: string }> | undefined) ?? [])]
@@ -3436,6 +3469,14 @@ export class Agent {
         if (state.todos.length) budget = Math.max(budget, Math.min(HARD_CAP, step + (state.todos.length - nowDone) * PER_PLAN_ITEM + 4))
         if (nowDone > doneItems) budget = Math.max(budget, Math.min(HARD_CAP, budget + (nowDone - doneItems) * 4))
         doneItems = nowDone
+        // Still making progress (real work went through this step, nothing failing): keep going on its own instead of
+        // stopping to ask the user to say "continue". Only in a chat the user is in (routines and helpers keep the plan-
+        // based budget, so nothing unattended runs long on its own). HARD_CAP, the loop guard and the spending limit still stop
+        // runaway work; twelve extensions of 12 steps at most per run.
+        if (step === budget && this.feat.autoContinue && !run.unattended && !run.helper && step < HARD_CAP && autoExtends < 12 && failStreak < 2 && ran.some((r) => r.status === 'ok' && !BOOKKEEPING.has(r.name))) {
+          autoExtends++
+          budget = Math.min(HARD_CAP, budget + 12)
+        }
 
         if (step === budget) {
           // Out of room: one text-only turn to report what's done and what's left (adapted from opencode max-steps, MIT).

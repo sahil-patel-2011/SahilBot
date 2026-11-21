@@ -202,6 +202,11 @@ export class Db {
     return row ? (JSON.parse(row.value as string) as T) : undefined
   }
 
+  /** Setting keys that start with a prefix (e.g. every saved secret's name). */
+  settingKeys(prefix: string): string[] {
+    return (this.sql.prepare("SELECT key FROM settings WHERE substr(key, 1, ?) = ?").all(prefix.length, prefix) as Row[]).map((r) => String(r.key))
+  }
+
   setSetting(key: string, value: unknown): void {
     this.sql.prepare('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
       .run(key, JSON.stringify(value))

@@ -7,7 +7,8 @@ Obsidian (or any Markdown app), edit notes there, and you'll see their edits.
 ## Where things are
 - Default folder: `<workspace>/SahilBot Vault/` (Settings → Memory → Knowledge vault → Folder).
 - `Shared/`: about the user, shared by every bot: People, Preferences, and the main bot's Projects,
-  Decisions, Facts, Research, Playbooks (how-tos) and Digests.
+  Decisions, Facts, Research, Playbooks (how-tos) and Digests, plus Memory/ (every saved memory) and
+  Decisions/Decision log (the user's decisions).
 - `Bots/<name>/`: one area per bot with the same folders: that bot's own work. You only see Shared and
   your own area, never another bot's.
 - `Home.md` and each area's `Index.md`: maps of content, regenerated automatically. `Changelog.md`:
@@ -67,6 +68,23 @@ their sources, [[links]] for relations, recent interactions. The rest of the not
 edit facts in People & Places (edits inside the block are replaced). Forgetting someone moves a note
 People & Places made to `.trash/` (a note that was there before only loses its block); Undo restores
 it. In the <context> block a vault note about someone whose card is shown is left out (the card says it).
+
+## Memories and decisions
+Every saved memory is also a note, so the vault holds everything SahilBot remembers (Settings → Memory →
+Knowledge vault → "Mirror memories and decisions", on by default):
+- `Shared/Memory/Memory — <Category>.md`: one note per category (About you, Preferences, People, Places,
+  Work, Projects, Trips, Dates, Links, Facts, Rules, Work log). Each memory is a dated point with where it
+  came from and a block id (`^mem-<id>`), plus [[links]] to the People and Projects notes it names.
+- `Shared/Decisions/Decision log.md`: the user's decisions, newest first, grouped by month: the question in
+  bold → the choice (over the alternatives), its date, and earlier choices on the same topic.
+- `Shared/Memory/Memory — Overview.md`: a map of these notes with counts. `Memory — Unverified` holds
+  wording saved from outside content (trust: quoted).
+- A bot's own memories go to its own area (`Bots/<name>/Memory/…`, `Bots/<name>/Decisions/…`), never Shared.
+The mirrored part sits between `<!-- sahilbot:memory … -->` markers and follows Memory: change or forget
+a memory with the memory tool (or the user in Settings → Memory), not by editing the note. Text written
+around the block is kept. These notes aren't repeated in the <context> block (memories and past decisions
+are there already); vault(action="search") finds them, e.g. "what did I decide about the report format".
+Secrets and sensitive categories the user turned off are never mirrored.
 
 ## Using it
 - The <context> block's "From your knowledge vault" section has the notes most relevant to this

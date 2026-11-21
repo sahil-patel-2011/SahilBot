@@ -72,7 +72,8 @@ import { MemoryStore, similar, type ImportItemIn } from './memory'
 import { IMPORT_MAX_CHARS, ruleName } from './memory-import'
 import { MEMORY_IMPORT_PROMPT } from '@shared/memory-import'
 import { appRoot, dataDir, isPackaged, sub } from './paths'
-import { Updater, backupBeforeUpgrade, bundleBuild, bundleOf } from './updater'
+import { Updater, backupBeforeUpgrade, backupData, backupsDir, bundleBuild, bundleOf, mirrorBackupsDir } from './updater'
+import { BackupService, RecoveryError, secretNames } from './backup'
 /** The version this Mac ran before this start, when this is the first start of a new version. */
 let upgradedFrom: string | undefined
 import { SkillStore } from './skills'
@@ -88,6 +89,7 @@ import { runUsage } from './run-usage'
 import { isPermissionMode, modeChangeAllowed } from './agent/permissions'
 import { codeTool, gitTool } from './agent/tools/code'
 import { researchTool } from './agent/tools/research'
+import { mapsTool } from './agent/tools/maps'
 import { phiTool } from './agent/tools/phi'
 import { agentsTool, swarmTool } from './agent/tools/agents'
 import { maxTool } from './agent/tools/max'
@@ -149,8 +151,10 @@ import { knowledgeTools, resolveScope } from './agent/tools/knowledge'
 import { vaultTool } from './agent/tools/vault'
 import { apiRequestTool } from './agent/tools/api-request'
 import { chatHistoryTool } from './agent/tools/chat-history'
+import { manualTool } from './agent/tools/manual'
 import { VaultService } from './vault/service'
 import { workingMemoryPage } from './vault/working-memory'
+import { MemoryMirror } from './vault/memory-mirror'
 import { ContextEngine } from './context-engine/service'
 import { BrainService } from './brain/service'
 import { liveIO } from './brain/io'
@@ -398,6 +402,9 @@ app.whenReady().then(() => {
   }
 
   const memory = new MemoryStore(db)
+  // Every bot, chat and agent reads what the other bots learned (labeled; never their rules) unless the user turned it off.
+  memory.nameOf = (id) => db.getSpace(id)?.name
+  memory.shareAcrossBots = settings.get().memorySharing !== false
   const results = new ResultStore(sub('results'))
   const docsDir = join(appRoot(), 'docs')
   // Pages (create_page) live in the workspace's "pages" folder; the app manual in docsDir is read-only.
@@ -762,6 +769,8 @@ app.whenReady().then(() => {
     ...coreTools(results),
     apiRequestTool(vault),
     chatHistoryTool(db),
+    // The app's own manual (docs/*.md), searchable: the agent looks things up instead of guessing.
+    manualTool(docsDir),
     ...fileTools(() => settings.get().workspaceDir, docsDir),
     // Office: review_document (core; every new document gets checked) and the office tool (find_tools("office"/"excel"/"pdf")):
     // spreadsheets read/edited in place, PDF forms, merge/split, batch file jobs, receipts, meeting notes.
@@ -788,7 +797,9 @@ app.whenReady().then(() => {
     // Coding: search, symbols, exact edits, patches, tests/type checks/lint with parsed failures; git with a secret scan.
     codeTool({ getWorkspace: () => settings.get().workspaceDir }),
     gitTool(),
-    researchTool(),
+    researchTool({ ncbiKey: () => secrets.get('ncbiKey') }),
+    // Maps and travel: Google Maps with the user's key, else OpenStreetMap; every result links to Google Maps.
+    mapsTool({ googleKey: () => secrets.get('googleMapsKey') }),
     // Patient data: find and redact the 18 HIPAA identifiers before text goes anywhere (local, read-only).
     phiTool(),
     maxTool(),
@@ -1059,6 +1070,7 @@ app.whenReady().then(() => {
     onUnattendedAsk: (threadId, info) => goalHooks.ask?.(threadId, info),
     // A project's durable task memory is also a page in its vault area (vault/working-memory.ts), editable there.
     workingMemoryPage: () => { const v = notesVaultRef.current; if (!v) return undefined; return (workingMemoryRef.current ??= workingMemoryPage(v, db)) },
+    medical: { apiKey: () => secrets.get('ncbiKey') },
     vaultContext: (o) => notesVaultRef.current?.context({ spaceId: o.spaceId, query: o.query, local: o.local, window: notesVaultWindow(o.model) }) ?? null,
     // One "About the user and their world" section: memories + vault notes + people/places cards (src/main/context-engine).
     worldContext: (o) => worldRef.current?.context({ threadId: o.threadId, spaceId: o.spaceId, query: o.query, window: notesVaultWindow(o.model), local: o.local, memories: o.memories, vault: o.vault, openerId: o.openerId }) ?? null,
@@ -1115,6 +1127,7 @@ app.whenReady().then(() => {
   handle('settings:set', (patch: SettingsPatch) => {
     const wasLocal = localOn(settings.get())
     const s = settings.set(patch)
+    memory.shareAcrossBots = s.memorySharing !== false
     // Local models switched on or off: the model list (and Auto) follow at once.
     if (patch.local !== undefined && wasLocal !== localOn(s)) {
       // Turned on: an Ollama that's already installed starts (nothing is downloaded or installed here).
@@ -1851,7 +1864,16 @@ app.whenReady().then(() => {
       if (alertHit.fired && !priceAlert.repeat && !info.test) scheduler.update(task.id, { enabled: false })
       return { status: 'done', threadId }
     }
-    if (chat.isRunning(threadId)) return { status: 'skipped: the chat was busy', threadId }
+    // The bot is busy (you're working with it, or another routine is running): the routine waits its turn instead of
+    // being skipped, then runs as itself (unattended, with a routine's permissions), never mixed into your live run.
+    // It stops waiting if you pause routines or this one, delete it, or after two hours.
+    const until = Date.now() + (info.test ? 60_000 : 2 * 3600_000)
+    while ((chat.isRunning(threadId) || scheduledRuns.has(threadId)) && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 5000))
+      const cur = scheduler.get(task.id)
+      if (!info.test && (!cur || !cur.enabled || scheduler.paused())) return { status: 'skipped: paused or removed while it waited for the chat', threadId }
+    }
+    if (chat.isRunning(threadId) || scheduledRuns.has(threadId)) return { status: 'skipped: the chat stayed busy for two hours', threadId }
     const startedAt = Date.now()
     scheduledRuns.add(threadId)
     let status: Awaited<Awaited<ReturnType<typeof chat.send>>['done']>
@@ -1867,6 +1889,17 @@ app.whenReady().then(() => {
     if (space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) {
       const body = status === 'error' ? 'The routine hit a problem. Click to see what happened.' : (last?.content ?? 'Done').replace(/\s+/g, ' ').trim().slice(0, 140)
       showNote(new Notification({ title: `${space.isMain ? 'SahilBot' : space.name}: ${task.title.replace(/^⏰\s*/, '')}`, body }), threadId)
+    }
+    // What the routine did goes in the bot's work log (memory), so its next run, the bot's chats and the other bots
+    // can build on it without being told again. The work log keeps only the most recent entries per bot.
+    const gist = (last?.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 220)
+    // (A bare "Done." says nothing worth keeping.)
+    if (status === 'finished' && gist.length >= 24 && !/^(done|ok(ay)?|finished|all set|nothing (new|to report))\b[.!]?$/i.test(gist) && !info.test) {
+      try {
+        // Built from web pages, email or another app's output: kept as outside content, never a trusted fact.
+        const tainted = after.some((m) => m.role === 'tool' && m.meta?.untrusted)
+        memory.save(`${new Date().toISOString().slice(0, 10)}: routine "${task.title.replace(/^⏰\s*/, '')}" ran → ${gist}`, 'worklog', space.isMain ? null : space.id, 'chat', tainted ? 'untrusted' : 'trusted')
+      } catch { /* the routine's result stands without the log entry */ }
     }
     if (status === 'finished') return { status: 'done', threadId }
     // Why it failed: the run's own error line, when it left one.
@@ -2347,6 +2380,19 @@ app.whenReady().then(() => {
   })
   worldRef.current = world
   registry.register(aboutTool({ engine: world, db }))
+
+  // Memories and the user's decisions, mirrored into the knowledge vault (Shared/Memory, Shared/Decisions/Decision
+  // log; src/main/vault/memory-mirror.ts): after every change (debounced), once at startup, and every few minutes.
+  const memoryMirror = new MemoryMirror({
+    vault: notesVault, memory, db,
+    screen: (text) => world.screenMemory(text),
+    secretValues: () => { try { return [...vault.secretValues(), ...browser.hiddenValues()] } catch { return [] } }
+  })
+  memory.onChange(() => memoryMirror.schedule())
+  memoryMirror.schedule(HIDDEN ? 500 : 15_000)
+  const memoryMirrorTimer = setInterval(() => memoryMirror.schedule(0), 5 * 60_000)
+  memoryMirrorTimer.unref?.()
+  app.on('before-quit', () => { memoryMirror.stop(); clearInterval(memoryMirrorTimer) })
   handle('people:status', () => world.status())
   handle('people:setSettings', (patch: Record<string, unknown>) => { world.setSettings((patch ?? {}) as never); return world.status() })
   handle('people:list', (o?: { query?: string; type?: string }) => world.list({ query: typeof o?.query === 'string' ? o.query.slice(0, 200) : undefined, type: typeof o?.type === 'string' ? o.type as never : undefined }))
@@ -2361,10 +2407,11 @@ app.whenReady().then(() => {
     return out
   })
   handle('notesVault:status', () => notesVault.status())
-  handle('notesVault:setSettings', (patch: Record<string, unknown>) => { notesVault.setSettings((patch ?? {}) as never); return notesVault.status() })
+  handle('notesVault:setSettings', (patch: Record<string, unknown>) => { notesVault.setSettings((patch ?? {}) as never); memoryMirror.schedule(0); return notesVault.status() })
   handle('notesVault:setBot', (spaceId: string, patch: { enabled?: boolean | null; level?: 'normal' | 'aggressive' | null }) => {
     if (!db.getSpace(String(spaceId ?? ''))) throw new Error('That bot is gone.')
     notesVault.setBot(String(spaceId), patch ?? {})
+    memoryMirror.schedule(0)
     return notesVault.status()
   })
   handle('notesVault:list', () => notesVault.list())
@@ -3161,11 +3208,56 @@ app.whenReady().then(() => {
     return { loginItem, openedAtLogin, working: work.working().length, keepingAwake: awake.on, menuBarIcon: !!menuBar?.shown, routinesPaused: !!s.routinesPaused }
   }
   handle('alwaysOn:status', () => alwaysOnStatus())
+  // ---- Backups (main/backup.ts, docs/backups.md): the daily copy of the data folder plus the knowledge vault, a
+  // readable export of memories and decisions, and the API keys encrypted with the user's recovery password.
+  const vacuumInto = (path: string): void => { db.sql.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`) }
+  const backups = new BackupService({
+    dataDir: dataDir(), mainDir: backupsDir(), mirrorDir: mirrorBackupsDir(),
+    backupData: (o) => backupData(dataDir(), 'profile copy', { vacuumInto, extras: o.extras, extraMirror: o.extraMirror }),
+    vaultRoot: () => notesVault.root(),
+    memories: () => memory.list(),
+    spaceName: (id) => db.getSpace(id)?.name,
+    secrets: {
+      names: () => secretNames(db.sql.prepare(`SELECT key FROM settings WHERE key LIKE 'secret:%'`).all() as Array<{ key: string }>),
+      get: (n) => secrets.get(n), set: (n, v) => secrets.set(n, v), has: (n) => secrets.has(n)
+    },
+    getSetting: (k) => db.getSetting(k), setSetting: (k, v) => db.setSetting(k, v),
+    quickKdf: HIDDEN
+  })
+  handle('backups:status', () => backups.status())
+  handle('backups:now', async () => {
+    try { const path = await backups.backupNow(); return { ok: true, path } } catch (e) { return { ok: false, error: (e as Error).message } }
+  })
+  handle('backups:setRecoveryPassword', async (password: string) => {
+    try { await backups.setRecoveryPassword(String(password ?? '')); void backups.backupNow().catch(() => undefined); return { ok: true } } catch (e) { return { ok: false, error: (e as Error).message } }
+  })
+  handle('backups:clearRecovery', () => { backups.clearRecovery(); return { ok: true } })
+  handle('backups:restoreKeys', async (password: string, replace?: boolean) => {
+    const r = win ? await dialog.showOpenDialog(win, { properties: ['openFile'], defaultPath: backupsDir(), filters: [{ name: 'SahilBot recovery file', extensions: ['sbrecovery'] }] }) : { canceled: true, filePaths: [] }
+    if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true }
+    try {
+      const out = await backups.restoreKeys(readFileSync(r.filePaths[0], 'utf8'), String(password ?? ''), !!replace)
+      return { ok: true, ...out }
+    } catch (e) { return { ok: false, error: e instanceof RecoveryError ? e.message : 'The recovery file could not be read.' } }
+  })
+  handle('backups:chooseExtraFolder', async () => {
+    const r = win ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], message: 'Choose a folder for an extra copy of every backup (an external drive, for example)' }) : { canceled: true, filePaths: [] }
+    if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true }
+    return backups.setExtraDir(r.filePaths[0])
+  })
+  handle('backups:clearExtraFolder', () => backups.setExtraDir(null))
+  handle('backups:open', (path: string) => {
+    const known = backups.status()
+    if (!known.folders.some((f) => f.path === path) && known.last?.path !== path) return false
+    mkdirSync(path, { recursive: true })
+    if (!HIDDEN) void shell.openPath(path)
+    return true
+  })
   // ---- Updates (main/updater.ts): check, download and verify in the background; install on the user's click.
   const updater = new Updater({
     execPath: process.execPath, version: app.getVersion(), packaged: isPackaged(), dataDir: dataDir(),
     emit: (st) => toWin('update:status', st), quit: () => app.quit(), openUrl: (u) => void shell.openExternal(u),
-    vacuumInto: (path) => db.sql.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`)
+    vacuumInto, dailyBackup: () => backups.backupNow()
   })
   updater.start()
   // Back from sleep: look for a new build right away (the hourly timer may have slept through it).

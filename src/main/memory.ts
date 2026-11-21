@@ -482,6 +482,7 @@ function toMemory(r: Row): Memory {
 
 export class MemoryStore {
   private removed = new Set<(m: Memory) => void>()
+  private changedCbs = new Set<() => void>()
 
   constructor(private db: Db) {
     db.sql.exec(`CREATE TABLE IF NOT EXISTS memory_history (
@@ -544,12 +545,14 @@ export class MemoryStore {
       const at = Math.max(now, dup.updatedAt)
       if (dup.content !== text) this.archive(dup, at)
       this.db.sql.prepare('UPDATE memories SET content = ?, category = ?, updated_at = ?, provenance = ? WHERE id = ?').run(text, kind, at, provenance, dup.id)
+      this.changed()
       return { memory: { ...dup, content: text, category: kind, updatedAt: at, provenance }, replaced: dup.content }
     }
     const m: Memory = { id: this.newId(), category: kind, content: text, spaceId, projectId: spaceId, source, provenance, createdAt: now, updatedAt: now }
     this.db.sql.prepare('INSERT INTO memories(id, category, content, created_at, updated_at, scope, source, provenance) VALUES(?,?,?,?,?,?,?,?)')
       .run(m.id, m.category, m.content, now, now, spaceId, source, provenance)
     if (kind === 'worklog') this.trimWorklog(spaceId)
+    this.changed()
     return { memory: m }
   }
 
@@ -567,6 +570,7 @@ export class MemoryStore {
     const prov = patch.provenance ?? cur.provenance ?? 'trusted'
     if (text !== cur.content || kind !== cur.category) this.archive(cur, Date.now())
     this.db.sql.prepare('UPDATE memories SET content = ?, category = ?, scope = ?, updated_at = ?, provenance = ? WHERE id = ?').run(text, kind, scope, Date.now(), prov, id)
+    this.changed()
     return this.get(id)
   }
 
@@ -574,7 +578,18 @@ export class MemoryStore {
   restore(m: Pick<Memory, 'id' | 'category' | 'content' | 'spaceId' | 'source' | 'createdAt' | 'updatedAt'> & { provenance?: MemoryProvenance }): Memory {
     this.db.sql.prepare('INSERT OR REPLACE INTO memories(id, category, content, created_at, updated_at, scope, source, provenance) VALUES(?,?,?,?,?,?,?,?)')
       .run(m.id, m.category, m.content, m.createdAt, m.updatedAt, m.spaceId, m.source, m.provenance === 'untrusted' ? 'untrusted' : 'trusted')
+    this.changed()
     return this.get(m.id)!
+  }
+
+  /** Called after any memory is saved, changed, restored or removed (the vault's memory mirror listens). */
+  onChange(cb: () => void): () => void {
+    this.changedCbs.add(cb)
+    return () => { this.changedCbs.delete(cb) }
+  }
+
+  private changed(): void {
+    for (const cb of this.changedCbs) { try { cb() } catch { /* a listener never blocks a save */ } }
   }
 
   /** Called with each memory removed (forgotten in Settings or by a bot, or tidied away). */
@@ -587,7 +602,32 @@ export class MemoryStore {
     const m = this.removed.size ? this.get(id) : undefined
     const ok = Number(this.db.sql.prepare('DELETE FROM memories WHERE id = ?').run(id).changes) > 0
     if (ok && m) for (const cb of this.removed) { try { cb(m) } catch { /* a listener never blocks a removal */ } }
+    if (ok) this.changed()
     return ok
+  }
+
+  /** Bots read what the other bots learned (their work logs, facts, decisions; never another bot's rules). */
+  shareAcrossBots = true
+  /** A bot's name for labels ("from Inbox"); main wires it to the spaces table. */
+  nameOf?: (spaceId: string) => string | undefined
+
+  /**
+   * What the user's other bots and projects learned that matches `query` (not `spaceId`'s own, not shared ones,
+   * never their rules, which are that bot's instructions): read-only, for any bot, chat or agent.
+   */
+  teamSearch(query: string, spaceId: string | null | undefined, limit = 5, min = 0.4): Array<Memory & { from: string }> {
+    const q = query.trim()
+    if (!this.enabled || !this.shareAcrossBots || !q) return []
+    // Only trusted memories cross bots: wording from web pages, email or other apps stays with the bot that read it
+    // (a planted instruction must not reach every other bot as a teammate's fact).
+    const rows = this.db.sql.prepare("SELECT * FROM memories WHERE scope IS NOT NULL AND scope != ? AND category != 'rule' AND (provenance IS NULL OR provenance != 'untrusted') ORDER BY updated_at DESC LIMIT 600").all(spaceId ?? '') as Row[]
+    return rows.map(toMemory)
+      .filter((m) => m.category !== 'rule' && !isUntrusted(m) && !!m.spaceId && !!this.nameOf?.(m.spaceId))
+      .map((m) => ({ m, s: Math.max(fuzzyScore(q, m.content), fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
+      .filter((x) => x.s >= min)
+      .sort((a, b) => b.s - a.s || b.m.updatedAt - a.m.updatedAt)
+      .slice(0, limit)
+      .map((x) => ({ ...x.m, from: this.nameOf!(x.m.spaceId!)! }))
   }
 
   /** Fuzzy search over shared memories plus `spaceId`'s (all memories when spaceId is undefined). */
@@ -643,7 +683,12 @@ export class MemoryStore {
       return renderBlock(this.list(null), { maxTokens: Math.round(maxChars / 4) })
     }
     const ctx = opts ?? this.inferContext()
-    return renderBlock(this.list(ctx.spaceId ?? null), ctx)
+    const own = renderBlock(this.list(ctx.spaceId ?? null), ctx)
+    // A few things the other bots learned that fit this request (labeled, read-only; their rules never come along).
+    const team = ctx.query ? this.teamSearch(ctx.query, ctx.spaceId ?? null, 3, 0.5) : []
+    if (!team.length) return own
+    const lines = team.map((m) => `- [${m.id}] (${m.category === 'worklog' ? 'work log' : KIND_LABEL[m.category]}, from ${m.from}, ${isoDay(m.updatedAt)}) ${m.content}`)
+    return `${own}${own ? '\n' : ''}From your other bots (what they learned; your own rules still apply):\n${lines.join('\n')}`
   }
 
   /**

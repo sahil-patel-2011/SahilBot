@@ -81,14 +81,14 @@ export function BotDeck({ bots, needSpaces, onOpen, onTalk, onNewBot, onSetup }:
   const list = bots.filter((b) => b.kind === 'bot' && !b.hidden && !b.isMain)
   return (
     <section className="bot-deck" data-testid="bot-deck">
-      <div className="home-files-head"><span>Your bots</span>{(onSetup || onNewBot) && <button className="link-btn" onClick={() => (onSetup ? onSetup(false) : onNewBot?.())} data-testid="deck-new-bot">New bot</button>}</div>
+      {list.length > 0 && <div className="home-files-head"><span>Your bots</span>{(onSetup || onNewBot) && <button className="link-btn" onClick={() => (onSetup ? onSetup(false) : onNewBot?.())} data-testid="deck-new-bot">New bot</button>}</div>}
       {list.length === 0 ? (
         <div className="bot-card setup" data-testid="deck-make-bot">
           <button className="bot-card-main" onClick={() => (onSetup ? onSetup(false) : onNewBot?.())} title="Set up your first bot">
             <span className="bot-card-new" aria-hidden="true"><I.Plus size={18} /></span>
             <span className="bot-card-text">
               <b>New bot</b>
-              <small className="wrap">Tell it what you want done, by typing or talking. It names itself, writes its own instructions with you, then keeps working and remembers what you say.</small>
+              <small>A teammate with its own job that keeps working and remembers.</small>
             </span>
           </button>
           <div className="bot-card-actions">
@@ -137,15 +137,14 @@ export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, 
   return (
     <div className="home">
       <div className="home-hero">
-        <div className="welcome"><Mascot size={46} /><h1>{greeting(userName)}</h1></div>
-        {deck}
-        {deck && <div className="home-quick-head"><span>Quick question</span><small>For one-off things. What you say here is remembered, so your bots know it too.</small></div>}
+        <div className="welcome"><Mascot size={40} /><h1>{greeting(userName)}</h1></div>
         {composer}
         {onIdea && (
           <div className="ideas" data-testid="ideas">
-            {ideas.map((x) => <button key={x.label} className={`idea${x.personal ? ' personal' : ''}`} title={x.personal ? 'Suggested from what you do with SahilBot' : undefined} onClick={() => onIdea(x.text)}>{ICON[x.icon]}{x.label}</button>)}
+            {ideas.slice(0, 4).map((x) => <button key={x.label} className={`idea${x.personal ? ' personal' : ''}`} title={x.personal ? 'Suggested from what you do with SahilBot' : undefined} onClick={() => onIdea(x.text)}>{ICON[x.icon]}{x.label}</button>)}
           </div>
         )}
+        {deck}
         {files.length > 0 && (
           <section className="home-files">
             <div className="home-files-head"><span>Recent files</span><button className="link-btn" onClick={onViewFiles}>View all</button></div>

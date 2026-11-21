@@ -6870,6 +6870,1033 @@
    "tags": [
     "h3-adversarial"
    ]
+  },
+  {
+   "id": "d4-001",
+   "split": "domains",
+   "text": "What are the AUA guideline recommendations for BPH medical therapy? Cite the guideline and key trials with PMIDs.",
+   "category": "research",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-002",
+   "split": "domains",
+   "text": "Summarize the latest meta-analyses on active surveillance versus prostatectomy for low-risk prostate cancer, with PMIDs",
+   "category": "research",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-003",
+   "split": "domains",
+   "text": "Find recruiting clinical trials for metastatic castration-resistant prostate cancer and list their phases and sites",
+   "category": "research",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-004",
+   "split": "domains",
+   "text": "What's the usual starting dose of tamsulosin?",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 3,
+   "effort": "high",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-005",
+   "split": "domains",
+   "text": "Can I take finasteride and tamsulosin together?",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 3,
+   "effort": "high",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-006",
+   "split": "domains",
+   "text": "Explain what PSA density is",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-007",
+   "split": "domains",
+   "text": "My creatinine came back at 1.8, what does that mean?",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 3,
+   "effort": "high",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-008",
+   "split": "domains",
+   "text": "Compare the side effect profiles of enzalutamide, apalutamide and darolutamide using the FDA labels and trials",
+   "category": "research",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-009",
+   "split": "domains",
+   "text": "Write a patient handout on kidney stone prevention with citations and save it as a PDF",
+   "category": "office",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-010",
+   "split": "domains",
+   "text": "How long is the drive from Atlanta to Savannah right now?",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-travel"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-011",
+   "split": "domains",
+   "text": "Find a highly rated sushi place near Union Square that's open tonight",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-travel"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-012",
+   "split": "domains",
+   "text": "Give me walking directions from 123 Peachtree St to the Georgia Aquarium",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-travel"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-013",
+   "split": "domains",
+   "text": "Which of these hotels is closest to the convention center: Hilton Midtown, Hyatt Regency or the Omni?",
+   "category": "research",
+   "kind": "agent",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-travel"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-014",
+   "split": "domains",
+   "text": "Ideas for a fun weekend near Asheville with two kids",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-travel"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-015",
+   "split": "domains",
+   "text": "Book a table for 4 at Ponce City Market tomorrow at 7pm",
+   "category": "computer-use",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-travel"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-016",
+   "split": "domains",
+   "text": "Plan a 4-day trip to Lisbon with day-by-day stops, travel times between them and Google Maps links",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 3,
+   "effort": "high",
+   "tags": [
+    "domain-travel"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-017",
+   "split": "domains",
+   "text": "Brainstorm 20 ways a urology practice could add revenue, then rank them",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-business"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-018",
+   "split": "domains",
+   "text": "Build a pricing model spreadsheet for a SaaS with three tiers and churn assumptions",
+   "category": "office",
+   "kind": "agent",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-business"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-019",
+   "split": "domains",
+   "text": "Draft a one-page investor update for October",
+   "category": "writing",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-business"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-020",
+   "split": "domains",
+   "text": "What's a typical gross margin for a medical device startup?",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-business"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-021",
+   "split": "domains",
+   "text": "Every Monday at 8am, send me a summary of new competitor news",
+   "category": "agent-tools",
+   "kind": "agent",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-business"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-022",
+   "split": "domains",
+   "text": "Calculate the max deflection of a 2 m steel cantilever with a 500 N end load, 50x50 mm square tube with a 3 mm wall",
+   "category": "math",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-engineering"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-023",
+   "split": "domains",
+   "text": "Design a mounting bracket for a NEMA 17 motor in Onshape",
+   "category": "cad",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-engineering"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-024",
+   "split": "domains",
+   "text": "Pick an op-amp for a 10x gain stage on a 3.3 V single supply and explain why",
+   "category": "math",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-engineering"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-025",
+   "split": "domains",
+   "text": "Hand this bug to Cursor: the login page crashes when the email field is empty. Have it open a PR",
+   "category": "coding",
+   "kind": "agent",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-coding-agents"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-026",
+   "split": "domains",
+   "text": "Have a Cursor cloud agent add dark mode across my repo acme/web and report back",
+   "category": "coding",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-coding-agents"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-027",
+   "split": "domains",
+   "text": "Check on the Cursor agent you started and review its diff",
+   "category": "coding",
+   "kind": "agent",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-coding-agents"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-028",
+   "split": "domains",
+   "text": "Use Codex to refactor the payments module into smaller files and run the tests",
+   "category": "coding",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-coding-agents"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-029",
+   "split": "domains",
+   "text": "Run three coding agents in parallel on issues #12, #15 and #19",
+   "category": "coding",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-coding-agents"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-030",
+   "split": "domains",
+   "text": "What's the difference between Cursor's cloud agents and its local agent?",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-coding-agents"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-031",
+   "split": "domains",
+   "text": "Look up whether PMID 27626136 has been retracted",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-032",
+   "split": "domains",
+   "text": "What are the warning signs of sepsis after a kidney stone procedure?",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 3,
+   "effort": "high",
+   "tags": [
+    "domain-medical"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-033",
+   "split": "domains",
+   "text": "Find the three closest urgent care clinics to 30309 that are open now",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-travel"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-034",
+   "split": "domains",
+   "text": "Estimate the travel time between each of these 5 job sites and make a route for tomorrow",
+   "category": "research",
+   "kind": "agent",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-travel"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-035",
+   "split": "domains",
+   "text": "Write a go-to-market plan for a remote patient monitoring product",
+   "category": "office",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-business"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-036",
+   "split": "domains",
+   "text": "Give me 10 startup ideas in surgical robotics",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-business"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-037",
+   "split": "domains",
+   "text": "Size the market for at-home PSA testing in the US with sources",
+   "category": "research",
+   "kind": "agent",
+   "difficulty": 3,
+   "effort": "xhigh",
+   "tags": [
+    "domain-business"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-038",
+   "split": "domains",
+   "text": "Compute the torque needed to lift a 5 kg arm 0.6 m long with a 100:1 gearbox",
+   "category": "math",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-engineering"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-039",
+   "split": "domains",
+   "text": "Write a task brief for a coding agent to add CSV export to the reports page",
+   "category": "writing",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-coding-agents"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4-040",
+   "split": "domains",
+   "text": "Review the pull request Cursor opened and tell me if it's safe to merge",
+   "category": "coding",
+   "kind": "agent",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-coding-agents"
+   ],
+   "note": "domain set (medical, travel, business, engineering, coding agents): measured at category 67.5%, difficulty 42.5%, 7 agent-as-chat before its rules were added; tuned on, not blind"
+  },
+  {
+   "id": "d4n-001",
+   "split": "domains",
+   "text": "how much load will my API handle",
+   "category": "code-quick",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-002",
+   "split": "domains",
+   "text": "estimate the load on my server at peak",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-003",
+   "split": "domains",
+   "text": "how much stress is normal at work",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-004",
+   "split": "domains",
+   "text": "what's the required stress test for a bank",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-005",
+   "split": "domains",
+   "text": "red flags in a job offer",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-006",
+   "split": "domains",
+   "text": "warning signs of a bad landlord",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-007",
+   "split": "domains",
+   "text": "red flags in a contract",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-008",
+   "split": "domains",
+   "text": "how much potassium is in a banana",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-009",
+   "split": "domains",
+   "text": "what's on the white count of my report card",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-010",
+   "split": "domains",
+   "text": "hemoglobin and myoglobin difference for my biology exam",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-011",
+   "split": "domains",
+   "text": "platelets explained for my biology class",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-013",
+   "split": "domains",
+   "text": "I put an overdose of salt in my soup, how do I fix it",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-014",
+   "split": "domains",
+   "text": "troponin definition",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-015",
+   "split": "domains",
+   "text": "can I eat eggs together with my cholesterol diet",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-016",
+   "split": "domains",
+   "text": "what's a safe dose of exercise for my cholesterol",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-017",
+   "split": "domains",
+   "text": "dosage of fertilizer for tomato plants",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-018",
+   "split": "domains",
+   "text": "can we deploy together with the customers' security fixes",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-019",
+   "split": "domains",
+   "text": "first-line support for customers, how do I set it up",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-020",
+   "split": "domains",
+   "text": "how do I take notes and sign a lease with my landlord",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-021",
+   "split": "domains",
+   "text": "book a hotel in Rome, find me options",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "high",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-022",
+   "split": "domains",
+   "text": "which of the following options is closest to the right answer",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-023",
+   "split": "domains",
+   "text": "what's the closest planet to the sun",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-024",
+   "split": "domains",
+   "text": "how far is the moon",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-025",
+   "split": "domains",
+   "text": "what is the distance between the earth and the moon",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-026",
+   "split": "domains",
+   "text": "what's the best route to learn Spanish",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-027",
+   "split": "domains",
+   "text": "write a message to Claude Code users about the update",
+   "category": "writing",
+   "kind": "chat",
+   "difficulty": 2,
+   "effort": "high",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-028",
+   "split": "domains",
+   "text": "use the coding agent pattern in my design doc",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-029",
+   "split": "domains",
+   "text": "how do I make the cursor blink in the terminal",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-030",
+   "split": "domains",
+   "text": "set the cursor in the textarea to the end",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-031",
+   "split": "domains",
+   "text": "what is a meta-analysis",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-032",
+   "split": "domains",
+   "text": "what does a systematic review mean",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-033",
+   "split": "domains",
+   "text": "explain what clinical trials are",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-034",
+   "split": "domains",
+   "text": "who runs the FDA labels and nutrition facts on food",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-035",
+   "split": "domains",
+   "text": "how do I size the market for my lemonade stand",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-036",
+   "split": "domains",
+   "text": "mix the eggs and flour together",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-037",
+   "split": "domains",
+   "text": "what's the mission of the red cross",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-038",
+   "split": "domains",
+   "text": "cursor vs windsurf, which is better",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-039",
+   "split": "domains",
+   "text": "guidelines for jury duty",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
+  },
+  {
+   "id": "d4n-040",
+   "split": "domains",
+   "text": "what are the trials of hercules",
+   "category": "chat",
+   "kind": "chat",
+   "difficulty": 1,
+   "effort": "medium",
+   "tags": [
+    "domain-negative"
+   ],
+   "note": "everyday prompt that shares words with the domain rules (from an independent review): must route as before the domain rules"
   }
  ]
 }
