@@ -205,7 +205,9 @@ describe('compiling the vault', () => {
   test('documents get a quoted digest note; the activity digest is quoted and only for local models', async () => {
     const { db, ws, writer, now } = setup()
     const doc = join(ws, 'Notes', 'Kidney stones review.md')
-    let clock = now()
+    // Midday, not the real clock: the activity window (30 to 5 minutes ago) must not cross midnight, or the
+    // digest belongs to the day before and this failed for the first half hour of every UTC day (CI, 00:10).
+    let clock = new Date(now()).setHours(12, 0, 0, 0)
     const vault2 = new VaultService({
       db, workspace: () => ws, now: () => clock,
       docs: { enabled: () => true, recent: () => [{ path: doc, mtime: 5, size: 9000 }], text: () => 'Kidney stone imaging review. '.repeat(30) },
