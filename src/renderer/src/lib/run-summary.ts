@@ -5,7 +5,7 @@ import type { Message, RunUsage } from '@shared/types'
 // 48.2k tokens (41k in / 7k out) · $0.06". Pure functions (unit-tested); JobsPanel.tsx renders them.
 
 const CMD_CODE = new Set(['run_tests', 'typecheck', 'lint', 'build', 'run'])
-const FILE_TOOLS = new Set(['file_write', 'create_document', 'file_manage', 'create_page', 'update_page'])
+const FILE_TOOLS = new Set(['file_write', 'file_edit', 'create_document', 'file_manage', 'create_page', 'update_page'])
 
 export interface RunFacts { commands: number; files: number; jobs: number; actions: number; since: number; until: number }
 

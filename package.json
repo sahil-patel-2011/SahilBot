@@ -22,7 +22,8 @@
     "postinstall": "node scripts/brand-dev.mjs",
     "install:mac": "node scripts/install-mac.mjs",
     "eval:scripted": "vitest run --config vitest.eval.config.mts",
-    "eval:real": "REAL_WORK=1 REAL_WORK_OUT=eval-results/real-work.json vitest run --config vitest.eval.config.mts"
+    "eval:real": "REAL_WORK=1 REAL_WORK_OUT=eval-results/real-work.json vitest run --config vitest.eval.config.mts",
+    "arena": "ARENA=1 ARENA_OUT=eval-results/arena.json vitest run --config vitest.arena.config.mts && node scripts/arena-report.mjs eval-results/arena.json"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

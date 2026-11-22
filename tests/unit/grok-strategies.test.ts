@@ -88,6 +88,12 @@ test('a reply that announces an action without doing it is caught; finished work
   // The gerund forms it used to miss.
   expect(promisesAction('Running the migration now.')).toBe(true)
   expect(promisesAction('Submitting the form now.')).toBe(true)
+  // Everyday edits it used to miss (Agent Arena: a changelog entry announced and never written).
+  expect(promisesAction("I'll add the 1.2.0 entry to CHANGELOG.md now.")).toBe(true)
+  expect(promisesAction('Updating the three config files now.')).toBe(true)
+  expect(promisesAction('Let me rename the function across the project.')).toBe(true)
+  expect(promisesAction('Let me summarize what I found: revenue is up 12%.')).toBe(false)
+  expect(promisesAction('I updated CHANGELOG.md with the 1.2.0 entry.')).toBe(false)
 })
 
 test('review fixes: masking keeps whole words, recall widens only on real back-references', async () => {

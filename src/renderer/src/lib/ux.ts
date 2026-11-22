@@ -30,7 +30,7 @@ export function nameFromJob(job: string): string {
   return words ? words[0].toUpperCase() + words.slice(1) : ''
 }
 
-const FILE_TOOLS = new Set(['file_write', 'create_document'])
+const FILE_TOOLS = new Set(['file_write', 'file_edit', 'create_document'])
 
 /** One entry per file (the latest call wins), only for calls that succeeded and said where the file is. */
 export function filesFromSteps(steps: Array<{ call: Pick<ToolCall, 'id' | 'name'>; result?: Pick<Message, 'meta'> }>): Array<{ key: string; path: string }> {

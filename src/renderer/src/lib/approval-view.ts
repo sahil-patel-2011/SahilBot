@@ -63,6 +63,10 @@ export function approvalView(req: Pick<PendingRequest, 'tool' | 'label' | 'summa
       preview: { kind: 'file', name: base(path), where: whereOf(path), markdown: /\.(md|markdown|txt)$/i.test(path), append, ...ex }
     }
   }
+  if (tool === 'file_edit' && str(a.path) && typeof a.new_string === 'string') {
+    const path = a.path as string
+    return { title: ['Edit ', base(path), ` ${whereOf(path)}`.trimEnd()], preview: { kind: 'file', name: base(path), where: whereOf(path), markdown: false, append: false, ...excerpt(a.new_string) } }
+  }
   if (tool === 'create_document' && (str(a.path) || str(a.title))) {
     const target = str(a.path) ? base(a.path as string) : (a.title as string)
     return { title: ['Create ', target, str(a.path) ? ` ${whereOf(a.path as string)}`.trimEnd() : ''], preview: fieldsOf(a, ['path', 'title', 'format']) }

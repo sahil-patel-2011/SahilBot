@@ -51,11 +51,27 @@ const norm = (t: string): string => t.toLowerCase().replace(/[^\p{L}\p{N}/._#$%-
 // Secret values never go in the notes: names only. Values that look like keys, tokens or passwords are cut.
 const KEY_SHAPES = /\b(?:sk|pk|rk)[-_](?:live|test|proj|ant)?[-_]?[A-Za-z0-9_-]{8,}|\bgh[pousr]_[A-Za-z0-9]{16,}|\bxox[abprs]-[A-Za-z0-9-]{8,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{20,}|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g
 const ASSIGNED = /\b((?:password|passcode|passwd|pwd|api[ _-]?key|secret|token|pin|private[ _-]?key)\b[^\n:=]{0,20}?(?:[:=]|\bis\b)\s*)(["']?)([^\s"',;]{4,})\2/gi
-const ENV_VALUE = /\b([A-Z][A-Z0-9]*_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD)[A-Z0-9_]*)=(\S{4,})/g
+const ENV_VALUE = /\b([A-Z][A-Z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD)[A-Z0-9_]*)=(\S{4,})/g
 /** The text with anything that looks like a secret value replaced by [redacted] (names stay). */
 export function redactSecrets(text: string, known: string[] = []): string {
   let out = text.replace(KEY_SHAPES, '[redacted]').replace(ENV_VALUE, '$1=[redacted]').replace(ASSIGNED, (all, lead: string, _q: string, value: string) => (/^[A-Z][A-Z0-9_]+$/.test(value) || value === '[redacted]' ? all : `${lead}[redacted]`))
   for (const v of known) if (v && v.length >= 4) out = out.split(v).join('[redacted]')
+  return out
+}
+
+/**
+ * The answer with any live secret it copied out of a file or command output (an API key read from .env) hidden,
+ * keeping its first characters so it's clear which key is meant. Secrets the user typed themselves stay.
+ */
+export function hideCopiedSecrets(answer: string, outputs: string, userText: string): string {
+  const fromOutputs = new Set<string>()
+  for (const m of outputs.matchAll(new RegExp(KEY_SHAPES.source, 'g'))) fromOutputs.add(m[0])
+  for (const m of outputs.matchAll(new RegExp(ENV_VALUE.source, 'g'))) if (m[2].length >= 8) fromOutputs.add(m[2])
+  let out = answer
+  for (const v of [...fromOutputs].sort((a, b) => b.length - a.length)) {
+    if (!out.includes(v) || userText.includes(v)) continue
+    out = out.split(v).join(`${v.slice(0, Math.min(7, Math.floor(v.length / 3)))}…[hidden]`)
+  }
   return out
 }
 

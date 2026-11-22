@@ -202,8 +202,10 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
         const lines = saved.split('\n').slice((start ?? 1) - 1, end ?? undefined).join('\n')
         return { text: lines.length > 20_000 ? `${lines.slice(0, 20_000)}\n[… more: read_result id="${path}" with a later line range]` : lines, display: `read ${path}` }
       }
-      const isDoc = /^docs([\\/]|$)/.test(path)
-      const full = isDoc ? insideRoot(docsDir, path.replace(/^docs[\\/]?/, '') || '.') : at(path, workspace, ctx)
+      // "docs/…" is the app's own manual only when the user's folder has no docs/ of its own (a project's docs come first).
+      const own = at(path, workspace, ctx)
+      const isDoc = /^docs([\\/]|$)/.test(path) && !existsSync(own)
+      const full = isDoc ? insideRoot(docsDir, path.replace(/^docs[\\/]?/, '') || '.') : own
       if (!existsSync(full)) throw new Error(`No such file or folder: ${path}`)
       const base = isAbsolute(path) ? dirname(full) : isDoc ? docsDir : folderOf(ctx) && existsSync(folderOf(ctx)!) ? folderOf(ctx)! : workspace
       if (lstatSync(full).isDirectory()) return { text: listing(full, base), display: `listed ${basename(full)}` }
@@ -233,28 +235,28 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
     }
   }
 
-  const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwrite' | 'append' | 'create' }> = {
+  const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwrite' | 'append' | 'create'; replace_whole?: boolean }> = {
     name: 'file_write',
     label: 'Write file',
     core: true,
     effect: 'write_local',
     // Writes stay inside the workspace, the attached folders and the working folder unless the user approves.
     hardStop: (a, call) => outsideStop('writing', getWorkspace)(a.path, call),
-    description: 'Write a text file (Markdown, code, CSV, HTML…). Relative paths: the working folder (else the workspace); absolute: attached folders (others ask first). mode: "create" fails if it exists, "overwrite" replaces it (a backup is kept), "append" adds to the end. For .docx/.pptx/.xlsx/.pdf use create_document.',
+    description: 'Write a text file (Markdown, code, CSV, HTML…). Relative paths: the working folder (else the workspace); absolute: attached folders (others ask first). mode: "create" fails if it exists, "overwrite" replaces it (a backup is kept), "append" adds to the end. To change part of an existing file use file_edit instead. For .docx/.pptx/.xlsx/.pdf use create_document.',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string' },
         content: { type: 'string' },
-        mode: { type: 'string', enum: ['overwrite', 'append', 'create'], default: 'overwrite' }
+        mode: { type: 'string', enum: ['overwrite', 'append', 'create'], default: 'overwrite' },
+        replace_whole: { type: 'boolean', description: 'Set true only to replace a big file with much shorter content on purpose' }
       },
       required: ['path', 'content'],
       additionalProperties: false
     },
-    async run({ path, content, mode = 'overwrite' }, ctx) {
+    async run({ path, content, mode = 'overwrite', replace_whole }, ctx) {
       const workspace = getWorkspace()
       mkdirSync(workspace, { recursive: true })
-      if (/^docs[\\/]/.test(path)) throw new Error('The docs folder is read-only.')
       if (/\.(docx|pptx|xlsx|pdf)$/i.test(path)) throw new Error('Use create_document for .docx, .pptx, .xlsx and .pdf files.')
       const full = at(path, workspace, ctx)
       const exists = existsSync(full)
@@ -263,6 +265,9 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
       // Someone changed it since this chat read or wrote it: don't replace their edit.
       const stale = exists && mode === 'overwrite' ? staleReason(ctx.threadId, full, path) : undefined
       if (stale) throw new Error(stale)
+      // Writing back a shortened view of a file (a read whose middle was left out) would delete everything it didn't show.
+      const shrink = exists && mode === 'overwrite' ? shrinkReason(path, readFileSync(full, 'utf8'), content, replace_whole) : undefined
+      if (shrink) throw new Error(shrink)
       mkdirSync(dirname(full), { recursive: true })
       if (exists && mode === 'overwrite') backup(workspace, full)
       if (mode === 'append') appendFileSync(full, content)
@@ -270,6 +275,42 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
       noteSeen(ctx.threadId, full)
       const verb = mode === 'append' ? 'appended to' : exists ? 'updated' : 'created'
       return { text: `${verb} ${full} (${humanSize(Buffer.byteLength(content))}).`, display: `${verb} ${basename(full)}`, path: full }
+    }
+  }
+
+  // A change to part of a file, made on disk: the model needn't see (or rewrite) the whole file, so a big file
+  // read in pieces can't be cut short by writing back only the part it saw.
+  const fileEdit: ToolDef<{ path: string; old_string: string; new_string: string; replace_all?: boolean }> = {
+    name: 'file_edit',
+    label: 'Edit file',
+    core: true,
+    effect: 'write_local',
+    hardStop: (a, call) => outsideStop('editing', getWorkspace)(a.path, call),
+    description: 'Change part of a text file: replaces old_string with new_string exactly (whitespace included). old_string must appear exactly once, or set replace_all to change every occurrence. Include enough surrounding text to make it unique. Use this instead of rewriting a whole file with file_write.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        old_string: { type: 'string', description: 'The exact text to replace' },
+        new_string: { type: 'string', description: 'The text to put in its place' },
+        replace_all: { type: 'boolean', description: 'Replace every occurrence (default: exactly one must match)' }
+      },
+      required: ['path', 'old_string', 'new_string'],
+      additionalProperties: false
+    },
+    async run({ path, old_string, new_string, replace_all }, ctx) {
+      const workspace = getWorkspace()
+      const full = at(path, workspace, ctx)
+      if (!existsSync(full)) throw new Error(`No such file: ${path}. Create it with file_write.`)
+      if (lstatSync(full).isDirectory()) throw new Error(`${path} is a folder.`)
+      const stale = staleReason(ctx.threadId, full, path)
+      if (stale) throw new Error(stale)
+      const r = applyEdit(readFileSync(full, 'utf8'), old_string, new_string, !!replace_all)
+      if ('error' in r) throw new Error(`${r.error} in ${path}.`)
+      backup(workspace, full)
+      writeFileSync(full, r.text)
+      noteSeen(ctx.threadId, full)
+      return { text: `Edited ${full}: ${r.count} replacement${r.count === 1 ? '' : 's'} (line ${r.line}).`, display: `edited ${basename(full)}`, path: full }
     }
   }
 
@@ -480,7 +521,7 @@ Optional "accent" color like "#2563EB" (too-light accents are darkened for text 
     }
   }
 
-  return [fileRead, fileWrite, fileManage, createDoc]
+  return [fileRead, fileWrite, fileEdit, fileManage, createDoc]
 }
 
 function safe<T>(fn: () => T): T | undefined {
@@ -494,4 +535,27 @@ function safe<T>(fn: () => T): T | undefined {
 /** Opens a file the agent produced with the default app (user action from the UI). */
 export function openWithDefault(path: string): Promise<string> {
   return shell.openPath(path)
+}
+
+/** An exact-text replacement: one match (or every match with all), the new text, and where the first one was. */
+export function applyEdit(text: string, oldStr: string, newStr: string, all: boolean): { text: string; count: number; line: number } | { error: string } {
+  if (!oldStr) return { error: 'old_string is empty' }
+  if (oldStr === newStr) return { error: 'old_string and new_string are the same' }
+  const first = text.indexOf(oldStr)
+  if (first < 0) return { error: 'old_string was not found (it must match exactly, whitespace included; read that part of the file again)' }
+  const count = text.split(oldStr).length - 1
+  if (count > 1 && !all) return { error: `old_string appears ${count} times; add surrounding text to make it unique, or set replace_all` }
+  return { text: all ? text.split(oldStr).join(newStr) : text.slice(0, first) + newStr + text.slice(first + oldStr.length), count, line: text.slice(0, first).split('\n').length }
+}
+
+/**
+ * Why an overwrite would wreck the file, or undefined: the content still carries a "middle omitted" note from a
+ * shortened read, or a file of 200+ lines would lose more than half of them (unless replace_whole says it's meant).
+ */
+export function shrinkReason(path: string, before: string, after: string, replaceWhole?: boolean): string | undefined {
+  if (/\[… [\d,]+ tokens, [\d,]+ lines total\. Middle omitted\./.test(after)) return `That content is a shortened view of ${path} (it still has the "Middle omitted" note), so writing it would delete the part you didn't see. Use file_edit to change part of the file.`
+  const was = before.split('\n').length
+  const now = after.split('\n').length
+  if (!replaceWhole && was >= 200 && now < was / 2) return `This would replace ${path} (${was} lines) with ${now} lines and delete the rest. To change part of it use file_edit; to really replace the whole file, call file_write again with replace_whole: true.`
+  return undefined
 }

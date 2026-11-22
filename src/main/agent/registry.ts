@@ -18,7 +18,7 @@ export const QUICK_TOOLS = CHAT_TOOLS
  * review_document, cursor, mac_apps, agents, schedule, message_bot…) is one find_tools call away, and stays
  * listed once loaded. 'tiny' keeps fewer still, for when even 'small' leaves too little room.
  */
-export const SMALL_TOOLS = ['find_tools', 'web_search', 'fetch_page', 'memory', 'ask_user', 'todo', 'notes', 'file_read', 'file_write', 'file_manage', 'run_command', 'create_document', 'browser', 'manual'] as const
+export const SMALL_TOOLS = ['find_tools', 'web_search', 'fetch_page', 'memory', 'ask_user', 'todo', 'notes', 'file_read', 'file_write', 'file_edit', 'file_manage', 'run_command', 'create_document', 'browser', 'manual'] as const
 export const TINY_TOOLS = ['find_tools', 'web_search', 'fetch_page', 'memory', 'ask_user', 'todo', 'file_read', 'file_write', 'run_command'] as const
 const SMALL = new Set<string>(SMALL_TOOLS)
 const TINY = new Set<string>(TINY_TOOLS)

@@ -94,7 +94,7 @@ function ProgressPane({ messages, onOpenFile, browserState, onBrowser, running, 
     const a = lastTodo && !Array.isArray(own) ? JSON.parse(lastTodo.arguments) : null
     plan = Array.isArray(own) ? own as Array<{ text: string; status: string }> : !a ? [] : lastTodo!.name === 'todo' ? a.items ?? [] : (a.steps ?? []).map((t: string, i: number) => ({ text: t, status: i === 0 ? 'in_progress' : 'pending' }))
   } catch { plan = [] }
-  const outputs = [...new Map(messages.filter((m) => m.role === 'tool' && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && ['file_write', 'create_document', 'create_page', 'update_page'].includes(m.toolName ?? ''))
+  const outputs = [...new Map(messages.filter((m) => m.role === 'tool' && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && ['file_write', 'file_edit', 'create_document', 'create_page', 'update_page'].includes(m.toolName ?? ''))
     .map((m) => [m.meta!.path as string, m])).values()].reverse()
   const attached = messages.flatMap((m) => [
     ...((m.meta?.files ?? []) as Array<{ name: string; path: string }>).map((f) => ({ ...f, folder: false })),

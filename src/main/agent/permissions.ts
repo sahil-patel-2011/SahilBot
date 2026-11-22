@@ -17,7 +17,7 @@ export const normalizeMode = (m: PermissionMode): Exclude<PermissionMode, 'auton
  * Tools that only write inside the workspace and attached folders, and keep a backup when they overwrite
  * something (files.ts backup()). Auto runs their overwrites; deleting still asks (a hard stop).
  */
-export const BACKED_UP_OVERWRITES = new Set(['file_write', 'file_manage', 'create_document'])
+export const BACKED_UP_OVERWRITES = new Set(['file_write', 'file_edit', 'file_manage', 'create_document'])
 
 /** The stricter of two permission modes (ask > auto > bypass). A missing one doesn't loosen anything. */
 export function stricterMode(a: PermissionMode, b?: PermissionMode | null): PermissionMode {

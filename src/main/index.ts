@@ -2767,7 +2767,7 @@ app.whenReady().then(() => {
     announce: (text) => voice.announce(text),
     voiceThread: () => voiceThread,
     lastReply: (threadId, since) => [...db.listMessages(threadId)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && !!m.content && !m.meta?.superseded && !m.meta?.hidden && m.createdAt >= since)?.content,
-    files: (threadId, since) => [...new Set(db.listMessages(threadId).filter((m) => m.role === 'tool' && m.createdAt >= since && (m.toolName === 'file_write' || m.toolName === 'create_document') && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && !/\.html?$/i.test(m.meta.path as string)).map((m) => m.meta!.path as string))],
+    files: (threadId, since) => [...new Set(db.listMessages(threadId).filter((m) => m.role === 'tool' && m.createdAt >= since && (m.toolName === 'file_write' || m.toolName === 'file_edit' || m.toolName === 'create_document') && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && !/\.html?$/i.test(m.meta.path as string)).map((m) => m.meta!.path as string))],
     record: (vt, line, context, result) => {
       if (!db.getThread(vt)) return
       // Done: the result itself, with its files, from that bot (a notice: kept out of the model's history, which

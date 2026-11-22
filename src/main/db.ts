@@ -274,7 +274,7 @@ export class Db {
       SELECT json_extract(m.data, '$.meta.path') AS path, MAX(m.created_at) AS at, m.thread_id AS threadId
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE t.space_id = ? AND m.role = 'tool' AND json_extract(m.data, '$.meta.path') IS NOT NULL AND json_extract(m.data, '$.meta.status') = 'ok'
-        AND json_extract(m.data, '$.toolName') IN ('file_write', 'create_document', 'file_manage', 'create_page', 'update_page')
+        AND json_extract(m.data, '$.toolName') IN ('file_write', 'file_edit', 'create_document', 'file_manage', 'create_page', 'update_page')
       GROUP BY path ORDER BY at DESC LIMIT ?`).all(spaceId, limit) as Row[]
     const cited = this.sql.prepare(`
       SELECT json_extract(s.value, '$.url') AS url, json_extract(s.value, '$.title') AS title, MAX(m.created_at) AS at, m.thread_id AS threadId
@@ -323,7 +323,7 @@ export class Db {
       SELECT json_extract(m.data, '$.meta.path') AS path, m.thread_id AS threadId, t.title AS threadTitle, MAX(m.created_at) AS createdAt, json_extract(m.data, '$.toolName') AS tool
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE m.role = 'tool' AND json_extract(m.data, '$.meta.path') IS NOT NULL AND json_extract(m.data, '$.meta.status') = 'ok'
-        AND json_extract(m.data, '$.toolName') IN ('file_write', 'create_document', 'create_page', 'update_page')
+        AND json_extract(m.data, '$.toolName') IN ('file_write', 'file_edit', 'create_document', 'create_page', 'update_page')
       GROUP BY path ORDER BY createdAt DESC LIMIT ?`).all(limit) as Row[]
     return rows.map((r) => ({ path: r.path as string, threadId: r.threadId as string, threadTitle: r.threadTitle as string, createdAt: r.createdAt as number, tool: r.tool as string }))
   }

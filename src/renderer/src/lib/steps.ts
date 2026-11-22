@@ -76,6 +76,7 @@ export function describe(step: Step): [Category, string, string] {
     case 'fetch_page': return ['read', `Read ${host(a.url)}${a.chunk > 1 ? ` (part ${a.chunk})` : ''}`, `Reading ${host(a.url)}`]
     case 'file_read': return ['read', `Read ${q(a.path, 40)}`, `Reading ${q(a.path, 40)}`]
     case 'file_write': return ['write', display ? cap(display) : `Wrote ${q(a.path, 40)}`, `Writing ${q(a.path, 40)}`]
+    case 'file_edit': return ['write', display ? cap(display) : `Edited ${q(a.path, 40)}`, `Editing ${q(a.path, 40)}`]
     case 'file_manage': return [a.op === 'delete' ? 'delete' : 'write', display ? cap(display) : `${cap(a.op ?? 'changed')} ${q(a.path, 40)}`, `${cap(a.op ?? 'changing')} ${q(a.path, 40)}`]
     case 'create_document': return ['doc', display ? cap(display) : `Created ${q(a.path, 40)}`, `Creating ${q(a.path, 40)}`]
     case 'memory': return ['memory', a.action === 'save' ? `Remembered “${q(a.fact, 40)}”` : a.action === 'forget' ? 'Forgot a fact' : a.action === 'list' || !String(a.query ?? '').trim() ? 'Looked at saved memories' : `Searched memory for “${q(a.query, 30)}”`, 'Checking memory']

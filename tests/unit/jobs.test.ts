@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
@@ -158,6 +158,21 @@ describe('run_command background and the jobs tool', () => {
     expect(out.meta).toMatchObject({ job: { id: 'j1', url: 'http://localhost:5299' } })
     expect(m.get('j1')!.threadId).toBe('chat1')
   })
+  test('a server started in the foreground becomes a background job instead of blocking (Agent Arena)', async () => {
+    const m = mk()
+    const sh = shellTool({ jobs: m })
+    const t0 = Date.now()
+    const out = await sh.run({ command: 'sleep 0.2; echo "listening on http://127.0.0.1:5311"; sleep 30' }, ctx('chat1'))
+    expect(Date.now() - t0).toBeLessThan(15_000)
+    expect(out.text).toMatch(/kept running after "listening on http:\/\/127\.0\.0\.1:5311".*background job/)
+    expect(out.text).toMatch(/Background job j1/)
+    expect(m.get('j1')!.status).not.toBe('exited')
+    // Tests and builds that print such a line on the way are left alone.
+    writeFileSync(join(dir, 'run-tests.sh'), 'echo "listening on http://127.0.0.1:5312"\nsleep 2\necho "3 passed"\n')
+    const test = await sh.run({ command: `sh ${join(dir, 'run-tests.sh')}`, timeout: 20 }, ctx('chat1'))
+    expect(test.text).toMatch(/exit code 0/)
+    expect(test.text).toContain('3 passed')
+  }, 30_000)
   test('a job that fails right away says so', async () => {
     const m = mk()
     const out = await shellTool({ jobs: m }).run({ command: 'echo "boom" >&2; exit 2', background: true }, ctx('chat1'))

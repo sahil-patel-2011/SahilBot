@@ -40,6 +40,11 @@ _2026-11-22_
 - A side answer shows the message it answers, so it's clear which question it's replying to
 - A bot that stalls ("Want me to go ahead?", "On it!" with nothing done) is told to just do what you asked, so you don't have to say "go ahead"
 - Routines say what is really happening: starting now, running, done (with when it ran) or paused; a one-time reminder runs within 20 seconds of its time
+- Bots change part of a file without rewriting it (a new edit tool), and a file can no longer be cut short by writing back only the part a bot saw
+- A server a bot starts ("listening on…") keeps running in the background instead of blocking the chat, so the bot can use it next
+- An API key a bot reads in a file (like .env) is hidden if it copies it into its reply
+- A project's own docs/ folder is readable and writable (it used to be mistaken for SahilBot's manual)
+- "I'll add it now" with nothing done is caught for everyday edits too (add, update, rename, save…), and asks that name a file to write go straight to work
 
 ### You
 

@@ -1047,14 +1047,25 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       const limit = Math.min(a.timeout ?? 120, 1800) * 1000
       // Its own process group, so Stop and timeouts reach everything it started.
       const tick = throttle<string>((l) => ctx.progress?.(l), 700)
+      // A server started in the foreground ("listening on http://…", then it keeps running): instead of blocking until
+      // the timeout (and the server dying with it), it becomes a background job, so the next step can use it.
+      const ready = new AbortController()
+      let readyLine: string | undefined
       const out = await runProcess(LOGIN_SHELL, ['-lc', a.command], {
         cwd,
         timeoutMs: limit,
-        signal: ctx.signal,
+        signal: ctx.signal ? AbortSignal.any([ctx.signal, ready.signal]) : ready.signal,
         sandbox,
-        onLine: (l) => { if (l.trim()) tick.push(l.trim().slice(0, 160)) }
+        onLine: (l) => {
+          if (l.trim()) tick.push(l.trim().slice(0, 160))
+          if (!readyLine && SERVER_READY.test(l) && !NOT_A_SERVER.test(a.command)) { readyLine = l.trim(); setTimeout(() => ready.abort(), SERVER_GRACE_MS) }
+        }
       })
       tick.flush()
+      if (readyLine && out.stopped && ready.signal.aborted && !ctx.signal?.aborted) {
+        const job = await startJob(jobs, { ...a, background: true }, cwd, ctx, sandbox)
+        return { ...job, text: `${a.command} kept running after "${readyLine.slice(0, 120)}" (a server or watcher), so it was restarted as a background job instead of blocking. Use the job's URL below: it may differ from the line above.\n${job.text}` }
+      }
       const clean = stripAnsi(out.output).trimEnd()
       const status = out.timedOut ? `stopped after ${limit / 1000}s` : out.stopped ? 'stopped' : `exit code ${out.code}`
       const hint = out.timedOut ? '\n(It was still running. If it is a server or watcher, start it with background: true instead.)' : ''
@@ -1062,6 +1073,13 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
     }
   }
 }
+
+/** A line a server prints once it is up (then it keeps running). */
+export const SERVER_READY = /\b(listening (on|at)|server (is )?(running|started|ready|listening)|ready (on|in|at)|local:\s+https?:\/\/|started server on|running on https?:\/\/|serving (http )?(on|at)|now listening)\b/i
+/** Tests, builds and checks can print such a line on the way (a test server): never turned into jobs. */
+const NOT_A_SERVER = /\b(test|tests|jest|vitest|pytest|mocha|playwright|cypress|build|lint|tsc|typecheck|check|ci|install)\b/i
+/** How long it must keep running after that line before it counts as a server. */
+const SERVER_GRACE_MS = 1500
 
 /** Starts a background job, waits for it to be ready (or a moment for its URL), and reports. */
 async function startJob(jobs: JobManager, a: Args, cwd: string, ctx: ToolContext, sandbox?: SandboxSpec) {

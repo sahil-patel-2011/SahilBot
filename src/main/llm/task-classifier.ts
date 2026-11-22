@@ -714,6 +714,9 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (pick.rule === 'follow-up:new') return { kind: 'agent', why: 'follow-up that makes or sends something' }
     // Several asks, one of them done outside the reply (a file, an email, a booking): the agent does it.
     if (shaped && shape.acts && !question && category !== 'code-quick') return { kind: 'agent', why: 'several steps, one makes or sends something' }
+    // Names a file to make or change ("write the number to answer.txt", "set the database in config.json"): work on
+    // files, whatever the request's subject. A question about how to do it ("how do I set up package.json?") stays a reply.
+    if (FILE_ACTION.test(t) && !HOW_TO.test(t)) return { kind: 'agent', why: 'changes files' }
     switch (category) {
       case 'coding': case 'computer-use': case 'long-context': case 'agent-tools': case 'office':
         return { kind: 'agent', why: KIND_WHY[category] ?? 'agent work' }
@@ -774,6 +777,11 @@ export function consistent(c: Pick<TaskClass, 'category' | 'kind' | 'kindWhy'>):
   if ((c.category === 'chat' || c.category === 'code-quick') && c.kind === 'agent') return /is on|attached|in progress|helper|unattended|group|follow-up|files/.test(c.kindWhy)
   return true
 }
+
+/** A request to write or change a named file (a path with an extension). */
+const FILE_ACTION = /\b(write|save|set|change|update|edit|rename|add|put|create|fix|append|replace|delete|remove|record|store)\b[^.?!\n]{0,80}?\b[\w./-]+\.(txt|md|markdown|json|jsonc|js|jsx|ts|tsx|mjs|cjs|csv|tsv|py|rb|go|rs|java|kt|swift|c|h|cpp|cs|php|yaml|yml|toml|ini|cfg|conf|env|html|css|scss|xml|sql|sh|log)\b/
+/** "How do I…", "how can I…", "what's the best way to…": asking about it, not asking for it. */
+const HOW_TO = /^\s*(how (do|can|would|should) (i|you|we)|what'?s the (best )?way to|is it possible to|explain)\b/
 
 /** Simple chat or a quick question: the light path (no plan, no heavy tools) is enough. */
 export const isChatTask = (c: Pick<TaskClass, 'category' | 'difficulty'>): boolean => c.category === 'chat' && c.difficulty <= 1
