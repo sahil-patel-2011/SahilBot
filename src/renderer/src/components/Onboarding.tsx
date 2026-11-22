@@ -150,21 +150,31 @@ function LocalSetup() {
   )
 }
 
+/**
+ * Setup's progress, kept on this Mac until setup is done: granting a permission (Screen Recording, Accessibility…)
+ * makes macOS quit and reopen SahilBot, and setup picks up on the same step instead of starting over.
+ */
+const PROGRESS = 'sahilbot:onboarding-progress'
+type Progress = { step?: number; name?: string; workspace?: string; wantLocal?: boolean; importAfter?: boolean; anywhere?: boolean }
+const savedProgress = (): Progress => { try { return JSON.parse(localStorage.getItem(PROGRESS) ?? '{}') as Progress } catch { return {} } }
+
 export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (s: Settings) => void }) {
-  const [step, setStep] = useState(0)
-  const [name, setName] = useState(settings.userName)
-  const [workspace, setWorkspace] = useState(settings.workspaceDir)
+  const [resume] = useState(savedProgress)
+  const [step, setStep] = useState(() => ([0, 1, 1.5, 2, 3].includes(resume.step ?? -1) ? resume.step! : 0))
+  const [name, setName] = useState(resume.name ?? settings.userName)
+  const [workspace, setWorkspace] = useState(resume.workspace ?? settings.workspaceDir)
   const [keys, setKeys] = useState(settings.keys)
   const [plan, setPlan] = useState(false)
   const [grok, setGrok] = useState(false)
   // "Also use free local models on this Mac?" Not now is the default.
-  const [wantLocal, setWantLocal] = useState(false)
+  const [wantLocal, setWantLocal] = useState(resume.wantLocal ?? false)
   const refreshKeys = (): void => { void api.settings.get().then((s) => setKeys(s.keys)).catch(() => undefined) }
 
   /** After setup: open "Import memory" (the optional link on the connect step). */
-  const [importAfter, setImportAfter] = useState(false)
+  const [importAfter, setImportAfter] = useState(resume.importAfter ?? false)
   const finish = async (importNow = importAfter): Promise<void> => {
     const s = await api.settings.set({ userName: name.trim(), workspaceDir: workspace, onboarded: true, defaultModel: 'auto', local: { enabled: wantLocal } })
+    try { localStorage.removeItem(PROGRESS) } catch { /* nothing kept */ }
     onDone(s)
     if (importNow) window.dispatchEvent(new Event('sahilbot:import-memory'))
   }
@@ -174,7 +184,12 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
     setStep(wantLocal ? 1.5 : 2)
   }
   // Last step: what SahilBot may use on this Mac (the Mac app only; the web UI has no macOS permissions).
-  const [anywhere, setAnywhere] = useState(settings.advanced.filesAnywhere !== false)
+  const [anywhere, setAnywhere] = useState(resume.anywhere ?? settings.advanced.filesAnywhere !== false)
+  // Every change is kept right away (a quit-and-reopen can come at any moment), and the name is saved too.
+  useEffect(() => {
+    try { localStorage.setItem(PROGRESS, JSON.stringify({ step, name, workspace, wantLocal, importAfter, anywhere } satisfies Progress)) } catch { /* setup still works, it just can't resume */ }
+  }, [step, name, workspace, wantLocal, importAfter, anywhere])
+  useEffect(() => { if (step > 0 && name.trim() && name.trim() !== settings.userName) void api.settings.set({ userName: name.trim() }).catch(() => undefined) }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
   const pickWorkspace = async (): Promise<void> => { const f = await api.pickFolder().catch(() => null); if (f) setWorkspace(f) }
   const connected = CLOUD.filter((c) => keys[c.id]).length
 
