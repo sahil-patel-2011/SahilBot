@@ -6,6 +6,7 @@ Every SahilBot update, newest first. The same notes show in the app (Settings �
 
 _2026-11-22_
 
+- **Permissions and setup stick: updates no longer make you grant permissions or go through setup again**
 - **New bot asks for just a name, an icon and a color: the bot works out its job with you in its first chat, starting from its name**
 - **Settings has six clear sections, each with a one-line explanation, and no "More settings" menus**
 - **The voice bar is calmer: a smooth wave that follows your voice, one line of status, and plain words with a "Set up voice" button when voice isn't ready**
@@ -53,6 +54,11 @@ _2026-11-22_
 - A question with answer choices shows once, on its card, instead of twice
 - The "working on…" line under a chat names the step running right now, never an old one
 - Messages fade in, chat text has more space between lines, and hover effects match across the app. Reduced motion is respected
+
+### Fixes
+
+- Setup picks up where you left off: granting a permission makes macOS quit and reopen SahilBot, and setup now continues on the same step instead of starting over
+- Updates keep the permissions you granted (Screen Recording, Accessibility, Automation, Full Disk Access) and Keychain access: releases are signed with SahilBot's own certificate, so macOS sees the same app after every update. The first update to this version asks once more; after that they stay
 
 ## 26.11.21 · Medical research you can trust, a cleaner look, and keys that stay put
 
@@ -102,14 +108,6 @@ _2026-11-21_
 - Set a recovery password (Settings → Privacy & Security → Backups) and each backup also holds your API keys, encrypted with it, so you can restore them on any Mac
 - Back up now, see the last backup, open both backup folders, or add an extra folder such as an external drive
 
-### Simpler to use
-
-- The sidebar has one New chat button, then Needs you, Vault, Artifacts and Brain, then your bots, projects and recent chats as quiet single rows
-- Home puts the message box first, with four suggestions and a small bot card below it
-- The browser and side-panel buttons only show in a chat, where they do something
-- Settings is one short list with no "More settings" fold. Phone & server pages only show once you've turned one on: SahilBot is a desktop app first
-- The "no model yet" notice is a clear card with Add a key and Retry buttons
-
 ### Bots that keep going
 
 - In a chat you're in, a bot that's still making progress keeps working past its usual step limit instead of stopping to ask you to say "continue" (your spending limit and the safety stops still apply)
@@ -147,6 +145,14 @@ _2026-11-21_
 - New pages: business (models, decks, research, recurring work), engineering (CAD, calculations, electronics, FRC, software) and coding agents (when to hand off to Cursor, writing the brief, reviewing the result)
 - The tools page now lists every tool SahilBot has
 
+### Simpler to use
+
+- The sidebar has one New chat button, then Needs you, Vault, Artifacts and Brain, then your bots, projects and recent chats as quiet single rows
+- Home puts the message box first, with four suggestions and a small bot card below it
+- The browser and side-panel buttons only show in a chat, where they do something
+- Settings is one short list with no "More settings" fold. Phone & server pages only show once you've turned one on: SahilBot is a desktop app first
+- The "no model yet" notice is a clear card with Add a key and Retry buttons
+
 ### Bots you can talk to
 
 - In a voice chat, real work (research, a document, files, email, the browser) runs in the background in the bot's own chat, and the conversation keeps going
@@ -156,6 +162,7 @@ _2026-11-21_
 - Pick a voice (hear each one first), the speaking speed and the language you speak
 - When you hang up, the conversation folds into one line named after what you talked about, with its length. Open it to read the transcript. What you said is remembered like anything you type
 - The voice bar lists what's running, what needs you and what's done
+- A new bot sets itself up with you in its chat
 - A new bot sets itself up with you in its chat, typed or by voice: it asks what you want done, suggests a name, writes its own instructions, and saves them when you agree
 - Spoken replies use cloud voices for speed and quality: ChatGPT's (OpenAI) or Grok's (xAI). Switch between them in the voice bar, even mid-conversation
 - Dictate with the microphone button: click to start and stop, or hold ⌘D and let go when you're done

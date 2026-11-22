@@ -1,6 +1,6 @@
 // Publishes a CI build to GitHub Releases (used by .github/workflows/release.yml).
 //
-//   node scripts/release.mjs --version 0.1.0 --build 42 --sha <commit> --signing adhoc|signed|notarized [--dist dist] [--dry-run]
+//   node scripts/release.mjs --version 0.1.0 --build 42 --sha <commit> --signing adhoc|selfsigned|signed|notarized [--dist dist] [--dry-run]
 //
 // 1. Finds the DMG and ZIP electron-builder wrote to dist/ (SahilBot-<version>-<build>-arm64.*).
 // 2. Copies them to dist/release/ twice: the versioned names (kept for history) and the stable names
@@ -41,7 +41,7 @@ export function parseArgs(argv) {
   for (const k of ['version', 'build', 'sha', 'signing']) if (!o[k]) throw new Error(`Missing --${k}`)
   if (!/^\d+\.\d+\.\d+$/.test(o.version)) throw new Error(`Bad --version ${o.version}`)
   if (!/^\d+$/.test(o.build)) throw new Error(`Bad --build ${o.build}`)
-  if (!['adhoc', 'signed', 'notarized'].includes(o.signing)) throw new Error(`Bad --signing ${o.signing}`)
+  if (!['adhoc', 'selfsigned', 'signed', 'notarized'].includes(o.signing)) throw new Error(`Bad --signing ${o.signing}`)
   // Values reach gh as arguments only; still, nothing but a commit hash and owner/name is accepted.
   if (!/^[0-9a-f]{7,40}$/i.test(o.sha)) throw new Error(`Bad --sha ${o.sha}`)
   if (o.repo !== undefined && !/^[\w.-]+\/[\w.-]+$/.test(o.repo)) throw new Error(`Bad --repo ${o.repo}`)
@@ -91,6 +91,8 @@ export function releaseNotes({ version, build, sha, signing, repo, server }) {
     lines.push('',
       signing === 'signed'
         ? '**Signed but not notarized.** macOS asks before the first launch:'
+        : signing === 'selfsigned'
+        ? '**Signed with SahilBot\'s own certificate (not notarized).** Updates keep the permissions and Keychain access you granted. macOS asks once before the first launch:'
         : '**Not notarized (ad-hoc signed).** This build isn\'t signed with an Apple Developer ID, so macOS blocks the first launch:',
       '- macOS 13–14: right-click (or Control-click) SahilBot in Applications → **Open** → **Open**.',
       '- macOS 15 or later: double-click it once, then System Settings → Privacy & Security → **Open Anyway** next to SahilBot.',

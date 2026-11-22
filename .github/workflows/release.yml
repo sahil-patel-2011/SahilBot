@@ -221,6 +221,10 @@ jobs:
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # SahilBot's own self-signed code-signing certificate (.p12, base64) and its password: a stable identity
+          # across updates when there's no Developer ID (scripts/after-sign.cjs).
+          SELF_SIGN_P12: ${{ secrets.SELF_SIGN_P12 }}
+          SELF_SIGN_PASSWORD: ${{ secrets.SELF_SIGN_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -246,10 +250,30 @@ jobs:
             unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
             export CSC_IDENTITY_AUTO_DISCOVERY=false
             ARGS+=(-c.mac.identity=- -c.mac.notarize=false)
+            # With SahilBot's self-signed certificate, the app is re-signed with it after electron-builder signs
+            # (scripts/after-sign.cjs): the same identity every build, so updates keep permissions and Keychain access.
+            if [ -n "$SELF_SIGN_P12" ] && [ -n "$SELF_SIGN_PASSWORD" ]; then
+              KC="$RUNNER_TEMP/sahilbot-sign.keychain-db"
+              KCPW="$(openssl rand -hex 16)"
+              echo "$SELF_SIGN_P12" | base64 --decode > "$RUNNER_TEMP/sign.p12"
+              security create-keychain -p "$KCPW" "$KC"
+              security set-keychain-settings -lut 3600 "$KC"
+              security unlock-keychain -p "$KCPW" "$KC"
+              security import "$RUNNER_TEMP/sign.p12" -k "$KC" -P "$SELF_SIGN_PASSWORD" -T /usr/bin/codesign >/dev/null
+              security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" >/dev/null
+              rm -f "$RUNNER_TEMP/sign.p12"
+              export SAHILBOT_SELF_SIGN_KEYCHAIN="$KC" SAHILBOT_SELF_SIGN_IDENTITY="SahilBot Self-Signed"
+              SIGNING=selfsigned
+            fi
+            unset SELF_SIGN_P12 SELF_SIGN_PASSWORD
           fi
           echo "signing=$SIGNING" >> "$GITHUB_OUTPUT"
           echo "Signing: $SIGNING"
           npx electron-builder "${ARGS[@]}"
+          if [ "$SIGNING" = selfsigned ]; then
+            codesign -dr - dist/mac-arm64/SahilBot.app 2>&1 | grep -q 'certificate root' || { echo "The self-signed identity didn't stick"; exit 1; }
+            security delete-keychain "$SAHILBOT_SELF_SIGN_KEYCHAIN" || true
+          fi
 
       - name: Verify the app
         env:

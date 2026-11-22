@@ -156,7 +156,8 @@
         "height": 380
       }
     },
-    "afterPack": "scripts/after-pack.cjs"
+    "afterPack": "scripts/after-pack.cjs",
+    "afterSign": "scripts/after-sign.cjs"
   },
   "author": "SahilBot"
 }

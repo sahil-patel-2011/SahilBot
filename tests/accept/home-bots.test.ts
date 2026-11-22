@@ -82,6 +82,42 @@ describe('Home: your bots first', () => {
     }
   })
 
+  test('setup picks up where it left off after macOS quits and reopens SahilBot for a permission', async () => {
+    const profile = tempProfile()
+    const first = await launch(profile, llm.url, { FOREMAN_SKIP_ONBOARDING: '' })
+    try {
+      await first.page.locator('[data-testid="onboarding"]').waitFor()
+      await first.page.fill('[data-testid="onboarding-name"]', 'Sam')
+      await first.page.click('[data-testid="onboarding-name-next"]')
+      await first.page.click('[data-testid="onboarding-next"]')
+      await first.page.locator('[data-testid="onboarding-perms-next"]').waitFor()
+      await first.page.waitForTimeout(300)
+    } finally {
+      await first.app.close()
+    }
+    // Reopened (as after granting Screen Recording): the same step, with the name kept.
+    const again = await launch(profile, llm.url, { FOREMAN_SKIP_ONBOARDING: '' })
+    try {
+      await again.page.locator('[data-testid="onboarding"]').waitFor()
+      await again.page.locator('[data-testid="onboarding-perms-next"]').waitFor({ timeout: 10_000 })
+      expect(await again.page.locator('[data-testid="onboarding-name"]').count()).toBe(0)
+      expect((await again.page.evaluate(() => window.foreman.settings.get())).userName).toBe('Sam')
+      await again.page.click('[data-testid="onboarding-perms-next"]')
+      await again.page.click('[data-testid="onboarding-finish"]')
+      await expect.poll(() => again.page.locator('[data-testid="onboarding"]').count()).toBe(0)
+    } finally {
+      await again.app.close()
+    }
+    // Done means done: the next start has no setup at all.
+    const third = await launch(profile, llm.url, { FOREMAN_SKIP_ONBOARDING: '' })
+    try {
+      await third.page.waitForTimeout(800)
+      expect(await third.page.locator('[data-testid="onboarding"]').count()).toBe(0)
+    } finally {
+      await third.app.close()
+    }
+  })
+
   test('with bots: a card each, Open opens its chat, Talk opens the voice bar with that bot and its settings', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     try {
