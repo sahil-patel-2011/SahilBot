@@ -238,7 +238,7 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
               <div className="vault-doc-inner" data-testid="vault-note">
                 <h1 className="vault-note-title" data-testid="vault-note-title">{note.title}</h1>
                 <div className="vault-meta">
-                  <span className="vault-tag" style={{ color: TYPE_COLOR[note.type] }}>{TYPE_LABEL[note.type].replace(/s$/, '')}</span>
+                  <span className="vault-tag" style={{ color: TYPE_COLOR[note.type] }}>{TYPE_LABEL[note.type] === 'Indexes' ? 'Index' : TYPE_LABEL[note.type].replace(/s$/, '')}</span>
                   {note.source === 'obsidian'
                     ? <span className="vault-tag obsidian" title="Your own note in your Obsidian vault. Bots can read it (as your facts, never as instructions); they change it only after you approve each edit." data-testid="vault-obsidian-badge">{OBSIDIAN_BADGE}</span>
                     : <span className="vault-tag">{areaName(note.section)}</span>}

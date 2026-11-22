@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ComputerUseSetting } from './ComputerUseSetting'
-import { bytesText } from '@shared/bytes'
 import { WhatsNewList } from './WhatsNew'
 import type { ConnectorStatus, ModelInfo, ModelList, PermissionKind, ProviderId, Rule, Sampling, Settings, Skill, Space, SystemInfo, UpdateStatus, VoiceStatus } from '@shared/types'
 import { SENSITIVE_CATEGORIES, type ContextEngineStatus } from '@shared/context-engine'
@@ -28,7 +27,7 @@ import { AlwaysOnServerPage, PhoneAccessSection, PhonePage, ServerPage } from '.
 import { ClampText, Disclosure, InfoTip, Segmented, SetTabs as Tabs } from './ui'
 import { addRule, loadRules, removeRule, RULE_LIMIT, RULE_MAX_CHARS } from '../lib/approvalRules'
 import { useDevMode } from '../lib/dev-mode'
-import { LEGACY_PAGES, PAGE_TITLES, SETTINGS_INDEX, searchSettings, type SettingEntry, type SettingsPage } from '../lib/settings-index'
+import { SECTION_HINT, SECTION_OF, LEGACY_PAGES, PAGE_TITLES, SETTINGS_INDEX, searchSettings, type SettingEntry, type SettingsPage } from '../lib/settings-index'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
 
@@ -44,12 +43,9 @@ const PAGES: Array<{ id: Page; icon: ReactNode; color: string }> = [
   { id: 'connected', icon: <I.Plug size={14} />, color: '#007aff' },
   { id: 'memory', icon: <I.Sparkle size={14} />, color: '#34c759' },
   { id: 'privacy', icon: <I.Shield size={14} />, color: '#5ac8fa' },
-  { id: 'permissions', icon: <I.Shield size={14} />, color: '#34aadc' },
   { id: 'voice', icon: <I.Mic size={14} />, color: '#ff2d55' },
-  { id: 'usage', icon: <I.Clock size={14} />, color: '#ff6a1a' },
   // SahilBot Server: devices, pairing, notifications, audit (web UI); in the Mac app, the link to a server.
-  { id: 'server', icon: <I.Globe size={14} />, color: '#1f8a5b' },
-  { id: 'advanced', icon: <I.Sliders size={14} />, color: '#af52de' }
+  { id: 'server', icon: <I.Globe size={14} />, color: '#1f8a5b' }
 ]
 /**
  * SahilBot is a desktop app first: the phone and always-on server pages only show once one is in use (or in
@@ -72,7 +68,7 @@ export function resolvePage(id?: string): { page: Page; tab?: string } {
   if (LEGACY_PAGES[id]) return LEGACY_PAGES[id]
   const [p, tab] = id.split(':')
   if (LEGACY_PAGES[p]) return LEGACY_PAGES[p]
-  return PAGES.some((x) => x.id === p) ? { page: p as Page, tab } : { page: 'general' }
+  return p in SECTION_OF ? { page: p as Page, tab } : { page: 'general' }
 }
 
 // ------------------------------------------------------------------ building blocks
@@ -193,6 +189,13 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   const anchored = initialPage?.startsWith('#') ? SETTINGS_INDEX.find((e) => e.anchor === initialPage.slice(1)) : undefined
   const start = anchored ? { page: anchored.page, tab: anchored.tab } : resolvePage(initialPage)
   const [page, setPage] = useState<Page>(start.page)
+  /** The section on screen: some pages (Spending, What it may do, Advanced) live inside another one. */
+  const section = SECTION_OF[page] ?? 'general'
+  // Opened at a page that lives inside a section (a link to Spending, say): scroll to it there.
+  useEffect(() => {
+    const sub: Partial<Record<Page, string>> = { usage: 'usage', permissions: 'permissions-page', advanced: 'advanced-page' }
+    if (page !== section && sub[page]) setJump((j) => j ?? sub[page]!)
+  }, [page, section])
   const [tabs, setTabs] = useState<Partial<Record<Page, string>>>(start.tab ? { [start.page]: start.tab } : {})
   const [find, setFind] = useState('')
   const [jump, setJump] = useState<string | null>(anchored?.anchor ?? null)
@@ -273,22 +276,34 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
             </div>
           ) : <>
             {pages.map((p) => (
-              <button key={p.id} className={`set-nav-item${page === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}><span className="set-tile" style={{ background: p.color }}>{p.icon}</span>{pageTitle(p.id)}</button>
+              <button key={p.id} className={`set-nav-item${section === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}>
+                <span className="set-tile" style={{ background: p.color }}>{p.icon}</span>
+                <span className="set-nav-text"><span>{pageTitle(p.id)}</span>{SECTION_HINT[p.id] && <small>{SECTION_HINT[p.id]}</small>}</span>
+              </button>
             ))}
           </>}
-          {sys && <div className="set-nav-foot">{sys.chip}<br />{sys.totalGB} GB RAM · SahilBot {sys.appVersion}</div>}
+          {sys && <div className="set-nav-foot">SahilBot {sys.appVersion}</div>}
         </nav>
-        <div className="set-body" ref={bodyRef} data-page={page}>
-          {page === 'general' && <General s={s} patch={patch} />}
-          {page === 'models' && <ModelsPage s={s} models={models} patch={patch} onRefresh={onRefreshModels} />}
-          {page === 'connected' && <ConnectedPage s={s} patch={patch} />}
-          {page === 'permissions' && <PermissionsPage s={s} patch={patch} />}
-          {page === 'memory' && <MemoryPage spaces={spaces ?? []} tab={tabs.memory ?? 'memories'} onTab={setTab('memory')} />}
-          {page === 'voice' && <VoicePage s={s} models={models} patch={patch} />}
-          {page === 'privacy' && <PrivacySecurityPage s={s} patch={patch} tab={tabs.privacy ?? 'passwords'} onTab={setTab('privacy')} />}
-          {page === 'usage' && <div data-setting="usage"><UsagePage /></div>}
-          {page === 'server' && <div data-setting="server">{isServerRuntime ? (onPhone ? <PhonePage /> : <ServerPage />) : <AlwaysOnServerPage />}</div>}
-          {page === 'advanced' && <AdvancedPage s={s} models={models} patch={patch} spaces={spaces ?? []} tab={tabs.advanced ?? 'rules'} onTab={setTab('advanced')} />}
+        <div className="set-body" ref={bodyRef} data-page={page} key={section}>
+          {section === 'general' && <>
+            <General s={s} patch={patch} />
+            <Disclosure title="Advanced" sub="Look, routines, web search, rules and developer options. Most people never need these." testId="settings-advanced-section" defaultOpen={page === 'advanced'}>
+              <General s={s} patch={patch} extras />
+              <div data-setting="advanced-page"><AdvancedPage s={s} models={models} patch={patch} spaces={spaces ?? []} tab={tabs.advanced ?? 'rules'} onTab={setTab('advanced')} /></div>
+            </Disclosure>
+          </>}
+          {section === 'models' && <>
+            <ModelsPage s={s} models={models} patch={patch} onRefresh={onRefreshModels} />
+            <div data-setting="usage" className="set-subpage"><UsagePage /></div>
+          </>}
+          {section === 'connected' && <ConnectedPage s={s} patch={patch} />}
+          {section === 'memory' && <MemoryPage spaces={spaces ?? []} tab={tabs.memory ?? 'memories'} onTab={setTab('memory')} />}
+          {section === 'voice' && <VoicePage s={s} models={models} patch={patch} />}
+          {section === 'privacy' && <>
+            <div data-setting="permissions-page"><PermissionsPage s={s} patch={patch} /></div>
+            <div className="set-subpage"><PrivacySecurityPage s={s} patch={patch} tab={tabs.privacy ?? 'passwords'} onTab={setTab('privacy')} /></div>
+          </>}
+          {section === 'server' && <div data-setting="server">{isServerRuntime ? (onPhone ? <PhonePage /> : <ServerPage />) : <AlwaysOnServerPage />}</div>}
         </div>
       </div>
     </div>
@@ -309,17 +324,61 @@ function PhoneAccessWhenUsed() {
 
 const CATCH_UP = [[0, 'Off'], [1, '1 hour'], [6, '6 hours'], [12, '12 hours'], [24, '1 day'], [72, '3 days'], [168, '1 week']] as const
 
-function General({ s, patch }: P) {
+function General({ s, patch, extras }: P & { extras?: boolean }) {
   const [braveKey, setBraveKey] = useState('')
   const [login, setLogin] = useState<string | null>(null)
   useEffect(() => { if (!isServerRuntime) void api.alwaysOn.status().then((st) => setLogin(st.loginItem)).catch(() => undefined) }, [s.openAtLogin])
   const loginHint = login === 'requires-approval' ? 'Allow SahilBot in System Settings → General → Login Items.' : login === 'unsupported' ? 'Works in the installed app.' : 'Starts hidden in the menu bar.'
   const a = s.appearance
   const look = (p: Partial<Settings['appearance']>): void => void patch({ appearance: { ...a, ...p } })
+  // Advanced (the fold at the bottom of this page): look, routines and web search.
+  if (extras) return (
+    <>
+      <Section title="Look">
+        <Row id="chat-width" title="Chat width"><Slider min={600} max={1200} step={20} value={a.chatWidth} label="Chat width" onChange={(v) => look({ chatWidth: v })} left="Narrow" mid={`${a.chatWidth}px`} right="Wide" /></Row>
+        <Row id="code-wrap" title="Wrap long code lines"><Toggle on={a.codeWrap} onChange={(v) => look({ codeWrap: v })} label="Wrap long code lines" /></Row>
+        <Row id="tint" title="Accent tint" sub={a.tint ? `${a.tint}% strength` : 'Off'}>
+          <div className="hue-row">
+            <Slider min={0} max={360} value={a.hue} label="Tint color" onChange={(v) => look({ hue: v, tint: a.tint || 30 })} />
+            <span className="hue-swatch" style={{ background: `hsl(${a.hue} 70% 55%)` }} />
+            <Slider min={0} max={100} value={a.tint} label="Tint strength" onChange={(v) => look({ tint: v })} />
+          </div>
+        </Row>
+        <Row id="reduce-transparency" title="Reduce transparency"><Toggle on={a.reduceTransparency} onChange={(v) => look({ reduceTransparency: v })} label="Reduce transparency" /></Row>
+        {!isServerRuntime && <Row id="animate-browser" title="Animate browser actions" sub="Show a cursor animation when you’re watching SahilBot’s browser.">
+          <Toggle on={s.advanced.animateBrowser === true} onChange={(v) => void patch({ advanced: { ...s.advanced, animateBrowser: v } })} label="Animate browser actions" />
+        </Row>}
+      </Section>
+      <Section title="Routines">
+        {!isServerRuntime && <Row id="keep-awake" title="Keep the Mac awake while bots work" info="Only while a chat or routine is running. Closing the lid still sleeps (see the next setting)."><Toggle on={s.keepAwakeWhileWorking ?? true} onChange={(v) => void patch({ keepAwakeWhileWorking: v })} label="Keep the Mac awake while bots work" testId="keep-awake" /></Row>}
+        {!isServerRuntime && <LidAwakeRow on={s.lidAwake === true} onChanged={() => void patch({})} />}
+        <Row id="catch-up" title="Catch up on missed routines" info="If SahilBot was closed or the Mac was asleep, each missed routine runs once if it was due within this window.">
+          <select className="set-select" value={s.catchUpHours ?? 12} onChange={(e) => void patch({ catchUpHours: Number(e.target.value) })} data-testid="catch-up" aria-label="Catch up on missed routines">
+            {CATCH_UP.map(([h, label]) => <option key={h} value={h}>{label}</option>)}
+          </select>
+        </Row>
+        <Row id="routines-paused" title="Pause all routines"><Toggle on={s.routinesPaused ?? false} onChange={(v) => void patch({ routinesPaused: v })} label="Pause all routines" testId="routines-paused" /></Row>
+      </Section>
+      <Section title="Web search">
+        <Row id="web-search" title="Search with" info="Automatic uses the best one available. Brave and SearXNG need a key or an address.">
+          <select className="set-select" value={s.search.provider} aria-label="Web search provider" onChange={(e) => void patch({ search: { ...s.search, provider: e.target.value as Settings['search']['provider'] } })}>
+            <option value="auto">Automatic</option><option value="duckduckgo">DuckDuckGo (no key)</option><option value="brave">Brave Search API</option><option value="searxng">SearXNG</option><option value="none">Off</option>
+          </select>
+        </Row>
+        {s.search.provider === 'brave' && (
+          <Row title="Brave API key"><div className="key-edit">
+            <input className="set-input" type="password" value={braveKey} aria-label="Brave API key" onChange={(e) => setBraveKey(e.target.value)} placeholder={s.search.hasBraveKey ? '•••••••• saved' : 'Paste key'} />
+            <button className="btn" disabled={!braveKey} onClick={() => void patch({ braveKey }).then(() => { setBraveKey(''); toast('Saved', 'ok') })}>Save</button>
+          </div></Row>
+        )}
+        {s.search.provider === 'searxng' && <Row title="SearXNG address"><Field value={s.search.searxngUrl} placeholder="http://localhost:8888" label="SearXNG address" onSave={(v) => void patch({ search: { ...s.search, searxngUrl: v } })} /></Row>}
+      </Section>
+    </>
+  )
   return (
     <>
-      <h2>General</h2>
-      <div className="set-sub">Most people never need to change anything here.</div>
+      <h2>You</h2>
+      <div className="set-sub">What SahilBot calls you, how it looks, and how it starts. Changes save as you go.</div>
       <Section>
         <Row id="user-name" title="Your name" sub="What SahilBot calls you."><Field value={s.userName} placeholder="First name" label="Your name" onSave={(v) => void patch({ userName: v })} /></Row>
         {/* Me: bots may always email or text these without asking (agent/trusted.ts). Commas separate several. */}
@@ -332,6 +391,16 @@ function General({ s, patch }: P) {
         <Row id="workspace" title="Workspace folder" sub="Where SahilBot saves what it makes."><Field value={s.workspaceDir} width={280} label="Workspace folder" onSave={(v) => void patch({ workspaceDir: v })} /></Row>
         <Row id="theme" title="Theme">
           <Segmented value={s.theme} label="Theme" testIdPrefix="theme" onChange={(v) => void patch({ theme: v })} options={[{ id: 'system', label: 'System' }, { id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }]} />
+        </Row>
+        <Row id="font-size" title="Text size">
+          <div className="stepper">
+            <button onClick={() => look({ fontSize: Math.max(12, a.fontSize - 1) })} aria-label="Smaller">−</button>
+            <span>{a.fontSize}</span>
+            <button onClick={() => look({ fontSize: Math.min(20, a.fontSize + 1) })} aria-label="Larger">+</button>
+          </div>
+        </Row>
+        <Row id="density" title="Step detail" sub="How much of the agent's work shows in a chat.">
+          <Segmented value={a.density} label="Step detail" onChange={(v) => look({ density: v })} options={[{ id: 'compact', label: 'Compact' }, { id: 'detailed', label: 'Detailed' }]} />
         </Row>
         {!isServerRuntime && (
           <>
@@ -349,57 +418,6 @@ function General({ s, patch }: P) {
 
       {api.phoneAccess && <PhoneAccessWhenUsed />}
 
-      <Disclosure title="More" sub="Appearance, routines and web search" testId="general-more">
-        <Section title="Appearance">
-          <Row id="density" title="Step detail" sub="How much of the agent's work shows in a chat.">
-            <Segmented value={a.density} label="Step detail" onChange={(v) => look({ density: v })} options={[{ id: 'compact', label: 'Compact' }, { id: 'detailed', label: 'Detailed' }]} />
-          </Row>
-          <Row id="chat-width" title="Chat width"><Slider min={600} max={1200} step={20} value={a.chatWidth} label="Chat width" onChange={(v) => look({ chatWidth: v })} left="Narrow" mid={`${a.chatWidth}px`} right="Wide" /></Row>
-          <Row id="code-wrap" title="Wrap long code lines"><Toggle on={a.codeWrap} onChange={(v) => look({ codeWrap: v })} label="Wrap long code lines" /></Row>
-          <Row id="tint" title="Accent tint" sub={a.tint ? `${a.tint}% strength` : 'Off'}>
-            <div className="hue-row">
-              <Slider min={0} max={360} value={a.hue} label="Tint color" onChange={(v) => look({ hue: v, tint: a.tint || 30 })} />
-              <span className="hue-swatch" style={{ background: `hsl(${a.hue} 70% 55%)` }} />
-              <Slider min={0} max={100} value={a.tint} label="Tint strength" onChange={(v) => look({ tint: v })} />
-            </div>
-          </Row>
-          <Row id="reduce-transparency" title="Reduce transparency"><Toggle on={a.reduceTransparency} onChange={(v) => look({ reduceTransparency: v })} label="Reduce transparency" /></Row>
-          {!isServerRuntime && <Row id="animate-browser" title="Animate browser actions" sub="Show a cursor animation when you’re watching SahilBot’s browser.">
-            <Toggle on={s.advanced.animateBrowser === true} onChange={(v) => void patch({ advanced: { ...s.advanced, animateBrowser: v } })} label="Animate browser actions" />
-          </Row>}
-          <Row id="font-size" title="Text size">
-            <div className="stepper">
-              <button onClick={() => look({ fontSize: Math.max(12, a.fontSize - 1) })} aria-label="Smaller">−</button>
-              <span>{a.fontSize}</span>
-              <button onClick={() => look({ fontSize: Math.min(20, a.fontSize + 1) })} aria-label="Larger">+</button>
-            </div>
-          </Row>
-        </Section>
-        <Section title="Routines">
-          {!isServerRuntime && <Row id="keep-awake" title="Keep the Mac awake while bots work" info="Only while a chat or routine is running. Closing the lid still sleeps (see the next setting)."><Toggle on={s.keepAwakeWhileWorking ?? true} onChange={(v) => void patch({ keepAwakeWhileWorking: v })} label="Keep the Mac awake while bots work" testId="keep-awake" /></Row>}
-          {!isServerRuntime && <LidAwakeRow on={s.lidAwake === true} onChanged={() => void patch({})} />}
-          <Row id="catch-up" title="Catch up on missed routines" info="If SahilBot was closed or the Mac was asleep, each missed routine runs once if it was due within this window.">
-            <select className="set-select" value={s.catchUpHours ?? 12} onChange={(e) => void patch({ catchUpHours: Number(e.target.value) })} data-testid="catch-up" aria-label="Catch up on missed routines">
-              {CATCH_UP.map(([h, label]) => <option key={h} value={h}>{label}</option>)}
-            </select>
-          </Row>
-          <Row id="routines-paused" title="Pause all routines"><Toggle on={s.routinesPaused ?? false} onChange={(v) => void patch({ routinesPaused: v })} label="Pause all routines" testId="routines-paused" /></Row>
-        </Section>
-        <Section title="Web search">
-          <Row id="web-search" title="Search with" info="Automatic uses the best one available. Brave and SearXNG need a key or an address.">
-            <select className="set-select" value={s.search.provider} aria-label="Web search provider" onChange={(e) => void patch({ search: { ...s.search, provider: e.target.value as Settings['search']['provider'] } })}>
-              <option value="auto">Automatic</option><option value="duckduckgo">DuckDuckGo (no key)</option><option value="brave">Brave Search API</option><option value="searxng">SearXNG</option><option value="none">Off</option>
-            </select>
-          </Row>
-          {s.search.provider === 'brave' && (
-            <Row title="Brave API key"><div className="key-edit">
-              <input className="set-input" type="password" value={braveKey} aria-label="Brave API key" onChange={(e) => setBraveKey(e.target.value)} placeholder={s.search.hasBraveKey ? '•••••••• saved' : 'Paste key'} />
-              <button className="btn" disabled={!braveKey} onClick={() => void patch({ braveKey }).then(() => { setBraveKey(''); toast('Saved', 'ok') })}>Save</button>
-            </div></Row>
-          )}
-          {s.search.provider === 'searxng' && <Row title="SearXNG address"><Field value={s.search.searxngUrl} placeholder="http://localhost:8888" label="SearXNG address" onSave={(v) => void patch({ search: { ...s.search, searxngUrl: v } })} /></Row>}
-        </Section>
-      </Disclosure>
     </>
   )
 }
@@ -414,12 +432,12 @@ function UpdatesRow() {
   }, [])
   const text = !st ? 'Checking…'
     : st.state === 'checking' ? 'Checking for a new version…'
-    : st.state === 'downloading' ? `Downloading ${st.version}${st.size ? ` (${bytesText(st.size)})` : ''}… ${st.progress ?? 0}%`
-    : st.state === 'ready' ? `${st.version}${st.size ? ` (${bytesText(st.size)})` : ''} is ready. The old version is removed once the new one has run for a minute, so only one SahilBot stays installed. Your chats, bots, connected apps and settings stay as they are, and a copy of your data is saved first.`
-    : st.state === 'installing' ? 'Backing up your data and restarting…'
+    : st.state === 'downloading' ? `Getting the update… ${st.progress ?? 0}%`
+    : st.state === 'ready' ? 'Ready. Restart to finish: your chats, bots and settings stay as they are, and a copy is saved first.'
+    : st.state === 'installing' ? 'Saving a copy of your data and restarting…'
     : st.state === 'error' || st.state === 'unsupported' ? st.detail ?? 'Couldn\'t check for updates.'
-    : st.state === 'idle' ? `SahilBot ${st.current ?? ''}. New versions are checked for and downloaded on their own.`
-    : `SahilBot ${st.current ?? ''} is up to date.`
+    : st.state === 'idle' ? 'New versions download on their own.'
+    : 'You\'re up to date.'
   return (
     <>
       <Row id="updates" title="Updates" sub={text} testId="updates-row">
@@ -474,7 +492,7 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
   const grok = installed.filter((m) => m.provider === 'xai')
   return (
     <>
-      <h2>Models &amp; Keys</h2>
+      <h2>AI &amp; spending</h2>
       <div className="set-sub">Connect at least one. Auto picks the right model for each request. Keys are encrypted with your Mac's Keychain and kept through updates.</div>
       {s.keysLocked && (
         <div className="banner" role="status" data-testid="keys-locked">
@@ -498,17 +516,20 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
           {power('xai', 'Grok')}
         </Row>
       </Section>
-      <div data-setting="chatgpt-plan"><ChatgptPlanSettings onRefresh={onRefresh} /></div>
-      {api.runtime !== 'server' && <GrokPlanSettings onRefresh={onRefresh} />}
+      <div data-setting="monthly-limit"><SpendingLimitSection s={s} patch={patch} /></div>
 
-      <Section title="How models are used">
-        <Row id="auto-prefers" title="Auto prefers" info="Best prioritizes the quality of the result. Price breaks close ties. Balanced and Cheapest give cost more weight.">
-          <Segmented value={s.cloud.autoPrefers ?? 'best'} label="Auto prefers" testIdPrefix="auto-prefers" onChange={(v) => void patch({ cloud: { ...s.cloud, autoPrefers: v } })}
-            options={[{ id: 'best', label: 'Best' }, { id: 'balanced', label: 'Balanced' }, { id: 'cheapest', label: 'Cheapest' }]} />
+      <Section title="How answers are picked">
+        <Row id="auto-prefers" title="Prefer" info="Best answers picks the strongest model for each request; price only breaks close ties. Balanced and Lowest cost give price more weight.">
+          <Segmented value={s.cloud.autoPrefers ?? 'best'} label="Prefer" testIdPrefix="auto-prefers" onChange={(v) => void patch({ cloud: { ...s.cloud, autoPrefers: v } })}
+            options={[{ id: 'best', label: 'Best answers' }, { id: 'balanced', label: 'Balanced' }, { id: 'cheapest', label: 'Lowest cost' }]} />
         </Row>
         <div data-setting="local-models"><LocalModelsRow s={s} patch={patch} onChanged={onRefresh} /></div>
       </Section>
-      <div data-setting="monthly-limit"><SpendingLimitSection s={s} patch={patch} /></div>
+
+      <Disclosure title="Use a ChatGPT or Grok subscription instead" sub="Your existing plan, through its app on this Mac, with no API charges" testId="models-subscriptions">
+        <div data-setting="chatgpt-plan"><ChatgptPlanSettings onRefresh={onRefresh} /></div>
+        {api.runtime !== 'server' && <GrokPlanSettings onRefresh={onRefresh} />}
+      </Disclosure>
       {localIsOn(s) && <RecommendedLocal s={s} models={models} onRefresh={onRefresh} />}
 
       <Disclosure title="Advanced" sub="Defaults, routing, fast mode, model list, servers and tool keys" testId="models-advanced">
@@ -808,7 +829,7 @@ function ConnectedPage({ s, patch }: P) {
   const waiting = (apps ?? []).filter((a) => a.state !== 'connected')
   return (
     <>
-      <h2>Connected apps</h2>
+      <h2>Apps</h2>
       <div className="set-sub">Gmail, Calendar, Notion, Slack, GitHub and more. Bots use them when a task needs them.</div>
       <Section>
         <Row id="connect-apps" testId="connected-summary"
@@ -920,8 +941,8 @@ function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab:
   const cur = tabs.find((t) => t.id === tab && !t.hidden)?.id ?? 'passwords'
   return (
     <>
-      <h2>Privacy &amp; Security</h2>
-      <div className="set-sub">Saved passwords, and what SahilBot may see and keep. What it may do on its own is under Permissions.</div>
+      <h3 className="set-h3">Passwords, privacy and backups</h3>
+      <div className="set-sub">Saved passwords, what SahilBot may see and keep, and copies of your data.</div>
       <Tabs value={cur} tabs={tabs} onChange={onTab} label="Privacy and security" />
       {cur === 'passwords' && <div data-setting="passwords">{onPhone
         ? <div className="set-sub" data-testid="vault-on-mac">Saved passwords, cards and authenticator codes stay on your Mac and are never sent to this phone. Manage them in SahilBot on the Mac.</div>
@@ -946,7 +967,7 @@ function PermissionsPage({ s, patch }: P) {
   const level = s.defaultMode === 'ask' ? 'ask' : 'auto'
   return (
     <>
-      <h2>Permissions</h2>
+      <h2>Privacy &amp; safety</h2>
       <div className="set-sub">What SahilBot may do without asking, and what your Mac lets it use.</div>
       <section className="set-section" data-setting="autonomy">
         <div className="set-label">New chats</div>

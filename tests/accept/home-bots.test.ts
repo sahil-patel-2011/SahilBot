@@ -22,13 +22,13 @@ describe('Home: your bots first', () => {
   test('a fresh start shows one "New bot": it sets itself up in its chat, names itself and saves its instructions', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     try {
-      await page.locator('[data-testid="bot-deck"]').waitFor()
-      expect(await page.locator('[data-testid="deck-make-bot"]').innerText()).toContain('New bot')
-      // The composer comes first now; the bot card sits below it (no separate "Quick question" header).
+      // A fresh start keeps Home to the message box: no bot card yet; the sidebar's "New bot" sets one up.
+      await page.locator('[data-testid="sidebar-make-bot"]').waitFor()
+      expect(await page.locator('[data-testid="bot-deck"]').count()).toBe(0)
       expect(await page.locator('.home-quick-head').count()).toBe(0)
       if (shots) await page.screenshot({ path: `${shots}/home-fresh.png` })
 
-      await page.click('[data-testid="deck-setup"]')
+      await page.click('[data-testid="sidebar-make-bot"]')
       await expect.poll(() => page.locator('[data-testid="bot-deck"]').count(), { timeout: 10_000 }).toBe(0)
       await expect.poll(() => page.locator('[data-testid="thread"]').innerText(), { timeout: 10_000 }).toContain('Let\'s set me up together')
 
@@ -112,7 +112,10 @@ describe('Home: your bots first', () => {
       await page.locator('[data-testid="bot-card"]', { hasText: 'Scout' }).locator('[data-testid="bot-talk"]').click()
       await page.locator('[data-testid="voice-mode"]').waitFor()
       expect(await page.locator('[data-testid="voice-mode"] .vb-name').innerText()).toContain('Scout')
-      for (const id of ['voice-settings', 'voice-transcript', 'voice-mute', 'voice-end']) expect(await page.locator(`[data-testid="${id}"]`).count(), id).toBe(1)
+      // The transcript switch lives in the voice options (the "⋯" button), with the voices.
+      // Without speech set up (a test run), the bar says so in plain words with one "Set up voice" button instead of mute.
+      const voiceReady = !(await page.locator('[data-testid="voice-mode"] .vb-fix').count())
+      for (const id of ['voice-settings', 'voice-end', ...(voiceReady ? ['voice-mute'] : [])]) expect(await page.locator(`[data-testid="${id}"]`).count(), id).toBe(1)
 
       // Settings: voices for the engine speaking now, speed and language; choices are kept.
       await page.click('[data-testid="voice-settings"]')
@@ -131,8 +134,11 @@ describe('Home: your bots first', () => {
       await page.click('[data-testid="voice-settings"]')
 
       // Mute and transcript are toggles.
-      await page.click('[data-testid="voice-mute"]')
-      expect(await page.getAttribute('[data-testid="voice-mute"]', 'aria-pressed')).toBe('true')
+      if (voiceReady) {
+        await page.click('[data-testid="voice-mute"]')
+        expect(await page.getAttribute('[data-testid="voice-mute"]', 'aria-pressed')).toBe('true')
+      }
+      await page.click('[data-testid="voice-settings"]')
       await page.click('[data-testid="voice-transcript"]')
       expect(await page.getAttribute('[data-testid="voice-transcript"]', 'aria-pressed')).toBe('true')
       if (shots) await page.screenshot({ path: `${shots}/voice-bar.png` })

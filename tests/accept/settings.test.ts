@@ -25,24 +25,27 @@ describe('Settings', () => {
       await page.keyboard.press('Meta+,')
       await page.locator('[data-testid="settings"]').waitFor()
 
-      // One flat list, most-used first. Phone & server only shows once in use or in Developer mode (on in tests).
+      // Six sections, each with a one-line explanation (Spending sits in AI & spending, What it may do in Privacy &
+      // safety, Advanced at the bottom of You). Phone & server only shows once in use or in Developer mode (on in tests).
       const ids = await page.locator('.set-nav .set-nav-item').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
-      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-memory', 'settings-privacy', 'settings-permissions', 'settings-voice', 'settings-usage', 'settings-server', 'settings-advanced'])
+      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-memory', 'settings-privacy', 'settings-voice', 'settings-server'])
+      expect(await page.locator('.set-nav-item small').count()).toBeGreaterThanOrEqual(6)
       expect(await page.locator('[data-testid="settings-more"]').count()).toBe(0)
-      // General: theme folded in; appearance details under More (closed).
+      // You: one list (theme, text size, step detail) and a single Advanced fold; no "More".
       expect(await page.locator('[data-setting="theme"]').count()).toBe(1)
-      expect(await page.locator('[data-testid="general-more"]').getAttribute('open')).toBeNull()
+      expect(await page.locator('[data-testid="general-more"]').count()).toBe(0)
       // Privacy & Security: tabs for passwords, approvals, permissions, activity, sensitive details.
       await page.click('[data-testid="settings-privacy"]')
       await page.locator('[data-testid="vault-status"]').waitFor()
-      await page.click('[data-testid="settings-permissions"]')
+      // What it may do (approval rules) is on the same page now.
       await page.locator('[data-testid="approvals-rules"] > summary').click()
       await page.locator('[data-testid="rule-when"]').waitFor()
       await page.click('[data-testid="settings-privacy"]')
       await page.click('[data-testid="settings-tab-sensitive"]')
       await expect.poll(() => page.locator('[data-testid^="settings-sens-"]').count()).toBeGreaterThan(5)
       // Advanced: rules & skills, knowledge folders, developer.
-      await page.click('[data-testid="settings-advanced"]')
+      await page.click('[data-testid="settings-general"]')
+      await page.click('[data-testid="settings-advanced-section"] > summary')
       await page.click('[data-testid="settings-tab-knowledge"]')
       await page.locator('[data-testid="knowledge-settings"]').waitFor()
 
@@ -50,7 +53,7 @@ describe('Settings', () => {
       await page.click('[data-testid="settings-general"]')
       await page.fill('[data-testid="settings-search"]', 'openrouter')
       await page.locator('[data-testid="settings-result-servers"]').waitFor()
-      expect(await page.locator('[data-testid="settings-result-servers"]').innerText()).toContain('Models & Keys · Advanced')
+      expect(await page.locator('[data-testid="settings-result-servers"]').innerText()).toContain('AI & spending · Advanced')
       await page.keyboard.press('Enter')
       await expect.poll(() => page.locator('[data-testid="settings-models"]').getAttribute('class')).toContain(' on')
       await expect.poll(() => page.locator('[data-testid="models-advanced"]').getAttribute('open')).not.toBeNull()
@@ -59,7 +62,7 @@ describe('Settings', () => {
       // ...and to one on another page's tab.
       await page.fill('[data-testid="settings-search"]', 'approval')
       await page.click('[data-testid="settings-result-approval-rules"]')
-      await expect.poll(() => page.locator('[data-testid="settings-permissions"]').getAttribute('class')).toContain(' on')
+      await expect.poll(() => page.locator('[data-testid="settings-privacy"]').getAttribute('class')).toContain(' on')
       await expect.poll(() => page.locator('[data-testid="rule-when"]').isVisible()).toBe(true)
 
       // Memory: one switch, a plain list with category chips, click to edit, delete with Undo.

@@ -2,6 +2,35 @@
 
 Every SahilBot update, newest first. The same notes show in the app (Settings → Updates → What's new) and on each GitHub release. Versions are dates (YY.MM.DD).
 
+## 26.11.22 · A simpler, smoother SahilBot
+
+_2026-11-22_
+
+- **The voice bar is calmer: a smooth wave that follows your voice, one line of status, and plain words with a "Set up voice" button when voice isn't ready**
+- **Settings has six clear sections, each with a one-line explanation, and no "More settings" menus**
+- **Updates and backup sizes show right away instead of making you wait**
+- **Smoother animations and easier-to-read chat text**
+
+### Voice
+
+- The wave moves smoothly with your voice and SahilBot's (no more jumpy bars), and calms down when nobody is talking
+- Transcript, voices, speed and language are behind one "⋯" button in the bar
+- If voice isn't set up, the bar says what to do in one sentence, and the button opens the right setting
+
+### Settings
+
+- Six sections: You, AI & spending, Apps, Memory, Privacy & safety, Voice. Each one says what it's for
+- Spending sits with the AI settings, and what SahilBot may do on its own sits with privacy
+- Text size and step detail are in the main list; rarely used options (tint, routines, web search, rules, developer options) are in one Advanced fold at the bottom
+- "How answers are picked" is a simple choice: Best answers, Balanced or Lowest cost. Using a ChatGPT or Grok plan instead of keys is one click away
+
+### Smoother everywhere
+
+- Update downloads skip a slow re-check of a file that was already verified, and the sidebar says "Getting the update", then "Restart to update"
+- Backup sizes are remembered instead of being recounted every time you open Settings
+- A question with answer choices shows once, on its card, instead of twice
+- Messages fade in, chat text has more space between lines, and hover effects match across the app. Reduced motion is respected
+
 ## 26.11.21 · Medical research you can trust, a cleaner look, and keys that stay put
 
 _2026-11-21_

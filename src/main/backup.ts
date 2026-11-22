@@ -238,6 +238,20 @@ export class BackupService {
   private lastError?: string
   constructor(private d: BackupDeps) {}
 
+  /**
+   * A finished backup's size, measured once and remembered (walking every file each time Settings asked made the
+   * "Last backup · 412 MB" line, and the whole section, wait on the disk).
+   */
+  private sizes = new Map<string, number>()
+  private sizeOf(path: string): number {
+    const known = this.sizes.get(path) ?? this.d.getSetting<number>(`backup:size:${basename(path)}`)
+    if (typeof known === 'number') { this.sizes.set(path, known); return known }
+    const n = folderBytes(path)
+    this.sizes.set(path, n)
+    try { this.d.setSetting(`backup:size:${basename(path)}`, n) } catch { /* memory only */ }
+    return n
+  }
+
   extraDir(): string | undefined { return this.d.getSetting<string>(EXTRA_KEY) || undefined }
 
   /** Checks a folder the user picked for the extra copy. */
@@ -355,7 +369,7 @@ export class BackupService {
       try { info = JSON.parse(readFileSync(join(path, '.complete.json'), 'utf8')) as typeof info } catch { /* older backup */ }
       const has = (n: string): boolean => existsSync(join(path, n))
       const includes = ['database & settings', ...(has('vault') ? ['knowledge vault'] : []), ...(has('export') ? ['memories & decisions'] : []), ...(has(RECOVERY_FILE) ? ['API keys (recovery password)'] : ['API keys (this Mac\'s Keychain only)'])]
-      last = { at: info.at ?? statSync(path).mtimeMs, path, bytes: folderBytes(path), label: info.label ?? '', includes }
+      last = { at: info.at ?? statSync(path).mtimeMs, path, bytes: this.sizeOf(path), label: info.label ?? '', includes }
     }
     return { folders, last, running: !!this.running, recoveryPassword: this.hasRecovery(), note: saved?.note, error: this.lastError }
   }

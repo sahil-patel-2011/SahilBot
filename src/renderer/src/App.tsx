@@ -900,7 +900,7 @@ export function App() {
           <div className="header-title">
             {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
           </div>
-          {chatBot && !vaultOpen && (thread || (isBot && view === 'home')) && (
+          {chatBot && !vaultOpen && !voiceOn && (thread || (isBot && view === 'home')) && (
             <div className={`chat-pill${panel === 'details' ? ' on' : ''}`}>
               {renamingTitle && thread ? (
                 <input className="title-edit" autoFocus defaultValue={thread.title}
@@ -1019,8 +1019,9 @@ export function App() {
           <ProjectHome project={space} onOpen={(t) => setThread(t)} onEdit={() => setEditor({ space, mode: 'project' })} composer={composerEl} />
         ) : (
           <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={chatInput} refreshKey={running.size}
-            deck={<BotDeck bots={spaces} needSpaces={needSpaces} onOpen={(id) => void openBot(id)} onNewBot={() => setEditor({ space: null, mode: 'bot' })}
-              onTalk={(id) => { setSpaceId(id); setThread(null); setVoiceKey((k) => k + 1); setVoiceOn(true) }} onSetup={(talk) => void startSetup(talk)} />}
+            // Your bots under the box once you have some (the sidebar's New bot makes the first one).
+            deck={spaces.some((b) => b.kind === 'bot' && !b.hidden && !b.isMain) ? <BotDeck bots={spaces} needSpaces={needSpaces} onOpen={(id) => void openBot(id)} onNewBot={() => setEditor({ space: null, mode: 'bot' })}
+              onTalk={(id) => { setSpaceId(id); setThread(null); setVoiceKey((k) => k + 1); setVoiceOn(true) }} onSetup={(talk) => void startSetup(talk)} /> : undefined}
             onIdea={(text, deep) => { composer.current?.replace(text); composer.current?.setDeep(!!deep) }} />
         )}
       </main>

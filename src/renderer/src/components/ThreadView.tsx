@@ -144,6 +144,8 @@ export function blocks(messages: Message[]): Block[] {
     if (m.toolCalls?.length) {
       for (const call of m.toolCalls) {
         if (call.name === 'ask_user') {
+          // A question the tool refused (bad arguments) was never asked: don't show it as one (the model asks again).
+          if (/^(Invalid arguments|Error)/.test(results.get(call.id)?.content.replace(/^<tool_output[^>]*>\s*/, '') ?? '')) continue
           // Questions read as conversation: the bot asks, you answer.
           let q = ''
           let many: Array<{ question: string }> = []
@@ -492,10 +494,13 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const all = useMemo(() => blocks(shown), [shown])
   // The quiet chat leaves out the plan, compaction markers, notes about models, and runs that left nothing to
   // show; Developer mode shows everything.
+  // A question waiting on its card (below) shows there only: the same words don't appear twice.
+  const asking = pending.some((p) => p.kind === 'question' || p.kind === 'questions')
   const bs = useMemo(() => all.filter((b) => {
+    if (b.kind === 'qa' && !b.answer && asking) return false
     if (b.kind === 'notice' && internalNotice(b.m)) return dev
     return dev || quietVisible(b, hasDocs)
-  }), [all, dev, hasDocs])
+  }), [all, dev, hasDocs, asking])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
   // Long chats mount their latest WINDOW blocks; an older first unread grows the window to include it.
   const limit = windowLimit(win.threadId === threadId ? win.limit : WINDOW, bs.length, dividerAt)

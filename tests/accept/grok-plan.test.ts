@@ -13,6 +13,8 @@ test('Grok subscription switches on without a key, executes a SahilBot tool, and
     await page.evaluate((folder) => window.foreman.settings.set({ workspaceDir: folder, local: { enabled: false } }), workspace)
     writeFileSync(join(data, 'grok-plan', 'signed-in'), '')
     await page.evaluate(() => window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: 'models' })))
+    // Subscriptions sit in their own fold under AI & spending.
+    await page.click('[data-testid="models-subscriptions"] summary')
     const status = page.getByTestId('grok-plan-status')
     await expect.poll(() => status.innerText()).toBe('Off')
     await page.getByTestId('grok-plan-on').click()

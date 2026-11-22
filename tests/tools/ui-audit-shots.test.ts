@@ -401,7 +401,7 @@ test('UI audit screenshots', async () => {
     }
     // General → More open (appearance, routines with the lid setting).
     await settingsPage(page, 'general')
-    await page.click('[data-testid="general-more"] > summary').catch(() => undefined)
+    await page.click('[data-testid="settings-advanced-section"] > summary').catch(() => undefined)
     await wait(page, 300)
     await shootTall(page, 'tall-settings-general-more')
     // Models → Advanced (Fast mode).
