@@ -33,9 +33,23 @@ test.skipIf(!process.env.UI_SHOTS)('ui screenshots', async () => {
   await page.waitForTimeout(2500); snap('03-voice')
   await page.keyboard.press('Escape'); await page.waitForTimeout(800)
   await page.click('[data-testid="voice-end"]', { timeout: 2000 }).catch(() => undefined)
+  // Composer menus and the chat header.
+  const pop = async (sel: string, name: string): Promise<void> => {
+    if (await page.locator(sel).first().click({ timeout: 2000 }).then(() => true).catch(() => false)) { await page.waitForTimeout(900); snap(name); await page.keyboard.press('Escape'); await page.waitForTimeout(500) }
+  }
+  await pop('.composer-bar .plus-pop > button', '04-composer-plus')
+  await pop('[data-testid="agent-strategy"]', '05-composer-model')
+  await pop('.wf-pick > button, button.wf-pick', '06-composer-folder')
+  await pop('[data-testid="bot-pill"]', '07-header-bot')
+  for (const [id, name] of [['nav-tasks', '30-needs-you'], ['nav-artifacts', '31-artifacts'], ['nav-brain', '32-brain'], ['nav-search', '33-search']] as const) {
+    await page.click(`[data-testid="${id}"]`, { timeout: 2000 }).catch(() => undefined)
+    await page.waitForTimeout(1800); snap(name)
+    await page.keyboard.press('Escape'); await page.waitForTimeout(500)
+  }
+  await page.click('[data-testid="new-chat"]').catch(() => undefined); await page.waitForTimeout(800)
   // Settings, every page.
   await page.click('[data-testid="profile"]'); await page.waitForTimeout(1500)
-  for (const id of ['general', 'models', 'connected', 'memory', 'privacy', 'permissions', 'voice', 'usage', 'advanced']) {
+  for (const id of ['general', 'models', 'connected', 'memory', 'privacy', 'voice', 'server']) {
     await page.click(`[data-testid="settings-${id}"]`, { timeout: 3000 }).catch(() => undefined)
     await page.waitForTimeout(1500); snap(`10-settings-${id}`)
   }
