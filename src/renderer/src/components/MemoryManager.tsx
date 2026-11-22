@@ -5,9 +5,10 @@ import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { LearningLog } from './LearningLog'
 import { ImportMemoryDialog } from './ImportMemoryDialog'
-import { VaultSettings } from './VaultView'
 import { Toggle } from './Toggle'
 import { BrainSettings } from './BrainSettings'
+import { LearningSources } from './PeopleView'
+import '../styles-vault.css'
 import { ClampText, Disclosure, InfoTip, SetTabs } from './ui'
 
 // Settings → Memory: one switch ("Remember things automatically": bots save what you tell them and SahilBot
@@ -78,7 +79,7 @@ export function MemoryPage({ spaces, tab, onTab }: { spaces: Space[]; tab: strin
   const tabs = [
     { id: 'memories', label: 'Memories' },
     { id: 'learned', label: <>Learned{waiting > 0 && <span className="set-tab-badge" title="Waiting for your OK">{waiting}</span>}</> },
-    { id: 'vault', label: 'Notes' },
+    { id: 'sources', label: 'What it learns from' },
     { id: 'brain', label: 'Brain' }
   ]
   const cur = tabs.some((t) => t.id === tab) ? tab : 'memories'
@@ -100,11 +101,10 @@ export function MemoryPage({ spaces, tab, onTab }: { spaces: Space[]; tab: strin
           <ShareAcrossBots />
         </div>
       </section>
-      <SetTabs value={cur} tabs={tabs} onChange={onTab} label="Memory"
-        extra={<button type="button" className="link-btn" data-setting="people-places" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-vault', { detail: { path: null, tab: 'people' } }))} data-testid="memory-people">People &amp; Places <I.External size={12} /></button>} />
+      <SetTabs value={cur} tabs={tabs} onChange={onTab} label="Memory" />
       {cur === 'memories' && <MemoryList spaces={spaces} />}
       {cur === 'learned' && <div data-setting="learned"><LearningLog spaces={spaces} /></div>}
-      {cur === 'vault' && <div data-setting="knowledge-vault"><VaultSettings /></div>}
+      {cur === 'sources' && <div data-setting="people-places"><LearningSources /></div>}
       {cur === 'brain' && <div data-setting="brain-settings"><BrainSettings /></div>}
       <MemoryAdvanced learn={learn} setLearning={setLearning} />
     </>

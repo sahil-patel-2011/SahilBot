@@ -34,7 +34,6 @@ import { BotDetails, BotEditor, ConnectApps, Lazy, Onboarding, preloadSurfaces, 
 type Editor = { space: Space | null; mode: 'bot' | 'group' | 'project' } | null
 
 // The knowledge vault view and the "Import memory" dialog (their own chunks; opened by events, see below).
-const VaultView = lazy(async () => ({ default: (await import('./components/VaultView')).VaultView }))
 const ImportMemoryDialog = lazy(async () => ({ default: (await import('./components/ImportMemoryDialog')).ImportMemoryDialog }))
 
 /** Models a council can sit with (the Council chip shows with two or more). */
@@ -92,19 +91,14 @@ export function App() {
   const [finding, setFinding] = useState(false)
   /** Bypass picked for the first time: what to do once the user confirms (null: no dialog). */
   const [bypassAsk, setBypassAsk] = useState<(() => void) | null>(null)
-  // The Vault view (in the main area) and the memory import dialog: opened from the palette, Settings
-  // or a bot's details through window events, so those surfaces don't need props from here.
-  const [vaultOpen, setVaultOpen] = useState<{ path: string | null; tab?: 'people' } | null>(null)
+  // The memory import dialog: opened from the palette or Settings through a window event. (The bots' notes have
+  // no view: they're the bots' own memory; the user asks a bot to remove or export them.)
   const [importOpen, setImportOpen] = useState(false)
   useEffect(() => {
-    const openVault = (e: Event): void => { const d = (e as CustomEvent).detail as { path?: string | null; tab?: 'people' } | undefined; setVaultOpen({ path: d?.path ?? null, tab: d?.tab }); setShowSettings(false) }
     const openImport = (): void => setImportOpen(true)
-    window.addEventListener('sahilbot:open-vault', openVault)
     window.addEventListener('sahilbot:import-memory', openImport)
-    return () => { window.removeEventListener('sahilbot:open-vault', openVault); window.removeEventListener('sahilbot:import-memory', openImport) }
+    return () => window.removeEventListener('sahilbot:import-memory', openImport)
   }, [])
-  // Opening a chat, a bot or another view leaves the vault.
-  useEffect(() => { setVaultOpen(null) }, [thread?.id, spaceId, view])
   const [voiceOn, setVoiceOn] = useState(false)
   /** ⌘D held or tapped (App's key handler). */
   const holdD = useRef<{ done: boolean; held: boolean; timer?: ReturnType<typeof setTimeout> } | null>(null)
@@ -364,8 +358,8 @@ export function App() {
     else if (a === 'toggle-panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
     else if (a === 'search') setPalette(true)
     else if (a === 'shortcuts') setShortcuts(true)
-    else if (a === 'needs-you') { setVaultOpen(null); setThread(null); setView('tasks') }
-    else if (a === 'brain') { setVaultOpen(null); setThread(null); setView('brain') }
+    else if (a === 'needs-you') { setThread(null); setView('tasks') }
+    else if (a === 'brain') { setThread(null); setView('brain') }
     else if (a === 'export' && threadRef.current) void api.chat.exportThread(threadRef.current).then((p) => p && toast(`Saved to ${p.split('/').pop()}`, 'ok'))
   }), [])
 
@@ -532,7 +526,7 @@ export function App() {
     return () => { window.removeEventListener('keydown', k); window.removeEventListener('keyup', up) }
   }, [])
 
-  const openMain = (): void => { setVaultOpen(null); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
+  const openMain = (): void => { setSpaceId(main?.id ?? null); setThread(null); setView('home') }
   newChatRef.current = openMain
   spacesRef.current = spaces
   spaceIdRef.current = spaceId
@@ -605,7 +599,6 @@ export function App() {
     else if (a.kind === 'voice') setVoiceOn(true)
     else if (a.kind === 'dictate') requestAnimationFrame(() => composer.current?.toggleDictation())
     else if (a.kind === 'max') requestAnimationFrame(() => composer.current?.toggleMax())
-    else if (a.kind === 'vault') setVaultOpen({ path: null })
     else if (a.kind === 'import-memory') setImportOpen(true)
     else if (a.kind === 'chat') void openAnyChat(a.id)
     else if (a.kind === 'usage') { setSettingsPage('usage'); setShowSettings(true) }
@@ -906,7 +899,7 @@ export function App() {
         onSetupBot={() => void startSetup(false)}
         onSearch={() => setPalette(true)}
         view={view}
-        onView={(v) => { setVaultOpen(null); setView(v); setThread(null) }}
+        onView={(v) => { setView(v); setThread(null) }}
         modelLabel={dev ? `${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}` : undefined}
         onCustomize={(s) => setEditor({ space: s, mode: s.kind })}
         onChanged={() => void refreshSpaces().then((sp) => {
@@ -935,7 +928,7 @@ export function App() {
           <div className="header-title">
             {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
           </div>
-          {chatBot && !vaultOpen && !voiceOn && (thread || (isBot && view === 'home')) && (
+          {chatBot && !voiceOn && (thread || (isBot && view === 'home')) && (
             <div className={`chat-pill${panel === 'details' ? ' on' : ''}`}>
               {renamingTitle && thread ? (
                 <input className="title-edit" autoFocus defaultValue={thread.title}
@@ -1012,9 +1005,7 @@ export function App() {
           </div>
         )}
 
-        {vaultOpen ? (
-          <Lazy><VaultView initialPath={vaultOpen.path} initialTab={vaultOpen.tab} onClose={() => setVaultOpen(null)} /></Lazy>
-        ) : view === 'tasks' && !thread ? (
+        {view === 'tasks' && !thread ? (
           <TasksView spaces={spaces} onOpenChat={(threadId) => void openAnyChat(threadId)} />
         ) : view === 'brain' && !thread ? (
           <BrainView onConnect={() => setShowConnect(true)} onNeedsYou={() => setView('tasks')} onOpenChat={(threadId) => void openAnyChat(threadId)} />

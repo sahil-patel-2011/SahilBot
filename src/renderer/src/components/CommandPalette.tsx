@@ -8,7 +8,7 @@ import { PAGE_TITLES, searchSettings } from '../lib/settings-index'
 export type PaletteAction =
   | { kind: 'new-chat' } | { kind: 'new-bot' } | { kind: 'new-group' } | { kind: 'new-project' }
   | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'tasks' } | { kind: 'brain' } | { kind: 'connect' } | { kind: 'settings' }
-  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'max' } | { kind: 'vault' } | { kind: 'import-memory' } | { kind: 'usage' } | { kind: 'shortcuts' }
+  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'max' } | { kind: 'import-memory' } | { kind: 'usage' } | { kind: 'shortcuts' }
   | { kind: 'open'; id: string } | { kind: 'chat'; id: string }
   /** A setting: Settings opens on its page and tab, scrolled to it (lib/settings-index.ts). */
   | { kind: 'setting'; anchor: string }
@@ -35,7 +35,6 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       { a: { kind: 'brain' }, label: 'Brain', sub: 'What SahilBot knows from your accounts, briefs and Agent mode', icon: ico(<I.Sparkle size={15} />), group: 'Go to' },
       { a: { kind: 'scheduled' }, label: 'Scheduled', sub: 'Routines and scheduled tasks', icon: ico(<I.Clock size={15} />), group: 'Go to' },
       { a: { kind: 'connect' }, label: 'Connect apps', icon: ico(<I.Plug size={15} />), group: 'Go to' },
-      { a: { kind: 'vault' }, label: 'Notes', sub: 'Your notes vault: people, projects, decisions', icon: ico(<I.ListIcon size={15} />), group: 'Go to' },
       { a: { kind: 'import-memory' }, label: 'Import memory from another AI', sub: 'ChatGPT, Claude, Gemini…', icon: ico(<I.Down size={15} />), group: 'Go to' },
       { a: { kind: 'settings' }, label: 'Settings', icon: ico(<I.Gear size={15} />), group: 'Go to', keys: ['⌘', ','] },
       { a: { kind: 'usage' }, label: 'Usage', sub: 'Spend this month, tokens and lifetime totals', icon: ico(<I.Clock size={15} />), group: 'Go to' },

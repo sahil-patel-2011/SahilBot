@@ -126,73 +126,40 @@ describe('import memory to SahilBot', () => {
 })
 
 describe('the Vault view', () => {
-  test('notes with clickable links, backlinks, graph, edit with history, changes and export', async () => {
+  test('notes are the bots\' own: there is no Notes view; asked in chat, the bot forgets a note, and the store still exports', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     const ws = mkdtempSync(join(tmpdir(), 'sahilbot-ws-'))
     await page.evaluate((dir) => window.foreman.settings.set({ workspaceDir: dir }), ws)
-    // Seed two linked notes the way a bot (or the compiler) would.
+    // Two notes, the way a bot (or the compiler) writes them.
     await page.evaluate(async () => {
       const v = window.foreman.notesVault
       const priya = await v.create({ title: 'Priya Patel', type: 'person' })
       const n = (await v.read(priya))!
-      await v.save(priya, `${n.text.trim()}\n\n> The user's sister, an ICU nurse.\n\n## Notes\n- Lives in Austin; see [[Austin trip]].\n`)
-      const trip = await v.create({ title: 'Austin trip', type: 'project' })
-      const t = (await v.read(trip))!
-      await v.save(trip, `${t.text.trim()}\n\n> Visiting [[Priya Patel]] in December.\n\n## Notes\n- Flying Dec 12–16.\n- Still to decide: [[Hotel choice]].\n`)
+      await v.save(priya, `${n.text.trim()}\n\n> The user's sister, an ICU nurse.\n`)
+      await v.create({ title: 'Austin trip', type: 'project' })
     })
-    // Open it from the command palette.
+    // Nothing in the app shows them: no sidebar item, nothing in ⌘K, no tab in Settings → Memory.
+    expect(await page.locator('[data-testid="nav-vault"]').count()).toBe(0)
     await page.keyboard.press('Meta+k')
     await page.fill('[data-testid="palette-input"]', 'notes')
+    expect(await page.locator('[data-testid="palette"]').innerText().catch(() => '')).not.toMatch(/Notes your bots keep|Your notes vault/)
+    await page.keyboard.press('Escape')
+    // The user asks; the bot removes it (the vault tool's remove, only on the user's own request).
+    llm.script.push(
+      { toolCalls: [{ name: 'vault', arguments: JSON.stringify({ action: 'remove', note: 'Austin trip' }) }] },
+      { content: 'Done: I removed the note about your Austin trip.' }
+    )
+    await page.fill('[data-testid="composer-input"]', 'Please forget the Austin trip note')
     await page.keyboard.press('Enter')
-    const view = page.locator('[data-testid="vault-view"]')
-    await view.waitFor()
-    await page.locator('[data-testid="vault-item"]', { hasText: 'Priya Patel' }).first().click()
-    await expect.poll(() => page.locator('[data-testid="vault-note-title"]').innerText()).toBe('Priya Patel')
-    expect(await page.locator('[data-testid="vault-body"]').innerText()).toContain('ICU nurse')
-    // A [[link]] opens its note; that note's backlinks list Priya.
-    await page.locator('[data-testid="vault-body"] a', { hasText: 'Austin trip' }).click()
-    await expect.poll(() => page.locator('[data-testid="vault-note-title"]').innerText()).toBe('Austin trip')
-    expect(await page.locator('[data-testid="vault-backlinks"]').innerText()).toContain('Priya Patel')
-    // A link to a note that doesn't exist yet makes it.
-    await page.locator('[data-testid="vault-body"] a', { hasText: 'Hotel choice' }).click()
-    await expect.poll(() => page.locator('[data-testid="vault-note-title"]').innerText()).toBe('Hotel choice')
-    expect(await page.locator('[data-testid="vault-backlinks"]').innerText()).toContain('Austin trip')
-    // Search.
-    await page.fill('[data-testid="vault-search"]', 'nurse')
-    await expect.poll(() => page.locator('[data-testid="vault-item"]').first().innerText()).toContain('Priya Patel')
-    await page.fill('[data-testid="vault-search"]', '')
-    // Edit (the old version is kept in .history).
-    await page.locator('[data-testid="vault-item"]', { hasText: 'Austin trip' }).first().click()
-    await expect.poll(() => page.locator('[data-testid="vault-note-title"]').innerText()).toBe('Austin trip')
-    await page.click('[data-testid="vault-edit"]')
-    const text = await page.locator('[data-testid="vault-editor"]').inputValue()
-    await page.fill('[data-testid="vault-editor"]', text.replace('Flying Dec 12–16.', 'Flying Dec 12–17.'))
-    await page.click('[data-testid="vault-save"]')
-    await expect.poll(() => page.locator('[data-testid="vault-body"]').innerText()).toContain('Dec 12–17')
-    // Graph: a node per note, lines for links.
-    await page.click('[data-testid="vault-tab-graph"]')
-    await expect.poll(() => page.locator('[data-testid="vault-graph-node"]').count()).toBe(3)
-    expect(await page.locator('[data-testid="vault-graph"] line').count()).toBe(2)
-    // Changes, with Undo on the edit.
-    await page.click('[data-testid="vault-tab-changes"]')
-    const change = page.locator('[data-testid="vault-change"]').first()
-    await change.waitFor()
-    expect(await change.innerText()).toMatch(/Updated\s*Austin trip/)
-    await change.locator('button', { hasText: 'Undo' }).click()
-    await expect.poll(async () => (await page.evaluate(() => window.foreman.notesVault.list())).length).toBeGreaterThan(0)
+    await expect.poll(async () => (await page.evaluate(() => window.foreman.notesVault.list())).map((x) => x.title), { timeout: 20_000 }).not.toContain('Austin trip')
+    expect((await page.evaluate(() => window.foreman.notesVault.list())).map((x) => x.title)).toContain('Priya Patel')
+    // The store is where it was, and still exports (what the bot does when asked).
     const root = (await page.evaluate(() => window.foreman.notesVault.status())).root
     expect(root).toBe(join(ws, 'SahilBot Vault'))
-    await expect.poll(() => readFileSync(join(root, 'Shared/Projects/Austin trip.md'), 'utf8')).toContain('Dec 12–16')
-    // Export: a zip in the workspace's exports folder.
+    expect(readFileSync(join(root, 'Shared/People/Priya Patel.md'), 'utf8')).toContain('ICU nurse')
     const out = await page.evaluate(() => window.foreman.notesVault.exportZip())
-    expect(out.startsWith(join(ws, 'exports'))).toBe(true)
     expect(existsSync(out)).toBe(true)
     expect(readFileSync(out).subarray(0, 4).toString('hex')).toBe('504b0304')
-    // Open in Obsidian (or Finder when it isn't installed): reported, not opened, in hidden runs.
-    expect(['obsidian', 'finder']).toContain(await page.evaluate(() => window.foreman.notesVault.openInObsidian()))
-    // Esc closes the view.
-    await page.click('[data-testid="vault-close"]')
-    await view.waitFor({ state: 'detached' })
     await app.close()
   })
 
@@ -206,12 +173,10 @@ describe('the Vault view', () => {
     expect(st.settings.bots[id]).toEqual({ level: 'normal' })
     st = await page.evaluate((sid) => window.foreman.notesVault.setBot(sid, { enabled: false, level: null }), id)
     expect(st.settings.bots[id]).toEqual({ enabled: false })
-    // Settings → Memory → Knowledge vault shows the vault section.
+    // Settings → Memory has no notes tab: notes are the bots' own.
     await page.click('[data-testid="profile"]')
     await settingsPage(page, 'memory')
-    await page.click('[data-testid="settings-tab-vault"]')
-    await page.locator('[data-testid="vault-settings"]').waitFor()
-    expect(await page.locator('[data-testid="vault-level-aggressive"]').getAttribute('aria-checked')).toBe('true')
+    expect(await page.locator('[data-testid="settings-tab-vault"]').count()).toBe(0)
     await app.close()
   })
 })

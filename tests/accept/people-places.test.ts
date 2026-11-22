@@ -55,20 +55,11 @@ describe('People & Places', () => {
     expect(block).toMatch(/- Taberna da Rua \(place\): your take you loved it/)
     expect(block).not.toContain('## What you remember')
 
-    // Vault → People & Places: the card, then Forget.
-    await page.keyboard.press('Meta+k')
-    await page.fill('[data-testid="palette-input"]', 'vault')
-    await page.keyboard.press('Enter')
-    await page.locator('[data-testid="vault-view"]').waitFor()
-    await page.click('[data-testid="vault-tab-people"]')
-    await page.locator('[data-testid="people-view"]').waitFor()
-    await page.locator('[data-testid="people-item"]', { hasText: 'Priya Patel' }).first().click()
-    await expect.poll(() => page.locator('[data-testid="people-card-name"]').innerText()).toContain('Priya Patel')
-    const card = await page.locator('[data-testid="people-card"]').innerText()
-    expect(card).toContain('March 3')
-    expect(card).toContain('You said')
-    await page.click('[data-testid="people-forget"]')
-    await page.click('[data-testid="people-forget-confirm"]')
+    // There is no People view: the user asks a bot to forget someone, which forgets the card (here, the same call).
+    expect(await page.locator('[data-testid="vault-view"]').count()).toBe(0)
+    const priya = (await page.evaluate(() => window.foreman.people.list())).find((e) => e.name === 'Priya Patel')!
+    expect(JSON.stringify(await page.evaluate((id) => window.foreman.people.card(id), priya.id))).toContain('March 3')
+    await page.evaluate((id) => window.foreman.people.forget(id), priya.id)
     await expect.poll(async () => (await page.evaluate(() => window.foreman.people.list())).some((e) => e.name === 'Priya Patel')).toBe(false)
     expect(existsSync(join(vaultRoot, 'Shared/People/Priya Patel.md'))).toBe(false)
     expect(readdirSync(join(vaultRoot, '.trash')).some((f) => f.includes('Priya Patel'))).toBe(true)
@@ -81,7 +72,10 @@ describe('People & Places', () => {
     const act = await page.evaluate(() => window.foreman.activity.status())
     expect(act.settings).toMatchObject({ enabled: true, learn: true, shareWithCloud: false })
     expect(act.collecting).toBe(false)
-    await page.click('[data-testid="people-tab-privacy"]')
+    // The switches live in Settings → Memory → What it learns from.
+    await page.click('[data-testid="profile"]')
+    await page.click('[data-testid="settings-memory"]')
+    await page.click('[data-testid="settings-tab-sources"]')
     await page.locator('[data-testid="people-privacy"]').waitFor()
     for (const id of ['chats', 'files', 'connectors', 'gmail', 'gcal', 'activity']) {
       await expect.poll(() => page.locator(`[data-testid="privacy-source-${id}"]`).getAttribute('data-on')).toBe('true')
@@ -107,10 +101,7 @@ describe('People & Places', () => {
     await page.click('[data-testid="people-src-files"]')
     await page.click('[data-testid="people-sens-health"]')
     await expect.poll(async () => { const s = (await page.evaluate(() => window.foreman.people.status())).settings; return s.sources.files && s.sensitive.health }).toBe(true)
-    await page.click('[data-testid="people-tab-cards"]')
-
-    await page.click('[data-testid="vault-tab-note"]')
-    await page.click('[data-testid="vault-close"]')
+    await page.keyboard.press('Escape')
 
     // A new chat no longer gets her card.
     await page.click('[data-testid="new-chat"]')

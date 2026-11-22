@@ -333,7 +333,6 @@ export function Sidebar(p: {
           <span className="sb-nav-icon"><I.Inbox size={16} /></span><span>Needs you</span>
           {goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
         </button>
-        <button className="sb-nav-item" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-vault', { detail: { path: null } }))} title="Notes your bots keep: people, projects and decisions (opens in Obsidian too)" data-testid="nav-vault"><span className="sb-nav-icon"><I.Vault size={16} /></span><span>Notes</span></button>
         <button className={`sb-nav-item${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Documents, decks, sheets and images your bots made" data-testid="nav-artifacts"><span className="sb-nav-icon" data-testid="nav-files"><I.Layers size={16} /></span><span>Artifacts</span></button>
         <button className={`sb-nav-item${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="What SahilBot knows from your connected accounts" data-testid="nav-brain"><span className="sb-nav-icon"><BrainIcon size={16} /></span><span>Brain</span></button>
       </nav>

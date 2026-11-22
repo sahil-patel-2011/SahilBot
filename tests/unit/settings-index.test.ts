@@ -42,7 +42,6 @@ describe('the settings search index', () => {
     ['fast mode', 'fast-mode'],
     ['passwords', 'passwords'],
     ['approval', 'approval-rules'],
-    ['obsidian', 'knowledge-vault'],
     ['remember', 'remember-auto'],
     ['tiingo', 'tool-keys'],
     ['health', 'sensitive'],

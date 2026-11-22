@@ -2358,7 +2358,7 @@ app.whenReady().then(() => {
     onChange: () => { if (!vaultNotify) vaultNotify = setTimeout(() => { vaultNotify = null; toWin('notesVault:changed') }, 400) }
   })
   notesVaultRef.current = notesVault
-  registry.register(vaultTool({ vault: notesVault, db, secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()] }))
+  registry.register(vaultTool({ vault: notesVault, db, exportDir: () => join(homedir(), 'Downloads'), secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()] }))
 
   // ---------------------------------------------------------------- the context engine (src/main/context-engine, docs/context.md)
   // An entity graph of the user's world (people, places, organizations, events, dates, things…) built by

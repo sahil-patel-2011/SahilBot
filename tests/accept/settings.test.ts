@@ -94,12 +94,12 @@ describe('Settings', () => {
       await expect.poll(async () => (await page.evaluate(() => window.foreman.settings.get())).learning).toMatchObject({ enabled: false, explicit: ['enabled'] })
       await page.click('[data-testid="memory-auto"]')
       await expect.poll(async () => (await page.evaluate(() => window.foreman.settings.get())).learning?.enabled).toBe(true)
-      // Learned and the knowledge vault are tabs; People & Places is a link.
+      // Learned and what it learns from are tabs; the bots' notes have no tab (they're the bots' own memory).
       await page.click('[data-testid="settings-tab-learned"]')
       await page.locator('[data-testid="learning-log"]').waitFor()
-      await page.click('[data-testid="settings-tab-vault"]')
-      await page.locator('[data-testid="vault-settings"]').waitFor()
-      expect(await page.locator('[data-testid="memory-people"]').count()).toBe(1)
+      expect(await page.locator('[data-testid="settings-tab-vault"]').count()).toBe(0)
+      await page.click('[data-testid="settings-tab-sources"]')
+      await page.locator('[data-testid="people-privacy"]').waitFor()
 
       await page.click('[data-testid="settings-voice"]')
       await page.selectOption('[data-testid="voice-provider"]', 'xai')
