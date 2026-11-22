@@ -8,7 +8,7 @@ import { PAGE_TITLES, searchSettings } from '../lib/settings-index'
 export type PaletteAction =
   | { kind: 'new-chat' } | { kind: 'new-bot' } | { kind: 'new-group' } | { kind: 'new-project' }
   | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'tasks' } | { kind: 'brain' } | { kind: 'connect' } | { kind: 'settings' }
-  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'max' } | { kind: 'vault' } | { kind: 'import-memory' } | { kind: 'usage' }
+  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'max' } | { kind: 'vault' } | { kind: 'import-memory' } | { kind: 'usage' } | { kind: 'shortcuts' }
   | { kind: 'open'; id: string } | { kind: 'chat'; id: string }
   /** A setting: Settings opens on its page and tab, scrolled to it (lib/settings-index.ts). */
   | { kind: 'setting'; anchor: string }
@@ -42,7 +42,8 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       // Shortcuts worth knowing: last in the default list, and found by searching.
       { a: { kind: 'panel' }, label: 'Toggle side panel', sub: 'Progress, browser, files and documents', icon: ico(<I.Panel size={15} />), group: 'Shortcuts', keys: ['⌘', '\\'] },
       { a: { kind: 'voice' }, label: 'Voice chat', sub: 'Talk with SahilBot', icon: ico(<I.Wave size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'V'] },
-      { a: { kind: 'dictate' }, label: 'Dictate a message', sub: 'Speak into the message box', icon: ico(<I.Mic size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'D'] },
+      { a: { kind: 'dictate' }, label: 'Dictate a message', sub: 'Speak into the message box', icon: ico(<I.Mic size={15} />), group: 'Shortcuts', keys: ['⌘', 'D'] },
+      { a: { kind: 'shortcuts' }, label: 'Keyboard shortcuts', sub: 'Every shortcut on one page', icon: ico(<I.Panel size={15} />), group: 'Shortcuts', keys: ['⌘', '/'] },
       { a: { kind: 'max' }, label: 'Use an agent swarm', sub: 'Bring in specialists for your next request; models and roles are chosen automatically', icon: ico(<I.Bolt size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'M'] }
     ]
     const bots: Item[] = [...spaces].sort((a, b) => Number(b.isMain) - Number(a.isMain)).map((s) => ({

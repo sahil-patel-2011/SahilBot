@@ -2,6 +2,20 @@
 
 Every SahilBot update, newest first. The same notes show in the app (Settings → Updates → What's new) and on each GitHub release. Versions are dates (YY.MM.DD).
 
+## 26.11.22 (later) · Keyboard shortcuts and find in chat
+
+_2026-11-22_
+
+- **⌘F finds words in the open chat: every match is highlighted, Enter and ⇧Enter step through them**
+- **⌘1 to ⌘9 open your bots, in the order the sidebar lists them**
+- **Help → Keyboard Shortcuts (⌘/) shows every shortcut on one page, including your Quick Ask key**
+
+### Smaller polish
+
+- The Help menu is now Keyboard Shortcuts, Connect Apps and Settings
+- Settings: "Steps in chats" with Summary or Every step, and text size shows its unit
+- The talk and dictate buttons say what each one does when you point at them
+
 ## 26.11.22 · A simpler, smoother SahilBot
 
 _2026-11-22_

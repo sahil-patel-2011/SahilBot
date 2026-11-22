@@ -73,7 +73,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'menu-bar', page: 'general', title: 'Show in the menu bar', words: 'menu bar icon tray status', keys: ['menuBarIcon'] },
   { anchor: 'open-at-login', page: 'general', title: 'Open at login', words: 'startup login launch boot', keys: ['openAtLogin'] },
   { anchor: 'updates', page: 'general', title: 'Updates', words: 'update upgrade new version latest release download install restart backup' },
-  { anchor: 'density', page: 'general', title: 'Step detail', words: 'tool call density compact detailed appearance', keys: ['appearance.density'] },
+  { anchor: 'density', page: 'general', title: 'Steps in chats', words: 'step detail tool call density compact detailed summary every appearance', keys: ['appearance.density'] },
   { anchor: 'chat-width', page: 'general', title: 'Chat width', words: 'appearance width narrow wide', keys: ['appearance.chatWidth'], advanced: true },
   { anchor: 'code-wrap', page: 'general', title: 'Wrap long code lines', words: 'appearance code block word wrap', keys: ['appearance.codeWrap'], advanced: true },
   { anchor: 'tint', page: 'general', title: 'Accent tint', words: 'appearance color hue intensity tint colour', keys: ['appearance.hue', 'appearance.tint'], advanced: true },
