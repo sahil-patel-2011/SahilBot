@@ -358,7 +358,7 @@ export function Sidebar(p: {
           <div className="bot-list">
             {bots.map(botRow)}
             {!bots.length && (
-              <button className="bot-row ghost" onClick={p.onSetupBot ?? p.onNewBot} data-testid="sidebar-make-bot">
+              <button className="bot-row ghost" onClick={p.onNewBot} data-testid="sidebar-make-bot">
                 <span className="br-btn">
                   <span className="br-avatar ghost-avatar"><I.Plus size={18} /></span>
                   <span className="br-text"><span className="br-name">New bot</span></span>

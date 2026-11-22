@@ -1,12 +1,8 @@
 import { useEffect, useState } from 'react'
-import type { BotShape, BotTemplate, ModelList, Space } from '@shared/types'
+import type { BotShape, ModelList, Space } from '@shared/types'
 import { api } from '../api'
 import { COLORS, SHAPES, SpaceAvatar } from '../brand'
 import * as I from '../icons'
-import { importBot } from './BotShare'
-import { Disclosure } from './ui'
-import { nameFromJob } from '../lib/ux'
-import { FunctionBots } from './FunctionBots'
 
 
 /**
@@ -19,7 +15,6 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
   models: ModelList | null
   mode: 'bot' | 'group' | 'project'
   onClose: () => void
-  /** `suggestion`: a first message to put in the new bot's chat box (its job), ready to send. */
   onSaved: (spaceId: string, threadId?: string, suggestion?: string) => void
 }) {
   const [name, setName] = useState(space?.name ?? '')
@@ -30,18 +25,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
   const [path, setPath] = useState('')
   const [folder, setFolder] = useState<string | null>(space?.folder ?? null)
   const [err, setErr] = useState('')
-  /** A new bot's job, in a sentence: becomes its instructions and its first message. */
-  const [job, setJob] = useState('')
-  const [templates, setTemplates] = useState<BotTemplate[]>([])
-  const [adding, setAdding] = useState<string | null>(null)
   const isNewBot = !space && mode === 'bot'
-  const [tq, setTq] = useState('')
-  useEffect(() => { if (isNewBot) void api.templates.list().then(setTemplates).catch(() => undefined) }, [isNewBot])
-  const addTemplate = async (t: BotTemplate): Promise<void> => {
-    setErr('')
-    setAdding(t.id)
-    try { const r = await api.templates.add(t.id); onSaved(r.spaceId, r.threadId); onClose() } catch (e) { setErr((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')) } finally { setAdding(null) }
-  }
   const bots = spaces.filter((s) => s.kind === 'bot')
 
   useEffect(() => {
@@ -66,12 +50,9 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
         onSaved(space.id)
       } else {
         if (mode === 'project' && !folder) throw new Error('Choose the project folder.')
-        const task = job.replace(/\s+/g, ' ').trim()
-        const r = await api.spaces.create({ name: name.trim() || (task ? nameFromJob(task) : undefined), color, shape, kind: mode, members, intro: mode === 'bot' && !prompt.trim() && !task, folder: folder ?? undefined })
-        // The job goes into its instructions (with anything typed there) and, ready to send, into its chat box.
-        const instructions = [task ? `Your job: ${task}` : '', prompt.trim()].filter(Boolean).join('\n\n')
-        if (mode !== 'group' && instructions) await api.spaces.setPrompt(r.space.id, instructions)
-        onSaved(r.space.id, r.threadId, task || undefined)
+        const r = await api.spaces.create({ name: name.trim() || undefined, color, shape, kind: mode, members, intro: mode === 'bot', folder: folder ?? undefined })
+        if (mode === 'project' && prompt.trim()) await api.spaces.setPrompt(r.space.id, prompt)
+        onSaved(r.space.id, r.threadId)
       }
       onClose()
     } catch (e) {
@@ -88,7 +69,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
           {isProject ? <span className="project-icon" style={{ background: color, width: 64, height: 64 }}><I.Folder size={28} /></span> : <SpaceAvatar color={color} shape={shape} size={64} group={isGroup ? members.map((id) => spaces.find((s) => s.id === id)?.color ?? '#999') : undefined} />}
           <div>
             <h2>{space ? `Customize ${isGroup ? 'group' : isProject ? 'project' : space.isMain ? 'SahilBot' : 'bot'}` : isGroup ? 'New group chat' : isProject ? 'New project' : 'New bot'}</h2>
-            <div className="hint">{isGroup ? 'Bots in a group answer together and can hand work to each other with @Name.' : isProject ? 'A project is a folder plus instructions. Every chat in it can read and edit that folder.' : isNewBot ? 'A teammate with its own job and chat. It works on its own and can run on a schedule.' : 'Each bot has its own personality, look and conversation, and shares your memory.'}</div>
+            <div className="hint">{isGroup ? 'Bots in a group answer together and can hand work to each other with @Name.' : isProject ? 'A project is a folder plus instructions. Every chat in it can read and edit that folder.' : isNewBot ? 'Pick a name, an icon and a color. It asks what you need in its chat.' : 'Each bot has its own personality, look and conversation, and shares your memory.'}</div>
           </div>
         </div>
         <div className="field"><label>Name</label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={isGroup ? 'e.g. Launch team' : isNewBot ? 'e.g. School Helper' : 'e.g. Research Bot'} disabled={space?.isMain} data-testid="bot-name" /></div>
@@ -111,7 +92,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
         )}
         {!isGroup && !isProject && (() => {
           const look = (
-            <div className="field"><label>Look</label>
+            <div className="field"><label>{isNewBot ? 'Icon and color' : 'Look'}</label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 6 }}>{SHAPES.map((sh) => (
                   <button key={sh} className={`shape-pick${sh === shape ? ' on' : ''}`} onClick={() => setShape(sh)} title={sh} aria-label={`Shape ${sh}`} aria-pressed={sh === shape}><SpaceAvatar color={color} shape={sh} size={34} /></button>
@@ -132,34 +113,9 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
             </>
           )
           if (!isNewBot) return <>{look}<div className="hint bot-auto-note" data-testid="editor-auto-model"><I.Sparkle size={12} /> Chooses its tools, models and specialist agents as the task needs.</div>{instructions}</>
-          return (
-            <>
-              <div className="field"><label htmlFor="bot-job">What's its job?</label>
-                <textarea id="bot-job" className="bot-job" rows={2} value={job} onChange={(e) => setJob(e.target.value)} placeholder="e.g. Track my competitors weekly and tell me what changed"
-                  onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save() } }} data-testid="bot-job" />
-              </div>
-              <div className="hint bot-auto-note" data-testid="editor-auto-model"><I.Sparkle size={12} /> It opens in its own chat with this job ready to send. Leave it empty and the bot introduces itself.</div>
-              <Disclosure title="Appearance and instructions" sub="Optional" testId="bot-editor-more">{look}{instructions}</Disclosure>
-              <FunctionBots templates={templates.filter((t) => t.group === 'function')} adding={adding} onAdd={(t) => void addTemplate(t)}
-                onConnect={() => { onClose(); window.dispatchEvent(new Event('sahilbot:open-connect')) }} />
-              {templates.length > 0 && (
-                <div className="be-templates" data-testid="bot-templates-list">
-                  <div className="be-templates-head"><span>Or start from a template</span><button className="link-btn" onClick={() => void importBot(onClose)} data-testid="template-import">Import from file…</button></div>
-                  {templates.length > 8 && (
-                    <input className="set-input be-template-search" value={tq} onChange={(e) => setTq(e.target.value)} placeholder={`Search ${templates.length} templates: engineering, ideas, school…`} aria-label="Search templates" data-testid="template-search" />
-                  )}
-                  <div className="be-template-grid">
-                    {templates.filter((t) => t.group !== 'function' && (!tq.trim() || `${t.name} ${t.description}`.toLowerCase().includes(tq.trim().toLowerCase()))).map((t) => (
-                      <button key={t.id} className="be-template" disabled={!!adding} onClick={() => void addTemplate(t)} data-testid={`template-${t.id}`} title={t.description}>
-                        <SpaceAvatar color={t.color} shape={t.shape} size={30} />
-                        <span className="be-template-text"><b>{adding === t.id ? 'Adding…' : t.name}</b><span>{t.description}</span></span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          )
+          // A new bot: a name and a look, nothing else. Its first message asks what it should do, guessing from its
+          // name and what SahilBot knows about you (prompt.ts INTRO).
+          return <>{look}<div className="hint bot-auto-note" data-testid="editor-auto-model"><I.Sparkle size={12} /> It opens in its own chat and asks what you need, starting from its name.</div></>
         })()}
         {isGroup && (
           <>
@@ -178,7 +134,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
         {err && <div className="hint error" style={{ marginTop: 8 }}>{err}</div>}
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={() => void save()} disabled={(isGroup && members.length === 0) || (isNewBot && !name.trim() && !job.trim())} title={isNewBot && !name.trim() && !job.trim() ? 'Give your bot a name (bots can\'t rename themselves)' : undefined} data-testid="bot-save">{space ? 'Save' : 'Create'}</button>
+          <button className="btn primary" onClick={() => void save()} disabled={(isGroup && members.length === 0) || (isNewBot && !name.trim())} title={isNewBot && !name.trim() ? 'Give your bot a name' : undefined} data-testid="bot-save">{space ? 'Save' : 'Create'}</button>
         </div>
       </div>
     </div>

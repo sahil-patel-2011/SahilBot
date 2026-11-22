@@ -4,8 +4,8 @@ import { launch, tempProfile } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 
 // Home is about your bots: a card per bot with its state, Talk (a voice conversation with that bot, in a bar at
-// the top of the chat) and Open (its ongoing chat). On a fresh start the only card is "New bot", which sets
-// itself up with you in its chat. The box below is for quick one-off questions.
+// the top of the chat) and Open (its ongoing chat). "New bot" asks only for a name, an icon and a color; the bot
+// asks what it should do in its chat. The box below is for quick one-off questions.
 
 let llm: MockLlm
 beforeAll(async () => { llm = await startMockLlm() })
@@ -19,48 +19,42 @@ const idle = async (page: Page): Promise<void> => {
 }
 
 describe('Home: your bots first', () => {
-  test('a fresh start shows one "New bot": it sets itself up in its chat, names itself and saves its instructions', async () => {
+  test('a fresh start: "New bot" asks only for a name, an icon and a color; the bot then asks what to do in its chat', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     try {
-      // A fresh start keeps Home to the message box: no bot card yet; the sidebar's "New bot" sets one up.
+      // A fresh start keeps Home to the message box: no bot card yet; the sidebar's "New bot" makes one.
       await page.locator('[data-testid="sidebar-make-bot"]').waitFor()
       expect(await page.locator('[data-testid="bot-deck"]').count()).toBe(0)
       expect(await page.locator('.home-quick-head').count()).toBe(0)
       if (shots) await page.screenshot({ path: `${shots}/home-fresh.png` })
 
       await page.click('[data-testid="sidebar-make-bot"]')
-      await expect.poll(() => page.locator('[data-testid="bot-deck"]').count(), { timeout: 10_000 }).toBe(0)
-      await expect.poll(() => page.locator('[data-testid="thread"]').innerText(), { timeout: 10_000 }).toContain('Let\'s set me up together')
+      await page.locator('[data-testid="bot-editor"]').waitFor()
+      // Name, icon and color only: no job box, no templates, no extra instructions.
+      for (const id of ['bot-job', 'bot-templates-list', 'bot-instructions', 'bot-editor-more']) expect(await page.locator(`[data-testid="${id}"]`).count(), id).toBe(0)
+      expect(await page.locator('[data-testid="bot-save"]').isDisabled()).toBe(true)
+      if (shots) await page.screenshot({ path: `${shots}/new-bot.png` })
 
-      // One message with the whole job: the bot proposes, the user agrees, it finishes its own setup.
       llm.script.push(
-        { content: 'Got it. I\'d call myself Inbox: I check your email every morning, draft replies, and flag what needs you. Sound good?' },
-        { toolCalls: [{ name: 'finish_setup', arguments: JSON.stringify({ name: 'Inbox', job: 'Email and replies', color: 'blue', instructions: 'You are Inbox. Every morning, read the user\'s new email, draft replies in their voice, and list what needs them. Never send without asking.' }) }] },
-        { content: 'I\'m set up as Inbox. Want me to go through today\'s email now?' }
+        { content: 'Hi! Going by my name, I think I\'m here for your email.', toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ question: 'What should I do for you?', options: ['Draft replies every morning', 'Flag what needs you', 'Clean up newsletters'] }) }] },
+        { toolCalls: [{ name: 'update_bot', arguments: JSON.stringify({ instructions: 'You are Inbox. Draft replies every morning. Never send without asking.' }) }] },
+        { content: 'Got it: I\'ll draft your replies every morning.' }
       )
-      await page.fill('[data-testid="composer-input"]', 'Keep my inbox under control and draft replies every morning')
-      await page.keyboard.press('Enter')
-      await expect.poll(() => llm.script.length, { timeout: 20_000 }).toBe(2)
-      await expect.poll(() => page.locator('[data-testid="stop"]').count(), { timeout: 20_000 }).toBe(0)
-      // The setup tool is offered to this bot (and only while it's being set up).
-      const tools = (llm.requests.at(-1)?.tools ?? []).map((t: { function?: { name?: string } }) => t.function?.name)
-      expect(tools).toContain('finish_setup')
-      await page.fill('[data-testid="composer-input"]', 'Yes, perfect')
+      await page.fill('[data-testid="bot-name"]', 'Inbox')
+      await page.locator('.shape-pick').nth(1).click()
+      await page.click('[data-testid="bot-save"]')
+      // Its first message asks what it should do, from its name (the hidden intro instruction says so).
+      const q = page.locator('[data-testid="question-card"]')
+      await q.waitFor({ timeout: 20_000 })
+      expect(await q.innerText()).toContain('What should I do for you?')
+      expect(JSON.stringify(llm.requests.at(-1)?.messages ?? '')).toContain('Your name is the best hint')
+      await page.fill('[data-testid="composer-input"]', 'Draft replies every morning')
       await page.keyboard.press('Enter')
       await idle(page)
-      await expect.poll(async () => (await page.evaluate(() => window.foreman.spaces.list())).find((s) => s.name === 'Inbox')?.label, { timeout: 10_000 }).toBe('Email and replies')
       const inbox = (await page.evaluate(() => window.foreman.spaces.list())).find((s) => s.name === 'Inbox')!
       expect(await page.evaluate((id) => window.foreman.spaces.getPrompt(id), inbox.id)).toContain('Never send without asking')
-      expect((await page.evaluate(() => window.foreman.spaces.list())).some((s) => s.name === 'New bot')).toBe(false)
 
-      // Done: no setup tool any more in its chat.
-      llm.script.push({ content: 'On it.' })
-      await page.fill('[data-testid="composer-input"]', 'Go through today\'s email')
-      await page.keyboard.press('Enter')
-      await idle(page)
-      expect((llm.requests.at(-1)?.tools ?? []).map((t: { function?: { name?: string } }) => t.function?.name)).not.toContain('finish_setup')
-
-      // Home now shows Inbox; "New bot" starts another setup.
+      // Home now shows Inbox.
       await page.click('[data-testid="new-chat"]')
       await expect.poll(() => page.locator('[data-testid="bot-card"] .bot-card-text b').allInnerTexts(), { timeout: 10_000 }).toEqual(['Inbox'])
     } finally {

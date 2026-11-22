@@ -25,12 +25,14 @@ describe('platform: templates, handoffs, pages, rules, routines, memory', () => 
   afterAll(async () => { await llm.close() })
   beforeEach(() => { llm.script.length = 0 })
 
-  test('adding a bot template (New bot → Or start from a template) creates the bot with its intro and paused routines', async () => {
+  test('adding a bot template creates the bot with its intro and paused routines', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
-    await page.click('[data-testid="new-bot"]')
-    await page.click('[data-testid="template-school-studying"]')
+    // Templates aren't in the New bot window any more (name, icon and color only); a shared template still adds this way.
+    await page.evaluate(() => window.foreman.templates.add('school-studying'))
+    await page.reload()
     // The new bot opens with its starter message.
     await expect.poll(() => page.locator('[data-testid="space-item"]').filter({ hasText: 'Study Buddy' }).count(), { timeout: 10_000 }).toBe(1)
+    await page.locator('[data-testid="space-item"]').filter({ hasText: 'Study Buddy' }).click()
     await expect.poll(async () => (await page.locator('.bubble.ai').allInnerTexts()).join('\n').length, { timeout: 10_000 }).toBeGreaterThan(20)
     // Its suggested routines exist and are paused until the user says yes.
     const spaces = await page.evaluate(() => window.foreman.spaces.list())
