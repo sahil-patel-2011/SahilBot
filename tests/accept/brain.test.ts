@@ -27,6 +27,8 @@ describe('Your brain', () => {
       expect(await page.locator('[data-testid="brain-source"][data-id="texts"]').count()).toBe(1)
       expect(await page.locator('[data-testid="brain-stat-cadence"]').innerText()).toMatch(/~15 min/)
       expect(await page.locator('[data-testid="brain-empty-briefs"]').innerText()).toMatch(/No briefs yet/)
+      // Nothing to search or filter yet: no search box or filter tabs.
+      expect(await page.locator('[data-testid="brain-search"]').count()).toBe(0)
 
       // The first read waits for an OK on its estimate.
       await page.click('[data-testid="nav-brain"]')
@@ -44,6 +46,7 @@ describe('Your brain', () => {
       const card = page.locator('[data-testid="brain-brief"]').filter({ has: page.locator('.brain-card-name', { hasText: /^Acme Retail$/ }) })
       await card.waitFor()
       expect(await card.innerText()).toMatch(/CLIENT/i)
+      expect(await page.locator('[data-testid="brain-search"]').count()).toBe(1)
       expect(await card.locator('[data-testid="brain-chip"]').first().innerText()).toMatch(/^Email · /)
       const status = await page.evaluate(() => window.foreman.brain.status())
       expect(status.stats.tools).toBe(2)

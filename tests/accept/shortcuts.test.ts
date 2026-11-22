@@ -31,6 +31,15 @@ describe('keyboard shortcuts', () => {
       await expect.poll(() => page.locator('.bot-pill').count(), { timeout: 10_000 }).toBe(0)
       await page.keyboard.press('Meta+2')
       await expect.poll(() => page.locator('.bot-pill .pill-name').innerText().catch(() => ''), { timeout: 10_000 }).toBe('Finance')
+      // Inside ⌘K, ⌘1 picks the first row (Settings here) and doesn't also switch bots behind the palette.
+      await page.keyboard.press('Meta+k')
+      await page.fill('[data-testid="palette-input"]', 'settings')
+      await page.keyboard.press('Meta+1')
+      await page.locator('[data-testid="settings"]').waitFor({ timeout: 10_000 })
+      expect(await page.locator('[data-testid="palette"]').count()).toBe(0)
+      await page.keyboard.press('Escape')
+      await expect.poll(() => page.locator('[data-testid="settings"]').count()).toBe(0)
+      expect(await page.locator('.bot-pill .pill-name').innerText()).toBe('Finance')
       // ⌘1: SahilBot, which opens on Home (like clicking it in the sidebar).
       await page.keyboard.press('Meta+1')
       await expect.poll(() => page.locator('.bot-pill').count(), { timeout: 10_000 }).toBe(0)

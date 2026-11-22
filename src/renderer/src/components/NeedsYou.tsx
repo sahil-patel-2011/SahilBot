@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { BotAutonomySettings, NeedsYouItem, QueueQuestion, Space } from '@shared/types'
+import type { BotAutonomySettings, NeedsYouItem, Space } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { folderName, plainApproval } from '../lib/plain-approval'
+import { plain, recommended } from '../lib/answers'
 
 // The "Needs you" inbox: every bot's pending questions and approvals in one place, with one-tap answers.
 // Questions a bot posted while it kept working (main: agent/questions) and cards open in running chats
@@ -14,8 +15,6 @@ import { folderName, plainApproval } from '../lib/plain-approval'
 
 const BOT_AUTONOMY_DEFAULTS: BotAutonomySettings = { alwaysAsk: [], deadlineHours: 4, digest: { enabled: true, time: '18:00' } }
 
-const plain = (o: string): string => o.replace(/\s*\((recommended|default|suggested)\)\s*/gi, ' ').replace(/\s+/g, ' ').trim()
-const recommended = (q: QueueQuestion): string | undefined => q.default?.trim() || q.options?.find((o) => /recommended/i.test(o))
 
 function deadlineLine(x: NeedsYouItem): string {
   if (x.kind === 'approval') return 'Waits for your OK'

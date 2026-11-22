@@ -193,6 +193,10 @@ import { electronAdapter } from './rpc-electron'
 import { setupRemoteServer } from './remote-server'
 import { placementBlock, placementOf, setupWorkerFleet, setupWorkerHost } from './workers'
 
+// Linux test runs only: Playwright launches Electron with --password-store=basic (plain text, which the
+// secret store refuses), so a test on a machine with a keyring can switch back to it before the app is ready.
+if (process.platform === 'linux' && process.env.SAHILBOT_TEST_PASSWORD_STORE) app.commandLine.appendSwitch('password-store', process.env.SAHILBOT_TEST_PASSWORD_STORE)
+
 // SAHILBOT_TIMING=1: launch phases in the log (src/main/timing.ts).
 mark('main module loaded')
 

@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process'
 import { createServer } from 'node:net'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -62,9 +63,9 @@ describe('JobManager', () => {
     const pid = m.get(j.id)!.pid!
     const s = await m.stop(j.id, 1000)
     expect(s!.status).toBe('stopped')
-    let alive = true
-    try { process.kill(-pid, 0) } catch { alive = false }
-    expect(alive).toBe(false)
+    // Killed children can linger as zombies where nothing reaps orphans (a container's PID 1): those are dead.
+    const live = execSync('ps -A -o pgid=,stat=').toString().split('\n').map((l) => l.trim().split(/\s+/)).filter(([g, st]) => Number(g) === pid && st && !st.startsWith('Z'))
+    expect(live).toHaveLength(0)
   })
 
   test('wait for exit reports success and failure; restart reruns under the same id', async () => {
