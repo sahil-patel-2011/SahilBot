@@ -88,6 +88,12 @@ export function cleanProfile(v: unknown, userName = '', now = new Date()): { fir
   return { firstName, lastName, ...(ok ? { birthday: b } : {}) }
 }
 
+/** The message box choices: two switches, both off by default (↵ sends; the Mac's spelling check is off). */
+export function cleanComposer(v: unknown): { cmdEnter: boolean; spellCheck: boolean } {
+  const x = (v ?? {}) as { cmdEnter?: unknown; spellCheck?: unknown }
+  return { cmdEnter: x.cmdEnter === true, spellCheck: x.spellCheck === true }
+}
+
 /**
  * The profile and the first name kept together: a profile change sets userName to the first name; a userName
  * change on its own (older callers) fills the names from it and keeps the birthday.
@@ -295,7 +301,8 @@ export class SettingsStore {
       botModes: cleanBotModes(s.botModes),
       thinking: isEffortChoice(s.thinking) ? s.thinking : 'auto',
       me: cleanMe(s.me),
-      profile: cleanProfile(s.profile, s.userName)
+      profile: cleanProfile(s.profile, s.userName),
+      composer: cleanComposer(s.composer)
     }
   }
 
@@ -357,6 +364,7 @@ export class SettingsStore {
       botAutonomy: rest.botAutonomy !== undefined ? cleanBotAutonomyMap(rest.botAutonomy) : cur.botAutonomy,
       me: rest.me !== undefined ? cleanMe(rest.me) : cur.me,
       ...profileAndName(cur, rest),
+      composer: rest.composer !== undefined ? cleanComposer({ ...cur.composer, ...rest.composer }) : cur.composer,
       learning: rest.learning !== undefined ? cleanLearning({
         ...cur.learning, ...rest.learning,
         // A switch the user flipped is theirs: later default changes leave it alone.

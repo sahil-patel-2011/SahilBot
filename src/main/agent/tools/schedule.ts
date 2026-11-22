@@ -3,7 +3,7 @@ import type { Db } from '../../db'
 import { describeSchedule, type Scheduler } from '../../scheduler'
 import type { ToolDef } from '../types'
 
-type Args = { action: 'create' | 'list' | 'delete' | 'pause' | 'resume'; title?: string; prompt?: string; when?: Schedule; id?: string }
+type Args = { action: 'create' | 'list' | 'update' | 'delete' | 'pause' | 'resume'; title?: string; prompt?: string; when?: Schedule; id?: string }
 
 /** Reminders and recurring tasks. Runs happen unattended: anything needing approval is skipped and reported. */
 export function scheduleTool(scheduler: Scheduler, db: Db): ToolDef<Args> {
@@ -18,12 +18,13 @@ export function scheduleTool(scheduler: Scheduler, db: Db): ToolDef<Args> {
     description: `Reminders and recurring tasks that run on their own later (in this bot's chat).
 - create {title, prompt, when}: prompt is the instruction you will receive when it runs, written so it stands alone ("Check my inbox for invoices and summarize them").
   when is one of: {type:"once", at:"2026-11-12T09:00"} (local time), {type:"daily", time:"09:00"}, {type:"weekly", days:["mon","thu"], time:"08:30"}, {type:"every", minutes:60}, {type:"cron", expr:"0 9 * * 1-5"}.
+- update {id, and any of title, prompt, when}: change a routine in place ("move it to 9:10 and add Saturdays"); its history is kept.
 - list, delete {id}, pause {id}, resume {id}.
 Scheduled runs can't ask for approval: actions that would need it are skipped and reported.`,
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['create', 'list', 'delete', 'pause', 'resume'] },
+        action: { type: 'string', enum: ['create', 'list', 'update', 'delete', 'pause', 'resume'] },
         title: { type: 'string', maxLength: 80 },
         prompt: { type: 'string', maxLength: 8000 },
         id: { type: 'string' },
@@ -41,7 +42,7 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
       additionalProperties: false,
       allOf: [
         { if: { properties: { action: { const: 'create' } } }, then: { required: ['title', 'prompt', 'when'] } },
-        { if: { properties: { action: { enum: ['delete', 'pause', 'resume'] } } }, then: { required: ['id'] } }
+        { if: { properties: { action: { enum: ['update', 'delete', 'pause', 'resume'] } } }, then: { required: ['id'] } }
       ]
     },
     async run(a, ctx) {
@@ -55,6 +56,11 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
         const ts = scheduler.list()
         if (!ts.length) return { text: 'No scheduled tasks.', display: 'none scheduled' }
         return { text: ts.map((t) => `- [${t.id}] ${t.title}: ${describeSchedule(t.schedule)}${t.enabled ? `, next ${t.nextRun ? new Date(t.nextRun).toLocaleString() : 'never'}` : ' (paused)'}${t.lastStatus ? `, last: ${t.lastStatus}` : ''}`).join('\n'), display: `${ts.length} scheduled` }
+      }
+      if (a.action === 'update') {
+        if (a.title === undefined && a.prompt === undefined && !a.when) throw new Error('update needs at least one of title, prompt or when.')
+        const t = scheduler.update(a.id!, { ...(a.title !== undefined ? { title: a.title } : {}), ...(a.prompt !== undefined ? { prompt: a.prompt } : {}), ...(a.when ? { schedule: a.when } : {}) })
+        return { text: `Updated "${t.title}" (${describeSchedule(t.schedule)}).${t.nextRun ? ` Next run: ${new Date(t.nextRun).toLocaleString()}.` : ''}`, display: `"${t.title}" ${describeSchedule(t.schedule)}` }
       }
       if (a.action === 'delete') {
         scheduler.remove(a.id!)

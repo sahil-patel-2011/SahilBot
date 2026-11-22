@@ -59,6 +59,16 @@ describe('keyboard shortcuts', () => {
       await expect.poll(() => page.locator('[data-testid="find-bar"]').count()).toBe(0)
       expect(await page.evaluate(() => (CSS as unknown as { highlights: Map<string, unknown> }).highlights.has('find'))).toBe(false)
 
+      // ⌘B hides the sidebar and shows it again; ⌃Tab goes to the next bot.
+      await page.keyboard.press('Meta+b')
+      await expect.poll(() => page.locator('.app.sb-hidden').count()).toBe(1)
+      expect(await page.locator('.sidebar').isVisible()).toBe(false)
+      await page.keyboard.press('Meta+b')
+      await expect.poll(() => page.locator('.sidebar').isVisible()).toBe(true)
+      await page.locator('[data-testid="thread"]').click({ position: { x: 5, y: 5 } }).catch(() => undefined)
+      await page.keyboard.press('Control+Tab')
+      await expect.poll(() => page.locator('.bot-pill .pill-name').innerText().catch(() => ''), { timeout: 10_000 }).toBe('Finance')
+
       // Every shortcut on one page.
       await page.keyboard.press('Meta+/')
       const sheet = page.locator('[data-testid="shortcuts-sheet"]')

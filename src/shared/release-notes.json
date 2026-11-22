@@ -5,6 +5,7 @@
     "title": "A simpler SahilBot: every button has one job",
     "highlights": [
       "Ask a quick question while a bot works on something long and it answers right away; the long job keeps going",
+      "Notes are the bots' own memory, with no screen to manage: ask a bot to forget something or export your notes",
       "Permissions and setup stick: updates no longer make you grant permissions or go through setup again",
       "Your main bot is a \"New bot\" you can rename just by asking, and pinned bots are big avatars at the top of the sidebar",
       "Voice is one choice, Grok first, ChatGPT or Claude, and typed replies are never read aloud on their own",
@@ -33,6 +34,9 @@
       {
         "title": "Smarter at real work",
         "items": [
+          "Make a routine without typing a request: Bot details → Routines → New routine (what, how often, when)",
+          "Change a routine by just asking (\"move it to 9:10 and add Saturdays\"): it's updated in place and keeps its history",
+          "A side answer shows the message it answers, so it's clear which question it's replying to",
           "A bot that stalls (\"Want me to go ahead?\", \"On it!\" with nothing done) is told to just do what you asked, so you don't have to say \"go ahead\"",
           "Routines say what is really happening: starting now, running, done (with when it ran) or paused; a one-time reminder runs within 20 seconds of its time"
         ]
@@ -40,6 +44,8 @@
       {
         "title": "You",
         "items": [
+          "Settings → You: Send with ⌘↵ (↵ makes a new line) and Check spelling while typing",
+          "What bots learn from (sources, pause, recently removed) is in Settings → Memory → What it learns from",
           "Setup asks your first name, then your last name and birthday (optional), ready for signing in with Google later. Settings → You has all three",
           "Bottom left shows your initials and name, like Grok Bot; click it for Settings, right-click for scheduled, usage and more"
         ]
@@ -55,6 +61,7 @@
       {
         "title": "Bots and pins",
         "items": [
+          "Notes are the bots' own memory: there is no Notes screen. Ask a bot to forget something and it removes it; ask for your notes and it exports them to your Downloads folder",
           "The main bot starts as \"New bot\" (SahilBot is the app). Ask it in chat (\"call yourself Juno\") and it renames itself; nothing else can rename it",
           "Pinned bots are big avatars at the top of the sidebar again, like Grok Bot: one pin is extra large, several sit in a row",
           "The button for another bot says \"Add a bot\", so it never looks like a bot named \"New bot\""
@@ -85,6 +92,7 @@
       {
         "title": "Keyboard",
         "items": [
+          "⌘B hides or shows the sidebar, ⇧⌘F searches, ⌃Tab goes to the next bot, and View → Reload (⌘R) is always there",
           "⇧⌘I opens the bot's details (routines, library), ⌥↑ / ⌥↓ go to the previous or next bot, ⌘I jumps to the message box",
           "⌘F: every match in the chat is highlighted; Enter and ⇧Enter step through them",
           "⌘1 to ⌘9 open your bots in the order the sidebar lists them",

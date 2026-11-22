@@ -153,3 +153,25 @@ export function routineStatus(t: Pick<ScheduledTask, 'schedule' | 'enabled' | 'n
   if (t.nextRun !== null && t.nextRun <= now) return 'Starting now…'
   return describeSchedule(t.schedule)
 }
+
+// The New routine form (components/RoutineForm.tsx).
+export type Repeat = 'once' | 'daily' | 'weekdays' | 'weekly'
+
+/** The schedule the form describes (null when something's missing or in the past). */
+export function formSchedule(o: { repeat: Repeat; date: string; time: string; days: string[] }, now = new Date()): Schedule | null {
+  if (!/^\d{2}:\d{2}$/.test(o.time)) return null
+  if (o.repeat === 'once') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) return null
+    const at = `${o.date}T${o.time}:00`
+    return new Date(at).getTime() > now.getTime() ? { type: 'once', at } : null
+  }
+  if (o.repeat === 'daily') return { type: 'daily', time: o.time }
+  if (o.repeat === 'weekdays') return { type: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri'], time: o.time }
+  return o.days.length ? { type: 'weekly', days: o.days, time: o.time } : null
+}
+
+/** A short title from what it does ("Send me a science fact" → "Send me a science fact"). */
+export function titleFrom(prompt: string): string {
+  const t = prompt.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '')
+  return t.length > 48 ? `${t.slice(0, 47).replace(/\s+\S*$/, '')}…` : t
+}

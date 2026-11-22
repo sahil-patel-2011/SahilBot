@@ -66,6 +66,8 @@ export const SECTION_HINT: Partial<Record<SettingsPage, string>> = {
 export const SETTINGS_INDEX: SettingEntry[] = [
   // General
   { anchor: 'user-name', page: 'general', title: 'Your name', words: 'name call me first name last name surname profile', keys: ['userName', 'profile', 'profile.firstName', 'profile.lastName'] },
+  { anchor: 'cmd-enter', page: 'general', title: 'Send with ⌘↵', words: 'send enter return command new line keyboard composer', keys: ['composer', 'composer.cmdEnter'] },
+  { anchor: 'spell-check', page: 'general', title: 'Check spelling while typing', words: 'spelling spell check typos autocorrect', keys: ['composer.spellCheck'] },
   { anchor: 'birthday', page: 'general', title: 'Birthday', words: 'birthday date of birth dob age profile', keys: ['profile.birthday'] },
   { anchor: 'me-contact', page: 'general', title: 'Your email and phone', words: 'me my email address phone number mobile text sms imessage trusted message without asking', keys: ['me', 'me.emails', 'me.phones'] },
   { anchor: 'workspace', page: 'general', title: 'Workspace folder', words: 'folder files save output directory', keys: ['workspaceDir'] },

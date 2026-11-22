@@ -78,3 +78,40 @@ describe('on time, and the list tells the truth (Grok Bot ran a reminder 7 minut
     expect(routineStatus({ schedule: { type: 'daily', time: '09:00' }, enabled: false, nextRun: due, lastRun: null, lastStatus: null }, false)).toBe('Paused')
   })
 })
+
+describe('the New routine form', () => {
+  test('what it describes becomes a schedule; the past or no days is not a routine', async () => {
+    const { formSchedule, titleFrom } = await import('../../src/renderer/src/routines')
+    const now = at('2026-11-22T06:00:00')
+    expect(formSchedule({ repeat: 'daily', date: '', time: '09:05', days: [] }, now)).toEqual({ type: 'daily', time: '09:05' })
+    expect(formSchedule({ repeat: 'weekdays', date: '', time: '09:10', days: [] }, now)).toEqual({ type: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri'], time: '09:10' })
+    expect(formSchedule({ repeat: 'weekly', date: '', time: '09:10', days: ['mon', 'sat'] }, now)).toEqual({ type: 'weekly', days: ['mon', 'sat'], time: '09:10' })
+    expect(formSchedule({ repeat: 'weekly', date: '', time: '09:10', days: [] }, now)).toBeNull()
+    expect(formSchedule({ repeat: 'once', date: '2026-11-22', time: '06:19', days: [] }, now)).toEqual({ type: 'once', at: '2026-11-22T06:19:00' })
+    expect(formSchedule({ repeat: 'once', date: '2026-11-21', time: '06:19', days: [] }, now)).toBeNull()
+    expect(titleFrom('Send me a short science fact.')).toBe('Send me a short science fact')
+    expect(titleFrom('x '.repeat(60)).length).toBeLessThanOrEqual(49)
+  })
+})
+
+describe('changing a routine by chat', () => {
+  test('update moves it to 9:10 and adds Saturday, keeping the same routine (and its history)', async () => {
+    const { scheduleTool } = await import('../../src/main/agent/tools/schedule')
+    const { emptyState } = await import('../../src/main/agent/types')
+    const db = new Db(':memory:')
+    const space = db.createSpace('Main', '#000', { isMain: true })
+    const t = db.createThread(space.id, 'auto', null)
+    const now = at('2026-11-22T06:16:00')
+    const s = new Scheduler(db, async () => 'done', () => undefined, () => now)
+    const tool = scheduleTool(s, db)
+    const ctx = { threadId: t.id, state: emptyState() } as never
+    await tool.run({ action: 'create', title: 'Weekday science fact', prompt: 'Send a science fact', when: { type: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri'], time: '09:05' } }, ctx)
+    const id = s.list()[0].id
+    const out = await tool.run({ action: 'update', id, when: { type: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat'], time: '09:10' } }, ctx)
+    expect(out.text).toMatch(/Updated "Weekday science fact"/)
+    expect(s.list()).toHaveLength(1)
+    expect(s.list()[0]).toMatchObject({ id, schedule: { type: 'weekly', time: '09:10' } })
+    expect((s.list()[0].schedule as { days: string[] }).days).toContain('sat')
+    await expect(tool.run({ action: 'update', id }, ctx)).rejects.toThrow(/at least one/)
+  })
+})

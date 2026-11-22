@@ -247,6 +247,8 @@ export interface Settings {
   me?: { emails: string[]; phones: string[] }
   /** Who the user is (setup asks; Settings → You): first and last name, and a birthday (YYYY-MM-DD) if they gave it. userName is the first name. */
   profile?: { firstName: string; lastName: string; birthday?: string }
+  /** The message box: ⌘↵ sends (↵ is a new line), and spelling is checked while typing. */
+  composer?: { cmdEnter?: boolean; spellCheck?: boolean }
   workspaceDir: string
   search: { provider: 'auto' | 'none' | 'brave' | 'searxng' | 'duckduckgo'; searxngUrl: string; hasBraveKey: boolean }
   advanced: {

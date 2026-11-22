@@ -78,6 +78,10 @@ export const Composer = forwardRef<ComposerHandle, {
   allowBypass?: boolean
   placeholder?: string
   accent?: string
+  /** Settings → You: ⌘↵ sends and ↵ makes a new line. */
+  cmdEnter?: boolean
+  /** Settings → You: check spelling while typing. */
+  spellCheck?: boolean
   /** A bot asked a question: typing answers it. */
   answering?: boolean
   onVoice?: () => void
@@ -356,6 +360,14 @@ export const Composer = forwardRef<ComposerHandle, {
             }
             // ↑ in an empty box: edit your last message (like ChatGPT and Claude).
             if (e.key === 'ArrowUp' && !text && !images.length && !atts.length && !p.running) { e.preventDefault(); window.dispatchEvent(new CustomEvent('sahilbot:edit-last')); return }
+            // ⌘↵ to send (Settings → You): a plain ↵ is a new line, ⌘↵ sends (steers while it works).
+            if (p.cmdEnter && e.key === 'Enter' && !e.nativeEvent.isComposing) {
+              if (!(e.metaKey || e.ctrlKey)) return
+              e.preventDefault()
+              if (dictating) { void toggleDictation().then(() => requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-testid="send"]')?.click())); return }
+              send(false)
+              return
+            }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               // Enter while dictating: finish dictation first, then send what was said.
@@ -364,6 +376,7 @@ export const Composer = forwardRef<ComposerHandle, {
               send(e.metaKey || e.ctrlKey)
             }
           }}
+          spellCheck={p.spellCheck === true}
           data-testid="composer-input"
         />
         {(() => {

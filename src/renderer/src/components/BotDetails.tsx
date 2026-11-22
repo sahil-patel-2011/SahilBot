@@ -7,6 +7,7 @@ import { describeSchedule, groupLibrary, host, routineStatus, when } from '../ro
 import { BotShareRows } from './BotShare'
 import { BotGoals } from './TasksView'
 import { VaultBotRows } from './VaultView'
+import { RoutineForm } from './RoutineForm'
 import { BotFolderRow } from './Attachments'
 import { AlwaysOnRows } from './NeedsYou'
 import { BotStatusLine } from './FunctionBots'
@@ -43,6 +44,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
   const { space } = p
   const [tab, setTab] = useState<Tab>('details')
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
+  const [formOpen, setFormOpen] = useState(false)
   const [runs, setRuns] = useState<Record<string, RoutineRun[]>>({})
   const [openId, setOpenId] = useState<string | null>(null)
   const [menuId, setMenuId] = useState<string | null>(null)
@@ -150,9 +152,12 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
           {tab === 'details' ? (
             <div className="bd-body">
               {space.kind !== 'group' && <BotGoals spaceId={space.id} />}
-              <div className="bd-section-title">Routines</div>
+              <div className="bd-section-title bd-section-row">Routines
+                {!formOpen && <button className="link-btn" onClick={() => setFormOpen(true)} data-testid="routine-new">+ New routine</button>}
+              </div>
+              {formOpen && <RoutineForm spaceId={space.id} onDone={() => { setFormOpen(false); void load() }} />}
               <div className="bd-card">
-                {tasks.length === 0 && <div className="bd-empty">Ask in chat to set a routine.</div>}
+                {tasks.length === 0 && !formOpen && <div className="bd-empty">Add one above, or ask in chat ("every weekday at 9, send me…").</div>}
                 {tasks.map((t) => (
                   <div key={t.id} className={`rt-row${t.enabled ? '' : ' paused'}`} data-testid="routine-row">
                     <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }} title={t.title}>

@@ -675,7 +675,7 @@ export class Agent {
       if (this.runs.has(threadId)) { run.steers = [...(run.steers ?? []), { text: asked.content }]; this.d.emit({ threadId, type: 'steer', pending: run.steers.length }) }
       return
     }
-    const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: reply, kind: 'normal', status: 'done', meta: { aside: true, replyTo: asked.id } })
+    const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: reply, kind: 'normal', status: 'done', meta: { aside: true, replyTo: asked.id, replyText: asked.content.replace(/\s+/g, ' ').slice(0, 90) } })
     this.d.emit({ threadId, type: 'message', message: m })
   }
 

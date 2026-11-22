@@ -89,6 +89,9 @@ export function App() {
   const [palette, setPalette] = useState(false)
   const [shortcuts, setShortcuts] = useState(false)
   const [finding, setFinding] = useState(false)
+  // ⌘B: hide or show the sidebar (remembered on this Mac).
+  const [sidebarHidden, setSidebarHidden] = useState(() => { try { return localStorage.getItem('sb-hidden') === '1' } catch { return false } })
+  useEffect(() => { try { localStorage.setItem('sb-hidden', sidebarHidden ? '1' : '0') } catch { /* private mode */ } }, [sidebarHidden])
   /** Bypass picked for the first time: what to do once the user confirms (null: no dialog). */
   const [bypassAsk, setBypassAsk] = useState<(() => void) | null>(null)
   // The memory import dialog: opened from the palette or Settings through a window event. (The bots' notes have
@@ -470,6 +473,15 @@ export function App() {
     const k = (e: KeyboardEvent): void => {
       if (e.metaKey && e.key === 'n') { e.preventDefault(); newChatRef.current() }
       if (e.metaKey && e.key === 'k') { e.preventDefault(); setPalette(true) }
+      if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); setPalette(true) }
+      if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarHidden((v) => !v) }
+      // ⌃Tab / ⌃⇧Tab: the next / previous bot.
+      if (e.ctrlKey && !e.metaKey && e.key === 'Tab') {
+        const order = botOrder(spacesRef.current, pinnedRef.current)
+        const at = order.findIndex((b) => b.id === spaceIdRef.current)
+        const b = order[at < 0 ? 0 : (at + (e.shiftKey ? -1 : 1) + order.length) % order.length]
+        if (b) { e.preventDefault(); void openBotRef.current(b.id) }
+      }
       if (e.metaKey && e.key === ',') { e.preventDefault(); setShowSettings(true) }
       if (e.metaKey && e.key === '/') { e.preventDefault(); setShortcuts(true) }
       // ⌘F: find in the open chat.
@@ -797,6 +809,8 @@ export function App() {
       inheritedFolder={space?.kind === 'group' ? null : space?.folder ?? null}
       running={isRunning}
       answering={!!question}
+      cmdEnter={settings?.composer?.cmdEnter === true}
+      spellCheck={settings?.composer?.spellCheck === true}
       onSend={(o) => send(o)}
       onStop={() => thread && void api.chat.stop(thread.id)}
       models={models}
@@ -879,7 +893,7 @@ export function App() {
 
   return (
     <DevMode.Provider value={dev}>
-    <div className={`app${dev ? ' dev model-details' : ''}`}>
+    <div className={`app${dev ? ' dev model-details' : ''}${sidebarHidden ? ' sb-hidden' : ''}`}>
       <WhatsNewOnce />
       <Toasts />
       {/* The secrets vault's unlock / confirm dialog: main asks, this only shows it. */}

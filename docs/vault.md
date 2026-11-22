@@ -1,11 +1,16 @@
 # The knowledge vault
 
 A folder of linked Markdown notes that you and the other bots keep about the user and your work, so
-you hold far more context than memories alone. It's Obsidian-compatible: the user can open it in
-Obsidian (or any Markdown app), edit notes there, and you'll see their edits.
+you hold far more context than memories alone.
+
+**The user has no view of these notes in the app.** They are your memory. When the user wants
+something gone, they ask you: use vault(action="remove", note) on that note (it can be undone). When
+they want their notes, use vault(action="export"): a zip lands in their Downloads folder; tell them the
+path. Only remove or export when the user asks in their own words. If they connected their own
+Obsidian vault, they can still open their notes there.
 
 ## Where things are
-- Default folder: `<workspace>/SahilBot Vault/` (Settings → Memory → Knowledge vault → Folder).
+- Default folder: `<workspace>/SahilBot Vault/`.
 - `Shared/`: about the user, shared by every bot: People, Preferences, and the main bot's Projects,
   Decisions, Facts, Research, Playbooks (how-tos) and Digests, plus Memory/ (every saved memory) and
   Decisions/Decision log (the user's decisions).

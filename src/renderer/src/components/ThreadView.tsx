@@ -999,6 +999,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
     <div className="row ai">
       <div className="bubble-wrap ai-col">
         {speaker && !cont && <div className={`speaker${spStyle ? ' spk-c' : ''}`} style={spStyle}>{speaker}</div>}
+        {typeof m.meta?.replyText === 'string' && <div className="reply-to" data-testid="reply-to" title="Answers this message"><span aria-hidden>↪</span>{m.meta.replyText as string}</div>}
         <div className={`bubble ai${error ? ' err' : ''}`} data-testid="assistant-bubble" data-status={m.status}>
           {dev && m.reasoning && (
             <details className="reasoning" open={streaming && !m.content}>

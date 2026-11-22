@@ -176,3 +176,23 @@
 .sb-me-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; color: var(--text); }
 .sb-me-name.muted { color: var(--text-2); }
 .sb-bottom .sb-connect { flex: none; width: auto; padding: 0 12px; gap: 6px; }
+
+/* Bot details → Routines → New routine: a small form (what, how often, when). */
+.bd-section-row { display: flex; align-items: center; justify-content: space-between; }
+.rt-form { display: flex; flex-direction: column; gap: 8px; padding: 12px; margin: 4px 0 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); animation: set-fade .14s ease both; }
+.rt-form-label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.rt-form-prompt { width: 100%; resize: vertical; min-height: 48px; }
+.rt-form-repeat, .rt-form-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.rt-form-repeat button, .rt-form-days button { padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; color: var(--text-2); }
+.rt-form-days button { width: 30px; padding: 5px 0; text-align: center; }
+.rt-form-repeat button.on, .rt-form-days button.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.rt-form-when { display: flex; gap: 6px; }
+.rt-form-when .set-input { width: auto; }
+.rt-form-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* An answer to one particular message (a side question while a job runs): a small quote of it above the reply. */
+.reply-to { display: flex; gap: 6px; align-items: baseline; max-width: 100%; margin: 0 0 4px 4px; font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reply-to > span { color: var(--text-3); }
+
+/* ⌘B: the sidebar folds away; the chat gets the whole window. */
+.app.sb-hidden > .sidebar { display: none; }

@@ -412,6 +412,8 @@ function General({ s, patch, extras }: P & { extras?: boolean }) {
         </Row>
         {!isServerRuntime && (
           <>
+            <Row id="cmd-enter" title="Send with ⌘↵" sub="On: ↵ starts a new line and ⌘↵ sends. Off: ↵ sends."><Toggle on={s.composer?.cmdEnter === true} onChange={(v) => void patch({ composer: { ...s.composer, cmdEnter: v } })} label="Send with Command-Return" testId="cmd-enter" /></Row>
+            <Row id="spell-check" title="Check spelling while typing"><Toggle on={s.composer?.spellCheck === true} onChange={(v) => void patch({ composer: { ...s.composer, spellCheck: v } })} label="Check spelling while typing" testId="spell-check" /></Row>
             <Row id="quick-ask" title="Quick Ask shortcut" sub="A small SahilBot bar over any app.">
               <select className="set-select" value={s.quickKey} onChange={(e) => void patch({ quickKey: e.target.value })} data-testid="quick-key" aria-label="Quick Ask shortcut">
                 <option value="Alt+Space">⌥ Space</option><option value="Control+Space">⌃ Space</option><option value="CommandOrControl+Shift+Space">⌘⇧ Space</option><option value="Alt+Shift+Space">⌥⇧ Space</option><option value="">Off</option>
