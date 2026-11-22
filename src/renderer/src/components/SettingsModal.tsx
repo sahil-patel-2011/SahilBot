@@ -894,12 +894,11 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
   return (
     <>
       <h2>Voice</h2>
-      <div className="set-sub">Dictate with ⌘D, talk with ⌘⇧V, Esc stops speaking.</div>
+      <div className="set-sub">Dictate with ⌘D, talk with ⇧⌘V. Typed replies are never read aloud on their own: press the speaker on a message to hear it.</div>
       <Section>
         {localIsOn(s) && <Row id="speech-model" testId="voice-speech-model" title={sp ? <>{sp.label} <span className="hint" data-testid="voice-speech-reason">· {sp.reason}</span></> : 'Speech recognition'} sub={speechSub} info={sp?.why}>
           {state}
         </Row>}
-        <Row id="read-aloud" title="Read replies aloud" sub="Or press the speaker on any message."><Toggle on={s.speakReplies} onChange={(v) => void patch({ speakReplies: v })} label="Read replies aloud" testId="speak-replies" /></Row>
         <div data-setting="voice-openai"><VoiceOutputRow s={s} patch={patch} /></div>
       </Section>
       <Disclosure title="Advanced" sub="Speech model, local transcription and the voice model" testId="voice-advanced">
@@ -930,14 +929,14 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
 
 
 function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab: (t: string) => void }) {
+  // Three tabs: passwords, backups, and everything about what SahilBot may see (on one page).
   const tabs = [
     { id: 'passwords', label: 'Passwords' },
     { id: 'backups', label: 'Backups', hidden: isServerRuntime },
-    { id: 'activity', label: 'Activity', hidden: isServerRuntime },
-    { id: 'sensitive', label: 'Sensitive details' },
-    { id: 'hybrid', label: 'Hybrid compute', hidden: isServerRuntime }
+    { id: 'privacy', label: 'What it may see' }
   ]
-  const cur = tabs.find((t) => t.id === tab && !t.hidden)?.id ?? 'passwords'
+  const want = tab === 'activity' || tab === 'sensitive' || tab === 'hybrid' ? 'privacy' : tab
+  const cur = tabs.find((t) => t.id === want && !t.hidden)?.id ?? 'passwords'
   return (
     <>
       <h3 className="set-h3">Passwords, privacy and backups</h3>
@@ -947,9 +946,13 @@ function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab:
         ? <div className="set-sub" data-testid="vault-on-mac">Saved passwords, cards and authenticator codes stay on your Mac and are never sent to this phone. Manage them in SahilBot on the Mac.</div>
         : <SecretVaultSettings embedded />}</div>}
       {cur === 'backups' && <div data-setting="backups"><BackupSettings /></div>}
-      {cur === 'activity' && <div data-setting="activity"><ActivitySettings /></div>}
-      {cur === 'sensitive' && <SensitiveDetails />}
-      {cur === 'hybrid' && <HybridComputeSettings />}
+      {cur === 'privacy' && (
+        <>
+          {!isServerRuntime && <div data-setting="activity"><ActivitySettings /></div>}
+          <SensitiveDetails />
+          {!isServerRuntime && <HybridComputeSettings />}
+        </>
+      )}
     </>
   )
 }
@@ -1026,7 +1029,8 @@ export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what yo
       const note = kind === 'notifications'
         ? (r === 'granted' ? '' : r === 'denied' ? 'macOS has notifications off for SahilBot. Use Open Settings, choose SahilBot and turn on Allow notifications.' : r === 'prompted' ? NOTE_ASKING : '')
         : ''
-      setAsked((a) => ({ ...a, [kind]: note || (r === 'opened' ? 'Turn on SahilBot in the window that opened, then come back.' : r === 'denied' ? 'macOS said no. Use Open Settings to change it.' : '') }))
+      const auto = kind === 'automation' && r === 'prompted' ? 'macOS is asking: click OK in its window to let SahilBot control your apps.' : ''
+      setAsked((a) => ({ ...a, [kind]: note || auto || (r === 'opened' ? 'Turn on SahilBot in the window that opened, then come back.' : r === 'denied' ? 'macOS said no. Use Open Settings to change it.' : '') }))
       setTimeout(refresh, 800)
       // macOS's question is still open: check again while the user answers it.
       if (kind === 'notifications' && r === 'prompted') for (const ms of [3000, 8000, 15000, 30000, 60000]) setTimeout(refresh, ms)
@@ -1060,10 +1064,10 @@ export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what yo
             <Row key={r.kind} title={title} sub={asked[r.kind] || PERM_SHORT[r.kind] || r.enables} info={[r.enables, r.how, r.detail].filter(Boolean).join(' ')} testId={`perm-${r.kind}`}>
               {on
                 ? <span className="perm-on" data-testid={`perm-${r.kind}-on`}><I.Check size={13} />On</span>
-                : <>
-                    {asked[r.kind] && <button className="link-btn" onClick={() => void api.permissions.open(r.kind)}>Open Settings</button>}
-                    <button className="btn" onClick={() => allow(r.kind)} data-testid={`perm-${r.kind}-allow`}>{r.kind === 'automation' ? 'Open Settings' : r.kind === 'notifications' ? 'Turn on' : 'Allow'}</button>
-                  </>}
+                // One button: it asks macOS first; once macOS has answered, the same button opens System Settings.
+                : asked[r.kind]
+                  ? <button className="btn" onClick={() => void api.permissions.open(r.kind)} data-testid={`perm-${r.kind}-open`}>Open Settings</button>
+                  : <button className="btn" onClick={() => allow(r.kind)} data-testid={`perm-${r.kind}-allow`}>{r.kind === 'notifications' ? 'Turn on' : 'Allow'}</button>}
             </Row>
           )
         })}

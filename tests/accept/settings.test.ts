@@ -41,7 +41,7 @@ describe('Settings', () => {
       await page.locator('[data-testid="approvals-rules"] > summary').click()
       await page.locator('[data-testid="rule-when"]').waitFor()
       await page.click('[data-testid="settings-privacy"]')
-      await page.click('[data-testid="settings-tab-sensitive"]')
+      await page.click('[data-testid="settings-tab-privacy"]')
       await expect.poll(() => page.locator('[data-testid^="settings-sens-"]').count()).toBeGreaterThan(5)
       // Advanced: rules & skills, knowledge folders, developer.
       await page.click('[data-testid="settings-general"]')

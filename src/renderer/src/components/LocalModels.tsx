@@ -1,4 +1,4 @@
-import { voicePreference, connectedVoice, nativeVoiceSite, type CloudSpeechProvider } from '@shared/voice-provider'
+import { voicePreference, connectedVoice, nativeVoiceSite, voiceChoice, type CloudSpeechProvider } from '@shared/voice-provider'
 import { useState } from 'react'
 import type { Settings } from '@shared/types'
 import { toast } from '../lib/toast'
@@ -42,16 +42,18 @@ export function LocalModelsRow({ s, patch, onChanged }: { s: Settings; patch: (p
 export function VoiceOutputRow({ s, patch }: { s: Settings; patch: (p: Partial<Settings>) => Promise<unknown> }) {
   const preference = voicePreference(s)
   const selected = connectedVoice(preference, { openai: !!s.keys.openai, xai: !!s.keys.xai })
+  const choice = voiceChoice(preference, { openai: !!s.keys.openai, xai: !!s.keys.xai })
   return (
     <div className="set-row" data-testid="voice-output-row">
       <div className="set-row-text">
         <div className="set-row-title">Voice</div>
-        <div className="set-row-sub">{nativeVoiceSite(preference) ? 'Talk opens the provider website. Select Voice there to use your account. That conversation stays with the provider.' : preference === 'off' ? 'Choose ChatGPT\'s or Grok\'s voice for talking with your bots.' : selected ? 'Microphone audio and spoken replies use your ' + (selected === 'xai' ? 'xAI' : 'OpenAI') + ' API key and monthly limit.' : 'Add its API key in Settings → AI & spending.'}</div>
+        <div className="set-row-sub">{preference === 'claude-app' ? 'Claude talks in its own app: Talk opens Claude\'s voice mode in your browser.' : nativeVoiceSite(preference) ? 'Talk opens the provider website. Select Voice there to use your account.' : preference === 'off' ? 'Pick Grok, ChatGPT or Claude to talk with your bots.' : selected ? `Uses your ${selected === 'xai' ? 'Grok (xAI)' : 'OpenAI'} key, within your monthly limit.` : `Add your ${choice === 'openai' ? 'OpenAI (ChatGPT)' : 'Grok (xAI)'} key in AI & spending to talk.`}</div>
       </div>
-      <select className="set-select" aria-label="Speech provider" data-testid="voice-provider" value={preference} onChange={(e) => void patch({ voiceOutput: { provider: e.target.value as CloudSpeechProvider } })}>
-        <option value="auto">Auto (the key you connected)</option>
-        <option value="openai">ChatGPT voice (OpenAI)</option><option value="xai">Grok voice (xAI)</option>
-        <option value="chatgpt-app">ChatGPT in browser</option><option value="grok-app">Grok in browser</option>
+      <select className="set-select" aria-label="Whose voice" data-testid="voice-provider" value={choice} onChange={(e) => void patch({ voiceOutput: { provider: e.target.value as CloudSpeechProvider } })}>
+        <option value="xai">Grok</option>
+        <option value="openai">ChatGPT</option>
+        <option value="claude-app">Claude</option>
+        {(choice === 'chatgpt-app' || choice === 'grok-app') && <option value={choice}>{choice === 'grok-app' ? 'Grok in browser' : 'ChatGPT in browser'}</option>}
         <option value="off">Off</option>
       </select>
     </div>

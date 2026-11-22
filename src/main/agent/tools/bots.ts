@@ -7,19 +7,23 @@ const COLORS: Record<string, string> = {
   blue: '#0EA5E9', purple: '#7C5CFF', pink: '#EC4899', gray: '#9CA3AF', black: '#1F1F1F'
 }
 
-/** Lets a bot set its own standing instructions and color. Its name is the user's to choose (Rename bot), never the bot's. */
-export function updateBotTool(db: Db, files: SpaceFiles, changed: () => void): ToolDef<{ instructions?: string; color?: string }> {
+/** The user asked for a new name in their own latest message (a page or an email can't rename a bot). */
+const ASKED_NAME = /\b(re-?name|name (yourself|you)|your name|call (yourself|you)|be called|go by)\b/i
+
+/** Lets a bot set its own standing instructions, color, and its name when the user asks for a new one in chat. */
+export function updateBotTool(db: Db, files: SpaceFiles, changed: () => void): ToolDef<{ instructions?: string; color?: string; name?: string }> {
   return {
     name: 'update_bot',
     label: 'Bot profile',
     group: 'Bots',
     effect: 'write_local',
-    description: 'Update your own bot profile: your standing instructions (who you are and what you focus on, a few sentences) and/or your color. You cannot change your name; only the user can rename you.',
+    description: 'Rename yourself or update your own bot profile: your standing instructions (who you are and what you focus on, a few sentences), your color, and your name (only when the user asks you to change it in this chat).',
     parameters: {
       type: 'object',
       properties: {
         instructions: { type: 'string', maxLength: 4000 },
-        color: { type: 'string', enum: Object.keys(COLORS) }
+        color: { type: 'string', enum: Object.keys(COLORS) },
+        name: { type: 'string', minLength: 1, maxLength: 40, description: 'A new name, only when the user asked for one' }
       },
       additionalProperties: false,
       minProperties: 1
@@ -28,17 +32,25 @@ export function updateBotTool(db: Db, files: SpaceFiles, changed: () => void): T
       const thread = db.getThread(ctx.threadId)
       const bot = thread && db.getSpace(thread.spaceId)
       if (!bot || bot.kind !== 'bot') throw new Error('Only a bot in its own chat can update its profile.')
-      if ('name' in (a as Record<string, unknown>)) throw new Error('Bots can\'t rename themselves. If the user wants a new name, tell them to use Rename bot in the sidebar.')
+      const name = typeof a.name === 'string' ? a.name.replace(/\s+/g, ' ').trim().slice(0, 40) : ''
+      if (a.name !== undefined) {
+        if (!name) throw new Error('Give the new name.')
+        const said = [...db.listMessages(ctx.threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.handoff && !m.meta?.fromApp)
+        if (!said || !ASKED_NAME.test(said.content)) throw new Error('Only change your name when the user asks for a new one in this chat.')
+        db.updateSpace(bot.id, { name })
+        // A bot's one conversation is titled after it (the main bot's chats keep their own titles).
+        if (!bot.isMain) for (const t of db.listThreads(bot.id)) db.updateThread(t.id, { title: name })
+      }
       if (a.color) db.updateSpace(bot.id, { color: COLORS[a.color] })
       if (a.instructions) files.setPrompt(bot.id, a.instructions.trim() + '\n')
       const saved = db.getSpace(bot.id), instructions = files.getPrompt(bot.id)
-      const verified = !!saved && (!a.instructions || instructions.trim() === a.instructions.trim())
+      const verified = !!saved && (!a.instructions || instructions.trim() === a.instructions.trim()) && (!name || saved.name === name)
       if (!verified) throw new Error('The profile update did not read back correctly. Check the saved profile before reporting completion.')
       ctx.state.systemSnapshot = undefined
       ctx.state.leanSnapshots = {}
       ctx.state.snapshots = {}
       changed()
-      const parts = [a.color && `color ${a.color}`, a.instructions && 'instructions'].filter(Boolean)
+      const parts = [name && `name (now ${name})`, a.color && `color ${a.color}`, a.instructions && 'instructions'].filter(Boolean)
       return { text: `Saved and read back your ${parts.join(', ')}. The updated profile applies in this conversation too.`, data: { name: saved!.name, instructions, verified }, verification: { passed: true, criterion: 'Bot profile saved', detail: `Read back the saved profile for ${saved!.name}.` }, display: `updated ${parts.join(', ')}` }
     }
   }
@@ -87,7 +99,7 @@ export function finishSetupTool(db: Db, files: SpaceFiles, changed: () => void):
       const thread = db.getThread(ctx.threadId)
       const bot = thread && db.getSpace(thread.spaceId)
       if (!bot || bot.kind !== 'bot') throw new Error('Only a new bot in its own chat can finish its setup.')
-      if (!db.getSetting<boolean>(`setup:${bot.id}`)) throw new Error('You are already set up. Use update_bot to change your instructions; only the user can rename you.')
+      if (!db.getSetting<boolean>(`setup:${bot.id}`)) throw new Error('You are already set up. Use update_bot to change your instructions (or your name, if the user asks).')
       const name = String(a.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 40)
       if (!name) throw new Error('Give the name the user agreed to.')
       const instructions = String(a.instructions ?? '').trim()

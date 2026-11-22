@@ -239,7 +239,7 @@ export function Sidebar(p: {
       ) : (
         <button className="pw-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.lastPreview ? `${s.name}: ${s.lastPreview.slice(0, 120)}` : s.name}>
           <span className="pw-avatar">
-            {avatar(s, 26)}
+            {avatar(s, pinnedSpaces.length === 1 ? 92 : 58)}
             {s.isMain && s.shape !== 'mascot' && <span className="pw-star"><Star /></span>}
             {(working(s) || needs(s) || (s.unread && !isActive(s))) && <span className="pw-status">{status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}</span>}
           </span>
@@ -336,11 +336,7 @@ export function Sidebar(p: {
       </nav>
 
       <div className="side-scroll">
-        <div className="nav-label sb-bots-label">
-          <span>Bots</span>
-          <span className="nav-label-actions">{bots.length > 0 && <button className="nav-add" onClick={p.onNewBot} title="New bot" aria-label="New bot" data-testid="new-bot"><I.Plus size={14} /></button>}</span>
-        </div>
-        <div className={`pin-grid${over === 'pinned' ? ' drop' : ''}${dragging?.kind === 'space' || dragging?.kind === 'chat' ? ' dragging' : ''}${pinnedSpaces.length ? '' : ' empty'}`} data-testid="pinned-top"
+        <div className={`pin-grid${over === 'pinned' ? ' drop' : ''}${dragging?.kind === 'space' || dragging?.kind === 'chat' ? ' dragging' : ''}${pinnedSpaces.length ? '' : ' empty'}${pinnedSpaces.length === 1 ? ' one' : ''}`} data-testid="pinned-top"
           onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('pinned') } }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(null) }}
           onDrop={(e) => {
@@ -353,6 +349,11 @@ export function Sidebar(p: {
           {!pinnedSpaces.length && dragging && <div className="pin-drop-hint">Drop here to pin</div>}
         </div>
 
+        <div className="nav-label sb-bots-label">
+          <span>Bots</span>
+          <span className="nav-label-actions">{bots.length > 0 && <button className="nav-add" onClick={p.onNewBot} title="Add a bot" aria-label="Add a bot" data-testid="new-bot"><I.Plus size={14} /></button>}</span>
+        </div>
+
         <div className={`sb-lists${over === 'list' ? ' drop' : ''}`} onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('list') } }} onDrop={dropOnList}>
           <div className="bot-list">
             {bots.map(botRow)}
@@ -360,7 +361,7 @@ export function Sidebar(p: {
               <button className="bot-row ghost" onClick={p.onNewBot} data-testid="sidebar-make-bot">
                 <span className="br-btn">
                   <span className="br-avatar ghost-avatar"><I.Plus size={18} /></span>
-                  <span className="br-text"><span className="br-name">New bot</span></span>
+                  <span className="br-text"><span className="br-name">Add a bot</span></span>
                 </span>
               </button>
             )}

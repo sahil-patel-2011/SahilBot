@@ -183,7 +183,8 @@ export function App() {
   // Read-aloud plays here (voice mode has its own player).
   const speaker = useRef<Speaker | null>(null)
   const live = useRef({ speak: false, voiceOn: false })
-  live.current = { speak: !!settings?.speakReplies, voiceOn }
+  // Typed chats are never read aloud on their own (the speaker on a message does it); voice conversations talk.
+  live.current = { speak: false, voiceOn }
 
   const main = spaces.find((s) => s.isMain)
   const space = spaces.find((s) => s.id === spaceId) ?? main

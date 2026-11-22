@@ -128,7 +128,7 @@ export function cleanLocal(v: unknown): LocalSettings | undefined {
 /** Speech output settings as saved. */
 export function cleanVoiceOutput(v: unknown): VoiceOutputSettings {
   const x = (v ?? {}) as Partial<VoiceOutputSettings>
-  return { openai: x.openai === true, ...(['auto', 'openai', 'xai', 'off', 'chatgpt-app', 'grok-app'].includes(x.provider ?? '') ? { provider: x.provider } : {}) }
+  return { openai: x.openai === true, ...(['auto', 'openai', 'xai', 'off', 'chatgpt-app', 'grok-app', 'claude-app'].includes(x.provider ?? '') ? { provider: x.provider } : {}) }
 }
 
 export const MARKET_KEY_PROVIDERS: MarketKeyProvider[] = ['tiingo', 'polygon', 'alphavantage', 'finnhub']

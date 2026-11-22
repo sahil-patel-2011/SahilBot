@@ -9,7 +9,7 @@ import { classifyTask, type TaskCategory } from './llm/task-classifier'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
-import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, SendInput, Settings, Space, UsageRow } from '@shared/types'
+import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, PermissionState, SendInput, Settings, Space, UsageRow } from '@shared/types'
 import type { GoalPatch, MemoryItem, VoiceBarOptions, VoiceSession, VoiceStyle } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 // Cloud first, local opt-in (shared/local-mode.ts); attached folders are counted and indexed (knowledge/folder-scan.ts).
@@ -27,7 +27,7 @@ import { PROVIDERS } from './llm/providers'
 import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
 import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff, speedOptions } from './llm/fast-mode'
 import { isAuto } from './llm/router'
-import { NotificationPermission, automationStatus, fileProbe, permissionsStatus, settingsUrl } from './permissions-center'
+import { NotificationPermission, automationStatus, fileProbe, permissionsStatus, requestAutomation, settingsUrl } from './permissions-center'
 import { collectText, isLocal, spendHooks, streamChat, usageDetails } from './llm/client'
 import { ConnectorIcons, Connectors, PRESETS } from './connectors'
 import { OAUTH_CLIENTS_FILE, readBuiltinClients } from './oauth-clients'
@@ -1088,7 +1088,7 @@ app.whenReady().then(() => {
   if (warmupAllowed()) setTimeout(() => warmup.soon(), 4000)
   // Paid requests made during a run are recorded against that run's bot.
 
-  if (db.listSpaces().length === 0) db.createSpace('SahilBot', '#1F1F1F', { isMain: true, shape: 'mascot' })
+  if (db.listSpaces().length === 0) db.createSpace('New bot', '#1F1F1F', { isMain: true, shape: 'mascot' })
   const attachments = new Attachments(() => win, () => settings.get().workspaceDir, docsDir)
   attachments.registerProtocol()
   // Pages run only in their own session (the side-panel view, their window, PDF/thumbnail renderers).
@@ -2698,7 +2698,7 @@ app.whenReady().then(() => {
     const keys = apiAccess(settings)
     const ready = { openai: !!keys.openai(), xai: !!keys.xai() }
     const provider = connectedVoice(voicePreference(settings.get()), ready) ?? null
-    return { ...voice.options(), providers: [{ id: 'openai', label: 'ChatGPT', ready: ready.openai }, { id: 'xai', label: 'Grok', ready: ready.xai }], provider }
+    return { ...voice.options(), providers: [{ id: 'xai', label: 'Grok', ready: ready.xai }, { id: 'openai', label: 'ChatGPT', ready: ready.openai }], provider }
   }
   handle('voice:options', () => voiceBarOptions())
   handle('voice:setStyle', (patch: { voice?: string; speed?: number; language?: string; provider?: 'openai' | 'xai' }) => {
@@ -3269,11 +3269,14 @@ app.whenReady().then(() => {
   handle('update:history', () => updater.history())
   handle('update:upgradedFrom', () => upgradedFrom ?? null)
   // Settings → Privacy & Security: status (no prompts) and the exact System Settings pane; nothing is granted here.
+  // Mac apps: what asking macOS last told us (Apple events have no read-only status check).
+  let automationState: PermissionState = 'unknown'
   handle('permissions:status', () => permissionsStatus({
     accessibility: () => systemPreferences.isTrustedAccessibilityClient(false),
     media: (kind) => systemPreferences.getMediaAccessStatus(kind),
     notificationsSupported: () => Notification.isSupported(),
     notifications: () => notePermission.get(),
+    automation: () => automationState,
     open: fileProbe,
     home: homedir()
   }))
@@ -3300,7 +3303,12 @@ app.whenReady().then(() => {
         // The first notification is what makes macOS ask; once it's been refused, the pane is where it's changed.
         if (!Notification.isSupported()) return pane()
         return notePermission.request(new Notification({ title: 'SahilBot', body: 'Notifications are on: SahilBot will tell you when a task finishes or needs you.' }))
-      case 'automation': return pane()
+      case 'automation': {
+        // Ask macOS for real first: SahilBot only appears in the Automation list once it has asked.
+        const r = await requestAutomation()
+        if (r !== 'prompted') automationState = r
+        return r === 'denied' ? pane() : r
+      }
       case 'fullDisk': return pane()
       default: { const never: never = kind; throw new Error(`Unknown permission "${String(never)}".`) }
     }

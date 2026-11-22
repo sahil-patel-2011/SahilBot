@@ -15,7 +15,7 @@ export const LEGACY_PAGES: Record<string, { page: SettingsPage; tab?: string }> 
   approvals: { page: 'permissions' },
   passwords: { page: 'privacy', tab: 'passwords' },
   vault: { page: 'privacy', tab: 'passwords' },
-  activity: { page: 'privacy', tab: 'activity' },
+  activity: { page: 'privacy', tab: 'privacy' },
   backups: { page: 'privacy', tab: 'backups' },
   'privacy:approvals': { page: 'permissions' },
   'privacy:permissions': { page: 'permissions' }
@@ -126,7 +126,6 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
   // Voice
   { anchor: 'speech-model', page: 'voice', title: 'Speech recognition', words: 'whisper dictation transcription speech to text microphone voice input model download', keys: ['voiceInput'] },
-  { anchor: 'read-aloud', page: 'voice', title: 'Read replies aloud', words: 'speak read aloud tts speech', keys: ['speakReplies'] },
   { anchor: 'voice-openai', page: 'voice', title: 'Speech provider', words: 'openai grok xai auto voice transcription tts cloud', keys: ['voiceOutput.provider', 'voiceOutput.openai'] },
   { anchor: 'transcribe-local', page: 'voice', title: 'Transcribe on this Mac', words: 'local whisper offline private', keys: ['voiceInput.local'], advanced: true },
   { anchor: 'whisper-model', page: 'voice', title: 'Speech model', words: 'whisper small medium large turbo model override size', keys: ['voiceInput.model'], advanced: true },
@@ -140,9 +139,9 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'files-anywhere', page: 'permissions', title: 'Read and edit files anywhere', words: 'files folders anywhere full disk read edit write without asking approve documents desktop', keys: ['advanced.filesAnywhere'] },
   { anchor: 'mac-permissions', page: 'permissions', title: 'Mac permissions', words: 'accessibility screen recording microphone full disk access automation notifications system settings' },
   { anchor: 'backups', page: 'privacy', tab: 'backups', title: 'Backups', words: 'backup copy restore recovery password api keys export memories decisions vault notes external drive time machine safe lost new mac', macOnly: true },
-  { anchor: 'activity', page: 'privacy', tab: 'activity', title: 'Know what I\'m working on', words: 'activity window titles browser tabs timeline context share cloud exclude apps sites' },
-  { anchor: 'hybrid-compute', page: 'privacy', tab: 'hybrid', title: 'Hybrid compute and Privacy Gate', words: 'hybrid local cloud privacy gate pii tracer personal information phi mask redact bank statement bill on my mac perplexity' },
-  { anchor: 'sensitive', page: 'privacy', tab: 'sensitive', title: 'Sensitive details', words: 'health money finance religion politics children sexuality government id sensitive categories privacy' },
+  { anchor: 'activity', page: 'privacy', tab: 'privacy', title: 'Know what I\'m working on', words: 'activity window titles browser tabs timeline context share cloud exclude apps sites' },
+  { anchor: 'hybrid-compute', page: 'privacy', tab: 'privacy', title: 'Hybrid compute and Privacy Gate', words: 'hybrid local cloud privacy gate pii tracer personal information phi mask redact bank statement bill on my mac perplexity' },
+  { anchor: 'sensitive', page: 'privacy', tab: 'privacy', title: 'Sensitive details', words: 'health money finance religion politics children sexuality government id sensitive categories privacy' },
 
   // Usage, server
   { anchor: 'permissions-page', page: 'permissions', title: 'What SahilBot may do on its own', words: 'permissions approvals auto ask first autonomy allowed actions mac access' },
@@ -166,6 +165,8 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 export const NOT_IN_SETTINGS = new Set([
   'hasApiKey', 'keys', 'keysSaved', 'hasCursorKey', 'hasTbaKey', 'hasNcbiKey', 'hasGoogleMapsKey', 'keysLocked', 'hasOnshapeKeys', 'onshapeKeyParts', 'onboarded', 'pinnedBots', 'search.hasBraveKey',
   'appearance', 'cloud', 'search', 'advanced', 'taskModels', 'learning', 'local', 'markets', 'voiceOutput',
+  // No longer a setting: typed replies are never read aloud on their own (the speaker on a message does it).
+  'speakReplies',
   // Set from other screens: bot details, the composer, the menu bar, local model loading.
   'botAutonomy', 'botSwarm', 'localKeepAlive', 'advanced.sandboxCommands', 'local.migrated', 'learning.explicit', 'cloud.maxConsultsPerRequest',
   // Saved-key flags (the keys themselves are entered on their rows and live in the Keychain).

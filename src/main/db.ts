@@ -96,7 +96,10 @@ const MIGRATIONS: string[] = [
    CREATE INDEX IF NOT EXISTS messages_streaming ON messages(status) WHERE status = 'streaming';`,
   // Thinking chosen per bot and per chat ('auto' or a level; NULL = inherit), like the model.
   `ALTER TABLE spaces ADD COLUMN effort TEXT;
-   ALTER TABLE threads ADD COLUMN effort TEXT;`
+   ALTER TABLE threads ADD COLUMN effort TEXT;`,
+  // The main bot isn't called SahilBot (that's the app) unless the user named it: it's a "New bot" that can
+  // take any name, from the sidebar or by asking it in chat.
+  `UPDATE spaces SET name = 'New bot' WHERE is_main = 1 AND name = 'SahilBot';`
 ]
 
 type Row = Record<string, unknown>

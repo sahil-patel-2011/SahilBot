@@ -18,7 +18,7 @@ test('service API keys have a masked editor and provider off switches keep saved
     expect(settings.keys.anthropic).toBe(false); expect(settings.keysSaved?.anthropic).toBe(true)
     await page.click('[data-testid="provider-on-anthropic"]')
     expect((await page.evaluate(() => window.foreman.settings.get())).keys.anthropic).toBe(true)
-    await page.click('[data-testid="settings-privacy"]'); await page.click('[data-testid="vault-tab-apiKeys"]')
+    await page.click('[data-testid="settings-privacy"]'); await page.click('[data-testid="vault-tab-logins"]')
     await page.click('[data-testid="vault-add-api_key"]')
     await page.fill('[data-testid="vault-f-name"]', 'my-service')
     await page.fill('[data-testid="vault-f-site"]', 'https://api.example.test')
@@ -30,8 +30,8 @@ test('service API keys have a masked editor and provider off switches keep saved
     expect(items[0]).toMatchObject({ kind: 'api_key', sites: ['https://api.example.test'], apiHeader: 'Authorization' })
     expect(JSON.stringify(items)).not.toContain('fixture_private')
     expect(await page.locator('[data-testid="settings"]').innerText()).not.toContain('fixture_private')
-    await page.click('[data-testid="vault-tab-logins"]')
-    expect(await page.locator('[data-testid="vault-item"]').count()).toBe(0)
+    // API keys sit under Logins, in their own list: the key isn't counted as a login.
+    expect(items.filter((i) => i.kind !== 'api_key')).toHaveLength(0)
   } finally { await app.close() }
 })
 

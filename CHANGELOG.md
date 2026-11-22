@@ -7,6 +7,8 @@ Every SahilBot update, newest first. The same notes show in the app (Settings â†
 _2026-11-22_
 
 - **Permissions and setup stick: updates no longer make you grant permissions or go through setup again**
+- **Your main bot is a "New bot" you can rename just by asking, and pinned bots are big avatars at the top of the sidebar**
+- **Voice is one choice, Grok first, ChatGPT or Claude, and typed replies are never read aloud on their own**
 - **New bot asks for just a name, an icon and a color: the bot works out its job with you in its first chat, starting from its name**
 - **Settings has six clear sections, each with a one-line explanation, and no "More settings" menus**
 - **The voice bar is calmer: a smooth wave that follows your voice, one line of status, and plain words with a "Set up voice" button when voice isn't ready**
@@ -26,6 +28,18 @@ _2026-11-22_
 - An empty Brain shows one thing to do, Connect apps, instead of a disabled refresh button and zeros
 - The Help menu is now Keyboard Shortcuts, Connect Apps and Settings
 
+### Privacy & safety
+
+- Mac apps: Allow now asks macOS for real (it's what puts SahilBot in the Automation list), with one button instead of two
+- Three tabs instead of five: Passwords, Backups and What it may see
+- Passwords has four tabs instead of eight: Logins (with API keys), Cards, IDs & notes, and Security (with history)
+
+### Bots and pins
+
+- The main bot starts as "New bot" (SahilBot is the app). Ask it in chat ("call yourself Juno") and it renames itself; nothing else can rename it
+- Pinned bots are big avatars at the top of the sidebar again, like Grok Bot: one pin is extra large, several sit in a row
+- The button for another bot says "Add a bot", so it never looks like a bot named "New bot"
+
 ### Settings
 
 - Six sections: You, AI & spending, Apps, Memory, Privacy & safety, Voice. Each one says what it's for
@@ -36,6 +50,9 @@ _2026-11-22_
 
 ### Voice
 
+- One choice: Grok, ChatGPT or Claude (Claude opens its own voice mode). Grok comes first when its key is there
+- Typed replies are never read aloud on their own: the speaker on a message reads it, and voice conversations talk
+- Bottom right of the message box, like Grok Bot: dictate in a grey circle, a voice conversation in a solid one
 - The wave moves smoothly with your voice and SahilBot's, and calms down when nobody is talking
 - Transcript, voices, speed and language are behind one "â‹¯" button in the bar
 - If voice isn't set up, the bar says what to do in one sentence, and the button opens the right setting

@@ -25,7 +25,7 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
   const items = useMemo(() => {
     const ico = (n: React.ReactNode): React.ReactNode => <span className="pal-icon">{n}</span>
     const commands: Item[] = [
-      { a: { kind: 'new-bot' }, label: 'New bot', icon: ico(<I.Plus size={16} />), group: 'Start' },
+      { a: { kind: 'new-bot' }, label: 'Add a bot', icon: ico(<I.Plus size={16} />), group: 'Start' },
       { a: { kind: 'new-chat' }, label: 'New chat', icon: ico(<I.Edit size={15} />), group: 'Start', keys: ['⌘', 'N'] },
       { a: { kind: 'new-group' }, label: 'Create group chat', icon: ico(<I.Users size={16} />), group: 'Start' },
       { a: { kind: 'new-project' }, label: 'New project', icon: ico(<I.Folder size={15} />), group: 'Start' },

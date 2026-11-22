@@ -33,18 +33,15 @@
 .sb-bots-label { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 4px 10px; min-height: 28px; font-size: 12.5px; font-weight: 600; color: var(--text-3); }
 .sb-bots-label .nav-add { opacity: 1; }
 
-/* Pinned bots: quiet rows at the top of the bot list, not big tiles. */
-.pin-grid { display: flex; flex-direction: column; gap: 1px; padding: 0; outline-offset: 0; }
-.pin-grid.empty.dragging { min-height: 40px; }
-.pin-widget { width: 100%; padding: 0; }
-.pw-btn { flex-direction: row; justify-content: flex-start; gap: 10px; height: 40px; padding: 0 10px; border-radius: 9px; text-align: left; }
-.pw-avatar, .pin-widget > .pw-avatar { width: 26px; height: 26px; margin: 0; }
-.pw-name { font-size: 14px; font-weight: 500; text-align: left; flex: 1; min-width: 0; }
-.pw-star { display: none; }
-.pw-avatar { position: relative; }
-.pw-avatar .pw-status { position: absolute; top: -3px; right: -5px; left: auto; bottom: auto; margin: 0; padding: 1px; border-radius: 999px; background: var(--sidebar) !important; display: flex; }
+/* Pinned bots: big avatars with their names at the top of the sidebar (like Grok Bot); one pin is extra big. */
+.pin-grid { padding: 6px 0 8px; gap: 0; }
+.pin-grid.one .pin-widget { width: 100%; }
+.pin-grid.one .pw-avatar { width: 96px; height: 96px; }
+.pw-btn { padding: 10px 4px; gap: 6px; border-radius: 18px; transition: background .16s ease-out, transform .16s ease-out; }
+.pw-btn:active { transform: scale(.97); }
+.pw-name { font-size: 13.5px; text-align: center; }
+.pin-grid.one .pw-name { font-size: 15px; }
 .pw-avatar .pw-status .need-dot, .pw-avatar .pw-status .unread-dot { width: 8px; height: 8px; }
-.pin-widget .rename { margin: 0; text-align: left; }
 
 /* Bots: one quiet row each (name, then a single grey line). */
 .bot-row { border-radius: 9px; }
@@ -163,3 +160,11 @@
 .find-bar .find-count { font-size: 12px; min-width: 64px; text-align: right; color: var(--text-2); }
 ::highlight(find) { background-color: rgba(255, 196, 0, .35); }
 ::highlight(find-current) { background-color: rgba(255, 140, 0, .75); color: #000; }
+
+/* Composer, bottom right (like Grok Bot): dictate in a soft grey circle, the voice conversation in a solid one. */
+.composer .c-btn[data-testid="dictate"] { width: 36px; height: 36px; background: var(--hover); color: var(--text-2); }
+.composer .c-btn[data-testid="dictate"]:hover { background: color-mix(in srgb, var(--text) 12%, transparent); color: var(--text); }
+.composer .c-btn.voice, .chat-root .composer .c-btn.voice { width: 40px; height: 40px; background: var(--text); color: var(--bg); }
+.composer .c-btn.voice:hover, .chat-root .composer .c-btn.voice:hover { background: var(--text); color: var(--bg); filter: none; opacity: .86; }
+.composer .c-btn.voice:active { transform: scale(.95); }
+.composer .c-btn[data-testid="dictate"].recording { background: var(--danger); color: #fff; }

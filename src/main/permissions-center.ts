@@ -61,6 +61,8 @@ export interface Probes {
   notificationsSupported(): boolean
   /** What macOS last did with one of SahilBot's notifications (NotificationPermission.get): apps can't read the setting itself. */
   notifications?(): PermissionState
+  /** Mac apps (Apple events): what SahilBot last learned by asking (requestAutomation), if it has asked. */
+  automation?(): PermissionState
   /** Opens a file read-only without reading it: 'ok', 'denied' (EPERM/EACCES), or 'missing'. */
   open(path: string): 'ok' | 'denied' | 'missing'
   home: string
@@ -101,7 +103,7 @@ export function permissionsStatus(p: Probes): PermissionRow[] {
     row('screen', safe(() => media(p.media('screen'))), 'macOS only applies a change after SahilBot is reopened.'),
     row('microphone', safe(() => media(p.media('microphone')))),
     row('fullDisk', safe(() => fullDiskState(p))),
-    row('automation', 'unknown', 'Checked per app: use "Check" next to an app.'),
+    row('automation', p.automation?.() ?? 'unknown', 'macOS asks once per app the first time SahilBot controls it.'),
     row('notifications', notes, notes === 'unknown' ? 'macOS doesn\'t let apps read this setting: Turn on sends one notification and macOS asks.'
       : notes === 'denied' ? 'macOS didn\'t show SahilBot\'s last notification: turn SahilBot on in System Settings → Notifications.' : undefined)
   ]
@@ -131,6 +133,24 @@ export function automationStatus(app: string, run: (args: string[]) => Promise<{
     const state = automationError(err)
     return { app, state, ...(state === 'unknown' ? { detail: err.trim().slice(0, 200) || 'No answer from the app.' } : {}) }
   })
+}
+
+/**
+ * Mac apps: macOS only lists SahilBot under Privacy & Security → Automation once it has tried to control an
+ * app, so opening System Settings first shows nothing to turn on. This asks for real: one harmless Apple event
+ * each to System Events and Finder (always running), which makes macOS show its "SahilBot wants to control…"
+ * prompt and adds SahilBot to that list. 'granted' when both answer; 'denied' when one was refused (System
+ * Settings is where that's changed); 'prompted' while macOS's question is still open.
+ */
+export async function requestAutomation(run: (args: string[]) => Promise<{ out: string; err: string }> = osascript): Promise<'granted' | 'denied' | 'prompted'> {
+  const states: PermissionState[] = []
+  for (const app of ['System Events', 'Finder']) {
+    const { out, err } = await run(['-l', 'JavaScript', '-e', `Application(${JSON.stringify(app)}).name()`])
+    states.push(out.trim() ? 'granted' : automationError(err))
+  }
+  if (states.every((s) => s === 'granted')) return 'granted'
+  if (states.includes('denied')) return 'denied'
+  return 'prompted'
 }
 
 function osascript(args: string[]): Promise<{ out: string; err: string }> {

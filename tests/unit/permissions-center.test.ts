@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { NotificationPermission, SETTINGS_URL, automationError, automationStatus, fullDiskState, permissionsStatus, settingsUrl, type Probes } from '../../src/main/permissions-center'
+import { NotificationPermission, SETTINGS_URL, automationError, automationStatus, fullDiskState, permissionsStatus, requestAutomation, settingsUrl, type Probes } from '../../src/main/permissions-center'
 
 const probes = (o: Partial<Probes> = {}): Probes => ({
   accessibility: () => true,
@@ -78,5 +78,24 @@ describe('permissions center', () => {
   test('only the known panes can be opened', () => {
     expect(settingsUrl('microphone')).toBe(SETTINGS_URL.microphone)
     expect(() => settingsUrl('https://evil.example')).toThrow(/Unknown permission/)
+  })
+})
+
+describe('Mac apps: asking macOS for real', () => {
+  test('one Apple event each to System Events and Finder: both answer → granted, a refusal → denied, an open prompt → prompted', async () => {
+    const asked: string[] = []
+    const ok = async (args: string[]) => { asked.push(args.at(-1)!); return { out: 'System Events', err: '' } }
+    expect(await requestAutomation(ok)).toBe('granted')
+    expect(asked).toEqual(['Application("System Events").name()', 'Application("Finder").name()'])
+    const refused = async () => ({ out: '', err: 'Not authorized to send Apple events to System Events. (-1743)' })
+    expect(await requestAutomation(refused)).toBe('denied')
+    const waiting = async () => ({ out: '', err: 'execution error: (-1744)' })
+    expect(await requestAutomation(waiting)).toBe('prompted')
+  })
+
+  test('the Mac apps row shows what asking last found', () => {
+    const p = { accessibility: () => true, media: () => 'granted', notificationsSupported: () => true, open: () => 'ok' as const, home: '/Users/x' }
+    expect(permissionsStatus(p).find((r) => r.kind === 'automation')!.state).toBe('unknown')
+    expect(permissionsStatus({ ...p, automation: () => 'granted' }).find((r) => r.kind === 'automation')!.state).toBe('granted')
   })
 })
