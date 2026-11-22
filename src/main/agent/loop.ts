@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { isStopRequest } from './stop-intent'
 import { projectInstructions } from './project-instructions'
 import { checkMedicalAnswer, medicalNote } from './medical-check'
 import { ALL_FEATURES, claimBacked, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
@@ -620,6 +621,14 @@ export class Agent {
     if (!run) {
       await this.send({ threadId, text, ...(meta ? { meta } : {}) })
       return 'sent'
+    }
+    // You typed only "stop" (or "cancel", "never mind"…): it really stops, like the Stop button, and helpers,
+    // commands and pending requests stop with it. Not a hint the bot may read and carry on past.
+    if (!meta && isStopRequest(text)) {
+      const m = this.d.db.insertMessage({ threadId, role: 'user', content: text, kind: 'normal', status: 'done', meta: { steer: true, stopRequest: true } })
+      this.d.emit({ threadId, type: 'message', message: m })
+      this.stop(threadId)
+      return 'steered'
     }
     // The user's own reply while the bot works may answer a question it posted: closed when it clearly does.
     const answered = !meta ? this.typedAnswer(threadId, text, false) : null

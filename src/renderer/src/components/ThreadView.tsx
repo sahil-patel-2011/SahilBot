@@ -571,7 +571,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const waiting = running && !pending.length && tail?.kind !== 'activity' && (!last || last.role !== 'assistant' || (last.status === 'streaming' && !last.content && !last.reasoning && !last.toolCalls))
   // Quiet chat: one status line the whole time SahilBot works, except while a reply is being written.
   const allTail = all[all.length - 1]
-  const liveStep = running && allTail?.kind === 'activity' ? allTail.steps[allTail.steps.length - 1] : undefined
+  // The status names the step that is running now: once it has its result, it's "Thinking" again, never a stale label.
+  const tailStep = running && allTail?.kind === 'activity' ? allTail.steps[allTail.steps.length - 1] : undefined
+  const liveStep = tailStep && !tailStep.result ? tailStep : undefined
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
   const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writing)
   const started = turnStart(messages, since)

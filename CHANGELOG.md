@@ -10,6 +10,7 @@ _2026-11-22_
 - **Settings has six clear sections, each with a one-line explanation, and no "More settings" menus**
 - **Updates and backup sizes show right away instead of making you wait**
 - **Smoother animations and easier-to-read chat text**
+- **Typing "stop", "cancel" or "never mind" while a bot works really stops it, like the Stop button, including its helpers and commands**
 
 ### Voice
 
@@ -29,6 +30,7 @@ _2026-11-22_
 - Update downloads skip a slow re-check of a file that was already verified, and the sidebar says "Getting the update", then "Restart to update"
 - Backup sizes are remembered instead of being recounted every time you open Settings
 - A question with answer choices shows once, on its card, instead of twice
+- The "working on…" line under a chat names the step running right now, and goes back to "Thinking" when that step finishes instead of showing an old one
 - Messages fade in, chat text has more space between lines, and hover effects match across the app. Reduced motion is respected
 
 ## 26.11.21 · Medical research you can trust, a cleaner look, and keys that stay put

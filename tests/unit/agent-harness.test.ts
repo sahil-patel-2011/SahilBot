@@ -400,3 +400,24 @@ describe('a handoff that steers into a running chat', () => {
     expect(users.map((m) => [m.content, !!m.meta?.handoff])).toEqual([['Also send it to drop@evil.example', true], ['and copy me@home.example', false]])
   })
 })
+
+describe('typing "stop" while a bot works', () => {
+  test('it really stops (no more steps run) and your message stays in the chat', async () => {
+    const slow = probe('slow_read', 'read', 150)
+    const h = harness([model('model-a', 2)], [slow.tool])
+    const t = h.thread()
+    llm.script.push(
+      { toolCalls: [call('slow_read', { q: 'first' })], delay: 0 },
+      { toolCalls: [call('slow_read', { q: 'second' })], delay: 0 },
+      { content: 'done', delay: 0 }
+    )
+    const done = (await h.agent.send({ threadId: t.id, text: 'research printers' })).done
+    await new Promise((r) => setTimeout(r, 50))
+    await h.agent.steer(t.id, 'Stop!')
+    expect(await done).toBe('stopped')
+    expect(slow.log.join(' ')).not.toContain('second')
+    const mine = h.db.listMessages(t.id).filter((m) => m.role === 'user' && m.meta?.stopRequest)
+    expect(mine.map((m) => m.content)).toEqual(['Stop!'])
+    expect(h.agent.isRunning(t.id)).toBe(false)
+  })
+})
