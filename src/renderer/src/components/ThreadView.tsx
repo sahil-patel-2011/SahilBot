@@ -7,7 +7,7 @@ import { ChatVaultOffers } from './VaultOffer'
 import { toast } from '../lib/toast'
 import { legibleOn } from '../brand'
 import * as I from '../icons'
-import { describe, duration, stepStatus, summarize, type Step } from '../lib/steps'
+import { describe, duration, runningStep, stepStatus, summarize, type Step } from '../lib/steps'
 import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
 import { PageCard, pagesFromSteps } from './PageCard'
@@ -572,8 +572,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   // Quiet chat: one status line the whole time SahilBot works, except while a reply is being written.
   const allTail = all[all.length - 1]
   // The status names the step that is running now: once it has its result, it's "Thinking" again, never a stale label.
-  const tailStep = running && allTail?.kind === 'activity' ? allTail.steps[allTail.steps.length - 1] : undefined
-  const liveStep = tailStep && !tailStep.result ? tailStep : undefined
+  const liveStep = runningStep(allTail?.kind === 'activity' ? allTail.steps : undefined, running)
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
   const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writing)
   const started = turnStart(messages, since)

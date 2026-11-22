@@ -464,3 +464,24 @@ describe('a quick question while a long job runs (Grok Bot never makes you wait)
     expect(JSON.stringify(llm.requests.at(-1)!.messages)).toContain('4 printers instead of 3')
   })
 })
+
+describe('two messages sent back to back (Grok Bot test B + C)', () => {
+  test('both are answered: the job answers the first, and the quick second one is answered beside it, tagged', async () => {
+    const slow = probe('slow_read', 'read', 300)
+    const h = harness([model('model-a', 2)], [slow.tool])
+    const t = h.thread()
+    const side = (req: Record<string, any>) => JSON.stringify(req.messages?.[0] ?? '').includes('quick side question')
+    const main = [{ toolCalls: [call('slow_read', { q: 'planets' })], delay: 0 }, { content: 'Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune: one fact each…', delay: 0 }]
+    let i = 0
+    const reply = (req: Record<string, any>) => (side(req) ? { content: '17 × 23 = 391.', delay: 0 } : main[i++])
+    llm.script.push(reply, reply, reply, reply)
+    const done = (await h.agent.send({ threadId: t.id, text: 'List the 8 planets with one fact each' })).done
+    await new Promise((r) => setTimeout(r, 40))
+    await h.agent.steer(t.id, '17 × 23')
+    expect(await done).toBe('finished')
+    await expect.poll(() => h.db.listMessages(t.id).find((m) => m.meta?.aside && m.role === 'assistant')?.content, { timeout: 3000 }).toBe('17 × 23 = 391.')
+    const answers = h.db.listMessages(t.id).filter((m) => m.role === 'assistant' && m.content)
+    expect(answers.some((m) => /Neptune/.test(m.content))).toBe(true)
+    expect(answers.find((m) => m.meta?.aside)?.meta?.replyText).toBe('17 × 23')
+  })
+})

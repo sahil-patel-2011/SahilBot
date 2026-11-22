@@ -138,3 +138,10 @@ export function duration(ms: number): string {
   const s = Math.max(1, Math.round(ms / 1000))
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
+
+/** The step the working line names: the newest one still running (none once it has its result: "Thinking"). */
+export function runningStep(steps: Step[] | undefined, running: boolean): Step | undefined {
+  const last = running ? steps?.[steps.length - 1] : undefined
+  return last && !last.result ? last : undefined
+}
+
