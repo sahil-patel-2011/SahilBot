@@ -299,7 +299,12 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
       g.noteObjs = []
       g.badges = []
       Notification.prototype.show = function (this: Electron.Notification) { g.notes.push({ title: this.title, body: this.body }); g.noteObjs.push(this) }
-      a.dock!.setBadge = (t: string) => { g.badges.push(t) }
+      // Linux needs a notification service to say it's supported; show() is recorded instead anyway.
+      Notification.isSupported = () => true
+      // No Dock off the Mac (a Linux test run): a stand-in, so the badge count is still checked.
+      const host = a as unknown as { dock?: Electron.Dock }
+      host.dock ??= {} as Electron.Dock
+      host.dock.setBadge = (t: string) => { g.badges.push(t) }
       for (const w of BrowserWindow.getAllWindows()) w.isFocused = () => true
     })
     const notes = (): Promise<Array<{ title: string; body: string }>> => app.evaluate(() => (globalThis as unknown as { notes: Array<{ title: string; body: string }> }).notes)
@@ -422,7 +427,7 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
     expect(await sent.innerText()).toContain('Find the boiling point of water')
     // The receiver's chat: who it came from, the message, and its own answer.
     await page.locator('[data-testid="space-item"]', { hasText: 'Researcher' }).click()
-    const from = page.locator('.notice.sys-line', { hasText: 'From SahilBot' })
+    const from = page.locator('.notice.sys-line', { hasText: 'From New bot' })
     await from.waitFor({ timeout: 10_000 })
     expect(await from.innerText()).toContain('Find the boiling point of water')
     await page.locator('[data-testid="assistant-bubble"]', { hasText: 'Water boils at 100 °C' }).waitFor({ timeout: 10_000 })

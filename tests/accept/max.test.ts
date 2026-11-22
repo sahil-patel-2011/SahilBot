@@ -126,10 +126,14 @@ describe('Max mode', () => {
     await page.click('[data-testid="bot-pill"]')
     await page.click('[data-testid="bot-customize"]')
     const editor = page.locator('[data-testid="bot-editor"]')
+    // The editor loads lazily: read its fields only once it's there.
+    await editor.waitFor()
     const labels = await editor.locator('.field > label').allInnerTexts()
     expect(labels).not.toContain('Model'); expect(labels).not.toContain('Thinking'); expect(labels).not.toContain('Max')
     expect(await editor.locator('[data-testid="editor-max-mode"]').count()).toBe(0)
-    await page.keyboard.press('Escape'); await page.keyboard.press('Escape')
+    // One layer per Escape: the editor, then the details panel.
+    await page.keyboard.press('Escape'); await expect.poll(() => editor.count()).toBe(0)
+    await page.keyboard.press('Escape'); await expect.poll(() => page.locator('[data-testid="bot-details"]').count()).toBe(0)
     await page.click('[data-testid="model-picker"]')
     expect(await page.locator('[data-testid="model-option"][data-auto="auto"]').isEnabled()).toBe(true)
     expect(await page.locator('[data-testid="thinking-picker"]').isEnabled()).toBe(true)

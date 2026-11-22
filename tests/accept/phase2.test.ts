@@ -82,7 +82,7 @@ describe('phase 2: agent loop + permissions + context', () => {
     const msgs = llm.requests.at(-1)!.messages as Array<{ role: string; content: string }>
     // Memories ride in the <context> block on the new chat's message (the system prompt stays cacheable).
     expect(String(msgs.find((m) => m.role === 'user')!.content)).toContain('Main client is Acme Co, launching Dec 1.')
-    expect(String(msgs[0].content)).toContain("The user's name is Sam Rivera.")
+    expect(String(msgs[0].content)).toContain("The user's name is Sam Rivera (call them Sam).")
     await app.close()
   })
 

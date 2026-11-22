@@ -1,13 +1,14 @@
 import { createDecipheriv, createECDH, hkdfSync, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chromium, type Browser } from 'playwright'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import type { PhoneAccessStatus } from '@shared/types'
 import { launch, tempProfile } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
+import { chromiumPath } from '../fixtures/chromium-path'
 
 // Phone access end to end, hidden (SAHILBOT_HIDDEN=1: no window ever shows): the Mac app turns it on (bound
 // to 127.0.0.1 for the test, never the real Wi-Fi), headless Chromium at iPhone size pairs as a phone from
@@ -15,19 +16,6 @@ import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 // the phone closed, an approval waiting on the Mac and a long task finishing reach it as Web Push. The push
 // service is a local sink; the test decrypts the payload with the phone's own keys (RFC 8291).
 
-function chromiumPath(): string | undefined {
-  if (process.env.PLAYWRIGHT_CHROMIUM_PATH) return process.env.PLAYWRIGHT_CHROMIUM_PATH
-  if (existsSync(chromium.executablePath())) return undefined
-  const cache = join(homedir(), process.platform === 'darwin' ? 'Library/Caches/ms-playwright' : '.cache/ms-playwright')
-  if (!existsSync(cache)) return undefined
-  for (const d of readdirSync(cache).filter((x) => x.startsWith('chromium_headless_shell-')).sort().reverse()) {
-    for (const sub of readdirSync(join(cache, d))) {
-      const exe = join(cache, d, sub, 'chrome-headless-shell')
-      if (existsSync(exe)) return exe
-    }
-  }
-  return undefined
-}
 
 interface Pushed { endpoint: string; headers: Record<string, string>; body: string }
 
@@ -193,6 +181,9 @@ test('a phone pairs from the QR link, chats, approves, is kept off the Mac’s s
     await mac.waitForTimeout(800)
 
     // A long task finishing → "done" on the phone.
+    // In a new chat: the approval run above may itself count as long, and the same news about the same
+    // chat within 5 s goes out once (hub.notify).
+    await mac.click('[data-testid="new-chat"]')
     const before = pushed.length
     llm.script.push({ content: 'Here is the long report you asked for, finished at last.', delay: 120 })
     await mac.fill('[data-testid="composer-input"]', 'Write the long report')
