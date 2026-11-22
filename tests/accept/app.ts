@@ -56,3 +56,16 @@ export async function expandMoreSettings(page: Page): Promise<void> {
   const more = page.locator('[data-testid="settings-more"]')
   if ((await more.count()) && (await more.getAttribute('aria-expanded')) !== 'true') await more.click()
 }
+
+/**
+ * Puts text in the message box. Playwright's fill inserts text in one go, which under load on Linux (Xvfb)
+ * can be dropped right after a modal or menu closes; then it types the text key by key instead.
+ */
+export async function typeMessage(page: Page, text: string): Promise<void> {
+  const box = page.locator('[data-testid="composer-input"]')
+  await box.fill(text)
+  if ((await box.inputValue()) === text) return
+  await box.click()
+  await box.fill('')
+  await box.pressSequentially(text)
+}

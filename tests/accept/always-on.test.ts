@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Page } from 'playwright'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
-import { launch, tempProfile } from './app'
+import { launch, tempProfile, typeMessage } from './app'
 import { lastToolOutput, refFor, startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 import { startTestSite, STORE, type TestSite } from '../fixtures/test-site'
 
@@ -48,7 +48,7 @@ describe('always-on bots', () => {
       },
       { content: 'Itinerary drafted; the hotel waits on your choice of area.' }
     )
-    await page.fill('[data-testid="composer-input"]', 'Plan my 3-day Lisbon trip and pick a hotel')
+    await typeMessage(page, 'Plan my 3-day Lisbon trip and pick a hotel')
     await page.getByTestId('send').click()
     await idle(page)
     expect(existsSync(p('research.md'))).toBe(true)
@@ -89,7 +89,7 @@ describe('always-on bots', () => {
       { toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ question: 'Which day should the museum visit be?', options: ['Day 2 (recommended)', 'Day 3'] }) }] },
       { content: 'Museums listed; the day waits on you.' }
     )
-    await page.fill('[data-testid="composer-input"]', 'Add a museum day')
+    await typeMessage(page, 'Add a museum day')
     await page.getByTestId('send').click()
     await idle(page)
     expect(await page.evaluate(() => window.foreman.needsYou.list())).toHaveLength(1)
@@ -100,7 +100,7 @@ describe('always-on bots', () => {
       },
       { content: 'Museums moved to day 3.' }
     )
-    await page.fill('[data-testid="composer-input"]', 'Day 3')
+    await typeMessage(page, 'Day 3')
     await page.getByTestId('send').click()
     await idle(page)
     expect(existsSync(p('museum-day.md'))).toBe(true)
@@ -121,7 +121,7 @@ describe('always-on bots', () => {
       (req) => browser({ action: 'click', ref: refFor(lastToolOutput(req), 'button', 'Place order') }),
       { content: 'I did not place the order.' }
     )
-    await page.fill('[data-testid="composer-input"]', 'Buy the travel mugs in my cart with my Personal card')
+    await typeMessage(page, 'Buy the travel mugs in my cart with my Personal card')
     await page.getByTestId('send').click()
     const fillCard = page.locator('[data-testid="purchase-card"][data-step="fill"]')
     await fillCard.waitFor({ timeout: 20_000 })
