@@ -3,7 +3,7 @@ import type { BotAutonomySettings, BotMaxSettings, LibraryItem, PermissionMode, 
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
-import { describeSchedule, groupLibrary, host, when } from '../routines'
+import { describeSchedule, groupLibrary, host, routineStatus, when } from '../routines'
 import { BotShareRows } from './BotShare'
 import { BotGoals } from './TasksView'
 import { VaultBotRows } from './VaultView'
@@ -159,7 +159,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                       <span className="rt-icon"><I.Clock size={16} /></span>
                       <span className="rt-text">
                         <b>{t.title}</b>
-                        <span>{running(t.id) ? 'Running…' : t.enabled ? describeSchedule(t.schedule) : 'Paused'}</span>
+                        <span data-testid="routine-status">{routineStatus(t, running(t.id))}</span>
                       </span>
                     </button>
                     <Toggle on={t.enabled} onChange={(v) => void setEnabled(t, v)} label={t.enabled ? 'Pause routine' : 'Resume routine'} testId="routine-toggle" />

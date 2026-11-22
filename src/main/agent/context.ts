@@ -613,7 +613,8 @@ export const EXACT_AT = 0.6
 
 /** Messages after the compaction boundary that belong in the prompt. */
 export function activeMessages(messages: Message[], state: ThreadState): Message[] {
-  let ms = messages.filter((m) => m.kind === 'normal' && m.status !== 'error' && !(m.status === 'streaming' && !m.content && !m.toolCalls))
+  // Side answers (agent/aside.ts) are a separate exchange beside a running job: never part of the job's prompt.
+  let ms = messages.filter((m) => m.kind === 'normal' && !m.meta?.aside && m.status !== 'error' && !(m.status === 'streaming' && !m.content && !m.toolCalls))
   if (state.compaction) {
     const i = ms.findIndex((m) => m.id === state.compaction!.boundaryId)
     if (i >= 0) ms = ms.slice(i + 1)

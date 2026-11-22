@@ -156,6 +156,7 @@ test('UI audit screenshots', async () => {
       await shoot(page, 'onboard-1-name')
       await page.fill('[data-testid="onboarding-name"]', 'Sahil')
       await page.click('[data-testid="onboarding-name-next"]')
+      await page.click('[data-testid="onboarding-about-next"]')
       await page.locator('[data-testid="onboarding-cloud"]').waitFor()
       await wait(page, 600)
       await shoot(page, 'onboard-2-connect')

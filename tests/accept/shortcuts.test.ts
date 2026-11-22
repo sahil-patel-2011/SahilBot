@@ -18,6 +18,19 @@ describe('keyboard shortcuts', () => {
 
       await page.keyboard.press('Meta+2')
       await expect.poll(() => page.locator('.bot-pill .pill-name').innerText().catch(() => ''), { timeout: 10_000 }).toBe('Finance')
+      // ⇧⌘I: this bot's details; again closes them. ⌘I: back to the message box. ⌥↑: the previous bot.
+      await page.keyboard.press('Meta+Shift+I')
+      await page.locator('[data-testid="bot-details"]').waitFor()
+      await page.keyboard.press('Meta+Shift+I')
+      await expect.poll(() => page.locator('[data-testid="bot-details"]').count()).toBe(0)
+      await page.locator('[data-testid="thread"]').click({ position: { x: 5, y: 5 } }).catch(() => undefined)
+      await page.keyboard.press('Meta+i')
+      expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))).toBe('composer-input')
+      await page.locator('[data-testid="thread"]').click({ position: { x: 5, y: 5 } }).catch(() => undefined)
+      await page.keyboard.press('Alt+ArrowUp')
+      await expect.poll(() => page.locator('.bot-pill').count(), { timeout: 10_000 }).toBe(0)
+      await page.keyboard.press('Meta+2')
+      await expect.poll(() => page.locator('.bot-pill .pill-name').innerText().catch(() => ''), { timeout: 10_000 }).toBe('Finance')
       // ⌘1: SahilBot, which opens on Home (like clicking it in the sidebar).
       await page.keyboard.press('Meta+1')
       await expect.poll(() => page.locator('.bot-pill').count(), { timeout: 10_000 }).toBe(0)

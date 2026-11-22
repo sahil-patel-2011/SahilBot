@@ -38,6 +38,7 @@ describe('cloud-first onboarding', () => {
     await page.locator('[data-testid="onboarding"]').waitFor()
     await page.fill('[data-testid="onboarding-name"]', 'JP')
     await page.click('[data-testid="onboarding-name-next"]')
+    await page.click('[data-testid="onboarding-about-next"]')
 
     // Cloud first: Claude, OpenAI, Grok keys and the ChatGPT plan; then the one local question.
     const cloud = await page.locator('[data-testid="onboarding-cloud"]').innerText()
@@ -96,6 +97,7 @@ describe('cloud-first onboarding', () => {
     await countLocalIpc(app, false)
     await page.locator('[data-testid="onboarding"]').waitFor()
     await page.click('[data-testid="onboarding-name-next"]')
+    await page.click('[data-testid="onboarding-about-next"]')
     await page.click('[data-testid="onboarding-local-yes"]')
     expect(await localCalls(app)).toEqual([])
     await page.click('[data-testid="onboarding-next"]')

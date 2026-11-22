@@ -175,6 +175,7 @@ export function App() {
   const newChatRef = useRef<() => void>(() => undefined)
   // For ⌘1–9 (the key handler is set up once): the bots and pins as they are now.
   const spacesRef = useRef<Space[]>([])
+  const spaceIdRef = useRef<string | null>(null)
   const pinnedRef = useRef<string[] | undefined>(undefined)
   const openBotRef = useRef<(id: string) => Promise<void>>(async () => undefined)
   const openAnyChatRef = useRef<(id: string) => void>(() => undefined)
@@ -479,6 +480,15 @@ export function App() {
       if (e.metaKey && e.key === '/') { e.preventDefault(); setShortcuts(true) }
       // ⌘F: find in the open chat.
       if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'f' && threadRef.current) { e.preventDefault(); setFinding(true) }
+      // ⌘I: the message box. ⇧⌘I: this bot's details (routines, library). ⌥↑ / ⌥↓: the previous / next bot.
+      if (e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); composer.current?.focus() }
+      if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'i') { e.preventDefault(); setPanel((p) => (p === 'details' ? null : 'details')) }
+      if (e.altKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !(e.target as HTMLElement)?.closest?.('textarea, input, [contenteditable="true"]')) {
+        const order = botOrder(spacesRef.current, pinnedRef.current)
+        const at = order.findIndex((b) => b.id === spaceIdRef.current)
+        const b = order[at < 0 ? 0 : (at + (e.key === 'ArrowDown' ? 1 : -1) + order.length) % order.length]
+        if (b) { e.preventDefault(); void openBotRef.current(b.id) }
+      }
       // ⌘1–9: open a bot, in the sidebar's order.
       if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) {
         const b = botOrder(spacesRef.current, pinnedRef.current)[Number(e.key) - 1]
@@ -525,6 +535,7 @@ export function App() {
   const openMain = (): void => { setVaultOpen(null); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
   newChatRef.current = openMain
   spacesRef.current = spaces
+  spaceIdRef.current = spaceId
   pinnedRef.current = settings?.pinnedBots ?? undefined
   const openChat = async (id: string): Promise<void> => {
     const t = chats.find((x) => x.id === id) ?? (await api.threads.list(main?.id)).find((x) => x.id === id)
@@ -886,6 +897,7 @@ export function App() {
         activeSpaceId={space?.id ?? null}
         activeThreadId={thread?.id ?? null}
         userName={settings.userName}
+        profile={settings.profile}
         onOpenMain={openMain}
         onOpenBot={(id) => void openBot(id)}
         onOpenChat={(id) => void openChat(id)}

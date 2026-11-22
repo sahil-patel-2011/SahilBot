@@ -6,6 +6,7 @@ Every SahilBot update, newest first. The same notes show in the app (Settings �
 
 _2026-11-22_
 
+- **Ask a quick question while a bot works on something long and it answers right away; the long job keeps going**
 - **Permissions and setup stick: updates no longer make you grant permissions or go through setup again**
 - **Your main bot is a "New bot" you can rename just by asking, and pinned bots are big avatars at the top of the sidebar**
 - **Voice is one choice, Grok first, ChatGPT or Claude, and typed replies are never read aloud on their own**
@@ -27,6 +28,16 @@ _2026-11-22_
 - Needs you is called Needs you everywhere, and Brain is called Brain everywhere
 - An empty Brain shows one thing to do, Connect apps, instead of a disabled refresh button and zeros
 - The Help menu is now Keyboard Shortcuts, Connect Apps and Settings
+
+### Smarter at real work
+
+- A bot that stalls ("Want me to go ahead?", "On it!" with nothing done) is told to just do what you asked, so you don't have to say "go ahead"
+- Routines say what is really happening: starting now, running, done (with when it ran) or paused; a one-time reminder runs within 20 seconds of its time
+
+### You
+
+- Setup asks your first name, then your last name and birthday (optional), ready for signing in with Google later. Settings → You has all three
+- Bottom left shows your initials and name, like Grok Bot; click it for Settings, right-click for scheduled, usage and more
 
 ### Privacy & safety
 
@@ -60,6 +71,7 @@ _2026-11-22_
 
 ### Keyboard
 
+- ⇧⌘I opens the bot's details (routines, library), ⌥↑ / ⌥↓ go to the previous or next bot, ⌘I jumps to the message box
 - ⌘F: every match in the chat is highlighted; Enter and ⇧Enter step through them
 - ⌘1 to ⌘9 open your bots in the order the sidebar lists them
 - Help → Keyboard Shortcuts (⌘/) shows every shortcut on one page, including your Quick Ask key

@@ -20,7 +20,9 @@
     "dist": "electron-vite build && electron-builder --mac",
     "voice:setup": "./scripts/voice-setup.sh",
     "postinstall": "node scripts/brand-dev.mjs",
-    "install:mac": "node scripts/install-mac.mjs"
+    "install:mac": "node scripts/install-mac.mjs",
+    "eval:scripted": "vitest run --config vitest.eval.config.mts",
+    "eval:real": "REAL_WORK=1 REAL_WORK_OUT=eval-results/real-work.json vitest run --config vitest.eval.config.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
@@ -99,7 +101,7 @@
       "resources/**",
       "package.json",
       "!**/*.{map,d.ts,d.mts,d.cts,md,markdown}",
-    "!resources/oauth-clients.example.json",
+      "!resources/oauth-clients.example.json",
       "!**/{test,tests,__tests__,example,examples,docs,doc,.github}/**",
       "!node_modules/onnxruntime-node/bin/napi-v3/{linux,win32}/**",
       "!node_modules/onnxruntime-node/bin/napi-v3/darwin/x64/**",

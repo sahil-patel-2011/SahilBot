@@ -1,6 +1,6 @@
 // Routines (scheduled tasks) in words, for the bot details panel and the Scheduled screen.
 // Pure helpers: no DOM, no api, so they can be unit tested.
-import type { LibraryItem, Schedule } from '@shared/types'
+import type { LibraryItem, Schedule, ScheduledTask } from '@shared/types'
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -139,4 +139,17 @@ export function groupLibrary(items: LibraryItem[], now = Date.now()): LibraryGro
 /** "example.com" from a URL; the URL itself if it doesn't parse. */
 export function host(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, '') } catch { return url }
+}
+
+/**
+ * What a routine row says, always true right now: running, done (a one-time that has run), paused, starting
+ * (due, about to begin or waiting for the bot to finish a reply), or its schedule.
+ */
+export function routineStatus(t: Pick<ScheduledTask, 'schedule' | 'enabled' | 'nextRun' | 'lastRun' | 'lastStatus'>, isRunning: boolean, now = Date.now()): string {
+  if (isRunning) return 'Running…'
+  const at = (ms: number): string => new Date(ms).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })
+  if (t.schedule.type === 'once' && t.nextRun === null) return t.lastRun ? `Done · ran ${at(t.lastRun)}` : t.lastStatus?.startsWith('skipped') ? 'Missed (SahilBot was closed)' : 'Done'
+  if (!t.enabled) return 'Paused'
+  if (t.nextRun !== null && t.nextRun <= now) return 'Starting now…'
+  return describeSchedule(t.schedule)
 }

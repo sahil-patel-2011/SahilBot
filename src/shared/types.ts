@@ -245,6 +245,8 @@ export interface Settings {
   userName: string
   /** The user's own email addresses and phone numbers (Settings → General): bots may always message them without asking. */
   me?: { emails: string[]; phones: string[] }
+  /** Who the user is (setup asks; Settings → You): first and last name, and a birthday (YYYY-MM-DD) if they gave it. userName is the first name. */
+  profile?: { firstName: string; lastName: string; birthday?: string }
   workspaceDir: string
   search: { provider: 'auto' | 'none' | 'brave' | 'searxng' | 'duckduckgo'; searxngUrl: string; hasBraveKey: boolean }
   advanced: {

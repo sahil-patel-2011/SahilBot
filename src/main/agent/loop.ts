@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { isStopRequest } from './stop-intent'
+import { asideSystem, isAside } from './aside'
 import { projectInstructions } from './project-instructions'
 import { checkMedicalAnswer, medicalNote } from './medical-check'
 import { ALL_FEATURES, claimBacked, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
@@ -22,7 +23,7 @@ import { collectText, contextPin, isLocal, isOllama, pinContextWindow, streamCha
 import { constrainedArgs } from '../llm/constrained'
 import { timer } from '../llm/timing'
 import type { Endpoints } from '../llm/endpoints'
-import type { HeavyBoard, Sampling } from '@shared/types'
+import type { HeavyBoard, Sampling, Settings } from '@shared/types'
 import { cost as priceOf } from '../llm/budget'
 import { claudeFamily } from '../llm/claude-models'
 import { HEAVY_ATTEMPT_NOTE, fitHeavy, heavyCap, runHeavy } from './heavy'
@@ -274,7 +275,7 @@ export const isRelayed = (m: Pick<Message, 'meta'>): boolean =>
  * goal lines the user typed in the Teach bar), helper tasks and the app's hidden notes are left out.
  */
 export function userTextOf(messages: Message[]): string {
-  return messages.filter((m) => m.role === 'user' && !m.meta?.hidden).map((m) => {
+  return messages.filter((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside).map((m) => {
     if (m.meta?.teach) return m.content.split('\n').slice(0, 2).filter((l) => /^(Teach|Goal): /.test(l)).join('\n')
     return isRelayed(m) ? '' : m.content
   }).filter(Boolean).join('\n')
@@ -524,6 +525,20 @@ const pretty = (raw: string): string => {
   }
 }
 
+/**
+ * The user as the prompt names them: full name, what to call them, and their birthday as a month and day only
+ * (never the year or an age).
+ */
+export function whoIs(s: Pick<Settings, 'userName' | 'profile'>): string {
+  const first = s.profile?.firstName || s.userName
+  const last = s.profile?.lastName ?? ''
+  const name = [first, last].filter(Boolean).join(' ')
+  if (!name) return ''
+  const b = s.profile?.birthday
+  const day = b ? new Date(`${b}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' }) : ''
+  return `${name}${last && first ? ` (call them ${first})` : ''}${day ? `; birthday ${day}` : ''}`
+}
+
 export class Agent {
   private runs = new Map<string, Run>()
   readonly runtime: RuntimeStore
@@ -630,12 +645,38 @@ export class Agent {
       this.stop(threadId)
       return 'steered'
     }
+    // A quick side question ("what's 9 squared?", "how's it going?"): answered right away beside the job,
+    // which keeps running. Only in a plain chat run the user is watching; never when a question card is open.
+    if (!meta && isAside(text) && !run.group && !run.helper && !run.unattended && !run.pending.size && this.lastModel.get(threadId)) {
+      const m = this.d.db.insertMessage({ threadId, role: 'user', content: text, kind: 'normal', status: 'done', meta: { aside: true } })
+      this.d.emit({ threadId, type: 'message', message: m })
+      void this.aside(threadId, run, m)
+      return 'steered'
+    }
     // The user's own reply while the bot works may answer a question it posted: closed when it clearly does.
     const answered = !meta ? this.typedAnswer(threadId, text, false) : null
     if (answered?.kind === 'clear') meta = { answerNote: answerNote(answered.question) }
     run.steers = [...(run.steers ?? []), { text, meta }]
     this.d.emit({ threadId, type: 'steer', pending: run.steers.length })
     return 'steered'
+  }
+
+  /**
+   * The side answer: one short reply from the chat's current model, no tools, while the job keeps going. If it
+   * can't answer (the model failed), the question joins the job as ordinary steering, so nothing is lost.
+   */
+  private async aside(threadId: string, run: Run, asked: Message): Promise<void> {
+    const model = this.lastModel.get(threadId)!
+    const all = this.d.db.listMessages(threadId)
+    const job = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside && m.id !== asked.id)?.content ?? ''
+    const step = [...all].reverse().find((m) => m.role === 'assistant' && m.toolCalls?.length)?.toolCalls?.at(-1)?.name
+    const reply = await this.teammate(model, asideSystem({ who: whoIs(this.d.settings.get()), job, ...(step ? { step: `using ${step.replace(/_/g, ' ')}` } : {}) }), asked.content, run, 'low', 400).catch(() => undefined)
+    if (!reply || !this.runs.has(threadId)) {
+      if (this.runs.has(threadId)) { run.steers = [...(run.steers ?? []), { text: asked.content }]; this.d.emit({ threadId, type: 'steer', pending: run.steers.length }) }
+      return
+    }
+    const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: reply, kind: 'normal', status: 'done', meta: { aside: true, replyTo: asked.id } })
+    this.d.emit({ threadId, type: 'message', message: m })
   }
 
   /** Adds waiting steering messages to the conversation; returns the messages added. */
@@ -720,7 +761,7 @@ export class Agent {
     // the model Auto picked for it. Only their own typed reply (no handoff, routine or Needs-you answer).
     if (!opts.unattended && !input.meta && !isRelayed({ meta: input.meta })) {
       const good = verdictFromWords(input.text)
-      const prev = [...history].reverse().find((m) => (m.role === 'assistant' && m.kind === 'normal' && !!m.content && !m.meta?.hidden) || (m.role === 'user' && !m.meta?.hidden))
+      const prev = [...history].reverse().find((m) => (m.role === 'assistant' && m.kind === 'normal' && !!m.content && !m.meta?.hidden) || (m.role === 'user' && !m.meta?.hidden && !m.meta?.aside))
       if (good !== undefined && prev?.role === 'assistant') this.judge(thread.id, prev, good, 'words')
     }
     const lastUserAt = [...history].reverse().find((m) => m.role === 'user')?.createdAt ?? 0
@@ -861,7 +902,7 @@ export class Agent {
   retry(threadId: string): void {
     const thread = this.d.db.getThread(threadId)
     if (!thread || this.runs.has(threadId)) throw new Error('SahilBot is still working in this thread.')
-    const lastUser = [...this.d.db.listMessages(threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const lastUser = [...this.d.db.listMessages(threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     if (!lastUser) throw new Error('Nothing to retry yet.')
     // Regenerating Auto's answer: it didn't suit the user (a verdict on its model for that kind of task).
     const ms = this.d.db.listMessages(threadId)
@@ -887,7 +928,7 @@ export class Agent {
   editLast(threadId: string, text: string): void {
     const thread = this.d.db.getThread(threadId)
     if (!thread || this.runs.has(threadId)) throw new Error('SahilBot is still working in this thread.')
-    const lastUser = [...this.d.db.listMessages(threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const lastUser = [...this.d.db.listMessages(threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     if (!lastUser) throw new Error('Nothing to edit yet.')
     lastUser.content = text
     this.d.db.updateMessage(lastUser)
@@ -910,7 +951,7 @@ export class Agent {
     if (location) throw new Error(location)
     const space = this.d.db.getSpace(thread.spaceId)
     const group = space?.kind === 'group'
-    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     const record = this.runtime.start(thread.id, opener?.id ?? randomUUID(), this.d.db.getState(thread.id).taskPolicy)
     const run: Run = { ctrl: new AbortController(), pending: new Map(), group, unattended: opts.unattended, intro: opts.intro, record, meter: new TaskMeter(record.policy), planFirst: !!opener?.meta?.planFirst, planApproved: !!opener?.meta?.planApproved }
     this.runs.set(thread.id, run)
@@ -991,7 +1032,7 @@ export class Agent {
     this.finishCollaboration(run, status)
     this.fanoutHelper.delete(thread.id)
     // Swarm cards: the run's last answer is the compiled result (credits), and their sessions close.
-    const finalAnswer = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.maxBrief && !m.meta?.superseded)?.content ?? ''
+    const finalAnswer = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.maxBrief && !m.meta?.superseded && !m.meta?.aside)?.content ?? ''
     finishSwarms(thread.id, finalAnswer, status)
     // The Max card: the answer is its result (credits), and its session closes.
     finishMax(thread.id, finalAnswer, status)
@@ -1014,7 +1055,7 @@ export class Agent {
   private baseSystem(bot: Space | undefined, spaceId: string, variant: PromptVariant = 'full'): string {
     const s = this.d.settings.get()
     const opts = {
-      userName: s.userName,
+      userName: whoIs(s),
       workspaceDir: s.workspaceDir,
       spacePrompt: this.d.spaces.getPrompt(bot?.id ?? spaceId),
       spaceName: bot?.name ?? 'SahilBot',
@@ -1203,7 +1244,7 @@ export class Agent {
   private warmFor(thread: Thread, run: Run, state: ThreadState, speaker?: Space): (rules: { model?: string; kind: RouteClass['kind'] }) => Promise<void> {
     return async (rules) => {
       const all = this.d.db.listMessages(thread.id)
-      const opener = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+      const opener = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
       if (!opener) return
       const chat = rules.kind === 'chat' && !run.intro && !isRelayed(opener) && chatEligible({ chat: true, state, helper: run.helper, unattended: run.unattended, group: run.group, newChat: !all.some((m) => m.role === 'assistant') })
       await this.warmContext(thread, opener, rules.model, !chat, speaker)
@@ -1260,7 +1301,7 @@ export class Agent {
     const id = v ? [...autoPool(v, this.d.endpoints.usable())].sort((a, b) => b.tier - a.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id : want
     const cap = swarmCapacity(this.modelInfo(id), swarmConfig(s.swarm))
     // Auto's team keeps the size it chose (max/auto-teamwork.ts).
-    const sized = ([...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.meta?.max as { helpers?: number } | undefined)?.helpers
+    const sized = ([...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)?.meta?.max as { helpers?: number } | undefined)?.helpers
     return { min: Math.min(sized ?? 10, cap.maxAgents), max: sized ? Math.min(cap.maxAgents, sized + 2) : cap.maxAgents }
   }
 
@@ -1361,7 +1402,7 @@ export class Agent {
       run.ctrl.signal.removeEventListener('abort', stop)
     }
     const fresh = db.listMessages(childId).slice(before)
-    let report = [...fresh].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)?.content ?? ''
+    let report = [...fresh].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded && !m.meta?.aside)?.content ?? ''
     let rateLimited: { afterMs?: number } | undefined
     if (status === 'error') {
       const err = [...fresh].reverse().find((m) => (m.role === 'assistant' && m.status === 'error') || m.kind === 'notice')
@@ -1401,11 +1442,11 @@ export class Agent {
     const model = chosen && this.d.endpoints.usable().some((m) => m.id === chosen) ? chosen : helperModelFor(lead, cfg.helperModel, this.d.endpoints.usable(), leadCap.cloud)
     const cap0 = model === lead ? leadCap : swarmCapacity(this.modelInfo(model), cfg)
     // Max: the bot's Max helpers caps its teams too (up to 50, never above what the model or settings allow).
-    const maxOn = !!maxSessionFor(rootId) || !![...db.listMessages(parent.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.meta?.max
+    const maxOn = !!maxSessionFor(rootId) || !![...db.listMessages(parent.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)?.meta?.max
     const cap = maxOn ? { ...cap0, maxAgents: Math.min(cap0.maxAgents, botMaxConfig(s, db.getSpace(parent.spaceId)?.id).maxHelpers) } : cap0
     const used = this.teamUsed.get(rootId) ?? 0
     // Team of Experts: the first team must be wide enough to research properly.
-    const opener = [...db.listMessages(parent.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const opener = [...db.listMessages(parent.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     const teamMode = depth === 1 && !!opener?.meta?.team
     // Auto's team comes sized (max/auto-teamwork.ts): its own minimum, not Team of Experts' ten.
     const sized = (opener?.meta?.max as { helpers?: number } | undefined)?.helpers
@@ -1545,7 +1586,7 @@ export class Agent {
   /** Heavy applies to this run: the user's own message asked for it, someone is watching, not a group or a resume. */
   private heavyWanted(thread: Thread, run: Run): boolean {
     if (run.helper || run.intro || run.group) return false
-    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     // Unattended only under Max (a routine's budget, never asking); a plain Heavy message needs someone there.
     if (run.unattended && !opener?.meta?.max) return false
     return !!opener?.meta?.heavy && !isRelayed(opener)
@@ -1554,7 +1595,7 @@ export class Agent {
   /** Max is on for this request: its one live card opens before anything runs. */
   private maxStart(thread: Thread, run: Run): MaxSession | undefined {
     if (run.helper || run.intro) return undefined
-    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     const m = opener?.meta?.max as { strategy?: string; phases?: string[]; pattern?: 'ideate' | 'divide'; title?: string; why?: string; source?: 'composer' | 'bot' | 'auto'; helpers?: number } | undefined
     if (!m || !m.strategy || !Array.isArray(m.phases)) return undefined
     const space = this.d.db.getSpace(thread.spaceId)
@@ -1571,7 +1612,7 @@ export class Agent {
     const first = (mx.board.phases[0]?.kind === 'team' ? 'team' : 'swarm') as 'team' | 'swarm'
     const status = await this.loop(thread, run, space)
     if (status !== 'finished' || run.ctrl.signal.aborted) return status
-    const brief = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)
+    const brief = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded && !m.meta?.aside)
     if (!brief) return status
     brief.meta = { ...brief.meta, maxBrief: mx.id }
     db.updateMessage(brief)
@@ -1591,7 +1632,7 @@ export class Agent {
     const { model: lead } = await this.chooseModel(requestedModel({ thread: db.getThread(thread.id), space, settings: s }), thread, state)
     db.setState(thread.id, state)
     const history = db.listMessages(thread.id)
-    const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)!
+    const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)!
     const prior = history.filter((m) => m.id !== opener.id && (m.role === 'user' || m.role === 'assistant') && m.kind === 'normal' && m.content && !m.meta?.hidden && !m.meta?.superseded).slice(-6)
     const context = prior.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.replace(/\s+/g, ' ').slice(0, 1500)}`).join('\n')
     // A hybrid's phase 2: the lead's phase-1 instructions don't apply to the attempts; its brief does.
@@ -1721,7 +1762,7 @@ export class Agent {
   /** Council applies to this run: the user's own message asked for it, someone is watching, not a group or a resume. */
   private councilWanted(thread: Thread, run: Run): boolean {
     if (run.unattended || run.helper || run.intro || run.group) return false
-    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     return !!opener?.meta?.council && !isRelayed(opener)
   }
 
@@ -1732,7 +1773,7 @@ export class Agent {
     await this.chooseModel(requestedModel({ thread: db.getThread(thread.id), space, settings: this.d.settings.get() }), thread, state)
     db.setState(thread.id, state)
     const history = db.listMessages(thread.id)
-    const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)!
+    const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)!
     const prior = history.filter((m) => m.id !== opener.id && (m.role === 'user' || m.role === 'assistant') && m.kind === 'normal' && m.content && !m.meta?.hidden && !m.meta?.superseded).slice(-6)
     const context = prior.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.replace(/\s+/g, ' ').slice(0, 1500)}`).join('\n')
     const note = typeof opener.meta?.note === 'string' ? opener.meta.note : ''
@@ -1836,7 +1877,7 @@ export class Agent {
       run.ctrl.signal.removeEventListener('abort', stop)
     }
     const ms = db.listMessages(child.id)
-    const answer = [...ms].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)?.content ?? ''
+    const answer = [...ms].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded && !m.meta?.aside)?.content ?? ''
     view.usd = threadCost(ms, (m) => this.cloudModel(m)).usd
     view.answer = answer.slice(0, 4000) || undefined
     view.status = answer ? 'answered' : status === 'stopped' ? 'stopped' : 'failed'
@@ -2228,7 +2269,7 @@ export class Agent {
     if (!usable.length) usable = (this.d.endpoints.last?.models ?? []).filter((m) => m.installed && !s.hiddenModels.includes(m.id) && (!isRemoteModel(m) || !!process.env.FOREMAN_BASE_URL) && (!localOff(s) || process.env.FOREMAN_BASE_URL || !providerDef(m.provider).local))
     const all = this.d.db.listMessages(thread.id)
     // The request being worked on: an "Approved: …" or an answer from Needs you continues the request it belongs to.
-    const shown = [...all].reverse().filter((m) => m.role === 'user' && !m.meta?.hidden)
+    const shown = [...all].reverse().filter((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     const last = shown.find((m) => !m.meta?.questionAnswer) ?? shown[0]
     const files = [...((last?.meta?.files as Array<{ name: string; path: string }>) ?? []).map((f) => ({ kind: /\.(png|jpe?g|gif|webp|heic)$/i.test(f.path) ? 'image' : 'file', path: f.path, name: f.name })),
       ...((last?.meta?.folders as string[]) ?? []).map((p) => ({ kind: 'folder', path: p, name: p }))] as Attachment[]
@@ -2407,7 +2448,7 @@ export class Agent {
     const cua = this.d.cua
     if (!cua) return undefined
     const s = this.d.settings.get()
-    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     const left = this.d.endpoints.budgetLeft?.()
     try {
       const r = await cua.start({
@@ -2599,7 +2640,7 @@ export class Agent {
     if (!r || r.manual || !r.category) return
     const ms = this.d.db.listMessages(threadId)
     const at = ms.findIndex((m) => m.id === answer.id)
-    const asked = ms.slice(0, at < 0 ? ms.length : at).reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const asked = ms.slice(0, at < 0 ? ms.length : at).reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     if (!asked) return
     try { this.outcomes.verdict({ threadId, messageId: asked.id, model: answer.model, category: r.category, good, source }) } catch { /* never in the way of the chat */ }
   }
@@ -2653,7 +2694,7 @@ export class Agent {
     // One teamwork decision per request: when Max, a team, Heavy, Council, Deep Research or a Max hint already
     // covers it (the user's or Auto's), the brain's own team (planner, pair, fan-out) is dropped, so the lead never
     // gets two sets of helpers or two conflicting "send helpers" notes.
-    const asked = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const asked = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     if (routed?.team && (cuaPair || run.group || run.helper || (run.unattended && routed.task?.rule !== 'semantic') || run.intro || !asked || isRelayed(asked) || asked.meta?.max || asked.meta?.maxHint || asked.meta?.planFirst || asked.meta?.team || asked.meta?.heavy || asked.meta?.council || asked.meta?.deepResearch || asked.meta?.swarm || asked.meta?.swarmHint)) routed = { ...routed, team: undefined }
     // Teamwork (Auto's brain): a stronger model plans first; the run's model carries the plan out with the whole conversation.
     if (routed?.team?.planner && !cuaPair && !run.helper) await this.planFirst(thread, run, model, routed.team, routed.task?.difficulty === 3 ? 'xhigh' : 'high')
@@ -2719,7 +2760,7 @@ export class Agent {
       if (switches >= 2 && !o.to) return false
       const fromName = modelName()
       const now = settings.get()
-      const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+      const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
       let next: ModelInfo | undefined
       let note: string | undefined
       if (o.to) next = o.to
@@ -2843,7 +2884,7 @@ export class Agent {
       if (mode === 'ask' || mode === 'auto' || mode === 'autonomous' || mode === 'bypass') run.modeCap = run.modeCap ? stricterMode(run.modeCap, mode) : normalizeMode(mode)
       if (m.meta.tainted) { run.forceTaint = true; track.web = true }
     }
-    const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+    const opener = [...history].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     const expectedFiles = (): string[] | undefined => {
       if (!opener || run.replay) return undefined
       const read = db.getMessage(opener.id)?.meta?.autoRead as BrainAnswer | undefined
@@ -2993,7 +3034,7 @@ export class Agent {
         // prefix), then the history with this chat's pinned <context> blocks.
         const built = timer('step')
         const all = db.listMessages(thread.id)
-        const opener = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+        const opener = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
         // The user's own rules ("don't touch the API folder") go into the working notes' Constraints as they arrive
         // (deterministic, from the user's own messages only: notes.ts captureConstraints). Notes only enter the
         // prompt with a compaction's brief, so this never changes the cached prefix.
@@ -3273,7 +3314,10 @@ export class Agent {
           // A real choice for the user ("Postgres or SQLite?", "which one…?") is left alone: that question is theirs.
           const finalAsk = assistant.content.trim()
           const asksToContinue = /\b(want me to|would you like me to|shall i|should i (go ahead|proceed|continue|start|do)|do you want me to|let me know if you(?:'d| would) like me to)\b[^?]{0,200}\?\s*(\((yes|y)\s*\/\s*(no|n)\))?\s*$/i.test(finalAsk) && !/\b(or|which|either)\b[^?]{0,120}\?\s*(\([^)]*\))?\s*$/i.test(finalAsk)
-          if (this.feat.continueNudge && asksToContinue && (actions > 0 || open.length > 0 || routed?.task?.rule === 'semantic') && !autonomyNudged && !run.unattended && !chatRun && step < HARD_CAP) {
+          // Asked for a task and stopped before doing anything ("I can do this. Want me to go ahead?"): the request was
+          // the go-ahead. A long reply that already answered and offers more work is left alone.
+          const stalledAtStart = actions === 0 && finalAsk.length < 300
+          if (this.feat.continueNudge && asksToContinue && (actions > 0 || open.length > 0 || routed?.task?.rule === 'semantic' || stalledAtStart) && !autonomyNudged && !run.unattended && (!chatRun || stalledAtStart) && step < HARD_CAP) {
             autonomyNudged = true
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself before anything risky (sending, buying, deleting). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
@@ -3283,7 +3327,7 @@ export class Agent {
           // Said it, didn't do it (Grok Build's task discipline, Apache-2.0): a reply that announces an action
           // ("Publishing the post now", "I'll send you the link once it's up") with no tool call means the action
           // never happened. Make it happen (twice per run at most).
-          if (this.feat.announceNudge && !asksToContinue && promisesAction(assistant.content) && actionNudges < 2 && !run.unattended && !chatRun && step < HARD_CAP) {
+          if (this.feat.announceNudge && !asksToContinue && promisesAction(assistant.content) && actionNudges < 2 && !run.unattended && (!chatRun || (actions === 0 && assistant.content.length < 300)) && step < HARD_CAP) {
             actionNudges++
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your reply says you are doing something (or will), but you made no tool call, so it did not happen. Do it now with the next concrete tool call, and keep going until it is actually done (the live link, the sent message, the saved file). If something truly blocks it, say plainly what.' })
@@ -3349,7 +3393,7 @@ export class Agent {
           // A steering message arrived while this answer was written: keep going with it.
           if (run.steers?.length && step < HARD_CAP) { budget = Math.max(budget, step + 2); continue }
           // Team of Experts on, but no team yet: send one.
-          const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)
+          const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
           if (lastUser?.meta?.team && !run.helper && !(this.teamUsed.get(state.rootId ?? thread.id) ?? 0) && !teamNudged && step < HARD_CAP) {
             teamNudged = true
             budget = Math.max(budget, step + 2)

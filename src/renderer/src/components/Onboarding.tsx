@@ -155,13 +155,17 @@ function LocalSetup() {
  * makes macOS quit and reopen SahilBot, and setup picks up on the same step instead of starting over.
  */
 const PROGRESS = 'sahilbot:onboarding-progress'
-type Progress = { step?: number; name?: string; workspace?: string; wantLocal?: boolean; importAfter?: boolean; anywhere?: boolean }
+type Progress = { step?: number; name?: string; last?: string; birthday?: string; workspace?: string; wantLocal?: boolean; importAfter?: boolean; anywhere?: boolean }
 const savedProgress = (): Progress => { try { return JSON.parse(localStorage.getItem(PROGRESS) ?? '{}') as Progress } catch { return {} } }
 
 export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (s: Settings) => void }) {
   const [resume] = useState(savedProgress)
-  const [step, setStep] = useState(() => ([0, 1, 1.5, 2, 3].includes(resume.step ?? -1) ? resume.step! : 0))
-  const [name, setName] = useState(resume.name ?? settings.userName)
+  const [step, setStep] = useState(() => ([0, 0.5, 1, 1.5, 2, 3].includes(resume.step ?? -1) ? resume.step! : 0))
+  const [name, setName] = useState(resume.name ?? settings.profile?.firstName ?? settings.userName)
+  // About you (step 0.5): last name and birthday, both optional; Google sign-in will use them later.
+  const [last, setLast] = useState(resume.last ?? settings.profile?.lastName ?? '')
+  const [birthday, setBirthday] = useState(resume.birthday ?? settings.profile?.birthday ?? '')
+  const profile = (): { firstName: string; lastName: string; birthday?: string } => ({ firstName: name.trim(), lastName: last.trim(), ...(birthday ? { birthday } : {}) })
   const [workspace, setWorkspace] = useState(resume.workspace ?? settings.workspaceDir)
   const [keys, setKeys] = useState(settings.keys)
   const [plan, setPlan] = useState(false)
@@ -173,7 +177,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
   /** After setup: open "Import memory" (the optional link on the connect step). */
   const [importAfter, setImportAfter] = useState(resume.importAfter ?? false)
   const finish = async (importNow = importAfter): Promise<void> => {
-    const s = await api.settings.set({ userName: name.trim(), workspaceDir: workspace, onboarded: true, defaultModel: 'auto', local: { enabled: wantLocal } })
+    const s = await api.settings.set({ profile: profile(), workspaceDir: workspace, onboarded: true, defaultModel: 'auto', local: { enabled: wantLocal } })
     try { localStorage.removeItem(PROGRESS) } catch { /* nothing kept */ }
     onDone(s)
     if (importNow) window.dispatchEvent(new Event('sahilbot:import-memory'))
@@ -187,9 +191,9 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
   const [anywhere, setAnywhere] = useState(resume.anywhere ?? settings.advanced.filesAnywhere !== false)
   // Every change is kept right away (a quit-and-reopen can come at any moment), and the name is saved too.
   useEffect(() => {
-    try { localStorage.setItem(PROGRESS, JSON.stringify({ step, name, workspace, wantLocal, importAfter, anywhere } satisfies Progress)) } catch { /* setup still works, it just can't resume */ }
-  }, [step, name, workspace, wantLocal, importAfter, anywhere])
-  useEffect(() => { if (step > 0 && name.trim() && name.trim() !== settings.userName) void api.settings.set({ userName: name.trim() }).catch(() => undefined) }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+    try { localStorage.setItem(PROGRESS, JSON.stringify({ step, name, last, birthday, workspace, wantLocal, importAfter, anywhere } satisfies Progress)) } catch { /* setup still works, it just can't resume */ }
+  }, [step, name, last, birthday, workspace, wantLocal, importAfter, anywhere])
+  useEffect(() => { if (step > 0 && name.trim()) void api.settings.set({ profile: profile() }).catch(() => undefined) }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
   const pickWorkspace = async (): Promise<void> => { const f = await api.pickFolder().catch(() => null); if (f) setWorkspace(f) }
   const connected = CLOUD.filter((c) => keys[c.id]).length
 
@@ -202,9 +206,21 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
           <>
             <h2 style={{ textAlign: 'center' }}>Welcome to SahilBot</h2>
             <p className="hint" style={{ textAlign: 'center' }}>An assistant that works on your Mac: it chats, researches, uses your apps and gets real work done. Your chats, files, memory and passwords stay here.</p>
-            <div className="field"><label>What should I call you?</label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Your first name" onKeyDown={(e) => e.key === 'Enter' && setStep(1)} data-testid="onboarding-name" /></div>
-            <div className="modal-actions"><button className="btn primary" onClick={() => setStep(1)} data-testid="onboarding-name-next">Continue</button></div>
+            <div className="field"><label>What's your first name?</label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="First name" autoComplete="given-name" onKeyDown={(e) => e.key === 'Enter' && setStep(0.5)} data-testid="onboarding-name" /></div>
+            <div className="modal-actions"><button className="btn primary" onClick={() => setStep(0.5)} data-testid="onboarding-name-next">Continue</button></div>
             <div className="hint onboard-time">Four short steps, about a minute.</div>
+          </>
+        )}
+        {step === 0.5 && (
+          <>
+            <h2 style={{ textAlign: 'center' }}>{name.trim() ? `Nice to meet you, ${name.trim()}` : 'A little about you'}</h2>
+            <p className="hint" style={{ textAlign: 'center' }}>Used to personalize SahilBot, and for signing in with Google later. It stays on this Mac.</p>
+            <div className="field"><label>Last name</label><input autoFocus value={last} onChange={(e) => setLast(e.target.value)} placeholder="Last name" autoComplete="family-name" onKeyDown={(e) => e.key === 'Enter' && setStep(1)} data-testid="onboarding-last" /></div>
+            <div className="field"><label>Birthday <span className="hint">(optional)</span></label><input type="date" value={birthday} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setBirthday(e.target.value)} autoComplete="bday" onKeyDown={(e) => e.key === 'Enter' && setStep(1)} data-testid="onboarding-birthday" /></div>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setStep(0)}>Back</button>
+              <button className="btn primary" onClick={() => setStep(1)} data-testid="onboarding-about-next">Continue</button>
+            </div>
           </>
         )}
         {step === 1 && (
@@ -240,7 +256,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             {connected === 0 && !plan && !grok && !wantLocal && <div className="hint onboard-nokey" data-testid="onboarding-no-key">No AI connected yet. You can start anyway and add a key later: SahilBot shows where when you send your first message.</div>}
             <label className="onboard-import"><input type="checkbox" checked={importAfter} onChange={(e) => setImportAfter(e.target.checked)} data-testid="onboarding-import" /> Afterwards, bring in what ChatGPT, Claude or Gemini already knows about me (you review it first)</label>
             <div className="modal-actions">
-              <button className="btn" onClick={() => setStep(0)}>Back</button>
+              <button className="btn" onClick={() => setStep(0.5)}>Back</button>
               <button className="btn primary" onClick={() => void next()} data-testid="onboarding-next">Continue</button>
             </div>
           </>

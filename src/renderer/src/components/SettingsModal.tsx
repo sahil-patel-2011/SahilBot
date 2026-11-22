@@ -380,7 +380,15 @@ function General({ s, patch, extras }: P & { extras?: boolean }) {
       <h2>You</h2>
       <div className="set-sub">What SahilBot calls you, how it looks, and how it starts. Changes save as you go.</div>
       <Section>
-        <Row id="user-name" title="Your name" sub="What SahilBot calls you."><Field value={s.userName} placeholder="First name" label="Your name" onSave={(v) => void patch({ userName: v })} /></Row>
+        <Row id="user-name" title="Your name" sub="SahilBot calls you by your first name.">
+          <div style={{ display: 'flex', gap: 6 }}>
+            <Field value={s.profile?.firstName ?? s.userName} width={130} placeholder="First name" label="First name" testId="me-first" onSave={(v) => void patch({ profile: { firstName: v, lastName: s.profile?.lastName ?? '' } })} />
+            <Field value={s.profile?.lastName ?? ''} width={130} placeholder="Last name" label="Last name" testId="me-last" onSave={(v) => void patch({ profile: { firstName: s.profile?.firstName ?? s.userName, lastName: v } })} />
+          </div>
+        </Row>
+        <Row id="birthday" title="Birthday" sub="Optional. Used for reminders and sign-in later; stays on this Mac.">
+          <Field value={s.profile?.birthday ?? ''} type="date" width={170} label="Birthday" testId="me-birthday" onSave={(v) => void patch({ profile: { firstName: s.profile?.firstName ?? s.userName, lastName: s.profile?.lastName ?? '', birthday: v } })} />
+        </Row>
         {/* Me: bots may always email or text these without asking (agent/trusted.ts). Commas separate several. */}
         <Row id="me-contact" title="Your email and phone" sub="Bots can always message you here without asking.">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

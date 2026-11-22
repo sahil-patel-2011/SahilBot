@@ -66,6 +66,7 @@ const TASKS: Task[] = [
       m.screen('onboarding: name')
       await m.type('[data-testid="onboarding-name"]', 'Sam')
       await m.click('[data-testid="onboarding-name-next"]')
+      await m.click('[data-testid="onboarding-about-next"]')
       m.screen('onboarding: connect AI')
       await m.type('[data-testid="onboarding-key"]', 'sk-ant-test-key')
       await m.key('Enter')

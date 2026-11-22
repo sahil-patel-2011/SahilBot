@@ -421,3 +421,46 @@ describe('typing "stop" while a bot works', () => {
     expect(h.agent.isRunning(t.id)).toBe(false)
   })
 })
+
+describe('a quick question while a long job runs (Grok Bot never makes you wait)', () => {
+  test('it is answered right away beside the job, which keeps going and never sees the side exchange', async () => {
+    const slow = probe('slow_read', 'read', 300)
+    const h = harness([model('model-a', 2)], [slow.tool])
+    const t = h.thread()
+    const side = (req: Record<string, any>) => JSON.stringify(req.messages?.[0] ?? '').includes('quick side question')
+    const main = [
+      { toolCalls: [call('slow_read', { q: 'printers' })], delay: 0 },
+      { toolCalls: [call('slow_read', { q: 'reviews' })], delay: 0 },
+      { content: 'Here is the printer comparison.', delay: 0 }
+    ]
+    let i = 0
+    const reply = (req: Record<string, any>) => (side(req) ? { content: '81.', delay: 0 } : main[i++])
+    llm.script.push(reply, reply, reply, reply, reply)
+    const done = (await h.agent.send({ threadId: t.id, text: 'Research 3 printers under $1,000 and compare them' })).done
+    await new Promise((r) => setTimeout(r, 120))
+    await h.agent.steer(t.id, 'What is 9 squared?')
+    // The answer arrives while the job is still running.
+    await expect.poll(() => h.db.listMessages(t.id).some((m) => m.role === 'assistant' && m.meta?.aside && m.content === '81.'), { timeout: 3000 }).toBe(true)
+    expect(h.agent.isRunning(t.id)).toBe(true)
+    expect(await done).toBe('finished')
+    expect(slow.log.join(' ')).toContain('end reviews')
+    // The job's own requests never carried the side exchange, and its final answer is its own.
+    const jobRequests = llm.requests.filter((r) => !side(r))
+    expect(jobRequests.every((r) => !JSON.stringify(r.messages).includes('9 squared'))).toBe(true)
+    const last = [...h.db.listMessages(t.id)].reverse().find((m) => m.role === 'assistant' && !m.meta?.aside && m.content)
+    expect(last?.content).toBe('Here is the printer comparison.')
+  })
+
+  test('a message that changes the job is still steering (it joins the job, no side answer)', async () => {
+    const slow = probe('slow_read', 'read', 200)
+    const h = harness([model('model-a', 2)], [slow.tool])
+    const t = h.thread()
+    llm.script.push({ toolCalls: [call('slow_read', { q: 'a' })], delay: 0 }, { content: 'Done with 4 printers.', delay: 0 })
+    const done = (await h.agent.send({ threadId: t.id, text: 'Compare 3 printers' })).done
+    await new Promise((r) => setTimeout(r, 60))
+    await h.agent.steer(t.id, 'Make it 4 printers instead of 3')
+    expect(await done).toBe('finished')
+    expect(h.db.listMessages(t.id).filter((m) => m.meta?.aside)).toHaveLength(0)
+    expect(JSON.stringify(llm.requests.at(-1)!.messages)).toContain('4 printers instead of 3')
+  })
+})

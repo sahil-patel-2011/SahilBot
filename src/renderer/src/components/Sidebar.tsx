@@ -11,7 +11,7 @@ import { BrainIcon } from './BrainView'
 import { openUsageGlance } from './UsagePage'
 import { money, useSpend } from './SpendingLimit'
 import { countLabel } from '@shared/read-state'
-import { rowSubtitle } from '../lib/ux'
+import { personName, rowSubtitle } from '../lib/ux'
 import { useDevMode } from '../lib/dev-mode'
 import { UpdateButton } from './UpdateButton'
 import { sidebarStatusText } from './FunctionBots'
@@ -38,6 +38,8 @@ export function Sidebar(p: {
   activeThreadId: string | null
   view: MainView
   userName: string
+  /** The user's profile (first and last name) for the initials and name at the bottom. */
+  profile?: { firstName: string; lastName: string }
   onOpenMain: () => void
   onOpenBot: (id: string) => void
   onOpenChat: (id: string) => void
@@ -64,6 +66,7 @@ export function Sidebar(p: {
   needSpaces?: Set<string>
 }) {
   const dev = useDevMode()
+  const me = personName({ userName: p.userName, profile: p.profile })
   const botStatus = useBotStatus()
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -403,11 +406,15 @@ export function Sidebar(p: {
 
       <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
-        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} aria-label="Settings" title={`Settings (⌘,)${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}\nRight-click for scheduled, usage and more`} data-testid="profile"><I.Gear size={17} /></button>
-        <button className="sb-connect" onClick={p.onConnect} data-testid="connect-apps">
+        {/* You: initials and your name (like Grok Bot). Click for Settings; right-click for scheduled, usage and more. */}
+        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: Settings`} title={`Settings (⌘,)${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}\nRight-click for scheduled, usage and more`} data-testid="profile">
+          <span className="sb-me-avatar" aria-hidden="true">{me.initials || <I.Gear size={16} />}</span>
+          {me.full ? <span className="sb-me-name">{me.full}</span> : <span className="sb-me-name muted">Settings</span>}
+        </button>
+        <button className="sb-connect" onClick={p.onConnect} title="Connect apps: Gmail, Calendar, Slack and more" aria-label="Connect apps" data-testid="connect-apps">
           <ConnectedIcons max={3} />
           <I.Plug size={16} className="sb-plug" />
-          <span>Connect apps</span>
+          <span>Apps</span>
         </button>
       </div>
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}

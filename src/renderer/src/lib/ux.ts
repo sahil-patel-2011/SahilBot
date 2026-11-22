@@ -56,3 +56,13 @@ export function filesFromMessages(messages: Array<Pick<Message, 'role' | 'toolNa
   }
   return [...out.values()]
 }
+
+/** The user's name as the sidebar shows it, and their initials for the avatar ("Sahil Patel" → "SP", "Sam" → "S"). */
+export function personName(p: { userName: string; profile?: { firstName: string; lastName: string } }): { full: string; initials: string } {
+  const first = (p.profile?.firstName || p.userName || '').trim()
+  const last = (p.profile?.firstName ? p.profile.lastName : '').trim()
+  const full = [first, last].filter(Boolean).join(' ')
+  const letter = (w: string): string => Array.from(w)[0]?.toUpperCase() ?? ''
+  const words = last ? [first, last] : first.split(/\s+/).slice(0, 2)
+  return { full, initials: words.map(letter).join('') }
+}

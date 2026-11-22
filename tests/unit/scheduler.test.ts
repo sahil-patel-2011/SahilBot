@@ -50,3 +50,31 @@ describe('scheduler', () => {
     expect(() => s.create({ title: 't', prompt: ' ', schedule: { type: 'daily', time: '09:00' }, spaceId: space.id })).toThrow(/instructions/)
   })
 })
+
+describe('on time, and the list tells the truth (Grok Bot ran a reminder 7 minutes late and dropped it from Upcoming)', () => {
+  test('a reminder in 3 minutes runs on the first check after it is due (checks every 20 s), not before', async () => {
+    const db = new Db(':memory:')
+    const space = db.createSpace('Main', '#000', { isMain: true })
+    let now = at('2026-11-22T06:16:10')
+    const ran: Array<{ title: string; at: number }> = []
+    const s = new Scheduler(db, async (t) => { ran.push({ title: t.title, at: now.getTime() }); return 'done' }, () => undefined, () => now)
+    s.create({ title: 'Schedule test reminder', prompt: 'Say "Schedule test fired"', schedule: { type: 'once', at: '2026-11-22T06:19:00' }, spaceId: space.id })
+    // Every 20 s, like the app: nothing before 6:19, it runs on the 6:19:10 check, and only once.
+    for (let t = now.getTime(); t <= at('2026-11-22T06:21:00').getTime(); t += 20_000) { now = new Date(t); await s.tick() }
+    expect(ran).toHaveLength(1)
+    const lateBy = ran[0].at - at('2026-11-22T06:19:00').getTime()
+    expect(lateBy).toBeGreaterThanOrEqual(0)
+    expect(lateBy).toBeLessThanOrEqual(20_000)
+  })
+
+  test('the routine row says what is happening: schedule, starting, running, done, paused', async () => {
+    const { routineStatus } = await import('../../src/renderer/src/routines')
+    const once = { schedule: { type: 'once', at: '2026-11-22T06:19:00' } as const, enabled: true, lastStatus: null }
+    const due = at('2026-11-22T06:19:00').getTime()
+    expect(routineStatus({ ...once, nextRun: due, lastRun: null }, false, due - 60_000)).toMatch(/^Once · /)
+    expect(routineStatus({ ...once, nextRun: due, lastRun: null }, false, due + 5_000)).toBe('Starting now…')
+    expect(routineStatus({ ...once, nextRun: null, lastRun: due }, true)).toBe('Running…')
+    expect(routineStatus({ ...once, enabled: false, nextRun: null, lastRun: due + 10_000 }, false)).toMatch(/^Done · ran /)
+    expect(routineStatus({ schedule: { type: 'daily', time: '09:00' }, enabled: false, nextRun: due, lastRun: null, lastStatus: null }, false)).toBe('Paused')
+  })
+})

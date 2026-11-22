@@ -65,7 +65,8 @@ export const SECTION_HINT: Partial<Record<SettingsPage, string>> = {
 
 export const SETTINGS_INDEX: SettingEntry[] = [
   // General
-  { anchor: 'user-name', page: 'general', title: 'Your name', words: 'name call me first name', keys: ['userName'] },
+  { anchor: 'user-name', page: 'general', title: 'Your name', words: 'name call me first name last name surname profile', keys: ['userName', 'profile', 'profile.firstName', 'profile.lastName'] },
+  { anchor: 'birthday', page: 'general', title: 'Birthday', words: 'birthday date of birth dob age profile', keys: ['profile.birthday'] },
   { anchor: 'me-contact', page: 'general', title: 'Your email and phone', words: 'me my email address phone number mobile text sms imessage trusted message without asking', keys: ['me', 'me.emails', 'me.phones'] },
   { anchor: 'workspace', page: 'general', title: 'Workspace folder', words: 'folder files save output directory', keys: ['workspaceDir'] },
   { anchor: 'theme', page: 'general', title: 'Theme', words: 'appearance dark light mode system', keys: ['theme'] },
