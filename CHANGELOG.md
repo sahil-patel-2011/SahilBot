@@ -21,7 +21,7 @@ _2026-11-22_
 
 ### Every button has one job
 
-- The sidebar says Notes (your bots' notes) instead of Vault, so Vault only means passwords
+- There is no Notes screen: notes are the bots' own memory, and Vault only means passwords
 - Settings is the gear at the bottom of the sidebar; the second gear in the chat header is gone
 - One "New bot" button when you have no bots yet, instead of two
 - The chat menu no longer repeats "About": click the bot's name for its settings, routines and files
@@ -29,6 +29,9 @@ _2026-11-22_
 - Needs you is called Needs you everywhere, and Brain is called Brain everywhere
 - An empty Brain shows one thing to do, Connect apps, instead of a disabled refresh button and zeros
 - The Help menu is now Keyboard Shortcuts, Connect Apps and Settings
+- Every page is the same width, and empty pages say one thing to do instead of showing empty tools
+- "Waiting on you" questions no longer pre-pick an answer you didn't choose
+- Settings → Connected keeps Cursor, MCP and Shortcuts links under "For developers"
 
 ### Smarter at real work
 
@@ -83,6 +86,7 @@ _2026-11-22_
 - ⌘F: every match in the chat is highlighted; Enter and ⇧Enter step through them
 - ⌘1 to ⌘9 open your bots in the order the sidebar lists them
 - Help → Keyboard Shortcuts (⌘/) shows every shortcut on one page, including your Quick Ask key
+- In the ⌘K menu, ⌘1 to ⌘9 pick a row instead of switching bots behind it
 
 ### Smoother everywhere
 

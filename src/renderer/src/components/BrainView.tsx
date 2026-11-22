@@ -89,9 +89,9 @@ export function BrainView(p: { onConnect: () => void; onNeedsYou: () => void; on
       <div className="page-head brain-head">
         <div className="brain-title">
           <h1>Brain</h1>
-          <span className={`brain-updated${st.syncing ? ' live' : ''}`} data-testid="brain-updated">
+          <span className={`brain-updated${st.syncing ? ' live' : ''}${!st.lastSyncAt && !st.syncing ? ' never' : ''}`} data-testid="brain-updated">
             <i className="brain-dot" aria-hidden="true" />
-            {st.syncing ? `${st.job ?? 'Refreshing'}…` : s.paused ? 'Paused' : `Updated ${ago(st.lastSyncAt, now)}`}
+            {st.syncing ? `${st.job ?? 'Refreshing'}…` : s.paused ? 'Paused' : st.lastSyncAt ? `Updated ${ago(st.lastSyncAt, now)}` : 'Not updated yet'}
           </span>
         </div>
         <div className="brain-actions">
@@ -153,12 +153,12 @@ export function BrainView(p: { onConnect: () => void; onNeedsYou: () => void; on
       <section className="brain-section" aria-label="Written for you">
         <div className="brain-h briefs">
           <h2>Written for you</h2>
-          <div className="brain-tools">
+          {(!!briefs?.length || !!query || filter !== FILTERS[0].id) && <div className="brain-tools">
             <span className="brain-search"><I.Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search people, clients, projects" aria-label="Search briefs" data-testid="brain-search" /></span>
             <div className="tk-filter" role="tablist" aria-label="Show">
               {FILTERS.map((f) => <button key={f.id} role="tab" aria-selected={filter === f.id} className={filter === f.id ? 'on' : ''} onClick={() => setFilter(f.id)} data-testid={`brain-filter-${f.id}`}>{f.label}</button>)}
             </div>
-          </div>
+          </div>}
         </div>
         {briefs === null ? <div className="hint">Loading…</div> : briefs.length === 0 ? (
           <div className="brain-empty small" data-testid="brain-empty-briefs">

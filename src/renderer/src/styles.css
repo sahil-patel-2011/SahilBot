@@ -837,7 +837,7 @@ a.btn { text-decoration: none; color: inherit; display: inline-block; }
 .file-from:hover { color: var(--text); }
 
 /* pages (Files, Projects) */
-.page { flex: 1; overflow-y: auto; padding: 56px max(28px, calc((100% - 1000px) / 2)) 48px; }
+.page { flex: 1; overflow-y: auto; padding: 56px max(28px, calc((100% - 1120px) / 2)) 48px; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
 .page-head h1 { font-family: var(--serif); font-weight: 400; font-size: 32px; margin: 0; }
 .page-search { width: 260px; }

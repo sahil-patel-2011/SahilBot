@@ -253,14 +253,14 @@ export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: strin
   return (
     <div className="page" data-testid="files-view">
       <div className="page-head"><h1>Artifacts</h1><input className="set-input page-search" placeholder="Search artifacts" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-      <div className="set-sub">Start a document, deck, sheet or dashboard that you and SahilBot edit together, or open the files your agents made. Click a file to preview it; the link under it opens the chat it came from.</div>
+      <div className="set-sub">Start a doc, deck, sheet or dashboard, or open what your bots made. Click a file to preview it.</div>
       <MakeNew />
       {chips.length > 2 && (
         <div className="artifact-chips" role="tablist" aria-label="Kind" data-testid="artifact-kinds">
           {chips.map((c) => <button key={c.id} role="tab" aria-selected={kind === c.id} className={`artifact-chip${kind === c.id ? ' on' : ''}`} onClick={() => setKind(c.id)} data-testid={`artifact-kind-${c.id}`}>{c.label} <span>{c.n}</span></button>)}
         </div>
       )}
-      {files === null ? <div className="hint">Loading…</div> : shown.length === 0 ? <div className="empty-state"><I.File size={22} /><div>{files.length ? 'Nothing matches.' : 'No files yet. Ask for a report, a deck, a spreadsheet or an image, or export a document above, and it shows up here.'}</div></div> : (
+      {files === null ? <div className="hint">Loading…</div> : shown.length === 0 ? <div className="empty-state"><I.File size={22} /><div>{files.length ? 'Nothing matches.' : 'No files yet. Ask a bot for a report, a deck, a spreadsheet or an image, and it shows up here.'}</div></div> : (
         <div className="file-grid">
           {shown.map((f) => (
             <div key={f.path} className="file-wrap">

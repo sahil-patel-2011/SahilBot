@@ -105,7 +105,7 @@ export function TasksView(p: { spaces: Space[]; onOpenChat: (threadId: string, b
           </div>
         )}
       </div>
-      <div className="set-sub">Goals your bots pursue over hours or days. They check in on their own, stay inside each goal’s budget, and leave anything risky for you.</div>
+      <div className="set-sub">Questions and approvals from your bots, plus the longer goals they’re working on.</div>
       <NeedsYouInbox spaces={p.spaces} onOpenChat={(threadId, botId) => p.onOpenChat(threadId, botId)} />
       {paused && (
         <div className="tk-banner" role="status">
@@ -277,7 +277,7 @@ export function BotGoals({ spaceId }: { spaceId: string }) {
     <>
       <div className="bd-section-title">Goals</div>
       <div className="bd-card" data-testid="bot-goals">
-        {goals !== null && mine.length === 0 && <div className="bd-empty">Ask in chat for something that takes days to start a goal.</div>}
+        {goals !== null && mine.length === 0 && <div className="bd-empty">No goals yet. Ask for something that takes days, like “track these 5 stocks weekly”.</div>}
         {mine.map((g) => {
           const finished = g.status === 'done'
           const on = !finished && g.status !== 'paused' && g.status !== 'waiting_user' && g.status !== 'blocked'

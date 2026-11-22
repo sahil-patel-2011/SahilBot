@@ -496,7 +496,8 @@ export function App() {
         if (b) { e.preventDefault(); void openBotRef.current(b.id) }
       }
       // ⌘1–9: open a bot, in the sidebar's order.
-      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) {
+      // (Not while ⌘K is open: there ⌘1–9 pick its rows.)
+      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key) && !e.defaultPrevented && !document.querySelector('[data-testid="palette"]')) {
         const b = botOrder(spacesRef.current, pinnedRef.current)[Number(e.key) - 1]
         if (b) { e.preventDefault(); void openBotRef.current(b.id) }
       }

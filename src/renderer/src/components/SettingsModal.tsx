@@ -38,7 +38,7 @@ import '../styles-purchase.css'
 
 type Page = SettingsPage
 const PAGES: Array<{ id: Page; icon: ReactNode; color: string }> = [
-  { id: 'general', icon: <I.Gear size={14} />, color: '#8e8e93' },
+  { id: 'general', icon: <I.Smile size={14} />, color: '#8e8e93' },
   { id: 'models', icon: <I.Cpu size={14} />, color: '#5856d6' },
   { id: 'connected', icon: <I.Plug size={14} />, color: '#007aff' },
   { id: 'memory', icon: <I.Sparkle size={14} />, color: '#34c759' },
@@ -848,6 +848,7 @@ function ConnectedPage({ s, patch }: P) {
           <button className="btn primary" onClick={() => window.dispatchEvent(new Event('sahilbot:open-connect'))} data-testid="settings-connect-apps">Connect apps</button>
         </Row>
       </Section>
+      <Disclosure title="For developers" sub="Cursor coding agents, MCP for other apps, Shortcuts links" testId="connected-advanced">
       <Section title="Cursor" sub="Hand coding work to Cursor Cloud Agents on your GitHub repos. Cursor is connected only by its API key." testId="connect-cursor">
         <Row title={<>Cursor{s.hasCursorKey ? <span className="tier-badge ok">Connected</span> : <span className="tier-badge">Not connected</span>}</>}
           sub={<>Cursor API key · <a href="https://cursor.com/dashboard?tab=integrations" target="_blank" rel="noreferrer">get one</a></>}>
@@ -859,11 +860,8 @@ function ConnectedPage({ s, patch }: P) {
           </Row>
         )}
       </Section>
-      {!isServerRuntime && (
-        <Disclosure title="Let other apps use SahilBot" sub="MCP for Cursor and Claude, Shortcuts links" testId="connected-advanced">
-          <div data-setting="mcp-server"><McpSettings /></div>
-        </Disclosure>
-      )}
+        {!isServerRuntime && <div data-setting="mcp-server"><McpSettings /></div>}
+      </Disclosure>
     </>
   )
 }

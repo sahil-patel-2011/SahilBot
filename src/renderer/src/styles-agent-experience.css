@@ -6,7 +6,7 @@
 .attachment-pop .menu-item { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; column-gap: 12px; width: 100%; padding: 12px; border-radius: 11px; text-align: left; white-space: normal; }
 .attachment-pop .menu-item > svg { color: var(--text-2); }
 .attachment-menu-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 13px; line-height: 1.4; }
-.attachment-pop .menu-item .sub { display: block; margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--text-3); }
+.attachment-pop .menu-item .sub { display: block; margin: 0; padding-left: 0; font-size: 11.5px; line-height: 1.45; color: var(--text-3); }
 .bd-agent-note { display: flex; align-items: flex-start; gap: 8px; margin: 18px 2px; color: var(--text-3); font-size: 12px; line-height: 1.6; }
 .bd-agent-note svg { flex: none; margin-top: 3px; color: var(--accent); }
 .connect-card.pending { max-width: 520px; padding: 20px; border-radius: 18px; box-shadow: 0 4px 20px #00000008; }

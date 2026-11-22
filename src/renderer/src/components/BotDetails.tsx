@@ -156,8 +156,8 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                 {!formOpen && <button className="link-btn" onClick={() => setFormOpen(true)} data-testid="routine-new">+ New routine</button>}
               </div>
               {formOpen && <RoutineForm spaceId={space.id} onDone={() => { setFormOpen(false); void load() }} />}
-              <div className="bd-card">
-                {tasks.length === 0 && !formOpen && <div className="bd-empty">Add one above, or ask in chat ("every weekday at 9, send me…").</div>}
+              {(tasks.length > 0 || !formOpen) && <div className="bd-card">
+                {tasks.length === 0 && <div className="bd-empty">Tap + New routine, or ask in chat ("every weekday at 9, send me…").</div>}
                 {tasks.map((t) => (
                   <div key={t.id} className={`rt-row${t.enabled ? '' : ' paused'}`} data-testid="routine-row">
                     <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }} title={t.title}>
@@ -187,20 +187,13 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                     )}
                   </div>
                 ))}
-              </div>
+              </div>}
               {err && <div className="bd-err" role="alert">{err}</div>}
 
               {/* Settings, grouped: how it works, how it tells you, Max and the Vault. */}
-              <div className="bd-section-title">Behaviour</div>
+              <div className="bd-section-title">Behavior</div>
               <div className="bd-card" data-testid="bot-behaviour">
                 <AutonomyRow space={space} />
-                {/* A bot chooses its own model and thinking for each request (never set per bot). */}
-                {(space.kind === 'group' || (space.kind === 'bot' && !space.isMain)) && (
-                  <div className="bd-row bd-row-readonly bd-row-compact" data-testid="bot-auto-line" title="This bot picks its model and how hard to think for each request, for the best result">
-                    <span className="bd-row-text">Model and thinking: automatic</span>
-                    <span className="bd-row-value">Auto</span>
-                  </div>
-                )}
                 {space.kind === 'bot' && <TrustedRow spaceId={space.id} />}
                 {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} part="behaviour" />}
                 <BotFolderRow space={space} onChanged={p.onChanged} />
@@ -399,7 +392,7 @@ function AutonomyRow({ space }: { space: Space }) {
   }
   const mine = s.mine === 'autonomous' ? 'auto' : s.mine
   const level = mine ?? (bot ? 'auto' : undefined)
-  const sub = level === 'ask' ? 'Asks before every change.' : level === 'auto' ? 'Works on its own; asks before money, passwords, deleting and posting.' : 'Each chat can change it in the composer.'
+  const sub = level === 'ask' ? 'Asks before every change.' : level === 'auto' ? 'Works on its own; asks before money, passwords, deleting and posting.' : 'Each chat can change it under its message box.'
   return (
     <label className="bd-row">
       <span className="bd-row-text">{bot ? 'Permissions' : 'Permissions for new chats'}<span className="bd-row-sub">{sub}</span></span>
@@ -490,7 +483,7 @@ export function MaxRows({ spaceId }: { spaceId: string }) {
   return (
     <>
       <label className="bd-row">
-        <span className="bd-row-text">Max<span className="bd-row-sub">{mode === 'off' ? 'Only when you turn Max on in the composer.' : mode === 'always' ? 'Every request runs many agents: a team, a swarm, judged attempts or a mix.' : 'Teams up only for big tasks (reports, big comparisons, many files); small ones stay with one agent.'}</span></span>
+        <span className="bd-row-text">Max<span className="bd-row-sub">{mode === 'off' ? 'Only when you turn Max on under the message box.' : mode === 'always' ? 'Every request runs many agents: a team, a swarm, judged attempts or a mix.' : 'Teams up only for big tasks (reports, big comparisons, many files); small ones stay with one agent.'}</span></span>
         <select className="bd-select" value={mode} onChange={(e) => save({ mode: e.target.value as BotMaxSettings['mode'] })} data-testid="bot-max-mode" aria-label="Max">
           <option value="off">Off</option>
           <option value="auto">Auto</option>

@@ -122,6 +122,8 @@
 .bd-btn:hover:not(:disabled) { background: var(--hover); }
 .bd-btn:disabled { opacity: 0.6; cursor: default; }
 .bd-btn.danger { color: var(--danger-text); }
+.bd-btn.primary { background: var(--text); color: var(--bg); border-color: transparent; }
+.bd-btn.primary:hover:not(:disabled) { background: var(--text); opacity: .86; }
 .rt-confirm .bd-btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 
 /* Settings rows. */

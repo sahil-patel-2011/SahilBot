@@ -39,6 +39,6 @@
 .bot-status.st-done .bs-dot { background: var(--ok); opacity: 1; }
 .bot-status .bs-state { color: var(--text-2); font-weight: 500; }
 .bot-status .bs-model { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bd-hero .bot-status { margin-top: 4px; justify-content: center; }
+.bd-hero .bot-status { margin-top: 4px; justify-content: center; max-width: 100%; min-width: 0; }
 .br-preview.br-status { color: var(--text-2); }
 @media (prefers-reduced-motion: reduce) { .bot-status .bs-dot { animation: none; } }
