@@ -1,11 +1,11 @@
-import { app, BrowserWindow, Menu, nativeImage, screen, shell, type MenuItemConstructorOptions, type Rectangle } from 'electron'
+import { app, BrowserWindow, Menu, nativeImage, screen, type MenuItemConstructorOptions, type Rectangle } from 'electron'
 import { join } from 'node:path'
 import type { Db } from './db'
 import { appRoot, isPackaged } from './paths'
 
 // The app around the window: name, icon, About panel, menu bar, and remembered window size.
 
-export type MenuAction = 'new-chat' | 'new-bot' | 'new-project' | 'settings' | 'scheduled' | 'connect' | 'toggle-panel' | 'export' | 'search' | 'import-bot'
+export type MenuAction = 'new-chat' | 'new-bot' | 'new-project' | 'settings' | 'scheduled' | 'connect' | 'toggle-panel' | 'export' | 'search' | 'import-bot' | 'shortcuts'
 
 export function setupApp(): void {
   app.setName('SahilBot')
@@ -76,10 +76,9 @@ export function buildMenu(send: (a: MenuAction) => void): void {
     {
       role: 'help',
       submenu: [
-        { label: 'Local Models and API Keys…', click: () => send('settings') },
+        { label: 'Keyboard Shortcuts', accelerator: 'CmdOrCtrl+/', click: () => send('shortcuts') },
         { label: 'Connect Apps…', click: () => send('connect') },
-        { type: 'separator' },
-        { label: 'Ollama Website', click: () => void shell.openExternal('https://ollama.com') }
+        { label: 'Settings…', click: () => send('settings') }
       ]
     }
   ]

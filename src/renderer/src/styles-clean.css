@@ -148,3 +148,18 @@
 
 /* Room under the last setting so nothing sits against the window edge. */
 .settings-page .set-body { padding-bottom: 72px; }
+
+/* Keyboard shortcuts sheet (⌘/). */
+.shortcuts-sheet { width: min(720px, calc(100vw - 32px)); }
+.shortcuts-sheet .sc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 28px; margin-top: 12px; }
+.shortcuts-sheet .sc-group h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 10px 0 4px; }
+.shortcuts-sheet .sc-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.shortcuts-sheet .sc-row:last-child { border-bottom: 0; }
+.shortcuts-sheet kbd { font: 500 12px/1 var(--font-ui, inherit); padding: 4px 7px; border-radius: 6px; background: var(--hover); color: var(--text); white-space: nowrap; }
+
+/* ⌘F find in chat. */
+.find-bar { position: absolute; top: 58px; right: 20px; z-index: 30; display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.10); animation: set-fade .14s ease both; color: var(--text-2); }
+.find-bar input { border: 0; outline: 0; background: transparent; font: inherit; font-size: 13.5px; color: var(--text); width: 200px; }
+.find-bar .find-count { font-size: 12px; min-width: 64px; text-align: right; color: var(--text-2); }
+::highlight(find) { background-color: rgba(255, 196, 0, .35); }
+::highlight(find-current) { background-color: rgba(255, 140, 0, .75); color: #000; }

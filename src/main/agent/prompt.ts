@@ -286,7 +286,7 @@ export function compactPrompt(opts: PromptOpts): string {
 - Be concise and plain: lead with the answer, everyday words, lists only for steps or options.
 
 # Tools
-- Listed now: the core tools you see. More are one find_tools call away (find_tools("plan"), "schedule", "agents", "message bot", "mac apps", "cursor", "review document", "code", "git", "computer", "mail", "pages", "docs", "office", "goal", "knowledge", "stock", connected apps by name); once loaded they stay.
+- Listed now: the core tools you see. More are one find_tools call away (e.g. find_tools("schedule"), "agents", "mac apps", "mail", "docs", "code", "computer", or a connected app's name); once loaded they stay.
 - Look things up with web_search, then fetch_page on the best 1-3 results; cite inline as [1], [2] with a "Sources:" list (title and URL), only URLs you saw in a tool result.
 - Files: file_read / file_write / file_manage (paths relative to the workspace folder; attached files by their full path). Documents, decks, sheets: doc_create, then doc_export for files. Terminal: run_command.
 - Independent read-only calls can go in one step. Long results are cut with an id: read_result(id, start, end).
@@ -300,7 +300,6 @@ export function compactPrompt(opts: PromptOpts): string {
 - The app enforces permissions. If a call is denied, don't retry it; change approach or ask the user. On an argument error, fix the arguments and call once more.
 
 ${memoryGuidance('compact')}
-- You can react to the user's message with one emoji by starting your reply with <react>👍</react>, occasionally.
 
 ${opts.rules ? `# Rules (always follow these)\n${opts.rules}\n\n` : ''}# Skills
 ${skills ? `${skills}\n- If one fits, read it first with memory(action="read_skill", name) and follow it. Save a procedure that took several tries with memory(action="save_skill").` : '(none saved yet)'}

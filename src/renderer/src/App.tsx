@@ -2,6 +2,9 @@ import { lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { autoLabel, isAutoModel } from '@shared/model-picker'
 import type { BrowserState, ChatEvent, EffortChoice, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
 import { api, isServerRuntime } from './api'
+import { botOrder } from './lib/bot-order'
+import { ShortcutsSheet } from './components/ShortcutsSheet'
+import { FindBar } from './components/FindBar'
 import { readableOn, SpaceAvatar } from './brand'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
@@ -85,6 +88,8 @@ export function App() {
   const [showConnect, setShowConnect] = useState(false)
   const [editor, setEditor] = useState<Editor>(null)
   const [palette, setPalette] = useState(false)
+  const [shortcuts, setShortcuts] = useState(false)
+  const [finding, setFinding] = useState(false)
   /** Bypass picked for the first time: what to do once the user confirms (null: no dialog). */
   const [bypassAsk, setBypassAsk] = useState<(() => void) | null>(null)
   // The Vault view (in the main area) and the memory import dialog: opened from the palette, Settings
@@ -168,6 +173,10 @@ export function App() {
   const [miniMsgs, setMiniMsgs] = useState<Message[]>([])
 
   const newChatRef = useRef<() => void>(() => undefined)
+  // For ⌘1–9 (the key handler is set up once): the bots and pins as they are now.
+  const spacesRef = useRef<Space[]>([])
+  const pinnedRef = useRef<string[] | undefined>(undefined)
+  const openBotRef = useRef<(id: string) => Promise<void>>(async () => undefined)
   const openAnyChatRef = useRef<(id: string) => void>(() => undefined)
   const threadRef = useRef<string | null>(null)
   threadRef.current = thread?.id ?? null
@@ -352,6 +361,7 @@ export function App() {
     else if (a === 'connect') setShowConnect(true)
     else if (a === 'toggle-panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
     else if (a === 'search') setPalette(true)
+    else if (a === 'shortcuts') setShortcuts(true)
     else if (a === 'needs-you') { setVaultOpen(null); setThread(null); setView('tasks') }
     else if (a === 'brain') { setVaultOpen(null); setThread(null); setView('brain') }
     else if (a === 'export' && threadRef.current) void api.chat.exportThread(threadRef.current).then((p) => p && toast(`Saved to ${p.split('/').pop()}`, 'ok'))
@@ -465,6 +475,14 @@ export function App() {
       if (e.metaKey && e.key === 'n') { e.preventDefault(); newChatRef.current() }
       if (e.metaKey && e.key === 'k') { e.preventDefault(); setPalette(true) }
       if (e.metaKey && e.key === ',') { e.preventDefault(); setShowSettings(true) }
+      if (e.metaKey && e.key === '/') { e.preventDefault(); setShortcuts(true) }
+      // ⌘F: find in the open chat.
+      if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'f' && threadRef.current) { e.preventDefault(); setFinding(true) }
+      // ⌘1–9: open a bot, in the sidebar's order.
+      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) {
+        const b = botOrder(spacesRef.current, pinnedRef.current)[Number(e.key) - 1]
+        if (b) { e.preventDefault(); void openBotRef.current(b.id) }
+      }
       if (e.metaKey && e.key === '\\') { e.preventDefault(); setPanel((p) => (p && p !== 'details' ? null : 'progress')) }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); composer.current?.toggleDictation() }
       // ⌘D: a tap starts or stops dictation; holding it talks until you let go.
@@ -505,6 +523,8 @@ export function App() {
 
   const openMain = (): void => { setVaultOpen(null); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
   newChatRef.current = openMain
+  spacesRef.current = spaces
+  pinnedRef.current = settings?.pinnedBots ?? undefined
   const openChat = async (id: string): Promise<void> => {
     const t = chats.find((x) => x.id === id) ?? (await api.threads.list(main?.id)).find((x) => x.id === id)
     if (!t) return
@@ -557,6 +577,7 @@ export function App() {
     void refreshSpaces()
   }
 
+  openBotRef.current = openBot
   const onPalette = (a: PaletteAction): void => {
     setPalette(false)
     if (a.kind === 'new-chat') openMain()
@@ -568,6 +589,7 @@ export function App() {
     else if (a.kind === 'connect') setShowConnect(true)
     else if (a.kind === 'settings') setShowSettings(true)
     else if (a.kind === 'panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
+    else if (a.kind === 'shortcuts') setShortcuts(true)
     else if (a.kind === 'voice') setVoiceOn(true)
     else if (a.kind === 'dictate') requestAnimationFrame(() => composer.current?.toggleDictation())
     else if (a.kind === 'max') requestAnimationFrame(() => composer.current?.toggleMax())
@@ -966,6 +988,7 @@ export function App() {
             {isServerRuntime && <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={() => setShowSettings(true)} data-testid="header-settings"><I.Gear size={17} /></button>}
           </div>
         </header>
+        {finding && thread && <FindBar key={thread.id} onClose={() => setFinding(false)} />}
         {models && !models.ok && (
           <div className="banner" role="status" data-testid="no-model-banner">
             <span className="banner-text"><b>Connect a model to start.</b> Add a Claude, OpenAI or Grok key or your ChatGPT plan{models.localOff ? '' : ', or start a local model server'}.</span>
@@ -1052,6 +1075,7 @@ export function App() {
           <p className="hint">Use it only for work you're watching. It applies to this chat and goes back to Auto when SahilBot restarts. You won't be asked again.</p>
         </ConfirmDialog>
       )}
+      {shortcuts && <ShortcutsSheet quickKey={settings?.quickKey} onClose={() => setShortcuts(false)} />}
       {palette && <CommandPalette spaces={spaces} chats={chats} onPick={onPalette} onClose={() => setPalette(false)} />}
       {importOpen && <Lazy><ImportMemoryDialog onClose={() => setImportOpen(false)} onDone={() => setImportOpen(false)} /></Lazy>}
       {showSettings && (

@@ -395,12 +395,12 @@ function General({ s, patch, extras }: P & { extras?: boolean }) {
         <Row id="font-size" title="Text size">
           <div className="stepper">
             <button onClick={() => look({ fontSize: Math.max(12, a.fontSize - 1) })} aria-label="Smaller">−</button>
-            <span>{a.fontSize}</span>
+            <span aria-label={`${a.fontSize} points`}>{a.fontSize} pt</span>
             <button onClick={() => look({ fontSize: Math.min(20, a.fontSize + 1) })} aria-label="Larger">+</button>
           </div>
         </Row>
-        <Row id="density" title="Step detail" sub="How much of the agent's work shows in a chat.">
-          <Segmented value={a.density} label="Step detail" onChange={(v) => look({ density: v })} options={[{ id: 'compact', label: 'Compact' }, { id: 'detailed', label: 'Detailed' }]} />
+        <Row id="density" title="Steps in chats" sub="How much of the bot's work you see while it works.">
+          <Segmented value={a.density} label="Step detail" onChange={(v) => look({ density: v })} options={[{ id: 'compact', label: 'Summary' }, { id: 'detailed', label: 'Every step' }]} />
         </Row>
         {!isServerRuntime && (
           <>
