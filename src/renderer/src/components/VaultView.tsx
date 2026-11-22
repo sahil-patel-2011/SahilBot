@@ -165,7 +165,7 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
       <aside className="vault-side">
         <div className="vault-side-head">
           <div className="vault-title">
-            <I.ListIcon size={16} />Vault
+            <I.ListIcon size={16} />Notes
             <span className="hint">{status ? `${status.notes} notes` : ''}</span>
             <button className="icon-btn" title="New note" aria-label="New note" onClick={() => setCreating('')} data-testid="vault-new"><I.Plus size={15} /></button>
             <button className="icon-btn" title="Close (Esc)" aria-label="Close vault" onClick={p.onClose} data-testid="vault-close"><I.Close size={15} /></button>
@@ -429,7 +429,7 @@ export function VaultSettings() {
   const s = st.settings
   return (
     <section className="set-section vault-set" data-testid="vault-settings">
-      <div className="set-label">Knowledge vault</div>
+      <div className="set-label">Notes</div>
       <div className="set-card">
         <div className="set-row">
           <div className="set-row-text">

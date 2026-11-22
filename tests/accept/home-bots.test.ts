@@ -33,7 +33,7 @@ describe('Home: your bots first', () => {
       // Name, icon and color only: no job box, no templates, no extra instructions.
       for (const id of ['bot-job', 'bot-templates-list', 'bot-instructions', 'bot-editor-more']) expect(await page.locator(`[data-testid="${id}"]`).count(), id).toBe(0)
       expect(await page.locator('[data-testid="bot-save"]').isDisabled()).toBe(true)
-      if (shots) await page.screenshot({ path: `${shots}/new-bot.png` })
+      if (shots) { await page.waitForTimeout(500); await page.screenshot({ path: `${shots}/new-bot.png` }) }
 
       llm.script.push(
         { content: 'Hi! Going by my name, I think I\'m here for your email.', toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ question: 'What should I do for you?', options: ['Draft replies every morning', 'Flag what needs you', 'Clean up newsletters'] }) }] },

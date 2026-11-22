@@ -128,7 +128,6 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'speech-model', page: 'voice', title: 'Speech recognition', words: 'whisper dictation transcription speech to text microphone voice input model download', keys: ['voiceInput'] },
   { anchor: 'read-aloud', page: 'voice', title: 'Read replies aloud', words: 'speak read aloud tts speech', keys: ['speakReplies'] },
   { anchor: 'voice-openai', page: 'voice', title: 'Speech provider', words: 'openai grok xai auto voice transcription tts cloud', keys: ['voiceOutput.provider', 'voiceOutput.openai'] },
-  { anchor: 'speaking-voice', page: 'voice', title: 'Voice', words: 'kokoro voice heart bella michael try it' },
   { anchor: 'transcribe-local', page: 'voice', title: 'Transcribe on this Mac', words: 'local whisper offline private', keys: ['voiceInput.local'], advanced: true },
   { anchor: 'whisper-model', page: 'voice', title: 'Speech model', words: 'whisper small medium large turbo model override size', keys: ['voiceInput.model'], advanced: true },
   { anchor: 'voice-model', page: 'voice', title: 'Model for voice conversations', words: 'voice conversation model fast light', keys: ['taskModels.voice'], advanced: true },

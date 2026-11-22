@@ -46,7 +46,7 @@ describe('usage dashboard', () => {
       expect(bots).toContain('Research')
       expect(bots).toContain('Writer')
 
-      // The limit's modes (Settings → Models & Keys): Unlimited and None, then back to an amount.
+      // The limit's modes (Settings → AI & spending): No limit and Don't spend, then back to a monthly limit.
       await page.click('[data-testid="settings-models"]')
       await page.click('[data-testid="spend-mode-unlimited"]')
       await expect.poll(() => page.locator('[data-testid="spend-settings"]').textContent()).toMatch(/used this month · no limit/)

@@ -148,7 +148,7 @@ export function WorkFolderChip({ threadId, inherited, draft, onDraft, projects }
     } catch (e) { toast(clean(e), 'error') }
   }
   const recents = recentFolders.filter((r) => r !== path).slice(0, 3)
-  const label = project && !draft ? project.name : path ? folderName(path) : 'Folder'
+  const label = project && !draft ? project.name : path ? folderName(path) : 'Choose folder'
   const whose = source === 'bot' ? ' (the bot\'s)' : source === 'project' ? ' (the project\'s)' : ''
   return (
     <Popover

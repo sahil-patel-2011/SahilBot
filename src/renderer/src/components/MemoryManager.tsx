@@ -78,8 +78,8 @@ export function MemoryPage({ spaces, tab, onTab }: { spaces: Space[]; tab: strin
   const tabs = [
     { id: 'memories', label: 'Memories' },
     { id: 'learned', label: <>Learned{waiting > 0 && <span className="set-tab-badge" title="Waiting for your OK">{waiting}</span>}</> },
-    { id: 'vault', label: 'Knowledge vault' },
-    { id: 'brain', label: 'Your brain' }
+    { id: 'vault', label: 'Notes' },
+    { id: 'brain', label: 'Brain' }
   ]
   const cur = tabs.some((t) => t.id === tab) ? tab : 'memories'
   return (

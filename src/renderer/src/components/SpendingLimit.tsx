@@ -45,9 +45,9 @@ export function useSpend(): { spent: number; cap: number; requests: number; mode
 }
 
 const MODES: Array<{ id: SpendingMode; label: string; sub: string }> = [
-  { id: 'amount', label: 'Limit', sub: 'A request that could pass this month’s limit is refused before it’s sent.' },
-  { id: 'unlimited', label: 'Unlimited', sub: 'No cap. Spend is still tracked and shown.' },
-  { id: 'none', label: 'None', sub: 'No pay-per-use spending: only your ChatGPT plan and local models run.' }
+  { id: 'amount', label: 'Monthly limit', sub: 'A request that could pass this month’s limit is refused before it’s sent.' },
+  { id: 'unlimited', label: 'No limit', sub: 'Spend is still tracked and shown.' },
+  { id: 'none', label: 'Don\'t spend', sub: 'Only your ChatGPT plan and local models run: nothing pay-per-use.' }
 ]
 
 /** Settings → Models & Keys → Monthly spending limit. */

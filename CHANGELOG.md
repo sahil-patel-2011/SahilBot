@@ -8,6 +8,7 @@ _2026-11-22_
 
 - **The voice bar is calmer: a smooth wave that follows your voice, one line of status, and plain words with a "Set up voice" button when voice isn't ready**
 - **Settings has six clear sections, each with a one-line explanation, and no "More settings" menus**
+- **New bot asks for just a name, an icon and a color: the bot works out its job with you in its first chat, starting from its name**
 - **Updates and backup sizes show right away instead of making you wait**
 - **Smoother animations and easier-to-read chat text**
 - **Typing "stop", "cancel" or "never mind" while a bot works really stops it, like the Stop button, including its helpers and commands**
@@ -24,6 +25,18 @@ _2026-11-22_
 - Spending sits with the AI settings, and what SahilBot may do on its own sits with privacy
 - Text size and step detail are in the main list; rarely used options (tint, routines, web search, rules, developer options) are in one Advanced fold at the bottom
 - "How answers are picked" is a simple choice: Best answers, Balanced or Lowest cost. Using a ChatGPT or Grok plan instead of keys is one click away
+
+### Every button has one job
+
+- The sidebar says Notes (your bots' notes) instead of Vault, so Vault only means passwords
+- Settings is the gear at the bottom of the sidebar; the second gear in the chat header is gone
+- One "New bot" button when you have no bots yet, instead of two
+- The chat menu no longer repeats "About": click the bot's name for its settings, routines and files
+- "Attach a folder's files" (in +) and "Choose folder" (under the box) say what each one does
+- Spending choices read Monthly limit, No limit and Don't spend
+- Needs you is called Needs you everywhere, and Brain is called Brain everywhere
+- An empty Brain shows one thing to do, Connect apps, instead of a disabled refresh button and zeros
+- Voice settings no longer list a "Voices" row with nothing to click, and the dictate shortcut reads ⌘D everywhere
 
 ### Smoother everywhere
 

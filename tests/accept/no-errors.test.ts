@@ -109,7 +109,7 @@ async function everySettingsPage(page: Page): Promise<string[]> {
   await page.locator('[data-testid="settings"]').waitFor()
   await expandMoreSettings(page)
   const ids = await page.locator('.set-nav .set-nav-item').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid') ?? ''))
-  expect(ids.length).toBeGreaterThan(8)
+  expect(ids.length).toBeGreaterThanOrEqual(6)
   for (const id of ids) {
     await page.click(`[data-testid="${id}"]`)
     await expect.poll(() => page.locator(`[data-testid="${id}"]`).getAttribute('class')).toContain(' on')
@@ -183,7 +183,7 @@ describe('no errors on a first run', () => {
 
       // 4. Make a bot: it introduces itself.
       llm.script.push({ content: "Hi JP! I'm your new bot, ready for whatever you need." })
-      await page.click('[data-testid="new-bot"]')
+      await page.locator('[data-testid="new-bot"], [data-testid="sidebar-make-bot"]').first().click()
       await page.fill('[data-testid="bot-name"]', 'My helper')
       await page.click('[data-testid="bot-save"]')
       await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText().catch(() => ''), { timeout: 20_000 }).toContain('your new bot')

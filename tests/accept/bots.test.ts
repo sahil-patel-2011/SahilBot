@@ -29,7 +29,7 @@ describe('bots, group chats, reactions, attachments and documents', () => {
       { toolCalls: [{ name: 'update_bot', arguments: '{"instructions":"You help with the robotics team."}' }] },
       { content: 'Done — I will focus on the robotics team.' }
     )
-    await page.click('[data-testid="new-bot"]')
+    await page.locator('[data-testid="new-bot"], [data-testid="sidebar-make-bot"]').first().click()
     await page.fill('[data-testid="bot-name"]', 'Robo Coach')
     await page.click('[data-testid="bot-save"]')
     const q = page.locator('[data-testid="question-card"]')

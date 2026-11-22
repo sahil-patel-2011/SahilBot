@@ -894,14 +894,13 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
   return (
     <>
       <h2>Voice</h2>
-      <div className="set-sub">Dictate with ⌘⇧D, talk with ⌘⇧V, Esc stops speaking.</div>
+      <div className="set-sub">Dictate with ⌘D, talk with ⌘⇧V, Esc stops speaking.</div>
       <Section>
         {localIsOn(s) && <Row id="speech-model" testId="voice-speech-model" title={sp ? <>{sp.label} <span className="hint" data-testid="voice-speech-reason">· {sp.reason}</span></> : 'Speech recognition'} sub={speechSub} info={sp?.why}>
           {state}
         </Row>}
         <Row id="read-aloud" title="Read replies aloud" sub="Or press the speaker on any message."><Toggle on={s.speakReplies} onChange={(v) => void patch({ speakReplies: v })} label="Read replies aloud" testId="speak-replies" /></Row>
         <div data-setting="voice-openai"><VoiceOutputRow s={s} patch={patch} /></div>
-        <Row id="speaking-voice" title="Voices" sub="Pick a voice, its speed and your language in the voice bar: its settings button." />
       </Section>
       <Disclosure title="Advanced" sub="Speech model, local transcription and the voice model" testId="voice-advanced">
         <Section>
