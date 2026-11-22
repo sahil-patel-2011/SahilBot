@@ -18,7 +18,7 @@ const { Db } = await import('../../src/main/db')
 const store = (pw?: string) => {
   let key: Buffer | undefined
   let asked = 0
-  return { ks: { get: () => key, create: () => (key = Buffer.alloc(32, 7)), legacyPassword: () => { asked++; return pw } }, asked: () => asked }
+  return { ks: { get: () => key ?? ('missing' as const), create: () => (key = Buffer.alloc(32, 7)), legacyPassword: () => { asked++; return pw } }, asked: () => asked }
 }
 /** What Chromium's safeStorage writes on macOS ("v10", AES-128-CBC). */
 const chromium = (value: string, pw: string): string => {
@@ -87,4 +87,21 @@ test('without a Keychain (tests, the server) safeStorage is used as before', () 
   s.set('k', 'v')
   expect(Buffer.from(String(db.getSetting('secret:k')), 'base64').toString()).toBe('ss:v')
   expect(s.get('k')).toBe('v')
+})
+
+test('a locked Keychain never leads to a new key (which would make every saved key unreadable); it\'s asked again later', () => {
+  const db = new Db(':memory:')
+  const good = Buffer.alloc(32, 9)
+  db.setSetting('secret:anthropic', seal(good, 'sk-safe'))
+  let state: 'locked' | 'open' = 'locked'
+  let created = 0
+  const ks = { get: () => (state === 'locked' ? ('error' as const) : good), create: () => { created++; return Buffer.alloc(32, 1) }, legacyPassword: () => undefined }
+  const s = new Secrets(db, ks)
+  expect(s.get('anthropic')).toBeUndefined()
+  expect(created).toBe(0)
+  expect(db.getSetting('secret:anthropic')).toBeTruthy()
+  state = 'open'
+  const later = new Secrets(db, ks)
+  expect(later.get('anthropic')).toBe('sk-safe')
+  expect(created).toBe(0)
 })

@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { chromium, type Browser } from 'playwright'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import type { PhoneAccessStatus } from '@shared/types'
-import { launch, tempProfile } from './app'
+import { launch, tempProfile, settingsPage } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 
 // Phone access end to end, hidden (SAHILBOT_HIDDEN=1: no window ever shows): the Mac app turns it on (bound
@@ -83,10 +83,10 @@ test('a phone pairs from the QR link, chats, approves, is kept off the Mac’s s
   try {
     await mac.evaluate((w) => window.foreman.settings.set({ workspaceDir: w }), workspace)
 
-    // Settings → General → Phone access: off by default; on, a QR code and a code.
+    // Settings → Phone & server (under More settings) → Phone access: off by default; on, a QR code and a code.
     await mac.keyboard.press('Meta+,')
     await mac.locator('[data-testid="settings"]').waitFor()
-    await mac.click('[data-testid="settings-general"]')
+    await settingsPage(mac, 'server')
     await mac.waitForSelector('[data-testid="phone-access-toggle"][aria-checked="false"]')
     await mac.click('[data-testid="phone-access-toggle"]')
     await mac.waitForSelector('[data-testid="phone-qr"]', { timeout: 15_000 })

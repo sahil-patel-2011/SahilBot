@@ -54,6 +54,7 @@ test('Settings: your own email and phone; per-bot trusted recipients are cleaned
   const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_QUIET: '1' })
   try {
     await page.keyboard.press('Meta+,')
+    await page.click('[data-testid="general-more"] > summary')
     await page.locator('[data-testid="me-emails"]').fill('Me@Example.com, not-an-email')
     await page.locator('[data-testid="me-phones"]').fill('+1 (555) 010-1234')
     await page.locator('[data-testid="me-phones"]').press('Enter')

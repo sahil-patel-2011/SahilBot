@@ -170,6 +170,8 @@ export interface Settings {
   keys: Record<Exclude<ProviderId, 'chatgpt' | 'xai' | 'grok-plan'>, boolean> & Partial<Record<'chatgpt' | 'xai' | 'grok-plan', boolean>>
   /** Which providers have a key saved, switched on or off (Settings → Models & Keys shows these as saved). */
   keysSaved?: Partial<Record<ProviderId, boolean>>
+  /** Keys that are saved but the Mac's Keychain wouldn't open just now (kept, not lost). */
+  keysLocked?: ProviderId[]
   /** Cloud providers switched off in Settings: their models aren't used, and their keys stay saved. */
   disabledProviders?: ProviderId[]
   grokPlan?: { enabled: boolean; preferSubscriptions: boolean }

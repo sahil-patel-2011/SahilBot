@@ -1,5 +1,5 @@
 import { safeStorage } from 'electron'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from 'node:crypto'
 import type { Db } from './db'
 
@@ -19,9 +19,13 @@ const V2 = 'v2:'
 
 /** Where the secrets key lives (the Mac's Keychain, through /usr/bin/security). */
 export interface KeyStore {
-  /** The key, if one was made before. */
-  get(): Buffer | undefined
-  /** Makes and saves a new key. */
+  /**
+   * The key; 'missing' only when the Keychain says there's no such item; 'error' when it couldn't answer (locked
+   * after sleep, a prompt dismissed, a timeout). Only 'missing' may lead to a new key: making one over an existing
+   * key would make every saved secret unreadable.
+   */
+  get(): Buffer | 'missing' | 'error'
+  /** Makes and saves a new key (never replacing one that exists). */
   create(): Buffer
   /** The password of the old safeStorage item (macOS asks the user to allow it once), to move old entries over. */
   legacyPassword(): string | undefined
@@ -34,14 +38,16 @@ const ACCOUNT = 'SahilBot'
 export function macKeyStore(appName = 'SahilBot'): KeyStore {
   return {
     get() {
-      try {
-        const hex = execFileSync(SECURITY, ['find-generic-password', '-s', SERVICE, '-a', ACCOUNT, '-w'], { encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-        return /^[0-9a-f]{64}$/.test(hex) ? Buffer.from(hex, 'hex') : undefined
-      } catch { return undefined }
+      const r = spawnSync(SECURITY, ['find-generic-password', '-s', SERVICE, '-a', ACCOUNT, '-w'], { encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] })
+      // 44: errSecItemNotFound. Anything else (locked, denied, timed out) is not "missing".
+      if (r.status === 44) return 'missing'
+      const hex = (r.stdout ?? '').trim()
+      return r.status === 0 && /^[0-9a-f]{64}$/.test(hex) ? Buffer.from(hex, 'hex') : 'error'
     },
     create() {
       const k = randomBytes(32)
-      execFileSync(SECURITY, ['add-generic-password', '-U', '-s', SERVICE, '-a', ACCOUNT, '-l', SERVICE, '-j', 'SahilBot encrypts your API keys with this. Deleting it makes saved keys unreadable.', '-w', k.toString('hex'), '-T', SECURITY], { timeout: 15_000, stdio: 'ignore' })
+      // No -U: if a key appeared meanwhile, this fails instead of replacing it.
+      execFileSync(SECURITY, ['add-generic-password', '-s', SERVICE, '-a', ACCOUNT, '-l', SERVICE, '-j', 'SahilBot encrypts your API keys with this. Deleting it makes saved keys unreadable.', '-w', k.toString('hex'), '-T', SECURITY], { timeout: 15_000, stdio: 'ignore' })
       return k
     },
     legacyPassword() {
@@ -76,19 +82,28 @@ export function openLegacy(enc: Buffer, password: string): string {
 }
 
 export class Secrets {
-  /** The secrets key: undefined until first needed, null when there's none (no Keychain, or it refused). */
+  /** The secrets key: undefined until first needed, null without a Keychain. */
   private master?: Buffer | null
-  /** The old item's password, asked for at most once a session. */
+  /** The Keychain couldn't answer: ask again after this (a locked Keychain unlocks; nothing is replaced). */
+  private retryAt = 0
+  /** The old item's password (a "no" is asked again after a minute, e.g. from Settings' Try again). */
   private legacy?: string | null
+  private legacyAt = 0
 
   constructor(private db: Db, private keys: KeyStore | null = null) {}
 
   private key(): Buffer | undefined {
-    if (this.master === undefined) {
-      if (!this.keys) this.master = null
-      else { try { this.master = this.keys.get() ?? this.keys.create() } catch { this.master = null } }
+    if (this.master !== undefined) return this.master ?? undefined
+    if (!this.keys) { this.master = null; return undefined }
+    if (Date.now() < this.retryAt) return undefined
+    let got = this.keys.get()
+    if (got === 'missing') {
+      try { got = this.keys.create() } catch { got = this.keys.get() }
     }
-    return this.master ?? undefined
+    if (Buffer.isBuffer(got)) { this.master = got; return got }
+    // Locked or refused for now: try again shortly, and never make a new key over this one.
+    this.retryAt = Date.now() + 15_000
+    return undefined
   }
 
   set(name: string, value: string | null): void {
@@ -124,7 +139,7 @@ export class Secrets {
     try { value = safeStorage.decryptString(Buffer.from(enc, 'base64')) } catch { value = undefined }
     if (value === undefined && this.keys) {
       // Written by an earlier build: the old item's password opens it (macOS asks once, then remembers).
-      if (this.legacy === undefined) this.legacy = this.keys.legacyPassword() ?? null
+      if (this.legacy === undefined || (this.legacy === null && Date.now() - this.legacyAt > 60_000)) { this.legacy = this.keys.legacyPassword() ?? null; this.legacyAt = Date.now() }
       if (this.legacy) { try { value = openLegacy(Buffer.from(enc, 'base64'), this.legacy) } catch { value = undefined } }
     }
     if (value === undefined) {

@@ -955,10 +955,10 @@ export function App() {
                 </span>
               )
             })()}
-            <button className={`icon-btn globe${panel === 'browser' ? ' on' : ''}`} title={browser?.controlling ? 'Browser: SahilBot is using it now (click to watch)' : 'Browser: the web pages SahilBot opens'} aria-label="Browser" onClick={() => setPanel((p) => (p === 'browser' ? null : 'browser'))} data-testid="toggle-browser">
+            {(!!browser?.tabs.length || panel === 'browser' || dev) && <button className={`icon-btn globe${panel === 'browser' ? ' on' : ''}`} title={browser?.controlling ? 'Browser: SahilBot is using it now (click to watch)' : 'Browser: the web pages SahilBot opens'} aria-label="Browser" onClick={() => setPanel((p) => (p === 'browser' ? null : 'browser'))} data-testid="toggle-browser">
               <I.Globe size={17} />
               {!!browser?.tabs.length && <span className={`globe-dot${browser.controlling ? ' live' : ''}`} />}
-            </button>
+            </button>}
             <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Side panel: progress, files and documents (⌘\)" aria-label="Side panel" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
             <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={() => setShowSettings(true)} data-testid="header-settings"><I.Gear size={17} /></button>
           </div>

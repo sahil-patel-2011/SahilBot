@@ -27,10 +27,10 @@ describe('Settings', () => {
 
       // Simple first: five pages up front, the rest under "More settings".
       const main = await page.locator('.set-nav .set-nav-item').allInnerTexts()
-      expect(main.map((t) => t.trim())).toEqual(['General', 'Models & Keys', 'Connected apps', 'Privacy & Security', 'Phone & server'])
+      expect(main.map((t) => t.trim())).toEqual(['General', 'Models & Keys', 'Connected apps', 'Privacy & Security'])
       await page.click('[data-testid="settings-more"]')
       const ids = await page.locator('.set-nav .set-nav-item').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
-      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-privacy', 'settings-server', 'settings-permissions', 'settings-memory', 'settings-voice', 'settings-usage', 'settings-advanced'])
+      expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-privacy', 'settings-permissions', 'settings-memory', 'settings-voice', 'settings-usage', 'settings-server', 'settings-advanced'])
       // General: theme folded in; appearance details under More (closed).
       expect(await page.locator('[data-setting="theme"]').count()).toBe(1)
       expect(await page.locator('[data-testid="general-more"]').getAttribute('open')).toBeNull()

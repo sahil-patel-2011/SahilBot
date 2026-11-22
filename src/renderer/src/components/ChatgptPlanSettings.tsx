@@ -25,6 +25,8 @@ export function ChatgptPlanSettings({ onRefresh, embedded }: { onRefresh?: () =>
   const load = useCallback((refresh = false) => api.chatgptPlan.status(refresh).then(setSt).catch(() => undefined), [])
   useEffect(() => { void load() }, [load])
   useEffect(() => api.chatgptPlan.onChanged(() => { void load() }), [load])
+  // Checked again on its own whenever you come back to SahilBot (after installing or signing in elsewhere).
+  useEffect(() => { const f = (): void => { void load(true) }; window.addEventListener('focus', f); return () => window.removeEventListener('focus', f) }, [load])
   // Terminal is installing Codex and running `codex login`: check until it's connected.
   const [waiting, setWaiting] = useState(false)
   useEffect(() => { if (st?.connected) { setWaiting(false); onRefresh?.() } }, [st?.connected]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -73,7 +75,6 @@ export function ChatgptPlanSettings({ onRefresh, embedded }: { onRefresh?: () =>
             {!st?.installed && st && <>
               <button className="btn primary" disabled={!!busy} title="Opens Terminal and runs OpenAI's official installer, then codex login" data-testid="chatgpt-plan-install-terminal"
                 onClick={() => void act('install', async () => { const r = await api.chatgptPlan.installInTerminal(); if (!r.ok) throw new Error(r.error ?? 'Couldn\'t open Terminal.'); setWaiting(true) })}>Install in Terminal</button>
-              <button className="btn" onClick={() => void api.chatgptPlan.openInstallGuide()} data-testid="chatgpt-plan-install">Install guide</button>
             </>}
             {st?.installed && !st.connected && (
               <button className="btn primary" disabled={!!busy || st.signingIn} onClick={() => void act('connect', () => api.chatgptPlan.connect({ signIn: st.enabled && st.login !== 'chatgpt' }))} data-testid="chatgpt-plan-connect">
@@ -81,7 +82,6 @@ export function ChatgptPlanSettings({ onRefresh, embedded }: { onRefresh?: () =>
               </button>
             )}
             {st?.connected && <button className="btn" disabled={!!busy} onClick={() => void act('disconnect', () => api.chatgptPlan.disconnect())} data-testid="chatgpt-plan-disconnect">Turn off</button>}
-            <button className="btn" disabled={!!busy} title="Check again" onClick={() => void act('refresh', () => load(true))}>{busy === 'refresh' ? 'Checking…' : 'Check'}</button>
           </div>
         </div>
 

@@ -17,6 +17,8 @@ export function GrokPlanSettings({ onRefresh, embedded }: { onRefresh?: () => vo
     return () => { mounted = false }
   }, [])
   useEffect(() => { if (status?.connected) setWaiting(false) }, [status?.connected])
+  // Checked again on its own whenever you come back to SahilBot (after signing in in Terminal or the browser).
+  useEffect(() => { const f = (): void => { void api.grokPlan.status(true).then(setStatus).catch(() => undefined) }; window.addEventListener('focus', f); return () => window.removeEventListener('focus', f) }, [])
   usePollWhile(waiting, () => { void api.grokPlan.status(true).then((value) => { setStatus(value); if (value.connected) onRefresh?.() }).catch(() => undefined) })
 
   const run = async (action: () => Promise<GrokPlanStatus | void>): Promise<void> => {
@@ -53,14 +55,12 @@ export function GrokPlanSettings({ onRefresh, embedded }: { onRefresh?: () => vo
           <div className="set-row-ctl">
             {status?.installed === false && <>
               <button className="btn primary" disabled={busy} onClick={() => void install()} data-testid="grok-plan-install" title="Opens Terminal and runs xAI's official installer, then Grok Build's sign-in">Install in Terminal</button>
-              <button className="btn" onClick={() => void run(() => api.grokPlan.openInstallGuide())}>Install guide</button>
             </>}
             {status?.installed && !status.connected && !status.limited && <button className="btn" disabled={busy} onClick={() => void run(async () => {
               await api.grokPlan.signIn()
               setWaiting(true)
               return api.grokPlan.configure({ enabled: true })
             })} data-testid="grok-plan-sign-in">Sign in</button>}
-            <button className="btn" disabled={busy} onClick={() => void run(() => api.grokPlan.status(true))}>Check connection</button>
             {status?.installed && <Toggle on={status.enabled} disabled={busy} label="Use Grok subscription" testId="grok-plan-on" onChange={(enabled) => void run(() => api.grokPlan.configure({ enabled }))} />}
           </div>
         </div>

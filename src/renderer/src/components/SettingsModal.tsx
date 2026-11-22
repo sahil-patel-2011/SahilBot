@@ -50,7 +50,7 @@ const PAGES: Array<{ id: Page; icon: ReactNode; color: string }> = [
   { id: 'advanced', icon: <I.Sliders size={14} />, color: '#af52de' }
 ]
 /** The pages shown up front; the others sit under "More settings". */
-const MAIN_PAGES = new Set<Page>(['general', 'models', 'connected', 'privacy', 'server'])
+const MAIN_PAGES = new Set<Page>(['general', 'models', 'connected', 'privacy', ...(isServerRuntime ? ['server' as Page] : [])])
 /** A phone using the Mac (Phone access) sees its own page where SahilBot Server's browsers see the server's. */
 const onPhone = isServerRuntime && api?.serverHost === 'mac'
 const pageTitle = (id: Page): string => (id === 'server' && isServerRuntime ? (onPhone ? 'This phone' : 'Server') : PAGE_TITLES[id])
@@ -281,7 +281,7 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
           {page === 'voice' && <VoicePage s={s} models={models} patch={patch} />}
           {page === 'privacy' && <PrivacySecurityPage s={s} patch={patch} tab={tabs.privacy ?? 'passwords'} onTab={setTab('privacy')} />}
           {page === 'usage' && <div data-setting="usage"><UsagePage /></div>}
-          {page === 'server' && <div data-setting="server">{isServerRuntime ? (onPhone ? <PhonePage /> : <ServerPage />) : <AlwaysOnServerPage />}</div>}
+          {page === 'server' && <div data-setting="server">{isServerRuntime ? (onPhone ? <PhonePage /> : <ServerPage />) : <>{api.phoneAccess && <div data-setting="phone-access"><PhoneAccessSection /></div>}<AlwaysOnServerPage /></>}</div>}
           {page === 'advanced' && <AdvancedPage s={s} models={models} patch={patch} spaces={spaces ?? []} tab={tabs.advanced ?? 'rules'} onTab={setTab('advanced')} />}
         </div>
       </div>
@@ -308,34 +308,34 @@ function General({ s, patch }: P) {
       <div className="set-sub">Most people never need to change anything here.</div>
       <Section>
         <Row id="user-name" title="Your name" sub="What SahilBot calls you."><Field value={s.userName} placeholder="First name" label="Your name" onSave={(v) => void patch({ userName: v })} /></Row>
-        {/* Me: bots may always email or text these without asking (agent/trusted.ts). Commas separate several. */}
-        <Row id="me-contact" title="Your email and phone" sub="Bots can always message you here without asking.">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Field value={(s.me?.emails ?? []).join(', ')} width={220} placeholder="you@example.com" label="Your email" testId="me-emails" onSave={(v) => void patch({ me: { emails: v.split(/[,;\s]+/).filter(Boolean), phones: s.me?.phones ?? [] } })} />
-            <Field value={(s.me?.phones ?? []).join(', ')} width={220} type="tel" placeholder="+1 555 010 1234" label="Your phone" testId="me-phones" onSave={(v) => void patch({ me: { emails: s.me?.emails ?? [], phones: v.split(/[,;]+/).map((x) => x.trim()).filter(Boolean) } })} />
-          </div>
-        </Row>
-        <Row id="workspace" title="Workspace folder" sub="Where SahilBot saves what it makes."><Field value={s.workspaceDir} width={280} label="Workspace folder" onSave={(v) => void patch({ workspaceDir: v })} /></Row>
         <Row id="theme" title="Theme">
           <Segmented value={s.theme} label="Theme" testIdPrefix="theme" onChange={(v) => void patch({ theme: v })} options={[{ id: 'system', label: 'System' }, { id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }]} />
         </Row>
-        {!isServerRuntime && (
-          <>
-            <Row id="quick-ask" title="Quick Ask shortcut" sub="A small SahilBot bar over any app.">
-              <select className="set-select" value={s.quickKey} onChange={(e) => void patch({ quickKey: e.target.value })} data-testid="quick-key" aria-label="Quick Ask shortcut">
-                <option value="Alt+Space">⌥ Space</option><option value="Control+Space">⌃ Space</option><option value="CommandOrControl+Shift+Space">⌘⇧ Space</option><option value="Alt+Shift+Space">⌥⇧ Space</option><option value="">Off</option>
-              </select>
-            </Row>
-            <Row id="menu-bar" title="Show in the menu bar" sub="See what bots are doing from any app."><Toggle on={s.menuBarIcon ?? true} onChange={(v) => void patch({ menuBarIcon: v })} label="Show SahilBot in the menu bar" testId="menu-bar-icon" /></Row>
-            <Row id="open-at-login" title="Open at login" sub={loginHint}><Toggle on={s.openAtLogin ?? false} onChange={(v) => void patch({ openAtLogin: v })} label="Open at login" testId="open-at-login" /></Row>
-            <UpdatesRow />
-          </>
-        )}
+        {!isServerRuntime && <UpdatesRow />}
       </Section>
 
-      {api.phoneAccess && <div data-setting="phone-access"><PhoneAccessSection /></div>}
-
-      <Disclosure title="More" sub="Appearance, routines and web search" testId="general-more">
+      <Disclosure title="More" sub="Your contact details, folders, shortcuts, appearance, routines and web search" testId="general-more">
+        <Section title="You and your Mac">
+          {/* Me: bots may always email or text these without asking (agent/trusted.ts). Commas separate several. */}
+          <Row id="me-contact" title="Your email and phone" sub="Bots can always message you here without asking.">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Field value={(s.me?.emails ?? []).join(', ')} width={220} placeholder="you@example.com" label="Your email" testId="me-emails" onSave={(v) => void patch({ me: { emails: v.split(/[,;\s]+/).filter(Boolean), phones: s.me?.phones ?? [] } })} />
+              <Field value={(s.me?.phones ?? []).join(', ')} width={220} type="tel" placeholder="+1 555 010 1234" label="Your phone" testId="me-phones" onSave={(v) => void patch({ me: { emails: s.me?.emails ?? [], phones: v.split(/[,;]+/).map((x) => x.trim()).filter(Boolean) } })} />
+            </div>
+          </Row>
+          <Row id="workspace" title="Workspace folder" sub="Where SahilBot saves what it makes."><Field value={s.workspaceDir} width={280} label="Workspace folder" onSave={(v) => void patch({ workspaceDir: v })} /></Row>
+          {!isServerRuntime && (
+            <>
+              <Row id="quick-ask" title="Quick Ask shortcut" sub="A small SahilBot bar over any app.">
+                <select className="set-select" value={s.quickKey} onChange={(e) => void patch({ quickKey: e.target.value })} data-testid="quick-key" aria-label="Quick Ask shortcut">
+                  <option value="Alt+Space">⌥ Space</option><option value="Control+Space">⌃ Space</option><option value="CommandOrControl+Shift+Space">⌘⇧ Space</option><option value="Alt+Shift+Space">⌥⇧ Space</option><option value="">Off</option>
+                </select>
+              </Row>
+              <Row id="menu-bar" title="Show in the menu bar" sub="See what bots are doing from any app."><Toggle on={s.menuBarIcon ?? true} onChange={(v) => void patch({ menuBarIcon: v })} label="Show SahilBot in the menu bar" testId="menu-bar-icon" /></Row>
+              <Row id="open-at-login" title="Open at login" sub={loginHint}><Toggle on={s.openAtLogin ?? false} onChange={(v) => void patch({ openAtLogin: v })} label="Open at login" testId="open-at-login" /></Row>
+            </>
+          )}
+        </Section>
         <Section title="Appearance">
           <Row id="density" title="Step detail" sub="How much of the agent's work shows in a chat.">
             <Segmented value={a.density} label="Step detail" onChange={(v) => look({ density: v })} options={[{ id: 'compact', label: 'Compact' }, { id: 'detailed', label: 'Detailed' }]} />
@@ -462,6 +462,12 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
     <>
       <h2>Models &amp; Keys</h2>
       <div className="set-sub">Connect at least one. Auto picks the right model for each request.</div>
+      {!!s.keysLocked?.length && (
+        <div className="set-notice" role="status" data-testid="keys-locked">
+          <b>Your keys are still saved.</b> Your Mac's Keychain didn't let SahilBot read {s.keysLocked.length === 1 ? 'one of them' : `${s.keysLocked.length} of them`} just now (it can happen right after an update or when the Mac wakes). If macOS asks about "SahilBot Safe Storage", enter your Mac password and choose Always Allow.
+          <button className="btn small" onClick={() => void patch({}).then(onRefresh)} data-testid="keys-locked-retry">Try again</button>
+        </div>
+      )}
       <Section title="Connect" sub="Switch a provider off to stop using it. Its key stays saved.">
         <div data-setting="provider-switches" />
         <Row id="key-anthropic" title={<>Claude{status('anthropic')}</>} sub={<>Anthropic API key · <a href={link('anthropic') ?? 'https://console.anthropic.com/settings/keys'} target="_blank" rel="noreferrer">get one</a></>} info="Used for every model named “claude-…”. Spending counts toward your monthly limit.">

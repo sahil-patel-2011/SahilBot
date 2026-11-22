@@ -276,6 +276,7 @@ export class SettingsStore {
       onshapeKeyParts: { access: this.secrets.has('onshapeAccessKey'), secret: this.secrets.has('onshapeSecretKey') },
       keysSaved: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers))])),
       keys: Object.fromEntries(DEFS.map((d) => [d.id, !!this.keyFor(baseUrlOf(d.id, s.providers)) && !(s.disabledProviders ?? []).includes(d.id)])) as Record<ProviderId, boolean>,
+      keysLocked: DEFS.filter((d) => this.secrets.unreadable?.has(keyName(baseUrlOf(d.id, s.providers)))).map((d) => d.id),
       search: { ...s.search, hasBraveKey: this.secrets.has('braveKey') },
       markets: { ...cleanMarkets(s.markets), keys: Object.fromEntries(MARKET_KEY_PROVIDERS.map((p) => [p, this.secrets.has(marketKeyName(p))])) as Record<MarketKeyProvider, boolean> }
     }

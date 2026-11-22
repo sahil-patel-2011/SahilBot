@@ -7,6 +7,7 @@ Every SahilBot update, newest first. The same notes show in the app (Settings â†
 _2026-11-21_
 
 - **Your API keys stay saved through updates. Keys the last update lost come back after you allow one macOS prompt**
+- **Settings and the top bar are simpler: fewer pages up front and fewer buttons**
 - **Talk to a bot and it goes off to do the work while you keep talking, then tells you out loud when it's done**
 - **Home shows your bots first, and a new bot sets itself up with you in its chat**
 - **Voices are ChatGPT's or Grok's: pick one, its speed and your language right in the voice bar**
@@ -87,6 +88,15 @@ _2026-11-21_
 
 - API keys and other secrets are now sealed with SahilBot's own Keychain key, which stays the same across updates, so an update never asks you to enter them again
 - Keys saved before this update are moved over the first time they're read. If macOS asks whether "security" may use "SahilBot Safe Storage", enter your Mac password and choose Always Allow; your keys come back. If you choose Deny, they're kept, and you can allow it later
+- Keys no longer seem to vanish at random: when your Mac's Keychain is locked for a moment (right after waking, say), SahilBot waits and tries again instead of treating your keys as gone, and it never replaces the key that unlocks them
+- If a key can't be read right now, Models & Keys says it's still saved, with a Try again button
+
+### Simpler to use
+
+- Settings has four pages up front: General, Models & Keys, Connected apps, and Privacy & Security. Phone & server and the rest are under More settings
+- General shows your name, theme and updates; contact details, folders and shortcuts are under More
+- The ChatGPT and Grok subscription rows have one button each, and check their status on their own when you come back to SahilBot
+- The browser button appears in the top bar only once SahilBot has opened a page
 
 ### Coming next
 

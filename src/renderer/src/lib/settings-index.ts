@@ -140,7 +140,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
 /** Settings keys that aren't user-facing settings (internal state, other screens own them). */
 export const NOT_IN_SETTINGS = new Set([
-  'hasApiKey', 'keys', 'keysSaved', 'hasCursorKey', 'hasTbaKey', 'hasOnshapeKeys', 'onshapeKeyParts', 'onboarded', 'pinnedBots', 'search.hasBraveKey',
+  'hasApiKey', 'keys', 'keysSaved', 'keysLocked', 'hasCursorKey', 'hasTbaKey', 'hasOnshapeKeys', 'onshapeKeyParts', 'onboarded', 'pinnedBots', 'search.hasBraveKey',
   'appearance', 'cloud', 'search', 'advanced', 'taskModels', 'learning', 'local', 'markets', 'voiceOutput',
   // Set from other screens: bot details, the composer, the menu bar, local model loading.
   'botAutonomy', 'botSwarm', 'localKeepAlive', 'advanced.sandboxCommands', 'local.migrated', 'learning.explicit', 'cloud.maxConsultsPerRequest',
