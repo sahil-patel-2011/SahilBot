@@ -274,3 +274,9 @@ export function throttle<T>(fn: (v: T) => void, ms: number): { push(v: T): void;
     }
   }
 }
+
+/**
+ * The login shell commands run in: zsh (every Mac has it), else bash, else sh, for SahilBot Server on Linux (a
+ * Raspberry Pi or VM usually has no zsh, and commands, tests and jobs failed there).
+ */
+export const LOGIN_SHELL: string = ['/bin/zsh', '/usr/bin/zsh', '/bin/bash', '/usr/bin/bash'].find((p) => existsSync(p)) ?? '/bin/sh'

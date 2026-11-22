@@ -1,3 +1,4 @@
+import { LOGIN_SHELL } from '../../code/proc'
 import { execFile } from 'node:child_process'
 import { accessSync, constants, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -47,7 +48,7 @@ export function run(bin: string, args: string[], o: { timeoutMs?: number; env?: 
 
 /** The login shell's `command -v codex` (nvm, asdf and custom PATHs live in the user's zsh profile). */
 async function fromShell(): Promise<string | undefined> {
-  const r = await run('/bin/zsh', ['-lc', 'command -v codex'], { timeoutMs: 4000, env: { ...process.env } }).catch(() => undefined)
+  const r = await run(LOGIN_SHELL, ['-lc', 'command -v codex'], { timeoutMs: 4000, env: { ...process.env } }).catch(() => undefined)
   const p = r?.code === 0 ? r.stdout.trim().split('\n').pop()?.trim() : undefined
   return p && p.startsWith('/') && executable(p) ? p : undefined
 }

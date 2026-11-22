@@ -4,7 +4,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ToolEffect } from '@shared/types'
-import { homeGuarded, runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec } from '../../code/proc'
+import { homeGuarded, runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec, LOGIN_SHELL } from '../../code/proc'
 import { jobLine, jobs as defaultJobs, type JobManager, type WaitFor } from '../../jobs/manager'
 import type { ThreadState, ToolContext, ToolDef } from '../types'
 import { inForbidden, isSecretName } from '../../knowledge/ignore'
@@ -1047,7 +1047,7 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       const limit = Math.min(a.timeout ?? 120, 1800) * 1000
       // Its own process group, so Stop and timeouts reach everything it started.
       const tick = throttle<string>((l) => ctx.progress?.(l), 700)
-      const out = await runProcess('/bin/zsh', ['-lc', a.command], {
+      const out = await runProcess(LOGIN_SHELL, ['-lc', a.command], {
         cwd,
         timeoutMs: limit,
         signal: ctx.signal,

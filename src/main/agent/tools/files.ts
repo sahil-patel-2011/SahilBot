@@ -1,4 +1,5 @@
 import { shell } from 'electron'
+import { noteSeen, staleReason } from './freshness'
 import { appendFileSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -227,6 +228,7 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
         const lines = text.split('\n')
         text = lines.slice((start ?? 1) - 1, end ?? lines.length).join('\n')
       }
+      noteSeen(ctx.threadId, full)
       return { text: text || '(empty file)', display: basename(full) }
     }
   }
@@ -258,10 +260,14 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
       const exists = existsSync(full)
       if (exists && lstatSync(full).isDirectory()) throw new Error(`${path} is a folder.`)
       if (mode === 'create' && exists) throw new Error(`${path} already exists. Use mode "overwrite" or "append".`)
+      // Someone changed it since this chat read or wrote it: don't replace their edit.
+      const stale = exists && mode === 'overwrite' ? staleReason(ctx.threadId, full, path) : undefined
+      if (stale) throw new Error(stale)
       mkdirSync(dirname(full), { recursive: true })
       if (exists && mode === 'overwrite') backup(workspace, full)
       if (mode === 'append') appendFileSync(full, content)
       else writeFileSync(full, content)
+      noteSeen(ctx.threadId, full)
       const verb = mode === 'append' ? 'appended to' : exists ? 'updated' : 'created'
       return { text: `${verb} ${full} (${humanSize(Buffer.byteLength(content))}).`, display: `${verb} ${basename(full)}`, path: full }
     }

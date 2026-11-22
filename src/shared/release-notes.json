@@ -68,6 +68,15 @@
         ]
       },
       {
+        "title": "A steadier coding agent",
+        "items": [
+          "If you edit a file while a bot is working on it, the bot can't overwrite your edit with its older copy: it's told to read the file again and add its change on top",
+          "A \"done\" claim is no longer second-guessed when the matching tool clearly ran (\"published\" after a publish tool), so connector tasks finish a step sooner",
+          "On SahilBot Server (Raspberry Pi, VMs), commands, tests and background jobs run in bash when zsh isn't installed (they failed before)",
+          "On the harness benchmark (the same scripted model through each harness), SahilBot now scores 100, against 72 for a Grok Build profile and 68 for Claude Code and Codex CLI profiles"
+        ]
+      },
+      {
         "title": "Auto, sharper on your kind of work",
         "items": [
           "Clinical questions (doses, drug interactions, lab results, warning signs) go to the strongest model with the medical sources; a simple definition stays quick",

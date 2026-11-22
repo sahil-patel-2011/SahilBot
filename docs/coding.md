@@ -41,5 +41,11 @@ The project folder is the first folder attached to the chat (or the project's fo
 4. `git diff` before `git commit`; branch for real work; push/PR only when asked.
 5. Report what changed, the commands you ran and their results, and anything unverified.
 
+## Files the user is editing too
+If you overwrite a whole file (file_write mode "overwrite") that you read or wrote earlier in this chat and it changed
+on disk since (the user edited it), the write is refused: read it again and write your change on top of the current
+version. Exact-text edits (code edit) always apply to the file as it is now. Commands run in zsh on a Mac; on
+SahilBot Server (Linux) they run in bash when zsh isn't installed.
+
 ## Skills to read
 The <context> block suggests the ones that fit each request (and inlines the best one's steps on big windows); read any with memory(action="read_skill", name). Start with coding-agent-loop; for a new repo codebase-orientation; bugs debug-systematically and read-stack-traces; the stack playbook (typescript-project, python-project, react-frontend, swift-ios-app, java-kotlin-wpilib, rust-project, go-project, sql-queries, shell-scripting); Cursor hand-offs cursor-task-brief and coding-cursor-orchestration; long work long-task-working-notes. The full list and how selection works: docs/skills.md.

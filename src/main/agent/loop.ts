@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { projectInstructions } from './project-instructions'
 import { checkMedicalAnswer, medicalNote } from './medical-check'
-import { ALL_FEATURES, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
+import { ALL_FEATURES, claimBacked, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
 import { definiteFailure } from './runtime/policy'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -537,6 +537,8 @@ export class Agent {
   private testMs = new Map<string, number>()
   constructor(private d: AgentDeps) {
     this.feat = { ...ALL_FEATURES, ...(d.harness ?? {}) }
+    // A harness without an on-device privacy gate (the benchmark's other profiles) sends everything to the cloud model.
+    if (!this.feat.privacyGate && d.privacy) this.d = { ...d, privacy: undefined }
     this.runtime = new RuntimeStore(d.db)
     this.runtime.recover()
     this.memorySystem = new MemorySystem(d.db, d.memory)
@@ -3327,7 +3329,7 @@ export class Agent {
           // "I've saved it". Make it do it, or say plainly that it wasn't done (once per run).
           // (Not when the user asked about earlier work: "did you save it?" "Yes, I saved it earlier.")
           const askedAboutPast = /\?\s*$/.test(opener?.content ?? '') && /\b(did|have|has|was|were)\s+(you|it|they)\b/i.test(opener?.content ?? '')
-          if (this.feat.falseClaimNudge && !asksToContinue && (!track.changed || (track.failedWrites?.size ?? 0) > 0) && finalNudges < 3 && claimNudges < 1 && !askedAboutPast && !opener?.meta?.questionAnswer && !opener?.meta?.approvalFor && !run.unattended && !chatRun && step < HARD_CAP && claimsDone(assistant.content)) {
+          if (this.feat.falseClaimNudge && !asksToContinue && (!track.changed || (track.failedWrites?.size ?? 0) > 0) && finalNudges < 3 && claimNudges < 1 && !askedAboutPast && !opener?.meta?.questionAnswer && !opener?.meta?.approvalFor && !run.unattended && !chatRun && step < HARD_CAP && claimsDone(assistant.content) && !claimBacked(assistant.content, db.listMessages(thread.id).filter((m) => m.role === 'tool' && m.createdAt >= runStart && m.meta?.status === 'ok' && m.toolName).map((m) => m.toolName!))) {
             finalNudges++
             claimNudges++
             budget = Math.max(budget, step + 6)
