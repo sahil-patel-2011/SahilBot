@@ -94,7 +94,6 @@ export function Sidebar(p: {
   const hidden = p.spaces.filter((s) => s.hidden && !s.isMain)
   const recents = p.chats.filter((t) => !t.pinned)
   const colorsOf = (g: Space): string[] => g.members.map((id) => p.spaces.find((s) => s.id === id)?.color).filter((c): c is string => !!c)
-  const initials = (p.userName || 'You').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase()
 
   /** Pin, or move onto `target`'s place (after it when dragging down, before it when dragging up). */
   const pinSpace = (id: string, target?: string): void => {
@@ -327,11 +326,11 @@ export function Sidebar(p: {
       <nav className="sb-nav" aria-label="Main">
         <button className="sb-nav-item sb-new" onClick={p.onNew} title="New chat (⌘N)" data-testid="new-chat"><span className="sb-nav-icon new"><I.Plus size={15} /></span><span>New chat</span><kbd>⌘N</kbd></button>
         <button className={`sb-nav-item tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
-          title="Your bots' questions, approvals and long-running goals" aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
+          title="Questions and approvals waiting for you, and your bots' goals" aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
           <span className="sb-nav-icon"><I.Inbox size={16} /></span><span>Needs you</span>
           {goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
         </button>
-        <button className="sb-nav-item" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-vault', { detail: { path: null } }))} title="Your knowledge vault: linked notes, memories and decisions (opens in Obsidian too)" data-testid="nav-vault"><span className="sb-nav-icon"><I.Vault size={16} /></span><span>Vault</span></button>
+        <button className="sb-nav-item" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-vault', { detail: { path: null } }))} title="Notes your bots keep: people, projects and decisions (opens in Obsidian too)" data-testid="nav-vault"><span className="sb-nav-icon"><I.Vault size={16} /></span><span>Notes</span></button>
         <button className={`sb-nav-item${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Documents, decks, sheets and images your bots made" data-testid="nav-artifacts"><span className="sb-nav-icon" data-testid="nav-files"><I.Layers size={16} /></span><span>Artifacts</span></button>
         <button className={`sb-nav-item${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="What SahilBot knows from your connected accounts" data-testid="nav-brain"><span className="sb-nav-icon"><BrainIcon size={16} /></span><span>Brain</span></button>
       </nav>
@@ -339,7 +338,7 @@ export function Sidebar(p: {
       <div className="side-scroll">
         <div className="nav-label sb-bots-label">
           <span>Bots</span>
-          <span className="nav-label-actions"><button className="nav-add" onClick={p.onNewBot} title="New bot: a teammate with its own job and chat" aria-label="New bot" data-testid="new-bot"><I.Plus size={14} /></button></span>
+          <span className="nav-label-actions">{bots.length > 0 && <button className="nav-add" onClick={p.onNewBot} title="New bot" aria-label="New bot" data-testid="new-bot"><I.Plus size={14} /></button>}</span>
         </div>
         <div className={`pin-grid${over === 'pinned' ? ' drop' : ''}${dragging?.kind === 'space' || dragging?.kind === 'chat' ? ' dragging' : ''}${pinnedSpaces.length ? '' : ' empty'}`} data-testid="pinned-top"
           onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('pinned') } }}
@@ -358,7 +357,7 @@ export function Sidebar(p: {
           <div className="bot-list">
             {bots.map(botRow)}
             {!bots.length && (
-              <button className="bot-row ghost" onClick={p.onSetupBot ?? p.onNewBot} data-testid="sidebar-make-bot">
+              <button className="bot-row ghost" onClick={p.onNewBot} data-testid="sidebar-make-bot">
                 <span className="br-btn">
                   <span className="br-avatar ghost-avatar"><I.Plus size={18} /></span>
                   <span className="br-text"><span className="br-name">New bot</span></span>
@@ -403,7 +402,7 @@ export function Sidebar(p: {
 
       <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
-        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} title={`${p.userName || 'You'}${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}\nSettings (⌘,) · right-click for more`} data-testid="profile">{initials}</button>
+        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} aria-label="Settings" title={`Settings (⌘,)${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}\nRight-click for scheduled, usage and more`} data-testid="profile"><I.Gear size={17} /></button>
         <button className="sb-connect" onClick={p.onConnect} data-testid="connect-apps">
           <ConnectedIcons max={3} />
           <I.Plug size={16} className="sb-plug" />

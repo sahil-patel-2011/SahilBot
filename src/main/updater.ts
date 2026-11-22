@@ -344,7 +344,11 @@ export class Updater {
       const file = join(dir, ASSET)
       const want = sumFor(await (await f(sums.browser_download_url, { signal: AbortSignal.timeout(30_000) })).text(), ASSET)
       if (!want) throw new Error('The release has no checksum for the Mac app.')
-      if (!existsSync(file) || statSync(file).size !== zip.size || (await sha256(file)) !== want) {
+      // A download already checked against this checksum isn't hashed again on every check (hundreds of MB while the
+      // window said "Checking…"): a small marker remembers the size and checksum it matched.
+      const marker = `${file}.verified`
+      const verified = (): boolean => { try { return existsSync(file) && statSync(file).size === zip.size && readFileSync(marker, 'utf8') === `${zip.size}:${want}` } catch { return false } }
+      if (!verified() && (!existsSync(file) || statSync(file).size !== zip.size || (await sha256(file)) !== want)) {
         this.set({ state: 'downloading', version: label, notes, progress: 0, size: zip.size })
         const dl = await f(zip.browser_download_url, { signal: AbortSignal.timeout(30 * 60_000) })
         if (!dl.ok || !dl.body) throw new Error(`The download failed (${dl.status}).`)
@@ -357,6 +361,9 @@ export class Updater {
         await pipeline(counted, createWriteStream(file))
         if ((await sha256(file)) !== want) { rmSync(file, { force: true }); throw new Error('The download didn\'t match its checksum, so it wasn\'t used.') }
       }
+      try { writeFileSync(marker, `${zip.size}:${want}`) } catch { /* hashed again next time */ }
+      // Unpacking and checking the signature take a moment: say so rather than "Checking for a new version…".
+      this.set({ state: 'downloading', version: label, notes, progress: 100, size: zip.size })
       // Unpack next to the installed app's folder (same disk, so the swap is two renames).
       const stage = join(dir, 'app')
       rmSync(stage, { recursive: true, force: true })

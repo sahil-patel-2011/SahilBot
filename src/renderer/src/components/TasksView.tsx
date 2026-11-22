@@ -93,7 +93,7 @@ export function TasksView(p: { spaces: Space[]; onOpenChat: (threadId: string, b
   return (
     <div className="page tk-page" data-testid="tasks-view">
       <div className="page-head">
-        <h1>Tasks</h1>
+        <h1>Needs you</h1>
         {bots.length > 1 && (
           <div className="tk-filter" role="tablist" aria-label="Bot">
             <button role="tab" aria-selected={!bot} className={!bot ? 'on' : ''} onClick={() => setBot(null)}>All bots</button>

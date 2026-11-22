@@ -22,7 +22,8 @@ export function UpdateButton({ busy = 0 }: { busy?: number }) {
   // Shown as soon as a new build is found: downloading (with progress), then ready to install.
   if (st?.state === 'downloading') return (
     <button className="sb-update" disabled data-testid="sidebar-update-downloading" title={`Downloading ${st.version ?? 'the new version'}${st.size ? ` (${bytesText(st.size)})` : ''}. The Update button appears when it's ready.`}>
-      <span className="spin" /><span>Downloading update</span><span className="sb-update-v">{Math.round(st.progress ?? 0)}%</span>
+      <span className="spin" /><span>{(st.progress ?? 0) >= 100 ? 'Almost ready…' : 'Getting the update'}</span>
+      <span className="sb-update-bar" aria-hidden="true"><span style={{ transform: `scaleX(${Math.min(1, (st.progress ?? 0) / 100)})` }} /></span>
     </button>
   )
   if (!st || (st.state !== 'ready' && st.state !== 'installing')) return null
@@ -38,8 +39,7 @@ export function UpdateButton({ busy = 0 }: { busy?: number }) {
         }).catch((e: Error) => toast(e.message, 'error'))
       }}>
       {installing ? <span className="spin" /> : <I.Down size={15} />}
-      <span>{installing ? 'Updating…' : 'Update SahilBot'}</span>
-      {!installing && st.version && <span className="sb-update-v">{st.version.replace(/ \(build (\d+)\)/, ' · $1')}{st.size ? ` · ${bytesText(st.size)}` : ''}</span>}
+      <span>{installing ? 'Updating…' : 'Restart to update'}</span>
     </button>
   )
 }

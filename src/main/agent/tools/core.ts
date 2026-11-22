@@ -130,13 +130,13 @@ export function coreTools(results: ResultStore): ToolDef[] {
       type: 'object',
       properties: {
         question: { type: 'string', description: 'One question' },
-        options: { type: 'array', items: { type: 'string' }, maxItems: 3 },
+        options: { type: 'array', items: { type: 'string' }, maxItems: 6 },
         default: { type: 'string', description: 'Used if no answer in time' },
         preference: { type: 'boolean', description: 'Taste: remembered' },
         safe: { type: 'boolean', description: 'false: risky default' },
         questions: {
           type: 'array', minItems: 1, maxItems: 4, description: 'Several, answered together',
-          items: { type: 'object', properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' }, maxItems: 3 }, default: { type: 'string' } }, required: ['question'], additionalProperties: false }
+          items: { type: 'object', properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' }, maxItems: 6 }, default: { type: 'string' } }, required: ['question'], additionalProperties: false }
         }
       },
       additionalProperties: false

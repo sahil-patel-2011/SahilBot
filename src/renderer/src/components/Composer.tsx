@@ -378,7 +378,7 @@ export const Composer = forwardRef<ComposerHandle, {
             {(close) => (
               <>
                 <button className="menu-item" onClick={() => { close(); void pick('files') }} data-testid="attach-files"><I.Paperclip size={17} /><span className="attachment-menu-copy"><span>Upload files or photos</span><span className="sub">Drop or paste files · up to 100 MB each</span></span></button>
-                <button className="menu-item" onClick={() => { close(); void pick('folder') }} data-testid="attach-folder"><I.Folder size={17} /><span className="attachment-menu-copy"><span>Add a folder</span><span className="sub">Work with the files inside</span></span></button>
+                <button className="menu-item" onClick={() => { close(); void pick('folder') }} data-testid="attach-folder"><I.Folder size={17} /><span className="attachment-menu-copy"><span>Attach a folder's files</span><span className="sub">Share what's inside with this message</span></span></button>
                 <button className="menu-item" onClick={() => { close(); void takeScreenshot() }} data-testid="attach-screenshot"><I.Image size={17} /><span className="attachment-menu-copy"><span>Take a screenshot</span><span className="sub">Select an area of your screen</span></span></button>
               </>
             )}

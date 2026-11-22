@@ -88,7 +88,7 @@ export function BrainView(p: { onConnect: () => void; onNeedsYou: () => void; on
     <div className="page brain-page" data-testid="brain-view">
       <div className="page-head brain-head">
         <div className="brain-title">
-          <h1>Your brain</h1>
+          <h1>Brain</h1>
           <span className={`brain-updated${st.syncing ? ' live' : ''}`} data-testid="brain-updated">
             <i className="brain-dot" aria-hidden="true" />
             {st.syncing ? `${st.job ?? 'Refreshing'}…` : s.paused ? 'Paused' : `Updated ${ago(st.lastSyncAt, now)}`}
@@ -96,9 +96,10 @@ export function BrainView(p: { onConnect: () => void; onNeedsYou: () => void; on
         </div>
         <div className="brain-actions">
           <button className={`btn${settingsOpen ? ' on' : ''}`} onClick={() => setSettingsOpen((v) => !v)} aria-expanded={settingsOpen} data-testid="brain-settings-btn"><I.Sliders size={15} />Settings</button>
-          <button className="btn primary" onClick={refresh} disabled={st.syncing || s.paused || !on.length} data-testid="brain-refresh">
+          {/* Until a source is on, "Connect apps" (below) is the one thing to do here. */}
+          {on.length > 0 && <button className="btn primary" onClick={refresh} disabled={st.syncing || s.paused} data-testid="brain-refresh">
             {st.syncing ? <span className="spin" /> : <I.Bolt size={15} />}Refresh now
-          </button>
+          </button>}
         </div>
       </div>
       <div className="set-sub brain-sub">Everything SahilBot reads from your accounts, kept on this Mac. It refreshes only while SahilBot is open, within a small daily budget.</div>
@@ -120,13 +121,13 @@ export function BrainView(p: { onConnect: () => void; onNeedsYou: () => void; on
         </div>
       ))}
 
-      <section className="brain-stats" aria-label="Your brain at a glance">
+      {on.length > 0 && <section className="brain-stats" aria-label="Brain at a glance">
         <Stat value={count(st.stats.memories)} label="memories" sub="facts and memories" testId="brain-stat-memories" />
         <Stat value={String(st.stats.tools)} label={st.stats.tools === 1 ? 'tool connected' : 'tools connected'} sub="sources it reads" testId="brain-stat-tools" />
         <Stat value={st.cadence.everyMs ? st.cadence.label.replace(/ \(idle\)$/, '') : 'Paused'} label="between refreshes" sub={st.cadence.paused ? st.cadence.paused.replace(/^paused:? ?/, '').replace(/^./, (c) => c.toUpperCase()) || 'Paused' : /idle/.test(st.cadence.label) ? 'you’re away, so hourly' : 'while you’re active'} testId="brain-stat-cadence" />
         <Stat value={String(st.stats.notesFiled)} label={st.stats.notesFiled === 1 ? 'note you filed' : 'notes you filed'} sub="in your vault" testId="brain-stat-notes" />
         <Stat value={money(st.stats.todayUsd)} label="today" sub={`of ${money(st.stats.dailyUsd)} a day`} meter={st.stats.dailyUsd > 0 ? Math.min(1, st.stats.todayUsd / st.stats.dailyUsd) : 0} testId="brain-stat-cost" />
-      </section>
+      </section>}
 
       <AgentModeLine st={st} onNeedsYou={p.onNeedsYou} onTurnOn={() => void api.brain.setSettings({ agentMode: true }).then(() => { reload(); toast('Agent mode is on', 'ok') })} />
 

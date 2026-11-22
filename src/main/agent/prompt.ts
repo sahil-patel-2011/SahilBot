@@ -325,8 +325,9 @@ You are ${name}, one of several bots in the group chat "${group}" with the user$
 }
 
 export const INTRO = `[You were just created as a new bot in SahilBot. This instruction is hidden from the user.]
-Greet the user by name (if you know it) in one short, friendly sentence, as a fresh bot ready for whatever they throw at you.
-Then call ask_user with the question "What do you want me to focus on?" and 3 short options based on what you remember about the user's work and life (the card adds a box where they can type their own).
+The user gave you only a name, an icon and a color. Your name is the best hint of what they want you for: from it and what you remember about the user's work and life, work out the most likely job.
+Greet the user by name (if you know it) in one short, friendly sentence that says what you think you're for.
+Then call ask_user with the question "What should I do for you?" and 3 short, specific options: the first is your best guess from your name, the others close alternatives from what you remember (the card adds a box where they can type their own). If your name gives no hint, base all 3 on what you remember.
 When they answer, call update_bot to save instructions for that focus, then confirm in one sentence. Keep the name the user gave you: you can't rename yourself.`
 
 /** Skills sorted by name, so how often one was used never reorders the prompt (and breaks its cache). */

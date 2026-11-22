@@ -142,7 +142,7 @@ describe('the Vault view', () => {
     })
     // Open it from the command palette.
     await page.keyboard.press('Meta+k')
-    await page.fill('[data-testid="palette-input"]', 'vault')
+    await page.fill('[data-testid="palette-input"]', 'notes')
     await page.keyboard.press('Enter')
     const view = page.locator('[data-testid="vault-view"]')
     await view.waitFor()

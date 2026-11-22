@@ -144,6 +144,8 @@ export function blocks(messages: Message[]): Block[] {
     if (m.toolCalls?.length) {
       for (const call of m.toolCalls) {
         if (call.name === 'ask_user') {
+          // A question the tool refused (bad arguments) was never asked: don't show it as one (the model asks again).
+          if (/^(Invalid arguments|Error)/.test(results.get(call.id)?.content.replace(/^<tool_output[^>]*>\s*/, '') ?? '')) continue
           // Questions read as conversation: the bot asks, you answer.
           let q = ''
           let many: Array<{ question: string }> = []
@@ -492,10 +494,13 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const all = useMemo(() => blocks(shown), [shown])
   // The quiet chat leaves out the plan, compaction markers, notes about models, and runs that left nothing to
   // show; Developer mode shows everything.
+  // A question waiting on its card (below) shows there only: the same words don't appear twice.
+  const asking = pending.some((p) => p.kind === 'question' || p.kind === 'questions')
   const bs = useMemo(() => all.filter((b) => {
+    if (b.kind === 'qa' && !b.answer && asking) return false
     if (b.kind === 'notice' && internalNotice(b.m)) return dev
     return dev || quietVisible(b, hasDocs)
-  }), [all, dev, hasDocs])
+  }), [all, dev, hasDocs, asking])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
   // Long chats mount their latest WINDOW blocks; an older first unread grows the window to include it.
   const limit = windowLimit(win.threadId === threadId ? win.limit : WINDOW, bs.length, dividerAt)
@@ -566,7 +571,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const waiting = running && !pending.length && tail?.kind !== 'activity' && (!last || last.role !== 'assistant' || (last.status === 'streaming' && !last.content && !last.reasoning && !last.toolCalls))
   // Quiet chat: one status line the whole time SahilBot works, except while a reply is being written.
   const allTail = all[all.length - 1]
-  const liveStep = running && allTail?.kind === 'activity' ? allTail.steps[allTail.steps.length - 1] : undefined
+  // The status names the step that is running now: once it has its result, it's "Thinking" again, never a stale label.
+  const tailStep = running && allTail?.kind === 'activity' ? allTail.steps[allTail.steps.length - 1] : undefined
+  const liveStep = tailStep && !tailStep.result ? tailStep : undefined
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
   const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writing)
   const started = turnStart(messages, since)
@@ -808,7 +815,7 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
 export function errorFix(error: string): { label: string; run: () => void } | null {
   const settings = (page: string) => () => window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: page }))
   if (/spending|monthly (limit|cap)|budget|over the monthly/i.test(error)) return { label: 'Change the monthly limit', run: settings('#monthly-limit') }
-  if (/api key|401|403|unauthori[sz]ed|rejected|out of (api )?credit|insufficient_quota|no model|model is available|not available on this account/i.test(error)) return { label: 'Open Models & Keys', run: settings('models') }
+  if (/api key|401|403|unauthori[sz]ed|rejected|out of (api )?credit|insufficient_quota|no model|model is available|not available on this account/i.test(error)) return { label: 'Open AI & spending', run: settings('models') }
   if (/sign[- ]?in|reconnect|needs_auth|connector|connected app/i.test(error)) return { label: 'Open Connect apps', run: () => window.dispatchEvent(new Event('sahilbot:open-connect')) }
   return null
 }

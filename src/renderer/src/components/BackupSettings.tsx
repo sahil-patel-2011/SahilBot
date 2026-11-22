@@ -31,7 +31,7 @@ export function BackupSettings() {
     const t = setInterval(() => void refresh(), 1500)
     return () => clearInterval(t)
   }, [st?.running, refresh])
-  if (!st) return null
+  if (!st) return <div className="hint" data-testid="backup-settings-loading">Checking your backups…</div>
 
   const run = async (fn: () => Promise<void>): Promise<void> => { setBusy(true); try { await fn() } finally { setBusy(false); await refresh() } }
 

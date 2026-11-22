@@ -81,7 +81,7 @@ export function UsagePage() {
   const dayBars = useMemo<Bar[]>(() => (d?.days ?? []).map((x) => ({ key: x.day, label: shortDay(x.day), local: x.localTokens, cloud: x.cloudTokens, tip: `${tokens(x.tokens)} tokens · ${num(x.requests)} requests · ${money(x.usd)}` })), [d])
   const weekBars = useMemo<Bar[]>(() => (d?.weeks ?? []).map((x) => ({ key: x.start, label: `Week of ${shortDay(x.start)}`, local: x.localTokens, cloud: x.cloudTokens, tip: `${tokens(x.tokens)} tokens · ${num(x.requests)} requests · ${money(x.usd)}` })), [d])
 
-  if (!d) return <><h2>Usage</h2>{err ? <div className="us-err" role="alert">{err}</div> : <div className="us-empty">Loading…</div>}</>
+  if (!d) return <><h3 className="set-h3">Spending</h3>{err ? <div className="us-err" role="alert">{err}</div> : <div className="us-empty">Loading…</div>}</>
 
   const life = d.lifetime
   const lifeTokens = life.input + life.cached + life.cacheWrite + life.output + life.local.input + life.local.output
@@ -91,7 +91,7 @@ export function UsagePage() {
   return (
     <div className="us ud" data-testid="usage-page">
       <div className="us-title">
-        <h2>Usage</h2>
+        <h3 className="set-h3">Spending</h3>
         <button className="btn us-csv" onClick={() => void exportCsv()} disabled={!life.requests} data-testid="usage-export"><I.Share size={14} /> Export CSV</button>
       </div>
 

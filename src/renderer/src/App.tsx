@@ -1,7 +1,7 @@
 import { lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { autoLabel, isAutoModel } from '@shared/model-picker'
 import type { BrowserState, ChatEvent, EffortChoice, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
-import { api } from './api'
+import { api, isServerRuntime } from './api'
 import { readableOn, SpaceAvatar } from './brand'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
@@ -871,7 +871,7 @@ export function App() {
         onSetupBot={() => void startSetup(false)}
         onSearch={() => setPalette(true)}
         view={view}
-        onView={(v) => { setView(v); setThread(null) }}
+        onView={(v) => { setVaultOpen(null); setView(v); setThread(null) }}
         modelLabel={dev ? `${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}` : undefined}
         onCustomize={(s) => setEditor({ space: s, mode: s.kind })}
         onChanged={() => void refreshSpaces().then((sp) => {
@@ -900,14 +900,14 @@ export function App() {
           <div className="header-title">
             {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
           </div>
-          {chatBot && !vaultOpen && (thread || (isBot && view === 'home')) && (
+          {chatBot && !vaultOpen && !voiceOn && (thread || (isBot && view === 'home')) && (
             <div className={`chat-pill${panel === 'details' ? ' on' : ''}`}>
               {renamingTitle && thread ? (
                 <input className="title-edit" autoFocus defaultValue={thread.title}
                   onBlur={(e) => { setRenamingTitle(false); const v = e.target.value.trim(); if (v && v !== thread.title) void patchThread({ title: v }).then(() => refreshSpaces()) }}
                   onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { e.preventDefault(); setRenamingTitle(false) } }} />
               ) : (
-                <button className="bot-pill" onClick={() => setPanel((p) => (p === 'details' ? null : 'details'))} data-testid="bot-pill" title={`About ${chatBot.name}`}>
+                <button className="bot-pill" onClick={() => setPanel((p) => (p === 'details' ? null : 'details'))} data-testid="bot-pill" title={`${chatBot.name}: settings, routines and files`}>
                   {chatBot.kind === 'project'
                     ? <span className="proj-tile" style={{ background: chatBot.color, width: 22, height: 22, borderRadius: 7 }}><I.Folder size={12} /></span>
                     : <SpaceAvatar color={chatBot.color} shape={chatBot.shape} size={22} group={chatBot.kind === 'group' ? memberColors : undefined} />}
@@ -919,7 +919,6 @@ export function App() {
                 <Popover label={<I.Chevron size={14} />} className="title-menu" menuClass="down" title="Chat options">
                   {(close) => (
                     <>
-                      <button className="menu-item" onClick={() => { close(); setPanel('details') }}><I.Users size={15} />About {chatBot.name}</button>
                       <button className="menu-item" onClick={() => { close(); setRenamingTitle(true) }}><I.Edit size={15} />Rename chat</button>
                       <button className="menu-item" onClick={() => { close(); void patchThread({ pinned: !thread.pinned }).then(() => refreshSpaces()) }}><I.Pin size={15} />{thread.pinned ? 'Unpin' : 'Pin'}</button>
                       <button className="menu-item" onClick={() => { close(); void api.chat.exportThread(thread.id).then((p) => p && toast(`Saved to ${p.split('/').pop()}`, 'ok')) }}><I.Share size={15} />Export as Markdown</button>
@@ -964,7 +963,7 @@ export function App() {
             {(thread || isBot) && (
             <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Side panel: progress, files and documents (⌘\)" aria-label="Side panel" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
             )}
-            <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={() => setShowSettings(true)} data-testid="header-settings"><I.Gear size={17} /></button>
+            {isServerRuntime && <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={() => setShowSettings(true)} data-testid="header-settings"><I.Gear size={17} /></button>}
           </div>
         </header>
         {models && !models.ok && (
@@ -1019,8 +1018,9 @@ export function App() {
           <ProjectHome project={space} onOpen={(t) => setThread(t)} onEdit={() => setEditor({ space, mode: 'project' })} composer={composerEl} />
         ) : (
           <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={chatInput} refreshKey={running.size}
-            deck={<BotDeck bots={spaces} needSpaces={needSpaces} onOpen={(id) => void openBot(id)} onNewBot={() => setEditor({ space: null, mode: 'bot' })}
-              onTalk={(id) => { setSpaceId(id); setThread(null); setVoiceKey((k) => k + 1); setVoiceOn(true) }} onSetup={(talk) => void startSetup(talk)} />}
+            // Your bots under the box once you have some (the sidebar's New bot makes the first one).
+            deck={spaces.some((b) => b.kind === 'bot' && !b.hidden && !b.isMain) ? <BotDeck bots={spaces} needSpaces={needSpaces} onOpen={(id) => void openBot(id)} onNewBot={() => setEditor({ space: null, mode: 'bot' })}
+              onTalk={(id) => { setSpaceId(id); setThread(null); setVoiceKey((k) => k + 1); setVoiceOn(true) }} onSetup={(talk) => void startSetup(talk)} /> : undefined}
             onIdea={(text, deep) => { composer.current?.replace(text); composer.current?.setDeep(!!deep) }} />
         )}
       </main>

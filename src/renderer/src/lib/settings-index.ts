@@ -39,8 +39,28 @@ export interface SettingEntry {
 }
 
 export const PAGE_TITLES: Record<SettingsPage, string> = {
-  general: 'General', models: 'Models & Keys', connected: 'Connected apps', permissions: 'Permissions', memory: 'Memory', voice: 'Voice',
-  privacy: 'Privacy & Security', usage: 'Usage', server: 'Phone & server', advanced: 'Advanced'
+  general: 'You', models: 'AI & spending', connected: 'Apps', permissions: 'What it may do', memory: 'Memory', voice: 'Voice',
+  privacy: 'Privacy & safety', usage: 'Spending', server: 'Phone & server', advanced: 'Advanced'
+}
+
+/**
+ * Settings shows six sections. Some pages live inside another one: Spending under AI & spending, What it may do
+ * under Privacy & safety, Advanced at the bottom of You. Search and links to those pages open their section.
+ */
+export const SECTION_OF: Record<SettingsPage, SettingsPage> = {
+  general: 'general', models: 'models', connected: 'connected', memory: 'memory', privacy: 'privacy', voice: 'voice', server: 'server',
+  usage: 'models', permissions: 'privacy', advanced: 'general'
+}
+
+/** One plain line under each section's name. */
+export const SECTION_HINT: Partial<Record<SettingsPage, string>> = {
+  general: 'Your name, look, startup and updates',
+  models: 'Which AI answers you, and what it may spend',
+  connected: 'Gmail, Calendar, Notion and other services',
+  memory: 'What SahilBot remembers about you',
+  privacy: 'What it may do on its own, passwords, backups',
+  voice: 'Talking out loud and how it sounds',
+  server: 'Use SahilBot from your phone or a server'
 }
 
 export const SETTINGS_INDEX: SettingEntry[] = [
@@ -53,13 +73,13 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'menu-bar', page: 'general', title: 'Show in the menu bar', words: 'menu bar icon tray status', keys: ['menuBarIcon'] },
   { anchor: 'open-at-login', page: 'general', title: 'Open at login', words: 'startup login launch boot', keys: ['openAtLogin'] },
   { anchor: 'updates', page: 'general', title: 'Updates', words: 'update upgrade new version latest release download install restart backup' },
-  { anchor: 'density', page: 'general', title: 'Step detail', words: 'tool call density compact detailed appearance', keys: ['appearance.density'], advanced: true },
+  { anchor: 'density', page: 'general', title: 'Step detail', words: 'tool call density compact detailed appearance', keys: ['appearance.density'] },
   { anchor: 'chat-width', page: 'general', title: 'Chat width', words: 'appearance width narrow wide', keys: ['appearance.chatWidth'], advanced: true },
   { anchor: 'code-wrap', page: 'general', title: 'Wrap long code lines', words: 'appearance code block word wrap', keys: ['appearance.codeWrap'], advanced: true },
   { anchor: 'tint', page: 'general', title: 'Accent tint', words: 'appearance color hue intensity tint colour', keys: ['appearance.hue', 'appearance.tint'], advanced: true },
   { anchor: 'reduce-transparency', page: 'general', title: 'Reduce transparency', words: 'appearance solid background accessibility', keys: ['appearance.reduceTransparency'], advanced: true },
   { anchor: 'animate-browser', page: 'general', title: 'Animate browser actions', words: 'cursor screen motion quiet flashing background', keys: ['advanced.animateBrowser'], advanced: true, macOnly: true },
-  { anchor: 'font-size', page: 'general', title: 'Text size', words: 'appearance font size typography bigger smaller', keys: ['appearance.fontSize'], advanced: true },
+  { anchor: 'font-size', page: 'general', title: 'Text size', words: 'appearance font size typography bigger smaller', keys: ['appearance.fontSize'] },
   { anchor: 'keep-awake', page: 'general', title: 'Keep the Mac awake while bots work', words: 'sleep awake always on caffeinate', keys: ['keepAwakeWhileWorking'], advanced: true },
   { anchor: 'lid-awake', page: 'general', title: 'Keep working with the lid closed', words: 'lid closed shut clamshell sleep awake laptop travel', keys: ['lidAwake'] },
   { anchor: 'catch-up', page: 'general', title: 'Catch up on missed routines', words: 'routines schedule missed asleep closed', keys: ['catchUpHours'], advanced: true },
@@ -108,7 +128,6 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'speech-model', page: 'voice', title: 'Speech recognition', words: 'whisper dictation transcription speech to text microphone voice input model download', keys: ['voiceInput'] },
   { anchor: 'read-aloud', page: 'voice', title: 'Read replies aloud', words: 'speak read aloud tts speech', keys: ['speakReplies'] },
   { anchor: 'voice-openai', page: 'voice', title: 'Speech provider', words: 'openai grok xai auto voice transcription tts cloud', keys: ['voiceOutput.provider', 'voiceOutput.openai'] },
-  { anchor: 'speaking-voice', page: 'voice', title: 'Voice', words: 'kokoro voice heart bella michael try it' },
   { anchor: 'transcribe-local', page: 'voice', title: 'Transcribe on this Mac', words: 'local whisper offline private', keys: ['voiceInput.local'], advanced: true },
   { anchor: 'whisper-model', page: 'voice', title: 'Speech model', words: 'whisper small medium large turbo model override size', keys: ['voiceInput.model'], advanced: true },
   { anchor: 'voice-model', page: 'voice', title: 'Model for voice conversations', words: 'voice conversation model fast light', keys: ['taskModels.voice'], advanced: true },
@@ -126,6 +145,8 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { anchor: 'sensitive', page: 'privacy', tab: 'sensitive', title: 'Sensitive details', words: 'health money finance religion politics children sexuality government id sensitive categories privacy' },
 
   // Usage, server
+  { anchor: 'permissions-page', page: 'permissions', title: 'What SahilBot may do on its own', words: 'permissions approvals auto ask first autonomy allowed actions mac access' },
+  { anchor: 'advanced-page', page: 'advanced', title: 'Advanced', words: 'advanced rules skills knowledge folders developer power user' },
   { anchor: 'usage', page: 'usage', title: 'Usage', words: 'usage spend cost tokens requests bots csv export history' },
   { anchor: 'phone-access', page: 'general', title: 'Phone access', words: 'phone iphone android mobile ipad qr code pair pairing wifi home network tailscale away notifications push remote', macOnly: true },
   { anchor: 'server', page: 'server', title: 'Phone & server', words: 'server raspberry pi vps digitalocean always on remote phone iphone devices pairing tailscale mac link use this mac keep awake wake' },

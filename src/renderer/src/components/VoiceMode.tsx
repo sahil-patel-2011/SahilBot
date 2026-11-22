@@ -8,8 +8,10 @@ import { PendingCard } from './Agent'
 
 type VState = 'starting' | 'idle' | 'listening' | 'hearing' | 'thinking' | 'speaking'
 const LABEL: Record<VState, string> = {
-  starting: 'Getting ready…', idle: 'Paused', listening: 'Listening', hearing: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking: talk any time to interrupt'
+  starting: 'Getting ready…', idle: 'Paused', listening: 'Listening', hearing: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking · talk to interrupt'
 }
+/** Main's setup errors, in plain words with the one thing to do. */
+const friendly = (e: string): string => /speech provider|api key|key in|models & keys/i.test(e) ? 'Voice isn\'t set up yet. Add an OpenAI (ChatGPT) or Grok key to talk out loud.' : /microphone|permission|notallowed/i.test(e) ? 'SahilBot can\'t hear you yet. Allow the microphone in System Settings → Privacy & Security.' : e
 const TASK_STATE: Record<VoiceTask['status'], string> = { working: 'working', 'needs-you': 'needs you', done: 'done', failed: 'didn\'t finish', stopped: 'stopped' }
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
 
@@ -30,7 +32,8 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
   const [caption, setCaption] = useState('')
   const [update, setUpdate] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [level, setLevel] = useState(0)
+  /** The sound level drives the bars through a CSS variable on this element (no re-render per frame). */
+  const waveRef = useRef<HTMLSpanElement | null>(null)
   const [muted, setMuted] = useState(false)
   const [transcript, setTranscript] = useState(false)
   const [panel, setPanel] = useState(false)
@@ -81,10 +84,18 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
         setError(clean(e))
       }
     })()
-    const t = setInterval(() => setLevel(Math.max(mic.current?.level ?? 0, speaker.current?.level ?? 0)), 60)
+    // Smooth, frame-synced level: rises quickly, falls gently (no jitter), written straight to a CSS variable.
+    let smooth = 0, frame = 0
+    const tick = (): void => {
+      const raw = Math.min(1, Math.max(mic.current?.level ?? 0, speaker.current?.level ?? 0) * 1.6)
+      smooth += (raw - smooth) * (raw > smooth ? 0.35 : 0.12)
+      waveRef.current?.style.setProperty('--lvl', smooth.toFixed(3))
+      frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
     return () => {
       alive = false
-      clearInterval(t)
+      cancelAnimationFrame(frame)
       off()
       mic.current?.stop()
       speaker.current?.close()
@@ -133,31 +144,31 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
   }
 
   const name = space?.name ?? 'SahilBot'
-  const talking = state === 'speaking' || state === 'hearing'
-  const bars = Array.from({ length: 18 }, (_, i) => {
-    const near = i >= 12
-    const h = near ? 4 + Math.round(level * 26 * (0.55 + 0.45 * Math.abs(Math.sin(i * 1.7 + level * 9)))) : 4
-    return <span key={i} className={near ? 'vb-bar' : 'vb-dot'} style={near ? { height: talking ? h : 4 + (i - 11) * 2 } : undefined} />
-  })
-  const shown = error ?? (caption && (update || state === 'speaking' || state === 'thinking') ? caption : LABEL[state])
+  const status = error ? friendly(error) : (caption && (update || state === 'speaking' || state === 'thinking') ? caption : LABEL[state])
   return (
     <div className="voice-bar-wrap" data-testid="voice-mode" data-state={state}>
-      <div className="vb-name">{space && !space.isMain ? <SpaceAvatar color={space.color} shape={space.shape} size={18} /> : <Mascot size={18} />}<b>{name}</b></div>
-      <div className={`voice-bar${panel ? ' open' : ''}`}>
+      <div className={`voice-bar${panel ? ' open' : ''}${error ? ' err' : ''}`}>
         <div className="vb-row">
-          <span className={`vb-avatar ${state}`} aria-hidden="true">{space && !space.isMain ? <SpaceAvatar color={space.color} shape={space.shape} size={36} /> : <Mascot size={36} />}</span>
-          <span className="vb-wave" aria-label={LABEL[state]} role="img">{bars}</span>
-          <button className={`vb-btn${panel ? ' on' : ''}`} onClick={() => setPanel((p) => !p)} title="Voice settings" aria-label="Voice settings" aria-expanded={panel} data-testid="voice-settings"><I.Gear size={18} /></button>
-          <button className={`vb-btn${transcript ? ' on' : ''}`} onClick={toggleTranscript} title={transcript ? 'Hide transcript' : 'Show transcript'} aria-label={transcript ? 'Hide transcript' : 'Show transcript'} aria-pressed={transcript} data-testid="voice-transcript"><I.ChatDots size={18} /></button>
-          <button className={`vb-btn${muted ? ' on muted' : ''}`} onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'} aria-label={muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={muted} data-testid="voice-mute"><I.Mic size={18} /></button>
-          <button className="vb-end" onClick={onClose} title="End voice chat" aria-label="End voice chat" data-testid="voice-end"><I.HangUp size={20} /></button>
+          <span className={`vb-avatar ${state}`} aria-hidden="true">{space && !space.isMain ? <SpaceAvatar color={space.color} shape={space.shape} size={34} /> : <Mascot size={34} />}</span>
+          <span className="vb-text">
+            <b className="vb-name">{name}</b>
+            <span key={status} className={`vb-status${error ? ' err' : ''}`} data-testid={error ? 'voice-caption' : update ? 'voice-announce' : 'voice-caption'} aria-live="polite">{status}</span>
+          </span>
+          {!error && <span ref={waveRef} className={`vb-wave ${state}`} aria-hidden="true">{[0.55, 0.85, 1, 0.8, 0.5].map((f, i) => <span key={i} className="vb-bar" style={{ ['--f' as never]: f, ['--i' as never]: i }} />)}</span>}
+          {error && <button className="btn small primary vb-fix" onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: /microphone|permission/i.test(error) ? 'privacy' : 'models' })) }}>Set up voice</button>}
+          <button className={`vb-btn${panel ? ' on' : ''}`} onClick={() => setPanel((p) => !p)} title="Voice options and transcript" aria-label="Voice options" aria-expanded={panel} data-testid="voice-settings"><I.More size={18} /></button>
+          {!error && <button className={`vb-btn${muted ? ' on muted' : ''}`} onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'} aria-label={muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={muted} data-testid="voice-mute"><I.Mic size={18} /></button>}
+          <button className="vb-end" onClick={onClose} title="End voice chat (Esc)" aria-label="End voice chat" data-testid="voice-end"><I.HangUp size={19} /></button>
         </div>
         {panel && (
           <div className="vb-panel" data-testid="voice-panel">
+            <label className="vb-toggle"><span>Show what's said in the chat</span>
+              <button className={`vb-switch${transcript ? ' on' : ''}`} onClick={toggleTranscript} role="switch" aria-checked={transcript} aria-pressed={transcript} aria-label={transcript ? 'Hide transcript' : 'Show transcript'} data-testid="voice-transcript"><span /></button>
+            </label>
             <div className="vb-providers" role="radiogroup" aria-label="Whose voice">
               {(opts?.providers ?? []).map((p) => (
                 <button key={p.id} role="radio" aria-checked={opts?.provider === p.id} className={`vb-provider${opts?.provider === p.id ? ' on' : ''}`} disabled={!p.ready}
-                  title={p.ready ? `${p.label}'s voice` : `Add your ${p.id === 'openai' ? 'OpenAI' : 'xAI'} key in Settings → Models & Keys`}
+                  title={p.ready ? `${p.label}'s voice` : `Add your ${p.id === 'openai' ? 'OpenAI (ChatGPT)' : 'Grok'} key in Settings → AI & spending`}
                   onClick={() => style({ provider: p.id })} data-testid={`voice-provider-${p.id}`}>{p.label}</button>
               ))}
             </div>
@@ -186,19 +197,13 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
                 {(opts?.languages ?? [{ id: 'auto', label: 'Auto-detect' }]).map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
             </label>
-            {opts && <div className="vb-note">Voice: {opts.engineLabel}. More in Settings → Voice.</div>}
           </div>
         )}
       </div>
-      {(shown || error) && !panel && (
-        <div className={`vb-caption${error ? ' err' : ''}`} data-testid={update && !error ? 'voice-announce' : 'voice-caption'}>
-          {update && !error && <span className="vb-update">Update</span>}{shown}
-          {error && <button className="link-btn" onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: 'voice' })) }}>Voice settings</button>}
-        </div>
-      )}
-      {pending.length > 0 && (
+      {/* Background work's questions and approvals; this chat's own already show in the chat below. */}
+      {pending.some((p) => p.threadId !== (voiceId.current ?? threadId)) && (
         <div className="voice-cards" data-testid="voice-cards">
-          {pending.map((p) => <PendingCard key={p.id} req={p} onRespond={(id, answer) => api.chat.respond(p.threadId, id, answer)} />)}
+          {pending.filter((p) => p.threadId !== (voiceId.current ?? threadId)).map((p) => <PendingCard key={p.id} req={p} onRespond={(id, answer) => api.chat.respond(p.threadId, id, answer)} />)}
         </div>
       )}
       {!panel && tasks.length > 0 && (
