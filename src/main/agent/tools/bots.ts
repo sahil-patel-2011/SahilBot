@@ -36,7 +36,7 @@ export function updateBotTool(db: Db, files: SpaceFiles, changed: () => void): T
       const name = typeof a.name === 'string' ? a.name.replace(/\s+/g, ' ').trim().slice(0, 40) : ''
       if (a.name !== undefined) {
         if (!name) throw new Error('Give the new name.')
-        const said = [...db.listMessages(ctx.threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.handoff && !m.meta?.fromApp)
+        const said = [...db.listMessages(ctx.threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.handoff && !m.meta?.fromApp)
         if (!said || !ASKED_NAME.test(said.content)) throw new Error('Only change your name when the user asks for a new one in this chat.')
         db.updateSpace(bot.id, { name })
         // A bot's one conversation is titled after it (the main bot's chats keep their own titles).

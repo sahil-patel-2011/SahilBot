@@ -43,7 +43,12 @@ export function completionReport(store: RuntimeStore, runId: string, o: { requir
 
 /** The reply already tells the user it couldn't confirm the result ("I couldn't verify…", "not one I verified on screen"). */
 export function admitsUnverified(text: string): boolean {
-  return /\b(couldn'?t|could not|can'?t|cannot|wasn'?t able|was not able|unable|didn'?t|did not|not (yet )?(one i )?(verified|confirmed|checked)|unverified|unconfirmed|blocked|expected result|not sure|uncertain|to finish (the|this) (test|task))\b/i.test(text)
+  // A negation counts only when it is about doing or checking the work ("I couldn't open the file", "didn't confirm"),
+  // never a passing "can't" or "didn't" elsewhere in a reply that claims success.
+  const NEG = String.raw`(?:couldn'?t|could not|can'?t|cannot|wasn'?t able to|was not able to|unable to|didn'?t|did not|haven'?t|have not)`
+  const DO = String.raw`(?:verify|confirm|check|test|finish|complete|get|reach|access|open|load|run|see|find|read|save|send|click|connect|sign|log|do|make|start|install|fix|reproduce)`
+  return new RegExp(String.raw`\b${NEG}\s+(?:\w+\s+){0,2}?${DO}\w*\b`, 'i').test(text)
+    || /\b(not (yet )?(one i )?(verified|confirmed|checked)|unverified|unconfirmed|blocked (me|it|the)|was blocked|expected result|not sure|uncertain|to finish (the|this) (test|task))\b/i.test(text)
 }
 
 /** One plain sentence for a reply that sounds sure while the app's checks found something unresolved (no ids, no tool names). */

@@ -66,7 +66,11 @@ export function redactSecrets(text: string, known: string[] = []): string {
 export function hideCopiedSecrets(answer: string, outputs: string, userText: string): string {
   const fromOutputs = new Set<string>()
   for (const m of outputs.matchAll(new RegExp(KEY_SHAPES.source, 'g'))) fromOutputs.add(m[0])
-  for (const m of outputs.matchAll(new RegExp(ENV_VALUE.source, 'g'))) if (m[2].length >= 8) fromOutputs.add(m[2])
+  for (const m of outputs.matchAll(new RegExp(ENV_VALUE.source, 'g'))) {
+    // KEY="value" or KEY='value': the secret is what's inside the quotes (the model copies it without them).
+    const v = m[2].replace(/^(["'`])(.*)\1$/, '$2').replace(/^["'`]|["'`;,]$/g, '')
+    if (v.length >= 8) fromOutputs.add(v)
+  }
   let out = answer
   for (const v of [...fromOutputs].sort((a, b) => b.length - a.length)) {
     if (!out.includes(v) || userText.includes(v)) continue

@@ -19,3 +19,10 @@ test('a live secret copied out of a file is hidden in the answer; one the user t
   // Nothing secret: unchanged.
   expect(hideCopiedSecrets('All good.', env, '')).toBe('All good.')
 })
+
+test('a quoted .env value is hidden when the answer copies it without the quotes', () => {
+  const env = `DB_PASSWORD="hunter2-very-long-pw"\nAPP_TOKEN='tok_abcdefgh12345'`
+  const out = hideCopiedSecrets('The password is hunter2-very-long-pw and the token tok_abcdefgh12345.', env, 'check .env')
+  expect(out).not.toContain('hunter2-very-long-pw')
+  expect(out).not.toContain('tok_abcdefgh12345')
+})

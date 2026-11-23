@@ -86,6 +86,11 @@ test('a reply that already says it couldn\'t confirm the result is shown as writ
   expect(admitsUnverified("I couldn't open the file.")).toBe(true)
   expect(admitsUnverified('Everything passed.')).toBe(false)
   expect(admitsUnverified('Done: the invoice is sent.')).toBe(false)
+  // A passing negation in a reply that claims success is not an admission.
+  expect(admitsUnverified("Done: the invoice is sent. You can't reply to it from the app, but it went out.")).toBe(false)
+  expect(admitsUnverified("Fixed it. The old code didn't handle empty lists.")).toBe(false)
+  expect(admitsUnverified("I didn't confirm the total on screen.")).toBe(true)
+  expect(admitsUnverified('I was unable to reach the server.')).toBe(true)
 })
 
 test('recorded-tool replay cannot execute a live write', async () => {

@@ -44,3 +44,14 @@ test('without the user asking, or from a handoff, the name stays', async () => {
   await expect(run({ name: 'Evil' })).rejects.toThrow(/user asks/)
   expect(db.getSpace(bot.id)!.name).toBe('Scout')
 })
+
+test('the app\'s hidden notes never count as the user asking (the intro prompt mentions "your name")', async () => {
+  const { db, bot, say, run } = setup()
+  say('Introduce yourself. Your name is Scout; ask what to go by later.', { hidden: true })
+  await expect(run({ name: 'Nova' })).rejects.toThrow(/user asks/)
+  // A real ask, followed by a hidden app nudge: the user's ask still counts.
+  say('Call yourself Nova')
+  say('[From the app] the user is back', { hidden: true })
+  await run({ name: 'Nova' })
+  expect(db.getSpace(bot.id)!.name).toBe('Nova')
+})

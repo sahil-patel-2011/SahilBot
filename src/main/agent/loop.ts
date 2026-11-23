@@ -734,8 +734,11 @@ export class Agent {
     const job = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside && m.id !== asked.id)?.content ?? ''
     const step = [...all].reverse().find((m) => m.role === 'assistant' && m.toolCalls?.length)?.toolCalls?.at(-1)?.name
     const reply = await this.teammate(model, asideSystem({ who: whoIs(this.d.settings.get()), job, ...(step ? { step: `using ${step.replace(/_/g, ' ')}` } : {}) }), asked.content, run, 'low', 400).catch(() => undefined)
-    if (!reply || !this.runs.has(threadId)) {
-      if (this.runs.has(threadId)) { run.steers = [...(run.steers ?? []), { text: asked.content }]; this.d.emit({ threadId, type: 'steer', pending: run.steers.length }) }
+    // A side answer posts even if the run finished meanwhile (the question is already in the chat). When the side call
+    // failed, the question goes to the run that is going now (never a finished one): it's answered there.
+    if (!reply) {
+      const live = this.runs.get(threadId)
+      if (live) { live.steers = [...(live.steers ?? []), { text: asked.content }]; this.d.emit({ threadId, type: 'steer', pending: live.steers.length }) }
       return
     }
     const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: reply, kind: 'normal', status: 'done', meta: { aside: true, replyTo: asked.id, replyText: asked.content.replace(/\s+/g, ' ').slice(0, 90) } })
@@ -1507,7 +1510,9 @@ export class Agent {
     const crun: Run = {
       replay: o.replay, replayErrors: o.replayErrors, replayTools: o.replayTools, planFirst: run.planFirst, planApproved: run.planApproved,
       ctrl: new AbortController(), pending: new Map(), group: false, unattended: true, helper: true,
-      modeCap: o.modeCap ? stricterMode(run.modeCap ?? o.modeCap, o.modeCap) : run.modeCap, forceTaint: run.forceTaint, fromApp: run.fromApp, seed: o.seed, sampling: o.sampling
+      modeCap: o.modeCap ? stricterMode(run.modeCap ?? o.modeCap, o.modeCap) : run.modeCap, forceTaint: run.forceTaint, fromApp: run.fromApp, seed: o.seed, sampling: o.sampling,
+      // A dry run's helpers only list what they would change, into the same list as their lead.
+      ...(run.dryRun ? { dryRun: true, dryActions: (run.dryActions ??= []) } : {})
     }
     crun.record = this.runtime.start(childId, this.d.db.listMessages(childId).find((m) => m.role === 'user')?.id ?? randomUUID())
     crun.meter = taskScope.getStore() ?? new TaskMeter({})
@@ -1988,6 +1993,7 @@ export class Agent {
     show()
     const crun: Run = {
       ctrl: new AbortController(), pending: new Map(), group: false, unattended: run.unattended, modeCap: 'ask', forceTaint: tainted || undefined, fromApp: run.fromApp,
+      ...(run.dryRun ? { dryRun: true, dryActions: (run.dryActions ??= []) } : {}),
       askVia: run.unattended ? undefined : { threadId: thread.id, run, label: target.name },
       seed: { untrusted: [a.question ?? ''], userText: '' }
     }
