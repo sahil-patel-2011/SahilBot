@@ -77,7 +77,8 @@ export function FunctionBots({ templates, adding, onAdd, onConnect }: {
 /** Sidebar: a short word under the bot's name while it's doing something (nothing when Idle). */
 export function sidebarStatusText(s: BotStatus | undefined, unread: boolean): string | null {
   const st = withUnread(s, unread).state
-  return st === 'context' ? `${STATE_LABELS.context}…` : st === 'working' ? `${STATE_LABELS.working}…` : null
+  // One plain word while it works (no "Pulling context…"): the details are in the bot's chat when you want them.
+  return st === 'context' || st === 'working' ? `${STATE_LABELS.working}…` : null
 }
 
 /** The bot card's line: a status dot, the state, and the model its last reply ran on. */

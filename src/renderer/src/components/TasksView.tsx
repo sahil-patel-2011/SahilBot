@@ -273,6 +273,8 @@ export function BotGoals({ spaceId }: { spaceId: string }) {
   const [openId, setOpenId] = useState<string | null>(null)
   const mine = (goals ?? []).filter((g) => g.botId === spaceId && g.status !== 'abandoned')
   const toggle = (g: Goal, on: boolean): void => { void run(() => api.goals.update(g.id, { status: on ? 'active' : 'paused' })).then(reload) }
+  // No goals: nothing to show (ask the bot in chat to take one on).
+  if (!mine.length) return null
   return (
     <>
       <div className="bd-section-title">Goals</div>
