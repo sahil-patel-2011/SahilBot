@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import type { ModelInfo } from '../../src/shared/types'
 import { DEFAULT_BRAIN } from '../../src/shared/brain'
 import { Db } from '../../src/main/db'
@@ -495,6 +495,27 @@ describe('the brain service', () => {
     await h.brain.sync('schedule')
     expect(h.brain.prompts()).toHaveLength(0)
     expect(h.brain.store.surfacedSince(new Date(NOW).setHours(0, 0, 0, 0))).toBe(2)
+  })
+
+  test('turning Agent mode on surfaces what is already known at once; Refresh during a sync runs another after it', async () => {
+    const h = setup()
+    await h.brain.sync('manual')
+    h.inbox.push(email('n1', { at: NOW + MIN }))
+    h.replies.extract = () => SARAH_REPLY
+    h.advance(2 * MIN)
+    await h.brain.sync('manual')
+    expect(h.brain.needsYou({ id: 'main', name: 'SahilBot' })).toHaveLength(0)
+    h.brain.setSettings({ agentMode: true })
+    expect(h.brain.needsYou({ id: 'main', name: 'SahilBot' }).some((x) => x.prompt?.text.startsWith('Sarah Lee asked for the revised proposal'))).toBe(true)
+
+    // Refresh while a sync runs: one more sync follows (what came in after the first read is seen).
+    const syncs = () => h.brain.status().recent.length
+    const before = syncs()
+    h.advance(MIN)
+    const first = h.brain.sync('manual')
+    await h.brain.refresh()
+    await first
+    await vi.waitFor(() => expect(syncs()).toBe(before + 2))
   })
 
   test('Remind me brings it back; Not needed teaches; pre-approved drafting starts on its own and waits for review', async () => {

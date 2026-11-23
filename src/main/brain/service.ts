@@ -139,6 +139,9 @@ export class BrainService {
       if (cur && !this.sourceOn(def, before) && this.sourceOn(def, next)) { cur.head = Math.max(cur.head, this.now()); cur.gaps = []; moved = true }
     }
     if (moved) this.patch({ cursors: st.cursors })
+    // Agent mode just turned on: what's already known (open requests with deadlines) can reach the user now, not
+    // only after the next sync. Mid-sync, that sync surfaces them when it ends.
+    if (!before.agentMode && next.agentMode && !next.paused && !this.current) { try { this.surfacePrompts(next, this.now()) } catch { /* the next sync tries again */ } }
     this.changed()
     return next
   }
@@ -284,6 +287,8 @@ export class BrainService {
   }
 
   private lastQuickAt = 0
+  /** Refresh was pressed during a sync: one more runs when it ends. */
+  private again = false
   /**
    * Between syncs, while a "when an email arrives" routine is waiting: read new items only (no model call, so it runs
    * even when today's brain budget is used). They're extracted on the next sync. Not while the brain is paused, the Mac
@@ -303,7 +308,9 @@ export class BrainService {
   /** "Refresh now". */
   async refresh(): Promise<BrainStatus> {
     if (this.settings().paused) throw new Error('The brain is paused. Turn it back on to refresh.')
+    // Already syncing: another one starts right after (what you asked for may have come in after it read).
     if (!this.current) void this.sync('manual').catch(() => undefined)
+    else this.again = true
     return this.status()
   }
 
@@ -341,6 +348,7 @@ export class BrainService {
     } finally {
       this.current = null
     }
+    if (this.again && !this.stopped) { this.again = false; setTimeout(() => void this.sync('manual').catch(() => undefined), 0) }
     const usd = [...jobs.values()].reduce((a, j) => a + j.usd, 0)
     const parts = [
       out.kept ? `read ${out.kept} new ${out.kept === 1 ? 'item' : 'items'}` : '',

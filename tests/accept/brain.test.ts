@@ -54,8 +54,10 @@ describe('Your brain', () => {
       expect(status.recent[0].jobs.some((j) => j.job === 'extract' && j.model === 'qwen3.8:27b')).toBe(true)
 
       // Agent mode: SahilBot reaches out.
+      // (Once the first read has settled: the page reflows as briefs land.)
+      await expect.poll(async () => (await page.evaluate(() => window.foreman.brain.status())).syncing, { timeout: 20_000 }).toBe(false)
       await page.click('[data-testid="brain-agent-on"]')
-      await expect.poll(async () => (await page.evaluate(() => window.foreman.brain.status())).settings.agentMode).toBe(true)
+      await expect.poll(async () => (await page.evaluate(() => window.foreman.brain.status())).settings.agentMode, { timeout: 10_000 }).toBe(true)
       await page.click('[data-testid="brain-refresh"]')
       await expect.poll(async () => (await page.evaluate(() => window.foreman.needsYou.list())).filter((x) => x.source === 'brain').length, { timeout: 20_000 }).toBeGreaterThan(0)
       await page.click('[data-testid="nav-tasks"]')
