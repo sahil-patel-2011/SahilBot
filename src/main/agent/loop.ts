@@ -378,6 +378,20 @@ export function askedQuestions(args: Record<string, unknown>): string[] {
   return typeof args.question === 'string' && args.question.trim() ? [args.question] : []
 }
 
+/**
+ * A question asking for a fact the user may have given before ("What's your landlord's email?", "Which gym do you
+ * go to?"): the ask gate checks memory for these only. Never a confirmation ("Should I send it now?", "Are you
+ * sure…?"), a choice between options the model offers, or a taste question ("Which do you prefer?"): those are
+ * the user's call every time.
+ */
+export function factQuestion(q: string, options?: unknown[]): boolean {
+  const t = q.trim()
+  if (options?.length) return false
+  if (/^(should|shall|can|could|may|do you want|would you like|want me|are you sure|is it ok|is that ok|ok to|okay to|proceed|confirm|ready to|go ahead)\b/i.test(t)) return false
+  if (/\b(prefer|rather|like better|which (one|of these|option)|or should i|before i (send|delete|buy|post|book|pay))\b/i.test(t)) return false
+  return /^(what|what's|whats|which|who|who's|whose|where|when|how (much|many|long|old|often))\b/i.test(t)
+}
+
 /** What the model gets back instead of the user's answer when the user already told SahilBot (askedBefore). */
 export const memoryFirst = (lines: string[]): string => `Not asked yet: the user may have told you this already.\n${lines.join('\n')}\nIf this answers your question, don't ask: use it and carry on, and say in a few words what you used ("Using Mike's email from before"). If it doesn't answer it, or the step is risky enough that you must confirm, call ask_user again with the same question.`
 
@@ -1261,7 +1275,11 @@ export class Agent {
         if (st.compaction?.boundaryId) {
           const ms = this.d.db.listMessages(thread.id)
           const cut = ms.findIndex((m) => m.id === st.compaction!.boundaryId)
-          const lines = cut > 0 ? earlierSaid(ms.slice(0, cut + 1), query, { limit: 4 }) : []
+          const before = ms.slice(0, cut + 1)
+          // (The compaction's task brief already quotes the first and the newest nine of these: taskBrief.)
+          const own = before.filter((m) => m.role === 'user' && !m.meta?.hidden)
+          const skip = new Set([own[0]?.id, ...own.slice(-9).map((m) => m.id)].filter((x): x is string => !!x))
+          const lines = cut > 0 ? earlierSaid(before, query, { limit: 4, skip }) : []
           if (lines.length) out.push({ title: 'What the user said earlier in this chat, before it was summarized (their own words; later messages win on any conflict)', lines })
         }
       } catch { /* go on without */ }
@@ -2218,29 +2236,23 @@ export class Agent {
 
   /**
    * What the user already told SahilBot that answers these questions: saved memories (trusted ones, this bot's and
-   * shared) and their own words in other chats, each read with the request that started the run (a question like
-   * "What's their email?" names nobody). At most 6 lines; none when nothing fits well.
+   * shared) and their own words in other chats, matched on the question alone. At most 6 lines; none when nothing
+   * fits well.
    */
   private askedBefore(thread: Thread, run: Run, questions: string[]): string[] {
     if (!this.d.memory.enabled) return []
     try {
       const bot = run.speaker ?? this.d.db.getSpace(thread.spaceId)
       const scope = bot?.kind === 'bot' ? bot.id : null
-      const all = this.d.db.listMessages(thread.id)
-      const opener = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
-      const request = opener ? recallQuery(opener, all) : ''
       const out: string[] = []
       const seen = new Set<string>()
+      // The question on its own (never mixed with the request, whose words would match nearly anything).
       for (const q of questions) {
-        const asks = [q, request ? `${q}\n${request}` : ''].filter(Boolean)
-        for (const a of asks) {
-          for (const m of this.d.memory.search(a, scope, 8)) {
-            if (isUntrusted(m) || m.category === 'worklog' || seen.has(m.id)) continue
-            if (Math.max(relevance(q, m.content, m.category), relevance(a, m.content, m.category) * 0.9) < 0.55) continue
-            seen.add(m.id); out.push(`- Saved: ${m.content}`)
-          }
+        for (const m of this.d.memory.search(q, scope, 8)) {
+          if (isUntrusted(m) || m.category === 'worklog' || seen.has(m.id) || relevance(q, m.content, m.category) < 0.5) continue
+          seen.add(m.id); out.push(`- Saved: ${m.content}`)
         }
-        for (const x of this.d.db.recallUserSaid?.(asks.join('\n'), thread.id, 3) ?? []) {
+        for (const x of this.d.db.recallUserSaid?.(q, thread.id, 3) ?? []) {
           const k = x.text.slice(0, 120)
           if (seen.has(k)) continue
           seen.add(k); out.push(`- They said on ${new Date(x.at).toISOString().slice(0, 10)} ("${x.title.slice(0, 60)}"): ${x.text}`)
@@ -3577,6 +3589,8 @@ export class Agent {
 
         const editsBefore = track.edits
         const ran = await this.executeAll(thread, run, state, assistant.toolCalls, { failures, untrusted, userText, guard, track, window })
+        // (The check turned into a fix, executeAll: the old answer is no longer the one to fall back to.)
+        if (verifyDraft && !run.checking) verifyDraft = undefined
         // Tests right after an edit (Codex-style "run the checks after applying the patch", on fast suites): the
         // next step sees the result, so a wrong fix is caught before it's announced, not after.
         // Its own budget (2 runs), so the end-of-run gate still checks the last edit; a suite that took over 30 s
@@ -3962,6 +3976,10 @@ export class Agent {
       if (poll.nudge && !nudged && i + group.length >= calls.length) { const o = outcomes[outcomes.length - 1]; o.content += poll.nudge; nudged = true }
       // Stored in the order the model asked for them: providers match results to calls by position too.
       for (const o of outcomes) {
+        // The double-check changed something: it found a mistake and is fixing it. That's real work now, not a
+        // check of a finished answer: the 90-second cap and "a new message ends the check" no longer apply, so the
+        // fix is never thrown away for the answer it is correcting.
+        if (run.checking && o.status === 'ok' && o.meta?.effect && o.meta.effect !== 'read') run.checking = undefined
         out.push({ name: o.call.name, status: this.commit(thread, o, ctx) })
         if (o.call.native?.kind === 'computer' && o.status !== 'ok') computerFailed = true
       }
@@ -4155,7 +4173,7 @@ export class Agent {
     // Don't make the user repeat themselves: a question whose answer they already gave (a saved memory, their own
     // words in another chat) goes back to the model with that answer instead of to the user. Once per question.
     if (tool.name === 'ask_user' && !run.helper && !known) {
-      const qs = askedQuestions(args)
+      const qs = askedQuestions(args).filter((q, i) => factQuestion(q, (Array.isArray(args.questions) && args.questions.length ? (args.questions as Array<{ options?: unknown[] }>)[i]?.options : args.options) as unknown[] | undefined))
       const key = digest(qs)
       if (qs.length && !(run.memoryChecked ??= new Set()).has(key)) {
         run.memoryChecked.add(key)

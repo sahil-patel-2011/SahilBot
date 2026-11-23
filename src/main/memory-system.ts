@@ -4,7 +4,7 @@ import { digest } from './agent/runtime/store'
 import type { Embedder } from './knowledge/embeddings'
 import { rankBm25, termFreq, tokenize, rrf } from './knowledge/rank'
 import { fuzzyScore, relevance, type MemoryStore } from './memory'
-import { expansionTerms } from './recall-expand'
+import { NOT_OWN_WORDS, expansionTerms } from './recall-expand'
 
 type Row = Record<string, unknown>
 export interface RecallHit { id: string; kind: 'memory' | 'chat' | 'file' | 'vault'; text: string; score: number; at: number; source: { threadId?: string; messageId?: string; memoryId?: string; path?: string }; quoted: boolean }
@@ -157,11 +157,12 @@ function cosine(a: Float32Array, b: Float32Array): number {
  * The user's own messages from earlier in this chat that a compaction summarized away, best match for `query`
  * first (keyword search with other words for the same concepts, recall-expand.ts): a detail given at message 5
  * of 40 ("my landlord is Mike, mike@…") reaches a later request verbatim instead of only through the summary.
- * Skips hidden and relayed messages and anything already carried word for word (`skip`).
+ * Skips what isn't the user's own words (recall-expand.ts NOT_OWN_WORDS: relayed, app, MCP, scheduled, helper…)
+ * and anything already carried word for word (`skip`: the messages the compaction's task brief quotes).
  */
 export function earlierSaid(messages: Array<{ id: string; role: string; content: string; meta?: Record<string, unknown> }>, query: string, o: { limit?: number; skip?: Set<string> } = {}): string[] {
   if (!query.trim()) return []
-  const own = messages.filter((m) => m.role === 'user' && m.content && !m.meta?.hidden && !m.meta?.fromLink && !m.meta?.fromApp && !m.meta?.handoff && !o.skip?.has(m.id))
+  const own = messages.filter((m) => m.role === 'user' && m.content && !NOT_OWN_WORDS.some((k) => m.meta?.[k]) && !o.skip?.has(m.id))
     .map((m) => ({ m, text: m.content.replace(/^<context[^>]*>[\s\S]*?<\/context>\n\n/, '').replace(/\s+/g, ' ').trim() }))
     .filter((x) => x.text.length >= 8)
   if (!own.length) return []

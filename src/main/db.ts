@@ -4,7 +4,7 @@ import type { EffortChoice, LibraryItem, Message, PermissionMode, Space, Thread 
 import { emptyState, type ThreadState } from './agent/types'
 import { KNOWLEDGE_SCHEMA } from './knowledge/schema'
 import { UNREAD_CAP } from '@shared/read-state'
-import { alternativesFor } from './recall-expand'
+import { CONCEPTS, NOT_OWN_WORDS, conceptAlternatives, hasStem, hasWord, normalizeForRecall, wordStem } from './recall-expand'
 
 export const uid = (): string => randomUUID()
 
@@ -366,28 +366,42 @@ export class Db {
    */
   recallUserSaid(query: string, excludeThreadId: string, limit = 6): Array<{ threadId: string; title: string; text: string; at: number }> {
     const STOP = new Set('about above after again also because been before being below between both could does doing down during each from further have having here into itself just more most other over same should some such than that their them then there these they this those through under until very were what when where which while will with would your yours make made want need like please thanks thank help'.split(' '))
-    // Words of 4+ letters, and shorter ones that stand for something ("wed", "pup", "mom").
-    const words = [...new Set((query.toLowerCase().match(/[a-z0-9][a-z0-9'-]{2,}/g) ?? []).filter((w) => !STOP.has(w) && (w.length >= 4 || alternativesFor(w).length > 1)))].slice(0, 8)
     const here = this.getThread(excludeThreadId)
-    if (!words.length || !here) return []
+    if (!here) return []
+    // Search units, each counted once: the request's own words (4+ letters, whole words starting with them), and
+    // each concept it names by the words a message about it would use ("my landlord" → landlord, rent, lease;
+    // recall-expand.ts). A plain word that belongs to a named concept is counted with the concept.
+    const concepts = conceptAlternatives(query).slice(0, 4)
+    const conceptWords = new Set(concepts.flatMap((c) => [...c.words, ...CONCEPTS[c.concept].ask.flatMap((a) => normalizeForRecall(a).split(' '))]))
+    const plain = [...new Set((query.toLowerCase().match(/[a-z0-9][a-z0-9'-]{3,}/g) ?? []).filter((w) => !STOP.has(w)).map(wordStem).filter((w) => w.length >= 3 && !conceptWords.has(w)))].slice(0, 8)
+    const units: Array<{ stems?: string[]; words?: string[] }> = [...plain.map((w) => ({ stems: [w] })), ...concepts.map((c) => ({ words: c.words }))]
+    if (!units.length) return []
     this.sql.exec('CREATE INDEX IF NOT EXISTS messages_role_at ON messages(role, created_at)')
-    const esc = (w: string): string => `%${w.replace(/[%_\\]/g, (c) => '\\' + c)}%`
-    // Each word counts once, by itself or another word for the same thing ("contractor" → quotes, builders;
-    // recall-expand.ts), in the message or its chat's title ("our flight" in the "Lisbon trip" chat).
-    // Other words must start a word (" son", never "season").
-    const alts = words.map((w) => [esc(w), ...alternativesFor(w, query).filter((a) => a !== w && a.length >= 3).map((a) => `% ${a.replace(/[%_\\]/g, (c) => '\\' + c)}%`)])
-    const hay = `(' ' || lower(r.content) || ' ' || lower(coalesce(r.title, '')))`
-    const score = alts.map((a) => `(CASE WHEN ${a.map(() => `${hay} LIKE ? ESCAPE '\\'`).join(' OR ')} THEN 1 ELSE 0 END)`).join(' + ')
-    const notMine = ['hidden', 'handoff', 'teach', 'helperTask', 'fromLink', 'mcpClientId', 'fromApp', 'scheduled', 'goalRun', 'superseded', 'relayed']
-      .map((k) => `json_extract(m.data, '$.meta.${k}') IS NULL OR json_extract(m.data, '$.meta.${k}') IN (0, '')`).map((c) => `(${c})`).join(' AND ')
-    const rows = this.sql.prepare(`WITH r AS (
-        SELECT m.thread_id AS threadId, t.title AS title, m.content AS content, m.created_at AS at
+    const like = (w: string): string => `%${w.replace(/[%_\\]/g, (c) => '\\' + c)}%`
+    const patterns = units.flatMap((u) => [...(u.stems ?? []), ...(u.words ?? [])]).map(like)
+    const notMine = NOT_OWN_WORDS.map((k) => `json_extract(m.data, '$.meta.${k}') IS NULL OR json_extract(m.data, '$.meta.${k}') IN (0, '')`).map((c) => `(${c})`).join(' AND ')
+    // A cheap prefilter in SQL (any unit's letters anywhere, newest first), then whole-word scoring here.
+    const rows = (this.sql.prepare(`WITH r AS (
+        SELECT m.thread_id AS threadId, t.title AS title, m.content AS content, lower(m.content) AS lc, m.created_at AS at
         FROM messages m JOIN threads t ON t.id = m.thread_id
         WHERE m.role = 'user' AND m.kind = 'normal' AND m.status = 'done' AND t.space_id = ? AND m.thread_id != ? AND t.parent_id IS NULL
           AND length(m.content) BETWEEN 12 AND 20000 AND ${notMine}
         ORDER BY m.created_at DESC LIMIT 4000)
-      SELECT threadId, title, content AS text, at, (${score}) AS hits FROM r ORDER BY hits DESC, at DESC LIMIT 40`)
-      .all(here.spaceId, excludeThreadId, ...alts.flat()) as Array<{ threadId: string; title: string; text: string; at: number; hits: number }>
+      SELECT threadId, title, content AS text, at FROM r WHERE ${patterns.map(() => "lc LIKE ? ESCAPE '\\'").join(' OR ')} ORDER BY at DESC LIMIT 300`)
+      .all(here.spaceId, excludeThreadId, ...patterns) as Array<{ threadId: string; title: string; text: string; at: number }>)
+      .map((r) => {
+        const body = normalizeForRecall(r.text), title = normalizeForRecall(r.title ?? '')
+        const hit = (t: string, u: typeof units[number]): boolean => (u.stems ?? []).some((st) => hasStem(t, st)) || (u.words ?? []).some((w) => hasWord(t, w))
+        // A two-word phrase for the concept ("weekly report" for "weekly update") is as strong as two words.
+        const weight = (u: typeof units[number]): number => (u.words ?? []).some((w) => w.includes(' ') && hasWord(body, w)) ? 2 : 1
+        const inBody = units.filter((u) => hit(body, u)).reduce((n, u) => n + weight(u), 0)
+        // The chat's title adds what the message itself doesn't say ("our flight" in the "Lisbon trip" chat), but
+        // only for a message that matches on its own too.
+        const inTitle = inBody ? units.filter((u) => !hit(body, u) && hit(title, u)).length : 0
+        return { ...r, hits: inBody + inTitle }
+      })
+      .sort((a, b) => b.hits - a.hits || b.at - a.at)
+    const words = units
     const need = Math.min(2, words.length)
     const out: Array<{ threadId: string; title: string; text: string; at: number }> = []
     const perThread = new Map<string, number>()

@@ -238,6 +238,27 @@ describe('self-review', () => {
     expect(ms.at(-1)?.content).toBe('2 + 2 = 4.')
   })
 
+  test('a double-check that finds a mistake and fixes it is real work: a long fix is never thrown away for the old answer', async () => {
+    // Review: run.checking stayed set while the check was fixing, so past 90 s the wrong first answer came back.
+    const realNow = Date.now
+    let skew = 0
+    const save: ToolDef<{ v: string }> = {
+      name: 'save_note', label: 'Save', effect: 'write_local', description: 'save something',
+      parameters: { type: 'object', properties: { v: { type: 'string' } }, required: ['v'], additionalProperties: false },
+      // The fix takes "two minutes".
+      async run({ v }) { if (v === 'fixed') skew += 120_000; return { text: `saved ${v}` } }
+    }
+    const h = harness([model('model-a', 2)], [save])
+    Date.now = () => realNow() + skew
+    try {
+      llm.script.push({ toolCalls: [call('save_note', { v: 'wrong' })], delay: 0 }, { content: 'Saved: total is $313.20.', delay: 0 }, { toolCalls: [call('save_note', { v: 'fixed' })], delay: 0 }, { content: 'Fixed it: the total is $331.20.', delay: 0 })
+      const t = h.thread()
+      expect(await h.run(t, 'Add up the receipts and save the total in my notes file')).toBe('finished')
+      const shown = h.db.listMessages(t.id).filter((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)
+      expect(shown.map((m) => m.content)).toEqual(['Fixed it: the total is $331.20.'])
+    } finally { Date.now = realNow }
+  })
+
   test('pages the agent read in the browser show under its answer as sources', async () => {
     // Grok Bot head-to-head: the trip plan's sources were in the side panel only; browser pages never reached the answer.
     const browse: ToolDef<{ q: string }> = {

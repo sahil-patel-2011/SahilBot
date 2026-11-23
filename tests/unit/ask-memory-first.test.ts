@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
-import { Agent, askedQuestions, memoryFirst } from '../../src/main/agent/loop'
+import { Agent, askedQuestions, factQuestion, memoryFirst } from '../../src/main/agent/loop'
 import { ResultStore, estimate } from '../../src/main/agent/context'
 import { ToolRegistry } from '../../src/main/agent/registry'
 import { coreTools } from '../../src/main/agent/tools/core'
@@ -132,7 +132,32 @@ describe('check what the user said before asking', () => {
     expect(toolResults(h.db, t).join('\n')).not.toContain('attacker@evil.example')
   })
 
+  test('confirmations, choices and unrelated questions always reach the user (review: the gate answered them with unrelated facts)', async () => {
+    for (const [request, question, args] of [
+      ['Email my boss that I am out Friday', 'Should I send it now?', {}],
+      ['Email my boss that I am out Friday', 'Which of these two options do you prefer for the subject line?', {}],
+      ['Clean up my landlord emails', 'Are you sure you want to permanently delete these 14 emails?', {}],
+      ['Plan my running week', 'What is your max heart rate?', {}],
+      ['Email my landlord', 'Which tone?', { options: ['Friendly', 'Firm'] }]
+    ] as Array<[string, string, Record<string, unknown>]>) {
+      const h = harness()
+      h.memory.save('Manager at work is Dana Whitfield (dana.whitfield@northwind.io)', 'person', null, 'you')
+      h.memory.save('Landlord: Mike Delgado, mike@delgadoproperties.com', 'person', null, 'you')
+      h.memory.save('Hourly consulting rate is $145', 'work', null, 'you')
+      llm.script.push({ toolCalls: [call('look', { q: 'x' })], delay: 0 }, { toolCalls: [call('ask_user', { question, ...args })], delay: 0 }, { content: 'Done.', delay: 0 })
+      const t = h.thread()
+      expect(await h.run(t, request)).toBe('finished')
+      expect(h.pendings, question).toHaveLength(1)
+      expect(toolResults(h.db, t)[0]).not.toContain('Not asked yet')
+    }
+  })
+
   test('helpers', () => {
+    expect(factQuestion('What is your landlord\'s email?')).toBe(true)
+    expect(factQuestion('Which gym do you go to?')).toBe(true)
+    expect(factQuestion('Should I send it now?')).toBe(false)
+    expect(factQuestion('Which do you prefer, A or B?')).toBe(false)
+    expect(factQuestion('What time works?', ['9 AM', '10 AM'])).toBe(false)
     expect(askedQuestions({ question: 'A?' })).toEqual(['A?'])
     expect(askedQuestions({ questions: [{ question: 'A?' }, { question: 'B?' }] })).toEqual(['A?', 'B?'])
     expect(askedQuestions({})).toEqual([])

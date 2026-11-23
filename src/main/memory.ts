@@ -380,16 +380,19 @@ export function rankMemories(all: Memory[], opts: RankOptions = {}): Array<{ m: 
 
 /**
  * Tokens of saved memories a run gets, by the model's context window: the old fixed 700 on small local
- * windows, more on big ones, so a 200K or 1M model sees most of what the user told it (about 2% of the window,
- * capped). Never more than the window can spare.
+ * windows, more on big ones. The extra room is only for memories that fit the request (renderBlock), so a big
+ * model sees more of what bears on the task, not every unrelated fact on every run.
  */
 export function memoryBudget(window?: number): number {
-  if (!window || !Number.isFinite(window) || window <= 16_384) return 700
+  if (!window || !Number.isFinite(window) || window <= 16_384) return BASE_MEMORY_TOKENS
   if (window <= 40_000) return 1000
-  if (window <= 100_000) return 1800
-  if (window <= 300_000) return 4000
-  return 8000
+  if (window <= 100_000) return 1500
+  if (window <= 300_000) return 2500
+  return 4000
 }
+
+/** The memory block's usual size; room past it goes only to memories that fit the request (renderBlock). */
+export const BASE_MEMORY_TOKENS = 700
 
 /** The sub-header over the user's past decisions in the memory block (decisions.ts saves them). */
 export const DECISION_HEADER = 'Past decisions by the user (follow unless the request says otherwise):'
@@ -461,9 +464,12 @@ export function renderBlock(all: Memory[], opts: RankOptions & { maxTokens?: num
   used += decisionUsed
   omitted += decisions.length - pickedDecisions.length
   const mainBudget = budget - logReserve
+  // Past the usual size, only memories that bear on the request (or say who the user is and how they want things).
+  const base = Math.min(budget, BASE_MEMORY_TOKENS) - logReserve
+  const fits = (m: Memory): boolean => !q || ['profile', 'rule', 'preference'].includes(m.category) || relevance(q, m.content, m.category) >= 0.3
   for (const { m } of others) {
     const cost = estTokens(line(m)) + 1
-    if (used + cost > mainBudget) { omitted++; continue }
+    if (used + cost > mainBudget || (used + cost > base && !fits(m))) { omitted++; continue }
     used += cost
     ;(isUntrusted(m) ? unverified : m.spaceId ? mine : shared).push(m)
   }
@@ -645,7 +651,7 @@ export class MemoryStore {
     const rows = this.db.sql.prepare("SELECT * FROM memories WHERE scope IS NOT NULL AND scope != ? AND category != 'rule' AND (provenance IS NULL OR provenance != 'untrusted') ORDER BY updated_at DESC LIMIT 600").all(spaceId ?? '') as Row[]
     return rows.map(toMemory)
       .filter((m) => m.category !== 'rule' && !isUntrusted(m) && !!m.spaceId && !!this.nameOf?.(m.spaceId))
-      .map((m) => ({ m, s: Math.max(relevance(q, m.content, m.category), fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
+      .map((m) => ({ m, s: Math.max(fuzzyScore(q, m.content), fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
       .filter((x) => x.s >= min)
       .sort((a, b) => b.s - a.s || b.m.updatedAt - a.m.updatedAt)
       .slice(0, limit)
