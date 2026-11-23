@@ -570,6 +570,25 @@ export function App() {
     setView('home')
   }
   newChatRef.current = newChat
+  /**
+   * A fresh conversation with a bot (Grok Bot reviewers: "each Bot is one unbounded thread", no fresh session).
+   * The bot remembers everything (memories, its notes, what you said in its other conversations); the old one is in
+   * its profile under Past conversations. SahilBot's own conversation moves too.
+   */
+  const startFresh = async (bot: Space): Promise<void> => {
+    if (thread && thread.spaceId === bot.id) {
+      const day = new Date(thread.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      if (thread.title === bot.name) await api.threads.update(thread.id, { title: `${bot.name} · until ${day}` })
+    }
+    let t = await api.threads.create(bot.id) as Thread
+    t = await api.threads.update(t.id, { title: bot.name })
+    if (bot.isMain) setSettings(await api.settings.set({ mainThreadId: t.id }))
+    setPanel(null)
+    setSpaceId(bot.id)
+    setThread(t)
+    void refreshSpaces()
+    toast(`Fresh start with ${bot.name}. It still remembers everything.`, 'ok')
+  }
   spacesRef.current = spaces
   spaceIdRef.current = spaceId
   pinnedRef.current = settings?.pinnedBots ?? undefined
@@ -1109,7 +1128,9 @@ export function App() {
           <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)}
             onCustomize={() => setEditor({ space: detailsSpace, mode: detailsSpace.kind })}
             onChanged={() => void refreshSpaces()}
-            onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }} />
+            onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }}
+            onStartFresh={() => void startFresh(detailsSpace)}
+            onOpenThread={(t) => { setPanel(null); setSpaceId(t.spaceId); setThread(t) }} />
         </Lazy>
       ) : panel && panel !== 'details' && (
         <RightPanel tab={panel} onTab={setPanel} hidden={modal} messages={messages} file={file}

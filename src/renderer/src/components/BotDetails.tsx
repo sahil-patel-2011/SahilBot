@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
-import type { BotMaxSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
+import type { BotMaxSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
@@ -32,7 +32,13 @@ function Toggle({ on, onChange, label, testId }: { on: boolean; onChange: (v: bo
 }
 
 /** Bot details panel (right side): profile, routines, library. Spec: design/bot-ui.md. */
-export function BotDetails(p: { space: Space; threadId: string | null; onClose: () => void; onCustomize: () => void; onChanged: () => void; onEditRoutine: (text: string) => void }) {
+export function BotDetails(p: {
+  space: Space; threadId: string | null; onClose: () => void; onCustomize: () => void; onChanged: () => void; onEditRoutine: (text: string) => void
+  /** A fresh conversation with this bot (it remembers everything; the current one moves to Past conversations). */
+  onStartFresh?: () => void
+  /** Opens one of the bot's earlier conversations. */
+  onOpenThread?: (t: Thread) => void
+}) {
   const { space } = p
   const [tab, setTab] = useState<Tab>('details')
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
@@ -172,7 +178,14 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                   <span className="bd-row-text">Customize look and instructions…</span>
                   <span className="bd-chev"><I.Chevron size={14} /></span>
                 </button>
+                {p.onStartFresh && space.kind === 'bot' && (
+                  <button className="bd-row bd-row-btn" onClick={p.onStartFresh} data-testid="bot-start-fresh">
+                    <span className="bd-row-text">Start a fresh conversation<span className="bd-row-sub">It still remembers everything; this one moves to Past conversations.</span></span>
+                    <span className="bd-chev"><I.Chevron size={14} /></span>
+                  </button>
+                )}
               </div>
+              {p.onOpenThread && space.kind === 'bot' && <PastConversations spaceId={space.id} current={p.threadId} onOpen={p.onOpenThread} />}
               <BotShareRows space={space} />
               {!space.isMain && space.kind === 'bot' && <BotRemoveRows space={space} onChanged={p.onChanged} onClose={p.onClose} />}
             </div>
@@ -421,6 +434,31 @@ function BotRemoveRows({ space, onChanged, onClose }: { space: Space; onChanged:
             <button className="bd-btn danger" onClick={() => void del()} data-testid="bot-delete-confirm">Delete</button>
           </div>
         )}
+      </div>
+    </>
+  )
+}
+
+/** A bot's earlier conversations (after Start fresh), newest first: one click reopens one. */
+function PastConversations({ spaceId, current, onOpen }: { spaceId: string; current: string | null; onOpen: (t: Thread) => void }) {
+  const [list, setList] = useState<Thread[]>([])
+  useEffect(() => {
+    let alive = true
+    // Chats other apps opened with this bot ("From Cursor") aren't conversations you had.
+    void api.threads.list(spaceId).then((ts) => { if (alive) setList(ts.filter((t) => t.id !== current && !/^From .+/.test(t.title))) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [spaceId, current])
+  if (!list.length) return null
+  return (
+    <>
+      <div className="bd-section-title">Past conversations</div>
+      <div className="bd-card" data-testid="bot-past">
+        {list.slice(0, 20).map((t) => (
+          <button key={t.id} className="bd-row bd-row-btn" onClick={() => onOpen(t)} data-testid="bot-past-item">
+            <span className="bd-row-text">{t.title}<span className="bd-row-sub">Last used {new Date(t.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: new Date(t.updatedAt).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' })}</span></span>
+            <span className="bd-chev"><I.Chevron size={14} /></span>
+          </button>
+        ))}
       </div>
     </>
   )
