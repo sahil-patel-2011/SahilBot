@@ -779,17 +779,18 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
     switch (a.action) {
       case 'navigate': {
         const url = safeUrl(a.url!)
-        return { text: await b.navigate(url), display: `opened ${safeHost(url)}`, sources: [{ title: safeHost(url), url }], read: true }
+        const opened = await b.navigate(url)
+        return { text: opened, display: `opened ${safeHost(url)}`, sources: pageSource(b) ?? [{ title: safeHost(url), url }], read: true }
       }
       case 'snapshot':
-        return { text: await b.snapshot({ full: !!a.full }), display: `read ${safeHost(b.pageUrl())}` }
+        return { text: await b.snapshot({ full: !!a.full }), display: `read ${safeHost(b.pageUrl())}`, sources: pageSource(b), read: true }
       case 'find': {
         const q = (a.query ?? a.text ?? '').trim()
         if (!q) throw new Error('Say what to find, e.g. query "the search box".')
         return { text: await b.find(q, { prefer: safeCall(() => deps.sites?.locators(b.pageUrl()) ?? [], []) }), display: `found "${q.slice(0, 30)}"` }
       }
       case 'extract':
-        return { text: await b.extract({ kind: a.kind, ref: a.ref, max: a.max }), display: `read data on ${safeHost(b.pageUrl())}` }
+        return { text: await b.extract({ kind: a.kind, ref: a.ref, max: a.max }), display: `read data on ${safeHost(b.pageUrl())}`, sources: pageSource(b), read: true }
       case 'expand':
         return { text: b.expand(a.ref!, a.start), display: 'expanded a list' }
       case 'next_page':
@@ -976,7 +977,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         return { text: `Screenshot of ${b.pageUrl()}`, images: [img], display: `screenshot of ${safeHost(b.pageUrl())}` }
       }
       case 'get_text':
-        return { text: await b.getText(), display: `read text of ${safeHost(b.pageUrl())}` }
+        return { text: await b.getText(), display: `read text of ${safeHost(b.pageUrl())}`, sources: pageSource(b), read: true }
       case 'tabs': {
         if (a.op === 'new') {
           const url = a.url ? safeUrl(a.url) : undefined
@@ -1060,4 +1061,14 @@ function safeHostname(u: string): string {
 }
 function safeOrigin(u: string): string {
   try { return new URL(u).origin } catch { return u }
+}
+
+/** The page the browser is on, as a source the answer can show under it (web pages only, with their title). */
+function pageSource(b: { pageUrl(): string; pageTitle?: () => string }): Array<{ title: string; url: string }> | undefined {
+  let url = ''
+  try { url = b.pageUrl() } catch { return undefined }
+  if (!/^https?:\/\//i.test(url)) return undefined
+  let title = ''
+  try { title = (b.pageTitle?.() ?? '').replace(/\s+/g, ' ').trim().slice(0, 120) } catch { /* no title */ }
+  return [{ title: title || safeHost(url), url }]
 }

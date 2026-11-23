@@ -238,6 +238,21 @@ describe('self-review', () => {
     expect(ms.at(-1)?.content).toBe('2 + 2 = 4.')
   })
 
+  test('pages the agent read in the browser show under its answer as sources', async () => {
+    // Grok Bot head-to-head: the trip plan's sources were in the side panel only; browser pages never reached the answer.
+    const browse: ToolDef<{ q: string }> = {
+      name: 'browse_page', label: 'Browser', effect: 'read', description: 'read a page in the browser',
+      parameters: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'], additionalProperties: false },
+      async run() { return { text: 'Fairfield Inn Savannah: $260/night', sources: [{ title: 'Fairfield Inn Savannah Downtown', url: 'https://www.marriott.com/savannah' }], read: true } }
+    }
+    const h = harness([model('model-a', 2)], [browse])
+    llm.script.push({ toolCalls: [call('browse_page', { q: 'savannah hotel' })], delay: 0 }, { content: 'The Fairfield Inn is about $260 a night.', delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'How much is the Fairfield Inn in Savannah per night?')).toBe('finished')
+    const answer = h.db.listMessages(t.id).filter((m) => m.role === 'assistant' && m.content && !m.meta?.superseded).at(-1)!
+    expect(answer.meta?.sources).toEqual([{ title: 'Fairfield Inn Savannah Downtown', url: 'https://www.marriott.com/savannah' }])
+  })
+
   test('verifyNote: self-review only for complex work', () => {
     expect(verifyNote({ changed: true, researched: false, actions: 2, complex: false })).not.toMatch(/Critique/)
     expect(verifyNote({ changed: false, researched: true, actions: 9, complex: true, goal: 'Plan my trip' })).toMatch(/Critique your draft against what the user asked for \("Plan my trip"\)/)

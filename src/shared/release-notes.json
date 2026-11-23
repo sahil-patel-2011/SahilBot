@@ -59,7 +59,8 @@
           "A one-time reminder that fires while its chat is busy waits its turn instead of being dropped",
           "A bot never replaces a file it hasn't opened: it reads it first, saves under a new name (like name-2.py), or asks",
           "Internal markup from some models (\":codex-file-citation{…}\") never shows in the chat",
-          "On your ChatGPT or Grok plan, each chat (and each bot) keeps one ongoing conversation with the model instead of resending the whole chat: less of your plan used, and the model keeps its context and compacts it itself. Cloud models use their full context window (up to 1M) by default"
+          "On your ChatGPT or Grok plan, each chat (and each bot) keeps one ongoing conversation with the model instead of resending the whole chat: less of your plan used, and the model keeps its context and compacts it itself. Cloud models use their full context window (up to 1M) by default",
+          "The websites a bot used show under its answer, including pages it read in the built-in browser and answers written when a long task runs out of steps"
         ]
       },
       {

@@ -2992,6 +2992,17 @@ export class Agent {
     let verified = false
     /** The answer written before the double-check (kept when the check finds nothing to fix). */
     let verifyDraft: Message | undefined
+    /** The pages and results this run read (or found), under the answer as source pills (also on a wrap-up at the step budget). */
+    const attachSources = (m: Message): void => {
+      const all = db.listMessages(thread.id)
+      // (Server web search / fetch sources from this run's earlier steps and this reply are added after them.)
+      const srcs = [...sourcesSince(all, runStart), ...all.filter((x) => x.role === 'assistant' && x.createdAt >= runStart && Array.isArray(x.meta?.serverSources)).flatMap((x) => x.meta!.serverSources as Array<{ title: string; url: string }>), ...((m.meta?.serverSources as Array<{ title: string; url: string }> | undefined) ?? [])]
+        .filter((x, i, xs) => xs.findIndex((y) => y.url === x.url) === i).slice(0, 12)
+      if (!srcs.length) return
+      m.meta = { ...m.meta, sources: srcs }
+      db.updateMessage(m)
+      this.d.emit({ threadId: thread.id, type: 'message', message: m })
+    }
     /** The double-check ends early: the answer it was checking is the answer (shown again), and any half-written replacement goes. */
     const keepDraft = (): void => {
       if (!verifyDraft) return
@@ -3320,14 +3331,7 @@ export class Agent {
             }
           }
           // Sources this run read (or found) ride along for the UI's source pills.
-          // (Server web search / fetch sources from this run's earlier steps and this reply are added after them.)
-          const srcs = [...sourcesSince(all, runStart), ...all.filter((m) => m.role === 'assistant' && m.createdAt >= runStart && Array.isArray(m.meta?.serverSources)).flatMap((m) => m.meta!.serverSources as Array<{ title: string; url: string }>), ...((assistant.meta?.serverSources as Array<{ title: string; url: string }> | undefined) ?? [])]
-            .filter((x, i, xs) => xs.findIndex((y) => y.url === x.url) === i).slice(0, 12)
-          if (srcs.length) {
-            assistant.meta = { ...assistant.meta, sources: srcs }
-            db.updateMessage(assistant)
-            this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
-          }
+          attachSources(assistant)
           // Double-check real work: anything that changed something, and research beyond a quick lookup.
           // A quick answer or one search stays fast (the link check above still guards citations).
           // Complex work (the hardest tier, or 8+ actions) also gets a self-review against the user's goal, in the same single pass.
@@ -3611,6 +3615,7 @@ export class Agent {
           const last = await this.stream(thread.id, model, wrap.wire, wrapTools, window, run, speaker, routed, effortNow())
           // A tool call here can't run; the reply text is the summary.
           if (last.toolCalls?.length) { last.toolCalls = undefined; last.meta = { ...last.meta, raw: undefined }; db.updateMessage(last) }
+          if (last.content) attachSources(last)
         }
       }
     } catch (e) {
