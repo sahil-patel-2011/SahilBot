@@ -286,7 +286,8 @@ export class SettingsStore {
       ...DEFAULTS, ...s, providers,
       taskModels: { ...DEFAULTS.taskModels, ...s.taskModels },
       cloud: { ...DEFAULTS.cloud, ...s.cloud },
-      appearance: { ...DEFAULT_APPEARANCE, ...s.appearance },
+      // One look for everyone (no text size, width or color settings any more): saved customizations are ignored.
+      appearance: DEFAULT_APPEARANCE,
       search: { ...DEFAULTS.search, ...s.search }, advanced: { ...DEFAULTS.advanced, ...s.advanced },
       customRules: cleanRules(s.customRules),
       catchUpHours: cleanCatchUpHours(s.catchUpHours),

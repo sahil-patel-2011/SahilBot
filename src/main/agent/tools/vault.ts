@@ -97,7 +97,8 @@ export function vaultTool(deps: VaultToolDeps): ToolDef<Args> {
       const store = v.store
       store.ensure()
       const find = (ref: string) => {
-        const n = store.resolve(ref, own ? [own, SHARED] : [SHARED])
+        // One vault: any bot finds any note (Shared and its own area first).
+        const n = store.resolve(ref, [...new Set([...(own ? [own] : []), SHARED, ...sections])])
         return n && sections.includes(n.section) ? n : undefined
       }
 
@@ -221,7 +222,9 @@ export function vaultTool(deps: VaultToolDeps): ToolDef<Args> {
         v.changed()
         return { text: `Rewrote ${existing.path} (the old version is kept; Undo is in the Vault view).`, display: `rewrote ${existing.title}`, path: store.abs(existing.path) }
       }
-      const section = existing?.section ?? (a.shared ? SHARED : v.writeSectionFor(bot.id))
+      // Trusted writes go to the one shared vault; after reading outside content they stay quoted in the bot's own
+      // area (still readable by every bot, never mixed into the shared notes).
+      const section = existing?.section ?? (a.shared ? SHARED : ctx.tainted && own ? own : v.writeSectionFor(bot.id))
       const r = store.upsert({
         section, type, title: existing?.title ?? title, summary: a.summary, points: [...(a.points ?? []), ...(a.content ? [a.content.replace(/\s+/g, ' ').slice(0, 2000)] : [])],
         related: a.links, sources: a.source ? [a.source.slice(0, 300)] : [`${bot.name} (chat)`], bot: section === SHARED ? SHARED : bot.name

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { BotImportPreview, CheckinSettings, Space } from '@shared/types'
+import type { BotImportPreview, Space } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
@@ -134,55 +134,12 @@ export function BotShareHost() {
 
 // ------------------------------------------------------------------ bot details rows
 
-function Switch({ on, onChange, label, testId, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; testId?: string; disabled?: boolean }) {
-  return (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} title={label} className={`rt-switch${on ? ' on' : ''}`} data-testid={testId} disabled={disabled}
-      onClick={(e) => { e.stopPropagation(); onChange(!on) }}>
-      <i />
-    </button>
-  )
-}
-
-/** The morning check-in switch and time (main bot only). */
-function CheckinRows() {
-  const [c, setC] = useState<CheckinSettings | null>(null)
-  const [time, setTime] = useState('')
-  useEffect(() => {
-    const load = (): void => void api.checkin.get().then((x) => { setC(x); setTime(x.time) }).catch(() => undefined)
-    load()
-    // Pausing or deleting the routine in the list above turns the switch off too.
-    return api.schedules.onChange(load)
-  }, [])
-  if (!c) return null
-  const save = (n: CheckinSettings): void => {
-    setC(n)
-    void api.checkin.set(n).then((x) => { setC(x); setTime(x.time); if (n.enabled && !c.enabled) toast(`Check-in set for every morning at ${x.time}`, 'ok') })
-      .catch((e) => { toast(clean(e), 'error'); void api.checkin.get().then((x) => { setC(x); setTime(x.time) }) })
-  }
-  return (
-    <>
-      <div className="bd-row">
-        <span className="bd-row-text">Morning check-in from SahilBot<span className="bs-row-sub">Today’s calendar and reminders, open plans across your bots and what’s waiting on you, with 1–3 next steps. It never sends anything without asking.</span></span>
-        <Switch on={c.enabled} onChange={(v) => save({ ...c, enabled: v })} label="Morning check-in" testId="checkin-toggle" />
-      </div>
-      {c.enabled && (
-        <div className="bd-row">
-          <span className="bd-row-text">Time</span>
-          <input type="time" className="bs-time" value={time} aria-label="Check-in time" data-testid="checkin-time"
-            onChange={(e) => setTime(e.target.value)} onBlur={() => { if (/^\d\d:\d\d$/.test(time) && time !== c.time) save({ ...c, time }) }}
-            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
-        </div>
-      )}
-    </>
-  )
-}
-
-/** Bot details: Share as template, Duplicate, and (main bot) the morning check-in. */
+/** Bot details: Share as template and Duplicate. (A morning check-in is something you ask the bot for in chat.) */
 export function BotShareRows({ space }: { space: Space }) {
   if (space.kind !== 'bot') return null
   return (
     <>
-      <div className="bd-section-title">{space.isMain ? 'Share & check-in' : 'Share'}</div>
+      <div className="bd-section-title">Share</div>
       <div className="bd-card bs-card">
         <button className="bd-row bd-row-btn bs-row-btn" onClick={() => void shareBot(space)} data-testid="bot-share">
           <span className="bs-row-icon"><I.Share size={15} /></span>
@@ -192,7 +149,6 @@ export function BotShareRows({ space }: { space: Space }) {
           <span className="bs-row-icon"><I.Copy size={15} /></span>
           <span className="bd-row-text">Duplicate bot</span>
         </button>
-        {space.isMain && <CheckinRows />}
       </div>
     </>
   )

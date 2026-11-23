@@ -88,7 +88,7 @@ export function BotStatusLine({ space }: { space: Space }) {
     <div className={`bot-status st-${s.state}`} data-testid={`bot-status-${space.id}`} data-state={s.state}>
       <span className="bs-dot" aria-hidden="true" />
       <span className="bs-state">{STATE_LABELS[s.state]}{s.state === 'working' || s.state === 'context' ? '…' : ''}</span>
-      {s.runsOn && <span className="bs-model" data-testid="bot-runs-on" title={s.model ? `Last reply: ${s.model}. Auto still picks the best model for each request.` : undefined}>· runs on {s.runsOn}</span>}
+      {/* No "runs on <model>": the bot picks the best model for each request itself. */}
     </div>
   )
 }

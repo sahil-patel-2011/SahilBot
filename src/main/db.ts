@@ -605,7 +605,8 @@ function toSpace(r: Row): Space {
     folder: (r.folder as string | null) ?? null,
     icon: (r.icon as string | null) ?? null,
     label: (r.label as string | null) ?? null,
-    notify: r.notify !== 0,
+    // Notifications are automatic for every bot (no per-bot switch any more): it tells you when it finishes or needs you.
+    notify: true,
     effort: effortOrNull(r.effort),
     createdAt: r.created_at as number
   }

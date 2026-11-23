@@ -334,15 +334,14 @@ export class VaultService {
     return this.settings()
   }
 
-  botEnabled(spaceId: string | null | undefined): boolean {
-    const s = this.settings()
-    if (!s.enabled) return false
-    return !spaceId || s.bots[spaceId]?.enabled !== false
+  // One vault for every bot, always remembering the most (like Grok Bot): no per-bot switches or levels. Old
+  // per-bot settings are ignored; the vault's own on/off (Settings → Memory) still applies.
+  botEnabled(_spaceId: string | null | undefined): boolean {
+    return this.settings().enabled
   }
 
-  levelFor(spaceId: string | null | undefined): VaultLevel {
-    const s = this.settings()
-    return (spaceId ? s.bots[spaceId]?.level : undefined) ?? s.level
+  levelFor(_spaceId: string | null | undefined): VaultLevel {
+    return 'aggressive'
   }
 
   // ---------------------------------------------------------------- areas
@@ -363,16 +362,18 @@ export class VaultService {
   }
 
   /** What a bot may read: Shared and its own area (never another bot's). */
+  /** One vault: every bot reads all of it (Shared and the areas bots wrote before it became one vault). */
   sectionsFor(spaceId: string | null | undefined): string[] {
+    const all = new Set([SHARED])
+    try { for (const n of this.store.list()) if (n.section && n.section !== OBSIDIAN_SECTION) all.add(n.section) } catch { /* Shared only */ }
     const own = this.sectionFor(spaceId)
-    return own ? [SHARED, own] : [SHARED]
+    if (own) all.add(own)
+    return [...all]
   }
 
-  /** Where a bot's trusted writes go by default: the main bot's to Shared, others' to their own area. */
-  writeSectionFor(spaceId: string | null | undefined): string {
-    const sp = spaceId ? this.d.db.getSpace(spaceId) : undefined
-    if (!sp || sp.isMain || sp.kind === 'group') return SHARED
-    return this.sectionFor(spaceId) ?? SHARED
+  /** One vault: every bot's trusted writes go to Shared. */
+  writeSectionFor(_spaceId: string | null | undefined): string {
+    return SHARED
   }
 
   // ---------------------------------------------------------------- retrieval

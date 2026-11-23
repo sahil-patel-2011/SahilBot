@@ -1,15 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import type { BotAutonomySettings, BotMaxSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import type { BotMaxSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { describeSchedule, groupLibrary, host, routineStatus, when } from '../routines'
 import { BotShareRows } from './BotShare'
 import { BotGoals } from './TasksView'
-import { VaultBotRows } from './VaultView'
-import { RoutineForm } from './RoutineForm'
-import { BotFolderRow } from './Attachments'
-import { AlwaysOnRows } from './NeedsYou'
 import { BotStatusLine } from './FunctionBots'
 
 type Tab = 'details' | 'library'
@@ -26,10 +22,6 @@ function accentOf(color: string | undefined): string {
 
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
 
-const More = ({ size = 16 }: { size?: number }): ReactNode => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
-)
-
 function Toggle({ on, onChange, label, testId }: { on: boolean; onChange: (v: boolean) => void; label: string; testId?: string }) {
   return (
     <button type="button" role="switch" aria-checked={on} aria-label={label} title={label} className={`rt-switch${on ? ' on' : ''}`} data-testid={testId}
@@ -44,7 +36,6 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
   const { space } = p
   const [tab, setTab] = useState<Tab>('details')
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
-  const [formOpen, setFormOpen] = useState(false)
   const [runs, setRuns] = useState<Record<string, RoutineRun[]>>({})
   const [openId, setOpenId] = useState<string | null>(null)
   const [menuId, setMenuId] = useState<string | null>(null)
@@ -53,9 +44,8 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
   const [err, setErr] = useState('')
   const [name, setName] = useState(space.name)
   const [label, setLabel] = useState(space.label ?? '')
-  const [notify, setNotify] = useState(space.notify !== false)
 
-  useEffect(() => { setName(space.name); setLabel(space.label ?? ''); setNotify(space.notify !== false) }, [space.id, space.name, space.label, space.notify])
+  useEffect(() => { setName(space.name); setLabel(space.label ?? '') }, [space.id, space.name, space.label])
   useEffect(() => { setOpenId(null); setMenuId(null); setConfirmId(null); setErr(''); setTab('details') }, [space.id])
 
   const load = useCallback(async (): Promise<void> => {
@@ -152,73 +142,37 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
           {tab === 'details' ? (
             <div className="bd-body">
               {space.kind !== 'group' && <BotGoals spaceId={space.id} />}
-              <div className="bd-section-title bd-section-row">Routines
-                {!formOpen && <button className="link-btn" onClick={() => setFormOpen(true)} data-testid="routine-new">+ New routine</button>}
-              </div>
-              {formOpen && <RoutineForm spaceId={space.id} onDone={() => { setFormOpen(false); void load() }} />}
-              {(tasks.length > 0 || !formOpen) && <div className="bd-card">
-                {tasks.length === 0 && <div className="bd-empty">Tap + New routine, or ask in chat ("every weekday at 9, send me…").</div>}
-                {tasks.map((t) => (
-                  <div key={t.id} className={`rt-row${t.enabled ? '' : ' paused'}`} data-testid="routine-row">
-                    <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }} title={t.title}>
-                      <span className="rt-icon"><I.Clock size={16} /></span>
-                      <span className="rt-text">
-                        <b>{t.title}</b>
-                        <span data-testid="routine-status">{routineStatus(t, running(t.id))}</span>
-                      </span>
-                    </button>
-                    <Toggle on={t.enabled} onChange={(v) => void setEnabled(t, v)} label={t.enabled ? 'Pause routine' : 'Resume routine'} testId="routine-toggle" />
-                    <div className="rt-menu-wrap">
-                      <button className="bd-icon" aria-label="Routine menu" aria-haspopup="menu" aria-expanded={menuId === t.id} onClick={() => setMenuId(menuId === t.id ? null : t.id)} data-testid="routine-menu"><More /></button>
-                      {menuId === t.id && (
-                        <Menu onClose={() => setMenuId(null)}>
-                          <button role="menuitem" disabled={running(t.id)} onClick={() => { setMenuId(null); void test(t) }} data-testid="routine-test"><I.Play size={14} /> {running(t.id) ? 'Running…' : 'Test'}</button>
-                          <button role="menuitem" onClick={() => edit(t)} data-testid="routine-edit"><I.Edit size={14} /> Edit</button>
-                          <button role="menuitem" className="danger" onClick={() => { setMenuId(null); setConfirmId(t.id) }} data-testid="routine-delete"><I.Trash size={14} /> Delete</button>
-                        </Menu>
-                      )}
+              {/* Routines are made, changed and removed by asking the bot in chat; here you see them and can pause one. */}
+              {tasks.length > 0 && <>
+                <div className="bd-section-title">Routines</div>
+                <div className="bd-card">
+                  {tasks.map((t) => (
+                    <div key={t.id} className={`rt-row${t.enabled ? '' : ' paused'}`} data-testid="routine-row">
+                      <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }} title={t.title}>
+                        <span className="rt-icon"><I.Clock size={16} /></span>
+                        <span className="rt-text">
+                          <b>{t.title}</b>
+                          <span data-testid="routine-status">{routineStatus(t, running(t.id))}</span>
+                        </span>
+                      </button>
+                      <Toggle on={t.enabled} onChange={(v) => void setEnabled(t, v)} label={t.enabled ? 'Pause routine' : 'Resume routine'} testId="routine-toggle" />
                     </div>
-                    {confirmId === t.id && (
-                      <div className="rt-confirm" role="alertdialog" aria-label="Delete routine">
-                        <span>Delete “{t.title}”? This can’t be undone.</span>
-                        <button className="bd-btn" onClick={() => setConfirmId(null)}>Cancel</button>
-                        <button className="bd-btn danger" onClick={() => void remove(t)} data-testid="routine-delete-confirm">Delete</button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>}
+                  ))}
+                </div>
+                <p className="bd-agent-note" data-testid="routine-hint">To add, change or remove one, just ask in the chat.</p>
+              </>}
               {err && <div className="bd-err" role="alert">{err}</div>}
 
-              {/* Settings, grouped: how it works, how it tells you, Max and the Vault. */}
-              <div className="bd-section-title">Behavior</div>
+              {/* Just the basics. Notifications are automatic, memory is one vault that remembers the most, and the bot
+                  picks its own models and tools: none of that needs a switch. Anything else, ask the bot in chat. */}
+              <div className="bd-section-title">Settings</div>
               <div className="bd-card" data-testid="bot-behaviour">
                 <AutonomyRow space={space} />
-                {space.kind === 'bot' && <TrustedRow spaceId={space.id} />}
-                {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} part="behaviour" />}
-                <BotFolderRow space={space} onChanged={p.onChanged} />
                 <button className="bd-row bd-row-btn" onClick={p.onCustomize} data-testid="bot-customize">
                   <span className="bd-row-text">Customize look and instructions…</span>
                   <span className="bd-chev"><I.Chevron size={14} /></span>
                 </button>
               </div>
-
-              <div className="bd-section-title">Notifications</div>
-              <div className="bd-card" data-testid="bot-notifications">
-                <div className="bd-row">
-                  <span className="bd-row-text">Notify me when it finishes or needs me</span>
-                  <Toggle on={notify} onChange={(v) => { setNotify(v); void saveSpace({ notify: v }) }} label="Notifications" testId="bot-notify" />
-                </div>
-                {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} part="notifications" />}
-              </div>
-
-              <p className="bd-agent-note"><I.Sparkle size={13} /> Chooses its tools, models and specialist agents automatically. Ask it to plan first or use an agent swarm whenever you need.</p>
-              {space.kind !== 'group' && (
-                <>
-                  <div className="bd-section-title">Vault</div>
-                  <div className="bd-card" data-testid="bot-vault"><VaultBotRows spaceId={space.id} /></div>
-                </>
-              )}
               <BotShareRows space={space} />
               {!space.isMain && space.kind === 'bot' && <BotRemoveRows space={space} onChanged={p.onChanged} onClose={p.onClose} />}
             </div>
@@ -229,18 +183,6 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
       )}
     </aside>
   )
-}
-
-/** A small popover menu that closes on outside clicks. */
-function Menu({ children, onClose }: { children: ReactNode; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const down = (e: MouseEvent): void => { if (ref.current && !ref.current.contains(e.target as Node)) onClose() }
-    // Next tick, so the click that opened it doesn't close it.
-    const id = setTimeout(() => window.addEventListener('mousedown', down))
-    return () => { clearTimeout(id); window.removeEventListener('mousedown', down) }
-  }, [onClose])
-  return <div className="rt-menu" role="menu" ref={ref}>{children}</div>
 }
 
 function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: boolean; confirming: boolean; err: string; onPause: () => void; onTest: () => void; onEdit: () => void; onDelete: () => void; onCancelDelete: () => void; onConfirmDelete: () => void }) {
@@ -403,59 +345,6 @@ function AutonomyRow({ space }: { space: Space }) {
         <option value="auto">Auto</option>
       </select>
     </label>
-  )
-}
-
-/** Same shape check as main (agent/trusted.ts normalizeRecipient), for feedback while typing. */
-const looksLikeRecipient = (t: string): boolean => /^[^\s@<>]+@[^\s@<>]+\.[a-z]{2,}$/i.test(t) || /^\+?[\d\s().-]{5,20}$/.test(t) && t.replace(/\D/g, '').length >= 5
-
-/**
- * "Can message without asking": people this bot may email or text on its own (even unattended), as chips.
- * Main checks every recipient exactly against this list plus the user's own email and phone (agent/trusted.ts).
- */
-function TrustedRow({ spaceId }: { spaceId: string }) {
-  const [all, setAll] = useState<Record<string, Partial<BotAutonomySettings>> | null>(null)
-  const [draft, setDraft] = useState('')
-  const [bad, setBad] = useState(false)
-  useEffect(() => {
-    let alive = true
-    void api.settings.get().then((x) => { if (alive) setAll(x.botAutonomy ?? {}) })
-    return () => { alive = false }
-  }, [spaceId])
-  if (!all) return null
-  const list = all[spaceId]?.trustedRecipients ?? []
-  const save = (next: string[]): void => {
-    const map = { ...all, [spaceId]: { ...(all[spaceId] ?? {}), trustedRecipients: next } }
-    setAll(map)
-    void api.settings.set({ botAutonomy: map }).then((s) => { setAll(s.botAutonomy ?? map); window.dispatchEvent(new Event('sahilbot:settings-changed')) })
-  }
-  const add = (): void => {
-    const items = draft.split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean)
-    if (!items.length) return
-    if (items.some((t) => !looksLikeRecipient(t))) { setBad(true); return }
-    save([...list, ...items.filter((t) => !list.some((x) => x.toLowerCase() === t.toLowerCase()))].slice(0, 50))
-    setDraft('')
-    setBad(false)
-  }
-  return (
-    <div className="bd-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }} data-testid="bot-trusted">
-      <span className="bd-row-text">Can message without asking<span className="bd-row-sub">Emails and texts to only these people (and you) send on their own. Anyone else still asks.</span></span>
-      {list.length > 0 && (
-        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {list.map((w) => (
-            <span key={w} className="ui-pill bd-chip" data-testid="bot-trusted-chip">
-              {w}
-              <button className="bd-icon" style={{ width: 18, height: 18 }} aria-label={`Ask again before messaging ${w}`} title="Remove" onClick={() => save(list.filter((x) => x !== w))}><I.Close size={10} /></button>
-            </span>
-          ))}
-        </span>
-      )}
-      <span style={{ display: 'flex', gap: 8 }}>
-        <span className="tk-input" style={{ flex: 1 }}><input value={draft} placeholder="Email or phone number" maxLength={400} onChange={(e) => { setDraft(e.target.value); setBad(false) }} onKeyDown={(e) => { if (e.key === 'Enter') add() }} aria-label="Add someone this bot may message without asking" data-testid="bot-trusted-input" /></span>
-        <button className="bd-btn" onClick={add} disabled={!draft.trim()} data-testid="bot-trusted-add">Add</button>
-      </span>
-      {bad && <span className="bd-row-sub" role="alert">That isn't an email address or phone number.</span>}
-    </div>
   )
 }
 

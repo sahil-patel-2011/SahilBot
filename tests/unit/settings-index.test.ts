@@ -37,21 +37,17 @@ describe('the settings search index', () => {
     ['dark mode', 'theme'],
     ['whisper', 'speech-model'],
     ['budget', 'monthly-limit'],
-    ['openrouter', 'servers'],
-    ['temperature', 'sampling'],
-    ['fast mode', 'fast-mode'],
     ['passwords', 'passwords'],
-    ['approval', 'approval-rules'],
+    ['approval', 'autonomy'],
     ['remember', 'remember-auto'],
-    ['tiingo', 'tool-keys'],
-    ['health', 'sensitive'],
-    ['context window', 'context-window']
+    ['grok', 'key-xai']
   ])('"%s" finds %s first', (q, anchor) => {
     expect(searchSettings(q)[0]?.anchor).toBe(anchor)
   })
 
-  test('Advanced settings say so; old page ids still open the right page', () => {
-    expect(searchSettings('openrouter')[0]).toMatchObject({ page: 'models', advanced: true })
+  test('removed settings are gone from search; old page ids still open the right page', () => {
+    // Nov 2026: the advanced settings were removed (the bot picks sensible defaults; ask it in chat for the rest).
+    for (const q of ['openrouter', 'temperature', 'fast mode', 'tiingo', 'text size', 'chat width', 'tint']) expect(searchSettings(q).filter((e) => e.advanced)).toEqual([])
     expect(searchSettings('nothing like this')).toEqual([])
     expect(searchSettings('whisper', { server: true })).toEqual([])
     for (const v of Object.values(LEGACY_PAGES)) expect(Object.keys(PAGE_TITLES)).toContain(v.page)
