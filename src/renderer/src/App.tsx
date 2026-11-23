@@ -8,7 +8,7 @@ import { FindBar } from './components/FindBar'
 import { readableOn, SpaceAvatar } from './brand'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
-import { BotDeck, FilesView, Home, ProjectsView } from './components/Home'
+import { FilesView, Home, ProjectsView } from './components/Home'
 import { WhatsNewOnce } from './components/WhatsNew'
 import { pruneDrafts } from './lib/drafts'
 import { installFocusTrap } from './lib/focus-trap'
@@ -549,8 +549,27 @@ export function App() {
   }, [])
 
   // Picking anything in the sidebar leaves Settings (it used to stay over the page you picked).
-  const openMain = (): void => { setShowSettings(false); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
-  newChatRef.current = openMain
+  /** New chat (+, ⌘N): a fresh conversation on the home screen; it shows in Recents once you send. */
+  const newChat = (): void => { setShowSettings(false); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
+  /**
+   * SahilBot's widget: its one ongoing conversation, like any bot's (Grok Bot's way). Never a new Recents entry;
+   * Recents hold only the chats you start with New chat.
+   */
+  const openMain = async (): Promise<void> => {
+    if (!main) return newChat()
+    setShowSettings(false)
+    const saved = settings?.mainThreadId
+    let t = saved ? (await api.threads.list(main.id)).find((x) => x.id === saved) : undefined
+    if (!t) {
+      t = await api.threads.create(main.id) as Thread
+      await api.threads.update(t.id, { title: main.name })
+      setSettings(await api.settings.set({ mainThreadId: t.id }))
+    }
+    setSpaceId(main.id)
+    setThread(t)
+    setView('home')
+  }
+  newChatRef.current = newChat
   spacesRef.current = spaces
   spaceIdRef.current = spaceId
   pinnedRef.current = settings?.pinnedBots ?? undefined
@@ -921,10 +940,11 @@ export function App() {
         activeThreadId={thread?.id ?? null}
         userName={settings.userName}
         profile={settings.profile}
-        onOpenMain={openMain}
+        onOpenMain={() => void openMain()}
+        mainThreadId={settings?.mainThreadId ?? null}
         onOpenBot={(id) => void openBot(id)}
         onOpenChat={(id) => void openChat(id)}
-        onNew={openMain}
+        onNew={newChat}
         onNewBot={() => setEditor({ space: null, mode: 'bot' })}
         onSetupBot={() => void startSetup(false)}
         onSearch={() => setPalette(true)}
@@ -1046,6 +1066,7 @@ export function App() {
         ) : thread ? (
           <>
             <ThreadView key={thread.id} messages={messages} running={isRunning} pending={pending} teams={teams} voiceLive={voiceOn ? voiceLive : null}
+              botName={(() => { const sp = spaces.find((x) => x.id === thread.spaceId); return sp && sp.kind === 'bot' && (!sp.isMain || thread.id === settings?.mainThreadId) ? sp.name : undefined })()}
               ready={ready} onAtBottom={onAtBottom}
               unreadAfter={opened?.id === thread.id && dividerKind({ space: spaces.find((s) => s.id === thread.spaceId), thread, messages }) ? opened.readAt : null}
               drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id] ?? null}
@@ -1074,11 +1095,7 @@ export function App() {
         ) : isProject && space ? (
           <ProjectHome project={space} onOpen={(t) => setThread(t)} onEdit={() => setEditor({ space, mode: 'project' })} composer={composerEl} />
         ) : (
-          <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={chatInput} refreshKey={running.size}
-            // Your bots under the box once you have some (the sidebar's New bot makes the first one).
-            deck={spaces.some((b) => b.kind === 'bot' && !b.hidden && !b.isMain) ? <BotDeck bots={spaces} needSpaces={needSpaces} onOpen={(id) => void openBot(id)} onNewBot={() => setEditor({ space: null, mode: 'bot' })}
-              onTalk={(id) => { setSpaceId(id); setThread(null); setVoiceKey((k) => k + 1); setVoiceOn(true) }} onSetup={(talk) => void startSetup(talk)} /> : undefined}
-            onIdea={(text, deep) => { composer.current?.replace(text); composer.current?.setDeep(!!deep) }} />
+          <Home userName={settings.userName} composer={chatInput} />
         )}
       </main>
       {panel === 'details' && detailsSpace ? (

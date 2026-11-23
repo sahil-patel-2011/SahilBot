@@ -372,6 +372,9 @@ export function codingRun(loaded: string[], why?: string): boolean {
 
 export const RESEARCH_FIRST = 'Research first: spend a few steps looking for the answer yourself (memory search, knowledge_search over the user\'s notes and documents, your own files and library, the connected apps via find_tools, the web) so your questions are informed or unnecessary. Then ask only what truly blocks progress or is the user\'s preference, all in one ask_user call — or, if this is purely the user\'s preference, call ask_user again.'
 
+/** How the stall watchdog's note starts (the chat shows it as a plain status, and a bot's chat as "still working"). */
+export const STALL_PREFIX = 'Still on it:'
+
 /** The questions of an ask_user call (one, or a batch). */
 export function askedQuestions(args: Record<string, unknown>): string[] {
   if (Array.isArray(args.questions) && args.questions.length) return (args.questions as Array<{ question?: unknown }>).map((q) => String(q?.question ?? '')).filter(Boolean)
@@ -589,6 +592,9 @@ export class Agent {
     this.feat = { ...ALL_FEATURES, ...(d.harness ?? {}) }
     // A harness without an on-device privacy gate (the benchmark's other profiles) sends everything to the cloud model.
     if (!this.feat.privacyGate && d.privacy) this.d = { ...d, privacy: undefined }
+    // Every event a chat sends counts as a sign of life for the stall watchdog (start()).
+    const emit = this.d.emit
+    this.d = { ...this.d, emit: (e) => { if (!(e.type === 'tool_progress' && e.callId === 'watchdog')) this.lastEvent.set(e.threadId, Date.now()); emit(e) } }
     this.runtime = new RuntimeStore(d.db)
     this.runtime.recover()
     this.memorySystem = new MemorySystem(d.db, d.memory)
@@ -998,6 +1004,7 @@ export class Agent {
     const run: Run = { ctrl: new AbortController(), pending: new Map(), group, unattended: opts.unattended, intro: opts.intro, record, meter: new TaskMeter(record.policy), planFirst: !!opener?.meta?.planFirst, planApproved: !!opener?.meta?.planApproved }
     this.runs.set(thread.id, run)
     this.d.emit({ threadId: thread.id, type: 'run', status: 'started', spaceId: thread.spaceId, title: thread.title })
+    const watchdog = this.stallWatchdog(thread.id, run)
     // Paid requests anywhere in this run (steps, summaries, helpers) are recorded against this bot.
     // A slot first (agent/run-scheduler.ts: fair per-bot queues and a machine-sized limit on SahilBot Server;
     // in the Mac app it goes at once). A run stopped while waiting is let through and ends right away.
@@ -1011,6 +1018,7 @@ export class Agent {
       .catch((e) => { this.notice(thread.id, `Run failed: ${(e as Error).message}`); return 'error' as const })
       .then((status) => { this.runtime.finish(record.id, status); return status })
       .finally(() => {
+        clearInterval(watchdog)
         if (this.runs.get(thread.id) === run) this.runs.delete(thread.id)
         // Steered at the very end: it goes out as the next message. After a Stop it's kept in the chat
         // (the model sees it next time) but doesn't start new work on its own.
@@ -1316,6 +1324,34 @@ export class Agent {
   /** Pins the <context> block on the message that opened this run (see pinRunContext). True when the state changed. */
   private pinContext(thread: Thread, state: ThreadState, messages: Message[], opener: Message, system: string, speaker?: Space, refresh = false): boolean {
     return pinRunContext({ state, messages, openerId: opener.id, speakerId: speaker?.id, system, refresh, sections: () => this.contextSections(thread, speaker, recallQuery(opener, messages), system.includes(FULL_SKILLS), opener.id) })
+  }
+
+  /** When each chat last sent anything (a token, a step, a result): the stall watchdog's clock. */
+  private lastEvent = new Map<string, number>()
+
+  /**
+   * The stall watchdog: a run that has shown nothing for a minute (a slow page, a command that hangs, a model
+   * that's slow to answer) says so in plain words, and again each minute it stays quiet, instead of sitting
+   * silently on one step. Never while it's waiting on you (a question or an approval). FOREMAN_STALL_MS changes
+   * the minute (tests).
+   */
+  private stallWatchdog(threadId: string, run: Run): ReturnType<typeof setInterval> {
+    const after = Number(process.env.FOREMAN_STALL_MS) || 60_000
+    let told = 0
+    const t = setInterval(() => {
+      if (this.runs.get(threadId) !== run || run.ctrl.signal.aborted) return
+      // Waiting on you is not a stall (the card says what it needs).
+      if (run.pending.size) { this.lastEvent.set(threadId, Date.now()); return }
+      const now = Date.now()
+      const last = this.lastEvent.get(threadId) ?? now
+      // Quiet for a minute, and not already said in the last minute: say it (once a minute while it lasts).
+      if (now - last < after || now - told < after) return
+      told = now
+      const mins = Math.max(1, Math.round((now - last) / 60_000))
+      this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: `${STALL_PREFIX} this step is taking longer than usual (${mins} min). You can keep waiting, or press Stop.` })
+    }, Math.max(250, Math.min(5_000, Math.floor(after / 4))))
+    t.unref?.()
+    return t
   }
 
   /** A chat (or routine, or helper) is running. */

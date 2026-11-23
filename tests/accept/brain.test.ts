@@ -20,7 +20,7 @@ describe('Your brain', () => {
       await page.evaluate(() => window.foreman.settings.set({ local: { enabled: true }, userName: 'Sam' } as never))
       await page.evaluate(() => window.foreman.brain.setSettings({ quietHours: { start: '00:00', end: '00:00' } }))
 
-      await page.click('[data-testid="nav-brain"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-brain"]')
       await page.locator('[data-testid="brain-view"]').waitFor()
       await expect.poll(() => page.locator('[data-testid="brain-source"][data-id="gmail"]').getAttribute('data-state')).toBe('on')
       expect(await page.locator('[data-testid="brain-source"][data-id="hubspot"]').getAttribute('data-state')).toBe('needs-sign-in')
@@ -31,7 +31,7 @@ describe('Your brain', () => {
       expect(await page.locator('[data-testid="brain-search"]').count()).toBe(0)
 
       // The first read waits for an OK on its estimate.
-      await page.click('[data-testid="nav-brain"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-brain"]')
       const estimate = page.locator('[data-testid="brain-estimate"]', { hasText: 'Gmail' })
       await expect.poll(() => estimate.count(), { timeout: 15_000 }).toBe(1)
       expect(await estimate.innerText()).toMatch(/Read the last 30 days of Gmail: about 2 emails/)

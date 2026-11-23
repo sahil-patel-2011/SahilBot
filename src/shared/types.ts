@@ -210,6 +210,8 @@ export interface Settings {
   appearance: Appearance
   /** Bots pinned to the top of the sidebar; null = just the main bot. */
   pinnedBots: string[] | null
+  /** SahilBot's own ongoing conversation (its widget opens it, like any bot's): kept out of Recents, which hold New chats only. */
+  mainThreadId?: string | null
   /** Read every reply aloud. */
   speakReplies: boolean
   /** Global shortcut for Quick Ask ('' = off). */

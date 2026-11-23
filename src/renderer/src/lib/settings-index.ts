@@ -119,7 +119,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
 /** Settings keys that aren't user-facing settings (internal state, other screens own them). */
 export const NOT_IN_SETTINGS = new Set([
-  'hasApiKey', 'keys', 'keysSaved', 'hasCursorKey', 'hasTbaKey', 'hasNcbiKey', 'hasGoogleMapsKey', 'keysLocked', 'hasOnshapeKeys', 'onshapeKeyParts', 'onboarded', 'pinnedBots', 'search.hasBraveKey',
+  'hasApiKey', 'mainThreadId', 'keys', 'keysSaved', 'hasCursorKey', 'hasTbaKey', 'hasNcbiKey', 'hasGoogleMapsKey', 'keysLocked', 'hasOnshapeKeys', 'onshapeKeyParts', 'onboarded', 'pinnedBots', 'search.hasBraveKey',
   'appearance', 'cloud', 'search', 'advanced', 'taskModels', 'learning', 'local', 'markets', 'voiceOutput',
   // No longer a setting: typed replies are never read aloud on their own (the speaker on a message does it).
   'speakReplies',

@@ -726,7 +726,7 @@ const PERM_SHORT: Partial<Record<PermissionKind, string>> = {
 const NOTE_ASKING = 'macOS is asking: in the notification at the top right of your screen, click Allow (or Options → Allow).'
 const ALLOW_ALL_ORDER: PermissionKind[] = ['notifications', 'microphone', 'automation', 'accessibility', 'screen', 'fullDisk']
 
-export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what you want SahilBot to use. You can change these any time.' }: { title?: string; sub?: string } = {}) {
+export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what you want SahilBot to use. You can change these any time.', omit = [] }: { title?: string; sub?: string; omit?: PermissionKind[] } = {}) {
   const [rows, setRows] = useState<Awaited<ReturnType<typeof api.permissions.status>> | null>(null)
   const [asked, setAsked] = useState<Partial<Record<PermissionKind, string>>>({})
   const [busy, setBusy] = useState(false)
@@ -750,7 +750,7 @@ export function MacPermissions({ title = 'Your Mac', sub = 'Turn on only what yo
       if (kind === 'notifications' && r === 'prompted') for (const ms of [3000, 8000, 15000, 30000, 60000]) setTimeout(refresh, ms)
     }).catch((e) => toast(clean(e), 'error'))
   }
-  const sorted = (rows ?? []).slice().sort((a, b) => PERM_ORDER.indexOf(a.kind) - PERM_ORDER.indexOf(b.kind))
+  const sorted = (rows ?? []).filter((r) => !omit.includes(r.kind)).sort((a, b) => PERM_ORDER.indexOf(a.kind) - PERM_ORDER.indexOf(b.kind))
   const missing = sorted.filter((r) => r.state !== 'granted')
   const allowAll = async (): Promise<void> => {
     setBusy(true)

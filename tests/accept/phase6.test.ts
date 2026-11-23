@@ -72,7 +72,7 @@ describe('phase 6: projects + scheduled tasks', () => {
       { toolCalls: [{ name: 'file_manage', arguments: '{"op":"delete","path":"old.txt"}' }] },
       { content: 'I would delete old.txt, but that needs your OK.' }
     )
-    await page.click('[data-testid="nav-scheduled"]')
+    await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-scheduled"]')
     await page.locator('[data-testid="schedule-row"]').waitFor()
     await page.click('[data-testid="schedule-run"]')
     await expect.poll(async () => (await page.evaluate(() => window.foreman.schedules.list()))[0].lastStatus, { timeout: 20_000 }).toBe('done')

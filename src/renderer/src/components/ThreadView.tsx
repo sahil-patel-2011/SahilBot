@@ -1,4 +1,5 @@
 import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { repliedSince } from '../lib/bot-working'
 import { heldDrafts } from '../lib/held-drafts'
 import { PERMISSION_BUTTON, permissionAsked } from '../lib/permission-ask'
 import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
@@ -434,6 +435,19 @@ function StatusLine({ drafting, since, progress, doing }: { drafting: string | n
   )
 }
 
+/** A bot at work, Grok Bot's way: a quick "On it." from the bot, then just "<name> is working…". */
+function BotWorking({ name, ack, slow }: { name: string; ack: boolean; slow?: boolean }) {
+  return (
+    <>
+      {ack && <div className="row ai bot-ack" data-testid="bot-ack"><div className="bubble-wrap ai-col"><div className="bubble ai">On it.</div></div></div>}
+      <div className="status-line bot-working" data-testid="status-line">
+        <span className="activity-dots live"><i /><i /><i /><i /></span>
+        <span className="activity-title shimmer" role="status" aria-live="polite" data-testid="bot-working">{slow ? `${name} is still working. This is taking longer than usual; press Stop if you'd rather not wait` : `${name} is working`}…</span>
+      </div>
+    </>
+  )
+}
+
 /**
  * Long chats stay smooth: the thread shows its latest WINDOW blocks and pulls in earlier ones as you
  * scroll up (or press "Show earlier messages"), so opening a chat with hundreds of messages mounts a
@@ -462,8 +476,13 @@ export function windowLimit(limit: number, total: number, dividerAt: number): nu
   return dividerAt < 0 ? limit : Math.max(limit, total - dividerAt + DIVIDER_CONTEXT)
 }
 
-export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, ready = true, unreadAfter = null, onAtBottom, voiceLive }: {
+export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, ready = true, unreadAfter = null, onAtBottom, voiceLive, botName }: {
   messages: Message[]
+  /**
+   * A bot's chat (Grok Bot's way): only the conversation. While it works you see an "On it." from the bot and
+   * "<name> is working…"; steps, plans, team boards, "Double-checking" and the timer stay out of sight.
+   */
+  botName?: string
   /** A voice conversation in progress (in this chat): its turns show only with its transcript on. */
   voiceLive?: { since: number; transcript: boolean; threadId?: string } | null
   /** Live Team of Experts boards by agents call id. */
@@ -509,11 +528,16 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   // show; Developer mode shows everything.
   // A question waiting on its card (below) shows there only: the same words don't appear twice.
   const asking = pending.some((p) => p.kind === 'question' || p.kind === 'questions')
+  const quietBot = !!botName && !dev
   const bs = useMemo(() => all.filter((b) => {
     if (b.kind === 'qa' && !b.answer && asking) return false
     if (b.kind === 'notice' && internalNotice(b.m)) return dev
+    // A bot's chat: the conversation only (what it did is one click away in Show work, not in the chat).
+    if (quietBot && (b.kind === 'activity' || b.kind === 'plan' || b.kind === 'team' || b.kind === 'heavy' || b.kind === 'compacted')) return false
+    // ...and no status notes ("The bot is continuing with…"); cards that need you (connect, a file, a page) stay.
+    if (quietBot && b.kind === 'notice' && !isCardNotice(b.m)) return false
     return dev || quietVisible(b, hasDocs)
-  }), [all, dev, hasDocs, asking])
+  }), [all, dev, hasDocs, asking, quietBot])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
   // Long chats mount their latest WINDOW blocks; an older first unread grows the window to include it.
   const limit = windowLimit(win.threadId === threadId ? win.limit : WINDOW, bs.length, dividerAt)
@@ -615,7 +639,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
           // Near the top with more above: bring in the next batch.
           if (first > 0 && el.scrollTop < 240 && keepFromBottom.current === null) showEarlier()
         }}>
-        <div className="thread">
+        <div className={`thread${quietBot ? ' quiet-bot' : ''}`}>
           {first > 0 && (
             <button className="show-earlier" onClick={showEarlier} data-testid="show-earlier">
               <I.Chevron size={13} style={{ transform: 'rotate(180deg)' }} />Show earlier messages
@@ -648,8 +672,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
             )
           })}
           {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} thumb={p.tool === 'browser' ? lastBrowserShot(messages) : undefined} />))}
-          {showStatus && <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={liveStep && !dev ? describe(liveStep)[2] : null} />}
-          {running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
+          {showStatus && (quietBot ? <BotWorking name={botName!} ack={!repliedSince(messages)} slow={!!progress?.startsWith('Still on it:')} /> : <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={liveStep && !dev ? describe(liveStep)[2] : null} />)}
+          {!quietBot && running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
           {!running && lastText && !pending.length && (dev || (tailText?.kind === 'text' && (tailText.m.status === 'error' || tailText.m.status === 'stopped'))) && (
             <div className="after-actions">
               <button className="chip-btn" onClick={stable.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>

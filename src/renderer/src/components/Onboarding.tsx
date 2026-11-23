@@ -274,8 +274,9 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
         {step === 2 && (
           <>
             <h2>Let SahilBot work fully</h2>
-            <p className="hint">So it can use your screen and apps, read and edit your files, listen when you talk and tell you when it's done. macOS asks you about each one; you can change them any time in Settings → Permissions.</p>
-            {!isServerRuntime && <div className="onboard-perms" data-testid="onboarding-permissions"><MacPermissions title="" sub="" /></div>}
+            <p className="hint">So it can use your screen and apps, read and edit your files and tell you when it's done. macOS asks you about each one; you can change them any time in Settings → Privacy &amp; safety.</p>
+            {/* No voice in setup: the microphone is asked for the first time you talk, and the voice is picked from your keys. */}
+            {!isServerRuntime && <div className="onboard-perms" data-testid="onboarding-permissions"><MacPermissions title="" sub="" omit={['microphone']} /></div>}
             <label className="onboard-import" data-testid="onboarding-files-anywhere">
               <input type="checkbox" checked={anywhere} onChange={(e) => setAnywhere(e.target.checked)} />
               Read and edit my files in any folder without asking (deleting still asks; system and secret places stay off limits)
@@ -292,7 +293,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             <p className="hint" style={{ textAlign: 'center' }}>SahilBot works through bots: helpers that each have one job and keep at it.</p>
             <div className="onboard-how" data-testid="onboarding-how">
               <div><b>Give it a job</b><span>Your inbox, a project, research every morning, school. Say it in a sentence.</span></div>
-              <div><b>Talk or type</b><span>Press Talk and just say it. It works in the background and tells you when it's done.</span></div>
+              <div><b>Just ask</b><span>Type it in a sentence. It works in the background and tells you when it's done.</span></div>
               <div><b>It remembers</b><span>What you tell any bot is remembered, so you never repeat yourself.</span></div>
             </div>
             <div className="modal-actions">

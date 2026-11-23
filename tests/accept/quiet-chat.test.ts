@@ -55,11 +55,9 @@ describe('quiet chat', () => {
       expect(await page.locator('details.reasoning').count()).toBe(0)
       await shot(page, '4-bot-collaboration')
 
-      await page.getByTestId('profile').click()
-      await page.getByTestId('settings-search').fill('developer mode')
-      await page.getByTestId('settings-result-dev-mode').click()
-      await page.getByTestId('dev-mode').click()
-      await page.keyboard.press('Escape')
+      // Developer mode has no button any more (settings are basics only); turn it on directly.
+      await page.evaluate(() => window.foreman.settings.set({ advanced: { devMode: true } } as never))
+      await page.evaluate(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
       await expect.poll(() => card.locator('.collaboration-model').count()).toBe(2)
       expect(new Set(await card.locator('.collaboration-model').allTextContents()).size).toBe(2)
       expect(await page.getByTestId('model-picker').count()).toBe(1)

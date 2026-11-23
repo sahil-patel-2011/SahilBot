@@ -3,7 +3,6 @@ import type { Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
-import { ConnectedIcons } from './ConnectedIcons'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { duplicateBot, importBot, shareBot } from './BotShare'
 import { Target, useGoalsNeedingYou } from './TasksView'
@@ -41,6 +40,8 @@ export function Sidebar(p: {
   /** The user's profile (first and last name) for the initials and name at the bottom. */
   profile?: { firstName: string; lastName: string }
   onOpenMain: () => void
+  /** SahilBot's own conversation: its widget is lit while it's open, and it never shows in Recents. */
+  mainThreadId?: string | null
   onOpenBot: (id: string) => void
   onOpenChat: (id: string) => void
   onNew: () => void
@@ -91,11 +92,12 @@ export function Sidebar(p: {
   const allPinned = (p.pinned ?? (main ? [main.id] : [])).filter((id) => p.spaces.some((s) => s.id === id))
   const pinnedIds = allPinned.filter((id) => !p.spaces.find((s) => s.id === id)!.hidden)
   const pinnedSpaces = pinnedIds.map((id) => p.spaces.find((s) => s.id === id)!).filter(Boolean)
-  const pinnedChats = p.chats.filter((t) => t.pinned)
+  const pinnedChats = p.chats.filter((t) => t.pinned && t.id !== p.mainThreadId)
   const bots = p.spaces.filter((s) => !s.hidden && s.kind !== 'project' && !pinnedIds.includes(s.id))
   const projects = p.spaces.filter((s) => s.kind === 'project' && !s.hidden && !pinnedIds.includes(s.id))
   const hidden = p.spaces.filter((s) => s.hidden && !s.isMain)
-  const recents = p.chats.filter((t) => !t.pinned)
+  // Recents are the chats you started with New chat; talking to a bot (SahilBot's widget included) isn't one.
+  const recents = p.chats.filter((t) => !t.pinned && t.id !== p.mainThreadId)
   const colorsOf = (g: Space): string[] => g.members.map((id) => p.spaces.find((s) => s.id === id)?.color).filter((c): c is string => !!c)
 
   /** Pin, or move onto `target`'s place (after it when dragging down, before it when dragging up). */
@@ -109,7 +111,7 @@ export function Sidebar(p: {
   const unpinSpace = (id: string): void => p.onPinned(allPinned.filter((x) => x !== id))
   const pinChat = (id: string, on: boolean): void => void api.threads.update(id, { pinned: on }).then(p.onChanged)
   const openSpace = (s: Space): void => (s.isMain ? p.onOpenMain() : p.onOpenBot(s.id))
-  const isActive = (s: Space): boolean => s.id === p.activeSpaceId && (!s.isMain || !p.activeThreadId) && p.view === 'home'
+  const isActive = (s: Space): boolean => s.id === p.activeSpaceId && (!s.isMain || (!!p.mainThreadId && p.activeThreadId === p.mainThreadId)) && p.view === 'home'
 
   const spaceMenu = (s: Space, e: React.MouseEvent): void => {
     e.preventDefault()
@@ -172,13 +174,14 @@ export function Sidebar(p: {
     setMenu({
       x: e.type === 'contextmenu' ? e.clientX : r.left, y: e.type === 'contextmenu' ? e.clientY : r.top - 8,
       items: [
-        { label: 'Settings', icon: <I.Gear size={15} />, run: p.onSettings },
+        { label: 'Settings', icon: <I.Gear size={15} />, run: p.onSettings, testId: 'menu-settings' },
         // This month's spend at a glance ("$X used of $Y this month"); opens the compact usage card.
         { label: spendLabel(spend), icon: <I.Clock size={15} />, run: openUsageGlance },
         'sep',
-        { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects') },
-        { label: 'Library', icon: <I.Layers size={15} />, run: () => p.onView('files') },
-        { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled },
+        { label: 'Memory', icon: <BrainIcon size={15} />, run: () => p.onView('brain'), testId: 'nav-brain' },
+        { label: 'Library', icon: <I.Layers size={15} />, run: () => p.onView('files'), testId: 'menu-library' },
+        { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects'), testId: 'nav-projects' },
+        { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled, testId: 'nav-scheduled' },
         { label: 'Tasks', icon: <Target size={15} />, run: () => p.onView('tasks') },
         { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect },
         'sep',
@@ -257,12 +260,12 @@ export function Sidebar(p: {
     <div key={s.id} className={`bot-row${isActive(s) ? ' active' : ''}`} onContextMenu={(e) => spaceMenu(s, e)} {...drag('space', s.id)}>
       {renaming === s.id ? (
         <div className="br-btn">
-          <span className="br-avatar">{avatar(s, 28)}</span>
+          <span className="br-avatar">{avatar(s, 40)}</span>
           {renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v }))}
         </div>
       ) : (
         <button className="br-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.lastPreview ? `${s.name}: ${s.lastPreview.replace(/\s+/g, ' ').slice(0, 160)}` : s.name}>
-          <span className="br-avatar">{avatar(s, 28)}</span>
+          <span className="br-avatar">{avatar(s, 40)}</span>
           <span className="br-text">
             <span className={`br-name${runName(working(s), needs(s))}`}>{s.name}</span>
             {(() => {
@@ -322,21 +325,21 @@ export function Sidebar(p: {
 
   return (
     <aside className={`sidebar sb2${dragging ? ' is-dragging' : ''}`} onDragOver={(e) => { if (dragging) e.preventDefault() }}>
+      {/* Grok Bot's shape: search and new chat up top, then your bots. Library and Memory live in your profile menu. */}
       <div className="sb-top drag">
         <button className="sb-circle" onClick={p.onSearch} title="Search bots, chats, commands and settings (⌘K)" aria-label="Search (⌘K)" data-testid="nav-search"><I.Search size={16} /></button>
+        <button className="sb-circle" onClick={p.onNew} title="New chat (⌘N)" aria-label="New chat (⌘N)" data-testid="new-chat"><I.Plus size={16} /></button>
       </div>
-      {/* Claude-style: one clear way to start, then the few places you go, then your bots and chats. */}
-      <nav className="sb-nav" aria-label="Main">
-        <button className="sb-nav-item sb-new" onClick={p.onNew} title="New chat (⌘N)" data-testid="new-chat"><span className="sb-nav-icon new"><I.Plus size={15} /></span><span>New chat</span><kbd>⌘N</kbd></button>
-        {/* Only when something waits for you (or you're on it): one less thing on a new user's screen. */}
-        {(goalsNeedYou > 0 || p.view === 'tasks') && <button className={`sb-nav-item tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
-          title="Questions and approvals waiting for you, and your bots' goals" aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
-          <span className="sb-nav-icon"><I.Inbox size={16} /></span><span>Needs you</span>
-          {goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
-        </button>}
-        <button className={`sb-nav-item${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Documents, decks, sheets and images your bots made" data-testid="nav-artifacts"><span className="sb-nav-icon" data-testid="nav-files"><I.Layers size={16} /></span><span>Library</span></button>
-        <button className={`sb-nav-item${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="What your bots know: people, projects and your connected accounts" data-testid="nav-brain"><span className="sb-nav-icon"><BrainIcon size={16} /></span><span>Memory</span></button>
-      </nav>
+      {/* Only when something waits for you (or you're on it). */}
+      {(goalsNeedYou > 0 || p.view === 'tasks') && (
+        <nav className="sb-nav" aria-label="Main">
+          <button className={`sb-nav-item tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
+            title="Questions and approvals waiting for you, and your bots' goals" aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
+            <span className="sb-nav-icon"><I.Inbox size={16} /></span><span>Needs you</span>
+            {goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
+          </button>
+        </nav>
+      )}
 
       <div className="side-scroll">
         <div className={`pin-grid${over === 'pinned' ? ' drop' : ''}${dragging?.kind === 'space' || dragging?.kind === 'chat' ? ' dragging' : ''}${pinnedSpaces.length ? '' : ' empty'}${pinnedSpaces.length === 1 ? ' one' : ''}`} data-testid="pinned-top"
@@ -352,10 +355,6 @@ export function Sidebar(p: {
           {!pinnedSpaces.length && dragging && <div className="pin-drop-hint">Drop here to pin</div>}
         </div>
 
-        <div className="nav-label sb-bots-label">
-          <span>Bots</span>
-          <span className="nav-label-actions">{bots.length > 0 && <button className="nav-add" onClick={p.onNewBot} title="Add a bot" aria-label="Add a bot" data-testid="new-bot"><I.Plus size={14} /></button>}</span>
-        </div>
 
         <div className={`sb-lists${over === 'list' ? ' drop' : ''}`} onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('list') } }} onDrop={dropOnList}>
           <div className="bot-list">
@@ -370,7 +369,7 @@ export function Sidebar(p: {
             )}
           </div>
 
-          {section('projects', 'Projects', (
+          {projects.length > 0 && section('projects', 'Projects', (
             <>
               {projects.map((s) => smallRow(s, 'project-item'))}
             </>
@@ -381,14 +380,10 @@ export function Sidebar(p: {
             </>
           ))}
 
-          {section('recents', 'Recents', (
+          {(pinnedChats.length > 0 || recents.length > 0) && section('recents', 'Recents', (
             <>
               {pinnedChats.map(chatRow)}
               {recents.map(chatRow)}
-            </>
-          ), (
-            <>
-              <button className="nav-add" onClick={p.onScheduled} title="Scheduled: routines and reminders" aria-label="Scheduled routines" data-testid="nav-scheduled"><I.Clock size={14} /></button>
             </>
           ))}
 
@@ -407,15 +402,12 @@ export function Sidebar(p: {
       <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
         {/* You: initials and your name (like Grok Bot). Click for Settings; right-click for scheduled, usage and more. */}
-        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: Settings`} title={`Settings (⌘,)${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}\nRight-click for scheduled, usage and more`} data-testid="profile">
+        <button className="sb-me" onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, Memory, Library and more${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
           <span className="sb-me-avatar" aria-hidden="true">{me.initials || <I.Gear size={16} />}</span>
           {me.full ? <span className="sb-me-name">{me.full}</span> : <span className="sb-me-name muted">Settings</span>}
         </button>
-        <button className="sb-connect" onClick={p.onConnect} title="Connect apps: Gmail, Calendar, Slack and more" aria-label="Connect apps" data-testid="connect-apps">
-          <ConnectedIcons max={3} />
-          <I.Plug size={16} className="sb-plug" />
-          <span>Apps</span>
-        </button>
+        <button className="sb-circle sb-foot-btn" onClick={p.onConnect} title="Connect apps: Gmail, Calendar, Slack and more" aria-label="Connect apps" data-testid="connect-apps"><I.Plug size={16} /></button>
+        <button className={`sb-circle sb-foot-btn${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Library: documents, decks, sheets and images your bots made" aria-label="Library" data-testid="nav-artifacts"><I.Layers size={16} /></button>
       </div>
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
     </aside>
