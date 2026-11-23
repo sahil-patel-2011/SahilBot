@@ -1077,7 +1077,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
       {/* Beside the bubble (so stacked replies stay close): react, copy, read aloud, more; shown on hover. */}
       {m.content && !streaming && (
         <div className="ai-foot">
-          <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} />
+          <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} latest={!!retry} />
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
           {!!m.meta?.superseded && !!m.meta?.checking && <span className="result-checking">Double-checking…</span>}
           {(() => { const kind = m.status !== 'streaming' ? permissionAsked(m.content) : undefined; return kind ? <button type="button" className="perm-ask" onClick={() => void api.permissions.request(kind).catch(() => api.permissions.open(kind))} data-testid="perm-ask">{PERMISSION_BUTTON[kind]}</button> : null })()}
@@ -1123,7 +1123,7 @@ function CollaborationCard({ steps, interrupted }: { steps: CollaborationStep[];
 }
 
 /** Hover bar: react, reply, more (copy). Matches the bot-chat style. */
-function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actions: ThreadActions; side: 'left' | 'right'; onEdit?: () => void; onRetry?: () => void }) {
+function MessageTools({ m, actions, side, onEdit, onRetry, latest }: { m: Message; actions: ThreadActions; side: 'left' | 'right'; onEdit?: () => void; onRetry?: () => void; latest?: boolean }) {
   const dev = useDevMode()
   const [picker, setPicker] = useState<'quick' | 'more' | null>(null)
   const [copied, setCopied] = useState(false)
@@ -1141,11 +1141,11 @@ function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actio
   // The latest answer: if its task changed files, one click puts them back (Grok Bot can't take back what's done).
   const [undoable, setUndoable] = useState(0)
   useEffect(() => {
-    if (!onRetry || m.role !== 'assistant') { setUndoable(0); return }
+    if (!latest || m.role !== 'assistant') { setUndoable(0); return }
     let alive = true
     void api.undo?.status(m.threadId, m.id).then((s) => { if (alive) setUndoable(s?.files ?? 0) }).catch(() => undefined)
     return () => { alive = false }
-  }, [onRetry, m.id, m.threadId, m.role])
+  }, [latest, m.id, m.threadId, m.role])
   const undo = (): void => { void api.undo.run(m.threadId, m.id).then((text) => { setUndoable(0); toast(text, 'ok') }).catch((e) => toast((e as Error).message, 'error')) }
   return (
     <div className={`msg-actions${picker || menu ? ' pinned' : ''}`} ref={ref}>
