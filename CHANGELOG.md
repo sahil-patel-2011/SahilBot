@@ -2,6 +2,39 @@
 
 Every SahilBot update, newest first. The same notes show in the app (Settings → Updates → What's new) and on each GitHub release. Versions are dates (YY.MM.DD).
 
+## 26.11.23 · Remembers what you told it, and gets out of your way
+
+_2026-11-23_
+
+- **Bots remember what you already told them: "email my landlord", "the usual", "near my place" just work, without repeating yourself**
+- **Before asking you something you already told it, a bot checks its memory and your other chats first**
+- **Talking to a bot is one ongoing conversation, like Grok Bot: no new chat in Recents each time**
+- **A bot's chat shows just the conversation: "On it.", then "<name> is working…", then the answer**
+- **Settings are the basics only: about 8 per page, no Advanced sections, no look or approval rules to manage**
+- **If a step takes over a minute, the bot tells you in plain words instead of sitting silently**
+
+### Memory
+
+- Bots match what you said by meaning, not just the same words: "my boss" finds your manager, the weather knows your city, and a food question always brings in your allergies and diet
+- Bigger models see more of what you told them (up to about 4,000 tokens of memories on a 1M-token model), only what bears on the request
+- A long chat brings back a detail you gave early on, word for word, even after it was summarized
+- One memory vault for every bot, always remembering the most; there's no per-bot vault or "how much to remember" to set
+- Generic questions ("what is an IP address?") don't pull your personal details in
+
+### Simpler
+
+- The home screen is a greeting and the message box, nothing else
+- The sidebar: search and new chat at the top, your bots with bigger icons and their last message, Recents only for chats you start; Library and Memory are in your profile menu
+- A bot's profile: its routines, Permissions (Ask or Auto) and Customize. Notifications are automatic; the morning check-in, vault and "runs on <model>" are gone (ask the bot in chat instead)
+- Routines are made, changed and removed by asking the bot; there's no New routine form
+- Setup no longer asks about voice or the microphone: your voice is Grok if you added a Grok key, otherwise ChatGPT
+
+### Smarter and steadier
+
+- A quick math question while a bot works ("18% of $1,740?") is answered instantly; other side questions use a faster model
+- A double-check that finds and fixes a mistake keeps the fix, even when it takes longer than a minute and a half
+- A new script is the simplest one that works, tested once on a sample, with copy-paste steps to run it
+
 ## 26.11.22 · A simpler SahilBot: every button has one job
 
 _2026-11-22_

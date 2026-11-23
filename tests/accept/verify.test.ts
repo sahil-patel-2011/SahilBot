@@ -375,13 +375,13 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
     await row.waitFor({ timeout: 10_000 })
 
     llm.script.push({ content: 'Good morning! Nothing urgent today.' })
-    await row.locator('[data-testid="routine-menu"]').click()
+    // (No menu on the row any more: open the routine, and Test is there.)
+    await row.locator('.rt-main').click()
     await details.locator('[data-testid="routine-test"]').click()
     await idle(page)
     // The run's reply shows in the bot's chat.
     await expect.poll(chatText, { timeout: 15_000 }).toContain('Good morning! Nothing urgent today.')
     // Its run history says it worked, marked as a test.
-    await row.locator('.rt-main').click()
     const history = details.locator('[data-testid="routine-history"]')
     await expect.poll(() => history.innerText(), { timeout: 10_000 }).toMatch(/Succeeded\s*·\s*Test/)
     expect(await history.locator('.rt-run').count()).toBe(1)
