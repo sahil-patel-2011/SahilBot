@@ -537,8 +537,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     // ...one answer, posted once (Grok Bot's way): an answer still being double-checked stays out of sight, with
     // "<name> is working…" up, until the checked one is final (90 seconds at most; a fix it finds is kept).
     if (quietBot && b.kind === 'text' && b.m.meta?.superseded && b.m.meta?.checking) return false
-    // ...and no status notes ("The bot is continuing with…"); cards that need you (connect, a file, a page) stay.
-    if (quietBot && b.kind === 'notice' && !isCardNotice(b.m)) return false
+    // ...and no status notes ("The bot is continuing with…"). System lines Grok Bot shows too stay: "Paused routine ·
+    // …", "Undid …", messages between bots, and cards that need you.
+    if (quietBot && b.kind === 'notice' && !isCardNotice(b.m) && typeof b.m.meta?.publicText === 'string') return false
     return dev || quietVisible(b, hasDocs)
   }), [all, dev, hasDocs, asking, quietBot])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
@@ -1137,6 +1138,15 @@ function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actio
     return () => document.removeEventListener('mousedown', close)
   }, [picker, menu])
   const canReact = m.role === 'assistant'
+  // The latest answer: if its task changed files, one click puts them back (Grok Bot can't take back what's done).
+  const [undoable, setUndoable] = useState(0)
+  useEffect(() => {
+    if (!onRetry || m.role !== 'assistant') { setUndoable(0); return }
+    let alive = true
+    void api.undo?.status(m.threadId, m.id).then((s) => { if (alive) setUndoable(s?.files ?? 0) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [onRetry, m.id, m.threadId, m.role])
+  const undo = (): void => { void api.undo.run(m.threadId, m.id).then((text) => { setUndoable(0); toast(text, 'ok') }).catch((e) => toast((e as Error).message, 'error')) }
   return (
     <div className={`msg-actions${picker || menu ? ' pinned' : ''}`} ref={ref}>
       {canReact && <button className="icon-btn" title="React" aria-label="React" onClick={() => setPicker(picker ? null : 'quick')} data-testid="react-btn"><I.Smile size={17} /></button>}
@@ -1144,6 +1154,7 @@ function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actio
       <button className="icon-btn" title="Reply" aria-label="Reply" onClick={() => actions.onReply(m.content)}><I.Reply size={17} /></button>
       {canReact && m.content && <button className="icon-btn" title={copied ? 'Copied' : 'Copy'} aria-label={copied ? 'Copied' : 'Copy'} onClick={() => { void navigator.clipboard.writeText(m.content); setCopied(true); setTimeout(() => setCopied(false), 900) }} data-testid="copy-msg">{copied ? <I.Check size={15} /> : <I.Copy size={15} />}</button>}
       {canReact && m.content && <button className="icon-btn" title="Read aloud (Esc stops)" aria-label="Read aloud (Esc stops)" onClick={() => void api.voice.speak(m.content)} data-testid="read-aloud"><I.Speaker size={16} /></button>}
+      {undoable > 0 && <button className="icon-btn" title={`Undo the file changes (${undoable} file${undoable === 1 ? '' : 's'})`} aria-label="Undo the file changes" onClick={undo} data-testid="undo-changes"><I.Undo size={16} /></button>}
       {onRetry && <button className="icon-btn" title="Retry" aria-label="Retry" onClick={onRetry} data-testid="retry"><I.Reply size={15} style={{ transform: 'scaleX(-1)' }} /></button>}
       <button className="icon-btn" title="More" aria-label="More" onClick={() => setMenu((x) => !x)}><span className="more">···</span></button>
       {picker && (

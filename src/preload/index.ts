@@ -415,6 +415,7 @@ const api: SahilBotApi = {
   markets: { quotes: call('markets:quotes') as never, card: call('markets:card') as never, search: call('markets:search') as never },
   cad: { onshapeTest: call('onshape:test') as never },
   fast: { catalog: call('fast:catalog') as never },
+  undo: { status: call('undo:status') as never, run: call('undo:run') as never },
   usage: { report: call('usage:report') as never, exportCsv: call('usage:exportCsv') as never, forRun: call('usage:forRun') as never, dashboard: call('usage:dashboard') as never, glance: call('usage:glance') as never },
   skills: { list: call('skills:list') as never, save: call('skills:save') as never, remove: call('skills:remove') as never },
   alwaysOn: { status: call('alwaysOn:status') as never, pauseRoutines: call('alwaysOn:pauseRoutines') as never, setLidAwake: call('alwaysOn:setLidAwake') as never },

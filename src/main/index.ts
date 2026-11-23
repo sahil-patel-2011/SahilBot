@@ -151,6 +151,8 @@ import { knowledgeTools, resolveScope } from './agent/tools/knowledge'
 import { vaultTool } from './agent/tools/vault'
 import { apiRequestTool } from './agent/tools/api-request'
 import { chatHistoryTool } from './agent/tools/chat-history'
+import { taskOf, undoTask, undoTool } from './agent/tools/undo'
+import { changesOf, setUndoRoot, undoSummary } from './agent/undo-journal'
 import { manualTool } from './agent/tools/manual'
 import { VaultService } from './vault/service'
 import { workingMemoryPage } from './vault/working-memory'
@@ -220,6 +222,8 @@ if (HIDDEN) app.whenReady().then(() => app.dock?.hide()).catch(() => undefined)
 // Otherwise the data folder keeps its original name (Foreman) so chats, memory and keys carry over.
 if (process.env.FOREMAN_DATA_DIR) app.setPath('userData', process.env.FOREMAN_DATA_DIR)
 else app.setPath('userData', join(app.getPath('appData'), 'Foreman'))
+// What a task changed in your files, kept so it can be undone (agent/undo-journal.ts).
+setUndoRoot(join(app.getPath('userData'), 'undo'))
 
 registerScheme()
 // sahilbot:// links (Shortcuts, Raycast, Alfred): caught from launch on, handled once the window exists.
@@ -774,6 +778,7 @@ app.whenReady().then(() => {
     ...coreTools(results),
     apiRequestTool(vault),
     chatHistoryTool(db),
+    undoTool(db),
     // The app's own manual (docs/*.md), searchable: the agent looks things up instead of guessing.
     manualTool(docsDir),
     ...fileTools(() => settings.get().workspaceDir, docsDir),
@@ -1530,6 +1535,21 @@ app.whenReady().then(() => {
     db.deleteThread(id)
   })
   handle('threads:messages', (id: string) => db.listMessages(id))
+  // Undo a task's file changes (agent/undo-journal.ts): the Undo button under an answer. A system line says what changed back.
+  handle('undo:status', (threadId: string, messageId: string) => {
+    const key = taskOf(db, threadId, messageId)
+    const c = key ? changesOf(threadId, key) : undefined
+    return c && !c.undone ? { files: c.files.length } : null
+  })
+  handle('undo:run', (threadId: string, messageId: string) => {
+    const key = taskOf(db, threadId, messageId)
+    if (!key) return 'Nothing to undo.'
+    const r = undoTask(db, threadId, key)
+    const text = undoSummary(r)
+    const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', meta: { undoNotice: true } })
+    emit({ threadId, type: 'message', message: m })
+    return text
+  })
   handle('threads:react', (messageId: string, emoji: string | null) => {
     const m = db.react(messageId, 'user', emoji)
     emit({ threadId: m.threadId, type: 'message', message: m })

@@ -1,3 +1,4 @@
+import { afterChange, beforeChange } from '../undo-journal'
 import { shell } from 'electron'
 import { noteSeen, staleReason, unseenReason } from './freshness'
 import { appendFileSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -270,8 +271,10 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
       if (shrink) throw new Error(shrink)
       mkdirSync(dirname(full), { recursive: true })
       if (exists && mode === 'overwrite') backup(workspace, full)
+      beforeChange(ctx.threadId, full)
       if (mode === 'append') appendFileSync(full, content)
       else writeFileSync(full, content)
+      afterChange(ctx.threadId, full)
       noteSeen(ctx.threadId, full)
       const verb = mode === 'append' ? 'appended to' : exists ? 'updated' : 'created'
       return { text: `${verb} ${full} (${humanSize(Buffer.byteLength(content))}).`, display: `${verb} ${basename(full)}`, path: full }
@@ -308,7 +311,9 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
       const r = applyEdit(readFileSync(full, 'utf8'), old_string, new_string, !!replace_all)
       if ('error' in r) throw new Error(`${r.error} in ${path}.`)
       backup(workspace, full)
+      beforeChange(ctx.threadId, full)
       writeFileSync(full, r.text)
+      afterChange(ctx.threadId, full)
       noteSeen(ctx.threadId, full)
       return { text: `Edited ${full}: ${r.count} replacement${r.count === 1 ? '' : 's'} (line ${r.line}).`, display: `edited ${basename(full)}`, path: full }
     }
@@ -360,8 +365,13 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
       const finalDest = existsSync(dest) && lstatSync(dest).isDirectory() ? join(dest, basename(full)) : dest
       if (existsSync(finalDest)) backup(workspace, finalDest)
       mkdirSync(dirname(finalDest), { recursive: true })
+      // Undo (files only): a move is the source put back and the destination taken away; a copy, just the copy.
+      const isFile = lstatSync(full).isFile()
+      if (isFile && a.op === 'move') beforeChange(ctx.threadId, full)
+      if (isFile) beforeChange(ctx.threadId, finalDest)
       if (a.op === 'move') renameSync(full, finalDest)
       else cpSync(full, finalDest, { recursive: true })
+      if (isFile) afterChange(ctx.threadId, finalDest)
       return { text: `${a.op === 'move' ? 'Moved' : 'Copied'} ${full} → ${finalDest}.`, display: `${a.op === 'move' ? 'moved' : 'copied'} ${basename(full)}`, path: finalDest }
     }
   }
@@ -502,7 +512,9 @@ Optional "accent" color like "#2563EB" (too-light accents are darkened for text 
         if (statSync(p).size > 25_000_000) throw new Error(`Image ${src} is larger than 25 MB.`)
         return readFileSync(p)
       }
+      beforeChange(ctx.threadId, full)
       const r = await createDocument(full, spec, { readImage })
+      afterChange(ctx.threadId, full)
       if (!existed) madeHere.add(real(full))
       const what = spec.slides ? `${r.slides ?? spec.slides.length} slides` : spec.sheets ? `${spec.sheets.length} sheet${spec.sheets.length > 1 ? 's' : ''}` : `${r.pages ? `${r.pages} page${r.pages === 1 ? '' : 's'}${/\.docx$/i.test(full) ? ' as Word lays it out' : ''}, ` : ''}${humanSize(r.bytes)}`
       let review = ''

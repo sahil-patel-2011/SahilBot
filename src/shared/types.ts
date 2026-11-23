@@ -1600,6 +1600,11 @@ export interface SahilBotApi {
     get(): Promise<CheckinSettings>
     set(c: CheckinSettings): Promise<CheckinSettings>
   }
+  /** Undo a task's file changes (the Undo button under an answer): what it would undo, and doing it. */
+  undo: {
+    status(threadId: string, messageId: string): Promise<{ files: number } | null>
+    run(threadId: string, messageId: string): Promise<string>
+  }
   usage: {
     /** Last 30 days by model, bot and day, plus this month's spend against the cap. */
     report(): Promise<UsageReport>

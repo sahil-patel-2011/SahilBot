@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { isStopRequest } from './stop-intent'
 import { asideSystem, isAside, quickMath } from './aside'
+import { beginRun } from './undo-journal'
 import { projectInstructions } from './project-instructions'
 import { checkMedicalAnswer, medicalNote } from './medical-check'
 import { ALL_FEATURES, claimBacked, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
@@ -1022,6 +1023,8 @@ export class Agent {
     const group = space?.kind === 'group'
     const opener = [...this.d.db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
     const record = this.runtime.start(thread.id, opener?.id ?? randomUUID(), this.d.db.getState(thread.id).taskPolicy)
+    // File changes this task makes are grouped under the message that started it, so they can be undone together.
+    beginRun(thread.id, opener?.id ?? record.id)
     const run: Run = { ctrl: new AbortController(), pending: new Map(), group, unattended: opts.unattended, intro: opts.intro, record, meter: new TaskMeter(record.policy), planFirst: !!opener?.meta?.planFirst, planApproved: !!opener?.meta?.planApproved }
     this.runs.set(thread.id, run)
     this.d.emit({ threadId: thread.id, type: 'run', status: 'started', spaceId: thread.spaceId, title: thread.title })
