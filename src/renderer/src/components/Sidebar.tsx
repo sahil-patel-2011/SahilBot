@@ -49,6 +49,8 @@ export function Sidebar(p: {
   /** The empty list's "Make a bot": a New bot that sets itself up with you in its chat. */
   onSetupBot?: () => void
   onSearch: () => void
+  /** Hides the sidebar (⌘B; Grok Bot's button at its top). */
+  onHide?: () => void
   onView: (v: MainView) => void
   onCustomize: (s: Space) => void
   onChanged: () => void
@@ -327,6 +329,7 @@ export function Sidebar(p: {
     <aside className={`sidebar sb2${dragging ? ' is-dragging' : ''}`} onDragOver={(e) => { if (dragging) e.preventDefault() }}>
       {/* Grok Bot's shape: search and new chat up top, then your bots. Library and Memory live in your profile menu. */}
       <div className="sb-top drag">
+        {p.onHide && <button className="sb-circle" onClick={p.onHide} title="Hide the sidebar (⌘B)" aria-label="Hide the sidebar (⌘B)" data-testid="sidebar-hide"><I.SidebarLeft size={16} /></button>}
         <button className="sb-circle" onClick={p.onSearch} title="Search bots, chats, commands and settings (⌘K)" aria-label="Search (⌘K)" data-testid="nav-search"><I.Search size={16} /></button>
         <button className="sb-circle" onClick={p.onNew} title="New chat (⌘N)" aria-label="New chat (⌘N)" data-testid="new-chat"><I.Plus size={16} /></button>
       </div>

@@ -936,6 +936,7 @@ export function App() {
       {/* The secrets vault's unlock / confirm dialog: main asks, this only shows it. */}
       <VaultAuthDialog />
       <Sidebar
+        onHide={() => setSidebarHidden(true)}
         spaces={spaces}
         chats={chats}
         activeSpaceId={navTo ?? space?.id ?? null}
@@ -978,6 +979,7 @@ export function App() {
         )}
         <header className="main-header drag">
           <div className="header-title">
+            {sidebarHidden && <button className="icon-btn nodrag sb-show" onClick={() => setSidebarHidden(false)} title="Show the sidebar (⌘B)" aria-label="Show the sidebar (⌘B)" data-testid="sidebar-show"><I.SidebarLeft size={17} /></button>}
             {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
           </div>
           {chatBot && !voiceOn && (thread || (isBot && view === 'home')) && (

@@ -196,3 +196,6 @@
 
 /* ⌘B: the sidebar folds away; the chat gets the whole window. */
 .app.sb-hidden > .sidebar { display: none; }
+
+/* The sidebar's show button in the chat header while it's hidden (clear of the window buttons). */
+.app.sb-hidden .main-header .sb-show { margin-left: 72px; }

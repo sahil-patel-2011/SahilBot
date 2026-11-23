@@ -51,5 +51,10 @@ test.skipIf(!process.env.UI_SHOTS)('grok-shape screenshots', async () => {
   await page.waitForTimeout(600); snap('g5-profile-menu')
   await page.click('[data-testid="menu-settings"]')
   await page.waitForTimeout(1500); snap('g6-settings-you')
+  await page.keyboard.press('Escape')
+  // The sidebar hidden (its button at the top), and back from the chat header.
+  await page.click('[data-testid="sidebar-hide"]')
+  await page.waitForTimeout(600); snap('g7-sidebar-hidden')
+  await page.click('[data-testid="sidebar-show"]')
   await app.close()
 }, 120_000)
