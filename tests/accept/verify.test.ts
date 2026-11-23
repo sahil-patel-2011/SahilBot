@@ -401,7 +401,8 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
     expect(lines.some((l) => l.startsWith('Routine failed'))).toBe(false)
 
     // Deleting asks first, then the row goes and the chat says so.
-    await row.locator('[data-testid="routine-menu"]').click()
+    // (Open the routine: Delete is in its view; asking the bot in chat works too.)
+    await row.locator('.rt-main').click()
     await details.locator('[data-testid="routine-delete"]').click()
     await details.locator('[data-testid="routine-delete-confirm"]').click()
     await expect.poll(() => details.locator('[data-testid="routine-row"]').count(), { timeout: 10_000 }).toBe(0)
