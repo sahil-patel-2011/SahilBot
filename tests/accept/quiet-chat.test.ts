@@ -22,7 +22,7 @@ const shot = async (page: Page, name: string): Promise<void> => {
 }
 
 describe('quiet chat', () => {
-  test('Bots show teammate roles by default and reveal model details on opt-in', async () => {
+  test('A bot chat shows only the conversation by default; Developer mode reveals the team and its models', async () => {
     llm.models = ['qwen3.8:27b', 'gemma4:12b']
     const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_QUIET: '1', FOREMAN_NO_BRAIN: '', FOREMAN_RAM_GB: '64' })
     try {
@@ -48,16 +48,19 @@ describe('quiet chat', () => {
       await status.waitFor()
       expect(await page.getByTestId('stop').isVisible()).toBe(true)
       expect(await status.getByRole('status').evaluate((el) => getComputedStyle(el).animationName)).toBe('none')
+      // A bot's chat (Grok Bot's way): "<name> is working…", then the answer; the team card stays out of sight.
+      expect(await page.getByTestId('bot-working').innerText()).toContain('Review Bot is working')
+      await expect.poll(() => page.getByTestId('thread').innerText(), { timeout: 25_000 }).toContain('Hearth and Grain')
       const card = page.getByTestId('collaboration-card')
-      await expect.poll(() => card.innerText(), { timeout: 25_000 }).toContain('Complete')
-      expect(await card.innerText()).toContain('Second perspective')
-      expect(await card.locator('.collaboration-model').count()).toBe(0)
+      expect(await card.count()).toBe(0)
       expect(await page.locator('details.reasoning').count()).toBe(0)
       await shot(page, '4-bot-collaboration')
 
       // Developer mode has no button any more (settings are basics only); turn it on directly.
       await page.evaluate(() => window.foreman.settings.set({ advanced: { devMode: true } } as never))
       await page.evaluate(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
+      // Developer mode shows the work: the team card with each teammate's model.
+      await expect.poll(() => card.innerText(), { timeout: 15_000 }).toContain('Second perspective')
       await expect.poll(() => card.locator('.collaboration-model').count()).toBe(2)
       expect(new Set(await card.locator('.collaboration-model').allTextContents()).size).toBe(2)
       expect(await page.getByTestId('model-picker').count()).toBe(1)

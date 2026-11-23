@@ -24,6 +24,9 @@ describe('phase 6: projects + scheduled tasks', () => {
     writeFileSync(join(folder, 'brief.md'), 'Client: Acme. Deadline Dec 1.')
     const { app, page } = await launch(tempProfile(), llm.url)
     await app.evaluate(({ dialog }, f) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [f] })) as never }, folder)
+    // Projects live in the profile menu (Grok Bot's sidebar has no Projects section until you have one).
+    await page.click('[data-testid="profile"]')
+    await page.click('[data-testid="nav-projects"]')
     await page.click('[data-testid="new-project"]')
     await page.fill('[data-testid="bot-name"]', 'Acme launch')
     await page.click('[data-testid="project-folder"]')

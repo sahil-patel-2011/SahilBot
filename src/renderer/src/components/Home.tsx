@@ -264,7 +264,7 @@ export function ProjectsView({ spaces, onOpen, onNew }: { spaces: Space[]; onOpe
   }, [spaces]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="page" data-testid="projects-view">
-      <div className="page-head"><h1>Projects</h1><button className="btn primary" onClick={onNew}><I.Plus size={15} /> New project</button></div>
+      <div className="page-head"><h1>Projects</h1><button className="btn primary" onClick={onNew} data-testid="new-project"><I.Plus size={15} /> New project</button></div>
       <div className="set-sub">A project is a folder, instructions and chats that share what they learn with each other.</div>
       {projects.length === 0 ? <div className="empty-state"><I.Folder size={22} /><div>No projects yet. Make one for a client, a codebase or anything you keep coming back to.</div></div> : (
         <div className="project-grid">
