@@ -7,6 +7,8 @@ Every SahilBot update, newest first. The same notes show in the app (Settings â†
 _2026-11-23_
 
 - **Grok Voice 3.0: talk with your bots live, interrupt any time, and they do the work while you talk**
+- **Undo what a task did to your files: one button on the answer, or just say "undo that"**
+- **Dry run any routine: it reads for real and lists what it would send or change, without doing it**
 - **Bots remember what you already told them: "email my landlord", "the usual", "near my place" just work, without repeating yourself**
 - **Before asking you something you already told it, a bot checks its memory and your other chats first**
 - **Talking to a bot is one ongoing conversation, like Grok Bot: no new chat in Recents each time**
@@ -19,6 +21,14 @@ _2026-11-23_
 - With Grok as your voice and an xAI key saved, a voice conversation is live: Grok listens, answers in its own voice, and stops the moment you talk over it
 - For anything real (your memory, files, apps, email, the web, an action) it hands the request to the bot, which does it in its chat, and Grok tells you the result
 - About $0.08 a minute, counted against your monthly limit; if Grok can't connect, the standard voice takes over
+
+### Safer, clearer
+
+- Undo puts back files a task changed and takes away files it made (kept in a holding folder, never deleted); a file you changed since is left alone
+- Dry run, next to Test on a routine: reads your email, calendar and pages for real, and only lists what it would send, write or post
+- Start a fresh conversation with any bot from its profile; it still remembers everything, and earlier conversations are under Past conversations
+- A bot's profile shows what it cost this month
+- Bot chats show system lines again ("Paused routine", undo, messages between bots); only status chatter is hidden
 
 ### Memory
 
