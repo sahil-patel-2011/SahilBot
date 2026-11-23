@@ -440,7 +440,7 @@ describe('a quick question while a long job runs (Grok Bot never makes you wait)
     await new Promise((r) => setTimeout(r, 120))
     await h.agent.steer(t.id, 'What is 9 squared?')
     // The answer arrives while the job is still running.
-    await expect.poll(() => h.db.listMessages(t.id).some((m) => m.role === 'assistant' && m.meta?.aside && m.content === '81.' && m.meta?.replyText === 'What is 9 squared?'), { timeout: 3000 }).toBe(true)
+    await expect.poll(() => h.db.listMessages(t.id).some((m) => m.role === 'assistant' && m.meta?.aside && m.content === '9 squared = 81.' && m.meta?.replyText === 'What is 9 squared?'), { timeout: 3000 }).toBe(true)
     expect(h.agent.isRunning(t.id)).toBe(true)
     expect(await done).toBe('finished')
     expect(slow.log.join(' ')).toContain('end reviews')

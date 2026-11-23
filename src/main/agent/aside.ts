@@ -29,7 +29,8 @@ export function asideSystem(o: { who?: string; job: string; step?: string }): st
  * "what's 1740 * 0.18?", "250 + 75 - 10", "(3+4)*2", "9 squared". undefined: not plain arithmetic.
  */
 export function quickMath(text: string): string | undefined {
-  let t = text.trim().toLowerCase().replace(/\?+$/, '').replace(/^(what'?s|what is|whats|calculate|compute|how much is)\s+/, '').trim()
+  const asked = text.trim().replace(/\?+$/, '').replace(/^(what'?s|what is|whats|calculate|compute|how much is)\s+/i, '').trim()
+  let t = asked.toLowerCase()
   const money = t.includes('$')
   t = t.replace(/[$,]/g, '').replace(/×/g, '*').replace(/x(?=\s*[\d(])/g, '*').replace(/÷/g, '/').replace(/\bsquared\b/g, '^2').replace(/\bcubed\b/g, '^3')
   // "18% of 1740" → (18/100)*1740; a bare "18%" is 0.18.
@@ -41,7 +42,8 @@ export function quickMath(text: string): string | undefined {
   const shown = money
     ? `$${round.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     : round.toLocaleString('en-US', { maximumFractionDigits: 6 })
-  return `${shown}.`
+  // The sum and its answer ("17 × 23 = 391."), so it reads like a reply, not a bare number.
+  return `${asked.replace(/\s+/g, ' ')} = ${shown}.`
 }
 
 /** A tiny, safe arithmetic evaluator (+ - * / ^ and parentheses): no eval, no names. */
