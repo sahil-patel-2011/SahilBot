@@ -75,7 +75,17 @@ test('the final completion gate runs configured checks and exposes failure despi
   expect(await h.run('Implement the fixture and verify the result')).toBe('error')
   expect(checks).toBe(1)
   expect(h.final().meta?.verification).toMatchObject({ status: 'blocked' })
-  expect(h.final().content).toContain('Verification is incomplete')
+  // The user reads one plain sentence, not the checks' ids and tool names (those stay in meta.verification).
+  expect(h.final().content).toContain("I couldn't confirm this worked")
+  expect(h.final().content).not.toMatch(/Verification is incomplete|agent_control|fixture works: /)
+})
+
+test('a reply that already says it couldn\'t confirm the result is shown as written, with no technical prefix', async () => {
+  const { admitsUnverified } = await import('../../src/main/agent/runtime/verification')
+  expect(admitsUnverified('Calculator is open, but macOS blocked me from clicking its buttons. 245 × 18 = 4,410 is the expected result, not one I verified on screen.')).toBe(true)
+  expect(admitsUnverified("I couldn't open the file.")).toBe(true)
+  expect(admitsUnverified('Everything passed.')).toBe(false)
+  expect(admitsUnverified('Done: the invoice is sent.')).toBe(false)
 })
 
 test('recorded-tool replay cannot execute a live write', async () => {

@@ -40,3 +40,11 @@ export function completionReport(store: RuntimeStore, runId: string, o: { requir
   const passed = [...latest.values()].filter((c) => c.passed).length
   return { status: issues.length ? 'blocked' : passed > 0 ? 'verified' : 'unverified', issues: [...new Set(issues)], checks: latest.size, passed }
 }
+
+/** The reply already tells the user it couldn't confirm the result ("I couldn't verify…", "not one I verified on screen"). */
+export function admitsUnverified(text: string): boolean {
+  return /\b(couldn'?t|could not|can'?t|cannot|wasn'?t able|was not able|unable|didn'?t|did not|not (yet )?(one i )?(verified|confirmed|checked)|unverified|unconfirmed|blocked|expected result|not sure|uncertain|to finish (the|this) (test|task))\b/i.test(text)
+}
+
+/** One plain sentence for a reply that sounds sure while the app's checks found something unresolved (no ids, no tool names). */
+export const UNVERIFIED_NOTE = "I couldn't confirm this worked, so check the result before relying on it."

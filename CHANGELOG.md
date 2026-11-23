@@ -32,6 +32,7 @@ _2026-11-22_
 - Every page is the same width, and empty pages say one thing to do instead of showing empty tools
 - "Waiting on you" questions no longer pre-pick an answer you didn't choose
 - Settings → Connected keeps Cursor, MCP and Shortcuts links under "For developers"
+- When a bot can't confirm something worked, you see its plain explanation and a small "Needs a check" tag, not a technical report
 
 ### Smarter at real work
 

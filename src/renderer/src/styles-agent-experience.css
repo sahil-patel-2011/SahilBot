@@ -14,4 +14,8 @@
 .connect-card .pending-actions { margin-top: 16px; gap: 8px; }
 .connect-card .btn { border-radius: 10px; min-height: 36px; }
 .row.ai .ai-foot { gap: 10px; font-size: 11px; color: var(--text-3); }
+/* "Needs a check": the app could not confirm the result (details in developer mode). Quiet, not an error. */
+.ai-foot .result-needs-check, .ai-foot .result-verified { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11px; line-height: 18px; white-space: nowrap; }
+.ai-foot .result-needs-check { background: color-mix(in srgb, #d97706 12%, transparent); color: #b45309; }
+.ai-foot .result-verified { background: color-mix(in srgb, #16a34a 12%, transparent); color: #15803d; }
 @media (max-width: 540px) { .agent-auto-label { display: none; } .composer .agent-strategy { gap: 5px; padding-inline: 4px; } .attachment-pop .menu { width: min(320px, calc(100vw - 28px)); } }

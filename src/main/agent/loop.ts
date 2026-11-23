@@ -92,7 +92,7 @@ import type { Embedder } from '../knowledge/embeddings'
 import { OutcomeRouter, outcomeLines, verdictFromEmoji, verdictFromWords, type VerdictSource } from '../llm/outcome-router'
 import { requestStrategy } from '@shared/request-strategy'
 import { placementBlock } from '../workers'
-import { completionReport } from './runtime/verification'
+import { admitsUnverified, completionReport, UNVERIFIED_NOTE } from './runtime/verification'
 import { phaseTask } from './runtime/phase'
 import { taskGraphTool } from './runtime/graph'
 import { evaluationTool } from './runtime/evaluation'
@@ -3448,7 +3448,10 @@ export class Agent {
               continue
             }
             assistant.meta = { ...assistant.meta, verification: report, runId: run.record.id }
-            if (report.status === 'blocked') { status = 'error'; assistant.content = `Verification is incomplete: ${report.issues.join('; ')}\n\n${assistant.content}` }
+            // Unresolved checks: the details stay in meta.verification (the Needs-checking badge, developer mode). The user
+            // reads plain words: a reply that already says it couldn't confirm the result stands as written; one that
+            // sounds sure gets one plain sentence, never ids, tool names or "reconcile with agent_control".
+            if (report.status === 'blocked' && !admitsUnverified(assistant.content)) { status = 'error'; assistant.content = `${assistant.content.trimEnd()}\n\n${UNVERIFIED_NOTE}` }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
           }

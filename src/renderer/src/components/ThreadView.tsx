@@ -1030,7 +1030,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
         <div className="ai-foot">
           <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} />
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
-          {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title="Some acceptance checks remain unresolved">Needs checking</span>}
+          {(m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title={dev ? ((m.meta?.verification as { issues?: string[] }).issues ?? []).join('\n') : 'SahilBot couldn\'t confirm this worked. Check the result before relying on it.'}>Needs a check</span>}
         </div>
       )}
     </div>
