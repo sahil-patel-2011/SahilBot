@@ -1,3 +1,4 @@
+import { conceptScore } from './recall-expand'
 import type { Db } from './db'
 import { uid } from './db'
 import { grantsPermissions, importSecret, importTime, parseExport, type ExportPreview } from './memory-import'
@@ -166,6 +167,14 @@ export function fuzzyScore(query: string, text: string): number {
     sum += best
   }
   return sum / q.length
+}
+
+/**
+ * How well a saved fact fits a request: the same words (fuzzyScore, typos included) or the same meaning
+ * (recall-expand.ts: "my boss" ↔ "Manager at work…", the weather ↔ where they live, food ↔ allergies).
+ */
+export function relevance(query: string, text: string, category?: string): number {
+  return Math.max(fuzzyScore(query, text), conceptScore(query, text, category))
 }
 
 /** Near-identical wording (same normalized text, or 80% of the words shared). */
@@ -360,13 +369,26 @@ export function rankMemories(all: Memory[], opts: RankOptions = {}): Array<{ m: 
   return all
     .filter((m) => m.spaceId === null || (opts.spaceId != null && m.spaceId === opts.spaceId))
     .map((m) => {
-      const rel = q ? fuzzyScore(q, m.content) : 0
+      const rel = q ? relevance(q, m.content, m.category) : 0
       const age = Math.max(0, now - m.updatedAt) / DAY
       const recency = Math.exp(-age / 45)
       const score = rel * 3 + KIND_WEIGHT[m.category] + recency + (m.spaceId ? 0.3 : 0)
       return { m, score }
     })
     .sort((a, b) => b.score - a.score || b.m.updatedAt - a.m.updatedAt)
+}
+
+/**
+ * Tokens of saved memories a run gets, by the model's context window: the old fixed 700 on small local
+ * windows, more on big ones, so a 200K or 1M model sees most of what the user told it (about 2% of the window,
+ * capped). Never more than the window can spare.
+ */
+export function memoryBudget(window?: number): number {
+  if (!window || !Number.isFinite(window) || window <= 16_384) return 700
+  if (window <= 40_000) return 1000
+  if (window <= 100_000) return 1800
+  if (window <= 300_000) return 4000
+  return 8000
 }
 
 /** The sub-header over the user's past decisions in the memory block (decisions.ts saves them). */
@@ -623,7 +645,7 @@ export class MemoryStore {
     const rows = this.db.sql.prepare("SELECT * FROM memories WHERE scope IS NOT NULL AND scope != ? AND category != 'rule' AND (provenance IS NULL OR provenance != 'untrusted') ORDER BY updated_at DESC LIMIT 600").all(spaceId ?? '') as Row[]
     return rows.map(toMemory)
       .filter((m) => m.category !== 'rule' && !isUntrusted(m) && !!m.spaceId && !!this.nameOf?.(m.spaceId))
-      .map((m) => ({ m, s: Math.max(fuzzyScore(q, m.content), fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
+      .map((m) => ({ m, s: Math.max(relevance(q, m.content, m.category), fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
       .filter((x) => x.s >= min)
       .sort((a, b) => b.s - a.s || b.m.updatedAt - a.m.updatedAt)
       .slice(0, limit)
@@ -636,7 +658,7 @@ export class MemoryStore {
     const pool = this.list(spaceId)
     if (!q) return pool.slice(0, limit)
     return pool
-      .map((m) => ({ m, s: Math.max(fuzzyScore(q, m.content), m.id === q ? 1 : 0, fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
+      .map((m) => ({ m, s: Math.max(relevance(q, m.content, m.category), m.id === q ? 1 : 0, fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
       .filter((x) => x.s >= 0.34)
       .sort((a, b) => b.s - a.s || b.m.updatedAt - a.m.updatedAt)
       .slice(0, limit)

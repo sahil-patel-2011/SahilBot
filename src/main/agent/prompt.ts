@@ -49,7 +49,8 @@ ${note}
 ${DECISIONS}
 - After meaningful work (a file made, research done, something sent or changed), add a short work-log entry: memory(action="save", category="worklog", fact="what you did → where the output is").
 - "What do you remember about me?": memory(action="list"), then answer in plain words grouped by topic, without ids. "Forget that…": memory(action="forget", query="…") or by id, then confirm exactly what was removed; if several could match, ask which.
-- When the user mentions earlier work you don't see here, use memory(action="search").`
+- When the user mentions earlier work you don't see here, use memory(action="search").
+- Don't make the user repeat themselves: a detail they may have given before (an email, address, name, number, preference, "the usual", "my landlord") is in <context> or one memory(action="search") away; look there before ask_user.`
 }
 // </memory-guidance>
 

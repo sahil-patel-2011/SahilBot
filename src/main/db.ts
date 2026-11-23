@@ -4,6 +4,7 @@ import type { EffortChoice, LibraryItem, Message, PermissionMode, Space, Thread 
 import { emptyState, type ThreadState } from './agent/types'
 import { KNOWLEDGE_SCHEMA } from './knowledge/schema'
 import { UNREAD_CAP } from '@shared/read-state'
+import { alternativesFor } from './recall-expand'
 
 export const uid = (): string => randomUUID()
 
@@ -365,12 +366,18 @@ export class Db {
    */
   recallUserSaid(query: string, excludeThreadId: string, limit = 6): Array<{ threadId: string; title: string; text: string; at: number }> {
     const STOP = new Set('about above after again also because been before being below between both could does doing down during each from further have having here into itself just more most other over same should some such than that their them then there these they this those through under until very were what when where which while will with would your yours make made want need like please thanks thank help'.split(' '))
-    const words = [...new Set((query.toLowerCase().match(/[a-z0-9][a-z0-9'-]{3,}/g) ?? []).filter((w) => !STOP.has(w)))].slice(0, 8)
+    // Words of 4+ letters, and shorter ones that stand for something ("wed", "pup", "mom").
+    const words = [...new Set((query.toLowerCase().match(/[a-z0-9][a-z0-9'-]{2,}/g) ?? []).filter((w) => !STOP.has(w) && (w.length >= 4 || alternativesFor(w).length > 1)))].slice(0, 8)
     const here = this.getThread(excludeThreadId)
     if (!words.length || !here) return []
     this.sql.exec('CREATE INDEX IF NOT EXISTS messages_role_at ON messages(role, created_at)')
     const esc = (w: string): string => `%${w.replace(/[%_\\]/g, (c) => '\\' + c)}%`
-    const score = words.map(() => `(CASE WHEN lower(r.content) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END)`).join(' + ')
+    // Each word counts once, by itself or another word for the same thing ("contractor" → quotes, builders;
+    // recall-expand.ts), in the message or its chat's title ("our flight" in the "Lisbon trip" chat).
+    // Other words must start a word (" son", never "season").
+    const alts = words.map((w) => [esc(w), ...alternativesFor(w, query).filter((a) => a !== w && a.length >= 3).map((a) => `% ${a.replace(/[%_\\]/g, (c) => '\\' + c)}%`)])
+    const hay = `(' ' || lower(r.content) || ' ' || lower(coalesce(r.title, '')))`
+    const score = alts.map((a) => `(CASE WHEN ${a.map(() => `${hay} LIKE ? ESCAPE '\\'`).join(' OR ')} THEN 1 ELSE 0 END)`).join(' + ')
     const notMine = ['hidden', 'handoff', 'teach', 'helperTask', 'fromLink', 'mcpClientId', 'fromApp', 'scheduled', 'goalRun', 'superseded', 'relayed']
       .map((k) => `json_extract(m.data, '$.meta.${k}') IS NULL OR json_extract(m.data, '$.meta.${k}') IN (0, '')`).map((c) => `(${c})`).join(' AND ')
     const rows = this.sql.prepare(`WITH r AS (
@@ -380,7 +387,7 @@ export class Db {
           AND length(m.content) BETWEEN 12 AND 20000 AND ${notMine}
         ORDER BY m.created_at DESC LIMIT 4000)
       SELECT threadId, title, content AS text, at, (${score}) AS hits FROM r ORDER BY hits DESC, at DESC LIMIT 40`)
-      .all(here.spaceId, excludeThreadId, ...words.map(esc)) as Array<{ threadId: string; title: string; text: string; at: number; hits: number }>
+      .all(here.spaceId, excludeThreadId, ...alts.flat()) as Array<{ threadId: string; title: string; text: string; at: number; hits: number }>
     const need = Math.min(2, words.length)
     const out: Array<{ threadId: string; title: string; text: string; at: number }> = []
     const perThread = new Map<string, number>()

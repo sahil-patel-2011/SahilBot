@@ -14,7 +14,7 @@ import { grantableFolder } from './tools/files'
 import { usageScope } from '../usage'
 import type { ApprovalAnswer, Attachment, ChatEvent, CollaborationStep, Effort, TeamMember, Message, ModelInfo, PendingRequest, PermissionMode, QueueQuestion, SendInput, Space, Thread, Tier, ToolCall, ToolEffect } from '@shared/types'
 import type { Db } from '../db'
-import type { MemoryStore } from '../memory'
+import { isUntrusted, memoryBudget, relevance, type MemoryStore } from '../memory'
 import type { SettingsStore } from '../settings'
 import type { SpaceFiles } from '../spaces'
 import { samplingFor } from '../llm/catalog'
@@ -89,7 +89,7 @@ import { RuntimeStore, cleanPolicy, digest, type RunRecord } from './runtime/sto
 import { TaskMeter, taskScope, recoveryPlan } from './runtime/policy'
 import { runtimeTools } from './runtime/tools'
 import { ResearchStore, freshnessFor } from './runtime/research'
-import { MemorySystem, type RecallHit } from '../memory-system'
+import { MemorySystem, earlierSaid, type RecallHit } from '../memory-system'
 import type { Embedder } from '../knowledge/embeddings'
 import { OutcomeRouter, outcomeLines, verdictFromEmoji, verdictFromWords, type VerdictSource } from '../llm/outcome-router'
 import { requestStrategy } from '@shared/request-strategy'
@@ -212,6 +212,8 @@ interface Pending {
 }
 
 interface Run {
+  /** ask_user questions already checked against what the user said before (askedBefore): asked for real the next time. */
+  memoryChecked?: Set<string>
   collaboration?: { message: Message; steps: CollaborationStep[] }
   collaborationSpend?: SwarmLedger
   planFirst?: boolean
@@ -369,6 +371,15 @@ export function codingRun(loaded: string[], why?: string): boolean {
 }
 
 export const RESEARCH_FIRST = 'Research first: spend a few steps looking for the answer yourself (memory search, knowledge_search over the user\'s notes and documents, your own files and library, the connected apps via find_tools, the web) so your questions are informed or unnecessary. Then ask only what truly blocks progress or is the user\'s preference, all in one ask_user call — or, if this is purely the user\'s preference, call ask_user again.'
+
+/** The questions of an ask_user call (one, or a batch). */
+export function askedQuestions(args: Record<string, unknown>): string[] {
+  if (Array.isArray(args.questions) && args.questions.length) return (args.questions as Array<{ question?: unknown }>).map((q) => String(q?.question ?? '')).filter(Boolean)
+  return typeof args.question === 'string' && args.question.trim() ? [args.question] : []
+}
+
+/** What the model gets back instead of the user's answer when the user already told SahilBot (askedBefore). */
+export const memoryFirst = (lines: string[]): string => `Not asked yet: the user may have told you this already.\n${lines.join('\n')}\nIf this answers your question, don't ask: use it and carry on, and say in a few words what you used ("Using Mike's email from before"). If it doesn't answer it, or the step is risky enough that you must confirm, call ask_user again with the same question.`
 
 /** Tools that don't count as looking into the task (planning and asking). */
 const NOT_RESEARCH = new Set(['todo', 'ask_user', 'propose_plan', 'find_tools'])
@@ -1145,7 +1156,10 @@ export class Agent {
     const bot = speaker ?? this.d.db.getSpace(thread.spaceId)
     const project = bot?.kind === 'project' ? bot : undefined
     const local = this.isLocalModel(model)
-    const memories = this.d.memory.block({ spaceId: bot?.kind === 'bot' ? bot.id : null, spaceName: bot?.name, query })
+    // Sized by the model's window (memoryBudget): a big model sees most of what the user told it.
+    let window: number | undefined
+    try { window = this.d.contextWindow?.(model) } catch { /* the small default */ }
+    const memories = this.d.memory.block({ spaceId: bot?.kind === 'bot' ? bot.id : null, spaceName: bot?.name, query, maxTokens: memoryBudget(local ? Math.min(window ?? 0, 32_768) : window) })
     yield
     // The knowledge vault's most relevant notes (src/main/vault), budgeted by this model's window.
     const vault = this.d.vaultContext?.({ spaceId: bot && bot.kind !== 'group' ? bot.id : null, query, model, local, threadId: thread.id }) ?? null
@@ -1241,6 +1255,16 @@ export class Agent {
         const said = this.d.db.recallUserSaid?.(query, thread.id, 6) ?? []
         if (said.length) out.push({ title: 'What the user said in other chats that may bear on this (their own words; older ones may be out of date, and this chat wins on any conflict)', lines: said.map((x) => `[${new Date(x.at).toISOString().slice(0, 10)} · "${x.title.slice(0, 60)}"] ${x.text}`) })
       } catch { /* the search failed: go on without it */ }
+      // A long chat: what the user said earlier in it, before a compaction summarized it away (their own words).
+      try {
+        const st = this.d.db.getState(thread.id)
+        if (st.compaction?.boundaryId) {
+          const ms = this.d.db.listMessages(thread.id)
+          const cut = ms.findIndex((m) => m.id === st.compaction!.boundaryId)
+          const lines = cut > 0 ? earlierSaid(ms.slice(0, cut + 1), query, { limit: 4 }) : []
+          if (lines.length) out.push({ title: 'What the user said earlier in this chat, before it was summarized (their own words; later messages win on any conflict)', lines })
+        }
+      } catch { /* go on without */ }
       if (experiences.length) out.push({ title: 'Verified previous experience (check environment compatibility before reuse)', lines: experiences.map((e) => `${e.task}: ${e.procedure.slice(0, 600)} [${e.successes} verified successes, ${e.failures} failures; environment ${e.environment}]`) })
     }
     // A project's saved task memory (agent/task-memory.ts): every chat in the project starts with its core.
@@ -2190,6 +2214,40 @@ export class Agent {
   /** This run's own card answers count as the user's decisions (not a helper's, an app's, another bot's ask, or after outside content). */
   private ownAnswers(run: Run, ctx: ExecCtx): boolean {
     return !!this.d.decisions && !run.unattended && !run.helper && !run.askVia && !run.fromApp && !run.forceTaint && !ctx.track.sawUntrusted
+  }
+
+  /**
+   * What the user already told SahilBot that answers these questions: saved memories (trusted ones, this bot's and
+   * shared) and their own words in other chats, each read with the request that started the run (a question like
+   * "What's their email?" names nobody). At most 6 lines; none when nothing fits well.
+   */
+  private askedBefore(thread: Thread, run: Run, questions: string[]): string[] {
+    if (!this.d.memory.enabled) return []
+    try {
+      const bot = run.speaker ?? this.d.db.getSpace(thread.spaceId)
+      const scope = bot?.kind === 'bot' ? bot.id : null
+      const all = this.d.db.listMessages(thread.id)
+      const opener = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
+      const request = opener ? recallQuery(opener, all) : ''
+      const out: string[] = []
+      const seen = new Set<string>()
+      for (const q of questions) {
+        const asks = [q, request ? `${q}\n${request}` : ''].filter(Boolean)
+        for (const a of asks) {
+          for (const m of this.d.memory.search(a, scope, 8)) {
+            if (isUntrusted(m) || m.category === 'worklog' || seen.has(m.id)) continue
+            if (Math.max(relevance(q, m.content, m.category), relevance(a, m.content, m.category) * 0.9) < 0.55) continue
+            seen.add(m.id); out.push(`- Saved: ${m.content}`)
+          }
+        }
+        for (const x of this.d.db.recallUserSaid?.(asks.join('\n'), thread.id, 3) ?? []) {
+          const k = x.text.slice(0, 120)
+          if (seen.has(k)) continue
+          seen.add(k); out.push(`- They said on ${new Date(x.at).toISOString().slice(0, 10)} ("${x.title.slice(0, 60)}"): ${x.text}`)
+        }
+      }
+      return out.slice(0, 6)
+    } catch { return [] }
   }
 
   /** Every question in an ask_user call already has a saved answer (a preference the user gave before). */
@@ -4092,6 +4150,18 @@ export class Agent {
     if (!known && researchGate(tool.name, { task: !!ctx.track.task, explored: !!ctx.track.explored, gated: !!ctx.track.askGated, unattended: run.unattended, helper: run.helper, intro: run.intro, queued: !!qcfg })) {
       ctx.track.askGated = true
       return { call, status: 'ok', content: RESEARCH_FIRST, meta: { label: tool.label, effect: 'read', args: call.arguments, status: 'ok', display: 'looking into it first' } }
+    }
+
+    // Don't make the user repeat themselves: a question whose answer they already gave (a saved memory, their own
+    // words in another chat) goes back to the model with that answer instead of to the user. Once per question.
+    if (tool.name === 'ask_user' && !run.helper && !known) {
+      const qs = askedQuestions(args)
+      const key = digest(qs)
+      if (qs.length && !(run.memoryChecked ??= new Set()).has(key)) {
+        run.memoryChecked.add(key)
+        const lines = this.askedBefore(thread, run, qs)
+        if (lines.length) return { call, status: 'ok', content: memoryFirst(lines), meta: { label: tool.label, effect: 'read', args: call.arguments, status: 'ok', display: 'checked what you told me before' } }
+      }
     }
 
     // 2. Permission.
