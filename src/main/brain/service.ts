@@ -399,7 +399,9 @@ export class BrainService {
         }
         cur.gaps = cur.gaps.slice(0, 5)
         if (!cur.gaps.length && st.backfill[def.id]?.state === 'running') st.backfill[def.id] = { ...st.backfill[def.id], state: 'done' }
-        const r = this.take(items)
+        // Only mail newer than when SahilBot started reading this source can set off a routine (never a backfill).
+        const since = cur.since
+        const r = this.take(items, (x) => !x.at || x.at >= since)
         read += r.read; kept += r.kept; dropped += r.dropped
         delete st.errors[def.id]
       } catch (e) {
@@ -413,12 +415,13 @@ export class BrainService {
   }
 
   /** New items into the store: kept ones wait for extraction, filtered ones are remembered (never read again). */
-  private take(items: RawItem[]): { read: number; kept: number; dropped: number } {
+  private take(items: RawItem[], triggerable: (x: RawItem) => boolean = () => true): { read: number; kept: number; dropped: number } {
     const fresh = items.filter((x, i) => x.id && !this.store.hasItem(x.source, x.id) && items.findIndex((y) => y.source === x.source && y.id === x.id) === i)
     const f = prefilter(fresh, (h) => this.store.hasHash(h))
     for (const x of f.kept) this.store.addItem(x, f.hashes.get(x)!, 'pending', { raw: JSON.stringify(x) })
     for (const { item, reason } of f.dropped) this.store.addItem(item, f.hashes.get(item)!, 'dropped', { reason })
-    if (fresh.length) try { this.d.onNew?.(fresh) } catch { /* a routine trigger never fails the read */ }
+    const live = fresh.filter(triggerable)
+    if (live.length) try { this.d.onNew?.(live) } catch { /* a routine trigger never fails the read */ }
     return { read: fresh.length, kept: f.kept.length, dropped: f.dropped.length }
   }
 

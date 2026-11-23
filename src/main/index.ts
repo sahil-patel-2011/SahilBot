@@ -1955,7 +1955,7 @@ app.whenReady().then(() => {
     const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', meta: { routineNotice: ev.type, routine: ev.task.id } })
     emit({ threadId, type: 'message', message: m })
   }
-  registry.register({ ...scheduleTool(scheduler, db, () => brain.status().sources.map((x) => ({ kind: x.kind, name: x.name, on: x.on && x.state === 'on' }))), core: true })
+  registry.register({ ...scheduleTool(scheduler, db, () => brain.status().sources.map((x) => ({ kind: x.kind, name: x.name, on: x.on && x.state === 'on' })), () => !!brain.status().settings.paused), core: true })
   // Stock tools (found with find_tools "stock"): quotes, analysis, forecasts, compare, backtests, price alerts.
   registry.register(...stockTools(markets, { scheduler, db, liveQuotes }))
   // Missed runs (closed or asleep) catch up once within Settings → General → "Catch up on missed routines".
@@ -3225,6 +3225,8 @@ app.whenReady().then(() => {
   const setRoutinesPaused = (paused: boolean): void => {
     settings.set({ routinesPaused: paused })
     alwaysOnChanged.current({ routinesPaused: paused })
+    // "When …" matches that came in while routines were paused run now.
+    if (!paused) scheduler.drainAll()
   }
   const awake = new KeepAwake(powerSaveBlocker)
   // Lid closed too (off by default; main/lid-awake.ts): while anything runs and 5 minutes after.

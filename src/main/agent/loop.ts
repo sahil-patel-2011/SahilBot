@@ -3017,7 +3017,9 @@ export class Agent {
     const untrusted: string[] = [
       ...(run.seed?.untrusted ?? []),
       ...history.filter((m) => m.role === 'tool' && m.meta?.untrusted).slice(-20).map((m) => m.content),
-      ...history.filter((m) => m.role === 'user' && isRelayed(m) && !m.meta?.helperTask).slice(-10).map(relayedText)
+      ...history.filter((m) => m.role === 'user' && isRelayed(m) && !m.meta?.helperTask).slice(-10).map(relayedText),
+      // Emails and messages that set off a "when …" routine earlier in this chat stay outside content for later runs.
+      ...history.filter((m) => m.role === 'user' && Array.isArray(m.meta?.triggerUntrusted)).slice(-10).flatMap((m) => (m.meta!.triggerUntrusted as unknown[]).filter((t): t is string => typeof t === 'string'))
     ]
     let userText = [run.seed?.userText ?? '', userTextOf(history)].filter(Boolean).join('\n')
     // Set by execute(): did this run change anything or research anything? Then it gets a self-check pass.
@@ -3033,7 +3035,7 @@ export class Agent {
       unchecked: false,
       // Research before asking: did this run look at anything yet, is it a task, was it nudged already.
       explored: false, task: false, askGated: false,
-      web: history.some((m) => m.role === 'tool' && m.meta?.untrusted) || (run.seed?.untrusted.length ?? 0) > 1 || !!run.forceTaint,
+      web: history.some((m) => (m.role === 'tool' && m.meta?.untrusted) || (m.role === 'user' && Array.isArray(m.meta?.triggerUntrusted))) || (run.seed?.untrusted.length ?? 0) > 1 || !!run.forceTaint,
       sawUntrusted: false
     }
     // "This turn": a helper inherits its lead's; otherwise only what this run reads (or was handed) counts.

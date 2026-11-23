@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { RoutineRun, Schedule, ScheduledTask } from '@shared/types'
 import type { Db } from './db'
-import { describeWhen, pickItems, triggerNote, TRIGGER_DAILY_MAX, type TriggerItem } from './triggers'
+import { describeWhen, pickItems, triggerNote, TRIGGER_BATCH, TRIGGER_DAILY_MAX, TRIGGER_TEST_NOTE, type TriggerItem } from './triggers'
 
 // Scheduled tasks: once / daily / weekly / every N minutes / cron. Due tasks run as normal agent
 // turns in an unattended mode where anything that would need approval is skipped, not done.
@@ -250,6 +250,7 @@ export class Scheduler {
       .run(id, t.title.trim() || 'Scheduled task', t.prompt.trim(), JSON.stringify(t.schedule), t.spaceId, t.threadId ?? null, on ? 1 : 0, on && next ? next.getTime() : null, Date.now())
     this.changed()
     const task = this.get(id)!
+    if (task.schedule.type === 'when') this.arm(id)
     this.emit({ type: 'created', task })
     return task
   }
@@ -265,6 +266,8 @@ export class Scheduler {
       .run(n.title, n.prompt, JSON.stringify(n.schedule), n.enabled ? 1 : 0, next, id)
     this.changed()
     const task = this.get(id)!
+    if (task.schedule.type === 'when' && (cur.schedule.type !== 'when' || (!cur.enabled && task.enabled))) this.arm(id)
+    if (!task.enabled) this.waiting.delete(id)
     if (cur.enabled !== task.enabled) this.emit({ type: task.enabled ? 'resumed' : 'paused', task })
     else if (cur.title !== task.title || cur.prompt !== task.prompt || JSON.stringify(cur.schedule) !== JSON.stringify(task.schedule)) this.emit({ type: 'changed', task })
     return task
@@ -273,6 +276,7 @@ export class Scheduler {
   remove(id: string): void {
     const cur = this.get(id)
     this.db.sql.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id)
+    this.waiting.delete(id)
     this.changed()
     if (cur) this.emit({ type: 'deleted', task: cur })
   }
@@ -328,7 +332,7 @@ export class Scheduler {
   test(id: string, o: { dry?: boolean } = {}): { runId: string; done: Promise<void> } | null {
     const t = this.get(id)
     if (!t || this.busy.has(id) || !this.available(t.spaceId)) return null
-    return this.begin(t, true, undefined, o.dry)
+    return this.begin(t, true, undefined, o.dry, t.schedule.type === 'when' ? { note: TRIGGER_TEST_NOTE, untrusted: [], count: 0 } : undefined)
   }
 
   /** `late` = when a missed run was due (it runs now, once, and says so). */
@@ -349,24 +353,63 @@ export class Scheduler {
    * (their own mail never sets a routine off). Returns the routines started.
    */
   onItems(items: TriggerItem[], me: string[] = []): string[] {
-    if (!items.length || this.paused()) return []
+    if (!items.length) return []
     const started: string[] = []
-    const today = new Date(this.now()); today.setHours(0, 0, 0, 0)
     for (const t of this.list()) {
-      if (!t.enabled || t.schedule.type !== 'when' || this.busy.has(t.id) || !this.available(t.spaceId)) continue
-      // Only what arrived after the routine was made (a first read of older mail sets nothing off).
-      const hit = pickItems(t.schedule, items.filter((x) => x.at >= t.createdAt), me)
+      if (!t.enabled || t.schedule.type !== 'when') continue
+      // Only what arrived after the routine was set up (a first read or a backfill of older mail sets nothing off).
+      // An item without a time counts as arriving now.
+      const armed = this.armedAt(t)
+      const hit = pickItems(t.schedule, items.filter((x) => (x.at || Date.now()) >= armed), me)
       if (!hit.items.length) continue
-      const ran = (this.db.sql.prepare('SELECT COUNT(*) AS n FROM routine_runs WHERE task_id = ? AND test = 0 AND started_at >= ?').get(t.id, today.getTime()) as { n: number }).n
-      if (ran >= TRIGGER_DAILY_MAX) {
-        this.db.sql.prepare('UPDATE scheduled_tasks SET last_status = ? WHERE id = ?').run(`skipped: ran ${TRIGGER_DAILY_MAX} times today already`, t.id)
-        continue
-      }
-      this.db.sql.prepare('UPDATE scheduled_tasks SET last_run = ? WHERE id = ?').run(Date.now(), t.id)
-      void this.begin(t, false, undefined, false, { note: triggerNote(hit.items, hit.more), untrusted: hit.items.map((x) => `${x.title}\n${x.from ?? ''}\n${x.text}`), count: hit.items.length + hit.more })
-      started.push(t.id)
+      // Busy, paused, or its bot is away: kept for its next run, not dropped.
+      if (this.busy.has(t.id) || this.paused() || !this.available(t.spaceId)) { this.queue(t.id, hit.items, hit.more); continue }
+      if (this.startEvent(t, hit.items, hit.more)) started.push(t.id)
     }
     return started
+  }
+
+  /** Matches that came in while a "when" routine was busy or paused, for its next run (newest kept). */
+  private waiting = new Map<string, { items: TriggerItem[]; more: number }>()
+  private queue(id: string, items: TriggerItem[], more: number): void {
+    const cur = this.waiting.get(id) ?? { items: [], more: 0 }
+    const all = [...cur.items, ...items.filter((x) => !cur.items.some((y) => y.source === x.source && y.id === x.id))]
+    this.waiting.set(id, { items: all.slice(-TRIGGER_BATCH), more: cur.more + more + Math.max(0, all.length - TRIGGER_BATCH) })
+  }
+
+  /** When a "when" routine was set up, switched to "when" or turned back on: older items never set it off. */
+  private armedAt(t: ScheduledTask): number {
+    return this.db.getSetting<number>(`triggerArmed:${t.id}`) ?? t.createdAt
+  }
+
+  private arm(id: string): void {
+    this.db.setSetting(`triggerArmed:${id}`, Date.now())
+  }
+
+  private startEvent(t: ScheduledTask, items: TriggerItem[], more: number): boolean {
+    const today = new Date(this.now()); today.setHours(0, 0, 0, 0)
+    const ran = (this.db.sql.prepare('SELECT COUNT(*) AS n FROM routine_runs WHERE task_id = ? AND test = 0 AND started_at >= ?').get(t.id, today.getTime()) as { n: number }).n
+    if (ran >= TRIGGER_DAILY_MAX) {
+      this.db.sql.prepare('UPDATE scheduled_tasks SET last_status = ? WHERE id = ?').run(`skipped: ran ${TRIGGER_DAILY_MAX} times today already`, t.id)
+      return false
+    }
+    this.db.sql.prepare('UPDATE scheduled_tasks SET last_run = ? WHERE id = ?').run(Date.now(), t.id)
+    void this.begin(t, false, undefined, false, { note: triggerNote(items, more), untrusted: items.map((x) => `${x.title}\n${x.from ?? ''}\n${x.text}`), count: items.length + more })
+    return true
+  }
+
+  /** A "when" routine finished: matches that came in meanwhile run now (one run for all of them). */
+  private drain(id: string): void {
+    const w = this.waiting.get(id)
+    const t = this.get(id)
+    if (!w || !t || !t.enabled || t.schedule.type !== 'when' || this.busy.has(id) || this.paused() || !this.available(t.spaceId)) return
+    this.waiting.delete(id)
+    this.startEvent(t, w.items, w.more)
+  }
+
+  /** Runs queued matches whose routine can run now (routines resumed, a bot came back). */
+  drainAll(): void {
+    for (const id of [...this.waiting.keys()]) this.drain(id)
   }
 
   /** Records the run (synchronously, so callers can return at once), then runs it. */
@@ -393,6 +436,7 @@ export class Scheduler {
       this.db.sql.prepare('UPDATE scheduled_tasks SET last_status = ? WHERE id = ?').run(status, t.id)
       this.busy.delete(t.id)
       this.changed()
+      if (this.waiting.has(t.id)) setTimeout(() => this.drain(t.id), 0)
       if (out.status === 'failed') this.emit({ type: 'failed', task: this.get(t.id) ?? t, reason: out.reason ?? undefined, threadId })
     })()
     return { runId, done }

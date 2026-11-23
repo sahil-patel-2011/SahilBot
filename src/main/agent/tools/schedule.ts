@@ -8,8 +8,10 @@ type Args = { action: 'create' | 'list' | 'update' | 'delete' | 'pause' | 'resum
 /** Reminders and recurring tasks. Runs happen unattended: anything needing approval is skipped and reported. */
 /** Connected sources by kind, for "when …" routines (only what SahilBot reads can set one off). */
 export type SourceKinds = () => { kind: string; name: string; on: boolean }[]
+/** The reading behind "when …" routines is off (the Brain is paused). */
+export type ReadsPaused = () => boolean
 
-export function scheduleTool(scheduler: Scheduler, db: Db, sources?: SourceKinds): ToolDef<Args> {
+export function scheduleTool(scheduler: Scheduler, db: Db, sources?: SourceKinds, readsPaused?: ReadsPaused): ToolDef<Args> {
   return {
     name: 'schedule',
     label: 'Schedule',
@@ -61,6 +63,7 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
         if (when.type === 'when' && sources) {
           const on = sources().filter((x) => x.on && (when.kind === 'any' || x.kind === when.kind))
           if (!on.length) throw new Error(`Nothing SahilBot reads can set this off: connect ${when.kind === 'email' ? 'your email (Gmail or Outlook)' : when.kind === 'calendar' ? 'your calendar' : when.kind === 'chat' ? 'Slack or your messages' : 'an app'} first (connect_app), then create it again.`)
+          if (readsPaused?.()) throw new Error('SahilBot isn\'t reading your apps right now ("Pause the brain" is on), so this would never run. Ask the user to turn the brain back on first.')
           reads = ` It runs each time SahilBot reads ${on.map((x) => x.name).join(', ')} and finds a match (about every 5 minutes while SahilBot is open; at most 20 times a day).`
         }
         const t = scheduler.create({ title: a.title!, prompt: a.prompt!, schedule: when, spaceId: thread?.spaceId ?? '', threadId: thread && db.getSpace(thread.spaceId)?.isMain ? thread.id : null })
@@ -70,7 +73,7 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
       if (a.action === 'list') {
         const ts = scheduler.list()
         if (!ts.length) return { text: 'No scheduled tasks.', display: 'none scheduled' }
-        return { text: ts.map((t) => `- [${t.id}] ${t.title}: ${describeSchedule(t.schedule)}${t.enabled ? `, next ${t.nextRun ? new Date(t.nextRun).toLocaleString() : 'never'}` : ' (paused)'}${t.lastStatus ? `, last: ${t.lastStatus}` : ''}`).join('\n'), display: `${ts.length} scheduled` }
+        return { text: ts.map((t) => `- [${t.id}] ${t.title}: ${describeSchedule(t.schedule)}${t.enabled ? (t.schedule.type === 'when' ? ', runs when one arrives' : `, next ${t.nextRun ? new Date(t.nextRun).toLocaleString() : 'never'}`) : ' (paused)'}${t.lastStatus ? `, last: ${t.lastStatus}` : ''}`).join('\n'), display: `${ts.length} scheduled` }
       }
       if (a.action === 'update') {
         if (a.title === undefined && a.prompt === undefined && !a.when) throw new Error('update needs at least one of title, prompt or when.')
@@ -90,7 +93,9 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
 /** A "when" schedule as stored: a known kind, short trimmed filters. */
 function cleanWhen(w: Extract<Schedule, { type: 'when' }>): Schedule {
   const kinds = ['email', 'chat', 'calendar', 'meetings', 'crm', 'docs', 'accounting', 'any'] as const
-  const kind = (kinds as readonly string[]).includes(w.kind) ? w.kind : 'any'
+  // A missing or unknown kind is an error, never "anything" (that would run on every item).
+  if (!(kinds as readonly string[]).includes(w.kind)) throw new Error(`when.kind must be one of ${kinds.join(', ')} ("chat" covers Slack and texts).`)
+  const kind = w.kind
   const t = (x: unknown): string | undefined => (typeof x === 'string' && x.trim() ? x.trim().slice(0, 200) : undefined)
   const from = t(w.from), contains = t(w.contains)
   return { type: 'when', kind, ...(from ? { from } : {}), ...(contains ? { contains } : {}) }

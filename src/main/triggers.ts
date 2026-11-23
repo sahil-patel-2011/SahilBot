@@ -21,6 +21,8 @@ export interface TriggerItem {
   text: string
   link?: string
   bulk?: boolean
+  labels?: string[]
+  declined?: boolean
 }
 
 /** At most this many matching items go into one run; the rest are counted. */
@@ -29,38 +31,69 @@ export const TRIGGER_BATCH = 5
 export const TRIGGER_DAILY_MAX = 20
 
 const norm = (s: string | undefined): string => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+const esc = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-/** Every listed word or phrase ("invoice, receipt" = either) appears as whole words. */
+/** The terms of a filter: "invoice, receipt" (or ";", "|") = either. */
+const termsOf = (list: string): string[] => list.split(/[,;|]/).map(norm).filter(Boolean)
+
+/** Any of the words or phrases appears as whole words; a plain word also matches its plural ("invoice" → "invoices"). */
 function hasAny(hay: string, list: string): boolean {
-  const terms = list.split(/[,;|]|\bor\b/i).map(norm).filter(Boolean)
+  const terms = termsOf(list)
   if (!terms.length) return true
-  return terms.some((t) => new RegExp(`(^|[^\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}\\p{N}])`, 'iu').test(hay))
+  return terms.some((t) => new RegExp(`(^|[^\\p{L}\\p{N}])${esc(t)}${/\p{L}$/u.test(t) ? '(e?s)?' : ''}($|[^\\p{L}\\p{N}])`, 'iu').test(hay))
+}
+
+/** The address in "Name <addr>" (or the whole thing when it is an address). */
+export function addressOf(from: string | undefined): string {
+  const f = norm(from)
+  const m = /<([^<>\s]+@[^<>\s]+)>/.exec(f) ?? /([^\s<>"]+@[^\s<>"]+)/.exec(f)
+  return m ? m[1] : ''
+}
+
+/**
+ * The sender filter. A domain or address ("vendor.com", "ap@vendor.com") is checked against the real address only:
+ * the address itself, or a domain it is at (vendor.com, mail.vendor.com), never a display name or a lookalike
+ * (vendor.com.evil.net). A plain name ("Pat Lee") matches the display name or the address as whole words.
+ */
+function fromMatches(from: string | undefined, list: string): boolean {
+  const addr = addressOf(from)
+  return termsOf(list).some((t) => {
+    if (t.includes('@')) return addr === t.replace(/^@/, '') || (t.startsWith('@') && addr.endsWith(t))
+    if (/^[\p{L}\p{N}-]+(\.[\p{L}\p{N}-]+)+$/u.test(t)) { const domain = addr.split('@')[1] ?? ''; return domain === t || domain.endsWith(`.${t}`) }
+    return hasAny(norm(from), t)
+  })
 }
 
 /** Does this item set off the trigger? Kind first, then sender, then words in the subject or body. */
 export function matchesTrigger(w: When, x: TriggerItem, me: string[] = []): boolean {
   if (w.kind !== 'any' && x.kind !== w.kind) return false
-  const from = norm(x.from)
-  // Your own mail never triggers (a routine that emails you would set itself off).
-  if (from && me.some((m) => m && from.includes(norm(m)))) return false
+  // Your own mail never triggers (a routine that emails you would set itself off), nor mail you sent.
+  const addr = addressOf(x.from)
+  if (addr && me.some((m) => m && addr === norm(m))) return false
+  if (x.labels?.some((l) => /^sent$/i.test(l))) return false
+  // A declined or cancelled invite isn't something arriving.
+  if (x.declined) return false
   // Newsletters and promotions only when asked for by sender.
   if (x.bulk && !w.from) return false
-  if (w.from && !hasAny(from, w.from)) return false
+  if (w.from && !fromMatches(x.from, w.from)) return false
   if (w.contains && !hasAny(`${norm(x.title)} ${norm(x.text)}`, w.contains)) return false
   return true
 }
 
 const KIND_WORD: Record<string, string> = WHEN_KIND_WORD
 
+/** Item text as data: no markup can open or close a fence (every angle bracket is escaped). */
+const inert = (t: string | undefined, max: number): string => (t ?? '').slice(0, max).replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
 /** The items as the bot sees them: fenced outside content, bounded. */
 export function triggerNote(items: TriggerItem[], more = 0): string {
   const one = (x: TriggerItem): string => [
-    `${KIND_WORD[x.kind]?.replace(/^an? /, '') ?? x.kind}: ${x.title.replace(/\s+/g, ' ').slice(0, 200)}`,
-    x.from ? `From: ${x.from.slice(0, 200)}` : '',
-    `When: ${new Date(x.at).toLocaleString()}`,
-    x.link ? `Link: ${x.link.slice(0, 500)}` : '',
+    `${KIND_WORD[x.kind]?.replace(/^an? /, '') ?? x.kind}: ${inert(x.title.replace(/\s+/g, ' '), 200)}`,
+    x.from ? `From: ${inert(x.from, 200)}` : '',
+    `When: ${new Date(x.at || Date.now()).toLocaleString()}`,
+    x.link ? `Link: ${inert(x.link, 500)}` : '',
     '',
-    x.text.replace(/<\/?trigger_item[^>]*>/gi, '[tag removed]').slice(0, 4000)
+    inert(x.text, 4000)
   ].filter((l, i) => l || i === 4).join('\n')
   const blocks = items.map((x) => `<trigger_item source="${x.source.replace(/[^\w.-]/g, '')}" trust="untrusted">\n${one(x)}\n</trigger_item>`)
   return [
@@ -68,6 +101,9 @@ export function triggerNote(items: TriggerItem[], more = 0): string {
     ...blocks
   ].join('\n')
 }
+
+/** A test or dry run of an event routine: nothing arrived, so the bot says what it would do with a match. */
+export const TRIGGER_TEST_NOTE = '[This is a test of a routine that normally runs when a matching item arrives. Nothing arrived this time: look for the most recent matching item yourself if you can (read only), otherwise say briefly what you would do with one.]'
 
 /** The items that set off a trigger, newest last, and how many were left out of the run. */
 export function pickItems(w: When, items: TriggerItem[], me: string[] = []): { items: TriggerItem[]; more: number } {
