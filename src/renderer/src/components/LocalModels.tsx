@@ -47,7 +47,7 @@ export function VoiceOutputRow({ s, patch }: { s: Settings; patch: (p: Partial<S
     <div className="set-row" data-testid="voice-output-row">
       <div className="set-row-text">
         <div className="set-row-title">Voice</div>
-        <div className="set-row-sub">{preference === 'claude-app' ? 'Claude talks in its own app: Talk opens Claude\'s voice mode in your browser.' : nativeVoiceSite(preference) ? 'Talk opens the provider website. Select Voice there to use your account.' : preference === 'off' ? 'Pick Grok, ChatGPT or Claude to talk with your bots.' : selected ? `Uses your ${selected === 'xai' ? 'Grok (xAI)' : 'OpenAI'} key, within your monthly limit.` : `Add your ${choice === 'openai' ? 'OpenAI (ChatGPT)' : 'Grok (xAI)'} key in AI & spending to talk.`}</div>
+        <div className="set-row-sub">{preference === 'claude-app' ? 'Claude talks in its own app: Talk opens Claude\'s voice mode in your browser.' : nativeVoiceSite(preference) ? 'Talk opens the provider website. Select Voice there to use your account.' : preference === 'off' ? 'Pick Grok, ChatGPT or Claude to talk with your bots.' : selected === 'xai' ? 'Grok Voice 3.0: a live conversation you can interrupt any time; your bots do the work. About $0.08 a minute, within your monthly limit.' : selected ? 'Uses your OpenAI key, within your monthly limit.' : `Add your ${choice === 'openai' ? 'OpenAI (ChatGPT)' : 'Grok (xAI)'} key in AI & spending to talk.`}</div>
       </div>
       <select className="set-select" aria-label="Whose voice" data-testid="voice-provider" value={choice} onChange={(e) => void patch({ voiceOutput: { provider: e.target.value as CloudSpeechProvider } })}>
         <option value="xai">Grok</option>

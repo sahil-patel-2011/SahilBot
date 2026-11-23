@@ -29,10 +29,12 @@ describe('quiet chat', () => {
       await page.evaluate(() => window.foreman.spaces.create({ name: 'Review Bot', intro: false }))
       await page.reload()
       await page.getByTestId('space-item').filter({ hasText: 'Review Bot' }).click()
-      await page.getByTestId('bot-permissions-picker').click()
-      expect(await page.getByTestId('picker-menu').getByTestId('model-option').count()).toBe(0)
-      expect(await page.getByTestId('mode-auto').getAttribute('aria-checked')).toBe('true')
-      await page.keyboard.press('Escape')
+      // Grok Bot's plain message box: no model or permissions picker (Auto picks; permissions are in the bot's profile),
+      // and no folder chip until the chat works in a folder.
+      await expect.poll(() => page.getByTestId('bot-pill').innerText().catch(() => '')).toContain('Review Bot')
+      expect(await page.getByTestId('bot-permissions-picker').count()).toBe(0)
+      expect(await page.getByTestId('model-picker').count()).toBe(0)
+      expect(await page.getByTestId('working-folder').count()).toBe(0)
       llm.script.push(
         { content: JSON.stringify({
           assessment: { goal: 'Suggest a name', work: 'answer', complexity: 'direct', impact: 'routine', deliverable: false, parts: [] },

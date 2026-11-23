@@ -182,6 +182,7 @@ import { phoneNote } from './phone/notes'
 import type { ToolContext } from './agent/types'
 import { embeddingProvider } from './knowledge/embeddings'
 import { grokSpeech } from './voice/grok'
+import { GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN, grokVoiceInstructions } from './voice/grok-realtime'
 import { connectedVoice, nativeVoiceSite, voicePreference } from '@shared/voice-provider'
 import { OPENAI_URL, XAI_URL } from './llm/providers'
 import { fromWav } from './voice/audio'
@@ -2685,6 +2686,26 @@ app.whenReady().then(() => {
         })
       })
     }),
+    // Grok Voice 3.0, live: when the voice is Grok and an xAI key is saved, and spending is allowed. Test runs use it
+    // only against a stand-in server (SAHILBOT_GROK_LIVE_URL), never the real one.
+    live: () => {
+      const s = settings.get()
+      const keys = apiAccess(settings)
+      if (connectedVoice(voicePreference(s), { openai: !!keys.openai(), xai: !!keys.xai() }) !== 'xai' || spendingMode(s) === 'none') return null
+      if (HIDDEN && !process.env.SAHILBOT_GROK_LIVE_URL) return null
+      const creds = keys.xai()
+      if (!creds) return null
+      try { hookSpend.beforeUsd(XAI_URL, GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN * 5) } catch { return null }
+      const thread = voiceThread ? db.getThread(voiceThread) : undefined
+      const bot = thread ? db.getSpace(thread.spaceId) : undefined
+      return {
+        apiKey: creds.apiKey,
+        baseUrl: process.env.SAHILBOT_GROK_LIVE_URL || creds.baseUrl,
+        instructions: grokVoiceInstructions({ botName: bot?.name ?? 'SahilBot', userName: s.profile?.firstName || s.userName }),
+        voice: s.voiceStyle?.voices?.xai
+      }
+    },
+    liveCharged: (usd) => hookSpend.afterUsd(XAI_URL, GROK_VOICE_MODEL, usd),
     emit: (e) => toWin('voice:event', e),
     respond: (text, signal, onText) => new Promise<void>((resolve, reject) => {
       const tid = voiceThread

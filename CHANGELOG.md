@@ -6,12 +6,19 @@ Every SahilBot update, newest first. The same notes show in the app (Settings �
 
 _2026-11-23_
 
+- **Grok Voice 3.0: talk with your bots live, interrupt any time, and they do the work while you talk**
 - **Bots remember what you already told them: "email my landlord", "the usual", "near my place" just work, without repeating yourself**
 - **Before asking you something you already told it, a bot checks its memory and your other chats first**
 - **Talking to a bot is one ongoing conversation, like Grok Bot: no new chat in Recents each time**
 - **A bot's chat shows just the conversation: "On it.", then "<name> is working…", then the answer**
 - **Settings are the basics only: about 8 per page, no Advanced sections, no look or approval rules to manage**
 - **If a step takes over a minute, the bot tells you in plain words instead of sitting silently**
+
+### Grok Voice 3.0
+
+- With Grok as your voice and an xAI key saved, a voice conversation is live: Grok listens, answers in its own voice, and stops the moment you talk over it
+- For anything real (your memory, files, apps, email, the web, an action) it hands the request to the bot, which does it in its chat, and Grok tells you the result
+- About $0.08 a minute, counted against your monthly limit; if Grok can't connect, the standard voice takes over
 
 ### Memory
 
@@ -28,6 +35,8 @@ _2026-11-23_
 - A bot's profile: its routines, Permissions (Ask or Auto) and Customize. Notifications are automatic; the morning check-in, vault and "runs on <model>" are gone (ask the bot in chat instead)
 - Routines are made, changed and removed by asking the bot; there's no New routine form
 - Setup no longer asks about voice or the microphone: your voice is Grok if you added a Grok key, otherwise ChatGPT
+- The message box is just the box: no folder chip until a chat works in a folder, no model picker (Auto picks), and the "Enter / ⌘Enter" tip only the first time
+- The chat header only shows the browser and side panel buttons when there's something in them, and a bot's chat ends on its answer
 
 ### Smarter and steadier
 

@@ -9,6 +9,7 @@ import type { VoiceBarOptions, VoiceStatus, VoiceStyle } from '@shared/types'
 import { LANGUAGES, VOICES, clampSpeed } from './voices'
 import { SentenceSplitter } from './audio'
 import { VoicePipeline, type VoiceEvent } from './pipeline'
+import { GrokRealtime } from './grok-realtime'
 import { KokoroEngine, SayEngine, type TtsChoice, type TtsEngine } from './tts'
 import { EnergyVad, SileroVad, type Vad } from './vad'
 import { chooseStt, type SttChoice, type SpeechToText } from './stt'
@@ -52,6 +53,13 @@ export interface VoiceHooks {
   saveBench?(b: WhisperBench): void
   /** A spoken sentence (16 kHz mono) for the benchmark, or null when none can be made. */
   speechSample?(): Promise<Float32Array | null>
+  /**
+   * Grok Voice 3.0 (live speech to speech) for this conversation: when the voice is Grok and an xAI key is saved
+   * (null otherwise, and the usual speech-to-text → model → voice chain runs).
+   */
+  live?(): { apiKey: string; baseUrl: string; instructions: string; voice?: string } | null
+  /** What a live conversation cost when it ended (spending limit and usage). */
+  liveCharged?(usd: number): void
 }
 
 export interface VoiceOptions {
@@ -401,7 +409,32 @@ export class VoiceService {
     return this.pipe
   }
 
+  /** A Grok Voice 3.0 conversation in progress (instead of the pipeline). */
+  private live: GrokRealtime | null = null
+
   async startVoice(): Promise<void> {
+    this.live?.close()
+    this.live = null
+    // Grok's live voice first, when it's the voice: one model listens, talks and hands work to the bot.
+    const cfg = this.hooks.live?.()
+    if (cfg) {
+      const live = new GrokRealtime({
+        apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, instructions: cfg.instructions, voice: cfg.voice,
+        emit: (e) => this.hooks.emit(e),
+        charge: (usd) => this.hooks.liveCharged?.(usd),
+        doTask: async (request, signal) => { let out = ''; await this.hooks.respond(request, signal, (t) => { out += t }); return out }
+      })
+      try {
+        await live.start()
+        this.live = live
+        this.active = 'voice'
+        return
+      } catch (e) {
+        live.close()
+        // It couldn't connect: the usual voice chain takes over, and says why once.
+        this.hooks.emit({ type: 'error', message: `${(e as Error).message} Using the standard voice instead.` })
+      }
+    }
     const p = await this.ensure()
     p.stop()
     p.mode = 'voice'
@@ -422,12 +455,15 @@ export class VoiceService {
   }
 
   stop(): void {
+    this.live?.close()
+    this.live = null
     this.pipe?.stop()
     this.active = 'off'
   }
 
   /** In a voice conversation: say this in the next pause (a bot's work finished or needs you). */
   announce(text: string): boolean {
+    if (this.active === 'voice' && this.live) { this.live.announce(text); return true }
     if (this.active !== 'voice' || !this.pipe) return false
     this.pipe.announce(text)
     return true
@@ -460,6 +496,7 @@ export class VoiceService {
   }
 
   frame(samples: Float32Array): void {
+    if (this.active === 'voice' && this.live) { this.live.pushAudio(samples); return }
     if (this.active !== 'off') void this.pipe?.feed(samples)
   }
 
