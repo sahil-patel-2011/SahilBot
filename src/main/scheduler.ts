@@ -197,7 +197,7 @@ export class Scheduler {
   wakeups?: () => Promise<void>
 
   /** `late` (on a run) = when a missed run was due; it is running late now. */
-  constructor(private db: Db, private run: (task: ScheduledTask, run: { id: string; test: boolean; late?: number }) => Promise<RunResult>, private changed: () => void, private now = () => new Date()) {
+  constructor(private db: Db, private run: (task: ScheduledTask, run: { id: string; test: boolean; late?: number; dry?: boolean }) => Promise<RunResult>, private changed: () => void, private now = () => new Date()) {
     // Runs cut short by a quit or crash can't still be running.
     this.db.sql.prepare(`UPDATE routine_runs SET status = 'failed', finished_at = COALESCE(finished_at, started_at), reason = 'SahilBot closed before it finished' WHERE status = 'running'`).run()
   }
@@ -309,10 +309,11 @@ export class Scheduler {
   }
 
   /** Test: runs a routine now without touching its schedule. Returns the run id at once (null if it's already running). */
-  test(id: string): { runId: string; done: Promise<void> } | null {
+  /** A test run now. `dry`: a dry run (reads for real; anything that would change something is only listed). */
+  test(id: string, o: { dry?: boolean } = {}): { runId: string; done: Promise<void> } | null {
     const t = this.get(id)
     if (!t || this.busy.has(id) || !this.available(t.spaceId)) return null
-    return this.begin(t, true)
+    return this.begin(t, true, undefined, o.dry)
   }
 
   /** `late` = when a missed run was due (it runs now, once, and says so). */
@@ -328,7 +329,7 @@ export class Scheduler {
   }
 
   /** Records the run (synchronously, so callers can return at once), then runs it. */
-  private begin(t: ScheduledTask, test: boolean, late?: number): { runId: string; done: Promise<void> } {
+  private begin(t: ScheduledTask, test: boolean, late?: number, dry?: boolean): { runId: string; done: Promise<void> } {
     this.busy.add(t.id)
     const runId = randomUUID()
     this.db.sql.prepare('INSERT INTO routine_runs(id, task_id, started_at, status, thread_id, test) VALUES(?,?,?,?,?,?)')
@@ -338,7 +339,7 @@ export class Scheduler {
     const done = (async () => {
       let result: RunResult
       try {
-        result = await this.run(t, { id: runId, test, ...(late !== undefined ? { late } : {}) })
+        result = await this.run(t, { id: runId, test, ...(late !== undefined ? { late } : {}), ...(dry ? { dry: true } : {}) })
       } catch (e) {
         result = `error: ${(e as Error).message}`
       }

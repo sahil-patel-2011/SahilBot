@@ -104,6 +104,10 @@ export function BotDetails(p: {
     setStarting((s) => new Set(s).add(t.id))
     return act(() => api.schedules.runNow(t.id))
   }
+  const dryRun = (t: ScheduledTask): Promise<void> => {
+    setStarting((s) => new Set(s).add(t.id))
+    return act(() => api.schedules.dryRun(t.id))
+  }
   const edit = (t: ScheduledTask): void => { setMenuId(null); p.onEditRoutine(`Edit routine "${t.title}": `) }
   const remove = (t: ScheduledTask): Promise<void> => act(async () => {
     await api.schedules.remove(t.id)
@@ -124,7 +128,7 @@ export function BotDetails(p: {
 
       {open ? (
         <RoutineView task={open} runs={runs[open.id] ?? []} running={running(open.id)} confirming={confirmId === open.id}
-          onPause={() => void setEnabled(open, !open.enabled)} onTest={() => void test(open)} onEdit={() => edit(open)}
+          onPause={() => void setEnabled(open, !open.enabled)} onTest={() => void test(open)} onDryRun={() => void dryRun(open)} onEdit={() => edit(open)}
           onDelete={() => setConfirmId(open.id)} onCancelDelete={() => setConfirmId(null)} onConfirmDelete={() => void remove(open)} err={err} />
       ) : (
         <>
@@ -199,7 +203,7 @@ export function BotDetails(p: {
   )
 }
 
-function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: boolean; confirming: boolean; err: string; onPause: () => void; onTest: () => void; onEdit: () => void; onDelete: () => void; onCancelDelete: () => void; onConfirmDelete: () => void }) {
+function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: boolean; confirming: boolean; err: string; onPause: () => void; onTest: () => void; onDryRun: () => void; onEdit: () => void; onDelete: () => void; onCancelDelete: () => void; onConfirmDelete: () => void }) {
   const t = p.task
   return (
     <div className="bd-body rt-detail" data-testid="routine-detail">
@@ -220,6 +224,8 @@ function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: bool
       <div className="rt-actions">
         <button className="bd-btn" onClick={p.onPause}>{t.enabled ? 'Pause' : 'Resume'}</button>
         <button className="bd-btn" onClick={p.onTest} disabled={p.running} data-testid="routine-test">{p.running ? 'Running…' : 'Test'}</button>
+        {/* Reads for real, changes nothing: it lists what it would send, write or post. */}
+        <button className="bd-btn" onClick={p.onDryRun} disabled={p.running} title="Runs it now without changing anything: it lists what it would send, write or post" data-testid="routine-dry-run">Dry run</button>
         <button className="bd-btn" onClick={p.onEdit} data-testid="routine-edit">Edit</button>
         <button className="bd-btn danger" onClick={p.onDelete} data-testid="routine-delete">Delete</button>
       </div>

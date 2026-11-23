@@ -213,6 +213,10 @@ interface Pending {
 }
 
 interface Run {
+  /** A dry run (a routine's Dry run): reads for real; every step that would change something is only listed. */
+  dryRun?: boolean
+  /** What a dry run would have done, in order. */
+  dryActions?: string[]
   /** ask_user questions already checked against what the user said before (askedBefore): asked for real the next time. */
   memoryChecked?: Set<string>
   collaboration?: { message: Message; steps: CollaborationStep[] }
@@ -372,6 +376,9 @@ export function codingRun(loaded: string[], why?: string): boolean {
 }
 
 export const RESEARCH_FIRST = 'Research first: spend a few steps looking for the answer yourself (memory search, knowledge_search over the user\'s notes and documents, your own files and library, the connected apps via find_tools, the web) so your questions are informed or unnecessary. Then ask only what truly blocks progress or is the user\'s preference, all in one ask_user call — or, if this is purely the user\'s preference, call ask_user again.'
+
+/** What the model gets back for a step a dry run skipped. */
+export const dryRunNote = (summary: string): string => `DRY RUN: this was not done (nothing was changed). It would have: ${summary}. Carry on as if it had worked, and end with a short list of everything you would have done, so the user can check it before the real run.`
 
 /** How the stall watchdog's note starts (the chat shows it as a plain status, and a bot's chat as "still working"). */
 export const STALL_PREFIX = 'Still on it:'
@@ -1025,7 +1032,7 @@ export class Agent {
     const record = this.runtime.start(thread.id, opener?.id ?? randomUUID(), this.d.db.getState(thread.id).taskPolicy)
     // File changes this task makes are grouped under the message that started it, so they can be undone together.
     beginRun(thread.id, opener?.id ?? record.id)
-    const run: Run = { ctrl: new AbortController(), pending: new Map(), group, unattended: opts.unattended, intro: opts.intro, record, meter: new TaskMeter(record.policy), planFirst: !!opener?.meta?.planFirst, planApproved: !!opener?.meta?.planApproved }
+    const run: Run = { ctrl: new AbortController(), pending: new Map(), group, unattended: opts.unattended, intro: opts.intro, record, meter: new TaskMeter(record.policy), planFirst: !!opener?.meta?.planFirst, planApproved: !!opener?.meta?.planApproved, ...(opener?.meta?.dryRun ? { dryRun: true } : {}) }
     this.runs.set(thread.id, run)
     this.d.emit({ threadId: thread.id, type: 'run', status: 'started', spaceId: thread.spaceId, title: thread.title })
     const watchdog = this.stallWatchdog(thread.id, run)
@@ -4245,6 +4252,12 @@ export class Agent {
     // 2. Permission.
     const { effect, decision, summary } = this.permission(thread, run, state, tool, call, args, ctx)
     const baseMeta = { label: tool.label, effect, args: call.arguments }
+    // A dry run: anything that would change something (write, send, post, buy, delete, run a command) is listed, not done.
+    if (run.dryRun && effect !== 'read') {
+      const what = summary || `${tool.label} (${tool.name})`
+      ;(run.dryActions ??= []).push(what)
+      return { call, status: 'ok', content: dryRunNote(what), meta: { ...baseMeta, status: 'ok', display: `would ${what.charAt(0).toLowerCase()}${what.slice(1)}`, dryRun: true } }
+    }
     if (decision.verdict === 'deny') {
       return { call, status: 'denied', content: `Blocked: ${decision.reason}`, meta: { ...baseMeta, status: 'denied', display: 'blocked' } }
     }

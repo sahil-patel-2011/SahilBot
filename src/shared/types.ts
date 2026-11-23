@@ -1399,6 +1399,8 @@ export interface SahilBotApi {
     remove(id: string): Promise<void>
     /** Test: runs it now without moving its schedule; progress arrives through onChange and runs(). */
     runNow(id: string): Promise<void>
+    /** Dry run: like Test, but every step that would change something is only listed, not done. */
+    dryRun(id: string): Promise<void>
     /** Run history, newest first (last 20). */
     runs(taskId: string): Promise<RoutineRun[]>
     onChange(cb: () => void): () => void

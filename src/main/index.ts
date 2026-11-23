@@ -1910,7 +1910,7 @@ app.whenReady().then(() => {
     try {
       // A missed run catching up: the bot knows it's late (time-sensitive steps may need adjusting).
       const late = info.late !== undefined ? { note: `[This routine was due at ${new Date(info.late).toLocaleString()} but SahilBot was closed or the Mac was asleep, so it is running late now. Adjust anything time-sensitive.]` } : {}
-      const { done } = await chat.send({ threadId, text: `⏰ ${task.title}\n\n${task.prompt}`, ...late, meta: { scheduled: task.id, ...(info.late !== undefined ? { late: info.late } : {}) } }, { unattended: true })
+      const { done } = await chat.send({ threadId, text: `⏰ ${info.dry ? '(Dry run) ' : ''}${task.title}\n\n${task.prompt}`, ...late, meta: { scheduled: task.id, ...(info.late !== undefined ? { late: info.late } : {}), ...(info.dry ? { dryRun: true } : {}) } }, { unattended: true })
       status = await done
     } finally { scheduledRuns.delete(threadId) }
     const after = db.listMessages(threadId).filter((m) => m.createdAt >= startedAt)
@@ -1976,6 +1976,15 @@ app.whenReady().then(() => {
     const location = placementBlock(db, routine.spaceId)
     if (location) throw new Error(location)
     scheduler.test(id)
+  })
+  // A dry run (Grok Bot reviewers: "there's no dry run; test runs do real work"): it reads for real, and every step
+  // that would change something (send, write, post, buy, delete) is only listed, not done.
+  handle('schedules:dryRun', (id: string) => {
+    const routine = scheduler.get(id)
+    if (!routine) throw new Error('That routine no longer exists.')
+    const location = placementBlock(db, routine.spaceId)
+    if (location) throw new Error(location)
+    scheduler.test(id, { dry: true })
   })
 
   /** Deletes a bot: its chats stop, its jobs stop, and groups drop it (the sidebar menu, its profile, or asking). */

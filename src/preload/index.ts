@@ -209,7 +209,7 @@ const api: SahilBotApi = {
     create: call('schedules:create') as never,
     update: call('schedules:update') as never,
     remove: call('schedules:remove') as never,
-    runNow: call('schedules:runNow') as never,
+    dryRun: call('schedules:dryRun') as never, runNow: call('schedules:runNow') as never,
     runs: call('schedules:runs') as never,
     onChange(cb) {
       const fn = (): void => cb()
