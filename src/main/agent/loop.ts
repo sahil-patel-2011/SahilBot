@@ -19,6 +19,8 @@ import type { SettingsStore } from '../settings'
 import type { SpaceFiles } from '../spaces'
 import { samplingFor } from '../llm/catalog'
 import { VaultLockedError } from '../secure/core'
+import { isPlanModel } from '../llm/codex/ids'
+import { isGrokPlanModel } from '@shared/grok-plan'
 import { collectText, contextPin, isLocal, isOllama, pinContextWindow, streamChat, type WireMessage, type WireTool } from '../llm/client'
 import { constrainedArgs } from '../llm/constrained'
 import { timer } from '../llm/timing'
@@ -2746,6 +2748,15 @@ export class Agent {
     }
     // Claude / OpenAI models with threshold compaction summarize on the server near the window (the model id: see prepare()).
     const serverCompactFor = (m: string, isClaude: boolean): string | undefined => (isClaude && !state.voice && (claudeInfo(m)?.compaction || openaiServerCompaction(this.d.endpoints.for(m).baseUrl, m)) ? m : undefined)
+    // How the history is kept across steps. A provider that holds the conversation itself (the ChatGPT plan through
+    // Codex, the Grok plan) resumes its own thread only while SahilBot's record of the chat is exactly what it has
+    // plus new messages: so nothing earlier is ever rewritten (no trimmed tool outputs, no dropped screenshots), and
+    // the client compacts only when the record no longer fits at all; the provider compacts its own thread. Every
+    // cloud model is append-only too (its prompt cache keys on the unchanged prefix) and compacts only when a run
+    // starts. Local models keep trimming, since their windows are small.
+    const providerThread = (m: string): boolean => isPlanModel(m) || isGrokPlanModel(m)
+    const appendOnlyFor = (m: string, isClaude: boolean): boolean => isClaude || providerThread(m) || !isLocal(this.d.endpoints.for(m).baseUrl)
+    const compactNow = (m: string, isClaude: boolean, step: number): boolean => (providerThread(m) ? false : !appendOnlyFor(m, isClaude) || step === 1)
     let window = windowFor(model, claude)
     // The system prompt for each step: the full harness, the chat path's or the compact one (set at the start of each step).
     let system = ''
@@ -3134,7 +3145,7 @@ export class Agent {
         const wireTools = registry.wire(tools, { compact: !!state.toolProfile })
         // A cloud model (unless the user shares activity with cloud models) never gets activity sections pinned in earlier turns.
         const withContext = (): Message[] => withPinned(view(db.listMessages(thread.id)), state, speaker?.id, { activity: activityAllowedFor(isLocal(ep.baseUrl)) })
-        let prepared = await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: claude, allowCompact: !claude || step === 1, serverCompaction: serverCompactFor(model, claude) })
+        let prepared = await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: appendOnlyFor(model, claude), allowCompact: compactNow(model, claude, step), serverCompaction: serverCompactFor(model, claude) })
         if (prepared.compacted) {
           db.setState(thread.id, state)
           const marker = db.insertMessage({
@@ -3148,7 +3159,7 @@ export class Agent {
           if (opener && this.pinContext(thread, state, db.listMessages(thread.id), opener, system, speaker, true)) {
             taintActivity()
             db.setState(thread.id, state)
-            prepared = { ...(await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: claude, allowCompact: false, serverCompaction: serverCompactFor(model, claude) })), compacted: prepared.compacted }
+            prepared = { ...(await cm.prepare({ system, toolsJson: JSON.stringify(wireTools), messages: withContext(), state, window, appendOnly: appendOnlyFor(model, claude), allowCompact: false, serverCompaction: serverCompactFor(model, claude) })), compacted: prepared.compacted }
           }
         }
         built.end({ step, used: prepared.used, window, tools: wireTools.length, mode: state.toolMode })
@@ -3594,7 +3605,7 @@ export class Agent {
           // Out of room: one text-only turn to report what's done and what's left (adapted from opencode max-steps, MIT).
           // Claude needs the tool list whenever the history has tool calls (and keeps its cache with it).
           const wrapTools = claude ? wireTools : []
-          const wrap = await cm.prepare({ system, toolsJson: JSON.stringify(wrapTools), messages: withPinned(view(db.listMessages(thread.id)), state, speaker?.id), state, window, appendOnly: claude, allowCompact: !claude, serverCompaction: serverCompactFor(model, claude) })
+          const wrap = await cm.prepare({ system, toolsJson: JSON.stringify(wrapTools), messages: withPinned(view(db.listMessages(thread.id)), state, speaker?.id), state, window, appendOnly: appendOnlyFor(model, claude), allowCompact: !appendOnlyFor(model, claude), serverCompaction: serverCompactFor(model, claude) })
           wrap.wire.push({ role: 'user', content: '[From the app] This run has used its step budget. Do not call tools. Reply with a short summary: what you finished, what is left, and what the user should say to continue.' })
           if (!isLocal(ep.baseUrl)) await this.privacyGate(thread, run, state, wrap.wire, model, undefined)
           const last = await this.stream(thread.id, model, wrap.wire, wrapTools, window, run, speaker, routed, effortNow())

@@ -303,7 +303,8 @@ export const openaiCompactAt = (window: number): number => Math.max(50_000, Math
 
 export function openaiStrategy(s: { cloud?: Partial<Settings['cloud']> }): ContextStrategy {
   const v = s.cloud?.contextStrategy
-  return v === 'max' || v === 'economy' ? v : 'balanced'
+  // Unset means the full window (the setting's shown default, and Claude's): balanced or economy only when chosen.
+  return v === 'balanced' || v === 'economy' ? v : 'max'
 }
 
 /** Cache-write price factors (of the input rate) for a model: 1.25x / 2.5x on GPT-5.6+, none before. */

@@ -1,4 +1,6 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Page } from 'playwright'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { launch, tempProfile } from './app'
@@ -73,6 +75,9 @@ describe('quiet chat', () => {
 
   test('a task reads like a conversation: a short note, quiet work, the result', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_QUIET: '1' })
+    // Its own workspace: a study guide left by an earlier run would (rightly) not be overwritten unread.
+    const ws = mkdtempSync(join(tmpdir(), 'sb-quiet-ws-'))
+    await page.evaluate((w) => window.foreman.settings.set({ workspaceDir: w } as never), ws)
     await page.setViewportSize({ width: 1100, height: 760 })
     llm.script.push(
       { content: 'On it, putting together a study guide for your chem quiz.', reasoning: 'The user wants a stoichiometry study guide.', toolCalls: [{ name: 'todo', arguments: JSON.stringify({ items: [{ text: 'Write the study guide', status: 'in_progress' }] }) }], delay: 40 },
