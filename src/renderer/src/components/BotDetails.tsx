@@ -135,6 +135,7 @@ export function BotDetails(p: {
             <input className="bd-label" value={label} onChange={(e) => setLabel(e.target.value)} onBlur={commitLabel} placeholder="Add a label" maxLength={80} aria-label="Label" data-testid="bot-label"
               onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setLabel(space.label ?? ''); e.stopPropagation(); e.currentTarget.blur() } }} />
             {space.kind !== 'project' && <BotStatusLine space={space} />}
+            {space.kind !== 'project' && <BotCost spaceId={space.id} />}
           </div>
 
           <div className="bd-tabs" role="tablist">
@@ -462,4 +463,20 @@ function PastConversations({ spaceId, current, onOpen }: { spaceId: string; curr
       </div>
     </>
   )
+}
+
+/**
+ * What this bot cost this month, in plain numbers (Grok Bot reviewers: "the allowance is invisible"). Hidden until it
+ * has used something; free local models show as requests only.
+ */
+function BotCost({ spaceId }: { spaceId: string }) {
+  const [row, setRow] = useState<{ usd: number; requests: number } | null>(null)
+  useEffect(() => {
+    let alive = true
+    void api.usage.dashboard().then((d) => { const b = d.byBot.find((x) => x.spaceId === spaceId); if (alive) setRow(b ? { usd: b.usd, requests: b.requests } : null) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [spaceId])
+  if (!row || !row.requests) return null
+  const money = row.usd >= 0.01 ? `$${row.usd.toFixed(2)}` : row.usd > 0 ? 'under a cent' : 'free'
+  return <div className="bd-cost hint" data-testid="bot-cost">This month: {money} · {row.requests.toLocaleString()} request{row.requests === 1 ? '' : 's'}</div>
 }
