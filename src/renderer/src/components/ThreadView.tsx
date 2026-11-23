@@ -539,7 +539,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     if (quietBot && b.kind === 'text' && b.m.meta?.superseded && b.m.meta?.checking) return false
     // ...and no status notes ("The bot is continuing with…"). System lines Grok Bot shows too stay: "Paused routine ·
     // …", "Undid …", messages between bots, and cards that need you.
-    if (quietBot && b.kind === 'notice' && !isCardNotice(b.m) && typeof b.m.meta?.publicText === 'string') return false
+    if (quietBot && b.kind === 'notice' && !isCardNotice(b.m) && (typeof b.m.meta?.publicText === 'string' || Array.isArray(b.m.meta?.collaboration))) return false
     return dev || quietVisible(b, hasDocs)
   }), [all, dev, hasDocs, asking, quietBot])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1

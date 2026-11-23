@@ -160,7 +160,7 @@ export function BotDetails(p: {
                   {tasks.map((t) => (
                     <div key={t.id} className={`rt-row${t.enabled ? '' : ' paused'}`} data-testid="routine-row">
                       <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }} title={t.title}>
-                        <span className="rt-icon"><I.Clock size={16} /></span>
+                        <span className="rt-icon">{t.schedule.type === 'when' ? <I.Bolt size={16} /> : <I.Clock size={16} />}</span>
                         <span className="rt-text">
                           <b>{t.title}</b>
                           <span data-testid="routine-status">{routineStatus(t, running(t.id))}</span>
@@ -208,7 +208,7 @@ function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: bool
   return (
     <div className="bd-body rt-detail" data-testid="routine-detail">
       <div className="rt-head">
-        <span className="rt-icon big"><I.Clock size={20} /></span>
+        <span className="rt-icon big">{t.schedule.type === 'when' ? <I.Bolt size={20} /> : <I.Clock size={20} />}</span>
         <div>
           <h3>{t.title}</h3>
           <span className={`rt-state${p.running ? ' running' : t.enabled ? ' on' : ''}`}>{p.running ? 'Running…' : t.enabled ? 'Active' : 'Paused'}</span>
