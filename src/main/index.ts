@@ -22,7 +22,7 @@ import { DEFAULT_TRANSCRIBE_MODEL, speechUsd, transcribe as openaiTranscribe, tr
 import { OpenAISttEngine } from './voice/stt'
 import { hookSpend } from './apis/spend'
 import { INTRO, autoMemoryOn, setAutoMemory } from './agent/prompt'
-import { finishSetupTool, SETUP_GREETING, SETUP_PROMPT, updateBotTool } from './agent/tools/bots'
+import { createBotTool, finishSetupTool, manageBotTool, SETUP_GREETING, SETUP_PROMPT, updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
 import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff, speedOptions } from './llm/fast-mode'
@@ -857,6 +857,17 @@ app.whenReady().then(() => {
       }
     }),
     updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
+    // "Make me a … bot" and "delete the … bot" by asking, from any chat.
+    createBotTool({
+      create: (name, color, shape, icon) => { const r = templateDeps.createBot(name, color, shape as BotShape); if (icon) db.updateSpace(r.spaceId, { icon }); return r },
+      setPrompt: (spaceId, text) => spaces.setPrompt(spaceId, text),
+      setLabel: (spaceId, label) => db.updateSpace(spaceId, { label }),
+      greet: (threadId, text) => { const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done' }); emit({ threadId, type: 'message', message: m }); emit({ threadId, type: 'thread', thread: db.markUnread(threadId) }) }
+    }, db, () => emit({ threadId: '', type: 'spaces' })),
+    manageBotTool({
+      remove: (id) => removeBot(id),
+      pin: (id, on) => { const cur = settings.get().pinnedBots ?? []; settings.set({ pinnedBots: on ? [...new Set([...cur, id])] : cur.filter((x) => x !== id) } as never) }
+    }, db, () => emit({ threadId: '', type: 'spaces' })),
     finishSetupTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
     // FRC robot software: logs, vendordeps, project scan, scouting (found with find_tools).
     frcCodeTool({ workspace: () => settings.get().workspaceDir, tbaKey: () => secrets.get('tbaKey') ?? undefined }),
@@ -1448,7 +1459,7 @@ app.whenReady().then(() => {
     emit({ threadId: '', type: 'spaces' })
     return { space, threadId: thread.id }
   })
-  handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'label' | 'notify' | 'effort'>>) => {
+  handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'label' | 'notify' | 'effort' | 'icon'>>) => {
     // A bot's model and thinking are never set per bot: it chooses by itself for each request (agent/choices.ts).
     const { model: _m, effort: _e, ...rest } = patch
     const s = db.updateSpace(id, rest)
@@ -1462,15 +1473,7 @@ app.whenReady().then(() => {
     const t = db.listThreads(id)[0]
     if (t) emit({ threadId: t.id, type: 'thread', thread: db.markUnread(t.id) })
   })
-  handle('spaces:remove', (id: string) => {
-    if (db.getSpace(id)?.isMain) throw new Error("The main bot can't be deleted.")
-    if (!isServer() && placementOf(db, id)) throw new Error('Move this bot back to this Mac before deleting its local profile.')
-    for (const t of db.listThreads(id)) chat.stop(t.id)
-    // Background jobs belong to the bot's chats: they stop with it.
-    void jobs.stopThreads(db.listThreads(id).map((t) => t.id))
-    db.deleteSpace(id)
-    for (const g of db.listSpaces().filter((x) => x.kind === 'group' && x.members.includes(id))) db.updateSpace(g.id, { members: g.members.filter((m) => m !== id) })
-  })
+  handle('spaces:remove', (id: string) => removeBot(id))
   handle('spaces:getPrompt', (id: string) => spaces.getPrompt(id))
   handle('spaces:setPrompt', (id: string, text: string) => {
     spaces.setPrompt(id, text)
@@ -1875,7 +1878,9 @@ app.whenReady().then(() => {
     while ((chat.isRunning(threadId) || scheduledRuns.has(threadId)) && Date.now() < until) {
       await new Promise((r) => setTimeout(r, 5000))
       const cur = scheduler.get(task.id)
-      if (!info.test && (!cur || !cur.enabled || scheduler.paused())) return { status: 'skipped: paused or removed while it waited for the chat', threadId }
+      // A one-time reminder is switched off the moment it fires (it won't come again), so only deleting it or
+      // pausing routines stops it waiting; a busy chat never drops it.
+      if (!info.test && (!cur || (!cur.enabled && cur.schedule.type !== 'once') || scheduler.paused())) return { status: 'skipped: paused or removed while it waited for the chat', threadId }
     }
     if (chat.isRunning(threadId) || scheduledRuns.has(threadId)) return { status: 'skipped: the chat stayed busy for two hours', threadId }
     const startedAt = Date.now()
@@ -1951,6 +1956,17 @@ app.whenReady().then(() => {
     if (location) throw new Error(location)
     scheduler.test(id)
   })
+
+  /** Deletes a bot: its chats stop, its jobs stop, and groups drop it (the sidebar menu, its profile, or asking). */
+  function removeBot(id: string): void {
+    if (db.getSpace(id)?.isMain) throw new Error("The main bot can't be deleted.")
+    if (!isServer() && placementOf(db, id)) throw new Error('Move this bot back to this Mac before deleting its local profile.')
+    for (const t of db.listThreads(id)) chat.stop(t.id)
+    // Background jobs belong to the bot's chats: they stop with it.
+    void jobs.stopThreads(db.listThreads(id).map((t) => t.id))
+    db.deleteSpace(id)
+    for (const g of db.listSpaces().filter((x) => x.kind === 'group' && x.members.includes(id))) db.updateSpace(g.id, { members: g.members.filter((m) => m !== id) })
+  }
 
   // ---------------------------------------------------------------- bot templates
   const templatesDir = join(appRoot(), 'packs', 'templates')

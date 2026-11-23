@@ -50,7 +50,7 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
       if (a.action === 'create') {
         // SahilBot's routines run in the chat that made them; other bots have one conversation anyway.
         const t = scheduler.create({ title: a.title!, prompt: a.prompt!, schedule: a.when!, spaceId: thread?.spaceId ?? '', threadId: thread && db.getSpace(thread.spaceId)?.isMain ? thread.id : null })
-        return { text: `Scheduled "${t.title}" (${describeSchedule(t.schedule)}), id ${t.id}. Next run: ${new Date(t.nextRun!).toLocaleString()}.`, display: `"${t.title}" ${describeSchedule(t.schedule)}` }
+        return { text: `Scheduled "${t.title}" (${describeSchedule(t.schedule)}), id ${t.id}. Next run: ${new Date(t.nextRun!).toLocaleString(undefined, { timeZoneName: 'short' })}.`, display: `"${t.title}" ${describeSchedule(t.schedule)}` }
       }
       if (a.action === 'list') {
         const ts = scheduler.list()
@@ -60,7 +60,7 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
       if (a.action === 'update') {
         if (a.title === undefined && a.prompt === undefined && !a.when) throw new Error('update needs at least one of title, prompt or when.')
         const t = scheduler.update(a.id!, { ...(a.title !== undefined ? { title: a.title } : {}), ...(a.prompt !== undefined ? { prompt: a.prompt } : {}), ...(a.when ? { schedule: a.when } : {}) })
-        return { text: `Updated "${t.title}" (${describeSchedule(t.schedule)}).${t.nextRun ? ` Next run: ${new Date(t.nextRun).toLocaleString()}.` : ''}`, display: `"${t.title}" ${describeSchedule(t.schedule)}` }
+        return { text: `Updated "${t.title}" (${describeSchedule(t.schedule)}).${t.nextRun ? ` Next run: ${new Date(t.nextRun).toLocaleString(undefined, { timeZoneName: 'short' })}.` : ''}`, display: `"${t.title}" ${describeSchedule(t.schedule)}` }
       }
       if (a.action === 'delete') {
         scheduler.remove(a.id!)

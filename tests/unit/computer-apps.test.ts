@@ -85,7 +85,12 @@ describe('what each call can do (effects and approvals)', () => {
     expect(hardStopOf('Finder', 'trash', { paths: [inside, inside] })).toMatch(/2 item\(s\) to the Trash/)
     expect(effectOf('Finder', 'selection', {}, scope)).toBe('read')
     expect(effectOf('Finder', 'open', { path: 'x.pdf' }, scope)).toBe('write_local')
-    expect(hardStopOf('Finder', 'open', { path: '/Applications/Calculator.app' })).toMatch(/runs it/)
+    // An installed app opens like clicking it in the Dock (Grok Bot head-to-head: Calculator showed "can't be undone").
+    expect(hardStopOf('Finder', 'open', { path: '/Applications/Calculator.app' })).toBeFalsy()
+    expect(hardStopOf('Finder', 'open', { path: '/System/Applications/Calculator.app' })).toBeFalsy()
+    // A downloaded app, a script or an installer still asks.
+    expect(hardStopOf('Finder', 'open', { path: '~/Downloads/Tool.app' })).toMatch(/runs it/)
+    expect(hardStopOf('Finder', 'open', { path: '~/Downloads/setup.pkg' })).toMatch(/runs it/)
     expect(hardStopOf('Finder', 'open', { path: 'install.command' })).toMatch(/runs it/)
     expect(hardStopOf('Finder', 'open', { path: 'report.pdf' })).toBeNull()
     expect(insideRoots('sub/new.txt', scope)).toBe(true)

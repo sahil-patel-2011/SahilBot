@@ -52,6 +52,9 @@ export function App() {
   const [spaces, setSpaces] = useState<Space[]>([])
   const [chats, setChats] = useState<Thread[]>([])
   const [spaceId, setSpaceId] = useState<string | null>(null)
+  /** The bot just clicked in the sidebar, highlighted while its chat loads. */
+  const [navTo, setNavTo] = useState<string | null>(null)
+  useEffect(() => { setNavTo(null) }, [spaceId])
   const [thread, setThread] = useState<Thread | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   /** The open chat once its messages are fetched, with your read mark from when you opened it (the NEW divider). */
@@ -61,6 +64,12 @@ export function App() {
   const [progress, setProgress] = useState<Record<string, Extract<ChatEvent, { type: 'progress' }>>>({})
   /** The right side: a RightPanel tab, or the bot details panel (opened from the header pill). */
   const [panel, setPanel] = useState<PanelTab | 'details' | null>(null)
+  // "Show work" on the status line opens the plan, sources and files; the first time a task runs it opens by itself.
+  useEffect(() => {
+    const show = (): void => setPanel('progress')
+    window.addEventListener('sahilbot:show-work', show)
+    return () => window.removeEventListener('sahilbot:show-work', show)
+  }, [])
   /** Open questions/approvals/plans per chat, for the sidebar's "needs you" dot. */
   const [needs, setNeeds] = useState<Record<string, string[]>>({})
   // A reopened window picks up chats that were already waiting on you.
@@ -539,12 +548,14 @@ export function App() {
     return () => { window.removeEventListener('keydown', k); window.removeEventListener('keyup', up) }
   }, [])
 
-  const openMain = (): void => { setSpaceId(main?.id ?? null); setThread(null); setView('home') }
+  // Picking anything in the sidebar leaves Settings (it used to stay over the page you picked).
+  const openMain = (): void => { setShowSettings(false); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
   newChatRef.current = openMain
   spacesRef.current = spaces
   spaceIdRef.current = spaceId
   pinnedRef.current = settings?.pinnedBots ?? undefined
   const openChat = async (id: string): Promise<void> => {
+    setShowSettings(false)
     const t = chats.find((x) => x.id === id) ?? (await api.threads.list(main?.id)).find((x) => x.id === id)
     if (!t) return
     setSpaceId(t.spaceId)
@@ -573,6 +584,10 @@ export function App() {
   startSetupRef.current = startSetup
   /** A bot has one ongoing conversation (created on first open). */
   const openBot = async (id: string): Promise<void> => {
+    setShowSettings(false)
+    // Highlighted at once (its chat loads after), so the sidebar never lags a click behind. The bot itself is
+    // selected only once its chat is ready, so nothing typed in between is lost when the message box switches chats.
+    setNavTo(id)
     setView('home')
     const sp = await api.spaces.list()
     const s = sp.find((x) => x.id === id)
@@ -902,7 +917,7 @@ export function App() {
       <Sidebar
         spaces={spaces}
         chats={chats}
-        activeSpaceId={space?.id ?? null}
+        activeSpaceId={navTo ?? space?.id ?? null}
         activeThreadId={thread?.id ?? null}
         userName={settings.userName}
         profile={settings.profile}
@@ -914,7 +929,7 @@ export function App() {
         onSetupBot={() => void startSetup(false)}
         onSearch={() => setPalette(true)}
         view={view}
-        onView={(v) => { setView(v); setThread(null) }}
+        onView={(v) => { setShowSettings(false); setView(v); setThread(null) }}
         modelLabel={dev ? `${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}` : undefined}
         onCustomize={(s) => setEditor({ space: s, mode: s.kind })}
         onChanged={() => void refreshSpaces().then((sp) => {
@@ -953,7 +968,7 @@ export function App() {
                 <button className="bot-pill" onClick={() => setPanel((p) => (p === 'details' ? null : 'details'))} data-testid="bot-pill" title={`${chatBot.name}: settings, routines and files`}>
                   {chatBot.kind === 'project'
                     ? <span className="proj-tile" style={{ background: chatBot.color, width: 22, height: 22, borderRadius: 7 }}><I.Folder size={12} /></span>
-                    : <SpaceAvatar color={chatBot.color} shape={chatBot.shape} size={22} group={chatBot.kind === 'group' ? memberColors : undefined} />}
+                    : <SpaceAvatar color={chatBot.color} shape={chatBot.shape} icon={chatBot.icon} size={22} group={chatBot.kind === 'group' ? memberColors : undefined} />}
                   <span className="pill-name">{chatBot.name}</span>
                   {thread && !isBot && <span className="pill-title" data-testid="thread-title">{thread.title}</span>}
                 </button>
@@ -1052,7 +1067,7 @@ export function App() {
                   <span className="hint">Sends when SahilBot finishes</span>
                 </div>
               )}
-              {dev && !isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} />}
+              {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} />}
               {chatInput}
             </div>
           </>

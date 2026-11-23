@@ -66,7 +66,7 @@ function useNow(ms = 30_000): number {
 }
 
 export function BrainView(p: { onConnect: () => void; onNeedsYou: () => void; onOpenChat: (threadId: string) => void }) {
-  const [st, reload] = useBrainStatus()
+  const [st, reload, failed] = useBrainStatus()
   const [briefs, setBriefs] = useState<BriefCard[] | null>(null)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<BriefFilter>('all')
@@ -77,7 +77,7 @@ export function BrainView(p: { onConnect: () => void; onNeedsYou: () => void; on
   const loadBriefs = (): void => { void api.brain.briefs({ query: q.current.query, filter: q.current.filter }).then(setBriefs).catch(() => setBriefs([])) }
   useEffect(() => { loadBriefs() }, [query, filter])
   useEffect(() => api.brain.onChanged(loadBriefs), [])
-  if (!st) return <div className="page brain-page" data-testid="brain-view"><div className="hint">Loading…</div></div>
+  if (!st) return <div className="page brain-page" data-testid="brain-view">{failed ? <div className="hint">Couldn’t load this page. <button className="link" onClick={reload} data-testid="brain-retry">Try again</button></div> : <div className="hint">Loading…</div>}</div>
 
   const on = st.sources.filter((x) => x.state === 'on')
   const anyConnected = st.sources.some((x) => x.state === 'on' || x.state === 'off')
@@ -88,7 +88,7 @@ export function BrainView(p: { onConnect: () => void; onNeedsYou: () => void; on
     <div className="page brain-page" data-testid="brain-view">
       <div className="page-head brain-head">
         <div className="brain-title">
-          <h1>Brain</h1>
+          <h1>Memory</h1>
           <span className={`brain-updated${st.syncing ? ' live' : ''}${!st.lastSyncAt && !st.syncing ? ' never' : ''}`} data-testid="brain-updated">
             <i className="brain-dot" aria-hidden="true" />
             {st.syncing ? `${st.job ?? 'Refreshing'}…` : s.paused ? 'Paused' : st.lastSyncAt ? `Updated ${ago(st.lastSyncAt, now)}` : 'Not updated yet'}

@@ -31,9 +31,9 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       { a: { kind: 'new-group' }, label: 'Create group chat', icon: ico(<I.Users size={16} />), group: 'Start' },
       { a: { kind: 'new-project' }, label: 'New project', icon: ico(<I.Folder size={15} />), group: 'Start' },
       { a: { kind: 'projects' }, label: 'Projects', sub: 'All your projects', icon: ico(<I.Folder size={15} />), group: 'Go to' },
-      { a: { kind: 'files' }, label: 'Artifacts', sub: 'Documents, PDFs, decks and images your bots made', icon: ico(<I.Layers size={15} />), group: 'Go to' },
+      { a: { kind: 'files' }, label: 'Library', sub: 'Documents, PDFs, decks and images your bots made', icon: ico(<I.Layers size={15} />), group: 'Go to' },
       { a: { kind: 'tasks' }, label: 'Needs you', sub: 'Questions, approvals and your bots\' goals', icon: ico(<I.Inbox size={15} />), group: 'Go to' },
-      { a: { kind: 'brain' }, label: 'Brain', sub: 'What SahilBot knows from your accounts, briefs and Agent mode', icon: ico(<BrainIcon size={15} />), group: 'Go to' },
+      { a: { kind: 'brain' }, label: 'Memory', sub: 'What your bots know: people, projects, your accounts and Agent mode', icon: ico(<BrainIcon size={15} />), group: 'Go to' },
       { a: { kind: 'scheduled' }, label: 'Scheduled', sub: 'Routines and scheduled tasks', icon: ico(<I.Clock size={15} />), group: 'Go to' },
       { a: { kind: 'connect' }, label: 'Connect apps', icon: ico(<I.Plug size={15} />), group: 'Go to' },
       { a: { kind: 'import-memory' }, label: 'Import memory from another AI', sub: 'ChatGPT, Claude, Gemini…', icon: ico(<I.Down size={15} />), group: 'Go to' },
@@ -51,7 +51,7 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       label: s.name + (s.hidden ? ' (hidden)' : ''),
       sub: s.lastPreview?.replace(/\s+/g, ' ').slice(0, 90),
       group: s.kind === 'project' ? 'Projects' : 'Bots',
-      icon: s.isMain ? <Mascot size={28} /> : s.kind === 'project' ? <span className="pal-icon" style={{ background: s.color, color: 'white' }}><I.Folder size={15} /></span> : <SpaceAvatar color={s.color} shape={s.shape} size={28} group={s.kind === 'group' ? s.members.map((id) => spaces.find((x) => x.id === id)?.color ?? '#999') : undefined} />
+      icon: s.isMain ? <Mascot size={28} /> : s.kind === 'project' ? <span className="pal-icon" style={{ background: s.color, color: 'white' }}><I.Folder size={15} /></span> : <SpaceAvatar color={s.color} shape={s.shape} icon={s.icon} size={28} group={s.kind === 'group' ? s.members.map((id) => spaces.find((x) => x.id === id)?.color ?? '#999') : undefined} />
     }))
     const recent: Item[] = chats.slice(0, 30).map((t) => ({ a: { kind: 'chat', id: t.id }, label: t.title.replace(/^⏰ /, ''), icon: ico(<I.Reply size={14} style={{ transform: 'scaleX(-1)' }} />), group: 'Chats' }))
     const t = q.trim().toLowerCase()

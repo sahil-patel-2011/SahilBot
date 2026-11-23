@@ -208,6 +208,36 @@ describe('self-review', () => {
     expect(shown[0].meta?.keptDraft).toBe(true)
   })
 
+  test('a message sent while it only double-checks an answer ends that run with the answer and starts a fresh one', async () => {
+    const save: ToolDef<{ v: string }> = {
+      name: 'save_note', label: 'Save', effect: 'write_local', description: 'save something',
+      parameters: { type: 'object', properties: { v: { type: 'string' } }, required: ['v'], additionalProperties: false },
+      async run({ v }) { return { text: `saved ${v}` } }
+    }
+    const h = harness([model('model-a', 2)], [save])
+    llm.requests.length = 0
+    // The double-check is slow (a word every 400 ms); the user moves on while it runs.
+    llm.script.push({ toolCalls: [call('save_note', { v: 'z' })], delay: 0 }, { content: 'Saved z to your notes.', delay: 0 }, { content: 'Let me look at that again more carefully before I answer you here', delay: 400 }, { content: '2 + 2 = 4.', delay: 0 })
+    const t = h.thread()
+    const done = h.run(t, 'Save a note that says z in my notes file')
+    for (let i = 0; i < 100 && !h.events.some((e) => e.type === 'drafting'); i++) await new Promise((r) => setTimeout(r, 20))
+    // While it checks, the answer it wrote is still the one on screen (held, marked checking).
+    const draft = h.db.listMessages(t.id).find((m) => m.content === 'Saved z to your notes.')!
+    expect(draft.meta).toMatchObject({ superseded: true, checking: true })
+    await new Promise((r) => setTimeout(r, 600))
+    expect(await h.agent.steer(t.id, 'Thanks. What is 2 + 2?')).toBe('sent')
+    expect(await done).toBe('finished')
+    let ms = h.db.listMessages(t.id)
+    expect(ms.find((m) => m.id === draft.id)?.meta).toMatchObject({ superseded: false, checkSkipped: true })
+    // The half-written re-check is gone from view; the new message runs as its own request.
+    expect(ms.filter((m) => m.role === 'assistant' && m.content.startsWith('Let me look') && !m.meta?.superseded)).toHaveLength(0)
+    for (let i = 0; i < 100 && !h.db.listMessages(t.id).some((m) => m.content === '2 + 2 = 4.'); i++) await new Promise((r) => setTimeout(r, 30))
+    ms = h.db.listMessages(t.id)
+    const asked = ms.find((m) => m.role === 'user' && m.content === 'Thanks. What is 2 + 2?')
+    expect(asked?.meta?.steer).toBeFalsy()
+    expect(ms.at(-1)?.content).toBe('2 + 2 = 4.')
+  })
+
   test('verifyNote: self-review only for complex work', () => {
     expect(verifyNote({ changed: true, researched: false, actions: 2, complex: false })).not.toMatch(/Critique/)
     expect(verifyNote({ changed: false, researched: true, actions: 9, complex: true, goal: 'Plan my trip' })).toMatch(/Critique your draft against what the user asked for \("Plan my trip"\)/)

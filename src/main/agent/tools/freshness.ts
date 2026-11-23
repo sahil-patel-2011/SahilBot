@@ -19,6 +19,21 @@ export function noteSeen(threadId: string | undefined, full: string): void {
   } catch { /* gone: nothing to remember */ }
 }
 
+/**
+ * An existing file this chat never opened (or wrote): replacing it blind could wipe someone's work (Grok Bot
+ * head-to-head: a script with the same name was overwritten without asking). The model reads it, picks a new
+ * name, or asks. Empty files don't count.
+ */
+export function unseenReason(threadId: string | undefined, full: string, shown: string): string | undefined {
+  if (!threadId || seen.has(key(threadId, full))) return undefined
+  try {
+    if (statSync(full).size === 0) return undefined
+  } catch { return undefined }
+  const dot = shown.lastIndexOf('.')
+  const alt = dot > 0 ? `${shown.slice(0, dot)}-2${shown.slice(dot)}` : `${shown}-2`
+  return `${shown} already exists and this chat hasn't opened it, so nothing was written. Read it first if you mean to change it, save yours as ${alt} instead, or ask the user whether to replace it.`
+}
+
 /** Why an overwrite would replace a change the agent hasn't seen, or undefined when it's safe. */
 export function staleReason(threadId: string | undefined, full: string, shown: string): string | undefined {
   if (!threadId) return undefined

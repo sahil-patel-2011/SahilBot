@@ -55,6 +55,8 @@ export interface Space {
   isMain: boolean
   /** Projects: the folder the project works in. */
   folder: string | null
+  /** The bot's own icon (an emoji) drawn on its colored shape; null = the shape's eyes. */
+  icon?: string | null
   pinned: boolean
   hidden: boolean
   /** For groups: member bot ids, in speaking order. */
@@ -1309,7 +1311,7 @@ export interface SahilBotApi {
     startSetup(): Promise<{ space: Space; threadId: string }>
     list(): Promise<Space[]>
     create(input: { name?: string; color?: string; shape?: BotShape; kind?: 'bot' | 'group' | 'project'; members?: string[]; intro?: boolean; folder?: string }): Promise<{ space: Space; threadId: string }>
-    update(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort'>>): Promise<Space>
+    update(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort' | 'icon'>>): Promise<Space>
     /** Files and links from this bot's chats, newest first. */
     library(spaceId: string): Promise<LibraryItem[]>
     markUnread(id: string): Promise<void>
@@ -3206,7 +3208,7 @@ export interface NeedsYouItem {
   botName: string
   threadId: string
   kind: 'question' | 'approval' | 'other' | 'prompt'
-  /** A brain prompt ("Sarah Lee asked for the revised proposal by Friday. Draft it?"): its actions and sources. */
+  /** A brain prompt ("a client asked for the revised proposal by Friday. Draft it?"): its actions and sources. */
   prompt?: { text: string; detail?: string; actions: import('./brain').BrainPromptAction[]; chips: import('./brain').SourceChip[]; question?: boolean; placeholder?: string; auto?: boolean }
   questions?: QueueQuestion[]
   approval?: { tool: string; label: string; summary?: string; reason?: string; folder?: string }

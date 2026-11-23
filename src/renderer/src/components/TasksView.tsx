@@ -99,7 +99,7 @@ export function TasksView(p: { spaces: Space[]; onOpenChat: (threadId: string, b
             <button role="tab" aria-selected={!bot} className={!bot ? 'on' : ''} onClick={() => setBot(null)}>All bots</button>
             {bots.map((b) => (
               <button key={b.id} role="tab" aria-selected={bot === b.id} className={bot === b.id ? 'on' : ''} onClick={() => setBot(b.id)}>
-                <SpaceAvatar color={b.color} shape={b.shape} size={16} />{b.name}
+                <SpaceAvatar color={b.color} shape={b.shape} icon={b.icon} size={16} />{b.name}
               </button>
             ))}
           </div>
@@ -159,7 +159,7 @@ function GoalCard({ goal: g, bot, column, onOpen, reload }: { goal: Goal; bot?: 
   return (
     <article className={`tk-card${finished ? ' finished' : ''}`} data-testid="goal-card" data-status={g.status} style={{ '--bot': bot?.color ?? 'var(--accent)' } as React.CSSProperties}>
       <div className="tk-card-top">
-        {bot ? <SpaceAvatar color={bot.color} shape={bot.shape} size={26} /> : <span className="tk-noavatar" />}
+        {bot ? <SpaceAvatar color={bot.color} shape={bot.shape} icon={bot.icon} size={26} /> : <span className="tk-noavatar" />}
         <span className="tk-bot">{bot?.name ?? 'Deleted bot'}</span>
         {g.running && <span className="tk-live" title="Working now"><span className="row-spin" />Working</span>}
         {!g.running && column === 'needs' && <span className="tk-chip needs">{g.status === 'blocked' ? 'Blocked' : 'Needs you'}</span>}

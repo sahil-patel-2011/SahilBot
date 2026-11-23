@@ -1,5 +1,5 @@
 import { shell } from 'electron'
-import { noteSeen, staleReason } from './freshness'
+import { noteSeen, staleReason, unseenReason } from './freshness'
 import { appendFileSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -263,7 +263,7 @@ export function fileTools(getWorkspace: () => string, docsDir: string): ToolDef[
       if (exists && lstatSync(full).isDirectory()) throw new Error(`${path} is a folder.`)
       if (mode === 'create' && exists) throw new Error(`${path} already exists. Use mode "overwrite" or "append".`)
       // Someone changed it since this chat read or wrote it: don't replace their edit.
-      const stale = exists && mode === 'overwrite' ? staleReason(ctx.threadId, full, path) : undefined
+      const stale = exists && mode === 'overwrite' ? staleReason(ctx.threadId, full, path) ?? (replace_whole ? undefined : unseenReason(ctx.threadId, full, path)) : undefined
       if (stale) throw new Error(stale)
       // Writing back a shortened view of a file (a read whose middle was left out) would delete everything it didn't show.
       const shrink = exists && mode === 'overwrite' ? shrinkReason(path, readFileSync(full, 'utf8'), content, replace_whole) : undefined
@@ -553,9 +553,9 @@ export function applyEdit(text: string, oldStr: string, newStr: string, all: boo
  * shortened read, or a file of 200+ lines would lose more than half of them (unless replace_whole says it's meant).
  */
 export function shrinkReason(path: string, before: string, after: string, replaceWhole?: boolean): string | undefined {
-  if (/\[… [\d,]+ tokens, [\d,]+ lines total\. Middle omitted\./.test(after)) return `That content is a shortened view of ${path} (it still has the "Middle omitted" note), so writing it would delete the part you didn't see. Use file_edit to change part of the file.`
+  if (/\[… [\d,]+ tokens, [\d,]+ lines total\. Middle omitted\./.test(after)) return `That content is a shortened view of ${path} (it still has the "Middle omitted" note), so writing it would delete the part you didn't see. Nothing was written. Use file_edit to change part of the file.`
   const was = before.split('\n').length
   const now = after.split('\n').length
-  if (!replaceWhole && was >= 200 && now < was / 2) return `This would replace ${path} (${was} lines) with ${now} lines and delete the rest. To change part of it use file_edit; to really replace the whole file, call file_write again with replace_whole: true.`
+  if (!replaceWhole && was >= 200 && now < was / 2) return `Nothing was written: this would replace ${path} (${was} lines) with ${now} lines and delete the rest. To change part of it use file_edit; to really replace the whole file, call file_write again with replace_whole: true.`
   return undefined
 }

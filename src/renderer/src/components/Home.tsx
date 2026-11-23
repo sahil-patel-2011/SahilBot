@@ -101,7 +101,7 @@ export function BotDeck({ bots, needSpaces, onOpen, onTalk, onNewBot, onSetup }:
           {list.map((b) => (
             <div key={b.id} className={`bot-card${needSpaces?.has(b.id) ? ' needs' : ''}`} data-testid="bot-card" data-id={b.id}>
               <button className="bot-card-main" onClick={() => onOpen(b.id)} title={`Open ${b.name}`}>
-                <SpaceAvatar color={b.color} shape={b.shape} size={34} />
+                <SpaceAvatar color={b.color} shape={b.shape} icon={b.icon} size={34} />
                 <span className="bot-card-text">
                   <b>{b.name}</b>
                   {b.label && <small>{b.label}</small>}
@@ -252,7 +252,7 @@ export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: strin
   const shown = (files ?? []).filter((f) => (kind === 'all' || artifactKind(f.name) === kind) && (!q || `${f.name} ${f.threadTitle}`.toLowerCase().includes(q.toLowerCase())))
   return (
     <div className="page" data-testid="files-view">
-      <div className="page-head"><h1>Artifacts</h1><input className="set-input page-search" placeholder="Search artifacts" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+      <div className="page-head"><h1>Library</h1><input className="set-input page-search" placeholder="Search your library" value={q} onChange={(e) => setQ(e.target.value)} /></div>
       <div className="set-sub">Start a doc, deck, sheet or dashboard, or open what your bots made. Click a file to preview it.</div>
       <MakeNew />
       {chips.length > 2 && (

@@ -64,7 +64,7 @@ export function NeedsYouInbox(p: { spaces: Space[]; onOpenChat: (threadId: strin
 function Head({ item, bot, chip }: { item: NeedsYouItem; bot?: Space; chip: string }) {
   return (
     <div className="tk-card-top">
-      {bot ? <SpaceAvatar color={bot.color} shape={bot.shape} size={26} /> : <span className="tk-noavatar" />}
+      {bot ? <SpaceAvatar color={bot.color} shape={bot.shape} icon={bot.icon} size={26} /> : <span className="tk-noavatar" />}
       <span className="tk-bot">{bot?.name ?? item.botName}</span>
       <span className="tk-chip needs">{chip}</span>
     </div>

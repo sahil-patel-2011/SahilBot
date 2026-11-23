@@ -22,15 +22,17 @@ export function modelName(id?: string): string {
 }
 const short = modelName
 
-export function useBrainStatus(): [BrainStatus | null, () => void] {
+export function useBrainStatus(): [BrainStatus | null, () => void, boolean] {
   const [st, setSt] = useState<BrainStatus | null>(null)
-  const load = (): void => { void api.brain?.status().then(setSt).catch(() => undefined) }
+  // A failed load says so (with Try again) instead of "Loading…" forever.
+  const [failed, setFailed] = useState(false)
+  const load = (): void => { setFailed(false); void api.brain?.status().then((x) => { setSt(x); setFailed(false) }).catch(() => setFailed(true)) }
   useEffect(() => {
     load()
     const off = api.brain?.onChanged(load)
     return () => { off?.() }
   }, [])
-  return [st, load]
+  return [st, load, failed]
 }
 
 export function BrainSettings({ status, onChange, compact }: { status?: BrainStatus | null; onChange?: (s: BrainStatus) => void; compact?: boolean }) {

@@ -9,6 +9,10 @@ import { expandPath, insideRoots, JXA_GET, JXA_POSIX, listOf, type ActionScope, 
 
 /** Opening these runs something (apps, scripts, installers). */
 const RUNS = /\.(app|command|tool|sh|bash|zsh|csh|terminal|workflow|action|pkg|mpkg|prefpane|jar|py|rb|pl|scpt|scptd|applescript|osascript|shortcut)\/?$/i
+/** An installed app (in Applications or System Applications): opening it is like clicking it in the Dock. */
+const INSTALLED_APP = /^(\/System)?\/Applications\/[^/]+\.app\/?$|^~\/Applications\/[^/]+\.app\/?$|^\/System\/Library\/CoreServices\/(Finder|Applications\/[^/]+)\.app\/?$/i
+/** Opening this runs something that isn't an installed app (a script, an installer, an app from a download). */
+const runsSomething = (path: string): boolean => RUNS.test(path) && !INSTALLED_APP.test(path)
 
 export const FINDER_SCRIPTS = {
   SELECTION: `(a) => { ${JXA_GET}; ${JXA_POSIX}
@@ -63,8 +67,8 @@ export const finder: AppAdapter = {
     open: {
       summary: 'Open a file or folder (in its default app, or the app given)',
       args: { path: { type: 'string', required: true, description: 'file or folder' }, with: { type: 'string', description: 'app to open it with, e.g. "Preview"' } },
-      effect: (a) => (RUNS.test(String(a.path ?? '')) ? 'destructive' : 'write_local'),
-      hardStop: (a) => (RUNS.test(String(a.path ?? '')) ? `opening ${basename(String(a.path ?? 'it'))} runs it (an app, script or installer)` : null),
+      effect: (a) => (runsSomething(String(a.path ?? '')) ? 'destructive' : 'write_local'),
+      hardStop: (a) => (runsSomething(String(a.path ?? '')) ? `opening ${basename(String(a.path ?? 'it'))} runs it (a script, installer or downloaded app)` : null),
       describe: (a) => `Open ${a.path}${a.with ? ` with ${a.with}` : ''}`,
       async run(a, env) {
         const p = expandPath(a.path, env.workspace)

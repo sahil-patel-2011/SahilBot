@@ -33,6 +33,12 @@ _2026-11-22_
 - "Waiting on you" questions no longer pre-pick an answer you didn't choose
 - Settings → Connected keeps Cursor, MCP and Shortcuts links under "For developers"
 - When a bot can't confirm something worked, you see its plain explanation and a small "Needs a check" tag, not a technical report
+- Make a bot by asking ("make me a Homework Helper bot"): a new bot with its own chat, job, color and emoji icon, in seconds. Delete, hide, pin or rename one by asking too (deleting asks first)
+- Each bot can have its own emoji icon; its profile has Hide and Delete
+- The sidebar says Library and Memory, and Needs you shows only when something is waiting
+- "Show work" on the status line opens the plan, sources and files (it opens by itself the first time); every finished task shows a one-line finish line
+- Status says file names, not paths ("Creating invoice.pdf in Downloads"); picking anything in the sidebar closes Settings and highlights right away; sending jumps to the newest message
+- Opening an installed app (Calculator) no longer warns "can't be undone"; looking at running apps or checking a Python version doesn't ask; a reply that needs Accessibility comes with a button that opens it
 
 ### Smarter at real work
 
@@ -46,6 +52,11 @@ _2026-11-22_
 - An API key a bot reads in a file (like .env) is hidden if it copies it into its reply
 - A project's own docs/ folder is readable and writable (it used to be mistaken for SahilBot's manual)
 - "I'll add it now" with nothing done is caught for everyday edits too (add, update, rename, save…), and asks that name a file to write go straight to work
+- Every task ends: if a bot is only double-checking an answer it already wrote, a new message ends that run with the answer and starts fresh, and a double-check never runs past 90 seconds
+- Answers never vanish while a bot double-checks them, and the checked answer replaces the draft in one bubble instead of appearing twice
+- A one-time reminder that fires while its chat is busy waits its turn instead of being dropped
+- A bot never replaces a file it hasn't opened: it reads it first, saves under a new name (like name-2.py), or asks
+- Internal markup from some models (":codex-file-citation{…}") never shows in the chat
 
 ### You
 

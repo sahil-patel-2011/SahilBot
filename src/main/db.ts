@@ -99,7 +99,9 @@ const MIGRATIONS: string[] = [
    ALTER TABLE threads ADD COLUMN effort TEXT;`,
   // The main bot isn't called SahilBot (that's the app) unless the user named it: it's a "New bot" that can
   // take any name, from the sidebar or by asking it in chat.
-  `UPDATE spaces SET name = 'New bot' WHERE is_main = 1 AND name = 'SahilBot';`
+  `UPDATE spaces SET name = 'New bot' WHERE is_main = 1 AND name = 'SahilBot';`,
+  // A bot's own icon (an emoji), like Grok Bot's per-bot icons; NULL = its shape's eyes.
+  `ALTER TABLE spaces ADD COLUMN icon TEXT;`
 ]
 
 type Row = Record<string, unknown>
@@ -247,9 +249,9 @@ export class Db {
     return r ? toSpace(r) : undefined
   }
 
-  createSpace(name: string, color: string, extra: Partial<Pick<Space, 'shape' | 'kind' | 'isMain' | 'members' | 'folder'>> = {}, id = uid()): Space {
-    this.sql.prepare('INSERT INTO spaces(id, name, color, created_at, shape, kind, is_main, members, folder) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(id, name, color, Date.now(), extra.shape ?? 'blob', extra.kind ?? 'bot', extra.isMain ? 1 : 0, JSON.stringify(extra.members ?? []), extra.folder ?? null)
+  createSpace(name: string, color: string, extra: Partial<Pick<Space, 'shape' | 'kind' | 'isMain' | 'members' | 'folder' | 'icon'>> = {}, id = uid()): Space {
+    this.sql.prepare('INSERT INTO spaces(id, name, color, created_at, shape, kind, is_main, members, folder, icon) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(id, name, color, Date.now(), extra.shape ?? 'blob', extra.kind ?? 'bot', extra.isMain ? 1 : 0, JSON.stringify(extra.members ?? []), extra.folder ?? null, cleanIcon(extra.icon))
     return this.getSpace(id)!
   }
 
@@ -258,13 +260,13 @@ export class Db {
     return r ? toSpace(r) : undefined
   }
 
-  updateSpace(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort'>>): Space {
+  updateSpace(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort' | 'icon'>>): Space {
     const cur = this.getSpace(id)
     if (!cur) throw new Error(`No space ${id}`)
     const n = { ...cur, ...patch }
     const label = typeof n.label === 'string' ? n.label.replace(/\s+/g, ' ').trim().slice(0, 80) || null : null
-    this.sql.prepare('UPDATE spaces SET name = ?, color = ?, shape = ?, pinned = ?, hidden = ?, members = ?, model = ?, folder = ?, label = ?, notify = ?, effort = ? WHERE id = ?')
-      .run(n.name, n.color, n.shape, n.pinned ? 1 : 0, n.hidden ? 1 : 0, JSON.stringify(n.members), n.model, n.folder, label, n.notify === false ? 0 : 1, effortOrNull(n.effort), id)
+    this.sql.prepare('UPDATE spaces SET name = ?, color = ?, shape = ?, pinned = ?, hidden = ?, members = ?, model = ?, folder = ?, label = ?, notify = ?, effort = ?, icon = ? WHERE id = ?')
+      .run(n.name, n.color, n.shape, n.pinned ? 1 : 0, n.hidden ? 1 : 0, JSON.stringify(n.members), n.model, n.folder, label, n.notify === false ? 0 : 1, effortOrNull(n.effort), cleanIcon(n.icon), id)
     return this.getSpace(id)!
   }
 
@@ -558,6 +560,15 @@ function dataOf(m: Message): Record<string, unknown> {
   return { reasoning, toolCalls, toolCallId, toolName, images, model, meta }
 }
 
+/** A bot icon: one emoji (or a couple of characters), nothing longer; anything else is no icon. */
+export function cleanIcon(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const t = v.trim()
+  if (!t || t.length > 16 || /[<>{}\\/]/.test(t)) return null
+  const chars = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(t)]
+  return chars.length <= 2 ? t : null
+}
+
 function toSpace(r: Row): Space {
   return {
     id: r.id as string,
@@ -571,6 +582,7 @@ function toSpace(r: Row): Space {
     members: JSON.parse((r.members as string) ?? '[]') as string[],
     model: (r.model as string | null) ?? null,
     folder: (r.folder as string | null) ?? null,
+    icon: (r.icon as string | null) ?? null,
     label: (r.label as string | null) ?? null,
     notify: r.notify !== 0,
     effort: effortOrNull(r.effort),

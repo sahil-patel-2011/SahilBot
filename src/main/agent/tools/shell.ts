@@ -321,11 +321,13 @@ function script(name: string | undefined, c: SegCtx, explicit: boolean): Verdict
   return ext(`"${name}" is not a script in this project's package.json`)
 }
 
+/** Python one-liners that only report what's installed: imports, then printing versions. */
+const PY_CHECK = /^\s*(import [\w.]+( as \w+)?(, ?[\w.]+)*\s*;\s*)*(print\(\s*(sys\.version(_info)?|platform\.\w+\(\)|[\w.]+\.__version__)\s*\)\s*;?\s*)*$/
 const READ_NAMES = new Set(['ls', 'll', 'pwd', 'cat', 'head', 'tail', 'more', 'wc', 'file', 'stat', 'du', 'df', 'which', 'whereis', 'type', 'echo', 'printf', 'date', 'cal', 'uname',
   'whoami', 'id', 'printenv', 'grep', 'egrep', 'fgrep', 'ag', 'cut', 'tr', 'diff', 'cmp', 'comm', 'jq', 'sw_vers', 'system_profiler', 'ps', 'lsof', 'md5', 'shasum', 'sha1sum', 'sha256sum',
   'md5sum', 'cksum', 'basename', 'dirname', 'realpath', 'readlink', 'nl', 'column', 'fold', 'paste', 'join', 'expand', 'unexpand', 'rev', 'tac', 'seq', 'true', 'false', 'test', '[', '[[', ']]',
   'sleep', 'pushd', 'popd', 'dirs', 'exit', 'return', 'wait', 'hash', 'mdfind', 'mdls', 'hexdump', 'od', 'strings', 'otool', 'nm', 'pbpaste', 'fi', 'done', 'esac', '}', ')', ':', 'for',
-  'unset', 'shift', 'getopts', 'read', 'tput', 'uptime', 'hostname', 'locale', 'groups', 'w', 'who', 'last', 'vm_stat', 'iostat', 'xxd', 'man', 'apropos', 'whatis'])
+  'unset', 'shift', 'getopts', 'read', 'tput', 'uptime', 'hostname', 'locale', 'groups', 'w', 'who', 'last', 'vm_stat', 'iostat', 'xxd', 'man', 'apropos', 'whatis', 'pgrep', 'pstree'])
 /** Known local tools: builds, compilers, linters, test runners, file utilities. They change files in your folders. */
 const LOCAL_NAMES = new Set(['mkdir', 'cp', 'mv', 'touch', 'ln', 'chmod', 'chown', 'chgrp', 'chflags', 'tee', 'patch', 'install', 'ditto', 'make', 'gmake', 'cmake', 'ninja', 'meson', 'ctest',
   'swiftc', 'clang', 'clang++', 'gcc', 'g++', 'cc', 'c++', 'ld', 'ar', 'ranlib', 'rustc', 'javac', 'tsc', 'eslint', 'prettier', 'vitest', 'jest', 'pytest', 'py.test', 'mocha', 'ruff', 'black',
@@ -446,6 +448,8 @@ function classifyInterpreter(name: string, args: string[], c: SegCtx): Verdict |
     for (let i = 0; i < args.length; i++) {
       const a = args[i]
       if (a === '-V' || a === '--version' || a === '-h' || a === '--help') return READ
+      // A version or import check ("python3 -c 'import sys; print(sys.version)'") only reads.
+      if (a === '-c' && PY_CHECK.test(args[i + 1] ?? '')) return READ
       if (a === '-c' || a.startsWith('-c') || a === '-') return INLINE
       if (a === '-m') return PY_MODULES.has(args[i + 1] ?? '') ? { effect: 'write_local', why: `runs python -m ${args[i + 1]}` } : ext(`python -m ${args[i + 1] ?? ''} is not a module SahilBot knows`)
       if (a === '-W' || a === '-X' || a === '-Q') { i++; continue }
@@ -533,6 +537,8 @@ function classifyProgram(argv: string[], c: SegCtx, depth: number): Verdict {
   }
   if (NET_NAMES.has(name)) {
     if (name === 'open' && args[0] === '-R') return READ
+    // Opening an app by name ("open -a Calculator"), with no file or address: like clicking it in the Dock.
+    if (name === 'open' && (args[0] === '-a' || args[0] === '-b') && args.length === 2 && !/[/:]/.test(args[1])) return { effect: 'write_local', why: `opens ${args[1]}` }
     if (name === 'brew' && /^(list|ls|--version|--prefix|--cellar|--repository|config|leaves|deps|uses)$/.test(args[0] ?? '')) return READ
     if ((name === 'pip' || name === 'pip3') && /^(list|show|freeze|--version|-V|check)$/.test(args[0] ?? '')) return READ
     // npx/bunx running a tool this project already installed (node_modules/.bin) is project code, like

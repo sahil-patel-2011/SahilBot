@@ -1,4 +1,6 @@
 import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { heldDrafts } from '../lib/held-drafts'
+import { PERMISSION_BUTTON, permissionAsked } from '../lib/permission-ask'
 import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
 import { filesFromMessages } from '../lib/ux'
 import { firstUnread } from '@shared/read-state'
@@ -120,8 +122,11 @@ export function blocks(messages: Message[]): Block[] {
   let act: Extract<Block, { kind: 'activity' }> | null = null
   // One plan card per request: it appears where the agent first wrote its plan and shows the latest version.
   let plan: Extract<Block, { kind: 'plan' }> | null = null
+  const { held, waiting } = heldDrafts(messages)
   for (const m of messages) {
     if (m.role === 'tool') continue
+    // The checked answer is still being written: the answer being checked stays in its place until it's done.
+    if (waiting.has(m.id)) continue
     if (m.kind === 'compacted') { out.push({ kind: 'compacted', m }); continue }
     // Heavy mode's card rides on a notice (kept out of the model's history), updated live.
     const hv = m.kind === 'notice' ? heavyOf(m) : undefined
@@ -136,7 +141,7 @@ export function blocks(messages: Message[]): Block[] {
       continue
     }
     // A draft the app sent back for fixing (e.g. it cited links nobody retrieved) is replaced by the next answer.
-    if (m.meta?.superseded) continue
+    if (m.meta?.superseded && !held.has(m.id)) continue
     // A Max hybrid's phase-1 brief is shown inside the Max card (the judged answer follows it).
     if (m.meta?.maxBrief && !m.toolCalls?.length) continue
     const hasText = !!(m.content || m.status === 'error' || m.status === 'stopped' || (m.reasoning && !m.toolCalls?.length))
@@ -328,7 +333,7 @@ function IdeaCard({ id, idea, why, outside, threadId, busy }: { id: string; idea
       {why && <div className="idea-why">{why}</div>}
       {outside && <div className="idea-why">This task read outside content (a web page, an email or a file), so check the idea before you send it.</div>}
       <div className="idea-actions">
-        {!outside && <button className="btn primary" disabled={sent || sending || busy} title={busy ? 'When this task finishes' : undefined} onClick={doIt} data-testid="idea-do">{sent ? 'Sent' : sending ? 'Sending…' : 'Do it'}</button>}
+        {!outside && <button className="btn primary" disabled={sent || sending || busy} title={busy ? 'When this task finishes' : undefined} aria-label={busy ? 'When this task finishes' : undefined} onClick={doIt} data-testid="idea-do">{sent ? 'Sent' : sending ? 'Sending…' : 'Do it'}</button>}
         <button className={`btn${outside ? ' primary' : ''}`} disabled={sent} onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:compose', { detail: idea }))} title="Put it in the message box to read or change it first" data-testid="idea-edit">{outside ? 'Put in message box' : 'Edit first'}</button>
       </div>
     </div>
@@ -411,12 +416,20 @@ function StatusLine({ drafting, since, progress, doing }: { drafting: string | n
     const t = setInterval(() => setNow(Date.now()), 500)
     return () => clearInterval(t)
   }, [])
+  // The first real task ever: the work panel opens by itself once, so people learn it's there.
+  useEffect(() => {
+    if (!doing) return
+    try { if (localStorage.getItem('sb.workShown')) return; localStorage.setItem('sb.workShown', '1') } catch { return }
+    window.dispatchEvent(new CustomEvent('sahilbot:show-work'))
+  }, [!!doing])
   const label = progress ? progress.replace(/\s+/g, ' ').slice(0, 120) : drafting ? (PREPARING[drafting] ?? `Preparing ${drafting.replace(/__/g, ' · ').replace(/_/g, ' ')}`) : doing ?? 'Thinking'
   return (
     <div className="status-line" data-testid="status-line">
       <span className="activity-dots live"><i /><i /><i /><i /></span>
       <span className="activity-title shimmer" role="status" aria-live="polite">{label}…</span>
       <span className="activity-meta" data-testid="turn-timer" aria-live="off" title="Time since you sent your message">{elapsed(now - since)}</span>
+      {/* The plan, sources and files it's working with, one click away (it used to be an unlabeled icon). */}
+      <button type="button" className="show-work" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>
     </div>
   )
 }
@@ -522,6 +535,12 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     const el = scroller.current
     if (el && atBottom) el.scrollTop = el.scrollHeight
   }, [messages, pending, atBottom])
+  // You just sent something: the chat jumps to it, even if you had scrolled up to read.
+  const lastSent = [...messages].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.id
+  const seenSent = useRef(lastSent)
+  useLayoutEffect(() => {
+    if (lastSent && lastSent !== seenSent.current) { seenSent.current = lastSent; setAtBottom(true); const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }
+  }, [lastSent])
 
   useEffect(() => {
     const el = scroller.current
@@ -1030,6 +1049,8 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
         <div className="ai-foot">
           <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} />
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
+          {!!m.meta?.superseded && !!m.meta?.checking && <span className="result-checking">Double-checking…</span>}
+          {(() => { const kind = m.status !== 'streaming' ? permissionAsked(m.content) : undefined; return kind ? <button type="button" className="perm-ask" onClick={() => void api.permissions.request(kind).catch(() => api.permissions.open(kind))} data-testid="perm-ask">{PERMISSION_BUTTON[kind]}</button> : null })()}
           {(m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title={dev ? ((m.meta?.verification as { issues?: string[] }).issues ?? []).join('\n') : 'SahilBot couldn\'t confirm this worked. Check the result before relying on it.'}>Needs a check</span>}
         </div>
       )}
@@ -1089,19 +1110,19 @@ function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actio
   const canReact = m.role === 'assistant'
   return (
     <div className={`msg-actions${picker || menu ? ' pinned' : ''}`} ref={ref}>
-      {canReact && <button className="icon-btn" title="React" onClick={() => setPicker(picker ? null : 'quick')} data-testid="react-btn"><I.Smile size={17} /></button>}
-      {onEdit && <button className="icon-btn" title="Edit and resend" onClick={onEdit} data-testid="edit-last"><I.Edit size={16} /></button>}
-      <button className="icon-btn" title="Reply" onClick={() => actions.onReply(m.content)}><I.Reply size={17} /></button>
-      {canReact && m.content && <button className="icon-btn" title={copied ? 'Copied' : 'Copy'} onClick={() => { void navigator.clipboard.writeText(m.content); setCopied(true); setTimeout(() => setCopied(false), 900) }} data-testid="copy-msg">{copied ? <I.Check size={15} /> : <I.Copy size={15} />}</button>}
-      {canReact && m.content && <button className="icon-btn" title="Read aloud (Esc stops)" onClick={() => void api.voice.speak(m.content)} data-testid="read-aloud"><I.Speaker size={16} /></button>}
-      {onRetry && <button className="icon-btn" title="Retry" onClick={onRetry} data-testid="retry"><I.Reply size={15} style={{ transform: 'scaleX(-1)' }} /></button>}
-      <button className="icon-btn" title="More" onClick={() => setMenu((x) => !x)}><span className="more">···</span></button>
+      {canReact && <button className="icon-btn" title="React" aria-label="React" onClick={() => setPicker(picker ? null : 'quick')} data-testid="react-btn"><I.Smile size={17} /></button>}
+      {onEdit && <button className="icon-btn" title="Edit and resend" aria-label="Edit and resend" onClick={onEdit} data-testid="edit-last"><I.Edit size={16} /></button>}
+      <button className="icon-btn" title="Reply" aria-label="Reply" onClick={() => actions.onReply(m.content)}><I.Reply size={17} /></button>
+      {canReact && m.content && <button className="icon-btn" title={copied ? 'Copied' : 'Copy'} aria-label={copied ? 'Copied' : 'Copy'} onClick={() => { void navigator.clipboard.writeText(m.content); setCopied(true); setTimeout(() => setCopied(false), 900) }} data-testid="copy-msg">{copied ? <I.Check size={15} /> : <I.Copy size={15} />}</button>}
+      {canReact && m.content && <button className="icon-btn" title="Read aloud (Esc stops)" aria-label="Read aloud (Esc stops)" onClick={() => void api.voice.speak(m.content)} data-testid="read-aloud"><I.Speaker size={16} /></button>}
+      {onRetry && <button className="icon-btn" title="Retry" aria-label="Retry" onClick={onRetry} data-testid="retry"><I.Reply size={15} style={{ transform: 'scaleX(-1)' }} /></button>}
+      <button className="icon-btn" title="More" aria-label="More" onClick={() => setMenu((x) => !x)}><span className="more">···</span></button>
       {picker && (
         <div className={`emoji-bar ${side}`}>
           {(picker === 'quick' ? QUICK : MORE).map((e) => (
             <button key={e} onClick={() => { actions.onReact(m.id, e); setPicker(null) }} data-testid="emoji">{e}</button>
           ))}
-          {picker === 'quick' && <button className="emoji-more" title="More" onClick={() => setPicker('more')}><I.SmilePlus size={20} /></button>}
+          {picker === 'quick' && <button className="emoji-more" title="More" aria-label="More" onClick={() => setPicker('more')}><I.SmilePlus size={20} /></button>}
         </div>
       )}
       {menu && (

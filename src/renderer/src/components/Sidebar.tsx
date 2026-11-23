@@ -177,7 +177,7 @@ export function Sidebar(p: {
         { label: spendLabel(spend), icon: <I.Clock size={15} />, run: openUsageGlance },
         'sep',
         { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects') },
-        { label: 'Artifacts', icon: <I.Layers size={15} />, run: () => p.onView('files') },
+        { label: 'Library', icon: <I.Layers size={15} />, run: () => p.onView('files') },
         { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled },
         { label: 'Tasks', icon: <Target size={15} />, run: () => p.onView('tasks') },
         { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect },
@@ -214,7 +214,7 @@ export function Sidebar(p: {
 
   const avatar = (s: Space, size: number): ReactNode => s.kind === 'project'
     ? <span className="proj-tile" style={{ background: s.color, width: Math.round(size * 0.8), height: Math.round(size * 0.8), borderRadius: Math.round(size * 0.26) }}><I.Folder size={Math.round(size * 0.36)} /></span>
-    : <SpaceAvatar color={s.color} shape={s.shape} size={size} group={s.kind === 'group' ? colorsOf(s) : undefined} />
+    : <SpaceAvatar color={s.color} shape={s.shape} icon={s.icon} size={size} group={s.kind === 'group' ? colorsOf(s) : undefined} />
 
   const testId = (s: Space): string => (s.isMain ? 'main-bot' : s.kind === 'project' ? 'project-item' : 'space-item')
   const needs = (s: Space): boolean => !!p.needSpaces?.has(s.id) && !isActive(s)
@@ -328,13 +328,14 @@ export function Sidebar(p: {
       {/* Claude-style: one clear way to start, then the few places you go, then your bots and chats. */}
       <nav className="sb-nav" aria-label="Main">
         <button className="sb-nav-item sb-new" onClick={p.onNew} title="New chat (⌘N)" data-testid="new-chat"><span className="sb-nav-icon new"><I.Plus size={15} /></span><span>New chat</span><kbd>⌘N</kbd></button>
-        <button className={`sb-nav-item tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
+        {/* Only when something waits for you (or you're on it): one less thing on a new user's screen. */}
+        {(goalsNeedYou > 0 || p.view === 'tasks') && <button className={`sb-nav-item tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
           title="Questions and approvals waiting for you, and your bots' goals" aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
           <span className="sb-nav-icon"><I.Inbox size={16} /></span><span>Needs you</span>
           {goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
-        </button>
-        <button className={`sb-nav-item${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Documents, decks, sheets and images your bots made" data-testid="nav-artifacts"><span className="sb-nav-icon" data-testid="nav-files"><I.Layers size={16} /></span><span>Artifacts</span></button>
-        <button className={`sb-nav-item${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="What SahilBot knows from your connected accounts" data-testid="nav-brain"><span className="sb-nav-icon"><BrainIcon size={16} /></span><span>Brain</span></button>
+        </button>}
+        <button className={`sb-nav-item${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Documents, decks, sheets and images your bots made" data-testid="nav-artifacts"><span className="sb-nav-icon" data-testid="nav-files"><I.Layers size={16} /></span><span>Library</span></button>
+        <button className={`sb-nav-item${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="What your bots know: people, projects and your connected accounts" data-testid="nav-brain"><span className="sb-nav-icon"><BrainIcon size={16} /></span><span>Memory</span></button>
       </nav>
 
       <div className="side-scroll">

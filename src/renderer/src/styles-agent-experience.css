@@ -17,5 +17,12 @@
 /* "Needs a check": the app could not confirm the result (details in developer mode). Quiet, not an error. */
 .ai-foot .result-needs-check, .ai-foot .result-verified { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11px; line-height: 18px; white-space: nowrap; }
 .ai-foot .result-needs-check { background: color-mix(in srgb, #d97706 12%, transparent); color: #b45309; }
+.ai-foot .perm-ask { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border, #d4d4d8); background: var(--panel, transparent); color: var(--text); font-size: 12px; cursor: pointer; }
+.ai-foot .perm-ask:hover { background: var(--hover, rgba(0,0,0,.05)); }
+.ai-foot .result-checking { color: var(--text-3); font-style: italic; }
 .ai-foot .result-verified { background: color-mix(in srgb, #16a34a 12%, transparent); color: #15803d; }
 @media (max-width: 540px) { .agent-auto-label { display: none; } .composer .agent-strategy { gap: 5px; padding-inline: 4px; } .attachment-pop .menu { width: min(320px, calc(100vw - 28px)); } }
+
+/* "Show work" on the status line: opens the plan, sources and files. */
+.status-line .show-work { margin-left: 6px; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--border, #d4d4d8); background: transparent; color: var(--text-2, inherit); font-size: 11.5px; cursor: pointer; }
+.status-line .show-work:hover { color: var(--text); background: var(--hover, rgba(0,0,0,.05)); }

@@ -149,7 +149,7 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
     <div className="voice-bar-wrap" data-testid="voice-mode" data-state={state}>
       <div className={`voice-bar${panel ? ' open' : ''}${error ? ' err' : ''}`}>
         <div className="vb-row">
-          <span className={`vb-avatar ${state}`} aria-hidden="true">{space && !space.isMain ? <SpaceAvatar color={space.color} shape={space.shape} size={34} /> : <Mascot size={34} />}</span>
+          <span className={`vb-avatar ${state}`} aria-hidden="true">{space && !space.isMain ? <SpaceAvatar color={space.color} shape={space.shape} icon={space.icon} size={34} /> : <Mascot size={34} />}</span>
           <span className="vb-text">
             <b className="vb-name">{name}</b>
             <span key={status} className={`vb-status${error ? ' err' : ''}`} data-testid={error ? 'voice-caption' : update ? 'voice-announce' : 'voice-caption'} aria-live="polite">{status}</span>

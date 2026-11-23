@@ -11,3 +11,10 @@ test('the working line names the running step, then nothing (Thinking) once it h
   expect(runningStep([step('web_search', false)], false)).toBeUndefined()
   expect(runningStep(undefined, true)).toBeUndefined()
 })
+
+test('status text names files the way a person would, never by their whole path', async () => {
+  const { fname, describe } = await import('../../src/renderer/src/lib/steps')
+  expect(fname('/Users/sahil/Downloads/Patel-Consulting-Invoice.pdf')).toBe('Patel-Consulting-Invoice.pdf in Downloads')
+  expect(fname('report.md')).toBe('report.md')
+  expect(describe({ call: { name: 'create_document', arguments: JSON.stringify({ path: '/Users/sahil/Downloads/inv.pdf' }) } } as never)[2]).toBe('Creating inv.pdf in Downloads')
+})

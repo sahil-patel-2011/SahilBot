@@ -413,9 +413,9 @@ export const Composer = forwardRef<ComposerHandle, {
             <span className="tip" role="tooltip">{dictating ? <>Click or let go of <kbd>⌘</kbd><kbd>D</kbd> to stop · Esc cancels</> : <>Dictate: speak and it types · <kbd>⌘</kbd><kbd>D</kbd></>}</span>
           </span>
           {p.running && !p.answering && !canSend ? (
-            <button className="c-btn primary stop" title="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
+            <button className="c-btn primary stop" title="Stop (Esc)" aria-label="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
           ) : canSend ? (
-            <button className="c-btn primary send" title={p.running && !p.answering ? 'Send now: SahilBot adjusts what it is doing (⌘Enter sends after it finishes)' : 'Send (Enter)'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
+            <button className="c-btn primary send" title={p.running && !p.answering ? 'Send now: SahilBot adjusts what it is doing (⌘Enter sends after it finishes)' : 'Send (Enter)'} aria-label={p.running && !p.answering ? 'Send now: SahilBot adjusts what it is doing (⌘Enter sends after it finishes)' : 'Send (Enter)'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
           ) : (
             <button className="c-btn voice" title="Talk with your bot out loud (⇧⌘V)" aria-label="Talk" onClick={p.onVoice} data-testid="voice-btn"><I.Wave size={17} /></button>
           )}

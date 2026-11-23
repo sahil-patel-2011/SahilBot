@@ -133,7 +133,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
       ) : (
         <>
           <div className="bd-hero">
-            <div className="bd-avatar"><SpaceAvatar color={space.color} shape={space.shape} size={88} /></div>
+            <div className="bd-avatar"><SpaceAvatar color={space.color} shape={space.shape} icon={space.icon} size={88} /></div>
             <input className="bd-name" value={name} onChange={(e) => setName(e.target.value)} onBlur={commitName} maxLength={60} aria-label="Bot name"
               onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setName(space.name); e.stopPropagation(); e.currentTarget.blur() } }} />
             <input className="bd-label" value={label} onChange={(e) => setLabel(e.target.value)} onBlur={commitLabel} placeholder="Add a label" maxLength={80} aria-label="Label" data-testid="bot-label"
@@ -220,6 +220,7 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
                 </>
               )}
               <BotShareRows space={space} />
+              {!space.isMain && space.kind === 'bot' && <BotRemoveRows space={space} onChanged={p.onChanged} onClose={p.onClose} />}
             </div>
           ) : (
             <Library spaceId={space.id} />
@@ -504,6 +505,34 @@ export function MaxRows({ spaceId }: { spaceId: string }) {
           </label>
         </>
       )}
+    </>
+  )
+}
+
+/** Hide a bot from the sidebar, or delete it (asks first): right in its profile, no right-click needed. */
+function BotRemoveRows({ space, onChanged, onClose }: { space: Space; onChanged: () => void; onClose: () => void }) {
+  const [confirm, setConfirm] = useState(false)
+  const hide = async (): Promise<void> => { await api.spaces.update(space.id, { hidden: !space.hidden }); onChanged() }
+  const del = async (): Promise<void> => { await api.spaces.remove(space.id); onChanged(); onClose() }
+  return (
+    <>
+      <div className="bd-section-title">Remove</div>
+      <div className="bd-card">
+        <button className="bd-row bd-row-btn" onClick={() => void hide()} data-testid="bot-hide">
+          <span className="bd-row-text">{space.hidden ? 'Show in the sidebar' : 'Hide from the sidebar'}<span className="bd-row-sub">{space.hidden ? 'It comes back with its chat and routines.' : 'Its chat and routines stay; find it under Hidden bots.'}</span></span>
+        </button>
+        {!confirm ? (
+          <button className="bd-row bd-row-btn danger" onClick={() => setConfirm(true)} data-testid="bot-delete">
+            <span className="bd-row-text">Delete {space.name}<span className="bd-row-sub">Removes the bot, its chat and its routines.</span></span>
+          </button>
+        ) : (
+          <div className="rt-confirm block" role="alertdialog" aria-label="Delete bot">
+            <span>Delete {space.name} and its chat? This can’t be undone.</span>
+            <button className="bd-btn" onClick={() => setConfirm(false)}>Cancel</button>
+            <button className="bd-btn danger" onClick={() => void del()} data-testid="bot-delete-confirm">Delete</button>
+          </div>
+        )}
+      </div>
     </>
   )
 }

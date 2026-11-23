@@ -92,6 +92,7 @@ import type { Embedder } from '../knowledge/embeddings'
 import { OutcomeRouter, outcomeLines, verdictFromEmoji, verdictFromWords, type VerdictSource } from '../llm/outcome-router'
 import { requestStrategy } from '@shared/request-strategy'
 import { placementBlock } from '../workers'
+import { stripDirectives } from '@shared/directives'
 import { admitsUnverified, completionReport, UNVERIFIED_NOTE } from './runtime/verification'
 import { phaseTask } from './runtime/phase'
 import { taskGraphTool } from './runtime/graph'
@@ -233,6 +234,12 @@ interface Run {
   helper?: boolean
   /** Messages sent while this run works (steering, or another bot's handoff), added at the start of the next step. */
   steers?: Array<{ text: string; meta?: Record<string, unknown> }>
+  /** The answer already written, being double-checked (the verify pass): when it started. */
+  checking?: { id: string; at: number }
+  /** A new message came while it was only double-checking: end the run with the answer it has. */
+  endWithDraft?: boolean
+  /** Messages to send as a fresh run once this one ends (sent while it was only double-checking). */
+  afterRun?: string[]
   /** Resolves when the run (and its group speakers) has ended. */
   done?: Promise<'finished' | 'stopped' | 'error'>
   /**
@@ -645,6 +652,14 @@ export class Agent {
       this.stop(threadId)
       return 'steered'
     }
+    // It already answered and is only double-checking that answer: the answer stands, the run ends, and this
+    // message starts a fresh run (it never becomes a steer into a finished task).
+    if (!meta && run.checking && !run.helper && !run.group) {
+      run.endWithDraft = true
+      run.afterRun = [...(run.afterRun ?? []), text]
+      run.ctrl.abort()
+      return 'sent'
+    }
     // A quick side question ("what's 9 squared?", "how's it going?"): answered right away beside the job,
     // which keeps running. Only in a plain chat run the user is watching; never when a question card is open.
     if (!meta && isAside(text) && !run.group && !run.helper && !run.unattended && !run.pending.size && this.lastModel.get(threadId)) {
@@ -1042,6 +1057,9 @@ export class Agent {
     const t = this.d.db.updateThread(thread.id, { unread: true }, true)
     this.d.emit({ threadId: thread.id, type: 'thread', thread: t })
     this.d.emit({ threadId: thread.id, type: 'run', status, error, spaceId: thread.spaceId, title: this.d.db.getThread(thread.id)?.title ?? thread.title })
+    // Sent while it was only double-checking: a fresh run, now that this one has ended.
+    const next = run.afterRun?.splice(0) ?? []
+    if (next.length) setTimeout(() => void this.send({ threadId: thread.id, text: next.join('\n\n') }).catch(() => undefined), 0)
     return status
   }
 
@@ -2963,6 +2981,24 @@ export class Agent {
     let verified = false
     /** The answer written before the double-check (kept when the check finds nothing to fix). */
     let verifyDraft: Message | undefined
+    /** The double-check ends early: the answer it was checking is the answer (shown again), and any half-written replacement goes. */
+    const keepDraft = (): void => {
+      if (!verifyDraft) return
+      const draft = verifyDraft
+      for (const m of db.listMessages(thread.id)) {
+        if (m.role === 'assistant' && m.createdAt > draft.createdAt && m.content && !m.meta?.superseded && !m.meta?.aside) {
+          m.meta = { ...m.meta, superseded: true }
+          if (m.status === 'streaming' || m.status === 'stopped') m.status = 'done'
+          db.updateMessage(m)
+          this.d.emit({ threadId: thread.id, type: 'message', message: m })
+        }
+      }
+      draft.meta = { ...draft.meta, superseded: false, checking: false, checkSkipped: true }
+      db.updateMessage(draft)
+      this.d.emit({ threadId: thread.id, type: 'message', message: draft })
+      verifyDraft = undefined
+      run.checking = undefined
+    }
     let evidenceRounds = 0
     let previousPhase = run.meter?.phase
     let phaseSwitches = 0
@@ -2988,6 +3024,9 @@ export class Agent {
     let profileFloor: ToolProfile | undefined
     try {
       for (let step = 1; step <= budget; step++) {
+        // Double-checking an answer it already wrote takes 90 seconds at most: then that answer stands and the run
+        // ends, so a slow check never leaves the chat "working" long after the answer was there.
+        if (verifyDraft && run.checking && Date.now() - run.checking.at > VERIFY_MAX_MS) { keepDraft(); break }
         run.meter?.check()
         // A picker change takes effect at the next model step without discarding this chat or tool state.
         const liveThread = db.getThread(thread.id)
@@ -3218,8 +3257,10 @@ export class Agent {
           // A live secret copied out of a file or command output (an API key in .env) doesn't stay in the answer the
           // user sees, syncs, gets notified about or shares (Agent Arena: a model pasted a Stripe key into its reply).
           {
-            const hidden = hideCopiedSecrets(assistant.content, all.filter((m) => m.role === 'tool').map((m) => m.content).join('\n'), all.filter((m) => m.role === 'user').map((m) => m.content).join('\n'))
-            if (hidden !== assistant.content) {
+            // Internal markup a backend left in the text (":codex-file-citation{…}") goes too.
+            const before = assistant.content
+            const hidden = hideCopiedSecrets(stripDirectives(before), all.filter((m) => m.role === 'tool').map((m) => m.content).join('\n'), all.filter((m) => m.role === 'user').map((m) => m.content).join('\n'))
+            if (hidden !== before) {
               assistant.content = hidden
               assistant.meta = { ...assistant.meta, secretsHidden: true }
               db.updateMessage(assistant)
@@ -3292,8 +3333,10 @@ export class Agent {
             if (selfCheck || review) {
               budget = Math.max(budget, step + 1)
               verifyDraft = assistant
+              run.checking = { id: assistant.id, at: Date.now() }
               this.d.emit({ threadId: thread.id, type: 'drafting', tool: 'verify' })
-              assistant.meta = { ...assistant.meta, superseded: true }
+              // checking: the chat keeps showing this answer while it's double-checked, until the checked one is written.
+              assistant.meta = { ...assistant.meta, superseded: true, checking: true }
               db.updateMessage(assistant)
               this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
               db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: verifyNote({ changed: track.changed, researched: track.researched, actions, complex, goal }) + review })
@@ -3560,7 +3603,8 @@ export class Agent {
         }
       }
     } catch (e) {
-      if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') status = 'stopped'
+      if (run.endWithDraft && verifyDraft) { keepDraft(); status = 'finished' }
+      else if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') status = 'stopped'
       else {
         status = 'error'
         if (!(e as { shown?: boolean }).shown) this.notice(thread.id, `Something went wrong: ${(e as Error).message}`)
@@ -4473,6 +4517,9 @@ export function promisesAction(text: string): boolean {
     || new RegExp(`\\b(${gerunds})\\b[^.!?\\n]{0,120}\\b(now|right away)\\b`, 'i').test(last)
     || /\b(send|share|post) (you )?(the|a) (live )?(link|url)\b[^.!?\n]{0,40}\b(once|when) (it'?s|it is) (up|live|done|ready|finished)\b/i.test(last)
 }
+
+/** The longest a double-check of an answer already written may take before that answer simply stands. */
+export const VERIFY_MAX_MS = 90_000
 
 /** Source files the test-until-green rule watches. */
 const CODE_FILE = /\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|scala|vue|svelte)$/i

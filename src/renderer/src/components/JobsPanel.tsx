@@ -248,7 +248,7 @@ if (typeof window !== 'undefined' && api?.chat) {
   })
 }
 
-export function RunSummary({ threadId, messages, mode }: { threadId: string; messages: Message[]; mode: PermissionMode }) {
+export function RunSummary({ threadId, messages, mode, simple }: { threadId: string; messages: Message[]; mode: PermissionMode; simple?: boolean }) {
   const facts = useMemo(() => runFacts(messages), [messages])
   const [usage, setUsage] = useState<RunUsage | null>(null)
   const since = facts?.since ?? 0
@@ -260,7 +260,8 @@ export function RunSummary({ threadId, messages, mode }: { threadId: string; mes
     void api.usage.forRun(threadId, since).then((u) => { if (alive) setUsage(u) }).catch(() => undefined)
     return () => { alive = false }
   }, [threadId, since, count])
-  if (!facts) return null
+  // Everyone sees the finish line after real work; a quick chat answer needs none.
+  if (!facts || (simple && facts.actions === 0)) return null
   const a = asks.get(threadId)
   const asked = a && a.since >= since - 10_000 ? a.n : undefined
   const line = statusLine(facts, usage, { asked })

@@ -29,7 +29,11 @@ test('an overwrite after the user changed the file is refused; after a fresh rea
   // Its own consecutive writes never trip it, and a file it never read is written as before.
   await write.run({ path: 'notes.md', content: 'v2\n' }, ctx)
   await write.run({ path: 'notes.md', content: 'v3\n' }, ctx)
+  // A file it never opened isn't replaced blind: it reads it first, picks another name, or asks.
   writeFileSync(join(ws, 'other.md'), 'x')
+  await expect(write.run({ path: 'other.md', content: 'y' }, ctx)).rejects.toThrow(/already exists and this chat hasn't opened it.*other-2\.md/)
+  expect(readFileSync(join(ws, 'other.md'), 'utf8')).toBe('x')
+  await read.run({ path: 'other.md' }, ctx)
   await write.run({ path: 'other.md', content: 'y' }, ctx)
   expect(readFileSync(join(ws, 'other.md'), 'utf8')).toBe('y')
 })

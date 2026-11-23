@@ -37,3 +37,15 @@ describe('run_command: what needs approval', () => {
     each(['git checkout -b feature', 'git checkout main', 'git restore --staged a.ts', 'npm test &> log.txt', 'npm test 2>&1 | tee log', 'git clean -n'], 'write_local')
   })
 })
+
+// Grok Bot head-to-head: opening Calculator took 3 approvals and a harmless Python check asked in Auto.
+test('opening an app by name, process lookups and version checks only read or change nothing risky', () => {
+  expect(classify('pgrep -l Calculator').effect).toBe('read')
+  expect(classify('open -a Calculator')).toMatchObject({ effect: 'write_local', why: 'opens Calculator' })
+  expect(classify('open -b com.apple.calculator').effect).toBe('write_local')
+  expect(classify("python3 -c 'import sys; print(sys.version)'").effect).toBe('read')
+  expect(classify('python3 -c "import PIL; print(PIL.__version__)"').effect).toBe('read')
+  // Real code still asks; opening a file or address with an app still goes through the network rule.
+  expect(classify("python3 -c 'import os; os.remove(\"x\")'").effect).not.toBe('read')
+  expect(classify('open -a Safari https://example.com').effect).not.toBe('write_local')
+})

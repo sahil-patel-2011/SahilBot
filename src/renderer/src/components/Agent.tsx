@@ -439,11 +439,23 @@ const SENDS = /\b(send|sends|sending|post|posts|posting|publish|share|sharing|up
 const SECURITY = /\b(account or security settings|security settings|account settings|change (your |the )?password|password (change|reset)|reset (your |the )?password|2fa|two[- ]factor|mfa|recovery (email|phone)|api keys?|sign[- ]in settings|login settings|permission settings)\b/i
 const SECRET = /\b(fill secret|saved login|password field|vault)\b/i
 
+/** Opening or running something, with nothing deleted or overwritten: not "can't be undone". */
+const runsOnly = (text: string): boolean => /\b(open|opening|opens|runs? it|launch(es|ing)?|run(s|ning)? (a|the) (script|program|app))\b/i.test(text) && !/\b(delet|remov|overwrit|eras|wip|replac|rm\b|format)/i.test(text)
+
+/** What a "Make it a rule…" rule should say to match this action: its name and what it's aimed at (not the long summary). */
+export function ruleSeed(req: Pick<PendingRequest, 'tool' | 'label' | 'args'>): string {
+  let a: Record<string, unknown> = {}
+  try { a = JSON.parse(req.args ?? '{}') as Record<string, unknown> } catch { /* not JSON */ }
+  const cmd = typeof a.command === 'string' ? a.command.trim().split(/\s+/).slice(0, 2).join(' ') : ''
+  const target = typeof a.path === 'string' ? a.path : typeof a.url === 'string' ? (() => { try { return new URL(a.url as string).host } catch { return '' } })() : typeof a.app === 'string' ? a.app : cmd
+  return [req.label ?? req.tool ?? '', target].filter(Boolean).join(' ').trim()
+}
+
 /** Plain-English warnings for the risky parts of an action. */
 function approvalWarnings(req: PendingRequest): string[] {
   const text = words(req.tool, req.label, req.summary, req.reason)
   const out: string[] = []
-  if (req.effect === 'destructive') out.push(/\btrash\b/i.test(text) ? 'This moves it to the Trash' : "This can't be undone")
+  if (req.effect === 'destructive') out.push(/\btrash\b/i.test(text) ? 'This moves it to the Trash' : runsOnly(text) ? 'This runs a program on your Mac' : "This can't be undone")
   if (req.effect === 'write_external' && SENDS.test(text) && !SECRET.test(text)) out.push('This shares your data outside this chat')
   if (SECURITY.test(text)) out.push('This changes sign-in or security settings')
   else if (SECRET.test(text)) out.push('This types one of your saved passwords')
@@ -464,7 +476,7 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
   const warnings = approvalWarnings(req)
   const name = req.label ?? req.tool ?? 'this action'
   const [ruleOpen, setRuleOpen] = useState(false)
-  const [ruleText, setRuleText] = useState(() => (req.summary ?? name).slice(0, RULE_MAX_CHARS))
+  const [ruleText, setRuleText] = useState(() => (ruleSeed(req) || name).slice(0, RULE_MAX_CHARS))
   const [ruleAction, setRuleAction] = useState<'allow' | 'ask'>('allow')
   const [saving, setSaving] = useState(false)
   // A second Enter before the first save re-renders must not save the rule twice.
@@ -474,7 +486,7 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
   const view = approvalView(req)
   // Which app or tool, unless the headline already says it plainly (saving a file, a command, a click).
   const who = view.preview && ['file', 'command', 'click'].includes(view.preview.kind) ? '' : name
-  const meta = [who, EFFECT_TEXT[req.effect ?? 'read'], reason && !warnings.some((w) => w.toLowerCase().includes(reason.toLowerCase())) ? reason : ''].filter(Boolean)
+  const meta = [who, req.effect === 'destructive' && runsOnly(words(req.tool, req.label, req.summary, req.reason)) ? 'Runs a program' : EFFECT_TEXT[req.effect ?? 'read'], reason && !warnings.some((w) => w.toLowerCase().includes(reason.toLowerCase())) ? reason : ''].filter(Boolean)
 
   const saveRule = async (): Promise<void> => {
     if (savingRef.current) return
