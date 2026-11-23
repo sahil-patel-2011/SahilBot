@@ -534,6 +534,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     if (b.kind === 'notice' && internalNotice(b.m)) return dev
     // A bot's chat: the conversation only (what it did is one click away in Show work, not in the chat).
     if (quietBot && (b.kind === 'activity' || b.kind === 'plan' || b.kind === 'team' || b.kind === 'heavy' || b.kind === 'compacted')) return false
+    // ...one answer, posted once (Grok Bot's way): an answer still being double-checked stays out of sight, with
+    // "<name> is working…" up, until the checked one is final (90 seconds at most; a fix it finds is kept).
+    if (quietBot && b.kind === 'text' && b.m.meta?.superseded && b.m.meta?.checking) return false
     // ...and no status notes ("The bot is continuing with…"); cards that need you (connect, a file, a page) stay.
     if (quietBot && b.kind === 'notice' && !isCardNotice(b.m)) return false
     return dev || quietVisible(b, hasDocs)
@@ -617,7 +620,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   // The status names the step that is running now: once it has its result, it's "Thinking" again, never a stale label.
   const liveStep = runningStep(allTail?.kind === 'activity' ? allTail.steps : undefined, running)
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
-  const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writing)
+  // A bot's chat keeps "<name> is working…" up while a checked answer is written out of sight (heldDrafts).
+  const writingVisible = writing && !(quietBot && (last?.meta?.superseded || heldDrafts(messages).waiting.has(last!.id)))
+  const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writingVisible)
   const started = turnStart(messages, since)
   const approvalWaiting = pending.some((p) => p.kind === 'approval')
   let tailText: Block | undefined
