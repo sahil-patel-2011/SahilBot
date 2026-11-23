@@ -136,6 +136,7 @@ describe('platform: templates, handoffs, pages, rules, routines, memory', () => 
     const { app, page } = await launch(tempProfile(), llm.url)
     await page.evaluate(() => window.foreman.memory.add('Lives in Atlanta, GA', null))
     await page.click('[data-testid="profile"]')
+    await page.click('[data-testid="menu-settings"]')
     await settingsPage(page, 'memory')
     await page.click('[data-testid="memory-import-open"]')
     await page.fill('[data-testid="memory-import-text"]', "Here's what I remember about you:\n- Prefers concise answers\n- Lives in Atlanta, GA\n- Always ask before sending email\n- Sister Priya is a nurse")

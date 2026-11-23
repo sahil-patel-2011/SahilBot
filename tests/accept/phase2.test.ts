@@ -76,7 +76,7 @@ describe('phase 2: agent loop + permissions + context', () => {
     expect(names).not.toContain('computer')
 
     // Cross-thread memory: a brand-new thread's system prompt already knows.
-    await page.click('[data-testid="main-bot"]')
+    await page.click('[data-testid="new-chat"]')
     await send(page, 'Who is my main client?')
     await idle(page)
     const msgs = llm.requests.at(-1)!.messages as Array<{ role: string; content: string }>

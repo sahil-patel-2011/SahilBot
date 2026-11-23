@@ -47,6 +47,7 @@ describe('import memory to SahilBot', () => {
     await page.evaluate((dir) => window.foreman.settings.set({ workspaceDir: dir }), ws)
     await page.evaluate(() => window.foreman.memory.add('Lives in Atlanta, GA', null))
     await page.click('[data-testid="profile"]')
+    await page.click('[data-testid="menu-settings"]')
     await settingsPage(page, 'memory')
     await page.click('[data-testid="memory-import-open"]')
     const dialog = page.locator('[data-testid="memory-import"]')
@@ -163,18 +164,17 @@ describe('the Vault view', () => {
     await app.close()
   })
 
-  test('a bot\'s vault setting: off, and how much to remember', async () => {
+  test('one vault: old per-bot switches are kept but change nothing, and Settings has no vault controls', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     const ws = mkdtempSync(join(tmpdir(), 'sahilbot-ws-'))
     await page.evaluate((dir) => window.foreman.settings.set({ workspaceDir: dir }), ws)
     const id = await page.evaluate(async () => (await window.foreman.spaces.list()).find((s) => s.isMain)!.id)
-    let st = await page.evaluate((sid) => window.foreman.notesVault.setBot(sid, { level: 'normal' }), id)
+    const st = await page.evaluate((sid) => window.foreman.notesVault.setBot(sid, { enabled: false, level: 'normal' }), id)
+    // Always the most-remembering level, for every bot.
     expect(st.settings.level).toBe('aggressive')
-    expect(st.settings.bots[id]).toEqual({ level: 'normal' })
-    st = await page.evaluate((sid) => window.foreman.notesVault.setBot(sid, { enabled: false, level: null }), id)
-    expect(st.settings.bots[id]).toEqual({ enabled: false })
     // Settings → Memory has no notes tab: notes are the bots' own.
     await page.click('[data-testid="profile"]')
+    await page.click('[data-testid="menu-settings"]')
     await settingsPage(page, 'memory')
     expect(await page.locator('[data-testid="settings-tab-vault"]').count()).toBe(0)
     await app.close()

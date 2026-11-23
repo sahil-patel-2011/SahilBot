@@ -27,14 +27,16 @@ describe('keyboard shortcuts', () => {
       await page.keyboard.press('Meta+i')
       expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))).toBe('composer-input')
       await page.locator('[data-testid="thread"]').click({ position: { x: 5, y: 5 } }).catch(() => undefined)
+      // SahilBot (the pinned main bot) opens its own ongoing conversation, like any bot (Grok Bot's way).
+      const mainName = await page.evaluate(async () => (await window.foreman.spaces.list()).find((s) => s.isMain)!.name)
       await page.keyboard.press('Alt+ArrowUp')
-      await expect.poll(() => page.locator('.bot-pill').count(), { timeout: 10_000 }).toBe(0)
+      await expect.poll(() => page.locator('.bot-pill .pill-name').innerText().catch(() => ''), { timeout: 10_000 }).toBe(mainName)
       await page.keyboard.press('Meta+2')
       await expect.poll(() => page.locator('.bot-pill .pill-name').innerText().catch(() => ''), { timeout: 10_000 }).toBe('Finance')
-      // ⌘1: SahilBot, which opens on Home (like clicking it in the sidebar).
+      // ⌘1: SahilBot's conversation (like clicking it in the sidebar); New chat (⌘N) is the empty Home.
       await page.keyboard.press('Meta+1')
-      await expect.poll(() => page.locator('.bot-pill').count(), { timeout: 10_000 }).toBe(0)
-      expect(await page.getAttribute('[data-testid="composer-input"]', 'placeholder')).toContain('How can I help')
+      await expect.poll(() => page.locator('.bot-pill .pill-name').innerText().catch(() => ''), { timeout: 10_000 }).toBe(mainName)
+      expect(await page.getAttribute('[data-testid="composer-input"]', 'placeholder')).toContain(`Message ${mainName}`)
 
       // Find in a chat.
       llm.script.push({ content: 'Revenue grew 12% this quarter. Most of the revenue came from renewals.' })

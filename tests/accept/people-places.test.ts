@@ -72,36 +72,13 @@ describe('People & Places', () => {
     const act = await page.evaluate(() => window.foreman.activity.status())
     expect(act.settings).toMatchObject({ enabled: true, learn: true, shareWithCloud: false })
     expect(act.collecting).toBe(false)
-    // The switches live in Settings → Memory → What it learns from.
-    await page.click('[data-testid="profile"]')
-    await page.click('[data-testid="settings-memory"]')
-    await page.click('[data-testid="settings-tab-sources"]')
-    await page.locator('[data-testid="people-privacy"]').waitFor()
-    for (const id of ['chats', 'files', 'connectors', 'gmail', 'gcal', 'activity']) {
-      await expect.poll(() => page.locator(`[data-testid="privacy-source-${id}"]`).getAttribute('data-on')).toBe('true')
-    }
-    for (const id of ['health', 'finance', 'credentials', 'govId', 'sexualOrientation', 'religion', 'politics', 'children']) {
-      expect(await page.locator(`[data-testid="privacy-sensitive-${id}"]`).getAttribute('data-on')).toBe('true')
-    }
-    const never = await page.locator('[data-testid="privacy-never-stored"]').innerText()
-    expect(never).toMatch(/Passwords, codes and keys/)
-    expect(never).toMatch(/Card, bank account and ID numbers/)
-    expect(await page.locator('[data-testid="privacy-never-stored"] [role="switch"]').count()).toBe(0)
-    expect(await page.locator('[data-testid="privacy-activity-cloud"]').innerText()).toContain('activity only goes to models on this Mac')
-    await page.click('[data-testid="people-src-files"]')
+    // No screen for these any more (settings are basics only); the switches still work.
+    await page.evaluate(() => window.foreman.people.setSettings({ sources: { files: false } } as never))
     await expect.poll(async () => (await page.evaluate(() => window.foreman.people.status())).settings.sources.files).toBe(false)
-    await expect.poll(() => page.locator('[data-testid="privacy-source-files"]').getAttribute('data-on')).toBe('false')
-    await page.click('[data-testid="people-sens-health"]')
-    await expect.poll(async () => (await page.evaluate(() => window.foreman.people.status())).settings.sensitive.health).toBe(false)
-    await page.click('[data-testid="privacy-pause"]')
+    await page.evaluate(() => window.foreman.people.setSettings({ paused: true } as never))
     await expect.poll(async () => (await page.evaluate(() => window.foreman.people.status())).settings.paused).toBe(true)
-    await expect.poll(() => page.locator('[data-testid="privacy-pause"]').innerText()).toContain('Resume learning')
-    await page.click('[data-testid="privacy-pause"]')
-    await expect.poll(async () => (await page.evaluate(() => window.foreman.people.status())).settings.paused).toBe(false)
-    await page.click('[data-testid="people-src-files"]')
-    await page.click('[data-testid="people-sens-health"]')
-    await expect.poll(async () => { const s = (await page.evaluate(() => window.foreman.people.status())).settings; return s.sources.files && s.sensitive.health }).toBe(true)
-    await page.keyboard.press('Escape')
+    await page.evaluate(() => window.foreman.people.setSettings({ paused: false, sources: { files: true } } as never))
+    await expect.poll(async () => { const s = (await page.evaluate(() => window.foreman.people.status())).settings; return s.sources.files && !s.paused }).toBe(true)
 
     // A new chat no longer gets her card.
     await page.click('[data-testid="new-chat"]')
