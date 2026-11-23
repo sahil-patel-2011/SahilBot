@@ -771,6 +771,8 @@ export function App() {
   const isProject = space?.kind === 'project'
   /** Whose chat this is: the bot, group or project; plain chats belong to SahilBot itself. */
   const chatBot = isBot || isProject ? space : main
+  /** A bot's conversation (SahilBot's own one included, not New chats): shown the quiet way, just the conversation. */
+  const botChatName = (() => { const sp = thread ? spaces.find((x) => x.id === thread.spaceId) : undefined; return thread && sp && sp.kind === 'bot' && (!sp.isMain || thread.id === settings?.mainThreadId) ? sp.name : undefined })()
 
   const patchThread = async (patch: Parameters<typeof api.threads.update>[1]): Promise<void> => {
     if (!thread) return
@@ -1032,13 +1034,14 @@ export function App() {
                 </span>
               )
             })()}
-            {(thread || isBot || !!browser?.tabs.length || panel === 'browser') && (
+            {/* Like Grok Bot's clean header: the browser button only when there are pages to see (⌘\\ and Show work still work). */}
+            {((dev && (thread || isBot)) || !!browser?.tabs.length || panel === 'browser') && (
             <button className={`icon-btn globe${panel === 'browser' ? ' on' : ''}`} title={browser?.controlling ? 'Browser: SahilBot is using it now (click to watch)' : 'Browser: the web pages SahilBot opens'} aria-label="Browser" onClick={() => setPanel((p) => (p === 'browser' ? null : 'browser'))} data-testid="toggle-browser">
               <I.Globe size={17} />
               {!!browser?.tabs.length && <span className={`globe-dot${browser.controlling ? ' live' : ''}`} />}
             </button>
             )}
-            {(thread || isBot) && (
+            {(thread || isBot) && (dev || (panel && panel !== 'details') || plan.length > 0 || (prog?.actions ?? 0) > 0) && (
             <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Side panel: progress, files and documents (⌘\)" aria-label="Side panel" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
             )}
             {isServerRuntime && <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={() => setShowSettings(true)} data-testid="header-settings"><I.Gear size={17} /></button>}
@@ -1066,7 +1069,7 @@ export function App() {
         ) : thread ? (
           <>
             <ThreadView key={thread.id} messages={messages} running={isRunning} pending={pending} teams={teams} voiceLive={voiceOn ? voiceLive : null}
-              botName={(() => { const sp = spaces.find((x) => x.id === thread.spaceId); return sp && sp.kind === 'bot' && (!sp.isMain || thread.id === settings?.mainThreadId) ? sp.name : undefined })()}
+              botName={botChatName}
               ready={ready} onAtBottom={onAtBottom}
               unreadAfter={opened?.id === thread.id && dividerKind({ space: spaces.find((s) => s.id === thread.spaceId), thread, messages }) ? opened.readAt : null}
               drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id] ?? null}
@@ -1088,7 +1091,8 @@ export function App() {
                   <span className="hint">Sends when SahilBot finishes</span>
                 </div>
               )}
-              {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} />}
+              {/* A bot's chat ends on its answer (Grok Bot's way); new chats keep the finish line. */}
+              {!isRunning && (dev || !botChatName) && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} />}
               {chatInput}
             </div>
           </>

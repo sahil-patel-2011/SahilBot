@@ -108,7 +108,9 @@ export interface FolderProjects {
  * or a folder picked earlier this session. A new chat (no thread yet) keeps the choice as a draft and sends
  * it with the first message.
  */
-export function WorkFolderChip({ threadId, inherited, draft, onDraft, projects }: {
+export function WorkFolderChip({ threadId, inherited, draft, onDraft, projects, onlyWhenSet }: {
+  /** Hidden until the chat works in a folder or project (Grok Bot's plain message box): pick one from the + menu. */
+  onlyWhenSet?: boolean
   threadId?: string
   /** The bot's or project's folder, used when the chat doesn't pick one. */
   inherited?: string | null
@@ -148,6 +150,7 @@ export function WorkFolderChip({ threadId, inherited, draft, onDraft, projects }
     } catch (e) { toast(clean(e), 'error') }
   }
   const recents = recentFolders.filter((r) => r !== path).slice(0, 3)
+  if (onlyWhenSet && !path && !project) return null
   const label = project && !draft ? project.name : path ? folderName(path) : 'Choose folder'
   const whose = source === 'bot' ? ' (the bot\'s)' : source === 'project' ? ' (the project\'s)' : ''
   return (

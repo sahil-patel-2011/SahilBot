@@ -112,6 +112,9 @@ export const Composer = forwardRef<ComposerHandle, {
   showModelThinking?: boolean
 }>(function Composer(p, ref) {
   const dev = useDevMode()
+  // The "Enter adjusts · ⌘Enter waits" hint: the first time you're typing while a bot works, then never again.
+  const [firstSteer] = useState(() => { try { return !localStorage.getItem('sb.steerHint') } catch { return false } })
+  useEffect(() => { if (firstSteer && p.running) try { localStorage.setItem('sb.steerHint', '1') } catch { /* private */ } }, [firstSteer, p.running])
   const [dictating, setDictating] = useState(false)
   const dictatingRef = useRef(false)
   dictatingRef.current = dictating
@@ -422,7 +425,7 @@ export const Composer = forwardRef<ComposerHandle, {
         </div>
       </div>
       <div className="under">
-        <WorkFolderChip threadId={p.threadId} inherited={p.inheritedFolder} draft={draftFolder} onDraft={setDraftFolder} projects={p.projects} />
+        <WorkFolderChip threadId={p.threadId} inherited={p.inheritedFolder} draft={draftFolder} onDraft={setDraftFolder} projects={p.projects} onlyWhenSet={!dev} />
         <span className="spacer" />
         {p.mode === 'bypass' && (
           <span className="bypass-chip" role="status" data-testid="bypass-chip"
@@ -430,10 +433,12 @@ export const Composer = forwardRef<ComposerHandle, {
             <span className="bypass-dot" aria-hidden />Bypass on
           </span>
         )}
-        <ComposerPicker key={p.showModelThinking === false ? 'permissions' : 'full'} models={p.models} model={p.model} onModel={p.onModel} onAuto={p.onAuto} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
-          thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} showModelThinking={p.showModelThinking} />
+        {/* The model, thinking and Ask/Auto picker is Developer mode only: Auto picks the model for each request, and
+            permissions are set once (Settings, or a bot's profile). Grok Bot's box has no picker either. */}
+        {dev && <ComposerPicker key={p.showModelThinking === false ? 'permissions' : 'full'} models={p.models} model={p.model} onModel={p.onModel} onAuto={p.onAuto} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
+          thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} showModelThinking={p.showModelThinking} />}
       </div>
-      {p.running && !p.answering && (
+      {p.running && !p.answering && (dev || firstSteer || p.steering) && (
         <div className="steer-hint" data-testid="steer-hint">
           <kbd>Enter</kbd> send now (SahilBot adjusts) · <kbd>⌘Enter</kbd> send after it finishes
           {p.steering ? <span className="steering"> · <span className="spin" /> adjusting at its next step…</span> : null}
