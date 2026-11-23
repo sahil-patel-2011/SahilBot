@@ -14,7 +14,7 @@ beforeAll(async () => { llm = await startMockLlm() })
 afterAll(async () => { await llm.close() })
 
 describe('Settings', () => {
-  test('the pages, search to an Advanced setting, Memory list/edit/delete, and Voice\'s model', async () => {
+  test('basics only: the pages, no Advanced, search, Memory list/edit/delete, and the one voice choice', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '24', FOREMAN_MODELS_DIR: mkdtempSync(join(tmpdir(), 'set-models-')) })
     try {
       await page.evaluate(async () => {
@@ -31,39 +31,30 @@ describe('Settings', () => {
       expect(ids).toEqual(['settings-general', 'settings-models', 'settings-connected', 'settings-memory', 'settings-privacy', 'settings-voice', 'settings-server'])
       expect(await page.locator('.set-nav-item small').count()).toBeGreaterThanOrEqual(6)
       expect(await page.locator('[data-testid="settings-more"]').count()).toBe(0)
-      // You: one list (theme, text size, step detail) and a single Advanced fold; no "More".
+      // You: the basics only (about 8), no text size, step detail or Advanced fold; no "More".
       expect(await page.locator('[data-setting="theme"]').count()).toBe(1)
+      for (const id of ['font-size', 'density', 'chat-width', 'menu-bar']) expect(await page.locator(`[data-setting="${id}"]`).count(), id).toBe(0)
       expect(await page.locator('[data-testid="general-more"]').count()).toBe(0)
-      // Privacy & Security: tabs for passwords, approvals, permissions, activity, sensitive details.
+      expect(await page.locator('[data-testid="settings-advanced-section"]').count()).toBe(0)
+      expect(await page.locator('.set-body .set-row').count()).toBeLessThanOrEqual(10)
+      // Privacy & safety: Ask or Auto, your Mac, passwords and backups. No approval rules or "what it may see" tab.
       await page.click('[data-testid="settings-privacy"]')
       await page.locator('[data-testid="vault-status"]').waitFor()
-      // What it may do (approval rules) is on the same page now.
-      await page.locator('[data-testid="approvals-rules"] > summary').click()
-      await page.locator('[data-testid="rule-when"]').waitFor()
-      await page.click('[data-testid="settings-privacy"]')
-      await page.click('[data-testid="settings-tab-privacy"]')
-      await expect.poll(() => page.locator('[data-testid^="settings-sens-"]').count()).toBeGreaterThan(5)
-      // Advanced: rules & skills, knowledge folders, developer.
-      await page.click('[data-testid="settings-general"]')
-      await page.click('[data-testid="settings-advanced-section"] > summary')
-      await page.click('[data-testid="settings-tab-knowledge"]')
-      await page.locator('[data-testid="knowledge-settings"]').waitFor()
+      expect(await page.locator('[data-testid="approvals-rules"]').count()).toBe(0)
+      expect(await page.locator('[data-testid="settings-tab-privacy"]').count()).toBe(0)
+      // AI & spending: keys, the limit and the plans; no Advanced.
+      await page.click('[data-testid="settings-models"]')
+      await page.locator('[data-testid="key-anthropic"]').waitFor()
+      expect(await page.locator('[data-testid="models-advanced"]').count()).toBe(0)
 
-      // Search jumps to a setting inside a closed Advanced section and opens it.
+      // Search finds what's left, and nothing that was removed.
       await page.click('[data-testid="settings-general"]')
       await page.fill('[data-testid="settings-search"]', 'openrouter')
-      await page.locator('[data-testid="settings-result-servers"]').waitFor()
-      expect(await page.locator('[data-testid="settings-result-servers"]').innerText()).toContain('AI & spending · Advanced')
-      await page.keyboard.press('Enter')
+      await page.locator('[data-testid="settings-results"]').waitFor()
+      expect(await page.locator('[data-testid="settings-result-servers"]').count()).toBe(0)
+      await page.fill('[data-testid="settings-search"]', 'budget')
+      await page.click('[data-testid="settings-result-monthly-limit"]')
       await expect.poll(() => page.locator('[data-testid="settings-models"]').getAttribute('class')).toContain(' on')
-      await expect.poll(() => page.locator('[data-testid="models-advanced"]').getAttribute('open')).not.toBeNull()
-      await expect.poll(() => page.locator('[data-setting="servers"]').isVisible()).toBe(true)
-      expect(await page.locator('[data-testid="key-openrouter"]').isVisible()).toBe(true)
-      // ...and to one on another page's tab.
-      await page.fill('[data-testid="settings-search"]', 'approval')
-      await page.click('[data-testid="settings-result-approval-rules"]')
-      await expect.poll(() => page.locator('[data-testid="settings-privacy"]').getAttribute('class')).toContain(' on')
-      await expect.poll(() => page.locator('[data-testid="rule-when"]').isVisible()).toBe(true)
 
       // Memory: one switch, a plain list with category chips, click to edit, delete with Undo.
       await page.click('[data-testid="settings-memory"]')
@@ -94,12 +85,10 @@ describe('Settings', () => {
       await expect.poll(async () => (await page.evaluate(() => window.foreman.settings.get())).learning).toMatchObject({ enabled: false, explicit: ['enabled'] })
       await page.click('[data-testid="memory-auto"]')
       await expect.poll(async () => (await page.evaluate(() => window.foreman.settings.get())).learning?.enabled).toBe(true)
-      // Learned and what it learns from are tabs; the bots' notes have no tab (they're the bots' own memory).
+      // Memories and Learned are the only tabs (no Brain, sources or vault tabs to manage).
       await page.click('[data-testid="settings-tab-learned"]')
       await page.locator('[data-testid="learning-log"]').waitFor()
-      expect(await page.locator('[data-testid="settings-tab-vault"]').count()).toBe(0)
-      await page.click('[data-testid="settings-tab-sources"]')
-      await page.locator('[data-testid="people-privacy"]').waitFor()
+      for (const id of ['settings-tab-vault', 'settings-tab-sources', 'settings-tab-brain']) expect(await page.locator(`[data-testid="${id}"]`).count(), id).toBe(0)
 
       await page.click('[data-testid="settings-voice"]')
       await page.selectOption('[data-testid="voice-provider"]', 'xai')

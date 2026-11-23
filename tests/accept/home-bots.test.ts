@@ -54,9 +54,10 @@ describe('Home: your bots first', () => {
       const inbox = (await page.evaluate(() => window.foreman.spaces.list())).find((s) => s.name === 'Inbox')!
       expect(await page.evaluate((id) => window.foreman.spaces.getPrompt(id), inbox.id)).toContain('Never send without asking')
 
-      // Home now shows Inbox.
+      // The sidebar lists Inbox (Grok Bot's shape: the home screen is just the greeting and the box).
       await page.click('[data-testid="new-chat"]')
-      await expect.poll(() => page.locator('[data-testid="bot-card"] .bot-card-text b').allInnerTexts(), { timeout: 10_000 }).toEqual(['Inbox'])
+      await expect.poll(() => page.locator('[data-testid="space-item"]').allInnerTexts(), { timeout: 10_000 }).toEqual([expect.stringContaining('Inbox')])
+      expect(await page.locator('[data-testid="bot-deck"]').count()).toBe(0)
     } finally {
       await app.close()
     }
@@ -72,7 +73,7 @@ describe('Home: your bots first', () => {
       await page.click('[data-testid="onboarding-next"]')
       await page.click('[data-testid="onboarding-perms-next"]')
       await page.locator('[data-testid="onboarding-how"]').waitFor()
-      expect(await page.locator('[data-testid="onboarding-how"]').innerText()).toMatch(/Give it a job[\s\S]*Talk or type[\s\S]*It remembers/)
+      expect(await page.locator('[data-testid="onboarding-how"]').innerText()).toMatch(/Give it a job[\s\S]*Just ask[\s\S]*It remembers/)
       if (shots) await page.screenshot({ path: `${shots}/onboarding-first-bot.png` })
       await page.click('[data-testid="onboarding-first-bot"]')
       await expect.poll(() => page.locator('[data-testid="onboarding"]').count()).toBe(0)
@@ -125,28 +126,29 @@ describe('Home: your bots first', () => {
     }
   })
 
-  test('with bots: a card each, Open opens its chat, Talk opens the voice bar with that bot and its settings', async () => {
+  test('with bots: each in the sidebar with its icon, a click opens its chat, ⇧⌘V talks to that bot with its settings', async () => {
     const { app, page } = await launch(tempProfile(), llm.url)
     try {
       await page.evaluate(() => window.foreman.spaces.create({ name: 'Finance', intro: false }))
       await page.evaluate(() => window.foreman.spaces.create({ name: 'Scout', intro: false }))
-      // The sidebar and Home refresh on the spaces event; a reload makes it certain.
+      // The sidebar refreshes on the spaces event; a reload makes it certain.
       await page.reload()
-      await expect.poll(() => page.locator('[data-testid="bot-card"]').count(), { timeout: 15_000 }).toBe(2)
-      const names = await page.locator('[data-testid="bot-card"] .bot-card-text b').allInnerTexts()
-      expect(names.sort()).toEqual(['Finance', 'Scout'])
-      expect(await page.locator('[data-testid="deck-make-bot"]').count()).toBe(0)
+      const rows = page.locator('[data-testid="space-item"]')
+      await expect.poll(() => rows.count(), { timeout: 15_000 }).toBe(2)
+      expect((await rows.allInnerTexts()).map((t) => t.split('\n')[0]).sort()).toEqual(['Finance', 'Scout'])
+      // No bot cards or ideas under the welcome (Grok Bot doesn't have them).
+      expect(await page.locator('[data-testid="bot-deck"]').count()).toBe(0)
+      expect(await page.locator('[data-testid="ideas"]').count()).toBe(0)
       if (shots) await page.screenshot({ path: `${shots}/home-bots.png` })
 
-      // Open: the bot's ongoing chat.
-      await page.locator('[data-testid="bot-card"]', { hasText: 'Finance' }).locator('[data-testid="bot-open"]').click()
-      await expect.poll(() => page.locator('[data-testid="bot-deck"]').count(), { timeout: 10_000 }).toBe(0)
+      // A click: the bot's ongoing chat.
+      await rows.filter({ hasText: 'Finance' }).click()
       await page.locator('[data-testid="composer-input"]').waitFor()
 
-      // Back home, Talk: the voice bar with that bot (speech may not be set up in a test run; the bar still opens).
-      await page.click('[data-testid="new-chat"]')
-      await page.locator('[data-testid="bot-deck"]').waitFor()
-      await page.locator('[data-testid="bot-card"]', { hasText: 'Scout' }).locator('[data-testid="bot-talk"]').click()
+      // Talk to Scout: open its chat, then ⇧⌘V (speech may not be set up in a test run; the bar still opens).
+      await rows.filter({ hasText: 'Scout' }).click()
+      await page.locator('[data-testid="composer-input"]').waitFor()
+      await page.keyboard.press('Meta+Shift+V')
       await page.locator('[data-testid="voice-mode"]').waitFor()
       expect(await page.locator('[data-testid="voice-mode"] .vb-name').innerText()).toContain('Scout')
       // The transcript switch lives in the voice options (the "⋯" button), with the voices.
