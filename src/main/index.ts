@@ -1910,7 +1910,10 @@ app.whenReady().then(() => {
     try {
       // A missed run catching up: the bot knows it's late (time-sensitive steps may need adjusting).
       const late = info.late !== undefined ? { note: `[This routine was due at ${new Date(info.late).toLocaleString()} but SahilBot was closed or the Mac was asleep, so it is running late now. Adjust anything time-sensitive.]` } : {}
-      const { done } = await chat.send({ threadId, text: `⏰ ${info.dry ? '(Dry run) ' : ''}${task.title}\n\n${task.prompt}`, ...late, meta: { scheduled: task.id, ...(info.late !== undefined ? { late: info.late } : {}), ...(info.dry ? { dryRun: true } : {}) } }, { unattended: true })
+      // A "when …" routine: the items that set it off are outside content (fenced in the note, and the run is tainted:
+      // anything it would send or post asks first).
+      const note = [late.note, info.event?.note].filter(Boolean).join('\n\n')
+      const { done } = await chat.send({ threadId, text: `⏰ ${info.dry ? '(Dry run) ' : ''}${task.title}\n\n${task.prompt}`, ...(note ? { note } : {}), meta: { scheduled: task.id, ...(info.late !== undefined ? { late: info.late } : {}), ...(info.dry ? { dryRun: true } : {}), ...(info.event ? { triggerUntrusted: info.event.untrusted.map((t) => t.slice(0, 4000)) } : {}) } }, { unattended: true })
       status = await done
     } finally { scheduledRuns.delete(threadId) }
     const after = db.listMessages(threadId).filter((m) => m.createdAt >= startedAt)
@@ -1952,7 +1955,7 @@ app.whenReady().then(() => {
     const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', meta: { routineNotice: ev.type, routine: ev.task.id } })
     emit({ threadId, type: 'message', message: m })
   }
-  registry.register({ ...scheduleTool(scheduler, db), core: true })
+  registry.register({ ...scheduleTool(scheduler, db, () => brain.status().sources.map((x) => ({ kind: x.kind, name: x.name, on: x.on && x.state === 'on' }))), core: true })
   // Stock tools (found with find_tools "stock"): quotes, analysis, forecasts, compare, backtests, price alerts.
   registry.register(...stockTools(markets, { scheduler, db, liveQuotes }))
   // Missed runs (closed or asleep) catch up once within Settings → General → "Catch up on missed routines".
@@ -2582,6 +2585,8 @@ app.whenReady().then(() => {
     // Test runs can fix how long the Mac has been idle (otherwise it depends on whoever is at the keyboard).
     idleMs: () => { if (HIDDEN && process.env.FOREMAN_IDLE_MS) return Number(process.env.FOREMAN_IDLE_MS); try { return powerMonitor.getSystemIdleTime() * 1000 } catch { return 0 } },
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+    // "When an email from … arrives" routines: each read's new items (your own mail never sets one off).
+    onNew: (items) => { scheduler.onItems(items, [...(settings.get().me?.emails ?? [])]) },
     // Draft it: a new chat with the main bot at its usual level (Auto by default), the user's click as the request.
     startRun: async (o) => {
       const main = db.listSpaces().find((x) => x.isMain)

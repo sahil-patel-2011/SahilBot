@@ -12,7 +12,7 @@ export const BOT_FILE_MAX_BYTES = 256 * 1024
 export const LIMITS = { name: 60, label: 80, description: 200, instructions: 20_000, skills: 30, routines: 10, routineTitle: 100, routinePrompt: 4000 } as const
 
 const TOP_KEYS = ['format', 'version', 'name', 'color', 'shape', 'label', 'description', 'instructions', 'skills', 'routines']
-const SCHEDULE_KEYS: Record<string, string[]> = { daily: ['type', 'time'], weekly: ['type', 'days', 'time'], every: ['type', 'minutes'], cron: ['type', 'expr'] }
+const SCHEDULE_KEYS: Record<string, string[]> = { daily: ['type', 'time'], weekly: ['type', 'days', 'time'], every: ['type', 'minutes'], cron: ['type', 'expr'], when: ['type', 'kind', 'from', 'contains'] }
 const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 // ------------------------------------------------------------------ cleaning untrusted text
@@ -145,6 +145,7 @@ function cleanSchedule(s: Schedule): Schedule {
     case 'weekly': return { type: 'weekly', days: s.days.map((d) => d.slice(0, 3).toLowerCase()), time: s.time }
     case 'every': return { type: 'every', minutes: s.minutes }
     case 'cron': return { type: 'cron', expr: s.expr.trim() }
+    case 'when': return { type: 'when', kind: s.kind, ...(s.from?.trim() ? { from: oneLine(s.from).slice(0, 200) } : {}), ...(s.contains?.trim() ? { contains: oneLine(s.contains).slice(0, 200) } : {}) }
     default: return s
   }
 }

@@ -85,6 +85,8 @@ export interface BrainDeps {
   notify?: (p: BrainPrompt) => void
   openLink?: (link: string) => void
   onChange?: () => void
+  /** Items read for the first time (kept or filtered): "when an email arrives" routines look at them. */
+  onNew?: (items: RawItem[]) => void
   now?: () => number
 }
 
@@ -393,6 +395,7 @@ export class BrainService {
     const f = prefilter(fresh, (h) => this.store.hasHash(h))
     for (const x of f.kept) this.store.addItem(x, f.hashes.get(x)!, 'pending', { raw: JSON.stringify(x) })
     for (const { item, reason } of f.dropped) this.store.addItem(item, f.hashes.get(item)!, 'dropped', { reason })
+    if (fresh.length) try { this.d.onNew?.(fresh) } catch { /* a routine trigger never fails the read */ }
     return { read: fresh.length, kept: f.kept.length, dropped: f.dropped.length }
   }
 

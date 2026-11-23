@@ -40,7 +40,7 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
     return () => window.removeEventListener('keydown', k)
   }, [onClose])
 
-  const schedule = (): Schedule => type === 'once' ? { type, at: new Date(at).toISOString() } : type === 'daily' ? { type, time } : type === 'weekly' ? { type, days, time } : type === 'every' ? { type, minutes } : { type, expr }
+  const schedule = (): Schedule => type === 'once' ? { type, at: new Date(at).toISOString() } : type === 'daily' ? { type, time } : type === 'weekly' ? { type, days, time } : type === 'every' ? { type, minutes } : { type: 'cron', expr }
 
   const create = async (): Promise<void> => {
     setErr('')

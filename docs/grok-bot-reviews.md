@@ -33,7 +33,7 @@ Sources: [Layer3 Labs](https://www.layer3labs.io/guides/grok-bot-review) ·
 | "It finishes… it hands me the thing" | Same goal: the verify pass, "never claim without proof", the arena and real-work evals; answers post once |
 | Keeps working with the laptop closed (cloud computer) | Runs on your Mac: keeps it awake while bots work; with the lid closed only if you turn that on. **Gap**: no cloud computer |
 | Teach a task once, replay it | Teach mode records a browser task and saves it as a skill |
-| Schedules and triggers | Routines by asking in chat; Dry run; missed runs catch up. **Gap**: no Slack/GitHub/webhook triggers yet |
+| Schedules and triggers | Routines by asking in chat; Dry run; missed runs catch up; **event routines**: "when an email from Acme mentioning invoice arrives, file it" (mail, messages, calendar; the item is handed over as outside content, so a send it asks for still needs your OK; your own mail never sets one off; at most 20 runs a day). **Gap**: no GitHub/webhook triggers yet |
 | Easy setup, "it just works" | Four short setup steps; voice and permissions asked when first needed |
 | Bot-to-bot group chats | Handoffs between bots and group chats |
 | Voice on desktop and phone | Grok Voice 3.0 live (talk over it any time; bots do the work); phone access in preview |
@@ -41,6 +41,6 @@ Sources: [Layer3 Labs](https://www.layer3labs.io/guides/grok-bot-review) ·
 | Multi-account connectors on one bot | **Gap** (one account per connector) |
 
 ## Next gaps to close
-- Triggers beyond time: a new email, a Slack message, a webhook.
+- Webhook and GitHub triggers (email, messages and calendar are done; they're checked when SahilBot reads your apps, about every 15 minutes, not instantly).
 - A way to keep working while the Mac sleeps (a helper on a server SahilBot already supports, made one click).
 - Several accounts of one app on one bot.

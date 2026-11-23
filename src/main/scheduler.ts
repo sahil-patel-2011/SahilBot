@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { RoutineRun, Schedule, ScheduledTask } from '@shared/types'
 import type { Db } from './db'
+import { describeWhen, pickItems, triggerNote, TRIGGER_DAILY_MAX, type TriggerItem } from './triggers'
 
 // Scheduled tasks: once / daily / weekly / every N minutes / cron. Due tasks run as normal agent
 // turns in an unattended mode where anything that would need approval is skipped, not done.
@@ -71,6 +72,9 @@ export function nextRun(s: Schedule, from: Date): Date | null {
     }
     case 'cron':
       return nextCron(s.expr, from)
+    case 'when':
+      // Runs when something arrives (onItems), never on the clock.
+      return null
   }
 }
 
@@ -81,7 +85,18 @@ export function describeSchedule(s: Schedule): string {
     case 'daily': return `every day at ${s.time}`
     case 'weekly': return `every ${s.days.map((d) => d.slice(0, 3)).join(', ')} at ${s.time}`
     case 'cron': return `cron ${s.expr}`
+    case 'when': return describeWhen(s).replace(/^When/, 'when')
   }
+}
+
+/** What a routine run is: a test, a late catch-up, a dry run, or set off by new items (`event`). */
+export interface RunInfo {
+  id: string
+  test: boolean
+  late?: number
+  dry?: boolean
+  /** The items that set off a "when …" routine: the fenced note the bot reads and the raw text (for the taint check). */
+  event?: { note: string; untrusted: string[]; count: number }
 }
 
 type Row = Record<string, unknown>
@@ -197,7 +212,7 @@ export class Scheduler {
   wakeups?: () => Promise<void>
 
   /** `late` (on a run) = when a missed run was due; it is running late now. */
-  constructor(private db: Db, private run: (task: ScheduledTask, run: { id: string; test: boolean; late?: number; dry?: boolean }) => Promise<RunResult>, private changed: () => void, private now = () => new Date()) {
+  constructor(private db: Db, private run: (task: ScheduledTask, run: RunInfo) => Promise<RunResult>, private changed: () => void, private now = () => new Date()) {
     // Runs cut short by a quit or crash can't still be running.
     this.db.sql.prepare(`UPDATE routine_runs SET status = 'failed', finished_at = COALESCE(finished_at, started_at), reason = 'SahilBot closed before it finished' WHERE status = 'running'`).run()
   }
@@ -228,11 +243,11 @@ export class Scheduler {
     if (!t.prompt.trim()) throw new Error('A scheduled task needs instructions.')
     if (t.prompt.length > 8000) throw new Error('Keep scheduled instructions under 8,000 characters.')
     const next = nextRun(t.schedule, this.now())
-    if (!next) throw new Error('That time has already passed.')
+    if (!next && t.schedule.type !== 'when') throw new Error('That time has already passed.')
     const id = randomUUID().slice(0, 8)
     const on = t.enabled !== false
     this.db.sql.prepare('INSERT INTO scheduled_tasks(id, title, prompt, schedule, space_id, thread_id, enabled, next_run, created_at) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(id, t.title.trim() || 'Scheduled task', t.prompt.trim(), JSON.stringify(t.schedule), t.spaceId, t.threadId ?? null, on ? 1 : 0, on ? next.getTime() : null, Date.now())
+      .run(id, t.title.trim() || 'Scheduled task', t.prompt.trim(), JSON.stringify(t.schedule), t.spaceId, t.threadId ?? null, on ? 1 : 0, on && next ? next.getTime() : null, Date.now())
     this.changed()
     const task = this.get(id)!
     this.emit({ type: 'created', task })
@@ -245,7 +260,7 @@ export class Scheduler {
     const n = { ...cur, ...patch }
     if (patch.prompt !== undefined && !n.prompt.trim()) throw new Error('A scheduled task needs instructions.')
     const next = n.enabled ? nextRun(n.schedule, this.now())?.getTime() ?? null : null
-    if (n.enabled && next === null) throw new Error('That time has already passed.')
+    if (n.enabled && next === null && n.schedule.type !== 'when') throw new Error('That time has already passed.')
     this.db.sql.prepare('UPDATE scheduled_tasks SET title=?, prompt=?, schedule=?, enabled=?, next_run=? WHERE id=?')
       .run(n.title, n.prompt, JSON.stringify(n.schedule), n.enabled ? 1 : 0, next, id)
     this.changed()
@@ -328,8 +343,34 @@ export class Scheduler {
     await this.begin(t, false, late).done
   }
 
+  /**
+   * New items from a read of mail, messages or the calendar: each "when …" routine that one of them matches runs once,
+   * with the matching items (up to TRIGGER_BATCH) handed to it as outside content. `me`: the user's own addresses
+   * (their own mail never sets a routine off). Returns the routines started.
+   */
+  onItems(items: TriggerItem[], me: string[] = []): string[] {
+    if (!items.length || this.paused()) return []
+    const started: string[] = []
+    const today = new Date(this.now()); today.setHours(0, 0, 0, 0)
+    for (const t of this.list()) {
+      if (!t.enabled || t.schedule.type !== 'when' || this.busy.has(t.id) || !this.available(t.spaceId)) continue
+      // Only what arrived after the routine was made (a first read of older mail sets nothing off).
+      const hit = pickItems(t.schedule, items.filter((x) => x.at >= t.createdAt), me)
+      if (!hit.items.length) continue
+      const ran = (this.db.sql.prepare('SELECT COUNT(*) AS n FROM routine_runs WHERE task_id = ? AND test = 0 AND started_at >= ?').get(t.id, today.getTime()) as { n: number }).n
+      if (ran >= TRIGGER_DAILY_MAX) {
+        this.db.sql.prepare('UPDATE scheduled_tasks SET last_status = ? WHERE id = ?').run(`skipped: ran ${TRIGGER_DAILY_MAX} times today already`, t.id)
+        continue
+      }
+      this.db.sql.prepare('UPDATE scheduled_tasks SET last_run = ? WHERE id = ?').run(Date.now(), t.id)
+      void this.begin(t, false, undefined, false, { note: triggerNote(hit.items, hit.more), untrusted: hit.items.map((x) => `${x.title}\n${x.from ?? ''}\n${x.text}`), count: hit.items.length + hit.more })
+      started.push(t.id)
+    }
+    return started
+  }
+
   /** Records the run (synchronously, so callers can return at once), then runs it. */
-  private begin(t: ScheduledTask, test: boolean, late?: number, dry?: boolean): { runId: string; done: Promise<void> } {
+  private begin(t: ScheduledTask, test: boolean, late?: number, dry?: boolean, event?: RunInfo['event']): { runId: string; done: Promise<void> } {
     this.busy.add(t.id)
     const runId = randomUUID()
     this.db.sql.prepare('INSERT INTO routine_runs(id, task_id, started_at, status, thread_id, test) VALUES(?,?,?,?,?,?)')
@@ -339,7 +380,7 @@ export class Scheduler {
     const done = (async () => {
       let result: RunResult
       try {
-        result = await this.run(t, { id: runId, test, ...(late !== undefined ? { late } : {}), ...(dry ? { dry: true } : {}) })
+        result = await this.run(t, { id: runId, test, ...(late !== undefined ? { late } : {}), ...(dry ? { dry: true } : {}), ...(event ? { event } : {}) })
       } catch (e) {
         result = `error: ${(e as Error).message}`
       }

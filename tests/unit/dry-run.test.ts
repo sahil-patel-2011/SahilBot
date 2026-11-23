@@ -29,7 +29,7 @@ test('a dry run reads for real and only lists what it would send', async () => {
     async run({ q }) { read.push(q); return { text: '2 unread: invoice from Acme, lunch invite' } }
   }
   const send: ToolDef<{ to: string; body: string }> = {
-    name: 'send_email', label: 'Email', effect: 'send', description: 'send an email', describe: (a) => `Send an email to ${a.to}`,
+    name: 'send_email', label: 'Email', effect: 'write_external', description: 'send an email', describe: (a) => `Send an email to ${a.to}`,
     parameters: { type: 'object', properties: { to: { type: 'string' }, body: { type: 'string' } }, required: ['to', 'body'], additionalProperties: false },
     async run({ to }) { sent.push(to); return { text: 'sent' } }
   }

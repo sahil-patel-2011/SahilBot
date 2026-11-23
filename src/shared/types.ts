@@ -1210,6 +1210,8 @@ export type Schedule =
   | { type: 'daily'; time: string }
   | { type: 'weekly'; days: string[]; time: string }
   | { type: 'cron'; expr: string }
+  /** Runs when something new arrives (an email, a message, a calendar event) that matches; see main/triggers.ts. */
+  | { type: 'when'; kind: 'email' | 'chat' | 'calendar' | 'meetings' | 'crm' | 'docs' | 'accounting' | 'any'; from?: string; contains?: string }
 
 export interface ScheduledTask {
   id: string

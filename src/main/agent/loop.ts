@@ -3067,6 +3067,13 @@ export class Agent {
       const seeded = opener.meta.goalUntrusted
       if (Array.isArray(seeded)) for (const t of seeded.slice(-20)) if (typeof t === 'string' && t) untrusted.push(t)
     }
+    // A routine set off by an email or message: that item is outside content (anything outward asks first).
+    if (opener && Array.isArray(opener.meta?.triggerUntrusted)) {
+      run.forceTaint = true
+      track.web = true
+      track.sawUntrusted = true
+      for (const t of (opener.meta.triggerUntrusted as unknown[]).slice(0, 10)) if (typeof t === 'string' && t) untrusted.push(t)
+    }
     run.taint = { untrusted, userText: () => userText, tainted: () => !!run.forceTaint || track.web }
     // Claude's server web search / fetch results from earlier turns live on assistant messages, not tool
     // messages: they are outside content too (added, never replacing the checks above).
