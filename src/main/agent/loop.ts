@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { isStopRequest } from './stop-intent'
-import { asideSystem, isAside } from './aside'
+import { asideSystem, isAside, quickMath } from './aside'
 import { projectInstructions } from './project-instructions'
 import { checkMedicalAnswer, medicalNote } from './medical-check'
 import { ALL_FEATURES, claimBacked, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
@@ -714,7 +714,14 @@ export class Agent {
    * can't answer (the model failed), the question joins the job as ordinary steering, so nothing is lost.
    */
   private async aside(threadId: string, run: Run, asked: Message): Promise<void> {
-    const model = this.lastModel.get(threadId)!
+    // Plain arithmetic is worked out right here: instant, and exact (report AL-01: "18% of $1,740" took 25 s).
+    const sum = quickMath(asked.content)
+    if (sum) {
+      const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: sum, kind: 'normal', status: 'done', meta: { aside: true, replyTo: asked.id, replyText: asked.content.replace(/\s+/g, ' ').slice(0, 90) } })
+      this.d.emit({ threadId, type: 'message', message: m })
+      return
+    }
+    const model = this.quickModel(this.lastModel.get(threadId)!)
     const all = this.d.db.listMessages(threadId)
     const job = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside && m.id !== asked.id)?.content ?? ''
     const step = [...all].reverse().find((m) => m.role === 'assistant' && m.toolCalls?.length)?.toolCalls?.at(-1)?.name
@@ -725,6 +732,20 @@ export class Agent {
     }
     const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: reply, kind: 'normal', status: 'done', meta: { aside: true, replyTo: asked.id, replyText: asked.content.replace(/\s+/g, ' ').slice(0, 90) } })
     this.d.emit({ threadId, type: 'message', message: m })
+  }
+
+  /**
+   * A faster model for a quick side answer: the same provider's lightest capable one (Haiku beside Opus, a mini
+   * beside GPT), never a cloud model for a chat on a local one. The chat's own model when there's nothing lighter.
+   */
+  private quickModel(current: string): string {
+    try {
+      const all = this.d.endpoints.usable()
+      const cur = all.find((m) => m.id === current)
+      if (!cur) return current
+      const lighter = all.filter((m) => m.id !== current && m.provider === cur.provider && isRemoteModel(m) === isRemoteModel(cur) && m.tier >= 1 && m.tier < cur.tier && m.installed !== false)
+      return [...lighter].sort((a, b) => a.tier - b.tier || (b.rank ?? 0) - (a.rank ?? 0))[0]?.id ?? current
+    } catch { return current }
   }
 
   /** Adds waiting steering messages to the conversation; returns the messages added. */

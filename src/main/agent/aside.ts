@@ -23,3 +23,41 @@ export function asideSystem(o: { who?: string; job: string; step?: string }): st
     o.who ? `The user's name is ${o.who}.` : ''
   ].filter(Boolean).join('\n')
 }
+
+/**
+ * Plain arithmetic in a side question, worked out right here (no model, so it's instant): "18% of $1,740",
+ * "what's 1740 * 0.18?", "250 + 75 - 10", "(3+4)*2", "9 squared". undefined: not plain arithmetic.
+ */
+export function quickMath(text: string): string | undefined {
+  let t = text.trim().toLowerCase().replace(/\?+$/, '').replace(/^(what'?s|what is|whats|calculate|compute|how much is)\s+/, '').trim()
+  const money = t.includes('$')
+  t = t.replace(/[$,]/g, '').replace(/×/g, '*').replace(/x(?=\s*[\d(])/g, '*').replace(/÷/g, '/').replace(/\bsquared\b/g, '^2').replace(/\bcubed\b/g, '^3')
+  // "18% of 1740" → (18/100)*1740; a bare "18%" is 0.18.
+  t = t.replace(/(\d+(?:\.\d+)?)\s*%\s*of\s*/g, '($1/100)*').replace(/(\d+(?:\.\d+)?)\s*%/g, '($1/100)')
+  if (!/^[\d\s+\-*/^().]+$/.test(t) || !/\d/.test(t) || !/[+\-*/^]/.test(t)) return undefined
+  const value = evalArith(t)
+  if (value === undefined || !Number.isFinite(value)) return undefined
+  const round = Math.round(value * 1e6) / 1e6
+  const shown = money
+    ? `$${round.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : round.toLocaleString('en-US', { maximumFractionDigits: 6 })
+  return `${shown}.`
+}
+
+/** A tiny, safe arithmetic evaluator (+ - * / ^ and parentheses): no eval, no names. */
+function evalArith(src: string): number | undefined {
+  const toks = src.match(/\d+(?:\.\d+)?|[+\-*/^()]/g) ?? []
+  let i = 0
+  const peek = (): string | undefined => toks[i]
+  const atom = (): number => {
+    const tk = toks[i++]
+    if (tk === '(') { const v = expr(); if (toks[i++] !== ')') throw new Error('paren'); return v }
+    if (tk !== undefined && /^\d/.test(tk)) return Number(tk)
+    throw new Error('token')
+  }
+  const unary = (): number => { if (peek() === '-') { i++; return -unary() } if (peek() === '+') { i++; return unary() } return atom() }
+  const power = (): number => { const b = unary(); if (peek() === '^') { i++; return b ** power() } return b }
+  const term = (): number => { let v = power(); while (peek() === '*' || peek() === '/') { const op = toks[i++]; const r = power(); v = op === '*' ? v * r : v / r } return v }
+  function expr(): number { let v = term(); while (peek() === '+' || peek() === '-') { const op = toks[i++]; const r = term(); v = op === '+' ? v + r : v - r } return v }
+  try { const v = expr(); return i === toks.length ? v : undefined } catch { return undefined }
+}
