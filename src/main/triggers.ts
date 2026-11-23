@@ -5,7 +5,7 @@ export { describeWhen, type When }
 // Routines that run when something arrives, not at a time ("when an email from Acme comes in, file the invoice").
 // Grok Bot reviewers list event triggers as the thing time-only schedules can't do. The items come from the same
 // read SahilBot already does for its Brain (mail, messages, calendar), so a trigger costs no extra reads; it fires
-// on the first read that sees the item (about every 15 minutes while you're around).
+// on the first read that sees the item (about every 5 minutes while SahilBot is open; no model call).
 //
 // The item is outside content. It reaches the bot fenced and labelled as data, the run is marked tainted (anything
 // it would send or post asks first), and a burst of matches becomes one run, not one per item.

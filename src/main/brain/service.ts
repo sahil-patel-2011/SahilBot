@@ -33,6 +33,10 @@ import { BrainStore, type StoredPrompt } from './store'
 const STATE_KEY = 'brain:state'
 const DAY = 86_400_000
 const TICK_MS = 60_000
+/** Quick reads for event routines: how often, how many items, and the backlog past which they wait for a sync. */
+const QUICK_READ_MS = 5 * 60_000
+const QUICK_READ_ITEMS = 20
+const QUICK_BACKLOG_MAX = 500
 
 type Chat = (req: ChatRequest) => AsyncIterable<StreamPart>
 
@@ -87,6 +91,8 @@ export interface BrainDeps {
   onChange?: () => void
   /** Items read for the first time (kept or filtered): "when an email arrives" routines look at them. */
   onNew?: (items: RawItem[]) => void
+  /** Some routine waits for new items: between syncs, a quick read (no model, nothing spent) every few minutes. */
+  wantsQuickReads?: () => boolean
   now?: () => number
 }
 
@@ -273,8 +279,25 @@ export class BrainService {
     if (this.stopped || this.current) return null
     this.resurface()
     const cad = this.cadenceNow()
-    if (!due(cad, this.state().lastSyncAt, this.now())) return null
+    if (!due(cad, this.state().lastSyncAt, this.now())) { await this.quickRead(cad); return null }
     return this.sync('schedule')
+  }
+
+  private lastQuickAt = 0
+  /**
+   * Between syncs, while a "when an email arrives" routine is waiting: read new items only (no model call, so it runs
+   * even when today's brain budget is used). They're extracted on the next sync. Not while the brain is paused, the Mac
+   * sleeps or the battery is low.
+   */
+  private async quickRead(cad: { paused?: string }): Promise<void> {
+    const now = this.now()
+    if (this.current || this.stopped || now - this.lastQuickAt < QUICK_READ_MS || !this.d.wantsQuickReads?.()) return
+    const s = this.settings()
+    if (s.paused || (cad.paused && !/budget|monthly/.test(cad.paused))) return
+    this.lastQuickAt = now
+    const ctrl = new AbortController()
+    this.current = { ctrl, job: 'Checking for new mail', usd: 0 }
+    try { await this.readSources(s, now, ctrl.signal, Math.min(QUICK_READ_ITEMS, Math.max(0, QUICK_BACKLOG_MAX - this.store.pendingCount()))) } catch { /* the next sync reads it */ } finally { this.current = null }
   }
 
   /** "Refresh now". */
@@ -342,12 +365,12 @@ export class BrainService {
     if (this.current?.ctrl.signal.aborted) throw new Halt(this.asleep ? 'Paused: the Mac went to sleep.' : 'Stopped.')
   }
 
-  private async readSources(s: BrainSettings, now: number, signal: AbortSignal): Promise<{ read: number; kept: number; dropped: number }> {
+  private async readSources(s: BrainSettings, now: number, signal: AbortSignal, cap?: number): Promise<{ read: number; kept: number; dropped: number }> {
     const io = this.d.io()
     const st = this.state()
     let read = 0, kept = 0, dropped = 0
     // A backlog waiting for extraction (budget ran out) is read first: no new reading until it shrinks.
-    let left = Math.max(0, s.maxItemsPerSync - this.store.pendingCount())
+    let left = cap ?? Math.max(0, s.maxItemsPerSync - this.store.pendingCount())
     for (const def of this.activeSources(s)) {
       if (left <= 0) break
       this.check()

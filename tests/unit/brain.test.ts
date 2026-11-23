@@ -246,7 +246,7 @@ function gmailAnswer(items: RawItem[], q: string): string {
   return JSON.stringify({ threads: hits.map((x) => ({ id: x.id, messages: [{ id: `${x.id}m`, sender: x.from, subject: x.title, snippet: x.text.slice(0, 80), date: new Date(x.at).toISOString() }] })) })
 }
 
-function setup(o: { models?: ModelInfo[]; dailyUsd?: number; local?: boolean } = {}): Fake {
+function setup(o: { models?: ModelInfo[]; dailyUsd?: number; local?: boolean; onNew?: (items: RawItem[]) => void; quick?: () => boolean } = {}): Fake {
   const db = new Db(':memory:')
   const memory = new MemoryStore(db)
   const ws = mkdtempSync(join(tmpdir(), 'brain-ws-'))
@@ -289,6 +289,8 @@ function setup(o: { models?: ModelInfo[]; dailyUsd?: number; local?: boolean } =
     chat,
     startRun: async (r) => { runs.push(r); return { threadId: `t${runs.length}` } },
     notify: (p) => notified.push(p.text),
+    ...(o.onNew ? { onNew: o.onNew } : {}),
+    ...(o.quick ? { wantsQuickReads: o.quick } : {}),
     now: () => clock
   }
   const brain = new BrainService(deps)
@@ -303,6 +305,28 @@ const SARAH_REPLY = JSON.stringify({
 })
 
 describe('the brain service', () => {
+  test('an event routine waiting: new mail is read every 5 minutes between syncs, with no model call, even past the budget', async () => {
+    const seen: string[] = []
+    let waiting = true
+    const h = setup({ onNew: (items) => seen.push(...items.map((x) => x.title)), quick: () => waiting })
+    await h.brain.sync('manual')
+    h.brain.setSettings({ dailyUsd: 0 })
+    h.inbox.push(email('n1', { at: NOW + 60_000, title: 'Invoice 42' }))
+    h.advance(6 * MIN)
+    await h.brain.tick()
+    expect(seen).toEqual(['Invoice 42'])
+    expect(h.calls).toHaveLength(0)
+    // Not again within 5 minutes; and not at all once no routine waits.
+    h.inbox.push(email('n2', { at: NOW + 7 * MIN, title: 'Invoice 43' }))
+    h.advance(2 * MIN)
+    await h.brain.tick()
+    expect(seen).toEqual(['Invoice 42'])
+    waiting = false
+    h.advance(6 * MIN)
+    await h.brain.tick()
+    expect(seen).toEqual(['Invoice 42'])
+  })
+
   test('incremental sync: from now on, nothing to do costs nothing, new mail is read once into the graph with provenance', async () => {
     const h = setup()
     // First sight: the cursor starts now (older mail waits for the user's OK on an estimate).

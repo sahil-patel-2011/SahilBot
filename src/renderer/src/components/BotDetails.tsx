@@ -219,7 +219,7 @@ function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: bool
         <div className="rt-fact"><label>Instruction</label><p className="rt-prompt">{t.prompt}</p></div>
         <div className="rt-fact"><label>When to run</label><p>{describeSchedule(t.schedule)}</p></div>
         {t.schedule.type === 'when'
-          ? <div className="rt-fact"><label>Checks</label><p>{t.enabled ? 'About every 15 minutes, when SahilBot reads your apps' : 'Paused'}</p></div>
+          ? <div className="rt-fact"><label>Checks</label><p>{t.enabled ? 'About every 5 minutes while SahilBot is open' : 'Paused'}</p></div>
           : <div className="rt-fact"><label>Next run</label><p>{t.enabled && t.nextRun ? when(t.nextRun) : t.enabled ? 'Not scheduled' : 'Paused'}</p></div>}
       </div>
 

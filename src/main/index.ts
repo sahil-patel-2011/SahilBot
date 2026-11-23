@@ -2587,6 +2587,7 @@ app.whenReady().then(() => {
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
     // "When an email from … arrives" routines: each read's new items (your own mail never sets one off).
     onNew: (items) => { scheduler.onItems(items, [...(settings.get().me?.emails ?? [])]) },
+    wantsQuickReads: () => !scheduler.paused() && scheduler.list().some((t) => t.enabled && t.schedule.type === 'when'),
     // Draft it: a new chat with the main bot at its usual level (Auto by default), the user's click as the request.
     startRun: async (o) => {
       const main = db.listSpaces().find((x) => x.isMain)

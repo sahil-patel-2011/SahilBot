@@ -61,7 +61,7 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
         if (when.type === 'when' && sources) {
           const on = sources().filter((x) => x.on && (when.kind === 'any' || x.kind === when.kind))
           if (!on.length) throw new Error(`Nothing SahilBot reads can set this off: connect ${when.kind === 'email' ? 'your email (Gmail or Outlook)' : when.kind === 'calendar' ? 'your calendar' : when.kind === 'chat' ? 'Slack or your messages' : 'an app'} first (connect_app), then create it again.`)
-          reads = ` It runs each time SahilBot reads ${on.map((x) => x.name).join(', ')} and finds a match (about every 15 minutes while you're around; at most 20 times a day).`
+          reads = ` It runs each time SahilBot reads ${on.map((x) => x.name).join(', ')} and finds a match (about every 5 minutes while SahilBot is open; at most 20 times a day).`
         }
         const t = scheduler.create({ title: a.title!, prompt: a.prompt!, schedule: when, spaceId: thread?.spaceId ?? '', threadId: thread && db.getSpace(thread.spaceId)?.isMain ? thread.id : null })
         if (t.schedule.type === 'when') return { text: `Set up "${t.title}" (${describeSchedule(t.schedule)}), id ${t.id}.${reads}`, display: `"${t.title}" ${describeSchedule(t.schedule)}` }

@@ -8,7 +8,10 @@ single-source claims with care.
 Sources: [Layer3 Labs](https://www.layer3labs.io/guides/grok-bot-review) ·
 [CellCog](https://cellcog.ai/blog/grok-bot-problems/) · [grok-bots.com](https://grok-bots.com/grok-bot-review) ·
 [Ali Fakhri](https://aliakbarfakhri.com/grok-bot-review/) · [Superapp](https://superapp.dev/blog/grok-bot-review-vs-claude-codex) ·
-[Deeper Insights](https://deeperinsights.com/ai-review/grok-bot-review/) · [Trustpilot](https://www.trustpilot.com/review/grok.com)
+[Deeper Insights](https://deeperinsights.com/ai-review/grok-bot-review/) · [Trustpilot](https://www.trustpilot.com/review/grok.com) ·
+[IBTimes](https://www.ibtimes.co.uk/elon-musk-grok-bot-costs-weekly-limits-1829842) · [BetaNews](https://betanews.com/article/grok-bot-usage-limits/) ·
+[Cursor forum: dead 36+ hours](https://forum.cursor.com/t/grok-bot-dead-36-hours-all-bots-all-devices/170512) ·
+[Cursor forum: unusable since Sept 7](https://forum.cursor.com/t/grok-bot-unusable-since-sept-7-agent-computer-reachable-but-all-bots-fail-t-f65125/172368)
 
 ## Where reviewers fault Grok Bot
 
@@ -25,6 +28,8 @@ Sources: [Layer3 Labs](https://www.layer3labs.io/guides/grok-bot-review) ·
 | "Do not use separate Bots as a security boundary" (xAI docs, via Ali Fakhri) | Shared computer, shared logins | Runs on your Mac; passwords stay in the local vault and are never typed into chat |
 | No model picker; the model behind a step isn't shown (grok-bots.com) | Hidden | Auto picks; Developer mode shows the model, thinking and cost of every reply |
 | Connectors "fail, silently and repeatedly" (Ali Fakhri) | Silent | A failed sign-in asks you to reconnect in the chat |
+| Weekly allowance cut off paying users after xAI called serving costs "unsustainably high" (IBTimes, BetaNews) | Locked out until the week resets | Your own keys or plans: no SahilBot allowance; when one provider's limit or credit runs out, Auto moves to another you've connected (or a local model) |
+| "Grok Bot dead 36+ hours: all bots, all devices"; "unusable since Sept 7" (Cursor forum) | One cloud outage stops everything | Runs on your Mac; a provider outage cools that provider down and the next connected one answers |
 
 ## Where reviewers praise Grok Bot, and where SahilBot stands
 
@@ -41,6 +46,6 @@ Sources: [Layer3 Labs](https://www.layer3labs.io/guides/grok-bot-review) ·
 | Multi-account connectors on one bot | **Gap** (one account per connector) |
 
 ## Next gaps to close
-- Webhook and GitHub triggers (email, messages and calendar are done; they're checked when SahilBot reads your apps, about every 15 minutes, not instantly).
+- Webhook and GitHub triggers (email, messages and calendar are done; they're checked about every 5 minutes while SahilBot is open, not instantly).
 - A way to keep working while the Mac sleeps (a helper on a server SahilBot already supports, made one click).
 - Several accounts of one app on one bot.
