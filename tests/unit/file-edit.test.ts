@@ -14,7 +14,8 @@ test('file_edit changes exactly the text it names, on disk, without the model se
   const lines = Array.from({ length: 3000 }, (_, i) => `export const R${i} = ${i}`)
   lines[2399] = 'export const TAX_RATE = 0.07 // sales tax'
   writeFileSync(join(ws, 'rates.js'), lines.join('\n'))
-  const t = tools(ws)
+  // The user asked to change it (else the edit goes to a copy beside it: tests/unit/never-replace.test.ts).
+  const t = Object.fromEntries(fileTools(() => ws, mkdtempSync(join(tmpdir(), 'sb-manual-')), { userText: () => 'Update the tax rate in rates.js to 7.25%' }).map((x) => [x.name, x]))
   const r = await t.file_edit.run({ path: 'rates.js', old_string: 'TAX_RATE = 0.07 //', new_string: 'TAX_RATE = 0.0725 //' }, ctx)
   expect(r.text).toMatch(/1 replacement \(line 2400\)/)
   const after = readFileSync(join(ws, 'rates.js'), 'utf8').split('\n')

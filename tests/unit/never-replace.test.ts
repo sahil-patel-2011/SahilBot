@@ -182,3 +182,101 @@ test('a note that gives orders to the assistant is data: the read is untrusted a
   await t.file_write.run({ path: 'summary.md', content: 'Meeting moved to 3pm.' }, ctx)
   expect(existsSync(join(ws, 'summary.md'))).toBe(true)
 })
+
+describe('the chat\'s own file stops being its own once someone else changes it (FFA-02 round 2)', () => {
+  test('write, outside rewrite, read again, write: the other version stays and yours is "rename_photos (2).py"', async () => {
+    setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-')))
+    const ws = mkdtempSync(join(tmpdir(), 'sb-outside-'))
+    const said = 'Write me a script rename_photos.py that renames my photos by date taken.'
+    const t = Object.fromEntries(fileTools(() => ws, ws, { userText: () => said }).map((x) => [x.name, x]))
+    const ctx = ctxFor('t-outside')
+    beginRun('t-outside', 'task-1')
+    await t.file_write.run({ path: 'rename_photos.py', content: 'print("mine")\n' }, ctx)
+    // Grok (or the user) writes its own version over it.
+    await new Promise((r) => setTimeout(r, 20))
+    writeFileSync(join(ws, 'rename_photos.py'), 'print("GROK VERSION")\n')
+    await t.file_read.run({ path: 'rename_photos.py' }, ctx)
+    const r = await t.file_write.run({ path: 'rename_photos.py', content: 'print("mine again")\n' }, ctx)
+    expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toBe('print("GROK VERSION")\n')
+    expect(readFileSync(join(ws, 'rename_photos (2).py'), 'utf8')).toBe('print("mine again")\n')
+    expect(r.text).toMatch(/already exists.*rename_photos \(2\)\.py/)
+  })
+
+  test('generic wording in a "write me a script" task never counts as asking to change a file found now', async () => {
+    const prompts = [
+      'Write me a script in Downloads that renames my photos by date taken. Keep the original extension.',
+      'Make a script that renames my photos by date. Make the names look like 2024-05-01_001.jpg',
+      'Write me a script in Downloads that renames photos and changes the file names to the date taken'
+    ]
+    for (const [i, said] of prompts.entries()) {
+      const { ws, t } = setup(said)
+      const id = `t-generic-${i}`
+      beginRun(id, `task-${i}`)
+      await t.file_read.run({ path: 'rename_photos.py' }, ctxFor(id))
+      const r = await t.file_write.run({ path: 'rename_photos.py', content: 'print("new")\n' }, ctxFor(id))
+      expect(r.display).toBe('created rename_photos (2).py')
+      expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toBe(ORIGINAL)
+    }
+  })
+
+  test('file_edit on a file of the user\'s they didn\'t ask to change edits a copy; the original is byte-identical', async () => {
+    const { ws, t } = setup('Write me a photo renamer script in Downloads')
+    const ctx = ctxFor('t-edit-user')
+    beginRun('t-edit-user', 'task-edit')
+    await t.file_read.run({ path: 'rename_photos.py' }, ctx)
+    const r = await t.file_edit.run({ path: 'rename_photos.py', old_string: ORIGINAL, new_string: 'print("mine")\n' }, ctx)
+    expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toBe(ORIGINAL)
+    expect(readFileSync(join(ws, 'rename_photos (2).py'), 'utf8')).toBe('print("mine")\n')
+    expect(r.text).toMatch(/rename_photos\.py already exists.*rename_photos \(2\)\.py/)
+    // Its next edit lands on its copy.
+    await t.file_edit.run({ path: 'rename_photos.py', old_string: 'mine', new_string: 'mine v2' }, ctx)
+    expect(readFileSync(join(ws, 'rename_photos (2).py'), 'utf8')).toBe('print("mine v2")\n')
+    expect(existsSync(join(ws, 'rename_photos (3).py'))).toBe(false)
+  })
+
+  test('asked to edit that file: file_edit changes it in place', async () => {
+    const { ws, t } = setup('Fix the date bug in rename_photos.py')
+    const ctx = ctxFor('t-edit-asked')
+    await t.file_edit.run({ path: 'rename_photos.py', old_string: '"original"', new_string: '"fixed"' }, ctx)
+    expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toContain('"fixed"')
+    expect(existsSync(join(ws, 'rename_photos (2).py'))).toBe(false)
+  })
+})
+
+describe('askedToChange, round 2', () => {
+  const f = '/Users/me/Downloads/rename_photos.py'
+  test('pointing words count only for a file in the chat before this message; "my script" counts for one found now', () => {
+    expect(askedToChange('Rewrite it more formally', '/x/notes.md', { seen: true, seenBefore: false })).toBe(false)
+    expect(askedToChange('Rewrite it more formally', '/x/notes.md', { seen: true, seenBefore: true })).toBe(true)
+    expect(askedToChange('fix the bug in my script', '/x/app.py', { seen: true, seenBefore: false })).toBe(true)
+    expect(askedToChange('Write me a script that renames photos. Keep the original extension.', f, { seen: true, seenBefore: true })).toBe(false)
+    expect(askedToChange('Make the names look like 2024-05-01_001.jpg', f, { seen: true, seenBefore: true })).toBe(false)
+    expect(askedToChange('rename my photos and change the file names to the date', f, { seen: true, seenBefore: true })).toBe(false)
+  })
+  test('after a copy was made, only "replace it / the original" means the original, not "replace spaces with dashes"', () => {
+    expect(askedToChange('ok, overwrite the original', f, { redirected: true })).toBe(true)
+    expect(askedToChange('replace rename_photos.py with yours', f, { redirected: true })).toBe(true)
+    expect(askedToChange('also replace spaces with dashes', f, { redirected: true })).toBe(false)
+    expect(askedToChange('swap the order of the steps', f, { redirected: true })).toBe(false)
+  })
+})
+
+test('code edit and apply_patch outside a code project edit a copy of a file the user didn\'t ask to change', async () => {
+  const { codeTool } = await import('../../src/main/agent/tools/code')
+  const ws = mkdtempSync(join(tmpdir(), 'sb-code-user-'))
+  writeFileSync(join(ws, 'rename_photos.py'), ORIGINAL)
+  const ctx = { threadId: 't-code-user', workspaceDir: ws, state: { roots: [ws], loaded: [], alwaysAllow: [], todos: [] }, signal: new AbortController().signal } as never
+  let said = 'Write me a photo renamer in this folder'
+  const code = codeTool({ getWorkspace: () => ws, trash: async () => undefined, userText: () => said })
+  const r = await code.run({ action: 'edit', path: 'rename_photos.py', old_string: '"original"', new_string: '"mine"' }, ctx)
+  expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toBe(ORIGINAL)
+  expect(readFileSync(join(ws, 'rename_photos (2).py'), 'utf8')).toContain('"mine"')
+  expect(r.text).toMatch(/rename_photos\.py is the user's.*rename_photos \(2\)\.py/)
+  await code.run({ action: 'apply_patch', patch: '*** Begin Patch\n*** Update File: rename_photos.py\n@@\n-print("mine")\n+print("mine v2")\n*** End Patch' }, ctx)
+  expect(readFileSync(join(ws, 'rename_photos (2).py'), 'utf8')).toContain('"mine v2"')
+  expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toBe(ORIGINAL)
+  // Asked to change it: edited in place.
+  said = 'Fix rename_photos.py'
+  await code.run({ action: 'edit', path: 'rename_photos.py', old_string: '"original"', new_string: '"fixed"' }, ctx)
+  expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toContain('"fixed"')
+})
