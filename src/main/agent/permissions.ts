@@ -361,7 +361,7 @@ function commandHosts(cmd: string): string[] {
 }
 
 /** A command that sends data somewhere: uploads, posts, copies to another machine, raw sockets. */
-const SENDS_DATA = /\b(curl|wget|http|https|xh)\b[^|;&\n]*(\s-[a-zA-Z]*[dFT]\b|\s--(data|data-binary|data-raw|data-urlencode|form|upload-file|post-data|post-file|json)\b|\s-X\s*['"]?(POST|PUT|PATCH)\b|\s--request\s*['"]?(POST|PUT|PATCH)\b)|(^|[\s;&|(])(scp|sftp|rsync|ftp|nc|ncat|netcat|socat)\s/i
+const SENDS_DATA = /\b(curl|wget)\b[^|;&\n]*(\s-[a-zA-Z]*[dFT]\b|\s--(data|data-binary|data-raw|data-urlencode|form|upload-file|post-data|post-file|json)\b|\s-X\s*['"]?(POST|PUT|PATCH)\b|\s--request\s*['"]?(POST|PUT|PATCH)\b)|(^|[\s;&|(])(scp|sftp|rsync|ftp|nc|ncat|netcat|socat)\s/i
 
 /** The user named this site: its address, or its name ("acme" for careers.acme.com). */
 function hostNamed(host: string, user: string, userWords: Set<string>): boolean {
