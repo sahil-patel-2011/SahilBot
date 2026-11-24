@@ -370,6 +370,8 @@ const ENG_UNITS = /\d.{0,40}\b(mm|cm|m|kg|g|n|kn|nm|n·m|mpa|gpa|psi|lbs?|ft|in|
 const DECISION = /\b(is it legal|am i allowed|is it (safe|ok) to|can i be (sued|fired)|should i|should we|is it worth|walk me through|which is better|or stay|can my)\b/
 const LONG_OUTPUT = /\b(\d{1,2},?\d{3}[- ]words?|\d+k[- ]words?|novel|book|whole manual|comprehensive|full report|literature review|10\+? slides|\d{2} slides)\b/
 const MULTI = /\b(and then|after that|then|once (that'?s|it'?s) done|finally)\b|,\s*(and )?(then )?(make|email|send|build|write|add|open|create|draft|save|post|remind|report|compare) (it|them|this|that|the|a|an|me|my|to|everything)\b/
+/** Where the one file goes ("save it to Downloads", "then open it"): part of making it, not another step. */
+const DESTINATION = /,?\s*(and )?(then )?(save|put|store) (it|this|them|that)( (to|in|into|as|on|at) [^,;]+?)?(?=$|[,;]|\.(\s|$))|,?\s*(and )?(then )?open (it|this|them|that)\b/g
 const LIVE = /\b(latest|current(ly)?|today|tonight|tomorrow|yesterday|last night|this (week|month|year)|right now|news|price|prices|stock|weather|score|release date|recent(ly)?|202\d|up[- ]to[- ]date)\b|https?:\/\//
 const ADVICE = /\b(itinerary|plan a|routine|recommend(ation)?s?|how should|what'?s a good|pros and cons|tips|advice|overwhelmed|stressed|anxious|depressed|lonely|vent|sad|grief|pain|injury|diet|ira|401k|roth|mortgage|tax(es)?|invest(ing|ment)?|budgeting)\b/
 const QUICK = /\b(quick|quickly|just|simple|simply|briefly|one-liner|small|tiny|short answer)\b/
@@ -637,7 +639,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
   // In school work a "mole" is chemistry, not a medical worry.
   const stakes = has(STAKES, study ? t.replace(/\bmoles?\b/g, ' ') : t) && (category !== 'coding' || has(/\b(production|customers|outage|security)\b/, t))
   const longOutput = has(LONG_OUTPUT, t)
-  const multi = has(MULTI, t) && words > 6
+  const multi = has(MULTI, t.replace(DESTINATION, ' ')) && words > 6
   const hard = has(HARD, t)
   const quick = has(QUICK, t)
   const difficulty0 = ((): Tier => {

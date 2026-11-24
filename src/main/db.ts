@@ -602,6 +602,8 @@ export class Db {
   /** Marks anything left 'streaming' by a crash or quit as stopped. */
   sweepStreaming(): void {
     this.sql.prepare(`UPDATE messages SET status = 'stopped' WHERE status = 'streaming'`).run()
+    // A reply written out of sight when the app quit (it was being checked): nothing is running now, so it stands.
+    this.sql.prepare(`UPDATE messages SET data = json_remove(data, '$.meta.provisional') WHERE json_extract(data, '$.meta.provisional') IS NOT NULL`).run()
   }
 }
 

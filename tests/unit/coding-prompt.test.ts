@@ -80,3 +80,31 @@ describe('documents (SDA-01, DPA-01, DPA-02)', () => {
     expect(full).not.toContain('doc_create, then doc_export that format')
   })
 })
+
+describe('round 2: one-call documents, chat coding guidance, this-chat instructions', () => {
+  test('a new office file is one create_document call: no skill read, no second review round (PCA-03)', () => {
+    expect(full).not.toContain('read the matching office-* skill first; after create_document')
+    expect(full).toContain("a new file from the user's details needs no skill read")
+    expect(full).toContain('re-read files you wrote by hand (create_document reviews its own)')
+  })
+
+  test('script and one-liner guidance is in the chat prompt too (CDA-01, CDA-02, CDA-04, CDA-05, CDA-06)', () => {
+    for (const p of [chat, full]) {
+      expect(p).toContain('about 80 lines')
+      expect(p).toContain('a dry run by default (--apply does it)')
+      expect(p).toContain('safe to run twice')
+      expect(p).toContain('A shell one-liner')
+    }
+    expect(chat).toContain('the dry run, then --apply')
+    expect(full).toContain('The steps show both commands: the dry run first, then the same with --apply.')
+  })
+
+  test('"from now on…" is this chat, never a save_rule trigger (IWB-01)', () => {
+    for (const p of [chat, full]) {
+      expect(p).not.toMatch(/\("always…", "never…", "from now on…"\), save/)
+      expect(p).toContain('"From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation')
+      expect(p).toContain('"Want this in every chat?"')
+    }
+  })
+})
+

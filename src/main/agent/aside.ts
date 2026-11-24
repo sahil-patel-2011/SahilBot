@@ -7,9 +7,12 @@ const CHANGES = /\b(instead|change|switch|also|add|remove|drop|include|exclude|o
 const QUESTION = /\?\s*$|^(what|what's|whats|who|who's|when|where|why|how|how's|is|are|was|were|can|could|does|do|did|which|define|convert|calculate)\b/i
 const MATH = /^[\d\s+\-*/×÷^().,%=x]+\??$/i
 
+/** "10/12", "2026-11-24", "1-2": a date, range or pick typed as a reply, not a sum to work out. */
+const BARE = /^\d+(?:[-/]\d+)+$/
+
 export function isAside(text: string): boolean {
   const t = text.trim()
-  if (!t || t.length > 220 || t.includes('\n')) return false
+  if (!t || t.length > 220 || t.includes('\n') || BARE.test(t)) return false
   // Plain arithmetic, with or without a "?" ("18% of $1,740"): answered at once beside the job.
   if (quickMath(t) !== undefined) return true
   if (CHANGES.test(t)) return false
@@ -34,6 +37,7 @@ export function asideSystem(o: { who?: string; job: string; step?: string }): st
 export function quickMath(text: string): string | undefined {
   // "Quick one: 245 × 18?", "btw, what's 15 percent of 200", "how much is a 20% tip on $85?"
   const asked = text.trim().replace(/\?+$/, '').replace(LEAD_IN, '').replace(/^(what'?s|what is|whats|calculate|compute|how much is|how much's)\s+/i, '').replace(/^an?\s+(?=\d)/i, '').trim()
+  if (BARE.test(text.trim())) return undefined
   let t = asked.toLowerCase().replace(/\s*\b(per ?cent|pct)\b/g, '%')
   const money = t.includes('$')
   t = t.replace(/[$,]/g, '').replace(/×/g, '*').replace(/x(?=\s*[\d(])/g, '*').replace(/÷/g, '/').replace(/\bsquared\b/g, '^2').replace(/\bcubed\b/g, '^3')

@@ -5,11 +5,11 @@ import { asideSystem, isAside, quickMath } from './aside'
 import { beginRun } from './undo-journal'
 import { projectInstructions } from './project-instructions'
 import { checkMedicalAnswer, isMedicalQuestion, medicalNote } from './medical-check'
-import { ALL_FEATURES, asksUserNow, claimBacked, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
+import { ALL_FEATURES, asksUserNow, claimBacked, claimsCant, claimsDone, countAsk, countMiss, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
 import { definiteFailure } from './runtime/policy'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { SkillSuggestion, SuggestOptions } from '../skills'
 import { appToolsFor, classifyTask, intentTools, likelyTools } from './intent'
 import { grantableFolder } from './tools/files'
@@ -552,6 +552,10 @@ export const modelSwitchNote = (from: string, to: string): string =>
 
 /** Tools that only keep the run's own books: a call to them is no change for the user to double-check. */
 const BOOKKEEPING = new Set(['todo', 'memory', 'ask_user', 'agent_control', 'checkpoint', 'notify', 'consult', 'find_tools', 'project_memory'])
+/** "Continue", "keep going", "pick up where you left off": the stopped task's plan goes on. */
+const RESUME = /^(?:(?:ok(?:ay)?|yes|please|now)[,!.\s]+)*(continue|go on|keep going|resume|carry on|go ahead|finish (it|that|the task|up)|pick (it )?up where you left off)\b/i
+/** A test runner in a command: a passing run checks the code it covers. */
+const TEST_RUNNER = /\b(pytest|python3? -m (pytest|unittest)|npm (run )?test|npx (vitest|jest)|vitest|jest|go test|cargo test|swift test)\b/
 /** Reads that look at the work itself (a file, a folder, a command's output, the page, the screen). */
 const LOOKS_AT_WORK = new Set(['file_read', 'list_files', 'search_files', 'run_command', 'browser', 'computer', 'screenshot', 'read_document', 'review_document', 'doc_read', 'read_document_image', 'git'])
 /** Tools that can do anything (a command, the browser, the Mac, a team): a "done" claim after one of them is taken as backed. */
@@ -766,6 +770,13 @@ export class Agent {
     if (!meta) {
       const targets = this.stopTargets(threadId, text)
       if (targets) { this.stopByWords(threadId, text, targets); return 'steered' }
+    }
+    // Plain arithmetic ("18% of $1,740?") is answered at once beside the job, even while it double-checks (the check goes on).
+    if (!meta && run.checking && !run.helper && !run.group && !run.unattended && !run.pending.size && quickMath(text) !== undefined) {
+      const m = this.d.db.insertMessage({ threadId, role: 'user', content: text, kind: 'normal', status: 'done', meta: { aside: true } })
+      this.d.emit({ threadId, type: 'message', message: m })
+      void this.aside(threadId, run, m)
+      return 'steered'
     }
     // It already answered and is only double-checking that answer: the answer stands, the run ends, and this
     // message starts a fresh run (it never becomes a steer into a finished task).
@@ -3060,6 +3071,12 @@ export class Agent {
     const group = run.group ? db.getSpace(thread.spaceId) : undefined
     const speaker = group ? space : undefined
     const state = db.getState(thread.id)
+    if (state.planPaused && !run.helper) {
+      const asked = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)?.content.trim() ?? ''
+      if (!(RESUME.test(asked) && asked.split(/\s+/).length <= 10)) state.todos = []
+      state.planPaused = undefined
+      db.setState(thread.id, state)
+    }
     // Files anywhere (Settings → Permissions, on by default): the home folder is one of this chat's folders.
     const home = homedir()
     const anywhere = s.advanced.filesAnywhere !== false
@@ -3357,8 +3374,13 @@ export class Agent {
     /** Hidden nudges after a final reply in this run (all kinds): a reply bounces back three times at most. */
     let finalNudges = 0
     let constraintNudges = 0
+    /** One rewrite when the reply misses the user's count ("exactly 150 words", "under 280 characters"). */
+    let countNudges = 0
     let pageNudges = 0
     let nudged = false
+    /** How the run ended (the plan is kept only for a question to the user or the step-budget wrap-up). */
+    let endedAsking = false
+    let hitBudgetWrap = false
     let teamNudged = false
     /** Web lookups this run (LOOKUP_TOOLS), and whether the "you have enough, answer now" note went in. */
     let lookups = 0
@@ -3442,12 +3464,6 @@ export class Agent {
       if (!state.todos.length) return undefined
       const i = state.todos.findIndex((t) => t.status !== 'done')
       return { at: i < 0 ? state.todos.length : i + 1, of: state.todos.length }
-    }
-    /** A final reply now would get the double-check (or a reviewer's): the same test the finish line uses below. */
-    const checksFinal = (): boolean => {
-      const complex = (routed?.tier === 3 && !this.d.db.getState(thread.id).voice) || actions >= 8
-      const reviewer = routed?.team?.reviewer !== model ? routed?.team?.reviewer : undefined
-      return !verified && !run.helper && !process.env.FOREMAN_NO_VERIFY && (!!reviewer || (!chatRun && (track.unchecked || (track.researched && (actions >= 3 || state.todos.length > 0)) || complex)))
     }
 
     // Intent tools are loaded once, when the run is (or turns into) agent work; the profile only gets slimmer.
@@ -3654,8 +3670,11 @@ export class Agent {
           // Decided before the reply is written (never after it was seen): agent work's replies, and a medical answer
           // the citation check reads, stay out of sight until they stand (settle). A plain chat streams as it's written.
           const medicalNext = this.feat.medicalCheck && !medChecked && isMedicalQuestion(userText)
-          // A quick answer with nothing to check yet (no action, no plan, no double-check coming) streams live.
-          const provisional = !run.helper && ((!chatRun && (!!verifyDraft || actions > 0 || open.length > 0 || checksFinal())) || medicalNext)
+          // Agent work waits until it stands (a step with tool calls is shown as soon as it's written). A plain chat
+          // streams live, unless the app may send it back: a lookup failed earlier, or a reviewer reads it first.
+          const reviewerNow = routed?.team?.reviewer !== model ? routed?.team?.reviewer : undefined
+          const counted = countNudges < 1 && !!countAsk(opener?.content ?? '')
+          const provisional = !run.helper && (!chatRun || runFailures > 0 || (!!reviewerNow && !verified) || medicalNext || counted)
           assistant = await this.stream(thread.id, model, prepared.wire, wireTools, window, run, speaker, routed, effortNow(), provisional)
           stepsDone++
         } catch (e) {
@@ -3791,6 +3810,8 @@ export class Agent {
           // A reply the app sends back (it claimed, gave up or stopped short) is replaced by the next one when the user
           // never saw it (it was written out of sight); one already on screen stays and the next one adds to it (pullBack).
           const bounce = (): void => pullBack(assistant)
+          // A chat reply already on screen is the answer: no nudge adds a second, contradicting one after it.
+          const onScreen = !run.helper && !assistant.meta?.provisional
           // A real choice for the user ("Postgres or SQLite?", "which one…?") is left alone: that question is theirs.
           const finalAsk = assistant.content.trim()
           const asksToContinue = /\b(want me to|would you like me to|shall i|should i (go ahead|proceed|continue|start|do)|do you want me to|let me know if you(?:'d| would) like me to)\b[^?]{0,200}\?\s*(\((yes|y)\s*\/\s*(no|n)\))?\s*$/i.test(finalAsk) && !/\b(or|which|either)\b[^?]{0,120}\?\s*(\([^)]*\))?\s*$/i.test(finalAsk)
@@ -3834,15 +3855,25 @@ export class Agent {
           // Said it, didn't do it (Grok Build's task discipline, Apache-2.0): a reply that announces an action
           // ("Publishing the post now", "I'll send you the link once it's up") with no tool call means the action
           // never happened. Make it happen (twice per run at most).
-          if (this.feat.announceNudge && !asksToContinue && !asksUser && promisesAction(assistant.content) && actionNudges < 2 && !run.unattended && (!chatRun || (actions === 0 && assistant.content.length < 300)) && step < HARD_CAP) {
+          if (this.feat.announceNudge && !asksToContinue && !asksUser && promisesAction(assistant.content) && actionNudges < 2 && !run.unattended && !onScreen && (!chatRun || (actions === 0 && assistant.content.length < 300)) && step < HARD_CAP) {
             actionNudges++
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your reply says you are doing something (or will), but you made no tool call, so it did not happen. Do it now with the next concrete tool call, and keep going until it is actually done (the live link, the sent message, the saved file). If something truly blocks it, say plainly what.' })
             bounce()
             continue
           }
+          // The user's count ("exactly 150 words", "under 280 characters"): counted here, one rewrite when it's off.
+          const miss = this.feat.constraintCheck && countNudges < 1 && !asksToContinue && !asksUser && !run.unattended && !onScreen && step < HARD_CAP ? countMiss(opener?.content ?? '', assistant.content) : undefined
+          if (miss && finalNudges < 3) {
+            finalNudges++
+            countNudges++
+            budget = Math.max(budget, step + 1)
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: miss })
+            bounce()
+            continue
+          }
           // The user's own limit ("under $200"): what the reply or a write chose is over it in the results.
-          const over = this.feat.constraintCheck && constraintNudges < 1 && !asksToContinue && !run.unattended && step < HARD_CAP
+          const over = this.feat.constraintCheck && constraintNudges < 1 && !asksToContinue && !run.unattended && !onScreen && step < HARD_CAP
             ? overLimit(userText, assistant.content, this.runToolText(thread.id, opener?.id), this.runWriteArgs(thread.id, opener?.id)) : undefined
           if (over && finalNudges < 3) {
             finalNudges++
@@ -3853,7 +3884,7 @@ export class Agent {
             continue
           }
           // Answered from the first page of a paged result ("page 1 of 3", "next_cursor=…"): get the rest first.
-          const more = this.feat.paginationCheck && pageNudges < 1 && !asksToContinue && !run.unattended && step < HARD_CAP ? morePages(this.lastToolText(thread.id, opener?.id)) : undefined
+          const more = this.feat.paginationCheck && pageNudges < 1 && !asksToContinue && !run.unattended && !onScreen && step < HARD_CAP ? morePages(this.lastToolText(thread.id, opener?.id)) : undefined
           if (more && finalNudges < 3) {
             finalNudges++
             pageNudges++
@@ -3866,7 +3897,7 @@ export class Agent {
           // (a different tool, source or approach), once per run, in a plain chat too (a lookup that failed once
           // isn't an answer). A real blocker still gets said plainly.
           // Twice per run: the second time, it has to name other ways and try the best one.
-          if (this.feat.giveUpNudge && runFailures > 0 && failStreak > 0 && finalNudges < 3 && giveUpNudges < 2 && !asksToContinue && !asksUser && !run.unattended && step < HARD_CAP && givesUp(assistant.content)) {
+          if (this.feat.giveUpNudge && runFailures > 0 && failStreak > 0 && finalNudges < 3 && giveUpNudges < 2 && !asksToContinue && !asksUser && !run.unattended && !onScreen && step < HARD_CAP && givesUp(assistant.content)) {
             finalNudges++
             giveUpNudges++
             budget = Math.max(budget, step + 8)
@@ -3877,7 +3908,7 @@ export class Agent {
             continue
           }
           // "I don't have access to your files" without trying anything: it has tools for that. Try first (once).
-          if (this.feat.cantNudge && actions === 0 && finalNudges < 3 && cantNudges < 1 && !asksToContinue && !run.unattended && step < HARD_CAP && claimsCant(assistant.content)) {
+          if (this.feat.cantNudge && actions === 0 && finalNudges < 3 && cantNudges < 1 && !asksToContinue && !run.unattended && !onScreen && step < HARD_CAP && claimsCant(assistant.content)) {
             finalNudges++
             cantNudges++
             budget = Math.max(budget, step + 8)
@@ -3896,7 +3927,7 @@ export class Agent {
           const unbacked = this.feat.falseClaimNudge && !asksToContinue && !askedAboutPast && !opener?.meta?.questionAnswer && !opener?.meta?.approvalFor
             && !(chatRun && /\?\s*$/.test(opener?.content ?? '')) && claimsDone(assistant.content) && !claimBacked(assistant.content, okTools)
             && ((track.failedWrites?.size ?? 0) > 0 || !okTools.some((n) => CAN_DO_ANYTHING.has(n)))
-          if (unbacked && finalNudges < 3 && claimNudges < 1 && !run.unattended && step < HARD_CAP) {
+          if (unbacked && finalNudges < 3 && claimNudges < 1 && !run.unattended && !onScreen && step < HARD_CAP) {
             finalNudges++
             claimNudges++
             budget = Math.max(budget, step + 6)
@@ -3917,7 +3948,7 @@ export class Agent {
           }
           // Don't stop with an unfinished plan: one nudge per run. (A question for the user ends the run: the plan waits
           // for their answer.) The reply goes back with it, so the next one is the only answer, not a second.
-          if (open.length && !nudged && !asksUser && step < HARD_CAP) {
+          if (open.length && !nudged && !asksUser && !chatRun && step < HARD_CAP) {
             budget = Math.max(budget, step + 1)
             nudged = true
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: `[From the app] Your plan still has open items:\n${planText(state)}\nContinue working on them, or update the plan with todo (mark items done, or remove ones that no longer apply) and explain why. If your reply above wasn't shown to the user, end with your complete answer for them.`, meta: { hidden: true, ...mine } })
@@ -3964,6 +3995,7 @@ export class Agent {
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
           }
           if (assistant.meta?.serverCompacted) storeBrief(assistant.id)
+          endedAsking = asksUser
           // Every check passed (or none applied): the answer is shown, once.
           settle(assistant)
           break
@@ -4072,6 +4104,7 @@ export class Agent {
         }
 
         if (step === budget) {
+          hitBudgetWrap = true
           // Out of room: one text-only turn to report what's done and what's left (adapted from opencode max-steps, MIT).
           // Claude needs the tool list whenever the history has tool calls (and keeps its cache with it).
           const wrapTools = claude ? wireTools : []
@@ -4106,6 +4139,13 @@ export class Agent {
         const procedure = this.runtime.actions(run.record.id).filter((a) => a.status === 'done').map((a) => `${a.tool}: ${a.args.slice(0, 300)}`).join('\n')
         this.memorySystem.experience({ threadId: thread.id, spaceId: thread.spaceId, task: opener?.content ?? '', procedure, model, environment: `${state.folder ?? 'workspace'};${registry.all().map((t) => t.name).sort().join(',').slice(0, 200)}`, verified: status === 'finished' && report.status === 'verified' })
       }
+    }
+    // A finished task closes its plan: a later quick question in the bot's one conversation is a chat, not a return to
+    // the old task (kept when the run ended on a question to the user or at the step budget). A stopped one's plan
+    // waits for "continue"; any other next request closes it (loop start).
+    if (!run.helper && state.todos.length) {
+      if (status === 'stopped') state.planPaused = true
+      else if (status === 'finished' && !endedAsking && !hitBudgetWrap) state.todos = []
     }
     // A follow-up ("yes, do it") runs the way this request ended up running.
     if (!run.helper) { state.lastKind = chatRun ? 'chat' : 'agent'; state.lastEffort = effortPick === 'auto' ? effortNow() : undefined }
@@ -4864,8 +4904,17 @@ export class Agent {
     // Code edits and test results, for the runtime's test-until-green rule.
     if (effect !== 'read' && ((tool.name === 'code' && /"action"\s*:\s*"(edit|apply_patch)"/.test(call.arguments)) || ((tool.name === 'file_write' || tool.name === 'file_edit' || tool.name === 'file_manage') && CODE_FILE.test(out.path ?? '')))) { ctx.track.codeEdited = true; ctx.track.testsGreen = false; ctx.track.edits = (ctx.track.edits ?? 0) + 1 }
     if (tool.name === 'code' && out.verification && /^tests\b/.test(out.verification.criterion)) ctx.track.testsGreen = out.verification.passed
+    const wasUnchecked = ctx.track.unchecked
     if (effect !== 'read' && !BOOKKEEPING.has(tool.name)) ctx.track.unchecked = true
     else if (effect === 'read' && LOOKS_AT_WORK.has(tool.name)) ctx.track.unchecked = false
+    if ((tool.name === 'file_write' || tool.name === 'file_edit' || tool.name === 'create_document') && out.path) (ctx.track.written ??= new Set()).add(basename(out.path))
+    // Running what this run wrote (the script on a sample, the tests) is the check; opening a file to show it
+    // changes nothing. Neither marks the work unchecked again.
+    if (tool.name === 'run_command') {
+      const cmd = String(args.command ?? '')
+      if (/^\s*open\s+(?!-a\b)/.test(cmd) && !/[;&|]/.test(cmd)) ctx.track.unchecked = wasUnchecked
+      else if ((out.data as { exitCode?: number } | undefined)?.exitCode === 0 && (TEST_RUNNER.test(cmd) || [...(ctx.track.written ?? [])].some((f) => cmd.includes(f)))) ctx.track.unchecked = false
+    }
     // create_document renders and reviews the file it made (the result carries the review): a clean review is the
     // check, so the answer after it needs no second pass (write → check once → done).
     if (tool.name === 'create_document' && reviewedClean(out.text)) ctx.track.unchecked = false
@@ -4944,7 +4993,7 @@ interface ExecCtx {
   private?: string[]
   userText: string
   guard: LoopGuard
-  track: { changed: boolean; researched: boolean; unchecked?: boolean; web: boolean; sawUntrusted: boolean; explored?: boolean; task?: boolean; askGated?: boolean; codeEdited?: boolean; testsGreen?: boolean; testRounds?: number; edits?: number; failedWrites?: Set<string> }
+  track: { changed: boolean; researched: boolean; unchecked?: boolean; written?: Set<string>; web: boolean; sawUntrusted: boolean; explored?: boolean; task?: boolean; askGated?: boolean; codeEdited?: boolean; testsGreen?: boolean; testRounds?: number; edits?: number; failedWrites?: Set<string> }
   window: number
 }
 

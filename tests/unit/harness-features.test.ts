@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { claimsDone, givesUp, PROFILES, ALL_FEATURES } from '../../src/main/agent/harness-features'
+import { claimsDone, countAsk, countMiss, givesUp, PROFILES, ALL_FEATURES } from '../../src/main/agent/harness-features'
 
 test('a false "I\'ve done it" is a claim about the world, not the reply itself or the user\'s own work', () => {
   for (const t of ['I\'ve saved the summary to your note "Standup".', 'It\'s been sent to Acme.', 'The post has been published.', 'It\'s live at https://x.example'])
@@ -127,3 +127,19 @@ test('the prompts ask for one plain sentence about what could not be checked, ne
   expect(harnessPrompt(base)).toMatch(/anything you couldn't check, plainly; never "all checks passed"/)
   expect(chatPrompt(base)).toMatch(/Never say you did something \(saved, sent, booked\) unless a tool in this chat did it/)
 })
+
+// Report IWA-01 / IWA-05 / IWA-06: an exact word or character count is counted by the app, not left to the model.
+test('countAsk / countMiss: exact words, character limits and bullet counts', () => {
+  expect(countAsk('Write exactly 150 words on why sleep matters.')).toEqual({ n: 150, unit: 'words', exact: true })
+  expect(countAsk('Write a tweet under 280 characters about coffee.')).toEqual({ n: 280, unit: 'characters', exact: false })
+  expect(countAsk('Give me 3 bullet points on why exercise matters.')).toEqual({ n: 3, unit: 'bullets', exact: true })
+  expect(countAsk('What is the capital of Australia?')).toBeUndefined()
+  const ten = 'Coffee wakes me up and makes mornings feel much brighter.'
+  expect(countMiss('Write exactly 10 words about coffee.', ten)).toBeUndefined()
+  expect(countMiss('Write exactly 10 words about coffee.', '**Coffee** wakes me up and makes mornings feel brighter.')).toMatch(/has 9 words; the user asked for exactly 10/)
+  expect(countMiss('Write a tweet under 20 characters', 'Coffee is great!')).toBeUndefined()
+  expect(countMiss('Write a tweet under 20 characters', 'Coffee is great, I love it!')).toMatch(/at most 20/)
+  expect(countMiss('Give me 3 bullet points on sleep', '- Rest\n- Mood\n- Focus')).toBeUndefined()
+  expect(countMiss('Give me 3 bullet points on sleep', '- Rest\n- Mood')).toMatch(/has 2 bullets/)
+})
+

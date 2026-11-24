@@ -148,8 +148,8 @@ export function blocks(messages: Message[]): Block[] {
     if (m.meta?.superseded && !held.has(m.id)) continue
     // A Max hybrid's phase-1 brief is shown inside the Max card (the judged answer follows it).
     if (m.meta?.maxBrief && !m.toolCalls?.length) continue
-    // A reply the app may still send back (provisional) stays out of sight until it stands: never shown, then pulled.
-    const hasText = !m.meta?.provisional && !!(m.content || m.status === 'error' || m.status === 'stopped' || (m.reasoning && !m.toolCalls?.length))
+    // (A reply the app may still send back, provisional, is kept out of sight below only while the run works.)
+    const hasText = !!(m.content || m.status === 'error' || m.status === 'stopped' || (m.reasoning && !m.toolCalls?.length))
     if (hasText) { act = null; out.push({ kind: 'text', m }) }
     if (m.toolCalls?.length) {
       for (const call of m.toolCalls) {
@@ -844,7 +844,7 @@ function QuietActivity({ steps, actions, hasDocs, artifactsOnly }: { steps: Step
     <>
       {done.map((a) => <div key={a.key} className={`quiet-action${a.failed ? ' failed' : ''}`} data-testid="quiet-action">{a.failed ? <span aria-hidden>!</span> : <I.Check size={12} />}{a.text}</div>)}
       <Gallery items={galleryFromSteps(steps)} onOpen={actions.onOpenFile} />
-      <MadeFiles files={filesFromSteps(steps).filter((f) => !galleryFromSteps(steps).some((g) => g.path === f.path))} onOpen={actions.onOpenFile} />
+      <MadeFiles files={filesFromSteps(steps, { exports: !hasDocs }).filter((f) => !galleryFromSteps(steps).some((g) => g.path === f.path))} onOpen={actions.onOpenFile} />
       {pagesFromSteps(steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
       {stocksFromSteps(steps).map((x) => <StockCard key={x.key} data={x.data} />)}
       {videosFromSteps(steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
@@ -923,7 +923,7 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
       ) : b.kind === 'activity' ? (
         <>
           <Activity steps={b.steps} live={live} waitingApproval={waitingApproval} onOpenFile={actions.onOpenFile} />
-          {!live && <MadeFiles files={filesFromSteps(b.steps)} onOpen={actions.onOpenFile} />}
+          {!live && <MadeFiles files={filesFromSteps(b.steps, { exports: !hasDocs })} onOpen={actions.onOpenFile} />}
           {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
           {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
           {videosFromSteps(b.steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}

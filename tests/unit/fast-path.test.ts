@@ -58,11 +58,39 @@ describe('no brain read for quick asks', () => {
     // Something attached: always read.
     expect(skipBrain('What is the capital of Australia?', classifyTask('What is the capital of Australia?'), 1)).toBe(false)
   })
+
+  test('short puzzles and logic, "What year did…" and "Explain … simply" start at once too (PCA-02)', () => {
+    for (const q of [
+      'Is 97 prime?', 'If a train leaves at 3pm going 60 mph, how far by 5:30pm?',
+      'Solve: all bloops are razzies and all razzies are lazzies. Are all bloops lazzies?',
+      'What year did WW2 end?', 'Explain photosynthesis simply'
+    ]) expect(skipBrain(q, classifyTask(q), 0), q).toBe(true)
+  })
 })
 
 describe('the chat path in a bot', () => {
   test('a chat whose replies used no tools (a greeting, an intro) is still new', () => {
     expect(chatEligible({ chat: true, state: { todos: [], toolMode: undefined }, newChat: true })).toBe(true)
     expect(chatEligible({ chat: true, state: { todos: [], toolMode: 'full' }, newChat: true })).toBe(false)
+  })
+})
+
+// PCA-03 / PCA-04: where the one file goes (", save it to Downloads", ", then open it") is part of making it, not a
+// second step: an invoice, a budget or a script stays tier 2 (High, no forced double-check round).
+describe('a destination is not another step', () => {
+  test('save it to Downloads / open it keeps a one-file task at d2, High', () => {
+    for (const q of [
+      'Make me an invoice PDF for 3 hours of tutoring at $40/hr for Jane Doe, save it to Downloads',
+      'Make a Sep–Dec budget in Excel with rent $900, food $300 and a SUM total, save it to my Downloads',
+      'Write a Python script that renames my photos by date taken, save it to Downloads as rename_photos.py',
+      'Make me an invoice PDF for Jane, then open it'
+    ]) {
+      const d = classifyTask(q)
+      expect(d.difficulty, q).toBe(2)
+      expect(d.effort, q).toBe('high')
+    }
+    // A real second step still counts.
+    expect(classifyTask('Make the invoice, then email it to Jane').difficulty).toBe(3)
+    expect(classifyTask('Make the invoice PDF, save it to Downloads, then email it to Jane').difficulty).toBe(3)
   })
 })

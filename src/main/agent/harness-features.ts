@@ -193,6 +193,33 @@ export function overLimit(userText: string, reply: string, toolText: string, wri
   return undefined
 }
 
+/** A count the user set for the reply ("exactly 150 words", "under 280 characters", "3 bullet points"). */
+type CountAsk = { n: number; unit: 'words' | 'characters' | 'bullets'; exact: boolean }
+const NUM: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 }
+export function countAsk(ask: string): CountAsk | undefined {
+  const t = straight(ask).toLowerCase()
+  const max = /\b(?:under|fewer than|less than|at most|no more than|max(?:imum)?(?: of)?|within|up to)\s+(\d[\d,]*)\s*(words|characters|chars)\b|\b(\d[\d,]*)\s*(words|characters|chars) or (?:less|fewer)\b/.exec(t)
+  if (max) return { n: Number((max[1] ?? max[3]).replace(/,/g, '')), unit: /^w/.test(max[2] ?? max[4]) ? 'words' : 'characters', exact: false }
+  const exact = /\bexactly\s+(\d[\d,]*|one|two|three|four|five|six|seven|eight|nine|ten)\s*(words|characters|chars|bullets?|bullet points)\b/.exec(t)
+  if (exact) { const n = NUM[exact[1]] ?? Number(exact[1].replace(/,/g, '')); return { n, unit: /^w/.test(exact[2]) ? 'words' : /^c/.test(exact[2]) ? 'characters' : 'bullets', exact: true } }
+  const bullets = /\b(\d|one|two|three|four|five|six|seven|eight|nine|ten)\s+bullet(?:s| points)\b/.exec(t)
+  if (bullets) return { n: NUM[bullets[1]] ?? Number(bullets[1]), unit: 'bullets', exact: true }
+  return undefined
+}
+
+/** The reply's count against the user's: a note for one rewrite when it's off, else undefined. Markdown markers don't count. */
+export function countMiss(ask: string, reply: string): string | undefined {
+  const c = countAsk(ask)
+  if (!c || !(c.n > 0)) return undefined
+  const text = reply.trim()
+  const plain = text.replace(/[*_`#>]+/g, '').replace(/^\s*[-•]\s+/gm, '')
+  const got = c.unit === 'words' ? plain.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length
+    : c.unit === 'characters' ? [...text].length
+      : text.split('\n').filter((l) => /^\s*([-*•]|\d+[.)])\s+\S/.test(l)).length
+  if (c.exact ? got === c.n : got <= c.n) return undefined
+  return `[From the app] Your reply has ${got} ${c.unit}; the user asked for ${c.exact ? 'exactly' : 'at most'} ${c.n}. Rewrite it to fit, and output only the rewritten reply.`
+}
+
 /** "page 1 of 3", "next_cursor=p2", "has_more: true", "more results": the result has more pages. */
 export function morePages(toolText: string): string | undefined {
   const t = toolText.slice(-4000)

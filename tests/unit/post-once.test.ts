@@ -185,6 +185,66 @@ describe('check first, post once', () => {
   })
 })
 
+describe('running what the run wrote is the check', () => {
+  const write: ToolDef<{ path: string; content: string }> = {
+    name: 'file_write', label: 'Write', effect: 'write_local', description: 'write a file',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false },
+    async run({ path }) { return { text: `Wrote ${path}`, path: `/Users/sam/Downloads/${path}` } }
+  }
+  const shell: ToolDef<{ command: string }> = {
+    name: 'run_command', label: 'Terminal', effect: 'write_local', description: 'run a command',
+    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false },
+    async run({ command }) { return { text: `$ ${command}\n(exit code 0)\nwould rename 3 files`, data: { exitCode: 0 } } }
+  }
+  test('write the script, run it on a sample, answer: no hidden double-check round', async () => {
+    delete process.env.FOREMAN_NO_VERIFY
+    try {
+      const h = harness([write, shell])
+      llm.script.push(
+        { toolCalls: [call('file_write', { path: 'rename_photos.py', content: 'print(1)' })], delay: 0 },
+        { toolCalls: [call('run_command', { command: 'python3 rename_photos.py --dry-run sample' })], delay: 0 },
+        { content: 'Saved rename_photos.py in Downloads and tried it on a sample: it would rename 3 files.', delay: 0 }
+      )
+      const t = h.thread()
+      expect(await h.run(t, 'Write a Python script that renames my photos by date taken')).toBe('finished')
+      expect(llm.requests).toHaveLength(3)
+      expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /double-check/.test(m.content))).toBe(false)
+    } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+  })
+
+  test('opening the file it just made and checked (macOS open) does not mark it unchecked again', async () => {
+    delete process.env.FOREMAN_NO_VERIFY
+    try {
+      const doc: ToolDef<{ path: string }> = {
+        name: 'create_document', label: 'Document', effect: 'write_local', description: 'make a file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false },
+        async run({ path }) { return { text: `Created pdf ${path}.\n\nReview of ${path} (1 page): PASS — 0 to fix, 0 warnings`, path } }
+      }
+      const h = harness([doc, shell])
+      llm.script.push({ toolCalls: [call('create_document', { path: 'invoice.pdf' })], delay: 0 }, { toolCalls: [call('run_command', { command: 'open invoice.pdf' })], delay: 0 }, { content: 'Made invoice.pdf and opened it.', delay: 0 })
+      const t = h.thread()
+      expect(await h.run(t, 'Make me an invoice PDF for 3 hours of tutoring at $40/hour and open it')).toBe('finished')
+      expect(llm.requests).toHaveLength(3)
+      expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /double-check/.test(m.content))).toBe(false)
+    } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+  })
+
+  test('a command that runs something else still leaves the work to check', async () => {
+    delete process.env.FOREMAN_NO_VERIFY
+    try {
+      const h = harness([write, shell])
+      llm.script.push(
+        { toolCalls: [call('file_write', { path: 'notes.txt', content: 'x' })], delay: 0 },
+        { toolCalls: [call('run_command', { command: 'mkdir -p out' })], delay: 0 },
+        { content: 'Done: notes.txt is in Downloads.', delay: 0 }, { content: '✓', delay: 0 }
+      )
+      const t = h.thread()
+      expect(await h.run(t, 'Write my notes to notes.txt and make an out folder')).toBe('finished')
+      expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /double-check/.test(m.content))).toBe(true)
+    } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+  })
+})
+
 describe('a bot\'s one ongoing conversation keeps the fast path', () => {
   test('a new bot\'s intro leaves the mode open: the first quick question runs on the chat path', async () => {
     process.env.FOREMAN_NO_VERIFY = '1'
@@ -218,6 +278,110 @@ describe('a bot\'s one ongoing conversation keeps the fast path', () => {
     const answer = h.visible(t.id).at(-1)!
     expect(answer.content).toBe('Canberra.')
     expect(h.events.some((e) => e.type === 'message' && (e.message as Message).id === answer.id && (e.message as Message).meta?.provisional)).toBe(false)
+  })
+})
+
+describe('one reply per question in a chat', () => {
+  test('a chat lookup that failed: the give-up reply waits out of sight, and only the real answer is shown', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    let n = 0
+    const search: ToolDef<{ query: string }> = {
+      name: 'web_search', label: 'Search', effect: 'read', description: 'search the web',
+      parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
+      async run({ query }) { if (n++ === 0) throw new Error('HTTP 403 blocked'); return { text: `results for ${query}: 72F and sunny` } }
+    }
+    const h = harness([search])
+    llm.script.push(
+      { toolCalls: [call('web_search', { query: 'atlanta weather' })], delay: 0 },
+      { content: 'I couldn\'t get the weather: the site blocked me.', delay: 0 },
+      { toolCalls: [call('web_search', { query: 'atlanta weather today' })], delay: 0 },
+      { content: 'It\'s 72°F and sunny in Atlanta.', delay: 0 }
+    )
+    const t = h.thread()
+    expect(await h.run(t, 'What is the weather in Atlanta right now?')).toBe('finished')
+    expect(h.db.getState(t.id).lastKind).toBe('chat')
+    const words = [...h.shown(t.id)].map((id) => h.db.getMessage(id)!).filter((m) => !m.toolCalls?.length)
+    expect(words.map((m) => m.content)).toEqual(['It\'s 72°F and sunny in Atlanta.'])
+    expect(h.visible(t.id).filter((m) => !m.toolCalls?.length).map((m) => m.content)).toEqual(['It\'s 72°F and sunny in Atlanta.'])
+  })
+
+  test('a chat reply already on screen gets no second answer from a nudge', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness()
+    llm.script.push({ content: 'I can\'t access your calendar from here.', delay: 0 }, { content: 'You have nothing on Friday.', delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'Hey, what do you think about my week?')).toBe('finished')
+    expect(llm.requests).toHaveLength(1)
+    expect(h.visible(t.id).map((m) => m.content)).toEqual(['I can\'t access your calendar from here.'])
+  })
+})
+
+describe('an exact count is checked before the reply is shown', () => {
+  test('"exactly 10 words": a 9-word reply is rewritten out of sight; only the 10-word one shows', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness()
+    llm.script.push({ content: 'Coffee wakes me up and makes mornings feel brighter.', delay: 0 }, { content: 'Coffee wakes me up and makes mornings feel much brighter.', delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'Write exactly 10 words about coffee.')).toBe('finished')
+    expect(llm.requests).toHaveLength(2)
+    expect(h.visible(t.id).map((m) => m.content)).toEqual(['Coffee wakes me up and makes mornings feel much brighter.'])
+    expect([...h.shown(t.id)].map((id) => h.db.getMessage(id)!.content)).toEqual(['Coffee wakes me up and makes mornings feel much brighter.'])
+  })
+})
+
+describe('a side sum during the double-check', () => {
+  test('"18% of $1,740?" is answered at once and the check goes on', async () => {
+    delete process.env.FOREMAN_NO_VERIFY
+    try {
+      const h = harness([save])
+      llm.script.push({ toolCalls: [call('save_note', { v: 'invoice' })], delay: 0 }, { content: 'Saved the invoice to your notes.', delay: 0 }, { content: 'Checked: the invoice note is saved. '.repeat(30), delay: 20 })
+      const t = h.thread()
+      const done = (await h.agent.send({ threadId: t.id, text: 'Save an invoice note for Jane in my notes file' })).done
+      for (let i = 0; i < 300 && llm.requests.length < 3; i++) await new Promise((r) => setTimeout(r, 10))
+      expect(await h.agent.steer(t.id, '18% of $1,740?')).toBe('steered')
+      for (let i = 0; i < 50 && !h.db.listMessages(t.id).some((m) => m.meta?.aside && m.role === 'assistant'); i++) await new Promise((r) => setTimeout(r, 10))
+      expect(h.db.listMessages(t.id).filter((m) => m.meta?.aside && m.role === 'assistant').map((m) => m.content)).toEqual(['18% of $1,740 = $313.20.'])
+      expect(h.agent.isRunning(t.id)).toBe(true)
+      expect(await done).toBe('finished')
+      // No fresh run for the sum: the check's answer is the last thing the model wrote.
+      expect(llm.requests).toHaveLength(3)
+    } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+  })
+})
+
+describe('a stopped or finished task closes its plan', () => {
+  test('a quick question after a stopped task with open plan items is a chat: no tools, no "plan still has open items"', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness([save])
+    const t = h.thread()
+    const items = [{ text: 'Draft the outline', status: 'done' }, { text: 'Write section 2', status: 'in_progress' }, { text: 'Proofread', status: 'pending' }]
+    llm.script.push({ toolCalls: [call('todo', { items })], delay: 0 }, { content: 'Writing section 2 now, this is a long section about the topic. '.repeat(40), delay: 30 })
+    const done = (await h.agent.send({ threadId: t.id, text: 'Write my report on rivers: outline, section 2, then proofread it' })).done
+    for (let i = 0; i < 200 && llm.requests.length < 2; i++) await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 60))
+    h.agent.stop(t.id, { byUser: true })
+    expect(await done).toBe('stopped')
+    // Kept for a "continue"; any other request closes it.
+    expect(h.db.getState(t.id).planPaused).toBe(true)
+    expect(h.db.getState(t.id).todos).toHaveLength(3)
+    llm.requests.length = 0
+    llm.script.push({ content: 'Canberra.', delay: 0 })
+    expect(await h.run(t, 'What is the capital of Australia?')).toBe('finished')
+    expect(h.db.getState(t.id).todos).toEqual([])
+    expect(llm.requests).toHaveLength(1)
+    expect(h.db.getState(t.id).lastKind).toBe('chat')
+    expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /plan still has open items/.test(m.content))).toBe(false)
+    expect(h.visible(t.id).at(-1)?.content).toBe('Canberra.')
+  })
+
+  test('a run that ends on a question to the user keeps its plan for the answer', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness([save])
+    const t = h.thread()
+    const items = [{ text: 'Pick a date', status: 'in_progress' }, { text: 'Book it', status: 'pending' }]
+    llm.script.push({ toolCalls: [call('todo', { items })], delay: 0 }, { content: 'Which date works for you, Friday or Saturday?', delay: 0 })
+    expect(await h.run(t, 'Plan the team dinner and book it for us')).toBe('finished')
+    expect(h.db.getState(t.id).todos).toHaveLength(2)
   })
 })
 

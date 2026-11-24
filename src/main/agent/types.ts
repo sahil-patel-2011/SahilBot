@@ -172,6 +172,8 @@ export interface ThreadState {
   /** Tools the user allowed "always" in this thread. */
   alwaysAllow: string[]
   todos: TodoItem[]
+  /** The task was stopped with plan items open: "continue" resumes them, any other request closes the plan. */
+  planPaused?: boolean
   /** The system prompt frozen for this thread so the server's KV cache prefix stays valid. */
   systemSnapshot?: string
   /** Group chats: one frozen system prompt per member bot. */
