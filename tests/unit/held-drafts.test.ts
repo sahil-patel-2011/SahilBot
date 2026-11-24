@@ -54,11 +54,18 @@ test('the check\'s bare "✓" never shows before the kept answer is swapped in',
 })
 
 test('an answer the app checks before accepting it waits out of view until it is final; errors and tool steps show', () => {
-  expect(awaitingFinal(msg('2', 'assistant', 'Saved it', { hold: true }))).toBe(true)
-  expect(awaitingFinal(msg('2', 'assistant', 'Saved it', { hold: true }, 'streaming'))).toBe(true)
-  expect(awaitingFinal(msg('2', 'assistant', 'Saved it', { hold: true, final: true }))).toBe(false)
+  expect(awaitingFinal(msg('2', 'assistant', 'Saved it', { provisional: true }))).toBe(true)
+  expect(awaitingFinal(msg('2', 'assistant', 'Saved it', { provisional: true }, 'streaming'))).toBe(true)
   expect(awaitingFinal(msg('2', 'assistant', 'Saved it'))).toBe(false)
-  expect(awaitingFinal(msg('2', 'assistant', 'It failed', { hold: true }, 'error'))).toBe(false)
-  expect(awaitingFinal(msg('2', 'assistant', 'Half', { hold: true }, 'stopped'))).toBe(false)
-  expect(awaitingFinal({ ...msg('2', 'assistant', 'Checking the file.', { hold: true }), toolCalls: [{ id: 'c', name: 'file_read', arguments: '{}' }] } as Message)).toBe(false)
+  expect(awaitingFinal(msg('2', 'assistant', 'It failed', { provisional: true }, 'error'))).toBe(false)
+  expect(awaitingFinal(msg('2', 'assistant', 'Half', { provisional: true }, 'stopped'))).toBe(false)
+  expect(awaitingFinal({ ...msg('2', 'assistant', 'Checking the file.', { provisional: true }), toolCalls: [{ id: 'c', name: 'file_read', arguments: '{}' }] } as Message)).toBe(false)
+})
+// Report ALD-04 / RLB-01: verify happened after the answer streamed, so it appeared, vanished and came back. A reply
+// written out of sight (provisional) was never on screen: nothing to hold, and its checked replacement is the one shown.
+test('a provisional draft being checked is never held on screen', () => {
+  const draft = msg('2', 'assistant', 'Draft plan', { superseded: true, checking: true, provisional: true })
+  expect(heldDrafts([msg('1', 'user', 'Plan my trip'), draft]).held.size).toBe(0)
+  const r = heldDrafts([msg('1', 'user', 'Plan my trip'), draft, msg('3', 'assistant', 'Checked pl', { provisional: true }, 'streaming')])
+  expect(r.held.size).toBe(0)
 })

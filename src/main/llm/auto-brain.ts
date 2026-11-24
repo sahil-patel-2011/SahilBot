@@ -471,14 +471,22 @@ export const isQuickModel = (m: ModelInfo | undefined): boolean => !!m && (QUICK
  *     typo fix) when the rules already route it to a quick model (`quickPick`): the read could only confirm it.
  * Never with something attached.
  */
-export const skipBrain = (text: string, d: Pick<TaskClass, 'difficulty' | 'category' | 'confident'> & { rule?: string; signals?: Pick<TaskClass['signals'], 'quick' | 'explicit'> }, attachments: number, o: { quickPick?: boolean } = {}): boolean => {
+export const skipBrain = (text: string, d: Pick<TaskClass, 'difficulty' | 'category' | 'confident'> & { kind?: TaskClass['kind'] } & { rule?: string; signals?: Pick<TaskClass['signals'], 'quick' | 'explicit'> }, attachments: number, o: { quickPick?: boolean } = {}): boolean => {
   const words = text.trim().split(/\s+/).length
   if (d.category === 'voice') return true
   if (attachments !== 0) return false
   if (d.confident && d.difficulty === 0 && (words <= 4 || d.rule === 'small-talk' || d.rule === 'empty')) return true
   if (d.rule === 'follow-up' && words <= 5) return true
+  // A light, short chat (a quiz question, a fact, a format ask, a tweet or a two-line email): the rules' pick
+  // stands and the first token comes at once (Grok answers these in ~5 s; a 4-6 s read before it doubled that).
+  if (d.kind === 'chat' && d.difficulty <= 1 && words <= 40 && !d.signals?.explicit && !d.signals?.quick && (FORMAT_ASK.test(text) || d.category === 'writing' || (d.category === 'code-quick' && FORMAT_ASK.test(text)) || (words <= 25 && FACT_QUESTION.test(text.trim())))) return true
   return !!d.signals?.quick && !d.signals.explicit && d.difficulty <= 1 && !!o.quickPick
 }
+
+/** A reply whose shape is set by the user (bullets, a word or character count, JSON, a table): nothing to weigh. */
+const FORMAT_ASK = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten) (bullet|bullets|bullet points|points|words|sentences|lines|items|examples|facts|reasons|tips)\b|\b(under|in|within|at most|no more than) \d+ (characters|chars|words)\b|\bexactly \d+\b|\b(valid )?json\b|\bas a table\b|\bin a table\b/i
+/** A plain fact to recall ("What is the capital of Australia?", "Who wrote Pride and Prejudice?"), not advice or a judgment. */
+const FACT_QUESTION = /^(what|who|when|where|which|how many|how far|how tall|how old|how long)('s|\s+(is|was|are|were|did|does|wrote|invented|discovered|painted|founded|won|signed))\b(?!.*\b(should|would|could|best|recommend\w*|my|your|our|me|i)\b)/i
 
 /** How much a model costs to run, in one word, for the "Why this model" line. */
 export type CostClass = 'quick' | 'standard' | 'premium'

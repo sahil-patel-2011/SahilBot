@@ -38,7 +38,7 @@ export function QuickAsk() {
 
   useEffect(() => api.chat.onEvent((e) => {
     if (e.threadId !== tid.current) return
-    if (e.type === 'message' && e.message.role === 'assistant' && e.message.kind === 'normal' && !e.message.meta?.superseded) setAnswer(e.message)
+    if (e.type === 'message' && e.message.role === 'assistant' && e.message.kind === 'normal' && !e.message.meta?.superseded && !e.message.meta?.provisional) setAnswer(e.message)
     else if (e.type === 'message' && e.message.role === 'tool') setDoing(String(e.message.meta?.display ?? e.message.toolName ?? ''))
     else if (e.type === 'delta') setAnswer((a) => (a && a.id === e.messageId ? { ...a, content: a.content + (e.content ?? '') } : a))
     else if (e.type === 'drafting') setDoing(e.tool ? 'Working…' : null)

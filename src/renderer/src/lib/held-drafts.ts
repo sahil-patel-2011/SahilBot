@@ -4,12 +4,12 @@ import type { Message } from '@shared/types'
 const KEEP_DRAFT = /^(✓|✔|✔️|ok|lgtm|all good|no changes?( needed)?)[.!]?$/i
 
 /**
- * Post once (Grok Bot's way): an answer the app will check before it's accepted (meta.hold, set before the model
- * writes it) stays out of view until the app marks it final. A step that ends in tool calls shows its words as
+ * Post once (Grok Bot's way): an answer the app may still check or send back (meta.provisional, set before
+ * the model writes it) stays out of view until the app accepts it and clears the flag. A step that ends in tool calls shows its words as
  * usual, and an error or a stopped reply always shows. Only while the run works: afterwards everything left stands.
  */
 export function awaitingFinal(m: Message): boolean {
-  return m.role === 'assistant' && !!m.meta?.hold && !m.meta?.final && !m.toolCalls?.length && !m.meta?.aside
+  return m.role === 'assistant' && !!m.meta?.provisional && !m.toolCalls?.length && !m.meta?.aside
     && m.status !== 'error' && m.status !== 'stopped'
 }
 
@@ -22,7 +22,8 @@ export function heldDrafts(messages: Message[]): { held: Set<string>; waiting: S
   const held = new Set<string>(), waiting = new Set<string>()
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
-    if (m.role !== 'assistant' || !m.meta?.superseded || !m.meta?.checking || !m.content) continue
+    // (A draft written out of sight, provisional, was never on screen: nothing to hold.)
+    if (m.role !== 'assistant' || !m.meta?.superseded || !m.meta?.checking || !m.content || m.meta?.provisional) continue
     let replacement: Message | undefined, later = false
     for (const x of messages.slice(i + 1)) {
       if (x.role === 'user' && !x.meta?.hidden && !x.meta?.aside) break

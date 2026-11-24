@@ -65,11 +65,8 @@ test('a finished task that offers one more step ends there: the offer is not tak
   expect(r.answers.map((m) => m.content)).toEqual(['Saved invoice.pdf to Downloads.\n\nWant me to email this to Sam?'])
   // Written out of sight (it could have been checked or sent back), then posted once, final.
   const final = r.answers[0]
-  expect(final.meta?.hold).toBe(true)
-  expect(final.meta?.final).toBe(true)
+  expect(final.meta?.provisional).toBeUndefined()
   const shown = r.events.filter((e) => e.type === 'message' && e.message?.id === final.id)
-  expect(shown.every((e) => e.message?.meta?.hold)).toBe(true)
-  expect(shown.filter((e) => e.message?.meta?.final).length).toBeGreaterThanOrEqual(1)
   expect(shown.some((e) => e.message?.meta?.superseded)).toBe(false)
 }, 60_000)
 
@@ -98,8 +95,7 @@ test('the open-plan nudge sends the first answer back: exactly one answer remain
   // The one sent back was never shown as an answer: held out of sight, then superseded (kept until the next was written).
   const first = r.events.filter((e) => e.type === 'message' && e.message?.content === 'Saved budget.xlsx.').map((e) => e.message!)
   expect(first.length).toBeGreaterThan(0)
-  expect(first.every((m) => m.meta?.hold && !m.meta?.final)).toBe(true)
-  expect(first.at(-1)?.meta).toMatchObject({ superseded: true, checking: true })
+  expect(first.at(-1)?.meta).toMatchObject({ superseded: true })
 }, 60_000)
 
 test('a "done" claim nothing backs is nudged once, then said plainly instead of passed on as done', async () => {
@@ -127,5 +123,6 @@ test('a claim the run backs is left alone', async () => {
 test('a quick answer with nothing to check streams live (not held)', async () => {
   const r = await run([{ content: 'Water boils at 100 °C at sea level.' }], 'At what temperature does water boil?')
   expect(r.status).toBe('finished')
-  expect(r.answers[0].meta?.hold).toBeUndefined()
+  expect(r.answers[0].meta?.provisional).toBeUndefined()
+  expect(r.events.filter((e) => e.type === 'message' && e.message?.id === r.answers[0].id).some((e) => e.message?.meta?.provisional)).toBe(false)
 }, 60_000)

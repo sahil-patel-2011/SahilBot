@@ -29,10 +29,19 @@ export function asideSystem(o: { who?: string; job: string; step?: string }): st
  * "what's 1740 * 0.18?", "250 + 75 - 10", "(3+4)*2", "9 squared". undefined: not plain arithmetic.
  */
 export function quickMath(text: string): string | undefined {
-  const asked = text.trim().replace(/\?+$/, '').replace(/^(what'?s|what is|whats|calculate|compute|how much is)\s+/i, '').trim()
-  let t = asked.toLowerCase()
+  // "Quick one: 245 × 18?", "btw, what's 15 percent of 200", "how much is a 20% tip on $85?"
+  const asked = text.trim().replace(/\?+$/, '').replace(LEAD_IN, '').replace(/^(what'?s|what is|whats|calculate|compute|how much is|how much's)\s+/i, '').replace(/^an?\s+(?=\d)/i, '').trim()
+  let t = asked.toLowerCase().replace(/\s*\b(per ?cent|pct)\b/g, '%')
   const money = t.includes('$')
   t = t.replace(/[$,]/g, '').replace(/×/g, '*').replace(/x(?=\s*[\d(])/g, '*').replace(/÷/g, '/').replace(/\bsquared\b/g, '^2').replace(/\bcubed\b/g, '^3')
+  const fmt = (v: number): string => (money ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : (Math.round(v * 1e6) / 1e6).toLocaleString('en-US', { maximumFractionDigits: 6 }))
+  // A tip, tax or discount on an amount: the part and what it comes to ("20% tip on $85 = $17.00 ($102.00 total).").
+  const pct = t.match(/^(\d+(?:\.\d+)?)\s*%\s*(tip|tax|off|discount)\s*(?:on|of|from|for)?\s*(\d+(?:\.\d+)?)$/)
+  if (pct) {
+    const rate = Number(pct[1]) / 100, base = Number(pct[3]), part = rate * base
+    const off = pct[2] === 'off' || pct[2] === 'discount'
+    return `${asked.replace(/\s+/g, ' ')} = ${fmt(off ? base - part : part)} (${off ? `you save ${fmt(part)}` : `${fmt(base + part)} total`}).`
+  }
   // "18% of 1740" → (18/100)*1740; a bare "18%" is 0.18.
   t = t.replace(/(\d+(?:\.\d+)?)\s*%\s*of\s*/g, '($1/100)*').replace(/(\d+(?:\.\d+)?)\s*%/g, '($1/100)')
   if (!/^[\d\s+\-*/^().]+$/.test(t) || !/\d/.test(t) || !/[+\-*/^]/.test(t)) return undefined
@@ -45,6 +54,9 @@ export function quickMath(text: string): string | undefined {
   // The sum and its answer ("17 × 23 = 391."), so it reads like a reply, not a bare number.
   return `${asked.replace(/\s+/g, ' ')} = ${shown}.`
 }
+
+/** Words before the sum that don't change it ("Quick one:", "hey,", "ok so", "btw"). */
+const LEAD_IN = /^(?:(?:quick (?:one|question|q)|hey|hi|ok(?:ay)?|so|btw|also|and|one more)[:,!\-–]?\s+)+/i
 
 /** A tiny, safe arithmetic evaluator (+ - * / ^ and parentheses): no eval, no names. */
 function evalArith(src: string): number | undefined {

@@ -180,7 +180,7 @@ describe('Excel workbooks', () => {
     expect(s.getCell('E2').value).toEqual({ formula: 'C2*D2', result: 125 })
     expect(s.getCell('F2').value).toEqual({ formula: 'IFERROR(INDEX(Team!B:B,MATCH(B2,Team!A:A,0)),"?")', result: 'Ann' })
     expect(s.getCell('A4').value).toBe('Total')
-    expect(s.getCell('E4').value).toEqual({ formula: 'SUBTOTAL(109,E2:E3)', result: 205 })
+    expect(s.getCell('E4').value).toEqual({ formula: 'SUM(E2:E3)', result: 205 })
     const sheets = readSheets(wb)
     const sales = sheets.find((x) => x.name === 'Sales')!
     expect(sales.frozen).toEqual({ rows: 1, cols: 0 })
@@ -203,10 +203,10 @@ describe('Excel workbooks', () => {
     expect(ws.getCell('D4').value).toEqual({ formula: 'B4*C4', result: 60 })
     expect(ws.getCell('C4').numFmt).toContain('#,##0.00')
     expect(ws.getCell('A5').value).toBe('Total')
-    expect(ws.getCell('D5').value).toEqual({ formula: 'SUBTOTAL(109,D2:D4)', result: 102 })
+    expect(ws.getCell('D5').value).toEqual({ formula: 'SUM(D2:D4)', result: 102 })
     expect(res.changed.find((c) => c.cell === 'B2')).toMatchObject({ before: '10', after: '20' })
     const reread = readSheets(await loadWorkbook(Buffer.from(await wb.xlsx.writeBuffer())), { sheet: 'Costs', range: 'D5:D5' })
-    expect(reread[0].cells[0]).toMatchObject({ addr: 'D5', value: 102, formula: '=SUBTOTAL(109,D2:D4)' })
+    expect(reread[0].cells[0]).toMatchObject({ addr: 'D5', value: 102, formula: '=SUM(D2:D4)' })
   })
 
   test('CSV import infers types; column statistics', async () => {

@@ -241,7 +241,7 @@ describe('office tool', () => {
     expect(readdirSync(join(ws, '.foreman', 'backups')).some((f) => f.endsWith('budget.xlsx'))).toBe(true)
     const r = await office.run({ action: 'sheet_read', path: 'budget.xlsx', range: 'A4:B5' }, ctxFor(ws))
     expect(r.text).toContain('A4="Gym" | B4="50"')
-    expect(r.text).toContain('B5="1500" (=SUBTOTAL(109,B2:B4))')
+    expect(r.text).toContain('B5="1500" (=SUM(B2:B4))')
     const sum = await office.run({ action: 'sheet_summarize', path: 'budget.xlsx' }, ctxFor(ws))
     expect(sum.text).toMatch(/B "Cost" \[currency\]: 3 values.*sum 1500/)
   })

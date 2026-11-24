@@ -152,9 +152,9 @@ describe('voice conversations in the chat', () => {
 describe('answers are posted once', () => {
   const ask = (): Message => msg({ role: 'user', content: 'Plan the Savannah trip' })
   for (const botName of [undefined, 'Trip Planner']) {
-    it(`a held answer shows only once it is final${botName ? ' (bot chat)' : ''}`, () => {
+    it(`a held answer shows only once it stands${botName ? ' (bot chat)' : ''}`, () => {
       const q = ask()
-      const draft = msg({ content: 'Day 1: River Street walk.', meta: { hold: true } })
+      const draft = msg({ content: 'Day 1: River Street walk.', meta: { provisional: true } })
       const render = (ms: Message[], running: boolean): string => renderToString(createElement(tv.ThreadView, { messages: ms, running, pending: [], actions, botName }))
       // Written, not yet accepted: out of sight, the working line up.
       let html = render([q, draft], true)
@@ -165,10 +165,8 @@ describe('answers are posted once', () => {
       expect(html).not.toContain('River Street')
       expect(html).toContain('data-testid="status-line"')
       // Final: shown, even while the run finishes up.
-      html = render([q, { ...draft, meta: { hold: true, final: true } }], true)
+      html = render([q, { ...draft, meta: {} }], true)
       expect(html).toContain('River Street')
-      // After the run, whatever is left stands (never lost).
-      expect(render([q, draft], false)).toContain('River Street')
     })
   }
 
@@ -178,5 +176,25 @@ describe('answers are posted once', () => {
     const html = renderToString(createElement(tv.ThreadView, { messages: [q, draft, msg({ role: 'user', content: '[From the app] check', meta: { hidden: true } })], running: true, pending: [], actions, botName: 'Trip Planner' }))
     expect(html).toContain('River Street')
     expect(html).not.toContain('Double-checking')
+  })
+})
+
+describe('post once', () => {
+  // Report ALD-04 / RLB-01: an answer still subject to the app's checks (provisional) is never shown, streaming or
+  // done; the working line stays up instead. Once it stands (provisional cleared) it shows, once.
+  it('a provisional reply is not shown; its tool calls are; once settled it shows', () => {
+    const ask = msg({ role: 'user', content: 'Plan a 3-day trip to Savannah' })
+    const writing = msg({ content: 'Day 1: River Street…', status: 'streaming', meta: { provisional: true } })
+    expect(tv.blocks([ask, writing]).filter((b) => b.kind === 'text')).toHaveLength(0)
+    const call = { id: 'p1', name: 'web_search', arguments: '{"query":"savannah hotels"}' }
+    const working = msg({ content: 'Checking a few hotels first.', toolCalls: [call], meta: { provisional: true } })
+    const bs = tv.blocks([ask, working])
+    expect(bs.filter((b) => b.kind === 'text')).toHaveLength(0)
+    expect(bs.filter((b) => b.kind === 'activity')).toHaveLength(1)
+    const done = { ...writing, status: 'done' as const, meta: {} }
+    expect(tv.blocks([ask, done]).filter((b) => b.kind === 'text')).toHaveLength(1)
+    // While it is written out of sight, the chat shows the working line, not the half-written answer.
+    const html = renderToString(createElement(tv.ThreadView, { messages: [ask, writing], running: true, pending: [], actions }))
+    expect(html).not.toContain('River Street')
   })
 })

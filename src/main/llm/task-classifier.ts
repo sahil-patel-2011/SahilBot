@@ -275,6 +275,15 @@ const SNIPPET = /\b(write|give me|show me)\b.{0,25}\b(a |an )?(quick |small |sho
 const NOT_CODE = /\b(the snake|not the (programming )?language|not (about )?(code|programming))\b/
 /** Making a site, an app or a game is coding. */
 const BUILD_APP = /\b(build|make|create|code|develop)\b( me)? (a|an|the|my) ([\w-]+ ){0,2}(landing page|website|web ?site|web app|web page|ios app|android app|mobile app|app|game|bot|plugin)\b/
+/**
+ * "Make me a bot called Study Pal for chemistry": a SahilBot bot (create_bot), not code. A Discord, Slack or
+ * Telegram bot, or one in a programming language, is still coding (CODE_STRONG or a chat platform named).
+ */
+const SAHILBOT_BOT = /\b(build|make|create|set up)\b( me)? (a|an|another|a new) (new )?bot\b(?! (in|with|using|for (discord|slack|telegram|twitch|whatsapp)))(\s+(called|named|for|that|to help|who|which|to)\b|\s*$|\s*[.!,])/
+const BOT_PLATFORM = /\b(discord|slack|telegram|twitch|whatsapp|reddit|twitter|x\.com|irc|chatbot for (my|our) (site|website|app))\b/
+/** Planning a trip ("plan a 3-day trip to Savannah", "a weekend itinerary") with the details that make it work: days, people, money. */
+const TRAVEL_PLAN = /\b(plan|planning|itinerar(y|ies)|organi[sz]e)\b.{0,40}\b(trip|vacation|getaway|weekend|visit|holiday)\b|\b\d+[- ]day (trip|itinerary|plan|vacation|getaway)\b|\bitinerar(y|ies)\b/
+const TRAVEL_SPECIFICS = /\b\d+ (people|adults|kids|of us|nights|days)\b|\bfamily of \d+\b|\$\s?\d|\bbudget\b|\bhotels?\b|\b\d+[- ]day\b/
 const INCIDENT = /\b(site is down|is down|outage|production is|in production|customers are complaining|500 errors?)\b/
 
 // Screen and browser
@@ -316,7 +325,7 @@ const RESEARCH_DEEP = /\b(meta-?analys[ie]s|systematic reviews?|pmids?|clinical 
 
 // Writing
 const WRITING = /\b(write|rewrite|re-write|draft|edit|proofread|polish|reword|rephrase|tighten|copy ?edit|essay|blog( post)?|article|story|poem|haiku|cover letter|bio|newsletter|speech|caption|taglines?|headline|press release|letter|(e-?mail) (to|for)|linkedin post|tweet|toast|eulogy|wedding|personal statement|statement of purpose|copy for|hero section|sound (less|more) \w+|cut it to|less formal|more formal|novel|lyrics|write about|(reply|respond) to this|help me (reply|respond|word|phrase))\b/
-const WRITING_SHORT = /\b(haiku|poem|taglines?|tweet|rewrite this|edit this|make this|cut it to|reword|rephrase|less formal|more formal|sound (less|more))\b/
+const WRITING_SHORT = /\b(haiku|poem|taglines?|tweet|rewrite this|edit this|make this|cut it to|reword|rephrase|less formal|more formal|sound (less|more)|thank[- ]you (note|card|message|text)|(short|quick|brief|two[- ]line|one[- ]line|\d+[- ]line|\d+[- ]sentence) (e-?mail|note|message|text|reply|bio|caption|toast)|([1-9]\d?|[12]\d\d) words?|(one|a single|a short) (sentence|paragraph))\b/
 
 // Difficulty and effort signals
 const HARD = /\b(architecture|design (a|the) system|from scratch|end[- ]to[- ]end|entire|whole (app|codebase|project|thing|system)|complex|complicated|in[- ]depth|thorough(ly)?|comprehensive|exhaustive|detailed (analysis|report|plan)|production[- ](ready|quality|grade)|production|perfect(ly)?|carefully|best possible|multi-?step|literature review|deep dive|competitive analysis|market analysis|financial model|forecast|dcf|3-statement|pitch deck|business plan|launch plan|go-to-market|memory leak|every (form|page|file|module|endpoint|screen|place)|all the (forms|pages|modules|endpoints)|security|vulnerab\w*|full assembly|interferences?|for investors|whatever breaks|find out why|figure out (what|why)|feedforward)\b/
@@ -502,7 +511,9 @@ export const RULE_CONFIDENCE: Record<string, number> = {
   // The fallbacks, where the rules run out (blind: chat 5/12, chat:question 5/9): below CONFIDENT.
   imperative: 0.5, chat: 0.55, 'chat:question': 0.65,
   // Added with holdout 4 (medical, travel, business, engineering, coding agents).
-  booking: 0.85, 'math:engineering': 0.85, 'coding:agent': 0.85, 'research:travel': 0.75, 'research:medical': 0.85
+  booking: 0.85, 'math:engineering': 0.85, 'coding:agent': 0.85, 'research:travel': 0.75, 'research:medical': 0.85,
+  // A new SahilBot bot by chat ("make me a bot called Study Pal"): one create_bot.
+  'agent-tools:bot': 0.85
 }
 
 interface Picked { category: TaskCategory; rule: string; why: string }
@@ -532,7 +543,9 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
   const roleCat = roleCategory(ctx.role)
   // The CAD module's own reading (cad/cad-intent.ts): a build or change in CAD is always agent work.
   const cad = cadSignals(raw)
-  const codeish = !has(NOT_CODE, t) && (has(CODE_STRONG, t) || has(BUILD_APP, t) || ((ctx.codeProject || roleCat === 'coding') && has(CODE_WEAK, t)))
+  // A SahilBot bot to make ("a bot called Study Pal") is not code; a Discord bot or one in Python is.
+  const appBot = has(SAHILBOT_BOT, t) && !has(BOT_PLATFORM, t) && !has(CODE_STRONG, t)
+  const codeish = !has(NOT_CODE, t) && (has(CODE_STRONG, t) || (has(BUILD_APP, t) && !appBot) || ((ctx.codeProject || roleCat === 'coding') && has(CODE_WEAK, t)))
   const officeDeliverable = (has(OFFICE_OBJ, t) || has(FILE_NAME, t)) && has(OFFICE_MAKE, t)
   // A document named up front ("Create a resume in Word from …") beats code words further on (skills, data).
   const head = t.split(/\s+/).slice(0, 10).join(' ')
@@ -569,6 +582,10 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (has(CODING_AGENT, t) && has(AGENT_HANDOFF, t) && !/\b(users|pattern|blink|textarea)\b/.test(t) && !/\b(write|draft) (a |the |me a )?(task )?(brief|prompt|spec)\b/.test(t) && !(question && !has(CODE_ACT, t) && !/\b(check|review|status|merge|safe to)\b/.test(t))) return { category: 'coding', rule: 'coding:agent', why: 'drives a coding agent' }
     // Distances or routes between several places: research with the maps tool.
     if (has(TRAVEL_COMPARE, t)) return { category: 'research', rule: 'research:travel', why: 'compares places on the map' }
+    // A trip to plan with its specifics (days, people, a budget): real work (a plan, prices, places on the map).
+    if (!question && has(TRAVEL_PLAN, t) && has(TRAVEL_SPECIFICS, t)) return { category: 'research', rule: 'research:travel', why: 'plans a trip' }
+    // A new SahilBot bot ("make me a bot called Study Pal for chemistry"): one create_bot, not code.
+    if (appBot && !question) return { category: 'agent-tools', rule: 'agent-tools:bot', why: 'makes a bot' }
     // Asked of the medical literature (summarize the meta-analyses, find recruiting trials, cite the guideline):
     // research. "What is a meta-analysis" isn't.
     if (has(MED_LIT, t) && has(LIT_ASK, t) && !has(DEFINITION, t) && words > 6 && !(/\bpmid:? ?\d{4,9}\b/.test(t) && !/\b(meta|trials?|guidelines?|reviews?)\b/.test(t))) return { category: 'research', rule: 'research:medical', why: 'medical literature' }
@@ -662,6 +679,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
         if (/^convert\b/.test(t) && words <= 12) return 1
         return 2
       case 'agent-tools':
+        if (pick.rule === 'agent-tools:bot') return 1
         if (folders || multi || /\b(go through|everything|each one)\b/.test(t)) return 3
         return 2
       case 'vision':

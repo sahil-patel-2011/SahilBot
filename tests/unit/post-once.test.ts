@@ -1,0 +1,241 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { Agent, QUICK_IN_FULL, SIMPLE_LOOKUPS, removeLinks, reviewedClean } from '../../src/main/agent/loop'
+import { ResultStore, estimate } from '../../src/main/agent/context'
+import { ToolRegistry } from '../../src/main/agent/registry'
+import { coreTools } from '../../src/main/agent/tools/core'
+import type { ToolDef } from '../../src/main/agent/types'
+import { Db } from '../../src/main/db'
+import type { ChatEvent, Message, ModelInfo, Settings, Thread } from '../../src/shared/types'
+import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
+
+// The head-to-head report (ALD-03, ALD-04, RLB-01, ALC-07, PCA-02/03): "Check first, post once". An answer the user
+// has seen is never pulled back (the Savannah plan vanished mid-read while links were rechecked); a finished answer's
+// "Want me to email it?" is an offer, not a stall; a simple task stops looking after ~15 lookups; a bot's one
+// ongoing conversation still answers a quick question as a chat.
+process.env.FOREMAN_NO_AUTOTITLE = '1'
+
+const model = (id: string, tier: 0 | 1 | 2 | 3): ModelInfo =>
+  ({ id, provider: 'ollama', providerName: 'Ollama', enabled: true, installed: true, label: id.toUpperCase(), vision: false, tier, requiredGB: 1, maxFittingWindow: 131072, fits: true }) as ModelInfo
+
+let llm: MockLlm
+beforeAll(async () => { llm = await startMockLlm() })
+afterAll(async () => { await llm.close() })
+afterEach(() => { llm.script.length = 0; llm.requests.length = 0 })
+
+function harness(tools: ToolDef[] = []) {
+  const models = [model('model-a', 2)]
+  const db = new Db(':memory:')
+  const settings = {
+    contextWindow: 32768, taskModels: { voice: '', background: '' }, sampling: {}, thinking: 'medium', advanced: { hardStopsEnabled: true },
+    workspaceDir: mkdtempSync(join(tmpdir(), 'ws-')), userName: 'Sam', defaultModel: models[0].id, hiddenModels: [], shownModels: [],
+    cloud: { enabled: false, hybrid: false, advisorModel: '', maxConsultsPerRequest: 0 }, customRules: []
+  } as unknown as Settings
+  const results = new ResultStore(mkdtempSync(join(tmpdir(), 'res-')))
+  const registry = new ToolRegistry()
+  registry.register(...coreTools(results), ...tools)
+  // Every event as it was when it was sent (the agent keeps changing the same message object afterwards).
+  const events: ChatEvent[] = []
+  const last = { ok: true, models, budgetGB: 32, totalGB: 64, providers: [] }
+  const endpoints = { last, for: () => ({ provider: 'custom', baseUrl: llm.url }), usable: () => models, list: async () => last, advisor: () => undefined }
+  const agent: Agent = new Agent({
+    db, results, registry, docsDir: tmpdir(),
+    settings: { get: () => settings, keyFor: () => undefined, apiKey: () => undefined } as never,
+    endpoints: endpoints as never,
+    spaces: { getPrompt: () => '' } as never,
+    memory: { block: () => '' } as never,
+    emit: (e) => { events.push(JSON.parse(JSON.stringify(e)) as ChatEvent) },
+    secretValues: () => [],
+    fitWindow: (_m, w) => w,
+    counter: () => ({ count: async (t: string) => estimate(t) })
+  })
+  const space = db.createSpace('Alpha', '#000000')
+  const thread = (): Thread => db.createThread(space.id, 'auto', models[0].id)
+  const run = async (t: Thread, text: string) => (await agent.send({ threadId: t.id, text })).done
+  /** Assistant messages the user saw (emitted with words, not provisional, not replaced), by id. */
+  const shown = (threadId: string): Set<string> => {
+    const ids = new Set<string>()
+    for (const e of events) {
+      if (e.type !== 'message' || e.threadId !== threadId) continue
+      const m = e.message as Message
+      if (m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.provisional && !m.meta?.superseded) ids.add(m.id)
+    }
+    return ids
+  }
+  const visible = (threadId: string): Message[] => db.listMessages(threadId).filter((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded && !m.meta?.hidden)
+  return { db, agent, events, thread, run, shown, visible }
+}
+
+const call = (name: string, args: Record<string, unknown>) => ({ name, arguments: JSON.stringify(args) })
+const save: ToolDef<{ v: string }> = {
+  name: 'save_note', label: 'Save', effect: 'write_local', description: 'save something',
+  parameters: { type: 'object', properties: { v: { type: 'string' } }, required: ['v'], additionalProperties: false },
+  async run({ v }) { return { text: `saved ${v}` } }
+}
+const look: ToolDef<{ q: string }> = {
+  name: 'look', label: 'Look', effect: 'read', description: 'read something',
+  parameters: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'], additionalProperties: false },
+  async run({ q }) { return { text: `found ${q}` } }
+}
+
+describe('check first, post once', () => {
+  test('a file task\'s answer is written out of sight while it is double-checked, then shown once', async () => {
+    delete process.env.FOREMAN_NO_VERIFY
+    try {
+      const h = harness([save])
+      // The check finds nothing ("✓"): the answer it wrote is the one shown, once.
+      llm.script.push({ toolCalls: [call('save_note', { v: 'y' })], delay: 0 }, { content: 'Saved y to your notes.', delay: 0 }, { content: '✓', delay: 0 })
+      const t = h.thread()
+      expect(await h.run(t, 'Save a note that says y in my notes file')).toBe('finished')
+      expect(h.db.listMessages(t.id).filter((m) => m.meta?.hidden && /double-check/.test(m.content))).toHaveLength(1)
+      const seen = [...h.shown(t.id)].map((id) => h.db.getMessage(id)!)
+      // Everything the user saw is still there (nothing appeared and then vanished), and the answer was shown once.
+      for (const m of seen) expect(m.meta?.superseded, m.content).toBeFalsy()
+      expect(seen.filter((m) => m.content === 'Saved y to your notes.')).toHaveLength(1)
+      expect(h.visible(t.id).map((m) => m.content)).toEqual(['Saved y to your notes.'])
+      // Never shown while it was checked: the draft's emits were all provisional.
+      const draft = h.db.listMessages(t.id).find((m) => m.role === 'assistant' && m.content === 'Saved y to your notes.' && m.meta?.superseded)
+      if (draft) expect(h.shown(t.id).has(draft.id)).toBe(false)
+
+      // The check rewrites it: only the checked answer is ever shown.
+      llm.script.push({ toolCalls: [call('save_note', { v: 'z' })], delay: 0 }, { content: 'Saved it.', delay: 0 }, { content: 'Saved "z" to notes.txt.', delay: 0 })
+      const t2 = h.thread()
+      expect(await h.run(t2, 'Save a note that says z in my notes file')).toBe('finished')
+      const seen2 = [...h.shown(t2.id)].map((id) => h.db.getMessage(id)!)
+      expect(seen2.map((m) => m.content)).toEqual(['Saved "z" to notes.txt.'])
+      expect(h.db.listMessages(t2.id).some((m) => m.meta?.provisional)).toBe(false)
+    } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+  })
+
+  test('a link nobody retrieved comes out of the answer in place: it is never sent back or replaced', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness()
+    llm.script.push({ content: 'Qwen 3.8 came out in October. Source: https://unseen.example/qwen-news\n\nSources:\n[1] Qwen news https://unseen.example/qwen-news', delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'When did Qwen 3.8 come out?')).toBe('finished')
+    expect(llm.requests).toHaveLength(1)
+    const ms = h.db.listMessages(t.id).filter((m) => m.role === 'assistant' && m.content)
+    expect(ms).toHaveLength(1)
+    expect(ms[0].meta?.superseded).toBeFalsy()
+    expect(ms[0].content).toBe('Qwen 3.8 came out in October.')
+    expect(ms[0].meta?.linksRemoved).toEqual(['https://unseen.example/qwen-news'])
+  })
+
+  test('a finished answer that offers one more step stays as written; nothing unasked is done for it', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness([save, look])
+    llm.script.push({ toolCalls: [call('save_note', { v: 'invoice' })], delay: 0 }, { content: 'Saved invoice.pdf to Downloads. Want me to email it to Jane?', delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'Make an invoice for Jane for 3 hours of tutoring and save it to my notes')).toBe('finished')
+    expect(llm.requests).toHaveLength(2)
+    expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /Don't stop to ask permission/.test(m.content))).toBe(false)
+    expect(h.visible(t.id).at(-1)?.content).toBe('Saved invoice.pdf to Downloads. Want me to email it to Jane?')
+
+    // Mid-task ("I found X. Want me to add them?" after only looking): still the step the task asked for.
+    llm.requests.length = 0
+    llm.script.push({ toolCalls: [call('look', { q: 'invoices' })], delay: 0 }, { content: 'I found INV-104 and INV-109. Want me to add them?', delay: 0 }, { toolCalls: [call('save_note', { v: 'INV-104, INV-109' })], delay: 0 }, { content: 'Added INV-104 and INV-109 to the list.', delay: 0 })
+    const t2 = h.thread()
+    expect(await h.run(t2, 'Find the overdue invoices and put them on the collections list')).toBe('finished')
+    expect(h.db.listMessages(t2.id).filter((m) => m.meta?.hidden && /Don't stop to ask permission/.test(m.content))).toHaveLength(1)
+    // The offer was written out of sight (agent work) and replaced: it never appeared.
+    const offer = h.db.listMessages(t2.id).find((m) => m.content.startsWith('I found INV-104'))!
+    expect(offer.meta?.superseded).toBe(true)
+    expect(h.shown(t2.id).has(offer.id)).toBe(false)
+    expect(h.visible(t2.id).map((m) => m.content)).toEqual(['Added INV-104 and INV-109 to the list.'])
+  })
+
+  test(`a simple task is told it has enough after ${SIMPLE_LOOKUPS} lookups, once`, async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const search: ToolDef<{ query: string }> = {
+      name: 'web_search', label: 'Search', effect: 'read', description: 'search the web',
+      parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
+      async run({ query }) { return { text: `results for ${query}` } }
+    }
+    const h = harness([search])
+    let n = 0
+    llm.script.push(...Array.from({ length: 40 }, () => (req: Record<string, any>) => JSON.stringify(req.messages).includes('You have enough to answer')
+      ? { content: 'Here is the plan for Savannah: three days, four people, about $1,450.', delay: 0 }
+      : { toolCalls: [call('web_search', { query: `savannah ${++n}` })], delay: 0 }))
+    const t = h.thread()
+    expect(await h.run(t, 'Plan a 3-day trip to Savannah for 4 people with a $1,500 budget')).toBe('finished')
+    const notes = h.db.listMessages(t.id).filter((m) => m.meta?.wrapUp)
+    expect(notes).toHaveLength(1)
+    expect(n).toBe(SIMPLE_LOOKUPS)
+    expect(h.visible(t.id).at(-1)?.content).toMatch(/^Here is the plan for Savannah/)
+  })
+
+  test('create_document\'s own clean review counts as checking the file (no second pass)', async () => {
+    delete process.env.FOREMAN_NO_VERIFY
+    try {
+      const doc: ToolDef<{ path: string }> = {
+        name: 'create_document', label: 'Document', effect: 'write_local', description: 'make a file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false },
+        async run({ path }) { return { text: `Created pdf ${path} (1 page, 20 KB).\n\nReview of ${path} (1 page): PASS — 0 to fix, 0 warnings\nReady to present.`, path } }
+      }
+      const h = harness([doc])
+      llm.script.push({ toolCalls: [call('create_document', { path: 'invoice.pdf' })], delay: 0 }, { content: 'Made invoice.pdf in your workspace.', delay: 0 })
+      const t = h.thread()
+      expect(await h.run(t, 'Make me an invoice PDF for 3 hours of tutoring at $40/hour')).toBe('finished')
+      expect(llm.requests).toHaveLength(2)
+      expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /double-check/.test(m.content))).toBe(false)
+      expect(h.visible(t.id).map((m) => m.content)).toEqual(['Made invoice.pdf in your workspace.'])
+    } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+  })
+})
+
+describe('a bot\'s one ongoing conversation keeps the fast path', () => {
+  test('a new bot\'s intro leaves the mode open: the first quick question runs on the chat path', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness()
+    const t = h.thread()
+    llm.script.push({ content: 'Hi Sam! I think I\'m here for chemistry. What should I focus on?', delay: 0 })
+    h.agent.intro(t.id, '[You were just created as a new bot] Say hi.')
+    for (let i = 0; i < 100 && (h.agent.isRunning(t.id) || !h.db.listMessages(t.id).some((m) => m.content.startsWith('Hi Sam'))); i++) await new Promise((r) => setTimeout(r, 20))
+    expect(h.db.getState(t.id).toolMode).toBeUndefined()
+    llm.requests.length = 0
+    llm.script.push({ content: 'Canberra.', delay: 0 })
+    expect(await h.run(t, 'What is the capital of Australia?')).toBe('finished')
+    expect(h.db.getState(t.id).toolMode).toBe('chat')
+    expect(String(llm.requests[0].messages[0].content)).toContain('# Chatting')
+  })
+
+  test('a quick question after real work answers as a chat on the same prompt, told to use no tools', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness([save])
+    const t = h.thread()
+    llm.script.push({ toolCalls: [call('save_note', { v: 'plan' })], delay: 0 }, { content: 'Saved your study plan.', delay: 0 })
+    expect(await h.run(t, 'Save my study plan to my notes file')).toBe('finished')
+    expect(h.db.getState(t.id).toolMode).toBe('full')
+    llm.requests.length = 0
+    llm.script.push({ content: 'Canberra.', delay: 0 })
+    expect(await h.run(t, 'What is the capital of Australia?')).toBe('finished')
+    expect(llm.requests).toHaveLength(1)
+    expect(JSON.stringify(llm.requests[0].messages)).toContain(QUICK_IN_FULL.slice(0, 60))
+    expect(h.db.getState(t.id).lastKind).toBe('chat')
+    // A chat streams as it's written (never provisional), and the answer stands.
+    const answer = h.visible(t.id).at(-1)!
+    expect(answer.content).toBe('Canberra.')
+    expect(h.events.some((e) => e.type === 'message' && (e.message as Message).id === answer.id && (e.message as Message).meta?.provisional)).toBe(false)
+  })
+})
+
+describe('helpers', () => {
+  test('removeLinks: titles stay, source lines and bare links go, sentences keep their periods', () => {
+    const u = 'https://unseen.example/a'
+    expect(removeLinks(`See [the guide](${u}) for more.`, [u])).toBe('See the guide for more.')
+    expect(removeLinks(`It opened in 2024 (source: ${u}).`, [u])).toBe('It opened in 2024.')
+    expect(removeLinks(`Read it at ${u}.`, [u])).toBe('Read it at.')
+    expect(removeLinks(`Plan.\n\nSources:\n[1] Seen https://seen.example/b\n[2] Guide ${u}`, [u])).toBe('Plan.\n\nSources:\n[1] Seen https://seen.example/b')
+    expect(removeLinks(`Plan.\n\nSources:\n- Guide — ${u}`, [u])).toBe('Plan.')
+    // A line of the answer itself keeps its words (only the link goes).
+    expect(removeLinks(`- Day 1: River Street and the Olde Pink House (${u})\n- Day 2: Forsyth Park`, [u])).toBe('- Day 1: River Street and the Olde Pink House\n- Day 2: Forsyth Park')
+  })
+
+  test('reviewedClean: only a passing review with nothing to fix', () => {
+    expect(reviewedClean('Created pdf a.pdf.\n\nReview of a.pdf (1 page): PASS — 0 to fix, 2 warnings')).toBe(true)
+    expect(reviewedClean('Created pdf a.pdf.\n\nReview of a.pdf (1 page): FAIL — 1 to fix, 0 warnings')).toBe(false)
+    expect(reviewedClean('Created pdf a.pdf.\n\n(Automatic review skipped: no renderer. Run review_document.)')).toBe(false)
+  })
+})
