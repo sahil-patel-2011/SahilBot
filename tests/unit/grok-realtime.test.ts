@@ -72,6 +72,8 @@ test('a live conversation: token, session, audio both ways, barge-in, work throu
   sock.ws.serve({ type: 'input_audio_buffer.speech_started' })
   expect(events.at(-2)).toEqual({ type: 'stop-audio' })
   expect(sock.sent.some((m) => m.type === 'response.cancel')).toBe(true)
+  // (The cut-off reply ends; a result that comes back while Grok is still talking waits for that.)
+  sock.ws.serve({ type: 'response.done' })
 
   // Grok hands the work to the bot; the result goes back and Grok answers again.
   sock.ws.serve({ type: 'response.function_call_arguments.done', call_id: 'c1', name: 'do_task', arguments: JSON.stringify({ request: 'Make three practice problems on balancing equations' }) })

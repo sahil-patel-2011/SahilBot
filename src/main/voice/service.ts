@@ -58,8 +58,10 @@ export interface VoiceHooks {
    * (null otherwise, and the usual speech-to-text → model → voice chain runs).
    */
   live?(): { apiKey: string; baseUrl: string; instructions: string; voice?: string } | null
-  /** What a live conversation cost when it ended (spending limit and usage). */
+  /** What a live conversation cost so far (each minute, and the rest when it ends): spending limit and usage. */
   liveCharged?(usd: number): void
+  /** Every minute of a live conversation: throws when the spending limit won't cover more. */
+  liveGuard?(minutes: number): void
 }
 
 export interface VoiceOptions {
@@ -422,6 +424,7 @@ export class VoiceService {
         apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, instructions: cfg.instructions, voice: cfg.voice,
         emit: (e) => this.hooks.emit(e),
         charge: (usd) => this.hooks.liveCharged?.(usd),
+        guard: (minutes) => this.hooks.liveGuard?.(minutes),
         doTask: async (request, signal) => { let out = ''; await this.hooks.respond(request, signal, (t) => { out += t }); return out }
       })
       try {
@@ -432,7 +435,7 @@ export class VoiceService {
       } catch (e) {
         live.close()
         // It couldn't connect: the usual voice chain takes over, and says why once.
-        this.hooks.emit({ type: 'error', message: `${(e as Error).message} Using the standard voice instead.` })
+        this.hooks.emit({ type: 'notice', message: `${(e as Error).message} Using the standard voice instead.` })
       }
     }
     const p = await this.ensure()

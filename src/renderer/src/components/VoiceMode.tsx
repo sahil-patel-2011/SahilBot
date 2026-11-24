@@ -13,6 +13,8 @@ const LABEL: Record<VState, string> = {
 /** Main's setup errors, in plain words with the one thing to do. */
 const friendly = (e: string): string => /speech provider|api key|key in|models & keys/i.test(e) ? 'Voice isn\'t set up yet. Add an OpenAI (ChatGPT) or Grok key to talk out loud.' : /microphone|permission|notallowed/i.test(e) ? 'SahilBot can\'t hear you yet. Allow the microphone in System Settings → Privacy & Security.' : e
 const TASK_STATE: Record<VoiceTask['status'], string> = { working: 'working', 'needs-you': 'needs you', done: 'done', failed: 'didn\'t finish', stopped: 'stopped' }
+/** Errors that are about setup (a key, the microphone): the bar offers "Set up voice". Others offer "Reconnect". */
+export const setupError = (e: string): boolean => /speech provider|api key|key in|models & keys|xai key|openai key|microphone|permission|notallowed|not set up|spending limit/i.test(e)
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
 
 /**
@@ -32,6 +34,10 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
   const [caption, setCaption] = useState('')
   const [update, setUpdate] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** A passing note (the standard voice took over): shown for a few seconds, never the error state. */
+  const [notice, setNotice] = useState<string | null>(null)
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [attempt, setAttempt] = useState(0)
   /** The sound level drives the bars through a CSS variable on this element (no re-render per frame). */
   const waveRef = useRef<HTMLSpanElement | null>(null)
   const [muted, setMuted] = useState(false)
@@ -60,23 +66,29 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
       else if (e.type === 'audio') speaker.current?.play(e.audio, e.rate)
       else if (e.type === 'stop-audio') speaker.current?.stop()
       else if (e.type === 'error') setError(e.message)
+      else if (e.type === 'notice') {
+        setNotice(e.message)
+        if (noticeTimer.current) clearTimeout(noticeTimer.current)
+        noticeTimer.current = setTimeout(() => setNotice(null), 4000)
+      }
     })
     void api.voice.options?.().then((o) => { if (alive) setOpts(o) }).catch(() => undefined)
     void (async () => {
       try {
         if (await api.voice.openNative()) { if (alive) onClose(); return }
         if (!alive) return
-        const id = await api.voice.start(threadId, space?.id ?? '')
+        // The microphone first: macOS's permission prompt (or a refusal) happens before a paid call connects.
+        mic.current = new Mic()
+        const input = mic.current
+        await input.start()
+        if (!alive) { input.stop(); return }
+        const id = await api.voice.start(voiceId.current ?? threadId, space?.id ?? '')
         // Hung up while it was getting ready: end it in main too (no conversation left running unseen).
-        if (!alive) { void api.voice.stop(); return }
+        if (!alive) { input.stop(); void api.voice.stop(); return }
         voiceId.current = id
         onThread(id)
         live.current?.({ since: since.current, transcript: false, threadId: id })
         void api.voice.tasks?.().then((t) => { if (alive) setTasks(t) }).catch(() => undefined)
-        mic.current = new Mic()
-        const input = mic.current
-        await input.start()
-        if (!alive) input.stop()
       } catch (e) {
         if (!alive) return
         mic.current?.stop()
@@ -97,12 +109,14 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
       alive = false
       cancelAnimationFrame(frame)
       off()
+      if (noticeTimer.current) clearTimeout(noticeTimer.current)
       mic.current?.stop()
+      mic.current = null
       speaker.current?.close()
       void api.voice.stop()
       live.current?.(null)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [attempt]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Questions and approvals from this conversation and the work it started: tap to answer (never by voice).
   useEffect(() => {
@@ -144,7 +158,9 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
   }
 
   const name = space?.name ?? 'SahilBot'
-  const status = error ? friendly(error) : (caption && (update || state === 'speaking' || state === 'thinking') ? caption : LABEL[state])
+  const status = error ? friendly(error) : notice ?? (caption && (update || state === 'speaking' || state === 'thinking') ? caption : LABEL[state])
+  /** A dropped or ended call (not a setup problem): start it again in the same chat. */
+  const reconnect = (): void => { setError(null); setNotice(null); setState('starting'); setAttempt((n) => n + 1) }
   return (
     <div className="voice-bar-wrap" data-testid="voice-mode" data-state={state}>
       <div className={`voice-bar${panel ? ' open' : ''}${error ? ' err' : ''}`}>
@@ -155,7 +171,8 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
             <span key={status} className={`vb-status${error ? ' err' : ''}`} data-testid={error ? 'voice-caption' : update ? 'voice-announce' : 'voice-caption'} aria-live="polite">{status}</span>
           </span>
           {!error && <span ref={waveRef} className={`vb-wave ${state}`} aria-hidden="true">{[0.55, 0.85, 1, 0.8, 0.5].map((f, i) => <span key={i} className="vb-bar" style={{ ['--f' as never]: f, ['--i' as never]: i }} />)}</span>}
-          {error && <button className="btn small primary vb-fix" onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: /microphone|permission/i.test(error) ? 'privacy' : 'models' })) }}>Set up voice</button>}
+          {error && setupError(error) && <button className="btn small primary vb-fix" onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: /microphone|permission/i.test(error) ? 'privacy' : 'models' })) }}>Set up voice</button>}
+          {error && !setupError(error) && <button className="btn small primary vb-fix" onClick={reconnect} data-testid="voice-reconnect">Reconnect</button>}
           <button className={`vb-btn${panel ? ' on' : ''}`} onClick={() => setPanel((p) => !p)} title="Voice options and transcript" aria-label="Voice options" aria-expanded={panel} data-testid="voice-settings"><I.More size={18} /></button>
           {!error && <button className={`vb-btn${muted ? ' on muted' : ''}`} onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'} aria-label={muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={muted} data-testid="voice-mute"><I.Mic size={18} /></button>}
           <button className="vb-end" onClick={onClose} title="End voice chat (Esc)" aria-label="End voice chat" data-testid="voice-end"><I.HangUp size={19} /></button>

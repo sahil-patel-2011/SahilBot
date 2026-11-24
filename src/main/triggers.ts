@@ -23,6 +23,8 @@ export interface TriggerItem {
   bulk?: boolean
   labels?: string[]
   declined?: boolean
+  /** Calendar: when the event was created (an edit changes `at`, not this). */
+  created?: number
 }
 
 /** At most this many matching items go into one run; the rest are counted. */

@@ -108,6 +108,8 @@ export async function keyless(query: string, count: number, signal: AbortSignal)
       errors.push(`${name}: ${(e as Error).name === 'TimeoutError' ? 'timed out' : 'unreachable'}`)
     }
   }
+  // Every engine answered and none had anything: that's "no results", not "search is down".
+  if (errors.length && errors.every((e) => e.endsWith(': no results'))) return []
   throw new Error(`Web search isn't reachable from this network right now (${errors.join('; ')}). Open well-known pages directly with fetch_page instead (the official site, or Wikipedia), and tell the user search was unavailable.`)
 }
 
@@ -125,6 +127,21 @@ export function parseDuckDuckGo(html: string): Hit[] {
     out.push({ title: (a.textContent ?? '').trim(), url: href, snippet: (r.querySelector('.result__snippet')?.textContent ?? '').trim() })
   }
   return out
+}
+
+/** Status codes sites use to turn automated readers away. */
+const BLOCKED_STATUS = new Set([401, 403, 429, 503])
+
+/** A bot wall or challenge page served in place of the real one (short, and says so). */
+export function isChallengePage(title: string, text: string): boolean {
+  if (text.length > 1500) return false
+  return /just a moment|attention required|access denied|verify (that )?you are (a )?human|are you a robot|captcha|enable javascript( and cookies)? to continue|unusual traffic|checking your browser|request blocked|bot detection|press (&|and) hold/i.test(`${title}\n${text}`)
+}
+
+export function botWall(url: string, why: string): string {
+  let host = url
+  try { host = new URL(url).hostname.replace(/^www\./, '') } catch { /* keep the url */ }
+  return `${host} blocks automated reading (${why}, a bot wall). Don't retry it: use another result from web_search or another reputable site for the same information, or open it with the browser tool only if the user needs that exact site. Never try to get past a CAPTCHA. Tell the user in one sentence which site blocked you and what you used instead.`
 }
 
 /** Extracts readable text from HTML with Readability, falling back to body text. */
@@ -200,7 +217,7 @@ export function webTools(getConfig: () => SearchConfig): ToolDef[] {
       } else {
         throw new Error('Web search is turned off. Ask the user to turn it on in Settings > Web search, or use the browser tool instead.')
       }
-      if (!hits.length) return { text: `No results for "${query}".`, display: `"${query}" · no results` }
+      if (!hits.length) return { text: `No results for "${query}". Try 1-2 differently worded or broader queries (drop quotes and filters). If there's still nothing, tell the user nothing reliable turned up and what you searched; don't guess.`, display: `"${query}" · no results` }
       const text = hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}\n   ${h.snippet}`).join('\n') +
         '\n\nSnippets can be outdated or misleading: open the most relevant 1-3 results with fetch_page before relying on them.'
       return { text, display: `"${query}" · ${hits.length} results`, sources: hits.slice(0, 5).map((h) => ({ title: h.title, url: h.url })) }
@@ -227,11 +244,13 @@ export function webTools(getConfig: () => SearchConfig): ToolDef[] {
       let page = pages.get(url)
       if (!page) {
         const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5' }, redirect: 'follow', signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(20_000)]) })
+        if (BLOCKED_STATUS.has(res.status)) throw new Error(botWall(url, `HTTP ${res.status}`))
         if (!res.ok) throw new Error(`${url} returned HTTP ${res.status}${res.status === 404 ? '. Don\'t guess addresses: find the right page with web_search first.' : ''}`)
         const type = res.headers.get('content-type') ?? ''
         if (/pdf|image|audio|video|octet-stream|zip/.test(type)) throw new Error(`${url} is ${type}, not a web page.`)
         const body = await res.text()
         const r = /html/.test(type) || /^\s*</.test(body) ? readable(body, res.url) : { title: url, text: body }
+        if (isChallengePage(r.title, r.text)) throw new Error(botWall(url, 'a "verify you are human" page'))
         page = { title: r.title, chunks: chunk(r.text) }
         pages.set(url, page)
         if (pages.size > 30) pages.delete(pages.keys().next().value!)

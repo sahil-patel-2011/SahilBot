@@ -109,6 +109,13 @@ export function nextRun(s: Schedule, from: Date): Date | null {
 // One wording everywhere (routines screens, the schedule tool's replies, the chat's routine lines): "Weekdays at 7:30 AM ET".
 export { describeSchedule }
 
+const QUEUE_KEY = 'triggerQueue'
+
+/** A calendar event without its version: "abc:1732000000000" and "abc:1732000500000" are one event. */
+export function eventKey(x: Pick<TriggerItem, 'source' | 'id'>): string {
+  return `${x.source}:${x.id.replace(/:\d{9,}$/, '')}`
+}
+
 /** What a routine run is: a test, a late catch-up, a dry run, or set off by new items (`event`). */
 export interface RunInfo {
   id: string
@@ -287,7 +294,7 @@ export class Scheduler {
     this.changed()
     const task = this.get(id)!
     if (task.schedule.type === 'when' && (cur.schedule.type !== 'when' || (!cur.enabled && task.enabled))) this.arm(id)
-    if (!task.enabled) this.waiting.delete(id)
+    if (!task.enabled) this.unqueue(id)
     if (cur.enabled !== task.enabled) this.emit({ type: task.enabled ? 'resumed' : 'paused', task })
     else if (cur.title !== task.title || cur.prompt !== task.prompt || JSON.stringify(cur.schedule) !== JSON.stringify(task.schedule)) this.emit({ type: 'changed', task })
     return task
@@ -296,7 +303,7 @@ export class Scheduler {
   remove(id: string): void {
     const cur = this.get(id)
     this.db.sql.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id)
-    this.waiting.delete(id)
+    this.unqueue(id)
     this.changed()
     if (cur) this.emit({ type: 'deleted', task: cur })
   }
@@ -307,6 +314,8 @@ export class Scheduler {
 
   start(intervalMs = 20_000): void {
     void this.tick()
+    // Matches saved before a quit run now (their routines' bots and the pause state permitting).
+    if (this.waiting.size) setTimeout(() => this.drainAll(), 0)
     this.timer = setInterval(() => void this.tick(), intervalMs)
   }
 
@@ -380,8 +389,14 @@ export class Scheduler {
       // Only what arrived after the routine was set up (a first read or a backfill of older mail sets nothing off).
       // An item without a time counts as arriving now.
       const armed = this.armedAt(t)
-      const hit = pickItems(t.schedule, items.filter((x) => (x.at || Date.now()) >= armed), me)
+      // A calendar event is new once: an edit or an RSVP gives it a new id and time (sources.ts calendarItems), but
+      // it isn't an arrival. It counts from when it was created, and each event sets a routine off only once.
+      const seen = this.seenEvents(t.id)
+      const fresh = items.filter((x) => x.kind !== 'calendar' || !seen.has(eventKey(x)))
+        .filter((x) => ((x.kind === 'calendar' ? x.created : undefined) || x.at || Date.now()) >= armed)
+      const hit = pickItems(t.schedule, fresh, me)
       if (!hit.items.length) continue
+      this.markSeen(t.id, hit.items)
       // Busy, paused, or its bot is away: kept for its next run, not dropped.
       if (this.busy.has(t.id) || this.paused() || !this.available(t.spaceId)) { this.queue(t.id, hit.items, hit.more); continue }
       if (this.startEvent(t, hit.items, hit.more)) started.push(t.id)
@@ -389,12 +404,41 @@ export class Scheduler {
     return started
   }
 
-  /** Matches that came in while a "when" routine was busy or paused, for its next run (newest kept). */
-  private waiting = new Map<string, { items: TriggerItem[]; more: number }>()
+  /** The calendar events that already set this routine off (newest kept). */
+  private seenEvents(id: string): Set<string> {
+    return new Set(this.db.getSetting<string[]>(`triggerSeen:${id}`) ?? [])
+  }
+
+  private markSeen(id: string, items: TriggerItem[]): void {
+    const keys = items.filter((x) => x.kind === 'calendar').map(eventKey)
+    if (!keys.length) return
+    const all = [...this.seenEvents(id)].filter((k) => !keys.includes(k))
+    this.db.setSetting(`triggerSeen:${id}`, [...all, ...keys].slice(-1000))
+  }
+
+  /**
+   * Matches that came in while a "when" routine was busy or paused, for its next run (newest kept). Saved too, so a
+   * quit or restart doesn't lose them (the items were read once and won't be handed over again).
+   */
+  private waitingMap?: Map<string, { items: TriggerItem[]; more: number }>
+  private get waiting(): Map<string, { items: TriggerItem[]; more: number }> {
+    if (!this.waitingMap) {
+      const saved = this.db.getSetting<Record<string, { items: TriggerItem[]; more: number }>>(QUEUE_KEY) ?? {}
+      this.waitingMap = new Map(Object.entries(saved).filter(([, w]) => Array.isArray(w?.items)))
+    }
+    return this.waitingMap
+  }
+  private saveWaiting(): void {
+    this.db.setSetting(QUEUE_KEY, Object.fromEntries(this.waiting))
+  }
   private queue(id: string, items: TriggerItem[], more: number): void {
     const cur = this.waiting.get(id) ?? { items: [], more: 0 }
     const all = [...cur.items, ...items.filter((x) => !cur.items.some((y) => y.source === x.source && y.id === x.id))]
     this.waiting.set(id, { items: all.slice(-TRIGGER_BATCH), more: cur.more + more + Math.max(0, all.length - TRIGGER_BATCH) })
+    this.saveWaiting()
+  }
+  private unqueue(id: string): void {
+    if (this.waiting.delete(id)) this.saveWaiting()
   }
 
   /** When a "when" routine was set up, switched to "when" or turned back on: older items never set it off. */
@@ -422,8 +466,10 @@ export class Scheduler {
   private drain(id: string): void {
     const w = this.waiting.get(id)
     const t = this.get(id)
-    if (!w || !t || !t.enabled || t.schedule.type !== 'when' || this.busy.has(id) || this.paused() || !this.available(t.spaceId)) return
-    this.waiting.delete(id)
+    // A routine that's gone (or no longer "when"): its queue goes too.
+    if (w && (!t || t.schedule.type !== 'when')) { this.unqueue(id); return }
+    if (!w || !t || !t.enabled || this.busy.has(id) || this.paused() || !this.available(t.spaceId)) return
+    this.unqueue(id)
     this.startEvent(t, w.items, w.more)
   }
 

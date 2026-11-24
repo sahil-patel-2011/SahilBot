@@ -678,7 +678,7 @@ export class MemoryStore {
   forget(query: string, spaceId: string | null, opts: { all?: boolean; only?: 'shared' | 'space' } = {}): { removed: Memory[]; candidates: Memory[] } {
     const scored = this.list(spaceId)
       .filter((m) => !opts.only || (opts.only === 'shared' ? !m.spaceId : !!m.spaceId))
-      .map((m) => ({ m, s: m.id === query.trim() ? 1 : fuzzyScore(query, m.content) }))
+      .map((m) => ({ m, s: m.id === query.trim() ? 1 : relevance(query, m.content, m.category) }))
       .filter((x) => x.s >= 0.5)
       .sort((a, b) => b.s - a.s || b.m.updatedAt - a.m.updatedAt)
     if (!scored.length) return { removed: [], candidates: [] }

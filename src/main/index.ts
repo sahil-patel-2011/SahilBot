@@ -2783,11 +2783,13 @@ app.whenReady().then(() => {
       return {
         apiKey: creds.apiKey,
         baseUrl: process.env.SAHILBOT_GROK_LIVE_URL || creds.baseUrl,
-        instructions: grokVoiceInstructions({ botName: bot?.name ?? 'SahilBot', userName: s.profile?.firstName || s.userName }),
+        instructions: grokVoiceInstructions({ botName: bot?.name ?? 'SahilBot', userName: s.profile?.firstName || s.userName, role: bot && !bot.isMain ? bot.label ?? undefined : undefined }),
         voice: s.voiceStyle?.voices?.xai
       }
     },
     liveCharged: (usd) => hookSpend.afterUsd(XAI_URL, GROK_VOICE_MODEL, usd),
+    // Each minute of a live call: the limit must still cover the next couple of minutes, or the call ends.
+    liveGuard: () => { hookSpend.beforeUsd(XAI_URL, GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN * 2) },
     emit: (e) => toWin('voice:event', e),
     respond: (text, signal, onText) => new Promise<void>((resolve, reject) => {
       const tid = voiceThread
@@ -2799,7 +2801,8 @@ app.whenReady().then(() => {
         if (e.type === 'run' && e.status !== 'started') { off(); resolve() }
       }
       listeners.add(l)
-      signal.addEventListener('abort', () => { chat.stop(tid); off(); resolve() })
+      // Hanging up ('hangup') stops waiting, not the bot: its run finishes in the chat and the answer lands there.
+      signal.addEventListener('abort', () => { if (signal.reason !== 'hangup') chat.stop(tid); off(); resolve() })
       chat.send({ threadId: tid, text, voice: true, meta: { voice: true } }).catch((err: Error) => { off(); reject(err) })
     })
   }, { download: HIDDEN ? 'stub' : 'real' })
@@ -2867,16 +2870,25 @@ app.whenReady().then(() => {
     try { if (learning.enabled()) void learning.extractMemories().catch(() => undefined) } catch { /* learning is off or busy: the next pass reads it */ }
   }
   handle('voice:start', async (threadId: string | null, spaceId: string) => {
-    await voice.startVoice()
+    // The chat first: the live voice is told whose it is (its bot's name) when it starts.
     const created = !threadId
     if (!threadId) {
       const t = db.createThread(spaceId, 'auto', null)
       db.updateThread(t.id, { title: `Voice chat · ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` })
       threadId = t.id
     }
+    const before = voiceThread
+    voiceThread = threadId
+    try {
+      await voice.startVoice()
+    } catch (e) {
+      // Couldn't start at all: nothing is left behind (no empty voice chat, the previous conversation as it was).
+      voiceThread = before
+      if (created && db.listMessages(threadId).length === 0) db.deleteThread(threadId)
+      throw e
+    }
     if (voiceSession && voiceSession.threadId !== threadId) void endVoiceSession()
     if (!voiceSession) voiceSession = { threadId, startedAt: Date.now(), created }
-    voiceThread = threadId
     return threadId
   })
   handle('voice:stop', () => { voice.stop(); voiceThread = null; void endVoiceSession() })
