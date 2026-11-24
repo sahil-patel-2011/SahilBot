@@ -5127,7 +5127,8 @@ function sourcesSince(ms: Message[], since: number): Array<{ title: string; url:
   const found = tools.filter((m) => !m.meta?.read).flatMap((m) => m.meta!.sources as Array<{ title: string; url: string }>)
   const out = new Map<string, { title: string; url: string }>()
   for (const s of [...read, ...found]) if (!out.has(s.url)) out.set(s.url, s)
-  return [...out.values()].slice(0, read.length ? Math.max(read.length, 3) : 5)
+  // Room for every result the model could cite (web_search returns up to 6); the chips fold after 6.
+  return [...out.values()].slice(0, Math.max(read.length, 8))
 }
 
 function planText(state: ThreadState): string {

@@ -5,6 +5,7 @@ import type { SkillStore } from '../../skills'
 import type { RuleStore } from '../../rules'
 import type { ToolDef } from '../types'
 import { autoMemoryOn } from '../prompt'
+import { ASKED_TO_REMEMBER, ASK_ONLY_LABEL, askOnlyCategories } from '../../context-engine/sensitive'
 
 type Args = {
   action: 'save' | 'list' | 'search' | 'forget' | 'read_skill' | 'save_skill' | 'save_rule' | 'about'
@@ -28,14 +29,11 @@ export interface WorldLookup {
   about(query: string, spaceId: string | null): string
   /** The context engine's sensitive-category rules (Privacy): may this fact be kept? */
   screenMemory?(text: string): { ok: boolean; why?: string; label?: string; categories?: string[] }
+  /** Drops facts (by key, and relations by type) from the user's own People & Places card; how many went. */
+  forgetUserFacts?(keys: string[], rels?: string[]): number
 }
 
-/** The user asked to keep something ("remember…", "save that", "keep in mind", "don't forget"). */
-export const ASKED_TO_REMEMBER = /\b(remember|memori[sz]e|save (that|this|it)|note (that|this|it|down)|make a note|keep in mind|keep that in mind|don'?t forget|do not forget|add (that|this|it) to (your )?memory)\b/i
-
-/** Sensitive categories kept only when the user asks (never saved on the bot's own initiative). */
-const ASK_ONLY = new Set(['health', 'finance', 'govId', 'sexualOrientation', 'religion', 'politics'])
-const ASK_ONLY_LABEL: Record<string, string> = { health: 'health', finance: 'money', govId: 'ID', sexualOrientation: 'sexuality', religion: 'religion', politics: 'politics' }
+export { ASKED_TO_REMEMBER }
 
 /** What the user last typed in this chat (not the app's hidden notes, not a message relayed from another bot or app). */
 export function lastUserText(db: Db, threadId: string): string {
@@ -169,7 +167,7 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
             ? 'That includes a number or code that is never stored in memory (passwords, card, account and ID numbers). Leave it out and save the rest, or don\'t save it.'
             : `The user turned off remembering ${screened.label ?? screened.why} details (Settings → Privacy & Security → Sensitive details), so it wasn't saved. Don't mention it again unless they bring it up.`)
         }
-        const sensitive = (screened?.categories ?? []).filter((c) => ASK_ONLY.has(c))
+        const sensitive = askOnlyCategories(a.fact!)
         if (own && !asked && sensitive.length) {
           return { text: `A sensitive detail (${sensitive.map((c) => ASK_ONLY_LABEL[c]).join(', ')}): not saved automatically. Nothing was saved; don't mention it unless the user asks you to remember it.`, display: 'not saved (sensitive)' }
         }
@@ -213,7 +211,13 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           const keep = new Set(items.map((m) => m.id))
           items = memory.search(a.query, botId, 100).filter((m) => keep.has(m.id))
         }
-        if (!items.length) return { text: 'Nothing saved yet.', display: 'nothing saved' }
+        // "What do you remember about me?" is about the user: the work log (what the bot did, routine runs)
+        // is left out unless asked for.
+        const logged = items.filter((m) => m.category === 'worklog').length
+        const withLog = a.scope === 'bot' || /\b(work ?log|did|done|have you (done|made)|ran|runs?|history)\b/i.test(a.query ?? '')
+        if (!withLog && logged) items = items.filter((m) => m.category !== 'worklog')
+        const logNote = !withLog && logged ? `(${logged} work-log entr${logged === 1 ? 'y' : 'ies'} not shown: ask "what have you done for me" to see ${logged === 1 ? 'it' : 'them'})` : ''
+        if (!items.length) return { text: logNote ? `Nothing saved about the user yet. ${logNote}` : 'Nothing saved yet.', display: 'nothing saved' }
         const groups = MEMORY_KINDS.map((k) => ({ k, ms: items.filter((m) => m.category === k) })).filter((g) => g.ms.length)
         const lines: string[] = []
         let shown = 0
@@ -226,6 +230,7 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           }
         }
         if (shown < items.length) lines.push(`(${items.length - shown} older entries not shown)`)
+        if (logNote) lines.push(logNote)
         lines.push('', 'Tell the user in plain words, grouped like this, without the ids. They can say "forget …" or edit everything in Settings → Memory.')
         return { text: lines.join('\n'), display: `${items.length} memories` }
       }
@@ -251,9 +256,20 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           }
         }
         const { removed: visible, candidates } = memory.forget(a.query!, botId, { all: a.all, only: a.scope === 'me' ? 'shared' : a.scope === 'bot' ? 'space' : undefined })
+        // "Forget my address / birthday / time zone": the same fact on the user's People & Places card goes too
+        // (it would otherwise keep reaching <context>).
+        const own = a.scope !== 'bot' && /\b(my|me|i|mine)\b/i.test(a.query!)
+        const facts = !own ? null
+          : /\b(address|home|house|apartment|flat|live|lives|living)\b/i.test(a.query!) ? { keys: ['address'], rels: /\b(live|lives|living|city|town)\b/i.test(a.query!) ? ['lives_in'] : [] }
+          : /\b(birthday|bday|born|date of birth)\b/i.test(a.query!) ? { keys: ['birthday'], rels: [] }
+          : /\btime ?zone\b/i.test(a.query!) ? { keys: ['timezone'], rels: [] } : null
+        let fromCard = 0
+        if (facts) { try { fromCard = world?.()?.forgetUserFacts?.(facts.keys, facts.rels) ?? 0 } catch { fromCard = 0 } }
+        const cardNote = fromCard ? ' Also removed from People & Places.' : ''
+        if (!visible.length && !candidates.length && fromCard) return { text: `Removed it from People & Places (no saved memory matched "${a.query}"). Confirm to the user what you removed.`, display: 'forgot it' }
         if (visible.length) {
           return {
-            text: `Forgot ${visible.length === 1 ? quote(visible[0].content) : `${visible.length} memories:\n${visible.map((m) => `- ${quote(m.content)}`).join('\n')}`}. Confirm to the user exactly what you removed.`,
+            text: `Forgot ${visible.length === 1 ? quote(visible[0].content) : `${visible.length} memories:\n${visible.map((m) => `- ${quote(m.content)}`).join('\n')}`}.${cardNote} Confirm to the user exactly what you removed.`,
             display: `forgot ${visible.length === 1 ? `"${visible[0].content.slice(0, 50)}"` : `${visible.length} memories`}`
           }
         }

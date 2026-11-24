@@ -81,6 +81,9 @@ export function parseMojeek(html: string): Hit[] {
   return out
 }
 
+/** A search engine's challenge, anomaly or consent page in place of results. */
+const SEARCH_BLOCKED = /anomaly-modal|anomaly\.js|unusual traffic|captcha|are you a robot|verify (that )?you are (a )?human|cf-chl|challenge-form|consent\.(google|yahoo|bing)\.|before you continue to|automated (queries|requests)|bots? (use|uses) DuckDuckGo/i
+
 /**
  * No key needed: DuckDuckGo first, then DuckDuckGo Lite, Bing and Mojeek, each with a short timeout, so
  * one engine being blocked or down on this network doesn't stop research.
@@ -100,16 +103,18 @@ export async function keyless(query: string, count: number, signal: AbortSignal)
     try {
       const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'text/html', 'accept-language': 'en-US,en;q=0.9' }, signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) })
       if (!res.ok) { errors.push(`${name}: ${res.status}`); continue }
-      const hits = parse(await res.text())
+      const body = await res.text()
+      const hits = parse(body)
       if (hits.length) return hits.slice(0, count)
-      errors.push(`${name}: no results`)
+      // An anti-bot or consent page parses to nothing too (DuckDuckGo serves its with HTTP 202): that engine is blocked, not empty.
+      errors.push(`${name}: ${res.status === 202 || SEARCH_BLOCKED.test(body) ? 'blocked' : 'no results'}`)
     } catch (e) {
       if (signal.aborted) throw e
       errors.push(`${name}: ${(e as Error).name === 'TimeoutError' ? 'timed out' : 'unreachable'}`)
     }
   }
-  // Every engine answered and none had anything: that's "no results", not "search is down".
-  if (errors.length && errors.every((e) => e.endsWith(': no results'))) return []
+  // An engine answered with a real, empty results page: that's "no results", not "search is down".
+  if (errors.some((e) => e.endsWith(': no results'))) return []
   throw new Error(`Web search isn't reachable from this network right now (${errors.join('; ')}). Open well-known pages directly with fetch_page instead (the official site, or Wikipedia), and tell the user search was unavailable.`)
 }
 
@@ -135,12 +140,16 @@ const BLOCKED_STATUS = new Set([401, 403, 429, 503])
 /** A bot wall or challenge page served in place of the real one (short, and says so). */
 export function isChallengePage(title: string, text: string): boolean {
   if (text.length > 1500) return false
-  return /just a moment|attention required|access denied|verify (that )?you are (a )?human|are you a robot|captcha|enable javascript( and cookies)? to continue|unusual traffic|checking your browser|request blocked|bot detection|press (&|and) hold/i.test(`${title}\n${text}`)
+  const rx = /just a moment|attention required|access denied|verify (that )?you are (a )?human|are you a robot|captcha|enable javascript( and cookies)? to continue|unusual traffic|checking your browser|request blocked|bot detection|press (&|and) hold/i
+  // Short, says so, and has no real paragraph (a short article about "access denied" errors is a page).
+  return rx.test(`${title}\n${text}`) && !text.split(/\n+/).some((l) => l.trim().length > 280)
 }
 
 export function botWall(url: string, why: string): string {
   let host = url
   try { host = new URL(url).hostname.replace(/^www\./, '') } catch { /* keep the url */ }
+  // 503 is also an ordinary outage.
+  if (/\b503\b/.test(why)) return `${host} is unavailable or blocking automated reading (${why}). Don't retry it now: use another result from web_search or another reputable site for the same information. Tell the user in one sentence which site didn't load and what you used instead.`
   return `${host} blocks automated reading (${why}, a bot wall). Don't retry it: use another result from web_search or another reputable site for the same information, or open it with the browser tool only if the user needs that exact site. Never try to get past a CAPTCHA. Tell the user in one sentence which site blocked you and what you used instead.`
 }
 
@@ -220,7 +229,7 @@ export function webTools(getConfig: () => SearchConfig): ToolDef[] {
       if (!hits.length) return { text: `No results for "${query}". Try 1-2 differently worded or broader queries (drop quotes and filters). If there's still nothing, tell the user nothing reliable turned up and what you searched; don't guess.`, display: `"${query}" · no results` }
       const text = hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}\n   ${h.snippet}`).join('\n') +
         '\n\nSnippets can be outdated or misleading: open the most relevant 1-3 results with fetch_page before relying on them.'
-      return { text, display: `"${query}" · ${hits.length} results`, sources: hits.slice(0, 5).map((h) => ({ title: h.title, url: h.url })) }
+      return { text, display: `"${query}" · ${hits.length} results`, sources: hits.slice(0, count).map((h) => ({ title: h.title, url: h.url })) }
     }
   }
 

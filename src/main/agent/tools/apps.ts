@@ -480,10 +480,13 @@ const CALENDAR_EVENTS = `(i) => {
       const asker = $.EKEventStore.alloc.init
       let done = false
       const cb = () => { done = true }
-      if (asker.respondsToSelector('requestFullAccessToEventsWithCompletion:')) asker.requestFullAccessToEventsWithCompletion(cb)
-      else asker.requestAccessToEntityTypeCompletion(0, cb)
+      // The completion block may never be called through the bridge: the status itself says when the user answered.
+      try {
+        if (asker.respondsToSelector('requestFullAccessToEventsWithCompletion:')) asker.requestFullAccessToEventsWithCompletion(cb)
+        else asker.requestAccessToEntityTypeCompletion(0, cb)
+      } catch (err) { done = true }
       const until = Date.now() + 60000
-      while (!done && Date.now() < until) $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.25))
+      while (!done && status() === 0 && Date.now() < until) $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.25))
     }
     if (status() === 3) {
       const store = $.EKEventStore.alloc.init
@@ -509,13 +512,15 @@ const CALENDAR_EVENTS = `(i) => {
 
 /** The events as the model reads them, on the user's clock. */
 export function formatEvents(events: MacEvent[], range: { from: Date; to: Date }, via: string): string {
-  if (!events.length) return `No events from ${range.from.toLocaleString()} to ${range.to.toLocaleString()}.${via === 'calendar' ? ' (Read through Calendar scripting, which can miss repeating events: allowing SahilBot full Calendar access in System Settings → Privacy & Security → Calendars fixes that.)' : ''}`
+  // Scripting matches only a repeating series' first event: say so whenever it was the way in, events or not.
+  const caveat = via === 'calendar' ? '\n(Read through Calendar scripting, which can miss repeating events: say so if the user relies on this list; allowing SahilBot full Calendar access in System Settings → Privacy & Security → Calendars fixes that.)' : ''
+  if (!events.length) return `No events from ${range.from.toLocaleString()} to ${range.to.toLocaleString()} in the Mac's Calendar app. A Google Calendar, if connected, is read with its own tools.${caveat}`
   const day = (d: Date): string => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
   return events.map((e) => {
     const s = new Date(e.start), en = new Date(e.end)
     const when = e.allDay ? `${day(s)} (all day)` : `${day(s)} ${s.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} – ${en.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
     return `- ${when}: ${e.title}${e.where ? ` @ ${e.where}` : ''} [${e.cal}]${e.others ? ' (invite)' : ''}`
-  }).join('\n')
+  }).join('\n') + caveat
 }
 
 type Jxa = (fn: string, input: unknown, signal?: AbortSignal, timeout?: number, progress?: (text: string) => void) => Promise<unknown>
@@ -530,7 +535,7 @@ export function macAppsTool(o: { jxa?: Jxa } = {}): ToolDef<MacArgs> {
     // result says so). The user's own reminders and events aren't, so reading them doesn't make a later send ask.
     effect: (a) => (/_(search|list|events)$/.test(a.action) ? 'read' : 'write_local'),
     describe: (a) => (a.action === 'notes_create' ? `Create a note "${a.title}"` : a.action === 'reminders_add' ? `Add reminder "${a.title}"${a.due ? ` due ${a.due}` : ''}` : a.action === 'calendar_add' ? `Add "${a.title}" to your calendar at ${a.start}` : a.action.replace('_', ' ')),
-    description: 'The Mac\'s Notes, Reminders and Calendar (macOS asks once). notes_search(query). notes_create(title, body). reminders_list(list?). reminders_add(title, due?, list?). calendar_events(from?, to? days, inclusive; default the next 7 days): repeating events included. calendar_add(title, start, end?, calendar?): on the user\'s own calendar (no invitees). Times ISO 8601.',
+    description: 'The Mac\'s Notes, Reminders and Calendar (macOS asks once). notes_search(query). notes_create(title, body). reminders_list(list?). reminders_add(title, due?, list?). calendar_events(from?, to?, days?): a bare date is its whole day; else days from today (default 7). calendar_add(title, start, end?, calendar?): on the user\'s own calendar (no invitees). Times ISO 8601.',
     parameters: {
       type: 'object',
       properties: {

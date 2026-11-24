@@ -87,7 +87,9 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "SahilBot uses the microphone for dictation and voice mode. Your selected speech provider processes your audio.",
         "NSAppleEventsUsageDescription": "SahilBot controls apps like Notes, Reminders, Calendar and System Events when you ask it to use your Mac.",
-        "NSScreenCaptureUsageDescription": "SahilBot looks at your screen only while you have it use your computer for a task."
+        "NSScreenCaptureUsageDescription": "SahilBot looks at your screen only while you have it use your computer for a task.",
+        "NSCalendarsUsageDescription": "SahilBot reads your calendar when you ask about your schedule, including repeating events.",
+        "NSCalendarsFullAccessUsageDescription": "SahilBot reads your calendar when you ask about your schedule, including repeating events."
       },
       "icon": "build/icon.icns",
       "hardenedRuntime": true,

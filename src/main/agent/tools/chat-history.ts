@@ -1,6 +1,8 @@
 import type { Db } from '../../db'
 import type { Message } from '../../../shared/types'
 import type { ToolDef } from '../types'
+import { rankBm25, termFreq, tokenize } from '../../knowledge/rank'
+import { expansionTerms } from '../../recall-expand'
 
 /**
  * Outside content in this chat: a tool result that was (a page, an email, another app), a message relayed from
@@ -12,6 +14,15 @@ export function outsideMessage(m: Pick<Message, 'role' | 'meta'>): boolean {
   if (m.role === 'tool') return !!meta.untrusted
   if (m.role === 'assistant') return !!meta.serverUntrusted
   return !!(meta.untrusted || meta.handoff || meta.teach || meta.helperTask || meta.fromLink || typeof meta.mcpClientId === 'string' || typeof meta.fromApp === 'string' || Array.isArray(meta.triggerUntrusted))
+}
+
+/** Messages that share words with the query (BM25 with the recall expansions), best first; at least one of the query's own words must be in it. */
+function ranked(messages: Message[], query: string): Message[] {
+  const own = new Set(tokenize(query))
+  if (!own.size || !messages.length) return []
+  const docs = messages.map((m, id) => { const ts = tokenize(m.content.slice(0, 20_000)); return { id, tf: termFreq(ts), length: ts.length } })
+  return rankBm25([query, ...expansionTerms(query, { singleWords: true })].join(' '), docs)
+    .filter((r) => [...own].some((t) => docs[r.id].tf.has(t))).map((r) => messages[r.id])
 }
 
 /** Compaction changes a model's working window, never the stored transcript. */
@@ -31,8 +42,15 @@ export function chatHistoryTool(db: Db): ToolDef<{ action: 'search' | 'read'; qu
         return { text: JSON.stringify(data), data, ...(outside ? { untrusted: true } : {}) }
       }
       const query = (a.query ?? '').trim().toLowerCase()
-      const hits = messages.filter((m) => !query || m.content.toLowerCase().includes(query)).slice(-20).reverse().map((m) => {
-        const at = query ? Math.max(0, m.content.toLowerCase().indexOf(query) - 140) : 0
+      // The exact phrase first (newest first); then messages ranked by their words, so "landlord email"
+      // still finds "my landlord is Mike, mike@acme.com".
+      const exact = messages.filter((m) => !query || m.content.toLowerCase().includes(query)).slice(-20).reverse()
+      const picked = query && exact.length < 20 ? [...exact, ...ranked(messages.filter((m) => !exact.includes(m)), query).slice(0, 20 - exact.length)] : exact
+      const words = query.split(/[^\p{L}\p{N}@.]+/u).filter((w) => w.length >= 3)
+      const hits = picked.map((m) => {
+        const low = m.content.toLowerCase()
+        const first = !query ? 0 : low.includes(query) ? low.indexOf(query) : Math.min(...words.map((w) => low.indexOf(w)).filter((i) => i >= 0), low.length)
+        const at = query ? Math.max(0, (first >= low.length ? 0 : first) - 140) : 0
         return { id: m.id, role: m.role, tool: m.toolName, at: m.createdAt, ...(outsideMessage(m) ? { outside: true } : {}), passage: m.content.slice(at, at + 650) }
       })
       // Only a passage of outside content makes the result outside content (wrapped and tracked as untrusted).

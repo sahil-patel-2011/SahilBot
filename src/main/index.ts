@@ -2575,6 +2575,7 @@ app.whenReady().then(() => {
     busy: () => chat.busy(),
     isRunning: (id) => chat.isRunning(id),
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+    sensitive: () => world.settings().sensitive,
     isAppThread: (id) => appThreadRef.current?.(id) ?? false,
     onBattery: () => { try { return powerMonitor.isOnBatteryPower() } catch { return false } },
     onChange: () => { if (!learningNotify) learningNotify = setTimeout(() => { learningNotify = null; toWin('learning:changed') }, 300) }
