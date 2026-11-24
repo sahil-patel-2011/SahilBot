@@ -1,13 +1,14 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ToolEffect } from '@shared/types'
 import { homeGuarded, runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec, LOGIN_SHELL } from '../../code/proc'
 import { jobLine, jobs as defaultJobs, type JobManager, type WaitFor } from '../../jobs/manager'
 import type { ThreadState, ToolContext, ToolDef } from '../types'
-import { ownedHere } from './freshness'
+import { mayReplaceFile, noteOwned, ownedHere, refreshOwnedSince } from './freshness'
+import { runStart } from '../undo-journal'
 import { inForbidden, isSecretName } from '../../knowledge/ignore'
 
 // Run a terminal command. What it can do decides who must approve it:
@@ -278,8 +279,24 @@ const DISPOSABLE_DIRS = new Set(['node_modules', 'dist', 'build', 'out', '.cache
   '.parcel-cache', '.pytest_cache', '.mypy_cache', '.ruff_cache', '.gradle', '.venv', 'venv', '.tox', 'tmp', 'temp', '.tmp', 'DerivedData', '.expo', '.svelte-kit', '.vite'])
 const DISPOSABLE_FILE = /\.(pyc|pyo|o|obj|class|log|tmp|swp|bak)$|^\.DS_Store$/i
 
+/**
+ * Made during this task (`since`: when it started), inside `cwd`: a file, or a folder whose every entry is (a test
+ * folder a script made). A file moved in from elsewhere keeps its older birth time, so it doesn't count.
+ */
+function madeSince(full: string, cwd: string, since: number | undefined): boolean {
+  if (!since || full === cwd || !within(realish(cwd), realish(full))) return false
+  let n = 0
+  const fresh = (p: string): boolean => {
+    if (++n > 2000) return false
+    const st = lstatSync(p)
+    if (!st.birthtimeMs || st.birthtimeMs < since - 100) return false
+    return !st.isDirectory() || readdirSync(p).every((e) => fresh(join(p, e)))
+  }
+  try { return fresh(full) } catch { return false }
+}
+
 /** A path an rm may take away: build output, caches, temp folders, or something this chat made (`ours`). */
-function disposable(arg: string, cwd: string, ours?: (full: string) => boolean): boolean {
+function disposable(arg: string, cwd: string, ours?: (full: string) => boolean, since?: number): boolean {
   if (/[$`]/.test(arg)) return false
   const expanded = arg === '~' ? HOME : arg.startsWith('~/') ? join(HOME, arg.slice(2)) : arg
   if (/^~/.test(expanded)) return false
@@ -294,7 +311,7 @@ function disposable(arg: string, cwd: string, ours?: (full: string) => boolean):
   const tmp = [tmpdir(), '/tmp', '/private/tmp', '/var/folders', '/private/var/folders'].map((t) => realish(resolve(t)))
   const real = realish(full)
   if (tmp.some((t) => within(t, real) && real !== t)) return true
-  return !!ours && (ours(full) || ours(real))
+  return (!!ours && (ours(full) || ours(real))) || madeSince(full, cwd, since)
 }
 
 /**
@@ -303,10 +320,10 @@ function disposable(arg: string, cwd: string, ours?: (full: string) => boolean):
  * left out: those can be taken back. A delete of the user's files goes through file_manage delete instead (the Trash,
  * and Undo brings it back); terminal changes aren't in the undo journal.
  */
-export function permanentDeletes(cmd: string, cwd: string, ours?: (full: string) => boolean, depth = 0): string[] {
+export function permanentDeletes(cmd: string, cwd: string, ours?: (full: string) => boolean, depth = 0, since?: number): string[] {
   if (depth > 3) return []
   const out: string[] = []
-  for (const inner of substitutions(cmd)) out.push(...permanentDeletes(inner, cwd, ours, depth + 1))
+  for (const inner of substitutions(cmd)) out.push(...permanentDeletes(inner, cwd, ours, depth + 1, since))
   let here = cwd
   for (const seg of splitCommand(cmd)) {
     const argv = normalize(words(seg.text).argv).argv
@@ -315,7 +332,7 @@ export function permanentDeletes(cmd: string, cwd: string, ours?: (full: string)
     if (name === 'cd') { const to = args[0]; if (to && !/[$`]/.test(to)) here = resolve(here, to === '~' ? HOME : to.replace(/^~\//, `${HOME}/`)); continue }
     if (/^(sh|bash|zsh|dash|ksh)$/.test(name)) {
       const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a))
-      if (c >= 0 && args[c + 1]) out.push(...permanentDeletes(args[c + 1], here, ours, depth + 1))
+      if (c >= 0 && args[c + 1]) out.push(...permanentDeletes(args[c + 1], here, ours, depth + 1, since))
       continue
     }
     if (name === 'rm' || name === 'unlink' || name === 'shred' || name === 'srm') {
@@ -323,7 +340,7 @@ export function permanentDeletes(cmd: string, cwd: string, ours?: (full: string)
       for (const a of args) {
         if (opts && a === '--') { opts = false; continue }
         if (opts && a.startsWith('-') && a !== '-') continue
-        if (!disposable(a, here, ours)) out.push(a)
+        if (!disposable(a, here, ours, since)) out.push(a)
       }
       continue
     }
@@ -335,7 +352,95 @@ export function permanentDeletes(cmd: string, cwd: string, ours?: (full: string)
       // find's name filter can make it build output only ("find . -name '*.pyc' -delete").
       const pattern = args[args.findIndex((a) => a === '-name' || a === '-iname') + 1]
       const onlyJunk = !!pattern && args.some((a) => a === '-name' || a === '-iname') && (DISPOSABLE_FILE.test(pattern.replace(/^\*/, 'x')) || DISPOSABLE_DIRS.has(pattern))
-      for (const r of roots.length ? roots : ['.']) if (!onlyJunk && !disposable(r, here, ours)) out.push(r)
+      for (const r of roots.length ? roots : ['.']) if (!onlyJunk && !disposable(r, here, ours, since)) out.push(r)
+    }
+  }
+  return [...new Set(out)]
+}
+
+// ---------- replacing files ----------
+
+/** The command without here-document bodies (their lines are text, not commands). */
+function withoutHeredocs(cmd: string): string {
+  const lines = cmd.split('\n')
+  const out: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    out.push(lines[i])
+    const m = lines[i].match(/<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/)
+    if (!m || /<<</.test(lines[i])) continue
+    while (i + 1 < lines.length && lines[i + 1].replace(/^\t+/, '').trim() !== m[2]) i++
+    i++
+  }
+  return out.join('\n')
+}
+
+const expandHome = (p: string): string => (p === '~' ? HOME : p.startsWith('~/') ? join(HOME, p.slice(2)) : p)
+
+/**
+ * Every file a command would write over (it may not exist yet): `>`, `>|` and `&>` targets (not `>>`), the
+ * destination of cp / mv / install / ditto / rsync (a file inside it when it is a folder) unless told not to
+ * overwrite (-n, --ignore-existing), tee without -a, sed -i / perl -i files, curl -o and wget -O. Also inside
+ * sh -c and $( ). Full paths.
+ */
+export function overwriteTargets(cmd: string, cwd: string, depth = 0): string[] {
+  if (depth > 3) return []
+  const text = withoutHeredocs(cmd)
+  const out: string[] = []
+  for (const inner of substitutions(text)) out.push(...overwriteTargets(inner, cwd, depth + 1))
+  let here = cwd
+  const add = (p: string | undefined): void => {
+    if (!p || /[$`*?[]/.test(p) || /^\/dev\//.test(p) || p === '-') return
+    out.push(resolve(here, expandHome(p)))
+  }
+  for (const seg of splitCommand(text)) {
+    const w = words(seg.text)
+    for (const r of w.redirs) if (isOutputRedir(r.op) && !r.op.includes('>>') && !/^\d*<|^<>/.test(r.op)) add(r.target)
+    const argv = normalize(w.argv).argv
+    const name = progName(argv[0] ?? '')
+    const args = argv.slice(1)
+    if (name === 'cd') { const to = args[0]; if (to && !/[$`]/.test(to)) here = resolve(here, expandHome(to)); continue }
+    if (/^(sh|bash|zsh|dash|ksh)$/.test(name)) {
+      const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a))
+      if (c >= 0 && args[c + 1]) out.push(...overwriteTargets(args[c + 1], here, depth + 1))
+      continue
+    }
+    const opts = args.filter((a) => a.startsWith('-') && a !== '-')
+    const plain = args.filter((a) => !a.startsWith('-') || a === '-')
+    if (name === 'cp' || name === 'mv' || name === 'install' || name === 'ditto' || name === 'rsync' || name === 'ln') {
+      if (name === 'ln' && !opts.some((o) => /^-[a-zA-Z]*f/.test(o) || o === '--force')) continue
+      if (opts.some((o) => /^-[a-zA-Z]*n/.test(o) && name !== 'rsync') || opts.some((o) => /^--(no-clobber|ignore-existing|update=none)$/.test(o)) || (name === 'rsync' && opts.some((o) => /^-[a-zA-Z]*n|^--dry-run$/.test(o)))) continue
+      if (plain.length < 2 || /:/.test(plain[plain.length - 1])) continue
+      const dest = resolve(here, expandHome(plain[plain.length - 1]))
+      let isDir = false
+      try { isDir = statSync(dest).isDirectory() } catch { /* a new name */ }
+      if (isDir) for (const src of plain.slice(0, -1)) add(join(dest, basename(expandHome(src).replace(/\/+$/, ''))))
+      else add(dest)
+      continue
+    }
+    if (name === 'tee') {
+      if (opts.some((o) => /^-[a-zA-Z]*a/.test(o) || o === '--append')) continue
+      for (const f of plain) add(f)
+      continue
+    }
+    if (name === 'sed' || name === 'gsed' || name === 'perl') {
+      // -i with no backup suffix (sed -i '' / -i, perl -pi): the file is rewritten in place.
+      const i = args.findIndex((a) => (name === 'perl' ? /^-[a-zA-Z]*i$/.test(a) : a === '-i' || a === '--in-place'))
+      if (i < 0) continue
+      let rest = args.slice(i + 1)
+      if (name !== 'perl' && rest[0] === '') rest = rest.slice(1)
+      const hasScript = args.some((a) => a === '-e' || a === '-f' || /^-[a-zA-Z]*e$/.test(a))
+      const files: string[] = []
+      for (let k = 0; k < rest.length; k++) {
+        if (rest[k] === '-e' || rest[k] === '-f' || /^-[a-zA-Z]*e$/.test(rest[k])) { k++; continue }
+        if (rest[k].startsWith('-')) continue
+        files.push(rest[k])
+      }
+      for (const f of hasScript ? files : files.slice(1)) add(f)
+      continue
+    }
+    if (name === 'curl' || name === 'wget') {
+      const flag = name === 'curl' ? /^(-o|--output)$/ : /^(-O|--output-document)$/
+      args.forEach((a, k) => { if (flag.test(a)) add(args[k + 1]) })
     }
   }
   return [...new Set(out)]
@@ -1014,6 +1119,8 @@ export function permissionChangeOutside(cmd: string, allowed: string[], cwd?: st
 export interface ShellDeps {
   /** The chat's attached folders (for project commands; the loop's state has them too). */
   rootsOf?: (threadId: string) => string[]
+  /** The user's own words for the task running in this chat (freshness.ts taskUserText): did they ask to change a file? */
+  userText?: (threadId: string) => string
   /** The workspace folder (outside-path checks need it; without it they're skipped). */
   workspace?: () => string
   jobs?: JobManager
@@ -1112,10 +1219,29 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       const cwd = cwdFor(a.cwd, ctx)
       // rm can't be undone: the user's files are deleted with file_manage delete (to the Trash, and Undo brings them
       // back). Build output, temp files and files this chat made can go with rm; an approved command runs as written.
+      const chat = ctx.state.rootId ?? ctx.threadId
+      const since = runStart(chat) ?? runStart(ctx.threadId)
+      const ours = (p: string): boolean => ownedHere(chat, p) || ownedHere(ctx.threadId, p)
       if (!ctx.approved) {
-        const gone = permanentDeletes(a.command, cwd, (p) => ownedHere(ctx.state.rootId ?? ctx.threadId, p) || ownedHere(ctx.threadId, p))
-        if (gone.length) throw new Error(`Nothing was run: this would delete ${gone.slice(0, 3).join(', ')}${gone.length > 3 ? ` and ${gone.length - 3} more` : ''} for good, and that can't be undone. Delete the user's files with file_manage delete instead (each one goes to the Trash, so Undo can bring it back). rm is fine for build output, caches, temp files and files you made in this chat.`)
+        const gone = permanentDeletes(a.command, cwd, ours, 0, since)
+        if (gone.length) throw new Error(`Nothing was run: this would delete ${gone.slice(0, 3).join(', ')}${gone.length > 3 ? ` and ${gone.length - 3} more` : ''} for good, and that can't be undone. Delete the user's files with file_manage delete instead (each one goes to the Trash, so Undo can bring it back). rm is fine for build output, caches, temp files and files you made in this chat with the file tools or during this task.`)
       }
+      // Never replace a file of the user's from the terminal either (>, cp, mv, tee, sed -i): it has no backup and no
+      // Undo. file_write saves the new one beside it as "name (2).ext" instead.
+      const writes = overwriteTargets(a.command, cwd)
+      const fresh = writes.filter((p) => !existsSync(p))
+      if (!ctx.approved && writes.length) {
+        const ask = { threadId: ctx.threadId, chat, roots: ctx.state.roots ?? [], userText: ctx.threadId ? safeText(() => deps.userText?.(chat)) : undefined }
+        const theirs = writes.filter((p) => {
+          try { const st = lstatSync(p); if (!st.isFile() || st.size === 0) return false } catch { return false }
+          return !disposable(p, cwd, ours, since) && !mayReplaceFile(ask, p)
+        })
+        if (theirs.length) {
+          const n = basename(theirs[0])
+          throw new Error(`Nothing was run: this would replace ${theirs.slice(0, 3).map((p) => basename(p)).join(', ')}${theirs.length > 3 ? ` and ${theirs.length - 3} more` : ''}, which ${theirs.length > 1 ? 'are' : 'is'} the user's (not made in this chat, and they didn't ask to change it), with no copy kept. Write yours with file_write instead (it is saved as ${n.replace(/(\.[^.]*)?$/, ' (2)$1')}) and tell the user, or use a new name.`)
+        }
+      }
+      const ranAt = Date.now()
       const roots = ctx.state.roots ?? []
       const far = permissionChangeOutside(a.command, [ctx.workspaceDir, ...roots], cwd)
       if (far.length) throw new Error(`Changing permissions or owners outside your folders (${far.slice(0, 2).join(', ')}) is system-level: SahilBot doesn't run it. Ask the user to run it themselves in Terminal.`)
@@ -1145,6 +1271,9 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
         }
       })
       tick.flush()
+      // Files this command made are this chat's own; its own files it changed stay its own.
+      for (const p of fresh) if (existsSync(p)) noteOwned(chat, p)
+      refreshOwnedSince(chat, ranAt)
       if (readyLine && out.stopped && ready.signal.aborted && !ctx.signal?.aborted) {
         const job = await startJob(jobs, { ...a, background: true }, cwd, ctx, sandbox)
         return { ...job, text: `${a.command} kept running after "${readyLine.slice(0, 120)}" (a server or watcher), so it was restarted as a background job instead of blocking. Use the job's URL below: it may differ from the line above.\n${job.text}` }
@@ -1155,6 +1284,10 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       return { text: `$ ${a.command}\n(in ${cwd}; ${status})\n${clean || '(no output)'}${hint}`, data: { exitCode: out.code, timedOut: out.timedOut, stopped: out.stopped, stdout: out.stdout, stderr: out.stderr, cwd }, display: `${a.command.slice(0, 60)} · ${status}` }
     }
   }
+}
+
+function safeText(fn: () => string | undefined): string | undefined {
+  try { return fn() } catch { return undefined }
 }
 
 /** A line a server prints once it is up (then it keeps running). */

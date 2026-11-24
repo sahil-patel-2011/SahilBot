@@ -807,10 +807,10 @@ app.whenReady().then(() => {
     appTool(() => settings.get().workspaceDir),
     appHelpTool(),
     // Terminal commands, and background jobs (dev servers, watchers) with the jobs tool to manage them.
-    shellTool({ rootsOf: (threadId) => db.getState(threadId).roots ?? [], workspace: () => settings.get().workspaceDir }),
+    shellTool({ rootsOf: (threadId) => db.getState(threadId).roots ?? [], workspace: () => settings.get().workspaceDir, userText: (id) => taskUserText(db.listMessages(id)) }),
     jobsTool(),
     // Coding: search, symbols, exact edits, patches, tests/type checks/lint with parsed failures; git with a secret scan.
-    codeTool({ getWorkspace: () => settings.get().workspaceDir }),
+    codeTool({ getWorkspace: () => settings.get().workspaceDir, userText: (id) => taskUserText(db.listMessages(id)) }),
     gitTool(),
     researchTool({ ncbiKey: () => secrets.get('ncbiKey') }),
     // Maps and travel: Google Maps with the user's key, else OpenStreetMap; every result links to Google Maps.

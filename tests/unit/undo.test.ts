@@ -100,6 +100,8 @@ test('code edits and apply_patch are in the undo journal too', async () => {
   setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-root-')))
   const root = mkdtempSync(join(tmpdir(), 'sb-undo-code-'))
   writeFileSync(join(root, 'math.ts'), 'export const add = (a: number, b: number) => a - b\n')
+  // A code project (outside one, a file of the user's is edited as a copy: tests/unit/never-replace.test.ts).
+  writeFileSync(join(root, 'package.json'), '{}')
   const code = codeTool({ getWorkspace: () => root, trash: async () => undefined })
   const ctx = { threadId: 't-code', state: { roots: [root], loaded: [], alwaysAllow: [], todos: [] }, workspaceDir: root, signal: new AbortController().signal } as never
   beginRun('t-code', 'task-code')

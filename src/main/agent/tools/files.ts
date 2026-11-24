@@ -1,6 +1,6 @@
-import { afterChange, beforeChange } from '../undo-journal'
+import { afterChange, beforeChange, noteMoved, tooBigToKeep } from '../undo-journal'
 import { shell } from 'electron'
-import { askedToChange, freeName, hasSeen, inGitRepo, looksInjected, noteOwned, notePlanted, noteRedirect, noteSeen, ownedHere, plantedName, redirectOf, staleReason } from './freshness'
+import { freeName, looksInjected, mayReplaceFile, noteOwned, notePlanted, noteRedirect, noteSeen, ownedHere, plantedName, redirectOf, refreshOwned, staleReason } from './freshness'
 import { appendFileSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -184,20 +184,12 @@ export function fileTools(getWorkspace: () => string, docsDir: string, o: FileTo
   // The chat a call belongs to (a helper agent works for the chat that started it).
   const chatOf = (ctx: ToolContext): string => ctx.state.rootId ?? ctx.threadId
   /**
-   * May this call replace the existing file `full`? Only a file this chat made, an empty one, or one the user asked
-   * to change ("fix rename_photos.py"; "rewrite it" once it was read; a code project's file it read, which git keeps).
-   * Anything else of the user's is never replaced: the new one is saved as "name (2).ext" (keep(), below).
+   * May this call replace the existing file `full`? Only a file this chat made (still as it left it), an empty one, or
+   * one the user asked to change (freshness.ts mayReplaceFile). Anything else of the user's is never replaced: the
+   * new one is saved as "name (2).ext" (keep(), below).
    */
-  const mayReplace = (ctx: ToolContext, full: string): boolean => {
-    // No chat behind the call (a direct call from the app): nothing to own, nothing the user said.
-    if (!ctx.threadId) return true
-    const id = chatOf(ctx)
-    if (ownedHere(id, full) || ownedHere(ctx.threadId, full)) return true
-    try { const st = statSync(full); if (st.isFile() && st.size === 0) return true } catch { return true }
-    const seen = hasSeen(ctx.threadId, full)
-    if (askedToChange(safe(() => o.userText?.(id)) ?? '', full, { seen, redirected: !!redirectOf(id, full) })) return true
-    return seen && inGitRepo(full)
-  }
+  const mayReplace = (ctx: ToolContext, full: string): boolean =>
+    mayReplaceFile({ threadId: ctx.threadId, chat: chatOf(ctx), roots: roots(ctx), userText: ctx.threadId ? safe(() => o.userText?.(chatOf(ctx))) : undefined }, full)
   /** The path this call writes: this chat's copy when it saved one instead of the user's file (and wasn't told to replace it). */
   const target = (ctx: ToolContext, full: string): string => {
     const alt = redirectOf(chatOf(ctx), full)
@@ -323,7 +315,8 @@ export function fileTools(getWorkspace: () => string, docsDir: string, o: FileTo
       else writeFileSync(full, content)
       afterChange(ctx.threadId, full)
       noteSeen(ctx.threadId, full)
-      if (mode !== 'append') noteOwned(chatOf(ctx), full)
+      if (mode !== 'append' || !exists) noteOwned(chatOf(ctx), full)
+      else refreshOwned(chatOf(ctx), full)
       const verb = mode === 'append' ? 'appended to' : exists ? 'updated' : 'created'
       if (kept) return { text: `created ${full} (${humanSize(Buffer.byteLength(content))}). ${keptNote(original, full)}`, display: `created ${basename(full)}`, path: full }
       const copy = full !== asked ? ` (this chat's copy: ${basename(asked)} is the user's and stays as it was)` : ''
@@ -354,18 +347,24 @@ export function fileTools(getWorkspace: () => string, docsDir: string, o: FileTo
     async run({ path, old_string, new_string, replace_all }, ctx) {
       const workspace = getWorkspace()
       // A file this chat saved a copy of (it wasn't asked to replace the user's): edits go to that copy.
-      const full = target(ctx, at(path, workspace, ctx))
-      if (!existsSync(full)) throw new Error(`No such file: ${path}. Create it with file_write.`)
-      if (lstatSync(full).isDirectory()) throw new Error(`${path} is a folder.`)
-      const stale = staleReason(ctx.threadId, full, path)
+      const asked = target(ctx, at(path, workspace, ctx))
+      if (!existsSync(asked)) throw new Error(`No such file: ${path}. Create it with file_write.`)
+      if (lstatSync(asked).isDirectory()) throw new Error(`${path} is a folder.`)
+      const stale = staleReason(ctx.threadId, asked, path)
       if (stale) throw new Error(stale)
-      const r = applyEdit(readFileSync(full, 'utf8'), old_string, new_string, !!replace_all)
+      const r = applyEdit(readFileSync(asked, 'utf8'), old_string, new_string, !!replace_all)
       if ('error' in r) throw new Error(`${r.error} in ${path}.`)
-      backup(workspace, full)
+      // A file of the user's they didn't ask to change: the edit goes to a copy beside it ("name (2).ext").
+      const kept = keep(ctx, asked)
+      const full = kept ?? asked
+      if (!kept) backup(workspace, full)
       beforeChange(ctx.threadId, full)
       writeFileSync(full, r.text)
       afterChange(ctx.threadId, full)
       noteSeen(ctx.threadId, full)
+      if (kept) noteOwned(chatOf(ctx), full)
+      else refreshOwned(chatOf(ctx), full)
+      if (kept) return { text: `Edited a copy, ${full}: ${r.count} replacement${r.count === 1 ? '' : 's'} (line ${r.line}). ${keptNote(asked, full)}`, display: `created ${basename(full)}`, path: full }
       return { text: `Edited ${full}: ${r.count} replacement${r.count === 1 ? '' : 's'} (line ${r.line}).`, display: `edited ${basename(full)}`, path: full }
     }
   }
@@ -410,10 +409,12 @@ export function fileTools(getWorkspace: () => string, docsDir: string, o: FileTo
       }
       if (!existsSync(full)) throw new Error(`No such file or folder: ${a.path}`)
       if (a.op === 'delete') {
-        // A copy first, so Undo (and "undo") brings it back even after the Trash is emptied.
+        // A copy first, so Undo (and "undo") brings it back even after the Trash is emptied (not for a huge folder).
+        const huge = tooBigToKeep(full)
         beforeChange(ctx.threadId, full, { folder: true })
         await shell.trashItem(full)
         afterChange(ctx.threadId, full)
+        if (huge) return { text: `Moved ${full} to the Trash. It is too big to keep a copy, so Undo can't bring it back: the user can restore it from the Trash. Say so.`, display: `trashed ${basename(full)}` }
         return { text: `Moved ${full} to the Trash. Undo brings it back (or the user can restore it from the Trash).`, display: `trashed ${basename(full)}` }
       }
       const dest = at(a.to!, workspace, ctx)
@@ -424,13 +425,17 @@ export function fileTools(getWorkspace: () => string, docsDir: string, o: FileTo
       if (kept) finalDest = kept
       else if (existsSync(finalDest)) backup(workspace, finalDest)
       mkdirSync(dirname(finalDest), { recursive: true })
-      // Undo (files only): a move is the source put back and the destination taken away; a copy, just the copy.
+      // Undo: a file move is the source put back and the destination taken away; a folder move is moved back; a
+      // copy (file or folder) is taken away.
       const isFile = lstatSync(full).isFile()
+      const isDir = lstatSync(full).isDirectory()
       if (isFile && a.op === 'move') beforeChange(ctx.threadId, full)
       if (isFile) beforeChange(ctx.threadId, finalDest)
+      else if (isDir && a.op === 'copy') beforeChange(ctx.threadId, finalDest, { newFolder: true })
       if (a.op === 'move') renameSync(full, finalDest)
       else cpSync(full, finalDest, { recursive: true })
       if (isFile) afterChange(ctx.threadId, finalDest)
+      else if (isDir && a.op === 'move') noteMoved(ctx.threadId, full, finalDest)
       noteOwned(chatOf(ctx), finalDest)
       const note = kept && takenBy ? ` ${basename(takenBy)} was already there and wasn't made in this chat, so it was left as it was and this one is named ${basename(kept)}. Tell the user in one short line.` : ''
       return { text: `${a.op === 'move' ? 'Moved' : 'Copied'} ${full} → ${finalDest}.${note}`, display: `${a.op === 'move' ? 'moved' : 'copied'} ${basename(full)}`, path: finalDest }

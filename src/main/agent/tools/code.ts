@@ -1,6 +1,6 @@
 import { shell } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { noteSeen } from './freshness'
+import { inCodeProject, noteOwned, noteSeen, refreshOwned, writeTarget } from './freshness'
 import { afterChange, beforeChange } from '../undo-journal'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
@@ -80,8 +80,19 @@ export function codeEffect(a: CodeArgs): ToolEffect {
   }
 }
 
-export function codeTool(o: { getWorkspace: () => string; trash?: (path: string) => Promise<void> }): ToolDef<CodeArgs> {
+export function codeTool(o: { getWorkspace: () => string; trash?: (path: string) => Promise<void>; userText?: (threadId: string) => string }): ToolDef<CodeArgs> {
   const trash = o.trash ?? ((p: string) => shell.trashItem(p))
+  /**
+   * Outside a code project, a file of the user's they didn't ask to change is never edited in place: the edit goes
+   * to a copy beside it, "name (2).ext" (freshness.ts). Inside a project, working on it means editing its files.
+   */
+  const where = (ctx: Ctx, full: string): { path: string; copyOf?: string } => {
+    if (inCodeProject(full)) return { path: full }
+    const chat = ctx.state.rootId ?? ctx.threadId
+    let said: string | undefined
+    try { said = chat ? o.userText?.(chat) : undefined } catch { said = undefined }
+    return writeTarget({ threadId: ctx.threadId, chat, roots: ctx.state.roots ?? [], userText: said }, full)
+  }
   return {
     name: 'code',
     label: 'Code',
@@ -167,8 +178,8 @@ export function codeTool(o: { getWorkspace: () => string; trash?: (path: string)
           return { text: formatSymbols(r, a.name ? `"${a.name}"` : sub ?? base), display: `${r.total} definition${r.total === 1 ? '' : 's'}` }
         }
         case 'read': return readNumbered(base, a, ctx)
-        case 'edit': return edit(base, a, ctx, o.getWorkspace())
-        case 'apply_patch': return applyPatch(base, a, ctx, o.getWorkspace(), trash)
+        case 'edit': return edit(base, a, ctx, o.getWorkspace(), where)
+        case 'apply_patch': return applyPatch(base, a, ctx, o.getWorkspace(), trash, where)
         default: {
           const kind = CHECKS[a.action]
           if (a.command && classify(a.command).why === 'system-level command') throw new Error('System-level commands are not run by SahilBot.')
@@ -247,11 +258,17 @@ function readNumbered(base: string, a: CodeArgs, ctx: Ctx): { text: string; disp
   return { text: `${shown}\n${body || '(empty file)'}${note}`, display: `${basename(full)}${start > 1 || end < total ? ` ${start}-${end}` : ''}`, path: full }
 }
 
-function edit(base: string, a: CodeArgs, ctx: Ctx, workspace: string): { text: string; display: string; path: string } {
-  const full = resolveIn(base, a.path!, ctx)
+type Where = (ctx: Ctx, full: string) => { path: string; copyOf?: string }
+/** The note for an edit saved to a copy instead of the user's file. */
+const copyNote = (orig: string, copy: string): string => `\n${basename(orig)} is the user's and they didn't ask to change it, so it was left as it was and the change was saved to ${basename(copy)} (${copy}). Use ${basename(copy)} from now on and tell the user in one short line.`
+
+function edit(base: string, a: CodeArgs, ctx: Ctx, workspace: string, where?: Where): { text: string; display: string; path: string } {
+  const asked = resolveIn(base, a.path!, ctx)
+  if (!existsSync(asked)) throw new Error(`No such file: ${relTo(base, asked)}. To create a file use file_write (or apply_patch with "*** Add File").`)
+  const t = where?.(ctx, asked) ?? { path: asked }
+  const full = t.path
   const shown = relTo(base, full)
-  if (!existsSync(full)) throw new Error(`No such file: ${shown}. To create a file use file_write (or apply_patch with "*** Add File").`)
-  const before = readTextFile(full, shown)
+  const before = readTextFile(t.copyOf && !existsSync(full) ? asked : full, shown)
   const edits = a.edits?.length ? a.edits : [{ old_string: a.old_string ?? '', new_string: a.new_string ?? '', replace_all: a.replace_all }]
   let content = before
   const notes: string[] = []
@@ -266,23 +283,26 @@ function edit(base: string, a: CodeArgs, ctx: Ctx, workspace: string): { text: s
       throw new Error(`${edits.length > 1 ? `Edit ${i + 1} of ${edits.length}: ` : ''}${(err as Error).message}${edits.length > 1 ? '\nNothing was changed.' : ''}`)
     }
   })
-  backup(workspace, full)
+  if (existsSync(full)) backup(workspace, full)
   // In this task's undo journal (agent/undo-journal.ts), like file_edit.
   beforeChange(ctx.threadId, full)
   writeFileSync(full, content)
   afterChange(ctx.threadId, full)
   noteSeen(ctx.threadId, full)
+  const chat = ctx.state.rootId ?? ctx.threadId
+  if (t.copyOf) noteOwned(chat, full)
+  else refreshOwned(chat, full)
   const d = unifiedDiff(shown, before, content)
   return {
-    text: `Edited ${full} (${count} replacement${count === 1 ? '' : 's'}, +${d.added} −${d.removed})${notes.length ? `\nNote: ${notes.join('; ')}` : ''}\n${clipDiff(d.text)}`,
+    text: `Edited ${full} (${count} replacement${count === 1 ? '' : 's'}, +${d.added} −${d.removed})${notes.length ? `\nNote: ${notes.join('; ')}` : ''}${t.copyOf ? copyNote(t.copyOf, full) : ''}\n${clipDiff(d.text)}`,
     display: `edited ${basename(full)} (+${d.added} −${d.removed})`,
     path: full
   }
 }
 
-async function applyPatch(base: string, a: CodeArgs, ctx: Ctx, workspace: string, trash: (p: string) => Promise<void>): Promise<{ text: string; display: string; path?: string }> {
+async function applyPatch(base: string, a: CodeArgs, ctx: Ctx, workspace: string, trash: (p: string) => Promise<void>, where?: Where): Promise<{ text: string; display: string; path?: string }> {
   const fps = parsePatch(a.patch!)
-  type Planned = { op: 'add' | 'update' | 'delete'; full: string; shown: string; before: string | null; after: string | null; moveFull?: string; moveShown?: string; notes: string[] }
+  type Planned = { op: 'add' | 'update' | 'delete'; full: string; shown: string; before: string | null; after: string | null; moveFull?: string; moveShown?: string; notes: string[]; copyOf?: string }
   const plan: Planned[] = []
   const seen = new Set<string>()
   for (const fp of fps) {
@@ -298,11 +318,13 @@ async function applyPatch(base: string, a: CodeArgs, ctx: Ctx, workspace: string
       if (!existsSync(full)) throw new Error(`Can't delete ${shown}: it doesn't exist.`)
       plan.push({ op: 'delete', full, shown, before: lstatSync(full).isDirectory() ? null : readTextFile(full, shown), after: null, notes: [] })
     } else {
-      const before = readTextFile(full, shown)
+      // A file of the user's they didn't ask to change (outside a code project): the change goes to a copy beside it.
+      const t = !fp.moveTo && existsSync(full) && where ? where(ctx, full) : { path: full }
+      const before = readTextFile(t.copyOf && !existsSync(t.path) ? full : t.path, shown)
       const r = fp.hunks.length ? applyHunks(before, fp.hunks, shown) : { content: before, notes: [] }
       const moveFull = fp.moveTo ? resolveIn(base, fp.moveTo, ctx) : undefined
       if (moveFull && existsSync(moveFull)) throw new Error(`Can't move ${shown} to ${fp.moveTo}: that file already exists.`)
-      plan.push({ op: 'update', full, shown, before, after: r.content, moveFull, moveShown: moveFull ? relTo(base, moveFull) : undefined, notes: r.notes })
+      plan.push({ op: 'update', full: t.path, shown: t.copyOf ? relTo(base, t.path) : shown, before, after: r.content, moveFull, moveShown: moveFull ? relTo(base, moveFull) : undefined, notes: t.copyOf ? [...r.notes, copyNote(t.copyOf, t.path).trim()] : r.notes, copyOf: t.copyOf })
     }
   }
   const diffs = plan.map((p) => unifiedDiff(p.shown, p.before, p.after, 3, p.moveShown ?? p.shown))
@@ -322,15 +344,17 @@ async function applyPatch(base: string, a: CodeArgs, ctx: Ctx, workspace: string
     } else if (p.op === 'delete') {
       await trash(p.full)
     } else {
-      backup(workspace, p.full)
+      if (existsSync(p.full)) backup(workspace, p.full)
       if (p.moveFull) {
         mkdirSync(dirname(p.moveFull), { recursive: true })
         renameSync(p.full, p.moveFull)
         writeFileSync(p.moveFull, p.after!)
-      } else if (p.after !== p.before) writeFileSync(p.full, p.after!)
+      } else if (p.after !== p.before || (p.copyOf && !existsSync(p.full))) writeFileSync(p.full, p.after!)
     }
   }
   for (const f of touched) afterChange(ctx.threadId, f)
+  const chat = ctx.state.rootId ?? ctx.threadId
+  for (const p of plan) if (p.op !== 'delete') { if (p.copyOf || p.op === 'add') noteOwned(chat, p.moveFull ?? p.full); else refreshOwned(chat, p.moveFull ?? p.full) }
   return {
     text: `Applied the patch (+${added} −${removed}):\n${summary}${notes.length ? `\nNotes: ${notes.join('; ')}` : ''}${plan.some((p) => p.op === 'delete') ? '\nDeleted files went to the Trash.' : ''}\n${body}`,
     display: `patched ${plan.length} file${plan.length > 1 ? 's' : ''} (+${added} −${removed})`,

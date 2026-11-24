@@ -11,6 +11,8 @@ import { formatReview, reviewDocument } from '../../docs/review'
 import { buildXlsx, columnStats, editWorkbook, formatSheets, loadWorkbook, parseCsv, readSheets, sheetFromCsv, type CellEdit } from '../../docs/xlsx'
 import type { ToolContext, ToolDef } from '../types'
 import { backup, resolvePath } from './files'
+import { afterChange, beforeChange } from '../undo-journal'
+import { refreshOwned } from './freshness'
 
 // The office tool (found with find_tools("office" / "excel" / "pdf")): spreadsheets read, edited in
 // place (with a backup) and summarized; CSV to typed Excel; PDF forms listed and filled, PDFs merged,
@@ -273,7 +275,11 @@ export function officeTool(o: OfficeDeps): ToolDef<OfficeArgs> {
           const r = editWorkbook(wb, a.edits ?? [])
           const target = a.out ? outPath(a.out, full, ctx, extname(full).toLowerCase()) : full
           if (target === full) backup(ctx.workspaceDir || o.getWorkspace(), full)
+          // In this task's undo journal, like file_edit (Undo puts the sheet back).
+          beforeChange(ctx.threadId, target)
           writeFileSync(target, Buffer.from(await wb.xlsx.writeBuffer()))
+          afterChange(ctx.threadId, target)
+          refreshOwned(ctx.state.rootId ?? ctx.threadId, target)
           const lines = r.changed.slice(0, 60).map((c) => `${c.sheet}!${c.cell}: ${c.before || '(empty)'} → ${c.after || '(empty)'}`)
           const errs = r.errors.map((e) => `${e.sheet}!${e.cell} ${e.formula} gives ${e.problem}`)
           return {
