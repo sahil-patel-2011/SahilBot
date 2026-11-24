@@ -37,6 +37,7 @@ import { getCheckin, overviewTool, setCheckin } from './checkin'
 import { aggregateUsage, providerOf, usageDashboard, usageDetailCsv, usageGlance, usageRows, usageScope, windowStart } from './usage'
 import { VoiceService } from './voice/service'
 import { Scheduler } from './scheduler'
+import { dateTimeIn, describeSchedule, nextLabel, tzLabel } from '@shared/when'
 import { buildMenu, setupApp, windowState } from './shell'
 import { scheduleTool } from './agent/tools/schedule'
 import { ResultStore } from './agent/context'
@@ -113,7 +114,7 @@ import { cadDesignTool } from './cad/design-tool'
 import { macKeyStore, Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { requestedModel } from './agent/choices'
-import { isPlainReminder, reminderText } from './triggers'
+import { reminderMessage, routineDelivery } from './triggers'
 import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels, migrateToAuto } from './spaces'
 import { ATTENDED_GRACE_MS, Learner, QuestionQueue, QuestionStore, createQuestionHost, notifyDevices as notifyQuestionDevices, toNeedsYou } from './agent/questions'
 import { DigestRunner } from './goals/digest'
@@ -1893,29 +1894,34 @@ app.whenReady().then(() => {
       if (alertHit.fired && !priceAlert.repeat && !info.test) scheduler.update(task.id, { enabled: false })
       return { status: 'done', threadId }
     }
-    // The bot is busy (you're working with it, or another routine is running): the routine waits its turn instead of
-    // being skipped, then runs as itself (unattended, with a routine's permissions), never mixed into your live run.
-    // It stops waiting if you pause routines or this one, delete it, or after two hours.
-    // A plain one-time reminder ("remind me in 3 minutes to stretch") is delivered on time even while the chat is busy:
-    // it needs no work, just the nudge (Grok Bot head-to-head SCB-02). Anything with real work waits its turn below.
-    if ((chat.isRunning(threadId) || scheduledRuns.has(threadId)) && isPlainReminder(task)) {
-      const text = `⏰ Reminder: ${reminderText(task)}`
-      const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done', meta: { scheduled: task.id, reminder: true } })
+    // A plain reminder ("remind me in 3 minutes to stretch") needs no work, just the nudge: it is posted as it is, on
+    // time, with no model call, whether or not the chat is busy (Grok Bot head-to-head SCA-01, SCB-01, SCB-02). It is an
+    // aside, like a side answer: never part of a live run's prompt (a run mid-tool keeps its tool result in place).
+    const delivery = routineDelivery(task, { busy: chat.isRunning(threadId) || scheduledRuns.has(threadId), dry: info.dry })
+    if (delivery === 'remind') {
+      const r = reminderMessage(task)
+      const m = db.insertMessage({ threadId, role: 'assistant', content: r.content, kind: 'normal', status: 'done', meta: r.meta })
       emit({ threadId, type: 'message', message: m })
-      if (space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) showNote(new Notification({ title: space.isMain ? 'SahilBot' : space.name, body: text }), threadId)
+      if (space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) showNote(new Notification({ title: space.isMain ? 'SahilBot' : space.name, body: r.content }), threadId)
       return { status: 'done', threadId }
     }
-    const until = Date.now() + (info.test ? 60_000 : 2 * 3600_000)
-    while ((chat.isRunning(threadId) || scheduledRuns.has(threadId)) && Date.now() < until) {
-      await new Promise((r) => setTimeout(r, 5000))
-      const cur = scheduler.get(task.id)
-      // A one-time reminder is switched off the moment it fires (it won't come again), so only deleting it or
-      // pausing routines stops it waiting; a busy chat never drops it.
-      if (!info.test && (!cur || (!cur.enabled && cur.schedule.type !== 'once') || scheduler.paused())) return { status: 'skipped: paused or removed while it waited for the chat', threadId }
+    // The bot is busy (you're working with it, or another routine is running): the routine runs on time beside it, in
+    // a hidden chat of its own (unattended, with a routine's permissions), never mixed into your live run, and its
+    // answer is posted into the bot's chat as an aside when it's done (SCB-02: routines post on time).
+    const host = threadId
+    let runIn = threadId
+    if (delivery === 'beside') {
+      const parent = db.getThread(host)!
+      const side = db.createThread(space.id, parent.permissionMode, parent.model ?? null, host)
+      db.updateThread(side.id, { title: `⏰ ${task.title}` })
+      const st = db.getState(side.id), ps = db.getState(host)
+      st.roots = ps.roots
+      st.folder = ps.folder
+      db.setState(side.id, st)
+      runIn = side.id
     }
-    if (chat.isRunning(threadId) || scheduledRuns.has(threadId)) return { status: 'skipped: the chat stayed busy for two hours', threadId }
     const startedAt = Date.now()
-    scheduledRuns.add(threadId)
+    scheduledRuns.add(runIn)
     let status: Awaited<Awaited<ReturnType<typeof chat.send>>['done']>
     try {
       // A missed run catching up: the bot knows it's late (time-sensitive steps may need adjusting).
@@ -1923,11 +1929,16 @@ app.whenReady().then(() => {
       // A "when …" routine: the items that set it off are outside content (fenced in the note, and the run is tainted:
       // anything it would send or post asks first).
       const note = [late.note, info.event?.note].filter(Boolean).join('\n\n')
-      const { done } = await chat.send({ threadId, text: `⏰ ${info.dry ? '(Dry run) ' : ''}${task.title}\n\n${task.prompt}`, ...(note ? { note } : {}), meta: { scheduled: task.id, ...(info.late !== undefined ? { late: info.late } : {}), ...(info.dry ? { dryRun: true } : {}), ...(info.event ? { triggerUntrusted: info.event.untrusted.map((t) => t.slice(0, 4000)) } : {}) } }, { unattended: true })
+      const { done } = await chat.send({ threadId: runIn, text: `⏰ ${info.dry ? '(Dry run) ' : ''}${task.title}\n\n${task.prompt}`, ...(note ? { note } : {}), meta: { scheduled: task.id, ...(info.late !== undefined ? { late: info.late } : {}), ...(info.dry ? { dryRun: true } : {}), ...(info.event ? { triggerUntrusted: info.event.untrusted.map((t) => t.slice(0, 4000)) } : {}) } }, { unattended: true })
       status = await done
-    } finally { scheduledRuns.delete(threadId) }
-    const after = db.listMessages(threadId).filter((m) => m.createdAt >= startedAt)
-    const last = [...after].reverse().find((m) => m.role === 'assistant' && m.content && m.kind === 'normal')
+    } finally { scheduledRuns.delete(runIn) }
+    const after = db.listMessages(runIn).filter((m) => m.createdAt >= startedAt)
+    const last = [...after].reverse().find((m) => m.role === 'assistant' && m.content && m.kind === 'normal' && !m.meta?.superseded)
+    // Ran beside a busy chat: its answer goes into the bot's chat once, as an aside (the live run's prompt is untouched).
+    if (runIn !== host && last) {
+      const m = db.insertMessage({ threadId: host, role: 'assistant', content: last.content, kind: 'normal', status: 'done', meta: { scheduled: task.id, aside: true, routineRun: runIn } })
+      emit({ threadId: host, type: 'message', message: m })
+    }
     // The routine's own notification (the generic "done" one is skipped for routine runs). Click opens the chat.
     if (space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) {
       const body = status === 'error' ? 'The routine hit a problem. Click to see what happened.' : (last?.content ?? 'Done').replace(/\s+/g, ' ').trim().slice(0, 140)
@@ -1957,11 +1968,16 @@ app.whenReady().then(() => {
     const threadId = own && db.getThread(own) ? own : db.listThreads(space.id)[0]?.id
     if (!threadId) return
     const verb = { created: 'Created', paused: 'Paused', resumed: 'Resumed', deleted: 'Deleted', changed: 'Changed', failed: 'Routine failed', late: 'Ran late', missed: 'Missed' }[ev.type]
-    const when = (ms: number): string => new Date(ms).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    // Times on the routine's own clock when it is tied to a place ("7:30 AM ET"), else the Mac's.
+    const tz = 'tz' in ev.task.schedule ? ev.task.schedule.tz : undefined
+    const when = (ms: number): string => `${dateTimeIn(ms, tz)}${tz ? ` ${tzLabel(tz)}` : ''}`
+    // A new or changed routine says when it runs ("Created routine · Atlanta weather · Weekdays at 7:30 AM ET · next Wed, Nov 25 at 7:30 AM ET").
+    const next = ev.task.enabled ? nextLabel(ev.task.schedule, ev.task.nextRun) : ''
     const text = ev.type === 'failed' ? `Routine failed · ${ev.task.title}${ev.reason ? `: ${ev.reason}` : ''}`
       : ev.type === 'late' ? `Ran late · ${ev.task.title}: was due at ${when(ev.dueAt ?? Date.now())}`
         : ev.type === 'missed' ? `Missed routine · ${ev.task.title}: was due at ${when(ev.dueAt ?? Date.now())} while SahilBot was closed${ev.task.enabled && ev.task.nextRun ? `. Next run ${when(ev.task.nextRun)}` : ''}`
-          : `${verb} routine · ${ev.task.title}`
+          : ev.type === 'created' || ev.type === 'changed' || ev.type === 'resumed' ? `${verb} routine · ${ev.task.title} · ${describeSchedule(ev.task.schedule)}${next && ev.task.schedule.type !== 'once' ? ` · next ${next}` : ''}`
+            : `${verb} routine · ${ev.task.title}`
     const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', meta: { routineNotice: ev.type, routine: ev.task.id } })
     emit({ threadId, type: 'message', message: m })
   }

@@ -16,7 +16,7 @@ describe('schedule math', () => {
     expect(nextRun({ type: 'weekly', days: ['mon', 'thu'], time: '08:30' }, at('2026-11-12T09:00:00'))!.toString()).toBe(at('2026-11-16T08:30:00').toString())
     expect(nextRun({ type: 'every', minutes: 30 }, at('2026-11-12T09:00:00'))!.toString()).toBe(at('2026-11-12T09:30:00').toString())
     expect(nextRun({ type: 'once', at: '2026-11-12T08:00:00' }, at('2026-11-12T09:00:00'))).toBeNull()
-    expect(describeSchedule({ type: 'every', minutes: 120 })).toBe('every 2 hours')
+    expect(describeSchedule({ type: 'every', minutes: 120 })).toBe('Every 2 hours')
   })
 })
 

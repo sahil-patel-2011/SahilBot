@@ -136,6 +136,8 @@ export function blocks(messages: Message[]): Block[] {
     if (m.role === 'user') {
       if (m.meta?.hidden) continue
       act = null
+      // A routine's run starts with its instructions: a small "⏰ Routine · title" line, never your own (editable) bubble.
+      if (m.meta?.scheduled) { plan = null; out.push({ kind: 'notice', m: { ...m, content: `⏰ Routine · ${m.content.split('\n')[0].replace(/^⏰\s*/, '').trim()}` } }); continue }
       // Steering mid-run continues the same request: keep its plan card.
       if (!m.meta?.steer) plan = null
       out.push({ kind: 'user', m })

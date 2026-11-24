@@ -373,7 +373,7 @@ export interface ContextSection {
 }
 
 export function dayLine(date: Date): string {
-  return `Today is ${date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}.`
+  return `Today is ${date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. It is ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })} (${Intl.DateTimeFormat().resolvedOptions().timeZone}).`
 }
 
 const splitLines = (s: string | undefined): string[] => (s ?? '').split('\n').map((l) => l.trimEnd()).filter(Boolean)

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Schedule, ScheduledTask, Space } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
-import { describeSchedule } from '../routines'
+import { describeSchedule, nextRunText } from '../routines'
 
 // Schedules in words live in ../routines (shared with the bot details panel).
 export { describeSchedule }
@@ -95,7 +95,7 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
               <div className="sched-text" onClick={() => t.threadId && onOpen(t)} role="button" tabIndex={t.threadId ? 0 : -1}
                 onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && t.threadId) { e.preventDefault(); onOpen(t) } }}>
                 <b>{t.title}</b>
-                <span className="hint">{running.has(t.id) ? 'Running…' : t.enabled ? describeSchedule(t.schedule) : 'Paused'} · {spaces.find((s) => s.id === t.spaceId)?.name ?? 'SahilBot'}{t.enabled && t.nextRun && !running.has(t.id) ? ` · next ${new Date(t.nextRun).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}{t.lastStatus && !running.has(t.id) ? ` · last: ${t.lastStatus}` : ''}</span>
+                <span className="hint">{running.has(t.id) ? 'Running…' : t.enabled ? describeSchedule(t.schedule) : 'Paused'} · {spaces.find((s) => s.id === t.spaceId)?.name ?? 'SahilBot'}{t.enabled && t.nextRun && !running.has(t.id) ? ` · next ${nextRunText(t.schedule, t.nextRun)}` : ''}{t.lastStatus && !running.has(t.id) ? ` · last: ${t.lastStatus}` : ''}</span>
               </div>
               <label className="switch" title={t.enabled ? 'Pause' : 'Resume'}><input type="checkbox" checked={t.enabled} onChange={(e) => { setErr(''); api.schedules.update(t.id, { enabled: e.target.checked }).catch(fail) }} /><span /></label>
               <button className="icon-btn" title={running.has(t.id) ? 'Running…' : 'Test (run now)'} disabled={running.has(t.id)} onClick={() => { setErr(''); setRunning((r) => new Set(r).add(t.id)); api.schedules.runNow(t.id).catch(fail) }} data-testid="schedule-run"><I.Play size={15} /></button>

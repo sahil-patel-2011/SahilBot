@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { RoutineRun, Schedule, ScheduledTask } from '@shared/types'
 import type { Db } from './db'
-import { withTz } from '@shared/when'
-import { describeWhen, pickItems, triggerNote, TRIGGER_BATCH, TRIGGER_DAILY_MAX, TRIGGER_TEST_NOTE, type TriggerItem } from './triggers'
+import { describeSchedule, hasOffset } from '@shared/when'
+import { pickItems, triggerNote, TRIGGER_BATCH, TRIGGER_DAILY_MAX, TRIGGER_TEST_NOTE, type TriggerItem } from './triggers'
 
 // Scheduled tasks: once / daily / weekly / every N minutes / cron. Due tasks run as normal agent
 // turns in an unattended mode where anything that would need approval is skipped, not done.
@@ -72,7 +72,7 @@ function fromWall(wall: Date, tz: string): Date {
 export function nextRun(s: Schedule, from: Date): Date | null {
   // A place's own clock: work it out on that clock, then turn it back into a real moment.
   // (A one-off with its own offset, "…Z" or "…-05:00", is already a real moment.)
-  if ('tz' in s && validTz(s.tz) && !(s.type === 'once' && /(z|[+-]\d\d:?\d\d)$/i.test(s.at))) {
+  if ('tz' in s && validTz(s.tz) && !(s.type === 'once' && hasOffset(s.at))) {
     const { tz, ...rest } = s
     const at = nextRun(rest as Schedule, wallIn(from, tz))
     return at && fromWall(at, tz)
@@ -106,20 +106,8 @@ export function nextRun(s: Schedule, from: Date): Date | null {
   }
 }
 
-export function describeSchedule(s: Schedule): string {
-  return withTz(describeBase(s), s)
-}
-
-function describeBase(s: Schedule): string {
-  switch (s.type) {
-    case 'once': return `once on ${new Date(s.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
-    case 'every': return s.minutes % 60 === 0 ? `every ${s.minutes / 60} hour${s.minutes === 60 ? '' : 's'}` : `every ${s.minutes} minutes`
-    case 'daily': return `every day at ${s.time}`
-    case 'weekly': return `every ${s.days.map((d) => d.slice(0, 3)).join(', ')} at ${s.time}`
-    case 'cron': return `cron ${s.expr}`
-    case 'when': return describeWhen(s).replace(/^When/, 'when')
-  }
-}
+// One wording everywhere (routines screens, the schedule tool's replies, the chat's routine lines): "Weekdays at 7:30 AM ET".
+export { describeSchedule }
 
 /** What a routine run is: a test, a late catch-up, a dry run, or set off by new items (`event`). */
 export interface RunInfo {

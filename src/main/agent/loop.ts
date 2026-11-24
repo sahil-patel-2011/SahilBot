@@ -4230,7 +4230,7 @@ export class Agent {
       alwaysAllowed: state.alwaysAllow.includes(tool.name),
       hardStop,
       hardStopsEnabled: s.advanced.hardStopsEnabled,
-      spends: effect !== 'read' && spendsMoney(tool.name, summary, hardStop),
+      spends: effect !== 'read' && spendsMoney(tool.name, tool.deferred ? null : summary, hardStop),
       planted: !!planted,
       // A handoff from a run that read untrusted content: every outside action in this run asks, and so
       // does every terminal command (whatever its effect: a "local" command can still do anything).
@@ -4244,7 +4244,7 @@ export class Agent {
       trustedSend: trust?.trusted,
       trustNote: trust?.note
     }, rule)
-    return { effect, decision: this.botStops(thread, tool, effect, args, call.arguments, summary, hardStop, this.runRisks(run, tool, effect, args, ctx, decision)), summary }
+    return { effect, decision: this.botStops(thread, tool, effect, args, call.arguments, tool.deferred ? undefined : summary, hardStop, this.runRisks(run, tool, effect, args, ctx, decision)), summary }
   }
 
   /**
