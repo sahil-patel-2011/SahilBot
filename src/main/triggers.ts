@@ -112,22 +112,63 @@ export function pickItems(w: When, items: TriggerItem[], me: string[] = []): { i
 }
 
 /**
- * A one-time routine that is only a nudge to the user ("Remind me to stretch"), not work for the bot: it can be
- * delivered as a message on time, even while the chat is busy.
+ * How the schedule tool stores a reminder made with `remind` ("⏰ Reminder: Stretch"): an explicit nudge to the user,
+ * never work for the bot, so it is delivered as it is, on time, without a model call.
+ */
+export const reminderPrompt = (text: string): string => `⏰ Reminder: ${text.trim().replace(/^(⏰\s*)?reminder:?\s*/i, '')}`
+const MARKED = /^⏰\s*Reminder:/i
+
+/** How a nudge is usually worded: "Remind me to…", "Tell the user it's time to…", "Time to…", "Send a stretch reminder". */
+const NUDGE = /^(⏰\s*)?(reminder\b|remind (me|the user|them|him|her|you)\b|tell (me|the user|them|him|her) (to|that|it'?s|it is|about)\b|nudge\b|(it'?s )?time to\b|don'?t forget\b|send (me |the user )?an? ([\w'-]+ ){0,3}reminder\b)/i
+/** Work for the bot. Only counted after a joiner ("remind me … and send Bob the report"): "remind me to check the oven" is the user's job. */
+const WORK = /\b(send|email|text|message|reply|post|draft|write|make|create|book|order|buy|pay|check|look up|search|find|summari[sz]e|research|update|delete|move|run|schedule|open)\b/i
+const JOINER = /\s(?:and|then|also)\s|[;]/i
+
+/**
+ * A routine that is only a nudge to the user ("Remind me to stretch"), not work for the bot: it is delivered as a
+ * message on time, whether or not the chat is busy. One made with the schedule tool's `remind` always is (on any clock
+ * schedule); otherwise only a one-time routine worded as a nudge, with no work for the bot after it.
  */
 export function isPlainReminder(t: { schedule: { type: string }; title: string; prompt: string }): boolean {
-  if (t.schedule.type !== 'once') return false
+  if (t.schedule.type === 'when') return false
   const p = t.prompt.trim()
+  if (MARKED.test(p)) return p.length <= 400
+  if (t.schedule.type !== 'once') return false
   if (p.length > 240) return false
-  const nudge = /^(⏰\s*)?(reminder\b|remind (me|the user|them|him|her)\b|tell (me|the user) to\b|nudge)/i
-  // Work words mean the bot has something to do ("remind me … and send the report", "check…").
-  const work = /\b(send|email|post|draft|write|make|create|book|order|buy|check|look up|search|find|summari[sz]e|research|update|delete|move|run|schedule)\b/i
-  return (nudge.test(p) || nudge.test(t.title)) && !work.test(p.replace(nudge, ''))
+  const lead = NUDGE.exec(p)
+  // "Stretch reminder" / "Stand up and stretch": a reminder by name, unless its instructions start with work ("Check my inbox").
+  const named = /\breminder\b|^(⏰\s*)?remind\b/i.test(t.title) && !new RegExp(`^${WORK.source}`, 'i').test(p)
+  if (!lead && !named) return false
+  const rest = lead ? p.slice(lead[0].length) : p
+  const at = rest.search(JOINER)
+  return at < 0 || !WORK.test(rest.slice(at))
+}
+
+/**
+ * How a due routine reaches its chat. 'remind': a plain reminder, posted as it is (no model call), busy or not.
+ * 'beside': the chat is busy, so the work runs on time in a hidden chat of its own and its answer is posted after.
+ * 'here': the chat is free, so it runs in the chat itself.
+ */
+export function routineDelivery(t: { schedule: { type: string }; title: string; prompt: string }, o: { busy: boolean; dry?: boolean }): 'remind' | 'beside' | 'here' {
+  if (isPlainReminder(t) && !o.dry) return 'remind'
+  return o.busy ? 'beside' : 'here'
+}
+
+/**
+ * A plain reminder as posted in the chat: an aside, like a side answer, so it is never part of a live run's prompt
+ * (a run waiting on a tool keeps its tool result right after the call, and its history never ends on this line).
+ */
+export function reminderMessage(t: { id: string; title: string; prompt: string }): { content: string; meta: Record<string, unknown> } {
+  return { content: `⏰ Reminder: ${reminderText(t)}`, meta: { scheduled: t.id, reminder: true, aside: true } }
 }
 
 /** What to say for a plain reminder: the thing to do, from its instructions ("to stretch" → "Stretch"). */
 export function reminderText(t: { title: string; prompt: string }): string {
-  const p = t.prompt.trim().replace(/^(⏰\s*)?(reminder:?\s*|remind (me|the user|them|him|her)\s*(to\s+|that\s+|about\s+)?|tell (me|the user) to\s+|nudge (me|the user)\s*(to\s+)?)/i, '').replace(/[.!]+$/, '')
-  const s = p || t.title.replace(/^(⏰\s*)?(reminder:?\s*)/i, '')
+  const title = t.title.replace(/^(⏰\s*)?(reminder:?\s*)/i, '').replace(/\s+reminder$/i, '').trim()
+  const raw = t.prompt.trim()
+  // "Send a stretch reminder" says how, not what: the title says what.
+  if (/^send (me |the user )?an? ([\w'-]+ ){0,3}reminder\b/i.test(raw) && title) return title.charAt(0).toUpperCase() + title.slice(1)
+  const p = raw.replace(/^(⏰\s*)?(reminder:?\s*|remind (me|the user|them|him|her|you)\s*(to\s+|that\s+|about\s+)?|tell (me|the user|them|him|her)\s+(to\s+|that\s+|about\s+)?|nudge (me|the user)\s*(to\s+)?|don'?t forget (to\s+)?)/i, '').replace(/[.!]+$/, '')
+  const s = p || title
   return s.charAt(0).toUpperCase() + s.slice(1)
 }

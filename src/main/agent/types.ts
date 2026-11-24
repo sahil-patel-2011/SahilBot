@@ -138,6 +138,11 @@ export interface ToolDef<A = any> {
    */
   consequential?: (args: A, call: { threadId: string; unattended?: boolean; state?: ThreadState }) => boolean | 'project'
   /**
+   * Its effects happen later, in a run of their own that is checked when it acts (a routine): setting it up never
+   * spends money or deletes anything, so the words in its summary ("Pay rent", "Delete old files") never ask.
+   */
+  deferred?: boolean
+  /**
    * Returns a reason when this call falls on the hard-stop list. `call` (when the loop has it): the chat's
    * attached folders and working folder, so a path outside them can ask first.
    */

@@ -3,7 +3,7 @@ import type { BotMaxSettings, LibraryItem, RoutineRun, ScheduledTask, Space, Thr
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
-import { describeSchedule, groupLibrary, host, routineStatus, when } from '../routines'
+import { describeSchedule, groupLibrary, host, nextRunText, routineStatus, when } from '../routines'
 import { BotShareRows } from './BotShare'
 import { BotGoals } from './TasksView'
 import { BotStatusLine } from './FunctionBots'
@@ -219,7 +219,7 @@ function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: bool
         <div className="rt-fact"><label>When to run</label><p>{describeSchedule(t.schedule)}</p></div>
         {t.schedule.type === 'when'
           ? <div className="rt-fact"><label>Checks</label><p>{t.enabled ? 'About every 5 minutes while SahilBot is open' : 'Paused'}</p></div>
-          : <div className="rt-fact"><label>Next run</label><p>{t.enabled && t.nextRun ? when(t.nextRun) : t.enabled ? 'Not scheduled' : 'Paused'}</p></div>}
+          : <div className="rt-fact"><label>Next run</label><p>{t.enabled && t.nextRun ? nextRunText(t.schedule, t.nextRun) : t.enabled ? 'Not scheduled' : 'Paused'}</p></div>}
       </div>
 
       <div className="rt-actions">

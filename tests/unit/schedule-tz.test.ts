@@ -31,5 +31,5 @@ test('moving a routine keeps the place\'s time zone', async () => {
   await tool.run({ action: 'update', id, when: { type: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri'], time: '07:00' } } as never, ctx)
   expect(s.get(id)!.schedule).toEqual({ type: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri'], time: '07:00', tz: 'America/New_York' })
   const out = await tool.run({ action: 'list' } as never, ctx)
-  expect(out.text).toMatch(/07:00 ET/)
+  expect(out.text).toMatch(/Weekdays at 7:00 AM ET, next .* at 7:00 AM ET/)
 })

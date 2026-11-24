@@ -146,3 +146,18 @@ describe('voice conversations in the chat', () => {
     expect(html).not.toContain('data-testid="user-bubble"')
   })
 })
+
+describe('routine runs in the chat', () => {
+  it('a routine\'s instructions show as a small "Routine" line, never as your own editable bubble', () => {
+    const ms = [
+      msg({ role: 'user', content: 'Hi' }),
+      msg({ content: 'Hello!' }),
+      msg({ role: 'user', content: '⏰ Atlanta weather\n\nSend me the Atlanta weather', meta: { scheduled: 'r1' } }),
+      msg({ content: 'Sunny, 61°F.' })
+    ]
+    const bs = tv.blocks(ms)
+    expect(bs.map((b) => b.kind)).toEqual(['user', 'text', 'notice', 'text'])
+    expect((bs[2] as { m: Message }).m.content).toBe('⏰ Routine · Atlanta weather')
+    expect(bs.filter((b) => b.kind === 'user').map((b) => (b as { m: Message }).m.content)).toEqual(['Hi'])
+  })
+})
