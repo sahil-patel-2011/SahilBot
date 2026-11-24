@@ -1081,6 +1081,23 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
         <button className="link-btn" onClick={() => void api.chat.resume(m.threadId).catch((e) => toast((e as Error).message, 'error'))} data-testid="resume-run">Continue</button>
       </div>
     )
+    // A bot deleted by asking: "Deleted Study Buddy · Undo" (it comes back with its chat and routines).
+    const botUndo = m.meta?.botUndo as { spaceId: string; name: string } | undefined
+    if (botUndo) return (
+      <div className="notice sys-line" role="status" data-testid="bot-deleted">
+        {m.content}{' · '}
+        {m.meta?.undone ? <span>Undone</span>
+          : <button className="link-btn" onClick={() => void api.spaces.restore(botUndo.spaceId).catch((e) => toast((e as Error).message, 'error'))} data-testid="bot-undo">Undo</button>}
+      </div>
+    )
+    // A bot made by asking: its icon, name and job, and a button into its chat.
+    const botCard = m.meta?.botCard as { spaceId: string; name: string; icon: string; job: string } | undefined
+    if (botCard) return (
+      <div className="notice sys-line" role="status" data-testid="bot-card">
+        <span aria-hidden>{botCard.icon}</span> {botCard.name}{botCard.job ? ` · ${botCard.job}` : ''}{' · '}
+        <button className="link-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-bot', { detail: botCard.spaceId }))} data-testid="bot-card-open">Open</button>
+      </div>
+    )
     // Planner ⇄ Executor computer use: its live timeline card rides on a notice (CuaCard.tsx).
     if (cuaOf(m)) return <CuaCard m={m} />
     if (Array.isArray(m.meta?.collaboration)) return <CollaborationCard steps={m.meta.collaboration as CollaborationStep[]} interrupted={m.status === 'stopped'} />

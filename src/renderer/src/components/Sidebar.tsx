@@ -15,6 +15,8 @@ import { useDevMode } from '../lib/dev-mode'
 import { UpdateButton } from './UpdateButton'
 import { sidebarStatusText } from './FunctionBots'
 import { useBotStatus } from '../lib/bot-status'
+import { deleteBotWithUndo } from '../lib/bot-delete'
+import { toast } from '../lib/toast'
 
 /** The profile menu's usage line: "Usage · $3.20 of $200 this month". */
 const spendLabel = (b: ReturnType<typeof useSpend>): string => !b ? 'Usage' : b.mode === 'amount' ? `Usage · ${money(b.spent)} of ${money(b.cap)} this month` : `Usage · ${money(b.spent)} this month`
@@ -126,7 +128,7 @@ export function Sidebar(p: {
         'sep',
         {
           label: 'Delete', icon: <I.Trash size={15} />, danger: true,
-          run: () => { if (confirm(`Delete "${s.name}" and its conversation? This can't be undone.`)) void api.spaces.remove(s.id).then(p.onChanged) }
+          run: () => { if (confirm(`Delete "${s.name}" and its conversation? You can undo it for a few minutes.`)) void deleteBotWithUndo(s, p.onChanged).catch((e) => toast((e as Error).message, 'error')) }
         }
       ] : [
         pinnedIds.includes(s.id)
@@ -147,7 +149,7 @@ export function Sidebar(p: {
           { label: 'Hide from sidebar', icon: <I.Close size={15} />, run: () => void api.spaces.update(s.id, { hidden: true }).then(p.onChanged) },
           {
             label: 'Delete', icon: <I.Trash size={15} />, danger: true,
-            run: () => { if (confirm(`Delete "${s.name}" and its conversation? This can't be undone.`)) void api.spaces.remove(s.id).then(p.onChanged) }
+            run: () => { if (confirm(`Delete "${s.name}" and its conversation? You can undo it for a few minutes.`)) void deleteBotWithUndo(s, p.onChanged).catch((e) => toast((e as Error).message, 'error')) }
           }
         ] as MenuItem[])
       ]

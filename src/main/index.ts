@@ -198,6 +198,7 @@ import { addAdapter, broadcast, registerHandler } from './rpc'
 import { electronAdapter } from './rpc-electron'
 import { setupRemoteServer } from './remote-server'
 import { placementBlock, placementOf, setupWorkerFleet, setupWorkerHost } from './workers'
+import { botTrash } from './bot-trash'
 
 // Linux test runs only: Playwright launches Electron with --password-store=basic (plain text, which the
 // secret store refuses), so a test on a machine with a keyring can switch back to it before the app is ready.
@@ -781,7 +782,7 @@ app.whenReady().then(() => {
     ...coreTools(results),
     apiRequestTool(vault),
     chatHistoryTool(db),
-    undoTool(db),
+    undoTool(db, { lastDeleted: (threadId) => lastDeletedBot(threadId), restore: (id) => { restoreBot(id); emit({ threadId: '', type: 'spaces' }) } }),
     // The app's own manual (docs/*.md), searchable: the agent looks things up instead of guessing.
     manualTool(docsDir),
     // A file of the user's is replaced only when their own words in this task asked to change it (tools/freshness.ts).
@@ -872,10 +873,16 @@ app.whenReady().then(() => {
       create: (name, color, shape, icon) => { const r = templateDeps.createBot(name, color, shape as BotShape); if (icon) db.updateSpace(r.spaceId, { icon }); return r },
       setPrompt: (spaceId, text) => spaces.setPrompt(spaceId, text),
       setLabel: (spaceId, label) => db.updateSpace(spaceId, { label }),
-      greet: (threadId, text) => { const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done' }); emit({ threadId, type: 'message', message: m }); emit({ threadId, type: 'thread', thread: db.markUnread(threadId) }) }
+      greet: (threadId, text) => { const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done' }); emit({ threadId, type: 'message', message: m }); emit({ threadId, type: 'thread', thread: db.markUnread(threadId) }) },
+      // The chat that asked gets a card for the new bot (icon, name, job, Open).
+      card: (threadId, bot) => { const m = db.insertMessage({ threadId, role: 'assistant', content: `Made ${bot.name} ${bot.icon}`, kind: 'notice', status: 'done', meta: { botCard: bot } }); emit({ threadId, type: 'message', message: m }) }
     }, db, () => emit({ threadId: '', type: 'spaces' })),
     manageBotTool({
-      remove: (id) => removeBot(id),
+      // Deleting by asking is undoable: "Deleted X · Undo" in the chat that asked, and "undo" brings it back.
+      remove: (id, threadId) => removeBot(id, threadId),
+      restore: (id) => restoreBot(id),
+      getPrompt: (id) => spaces.getPrompt(id),
+      setPrompt: (id, text) => spaces.setPrompt(id, text),
       pin: (id, on) => { const cur = settings.get().pinnedBots ?? []; settings.set({ pinnedBots: on ? [...new Set([...cur, id])] : cur.filter((x) => x !== id) } as never) }
     }, db, () => emit({ threadId: '', type: 'spaces' })),
     finishSetupTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
@@ -1135,7 +1142,7 @@ app.whenReady().then(() => {
   applyTheme(settings.get().theme)
 
   /** Calls that change what's unread refresh the Dock badge. */
-  const BADGE_IPC = new Set(['threads:update', 'threads:markRead', 'threads:remove', 'spaces:markUnread', 'spaces:update', 'spaces:remove'])
+  const BADGE_IPC = new Set(['threads:update', 'threads:markRead', 'threads:remove', 'spaces:markUnread', 'spaces:update', 'spaces:remove', 'spaces:restore'])
   const handle = <A extends unknown[], R>(ch: string, fn: (...args: A) => R | Promise<R>): void => {
     if (BADGE_IPC.has(ch)) registerHandler(ch, async (_ctx, ...args) => { try { return await fn(...(args as A)) } finally { refreshBadge() } })
     else registerHandler(ch, (_ctx, ...args) => fn(...(args as A)))
@@ -1485,6 +1492,7 @@ app.whenReady().then(() => {
     if (t) emit({ threadId: t.id, type: 'thread', thread: db.markUnread(t.id) })
   })
   handle('spaces:remove', (id: string) => removeBot(id))
+  handle('spaces:restore', (id: string) => { restoreBot(String(id ?? '')); emit({ threadId: '', type: 'spaces' }) })
   handle('spaces:getPrompt', (id: string) => spaces.getPrompt(id))
   handle('spaces:setPrompt', (id: string, text: string) => {
     spaces.setPrompt(id, text)
@@ -1990,7 +1998,7 @@ app.whenReady().then(() => {
   // Missed runs (closed or asleep) catch up once within Settings → General → "Catch up on missed routines".
   scheduler.catchUpHours = () => settings.get().catchUpHours ?? 12
   scheduler.paused = () => !!settings.get().routinesPaused
-  scheduler.available = (id) => !placementBlock(db, id)
+  scheduler.available = (id) => !placementBlock(db, id) && db.trashedAt(id) === undefined
   scheduler.start()
   // Waking from sleep: check for due (missed) routines now rather than at the next tick, once the network is back.
   powerMonitor.on('resume', () => { setTimeout(() => void scheduler.tick().catch(() => undefined), 5000) })
@@ -2019,16 +2027,25 @@ app.whenReady().then(() => {
     scheduler.test(id, { dry: true })
   })
 
-  /** Deletes a bot: its chats stop, its jobs stop, and groups drop it (the sidebar menu, its profile, or asking). */
-  function removeBot(id: string): void {
-    if (db.getSpace(id)?.isMain) throw new Error("The main bot can't be deleted.")
-    if (!isServer() && placementOf(db, id)) throw new Error('Move this bot back to this Mac before deleting its local profile.')
-    for (const t of db.listThreads(id)) chat.stop(t.id)
-    // Background jobs belong to the bot's chats: they stop with it.
-    void jobs.stopThreads(db.listThreads(id).map((t) => t.id))
-    db.deleteSpace(id)
-    for (const g of db.listSpaces().filter((x) => x.kind === 'group' && x.members.includes(id))) db.updateSpace(g.id, { members: g.members.filter((m) => m !== id) })
-  }
+  /**
+   * Deletes a bot (the sidebar menu, its profile, or asking) so it can be undone (bot-trash.ts): its chats and
+   * jobs stop, groups drop it and it leaves every list at once; Undo brings it all back for a few minutes.
+   * `threadId`: the chat that asked, which gets a "Deleted X · Undo" line.
+   */
+  const botBin = botTrash(db, {
+    stop: (threadIds) => {
+      for (const t of threadIds) chat.stop(t)
+      // Background jobs belong to the bot's chats: they stop with it.
+      void jobs.stopThreads(threadIds)
+    },
+    blocked: (id) => (!isServer() && placementOf(db, id) ? 'Move this bot back to this Mac before deleting its local profile.' : null),
+    emit: (m) => emit({ threadId: m.threadId, type: 'message', message: m })
+  })
+  function removeBot(id: string, threadId?: string): void { botBin.remove(id, threadId) }
+  function restoreBot(id: string): void { botBin.restore(id) }
+  function lastDeletedBot(threadId: string): { id: string; name: string; at: number } | undefined { return botBin.lastDeleted(threadId) }
+  // Bots deleted before the app last quit: past their Undo time they go now, the rest when it ends.
+  botBin.resume()
 
   // ---------------------------------------------------------------- bot templates
   const templatesDir = join(appRoot(), 'packs', 'templates')

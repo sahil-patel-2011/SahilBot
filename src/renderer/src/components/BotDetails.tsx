@@ -7,6 +7,7 @@ import { describeSchedule, groupLibrary, host, nextRunText, routineStatus, when 
 import { BotShareRows } from './BotShare'
 import { BotGoals } from './TasksView'
 import { BotStatusLine } from './FunctionBots'
+import { deleteBotWithUndo } from '../lib/bot-delete'
 
 type Tab = 'details' | 'library'
 type Filter = 'all' | 'file' | 'link'
@@ -381,11 +382,15 @@ export function MaxRows({ spaceId }: { spaceId: string }) {
   )
 }
 
-/** Hide a bot from the sidebar, or delete it (asks first): right in its profile, no right-click needed. */
+/** Hide a bot from the sidebar, or delete it (asks first, then Undo): right in its profile, no right-click needed. */
 function BotRemoveRows({ space, onChanged, onClose }: { space: Space; onChanged: () => void; onClose: () => void }) {
   const [confirm, setConfirm] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const hide = async (): Promise<void> => { await api.spaces.update(space.id, { hidden: !space.hidden }); onChanged() }
-  const del = async (): Promise<void> => { await api.spaces.remove(space.id); onChanged(); onClose() }
+  // Its chat closes with it (App's onChanged opens the main chat); a delete that can't happen says why, here.
+  const del = async (): Promise<void> => {
+    try { await deleteBotWithUndo(space, onChanged); onClose() } catch (e) { setError((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')) }
+  }
   return (
     <>
       <div className="bd-section-title">Remove</div>
@@ -399,11 +404,12 @@ function BotRemoveRows({ space, onChanged, onClose }: { space: Space; onChanged:
           </button>
         ) : (
           <div className="rt-confirm block" role="alertdialog" aria-label="Delete bot">
-            <span>Delete {space.name} and its chat? This can’t be undone.</span>
+            <span>Delete {space.name} and its chat? You can undo it for a few minutes.</span>
             <button className="bd-btn" onClick={() => setConfirm(false)}>Cancel</button>
             <button className="bd-btn danger" onClick={() => void del()} data-testid="bot-delete-confirm">Delete</button>
           </div>
         )}
+        {error && <div className="bd-row-sub danger" role="alert" data-testid="bot-delete-error">{error}</div>}
       </div>
     </>
   )
