@@ -162,7 +162,8 @@ describe('SahilBot Server', () => {
     await c.call('threads:update', thread.id, { permissionMode: 'ask' })
 
     // 1. A plain reply, streamed.
-    llm.script.push({ content: 'Hello from the Pi, streaming word by word.', delay: 20 })
+    // (A chat's first sentence is read before it shows; the rest streams.)
+    llm.script.push({ content: 'Hello from the Pi. The rest of this reply streams word by word, one piece at a time, as it is written.', delay: 20 })
     await c.call('chat:send', { threadId: thread.id, text: 'Say hello' })
     await until(() => c.events.some((e) => e.ch === 'chat:event' && e.args[0].threadId === thread.id && e.args[0].type === 'delta'))
     await until(() => c.events.some((e) => e.ch === 'chat:event' && e.args[0].type === 'run' && e.args[0].status === 'finished' && e.args[0].threadId === thread.id))

@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, truncateSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, truncateSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { expect, test, vi } from 'vitest'
 
-const trash = mkdtempSync(join(tmpdir(), 'sb-trash-'))
+const trash = realpathSync(mkdtempSync(join(tmpdir(), 'sb-trash-')))
 vi.mock('electron', () => ({ shell: { trashItem: async (p: string) => { renameSync(p, join(trash, `${Date.now()}-${basename(p)}`)) } }, BrowserWindow: class {} }))
 
 const { fileTools } = await import('../../src/main/agent/tools/files')
@@ -16,8 +16,8 @@ const { beginRun, changesOf, setUndoRoot, undoRun } = await import('../../src/ma
 const ctxFor = (threadId: string, ws: string) => ({ threadId, workspaceDir: ws, state: { roots: [], loaded: [], alwaysAllow: [], todos: [] }, signal: new AbortController().signal }) as never
 
 test('a moved folder is moved back, and a copied folder is taken away', async () => {
-  setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-')))
-  const ws = mkdtempSync(join(tmpdir(), 'sb-undo-dirs-'))
+  setUndoRoot(realpathSync(mkdtempSync(join(tmpdir(), 'sb-undo-'))))
+  const ws = realpathSync(mkdtempSync(join(tmpdir(), 'sb-undo-dirs-')))
   mkdirSync(join(ws, 'photos'))
   writeFileSync(join(ws, 'photos', 'a.jpg'), 'a')
   mkdirSync(join(ws, 'Archive'))
@@ -39,8 +39,8 @@ test('a moved folder is moved back, and a copied folder is taken away', async ()
 })
 
 test('deleting a folder too big to copy says Undo can\'t bring it back (the Trash can)', async () => {
-  setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-')))
-  const ws = mkdtempSync(join(tmpdir(), 'sb-undo-big-'))
+  setUndoRoot(realpathSync(mkdtempSync(join(tmpdir(), 'sb-undo-'))))
+  const ws = realpathSync(mkdtempSync(join(tmpdir(), 'sb-undo-big-')))
   mkdirSync(join(ws, 'big'))
   for (let i = 0; i < 5001; i++) writeFileSync(join(ws, 'big', `${i}.txt`), '')
   writeFileSync(join(ws, 'small.txt'), 'x')
@@ -53,9 +53,9 @@ test('deleting a folder too big to copy says Undo can\'t bring it back (the Tras
 })
 
 test('deleting one huge file copies nothing into the journal and says Undo can\'t bring it back', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'sb-undo-'))
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'sb-undo-')))
   setUndoRoot(root)
-  const ws = mkdtempSync(join(tmpdir(), 'sb-undo-hugefile-'))
+  const ws = realpathSync(mkdtempSync(join(tmpdir(), 'sb-undo-hugefile-')))
   writeFileSync(join(ws, 'video.mov'), '')
   truncateSync(join(ws, 'video.mov'), 600_000_000)
   const t = Object.fromEntries(fileTools(() => ws, ws).map((x) => [x.name, x]))
@@ -66,8 +66,8 @@ test('deleting one huge file copies nothing into the journal and says Undo can\'
 })
 
 test('sheet_write in place is in the undo journal', async () => {
-  setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-')))
-  const ws = mkdtempSync(join(tmpdir(), 'sb-undo-sheet-'))
+  setUndoRoot(realpathSync(mkdtempSync(join(tmpdir(), 'sb-undo-'))))
+  const ws = realpathSync(mkdtempSync(join(tmpdir(), 'sb-undo-sheet-')))
   const t = Object.fromEntries(fileTools(() => ws, ws).map((x) => [x.name, x]))
   await t.create_document.run({ path: 'budget.xlsx', sheets: [{ name: 'Budget', rows: [['Item', 'Cost'], ['Rent', 1000]] }] }, ctxFor('t-sheet', ws))
   const before = readFileSync(join(ws, 'budget.xlsx'))
