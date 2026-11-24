@@ -50,6 +50,8 @@ export interface ThreadActions {
   onOpenFile: (path: string) => void
   /** Docs: opens a live document in the Document tab. */
   onOpenDoc?: (id: string) => void
+  /** The bot as it is now (a "Made X" card follows a rename; null once it is deleted). */
+  liveBot?: (spaceId: string) => { name: string; icon?: string | null } | null | undefined
 }
 
 /**
@@ -633,7 +635,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     onReact: (id, emoji) => live.current.onReact(id, emoji),
     onReply: (text) => live.current.onReply(text),
     onOpenFile: (path) => live.current.onOpenFile(path),
-    onOpenDoc: (id) => live.current.onOpenDoc?.(id)
+    onOpenDoc: (id) => live.current.onOpenDoc?.(id),
+    liveBot: (id) => (live.current.liveBot ? live.current.liveBot(id) : undefined)
   }), [])
 
   useLayoutEffect(() => {
@@ -762,6 +765,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                 waitingApproval={approvalWaiting && b === lastActivity}
                 planLive={running && b === lastPlan}
                 members={b.kind === 'team' ? teams?.[b.id] : undefined}
+                botNow={b.kind === 'notice' && b.m.meta?.botCard ? botNow(actions, (b.m.meta.botCard as { spaceId: string }).spaceId) : undefined}
                 editable={!running && b.kind === 'user' && b.m.id === lastUserId}
                 dev={dev} quietBot={quietBot} retry={!running && !pending.length && b === tailText && b.kind === 'text'} />
               </Fragment>
@@ -808,6 +812,10 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   )
 }
 
+const botNow = (actions: ThreadActions, spaceId: string): string | undefined => {
+  const bot = actions.liveBot?.(spaceId)
+  return bot === undefined ? undefined : bot === null ? '' : `${bot.icon ?? ''} ${bot.name}`
+}
 const atOf = (x: Block): number => (x.kind === 'activity' ? x.steps[0].at : x.kind === 'qa' || x.kind === 'plan' || x.kind === 'team' || x.kind === 'heavy' || x.kind === 'idea' ? x.at : x.m.createdAt)
 const blockKey = (b: Block): string => (b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.kind === 'heavy' ? `h-${b.id}` : b.kind === 'idea' ? `i-${b.id}` : b.m.id)
 
@@ -822,6 +830,8 @@ type BlockProps = {
   waitingApproval: boolean
   planLive: boolean
   members?: TeamMember[]
+  /** A "Made X" card: the bot's name and icon now ('' once deleted), so the card re-renders when they change. */
+  botNow?: string
   editable: boolean
   /** Developer mode: every step, thinking, the model and its cost. */
   dev: boolean
@@ -956,7 +966,7 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
     </div>
   )
 }, (a, b) => a.time === b.time && a.cont === b.cont && a.actions === b.actions && a.hasDocs === b.hasDocs && a.running === b.running &&
-  a.live === b.live && a.waitingApproval === b.waitingApproval && a.planLive === b.planLive && a.members === b.members &&
+  a.live === b.live && a.waitingApproval === b.waitingApproval && a.planLive === b.planLive && a.members === b.members && a.botNow === b.botNow &&
   a.editable === b.editable && a.dev === b.dev && a.quietBot === b.quietBot && a.retry === b.retry && sameBlock(a.b, b.b))
 
 /**
@@ -1099,10 +1109,12 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
     )
     // A bot made by asking: its icon, name and job, and a button into its chat.
     const botCard = m.meta?.botCard as { spaceId: string; name: string; icon: string; job: string } | undefined
+    const liveBot = botCard && actions.liveBot ? actions.liveBot(botCard.spaceId) : undefined
     if (botCard) return (
       <div className="notice sys-line" role="status" data-testid="bot-card">
-        <span aria-hidden>{botCard.icon}</span> {botCard.name}{botCard.job ? ` · ${botCard.job}` : ''}{' · '}
-        <button className="link-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-bot', { detail: botCard.spaceId }))} data-testid="bot-card-open">Open</button>
+        <span aria-hidden>{liveBot?.icon || botCard.icon}</span> {liveBot?.name ?? botCard.name}{botCard.job ? ` · ${botCard.job}` : ''}{' · '}
+        {liveBot === null ? <span>Deleted</span>
+          : <button className="link-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-bot', { detail: botCard.spaceId }))} data-testid="bot-card-open">Open</button>}
       </div>
     )
     // Planner ⇄ Executor computer use: its live timeline card rides on a notice (CuaCard.tsx).

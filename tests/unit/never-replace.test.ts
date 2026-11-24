@@ -104,6 +104,33 @@ describe('never replace a file the user made', () => {
     expect(r.text).toMatch(/report\.txt was already there.*report \(2\)\.txt/)
   })
 
+  test('a file or folder of the user\'s that the chat moved stays theirs: a rebuild there saves "(2)", rm of it is not the chat\'s', async () => {
+    setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-')))
+    const ws = mkdtempSync(join(tmpdir(), 'sb-moved-'))
+    mkdirSync(join(ws, 'Documents'))
+    writeFileSync(join(ws, 'invoice.txt'), 'the only copy')
+    mkdirSync(join(ws, 'trip'))
+    writeFileSync(join(ws, 'trip', 'a.jpg'), 'a')
+    let said = 'Move invoice.txt and my trip folder to Documents'
+    const t = Object.fromEntries(fileTools(() => ws, ws, { userText: () => said }).map((x) => [x.name, x]))
+    const ctx = ctxFor('t-moved')
+    beginRun('t-moved', 'task-moved')
+    await t.file_manage.run({ op: 'move', path: 'invoice.txt', to: 'Documents' }, ctx)
+    await t.file_manage.run({ op: 'move', path: 'trip', to: 'Documents' }, ctx)
+    const { ownedHere } = await import('../../src/main/agent/tools/freshness')
+    const { createdInThread } = await import('../../src/main/agent/undo-journal')
+    expect(ownedHere('t-moved', join(ws, 'Documents', 'invoice.txt'))).toBe(false)
+    expect(createdInThread('t-moved', join(ws, 'Documents', 'invoice.txt'))).toBe(false)
+    expect(ownedHere('t-moved', join(ws, 'Documents', 'trip'))).toBe(false)
+    said = 'Make me a summary note'
+    const r = await t.file_write.run({ path: 'Documents/invoice.txt', content: 'a rebuild' }, ctx)
+    expect(readFileSync(join(ws, 'Documents', 'invoice.txt'), 'utf8')).toBe('the only copy')
+    expect(r.path).toBe(join(ws, 'Documents', 'invoice (2).txt'))
+    // A copy is the chat's own.
+    await t.file_manage.run({ op: 'copy', path: 'Documents/invoice.txt', to: 'copy.txt' }, ctx)
+    expect(ownedHere('t-moved', join(ws, 'copy.txt'))).toBe(true)
+  })
+
   test('file_manage delete goes to the Trash and Undo brings the file (or folder) back', async () => {
     setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-')))
     const ws = mkdtempSync(join(tmpdir(), 'sb-del-'))

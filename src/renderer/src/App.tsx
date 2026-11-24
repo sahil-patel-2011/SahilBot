@@ -1163,7 +1163,8 @@ export function App() {
                 onReact: (id, emoji) => void api.threads.react(id, emoji),
                 onReply: (text) => composer.current?.insert(`> ${text.replace(/\s+/g, ' ').slice(0, 220)}\n`),
                 onOpenFile: openFile,
-                onOpenDoc: openDoc
+                onOpenDoc: openDoc,
+                liveBot: (id) => spaces.find((s) => s.id === id) ?? null
               }} />
             <div className="composer-wrap">
               {(queue[thread.id] ?? []).length > 0 && (

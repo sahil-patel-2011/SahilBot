@@ -2760,6 +2760,7 @@ export class Agent {
       heavy: !!last?.meta?.heavy, team: !!last?.meta?.team || !!last?.meta?.max, deepResearch: !!last?.meta?.deepResearch, planFirst: !!last?.meta?.planFirst, council: !!last?.meta?.council,
       previousKind: state.lastKind, previousEffort: state.lastEffort, previousStudy: state.lastStudy,
       role: ((sp) => (sp && !sp.isMain && sp.kind === 'bot' ? [sp.name, sp.label].filter(Boolean).join(': ') : undefined))(this.d.db.getSpace(thread.spaceId)),
+      botNames: this.d.db.listSpaces().filter((sp) => sp.kind === 'bot' && sp.id !== thread.spaceId).map((sp) => sp.name),
       ...requestTokens({ text: last?.content ?? '', files, history: all.slice(Math.max(0, cut)).filter((m) => m !== last) })
     }
     let task = classifyRoute(last?.content ?? '', routeContext)
@@ -3433,6 +3434,7 @@ export class Agent {
     const kind = classifyTask(opener?.content ?? '', {
       flags: opener?.meta, files: attached, folders: ((opener?.meta?.folders as string[] | undefined) ?? []).length, openPlan, previous: state.lastKind,
       helper: run.helper, unattended: run.unattended, group: run.group,
+      botNames: db.listSpaces().filter((sp) => sp.kind === 'bot' && sp.id !== thread.spaceId).map((sp) => sp.name),
       // The router's decision for this request (same function): chat-vs-agent and the category never disagree.
       route: routed?.task
     })
@@ -3975,7 +3977,10 @@ export class Agent {
           // Said it, didn't do it (Grok Build's task discipline, Apache-2.0): a reply that announces an action
           // ("Publishing the post now", "I'll send you the link once it's up") with no tool call means the action
           // never happened. Make it happen (twice per run at most).
-          if (this.feat.announceNudge && mayBounce && !asksToContinue && !asksUser && promisesAction(assistant.content) && actionNudges < 2 && !run.unattended && (!chatRun || (actions === 0 && assistant.content.length < 300)) && step < HARD_CAP) {
+          // (Not after a schedule, follow-up or goal was set in this run: "I'll send you the weather every weekday at
+          // 7:30" is then backed by the routine itself.)
+          const scheduledHere = () => db.listMessages(thread.id).some((m) => m.createdAt >= runStart && m.role === 'tool' && m.meta?.status === 'ok' && LATER_TOOLS.has(m.toolName ?? ''))
+          if (this.feat.announceNudge && mayBounce && !asksToContinue && !asksUser && promisesAction(assistant.content) && actionNudges < 2 && !run.unattended && (!chatRun || (actions === 0 && assistant.content.length < 300)) && step < HARD_CAP && !scheduledHere()) {
             actionNudges++
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your reply says you are doing something (or will), but you made no tool call, so it did not happen. Do it now with the next concrete tool call, and keep going until it is actually done (the live link, the sent message, the saved file). If something truly blocks it, say plainly what.' })
@@ -5120,6 +5125,9 @@ export class Agent {
     // create_document renders and reviews the file it made (the result carries the review): a clean review is the
     // check, so the answer after it needs no second pass (write → check once → done).
     if (tool.name === 'create_document' && reviewedClean(out.text)) ctx.track.unchecked = false
+    // A schedule's result states what was stored ("Scheduled X (Weekdays at 7:30 AM ET), next run …"): that is
+    // the check, so a reminder or routine needs no second pass.
+    if (tool.name === 'schedule') ctx.track.unchecked = wasUnchecked
     // Ran the code it wrote (the script itself, a dry run, its tests) and it exited cleanly: that run is the check.
     if (ctx.track.codeEdited && ((tool.name === 'run_command' && testedOwnCode(String((args as { command?: unknown }).command ?? ''), (out.data as { exitCode?: unknown } | undefined)?.exitCode, [s.workspaceDir, ...(state.roots ?? [])].filter(Boolean)))
       || (tool.name === 'code' && out.verification?.passed && /^tests\b/.test(out.verification.criterion)))) ctx.track.unchecked = false
@@ -5298,6 +5306,9 @@ export function recallQuery(opener: Pick<Message, 'id' | 'content'>, messages: A
  * A final reply that announces an action instead of doing it: "Publishing the clicks post now.", "I'll send you
  * the live link once it's up", "Let me deploy it". Questions and past tense ("I published it") don't count.
  */
+/** Tools whose success makes a promise of later action true by itself (the routine or follow-up will do it). */
+const LATER_TOOLS = new Set(['schedule', 'follow_up', 'goal'])
+
 export function promisesAction(text: string): boolean {
   const t = (text ?? '').trim()
   if (!t || /\?\s*$/.test(t)) return false
@@ -5306,6 +5317,9 @@ export function promisesAction(text: string): boolean {
   // what I found", "I'll check in tomorrow") never count.
   const last = tail.split(/(?<=[.!])\s+/).slice(-2).join(' ')
   if (/\b(update you|keep you posted|let you know|check in|run through|walk you through|follow up (later|tomorrow|next)|if anything changes|tomorrow|next week|later today)\b/i.test(last)) return false
+  // A recurring or timed promise ("I'll send you the weather every weekday at 7:30 AM", "in 3 minutes") describes a
+  // schedule, not work left undone now.
+  if (/\b(every (day|morning|evening|night|week|weekday|month|hour|(mon|tues|wednes|thurs|fri|satur|sun)day)|each (day|week|morning|evening)|on weekdays|daily|weekly|monthly|from now on|at \d{1,2}(:\d\d)?\s*(am|pm)|in \d+ (minutes?|mins?|hours?))\b/i.test(last)) return false
   const verbs = 'send|publish|post|deploy|create|build|make|upload|open|sign in|log in|run|fix|write|draft|schedule|start|generate|render|submit|install|push|merge|book|order|email|export|add|update|edit|change|rename|save|move|copy|apply|commit|refactor|replace|insert|append|convert|compile|set up|fill in|rewrite|implement'
   const gerunds = 'sending|publishing|posting|deploying|creating|building|making|uploading|opening|signing in|logging in|running|fixing|writing|drafting|scheduling|starting|generating|rendering|submitting|installing|pushing|merging|booking|ordering|emailing|exporting|adding|updating|editing|changing|renaming|saving|moving|copying|applying|committing|refactoring|replacing|inserting|appending|converting|compiling|setting up|filling in|rewriting|implementing'
   return new RegExp(`\\b(i'll|i will|i'm going to|i am going to|let me|i'm now|now i'll|next,? i'll)\\s+(now\\s+|go ahead and\\s+|quickly\\s+|also\\s+)?(${verbs})\\b`, 'i').test(last)

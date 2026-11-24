@@ -44,3 +44,15 @@ test('a bot deleted by asking shows "Deleted X · Undo", and "Undone" once it is
   expect(back).not.toContain('data-testid="bot-undo"')
   expect(back).toContain('Undone')
 })
+
+test('the card follows the bot: its new name after a rename, and no Open once it is deleted', () => {
+  const card = msg({ kind: 'notice', content: 'Made Homework Helper 2 🧪', meta: { botCard: { spaceId: 's9', threadId: 't9', name: 'Homework Helper 2', icon: '🧪', job: 'Chemistry' } } })
+  const withBot = (live: { name: string; icon?: string } | null): string => renderToString(createElement(tv.ThreadView, { messages: [msg({ role: 'user', content: 'Make me a bot' }), card], running: false, pending: [], actions: { ...actions, liveBot: () => live } }))
+  const renamed = withBot({ name: 'Study Buddy', icon: '🧪' })
+  expect(renamed).toContain('Study Buddy')
+  expect(renamed).not.toContain('Homework Helper 2')
+  expect(renamed).toContain('data-testid="bot-card-open"')
+  const gone = withBot(null)
+  expect(gone).not.toContain('data-testid="bot-card-open"')
+  expect(gone).toContain('Deleted')
+})

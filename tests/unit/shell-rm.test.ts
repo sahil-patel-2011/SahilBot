@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { overwriteTargets, permanentDeletes, shellTool } from '../../src/main/agent/tools/shell'
-import { noteOwned } from '../../src/main/agent/tools/freshness'
+import { noteOwned, noteSeen, staleReason } from '../../src/main/agent/tools/freshness'
 import { beginRun } from '../../src/main/agent/undo-journal'
 
 // Auto deletes without a card because deletes go to the Trash and Undo takes them back. rm can't be taken back, so a
@@ -111,5 +111,61 @@ test('run_command never replaces a file of the user\'s (>, cp, mv, sed -i); new 
     said = 'Fix the date bug in rename_photos.py'
     await tool.run({ command: "sed -i 's/user/fixed/' rename_photos.py" }, ctx)
     expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toContain('fixed')
+  } finally { rmSync(ws, { recursive: true, force: true }) }
+})
+
+test('$HOME and ${HOME} paths count like ~ (writes and cd), and "| xargs rm" is a delete', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'sb-over-'))
+  const dl = join(homedir(), 'Downloads', 'rename_photos.py')
+  expect(overwriteTargets(`cat > "$HOME/Downloads/rename_photos.py" <<'EOF'\nprint(1)\nEOF`, cwd)).toEqual([dl])
+  expect(overwriteTargets('cp new.py "${HOME}/Downloads/rename_photos.py"', cwd)).toEqual([dl])
+  expect(overwriteTargets('cp new.py ${HOME}/Downloads/rename_photos.py', cwd)).toEqual([dl])
+  expect(overwriteTargets(`cd "$HOME/Downloads" && cat > rename_photos.py <<EOF\nx\nEOF`, cwd)).toEqual([dl])
+  expect(permanentDeletes('cd "$HOME/Desktop" && rm notes.txt', cwd)).toEqual(['notes.txt'])
+  // Piped deletes: the find's folder (unless it picks only build output), or "the files piped" from anything else.
+  expect(permanentDeletes("find ~/Pictures -name '*.jpg' | xargs rm", cwd)).toEqual(['~/Pictures'])
+  expect(permanentDeletes('find . -name "*.txt" -print0 | xargs -0 rm -f', join(homedir(), 'Documents'))).toEqual(['.'])
+  expect(permanentDeletes('ls | xargs rm', cwd)).toEqual(['the files piped to xargs rm'])
+  expect(permanentDeletes("find . -name '*.pyc' | xargs rm", cwd)).toEqual([])
+  expect(permanentDeletes(`find ${tmpdir()}/sb-x -name '*.jpg' | xargs rm`, cwd)).toEqual([])
+  expect(permanentDeletes('ls | xargs echo && find . -name "*.jpg" | xargs ls -l', cwd)).toEqual([])
+})
+
+test('run_command refuses writing over the user\'s file through $HOME, and a piped rm of their files', async () => {
+  const ws = mkdtempSync(join(homedir(), '.sb-clobber-home-'))
+  try {
+    writeFileSync(join(ws, 'x.py'), 'mine\n')
+    const tool = shellTool({ workspace: () => ws, userText: () => 'Write a script x.py that prints hi.' })
+    const ctx = ctxFor('t-home', ws)
+    await new Promise((r) => setTimeout(r, 300))
+    beginRun('t-home', 'task-home')
+    const rel = ws.slice(homedir().length + 1)
+    for (const command of [`cat > "$HOME/${rel}/x.py" <<EOF\nprint('hi')\nEOF`, `cp x.py "\${HOME}/${rel}/x.py"`, `cd "$HOME/${rel}" && cat > x.py <<EOF\nhi\nEOF`]) {
+      await expect(tool.run({ command }, ctx)).rejects.toThrow(/Nothing was run: this would replace x\.py/)
+    }
+    await expect(tool.run({ command: `find "$HOME/${rel}" -name '*.py' | xargs rm` }, ctx)).rejects.toThrow(/Nothing was run.*for good/)
+    expect(readFileSync(join(ws, 'x.py'), 'utf8')).toBe('mine\n')
+    // A new name through $HOME is fine.
+    await tool.run({ command: `echo hi > "$HOME/${rel}/new.py"` }, ctx)
+    expect(readFileSync(join(ws, 'new.py'), 'utf8')).toBe('hi\n')
+  } finally { rmSync(ws, { recursive: true, force: true }) }
+})
+
+test('after the chat\'s own command changes its own file (sed -i), the next file_write or file_edit is not "edited outside"', async () => {
+  const ws = mkdtempSync(join(homedir(), '.sb-own-cmd-'))
+  try {
+    const f = join(ws, 'script.py')
+    writeFileSync(f, 'a = 1\n')
+    noteOwned('t-own-cmd', f)
+    noteSeen('t-own-cmd', f)
+    const tool = shellTool({ workspace: () => ws, userText: () => 'Write script.py' })
+    await new Promise((r) => setTimeout(r, 20))
+    await tool.run({ command: "sed -i.bak 's/1/2/' script.py && rm -f script.py.bak" }, ctxFor('t-own-cmd', ws))
+    expect(readFileSync(f, 'utf8')).toBe('a = 2\n')
+    expect(staleReason('t-own-cmd', f, 'script.py')).toBeUndefined()
+    // A change by someone else still is.
+    await new Promise((r) => setTimeout(r, 20))
+    writeFileSync(f, 'a = 3 # theirs\n')
+    expect(staleReason('t-own-cmd', f, 'script.py')).toMatch(/changed on disk/)
   } finally { rmSync(ws, { recursive: true, force: true }) }
 })

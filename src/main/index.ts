@@ -790,7 +790,7 @@ app.whenReady().then(() => {
     // Office: review_document (core; every new document gets checked) and the office tool (find_tools("office"/"excel"/"pdf")):
     // spreadsheets read/edited in place, PDF forms, merge/split, batch file jobs, receipts, meeting notes.
     reviewDocumentTool({ getWorkspace: () => settings.get().workspaceDir }),
-    officeTool({ getWorkspace: () => settings.get().workspaceDir, markdownToPdf: async (md, title) => (await import('./docs/create')).renderPdf(md, { title }),
+    officeTool({ getWorkspace: () => settings.get().workspaceDir, userText: (id) => taskUserText(db.listMessages(id)), markdownToPdf: async (md, title) => (await import('./docs/create')).renderPdf(md, { title }),
       // Receipts without a text layer: Claude vision when an Anthropic key is saved and cloud is on.
       visionReceipt: (file, signal) => readReceipt({ access: apiAccess(settings), workspace: () => settings.get().workspaceDir }, file, signal) }),
     ...pageTools(pagesDir),
@@ -867,7 +867,7 @@ app.whenReady().then(() => {
         return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, settings.get().sampling), maxTokens: 2000, effort: 'medium', signal }))
       }
     }),
-    updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
+    updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' }), (id) => resetBotPrompt(id)),
     // "Make me a … bot" and "delete the … bot" by asking, from any chat.
     createBotTool({
       create: (name, color, shape, icon) => { const r = templateDeps.createBot(name, color, shape as BotShape); if (icon) db.updateSpace(r.spaceId, { icon }); return r },
@@ -1911,7 +1911,7 @@ app.whenReady().then(() => {
     // A plain reminder ("remind me in 3 minutes to stretch") needs no work, just the nudge: it is posted as it is, on
     // time, with no model call, whether or not the chat is busy (Grok Bot head-to-head SCA-01, SCB-01, SCB-02). It is an
     // aside, like a side answer: never part of a live run's prompt (a run mid-tool keeps its tool result in place).
-    const delivery = routineDelivery(task, { busy: chat.isRunning(threadId) || scheduledRuns.has(threadId), dry: info.dry })
+    const delivery = routineDelivery(task, { busy: chat.isRunning(threadId) || scheduledRuns.has(threadId), dry: info.dry, todos: db.getState(threadId).todos })
     if (delivery === 'remind') {
       const r = reminderMessage(task)
       const m = db.insertMessage({ threadId, role: 'assistant', content: r.content, kind: 'normal', status: 'done', meta: r.meta })

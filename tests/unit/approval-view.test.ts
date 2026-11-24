@@ -64,6 +64,18 @@ describe('plain sidebar rows and quick paths', () => {
     ])).toEqual([{ key: '3', path: '/w/deck.pptx' }, { key: '4', path: '/w/a.md' }])
   })
 
+  test('a code edit or patch and a file copied with file_manage get a file card; code reads and folder copies do not', () => {
+    const step = (id: string, name: string, meta: Record<string, unknown>) => ({ call: { id, name }, result: { meta } })
+    expect(filesFromSteps([
+      step('1', 'code', { status: 'ok', path: '/w/app.py', display: 'patched 1 file (+12 −0)' }),
+      step('2', 'code', { status: 'ok', path: '/w/lib.py', display: 'lib.py' }),
+      step('3', 'code', { status: 'ok', path: '/w/util.py', display: 'edited util.py (+1 −1)' }),
+      step('4', 'file_manage', { status: 'ok', path: '/w/Desktop/report.pdf', display: 'copied report.pdf' }),
+      step('5', 'file_manage', { status: 'ok', path: '/w/Archive/photos', display: 'copied photos' }),
+      step('6', 'file_manage', { status: 'ok', display: 'trashed old.txt' })
+    ])).toEqual([{ key: '1', path: '/w/app.py' }, { key: '3', path: '/w/util.py' }, { key: '4', path: '/w/Desktop/report.pdf' }])
+  })
+
   test('office results get a file card; a doc_export file only when no document card shows it', () => {
     const step = (id: string, name: string, meta: Record<string, unknown>) => ({ call: { id, name }, result: { meta } })
     const steps = [step('1', 'office', { status: 'ok', path: '/w/merged.pdf' }), step('2', 'doc_export', { status: 'ok', path: '/w/Report.docx' })]

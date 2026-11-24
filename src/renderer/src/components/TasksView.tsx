@@ -64,7 +64,11 @@ export function goalStateLine(g: Goal, now = Date.now()): string {
 /** Live list of every goal (refreshes on goals:changed and once a minute for "next check-in" times). */
 export function useGoals(): { goals: Goal[] | null; reload: () => void } {
   const [goals, setGoals] = useState<Goal[] | null>(null)
-  const reload = useCallback(() => { void api.goals.list().then(setGoals).catch(() => setGoals([])) }, [])
+  // A load that hangs shows the empty page after 5 s instead of "Loading…" for good (a late answer still lands).
+  const reload = useCallback(() => {
+    const late = setTimeout(() => setGoals((g) => g ?? []), 5_000)
+    void api.goals.list().then(setGoals).catch(() => setGoals([])).finally(() => clearTimeout(late))
+  }, [])
   useEffect(() => {
     reload()
     const off = api.goals.onChange(reload)

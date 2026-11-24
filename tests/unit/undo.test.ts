@@ -125,3 +125,23 @@ test('undo copies older than 30 days are pruned at start-up', () => {
   prune(Date.now() + 31 * 24 * 3600_000)
   expect(existsSync(join(root, 't-old', 'task-old'))).toBe(false)
 })
+
+test('undo of a file move leaves a new file at the old name alone', async () => {
+  setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-root-')))
+  const ws = mkdtempSync(join(tmpdir(), 'sb-undo-mv-'))
+  writeFileSync(join(ws, 'a.txt'), 'old a\n')
+  const t = Object.fromEntries(fileTools(() => ws, mkdtempSync(join(tmpdir(), 'sb-docs-'))).map((x) => [x.name, x]))
+  beginRun('t-undo-mv', 'task-mv')
+  await t.file_manage.run({ op: 'move', path: 'a.txt', to: 'b.txt' }, ctxFor('t-undo-mv'))
+  writeFileSync(join(ws, 'a.txt'), 'a brand new a\n')
+  const r = undoRun('t-undo-mv', 'task-mv')
+  expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('a brand new a\n')
+  expect(r.skipped.map((x) => x.why)).toContain('something new is there now')
+  // Nothing new there: the move is taken back.
+  writeFileSync(join(ws, 'c.txt'), 'c\n')
+  beginRun('t-undo-mv', 'task-mv2')
+  await t.file_manage.run({ op: 'move', path: 'c.txt', to: 'd.txt' }, ctxFor('t-undo-mv'))
+  undoRun('t-undo-mv', 'task-mv2')
+  expect(readFileSync(join(ws, 'c.txt'), 'utf8')).toBe('c\n')
+  expect(existsSync(join(ws, 'd.txt'))).toBe(false)
+})

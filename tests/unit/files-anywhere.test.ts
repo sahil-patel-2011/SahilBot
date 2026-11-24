@@ -24,6 +24,13 @@ describe('files anywhere', () => {
     // A note next to them stays free.
     expect(resolvePath(join(H, 'notes.md'), ws, roots)).toBe(join(H, 'notes.md'))
   })
+  test('iCloud Drive is the user\'s own folder for the file tools (inside ~/Library, which stays off limits)', () => {
+    const drive = join(H, 'Library', 'Mobile Documents', 'com~apple~CloudDocs')
+    expect(resolvePath(join(drive, 'Notes', 'trip.md'), ws, roots)).toBe(join(drive, 'Notes', 'trip.md'))
+    expect(resolvePath('~/iCloud Drive/trip.md', ws, roots)).toBe(join(drive, 'trip.md'))
+    expect(() => resolvePath(join(H, 'Library', 'Mobile Documents', 'other.app', 'x'), ws, roots)).toThrow(/system or private/)
+    expect(() => resolvePath(join(H, 'Library', 'Preferences', 'x.plist'), ws, roots)).toThrow()
+  })
   test('commands still start in the chat\'s workspace or folder, never in the home folder', () => {
     mkdirSync(ws, { recursive: true })
     expect(cwdFor(undefined, { workspaceDir: ws, state: { roots: [H] } as never })).toBe(ws)

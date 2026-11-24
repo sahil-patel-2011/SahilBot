@@ -67,10 +67,14 @@ function realTail(full: string): string {
   return join(realpathSync(probe), relative(probe, full))
 }
 
+/** iCloud Drive: inside ~/Library (never read), but the user's own files ("save it to iCloud Drive"). */
+export const ICLOUD_DRIVE = (): string => join(homedir(), 'Library', 'Mobile Documents', 'com~apple~CloudDocs')
+
 /** Why SahilBot never touches a path outside your folders, even when asked ('' when it may, with your OK). */
 export function neverOutside(full: string): string {
   const r = realTail(full)
-  if (inForbidden(r) || inForbidden(full)) return 'in a system or private folder SahilBot never reads'
+  const icloud = (p: string): boolean => p === ICLOUD_DRIVE() || p.startsWith(`${ICLOUD_DRIVE()}${sep}`)
+  if (!icloud(r) && !icloud(full) && (inForbidden(r) || inForbidden(full))) return 'in a system or private folder SahilBot never reads'
   if (isSecretName(basename(r))) return 'a file that holds secrets'
   return ''
 }
@@ -81,7 +85,8 @@ export function neverOutside(full: string): string {
  * working folder). Outside them only with the user's OK for this call (o.allowOutside).
  */
 export function resolvePath(p: string, workspace: string, roots: string[] = [], o: ResolveOptions = {}): string {
-  const expanded = p.startsWith('~/') ? join(homedir(), p.slice(2)) : p
+  const drive = /^~\/iCloud Drive(?=\/|$)/i.exec(p)
+  const expanded = drive ? ICLOUD_DRIVE() + p.slice(drive[0].length) : p.startsWith('~/') ? join(homedir(), p.slice(2)) : p
   const base = o.base && existsSync(o.base) ? o.base : workspace
   if (!isAbsolute(expanded)) return insideRoot(base, expanded)
   const full = resolve(expanded)
@@ -278,7 +283,7 @@ export function fileTools(getWorkspace: () => string, docsDir: string, o: FileTo
     effect: 'write_local',
     // Writes stay inside the workspace, the attached folders and the working folder unless the user approves.
     hardStop: (a, call) => outsideStop('writing', getWorkspace)(a.path, call),
-    description: 'Write a text file (Markdown, code, CSV, HTML…). Paths: relative ones start in the working folder; anything in the home folder works directly (~/Downloads, ~/Desktop, ~/Documents); places outside it ask first. mode: "create" fails if it exists, "overwrite" replaces a file this chat made or one the user asked you to change (a backup is kept and Undo works), "append" adds to the end. A file of the user\'s they didn\'t ask you to change is never replaced: yours is saved next to it as "name (2).ext" and the result says so. To change part of an existing file use file_edit instead. For .docx/.pptx/.xlsx/.pdf use create_document.',
+    description: 'Write a text file (Markdown, code, CSV, HTML…). Paths: relative ones start in the working folder; anything in the home folder works directly (~/Downloads, ~/Desktop, ~/Documents, ~/iCloud Drive); places outside it ask first. mode: "create" fails if it exists, "overwrite" replaces a file this chat made or one the user asked you to change (a backup is kept and Undo works), "append" adds to the end. A file of the user\'s they didn\'t ask you to change is never replaced: yours is saved next to it as "name (2).ext" and the result says so. To change part of an existing file use file_edit instead. For .docx/.pptx/.xlsx/.pdf use create_document.',
     parameters: {
       type: 'object',
       properties: {
@@ -433,14 +438,19 @@ export function fileTools(getWorkspace: () => string, docsDir: string, o: FileTo
       // copy (file or folder) is taken away.
       const isFile = lstatSync(full).isFile()
       const isDir = lstatSync(full).isDirectory()
+      // A copy is the chat's own; a moved file or folder stays the user's unless the chat made it (so a later rebuild
+      // at the new place saves "name (2)", and rm of it is refused).
+      const ours = a.op === 'copy' || ownedHere(chatOf(ctx), full) || ownedHere(ctx.threadId, full)
       if (isFile && a.op === 'move') beforeChange(ctx.threadId, full)
-      if (isFile) beforeChange(ctx.threadId, finalDest)
+      if (isFile) beforeChange(ctx.threadId, finalDest, a.op === 'move' && !ours ? { movedFrom: full } : {})
       else if (isDir && a.op === 'copy') beforeChange(ctx.threadId, finalDest, { newFolder: true })
       if (a.op === 'move') renameSync(full, finalDest)
       else cpSync(full, finalDest, { recursive: true })
       if (isFile) afterChange(ctx.threadId, finalDest)
       else if (isDir && a.op === 'move') noteMoved(ctx.threadId, full, finalDest)
-      noteOwned(chatOf(ctx), finalDest)
+      // The old name is gone: Undo won't put the file back over something new there.
+      if (isFile && a.op === 'move') afterChange(ctx.threadId, full)
+      if (ours) noteOwned(chatOf(ctx), finalDest)
       const note = kept && takenBy ? ` ${basename(takenBy)} was already there and wasn't made in this chat, so it was left as it was and this one is named ${basename(kept)}. Tell the user in one short line.` : ''
       return { text: `${a.op === 'move' ? 'Moved' : 'Copied'} ${full} → ${finalDest}.${note}`, display: `${a.op === 'move' ? 'moved' : 'copied'} ${basename(full)}`, path: finalDest }
     }
