@@ -123,6 +123,17 @@ export function eventKey(x: Pick<TriggerItem, 'source' | 'id'>): string {
   return `${x.source}:${x.id.replace(/:\d{9,}$/, '')}`
 }
 
+/** One version per calendar event in a read (an edit gives it a new id): the newest, so it runs and counts once. */
+export function newestVersions(items: TriggerItem[]): TriggerItem[] {
+  const newest = new Map<string, TriggerItem>()
+  for (const x of items) {
+    if (x.kind !== 'calendar') continue
+    const k = eventKey(x), cur = newest.get(k)
+    if (!cur || (x.at ?? 0) >= (cur.at ?? 0)) newest.set(k, x)
+  }
+  return items.filter((x) => x.kind !== 'calendar' || newest.get(eventKey(x)) === x)
+}
+
 /** What a routine run is: a test, a late catch-up, a dry run, or set off by new items (`event`). */
 export interface RunInfo {
   id: string
@@ -343,6 +354,8 @@ export class Scheduler {
     const now = this.now()
     const lastTickAt = this.lastTickAt
     this.lastTickAt = now.getTime()
+    // Matches held back by the daily limit run once a new day allows it.
+    if (this.waiting.size) this.drainAll()
     const due = this.list().filter((t) => t.enabled && t.nextRun !== null && t.nextRun <= now.getTime() && !this.busy.has(t.id) && this.available(t.spaceId))
     const window = this.catchUpHours()
     // Goal wake-ups run beside routines; a failure there never affects them.
@@ -402,13 +415,17 @@ export class Scheduler {
       // it isn't an arrival. It counts from when it was created (an invite not answered yet: from when it reached the
       // user, since a guest added to an older event keeps its old creation time), and each event sets it off only once.
       const seen = this.seenEvents(t.id)
-      const fresh = items.filter((x) => x.kind !== 'calendar' || !seen.has(eventKey(x)))
+      const fresh = newestVersions(items.filter((x) => x.kind !== 'calendar' || !seen.has(eventKey(x))))
         .filter((x) => ((x.kind === 'calendar' && !x.invited ? x.created : undefined) || x.at || Date.now()) >= armed)
       const hit = pickItems(t.schedule, fresh, me)
       if (!hit.items.length) continue
       this.markSeen(t.id, hit.items)
-      // Busy, paused, or its bot is away: kept for its next run, not dropped.
-      if (this.busy.has(t.id) || this.paused() || !this.available(t.spaceId)) { this.queue(t.id, hit.items, hit.more); continue }
+      // Busy, paused, its bot is away, or matches already waiting (the daily limit): kept for its next run, not dropped.
+      if (this.busy.has(t.id) || this.paused() || !this.available(t.spaceId) || this.waiting.has(t.id)) {
+        this.queue(t.id, hit.items, hit.more)
+        if (this.drain(t.id)) started.push(t.id)
+        continue
+      }
       if (this.startEvent(t, hit.items, hit.more)) started.push(t.id)
     }
     return started
@@ -460,10 +477,16 @@ export class Scheduler {
     this.db.setSetting(`triggerArmed:${id}`, Date.now())
   }
 
-  private startEvent(t: ScheduledTask, items: TriggerItem[], more: number): boolean {
+  /** The routine already ran TRIGGER_DAILY_MAX times today (a mail loop can't run it all day). */
+  private capped(t: ScheduledTask): boolean {
     const today = new Date(this.now()); today.setHours(0, 0, 0, 0)
-    const ran = (this.db.sql.prepare('SELECT COUNT(*) AS n FROM routine_runs WHERE task_id = ? AND test = 0 AND started_at >= ?').get(t.id, today.getTime()) as { n: number }).n
-    if (ran >= TRIGGER_DAILY_MAX) {
+    return (this.db.sql.prepare('SELECT COUNT(*) AS n FROM routine_runs WHERE task_id = ? AND test = 0 AND started_at >= ?').get(t.id, today.getTime()) as { n: number }).n >= TRIGGER_DAILY_MAX
+  }
+
+  private startEvent(t: ScheduledTask, items: TriggerItem[], more: number): boolean {
+    if (this.capped(t)) {
+      // Kept for tomorrow's first chance (they were read once and are marked seen), not dropped.
+      this.queue(t.id, items, more)
       this.db.sql.prepare('UPDATE scheduled_tasks SET last_status = ? WHERE id = ?').run(`skipped: ran ${TRIGGER_DAILY_MAX} times today already`, t.id)
       return false
     }
@@ -473,14 +496,14 @@ export class Scheduler {
   }
 
   /** A "when" routine finished: matches that came in meanwhile run now (one run for all of them). */
-  private drain(id: string): void {
+  private drain(id: string): boolean {
     const w = this.waiting.get(id)
     const t = this.get(id)
     // A routine that's gone (or no longer "when"): its queue goes too.
-    if (w && (!t || t.schedule.type !== 'when')) { this.unqueue(id); return }
-    if (!w || !t || !t.enabled || this.busy.has(id) || this.paused() || !this.available(t.spaceId)) return
+    if (w && (!t || t.schedule.type !== 'when')) { this.unqueue(id); return false }
+    if (!w || !t || !t.enabled || this.busy.has(id) || this.paused() || !this.available(t.spaceId) || this.capped(t)) return false
     this.unqueue(id)
-    this.startEvent(t, w.items, w.more)
+    return this.startEvent(t, w.items, w.more)
   }
 
   /** Runs queued matches whose routine can run now (routines resumed, a bot came back). */

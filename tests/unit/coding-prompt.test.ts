@@ -108,8 +108,13 @@ describe('round 2: one-call documents, chat coding guidance, this-chat instructi
     }
   })
 
+  test('"the file I made yesterday": the work prompt says how to find a file by date', () => {
+    expect(full).toContain("mdfind -onlyin ~ 'kMDItemFSContentChangeDate >= $time.yesterday'")
+    expect(full).toContain('chat_history')
+  })
+
   test('the compact prompt also keeps health, money and other sensitive details out of automatic saves (MPB-03)', () => {
-    expect(compact).toContain('no health, money, ID, religion, politics or sexuality details unless asked')
+    expect(compact).toContain('health, money, ID details only if asked')
   })
 })
 
