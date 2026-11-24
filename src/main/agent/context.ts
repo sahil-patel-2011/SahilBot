@@ -548,15 +548,25 @@ export function toWire(ms: Message[], maxImages = 2, rawSince = 0): WireMessage[
   // and every result needs its call: providers reject the whole request otherwise.
   let open: string[] = []
   let images: WireMessage[] = []
+  // Reminders and routine answers posted while a tool ran: after that batch's results (tool messages stay contiguous).
+  let later: WireMessage[] = []
   const settle = (): void => {
     for (const id of open) out.push({ role: 'tool', tool_call_id: id, content: '[Not run: the run was stopped before this tool finished.]' })
     open = []
     // Images from tool results ride in one user turn after the whole batch, so tool messages stay contiguous.
-    out.push(...images)
+    out.push(...images, ...later)
     images = []
+    later = []
   }
   for (const m of ms) {
     const withImages = imageBudget.get(m.id) && m.images?.length
+    if (posted(m)) {
+      // The app posted it (no model turn made it): a short note in the history, never a turn of its own.
+      const what = m.meta?.reminder ? 'a reminder was posted' : `routine "${String(m.meta?.routineTitle ?? 'a routine')}" posted this (its own run's answer)`
+      const note: WireMessage = { role: 'user', content: `[Earlier, ${what}: ${m.content.slice(0, 2000)}]` }
+      if (open.length || images.length) later.push(note); else out.push(note)
+      continue
+    }
     if (m.role === 'tool') {
       const at = open.indexOf(m.toolCallId!)
       if (at < 0) continue
@@ -611,10 +621,16 @@ export const KEEP_TOOL_OUTPUTS = 6
 /** Below this share of the input budget (by upperEstimate), the prompt is measured without the server's tokenizer. */
 export const EXACT_AT = 0.6
 
+/** A reminder or a routine's answer posted into the chat as an aside. */
+const posted = (m: Message): boolean => m.role === 'assistant' && !!m.meta?.aside && !!(m.meta.reminder || m.meta.routineRun)
+
 /** Messages after the compaction boundary that belong in the prompt. */
 export function activeMessages(messages: Message[], state: ThreadState): Message[] {
-  // Side answers (agent/aside.ts) are a separate exchange beside a running job: never part of the job's prompt.
-  let ms = messages.filter((m) => m.kind === 'normal' && !m.meta?.aside && m.status !== 'error' && !(m.status === 'streaming' && !m.content && !m.toolCalls))
+  // Side answers (agent/aside.ts) are a separate exchange beside a running job: never part of the job's prompt. A
+  // reminder or a routine's answer posted beside it joins the history once a later message started a new turn (the bot
+  // can say what this morning's routine found), never the live run's prompt.
+  const opener = [...messages].reverse().find((m) => m.role === 'user' && m.kind === 'normal' && !m.meta?.aside)?.createdAt ?? -Infinity
+  let ms = messages.filter((m) => m.kind === 'normal' && (!m.meta?.aside || (posted(m) && m.createdAt < opener)) && m.status !== 'error' && !(m.status === 'streaming' && !m.content && !m.toolCalls))
   if (state.compaction) {
     const i = ms.findIndex((m) => m.id === state.compaction!.boundaryId)
     if (i >= 0) ms = ms.slice(i + 1)

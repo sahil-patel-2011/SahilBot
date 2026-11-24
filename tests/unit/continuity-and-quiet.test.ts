@@ -35,8 +35,10 @@ const step = (name: string, action: string, display: string): Step => ({ at: 0, 
 
 test('quiet action receipts describe real changes and never label reads or declined goals as success', () => {
   expect(quietActions([step('schedule', 'list', '2 scheduled'), step('goal', 'get', 'Project'), step('goal', 'create', 'not started'), step('price_alert', 'list', '2 alerts')])).toEqual([])
-  expect(quietActions([step('schedule', 'delete', 'deleted fixture')])[0].text).toContain('Removed a routine')
-  expect(quietActions([step('schedule', 'create', 'morning brief')])[0].text).toContain('Created a routine')
+  // A routine's change has its own line from the scheduler ("Created routine · …"): one, not two.
+  expect(quietActions([step('schedule', 'delete', 'deleted fixture'), step('schedule', 'create', 'morning brief')])).toEqual([])
+  const failed = step('schedule', 'create', 'x'); failed.result!.meta = { status: 'error' }
+  expect(quietActions([failed])[0]).toMatchObject({ failed: true, text: expect.stringMatching(/^Didn't work/) })
   expect(quietActions([step('price_alert', 'cancel', 'cancelled fixture')])[0].text).toContain('Cancelled a price alert')
 })
 

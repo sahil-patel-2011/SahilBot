@@ -32,7 +32,7 @@ export function scheduleTool(scheduler: Scheduler, db: Db, sources?: SourceKinds
   when is one of: {type:"once", in_minutes:3} for "in N minutes/hours" (never work out the clock time yourself), {type:"once", at:"2026-11-12T09:00"} (local time), {type:"daily", time:"09:00"}, {type:"weekly", days:["mon","thu"], time:"08:30"}, {type:"every", minutes:60}, {type:"cron", expr:"0 9 * * 1-5"},
   or an event: {type:"when", kind:"email"|"chat"|"calendar"|"any", from?:"vendor.com", contains?:"invoice, receipt"} runs it each time something new arrives that matches (from = sender name or address part; contains = any of these words in the subject or body). The item is handed to you as outside content when it runs.
   Times are the user's clock unless they tie it to a place: "every weekday at 7:30 send me the Atlanta weather" is 7:30 in Atlanta, so add tz:"America/New_York" (the IANA zone of that place). Moving it later keeps that zone.
-- update {id, and any of title, prompt, remind, when}: change a routine in place ("move it to 9:10 and add Saturdays", "snooze it 10 minutes" → when {type:"once", in_minutes:10}); its history is kept.
+- update {id, and any of title, prompt, remind, when}: change a routine in place ("move it to 9:10 and add Saturdays", "snooze it 10 minutes" → when {type:"once", in_minutes:10}); days, time and zone left out are kept ("every day": all 7 days); its history is kept.
 - list, delete {id}, pause {id}, resume {id}.
 Scheduled runs can't ask for approval: actions that would need it are skipped and reported.`,
     parameters: {
@@ -69,7 +69,7 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
         // SahilBot's routines run in the chat that made them; other bots have one conversation anyway.
         const prompt = a.remind?.trim() ? reminderPrompt(a.remind) : a.prompt?.trim() ? a.prompt : undefined
         if (!prompt) throw new Error('create needs remind (a plain reminder to the user) or prompt (work you will do when it runs).')
-        const asked = resolveWhen(a.when!)
+        const asked = keepRest(resolveWhen(a.when!), undefined)
         const when = asked.type === 'when' ? cleanWhen(asked) : withZone(placeZone(asked, `${a.title ?? ''}\n${prompt}`), undefined)
         // An event routine needs a source SahilBot reads (Gmail for email…); without one it would never run.
         let reads = ''
@@ -84,15 +84,23 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
         return { text: `Scheduled "${t.title}" (${describeSchedule(t.schedule)}), id ${t.id}. Next run: ${runsAt(t.schedule, t.nextRun)}.`, display: `"${t.title}" ${describeSchedule(t.schedule)}` }
       }
       if (a.action === 'list') {
-        const ts = scheduler.list()
+        // This chat's bot first; another bot's routines say whose they are.
+        const here = thread?.spaceId
+        const ts = [...scheduler.list()].sort((x, y) => Number(y.spaceId === here) - Number(x.spaceId === here))
         if (!ts.length) return { text: 'No scheduled tasks.', display: 'none scheduled' }
-        return { text: ts.map((t) => `- [${t.id}] ${t.title}: ${describeSchedule(t.schedule)}${t.enabled ? (t.schedule.type === 'when' ? ', runs when one arrives' : `, next ${t.nextRun ? nextLabel(t.schedule, t.nextRun) : 'never'}`) : ' (paused)'}${t.lastStatus ? `, last: ${t.lastStatus}` : ''}`).join('\n'), display: `${ts.length} scheduled` }
+        const owner = (t: (typeof ts)[number]): string => { if (t.spaceId === here) return ''; const sp = db.getSpace(t.spaceId); return sp && !sp.isMain ? ` (${sp.name}'s)` : '' }
+        // A one-off that already went off is done, not paused.
+        const state = (t: (typeof ts)[number]): string => t.enabled ? (t.schedule.type === 'when' ? ', runs when one arrives' : `, next ${t.nextRun ? nextLabel(t.schedule, t.nextRun) : 'never'}`)
+          : t.schedule.type === 'once' && t.lastRun ? ', already went off' : ' (paused)'
+        return { text: ts.map((t) => `- [${t.id}] ${t.title}${owner(t)}: ${describeSchedule(t.schedule)}${state(t)}${t.lastStatus ? `, last: ${t.lastStatus}` : ''}`).join('\n'), display: `${ts.length} scheduled` }
       }
       if (a.action === 'update') {
         if (a.title === undefined && a.prompt === undefined && !a.remind?.trim() && !a.when) throw new Error('update needs at least one of title, prompt, remind or when.')
         // Moving a routine keeps the place's time zone it was set in ("move it to 7" stays Eastern).
-        const prevTz = (() => { const c = scheduler.get(a.id!)?.schedule; return c && 'tz' in c ? c.tz : undefined })()
-        const asked = a.when ? resolveWhen(a.when) : undefined
+        const cur = scheduler.get(a.id!)?.schedule
+        const prevTz = cur && 'tz' in cur ? cur.tz : undefined
+        // Only what changes ("move it to 7" → time 07:00): its days, time and zone stay as they were.
+        const asked = a.when ? keepRest(resolveWhen(a.when), cur) : undefined
         const when = asked ? (asked.type === 'when' ? cleanWhen(asked) : withZone(asked, prevTz)) : undefined
         const prompt = a.remind?.trim() ? reminderPrompt(a.remind) : a.prompt
         // A new time for a one-off that already went off ("snooze it 10 minutes") turns it back on.
@@ -118,6 +126,34 @@ function cleanWhen(w: Extract<Schedule, { type: 'when' }>): Schedule {
   const t = (x: unknown): string | undefined => (typeof x === 'string' && x.trim() ? x.trim().slice(0, 200) : undefined)
   const from = t(w.from), contains = t(w.contains)
   return { type: 'when', kind, ...(from ? { from } : {}), ...(contains ? { contains } : {}) }
+}
+
+/**
+ * A changed schedule that leaves things out keeps them from the routine as it is: "move it to 7" sent as
+ * {type:"weekly", time:"07:00"} (or "daily") on a weekday routine stays on weekdays. A daily that names no new time
+ * ("make it every day") becomes every day; a weekly with no days to keep is an error, never a crash.
+ */
+export function keepRest(w: Schedule, cur: Schedule | undefined): Schedule {
+  const x = w as Schedule & { days?: string[]; time?: string; expr?: string; minutes?: number }
+  const c = (cur ?? {}) as Partial<{ type: string; days: string[]; time: string; expr: string; minutes: number }>
+  const hasDays = Array.isArray(x.days) && x.days.length > 0
+  const time = typeof x.time === 'string' && x.time.trim() ? x.time : c.time
+  if (x.type === 'daily') {
+    // Weekdays moved to a new time stay weekdays; a daily at the same time (or none) means every day.
+    if (c.type === 'weekly' && !hasDays && c.days?.length && c.days.length < 7 && time !== c.time) return { ...x, type: 'weekly', days: c.days, time: time! } as Schedule
+    if (!time) throw new Error('A daily schedule needs when.time ("07:00").')
+    const { days: _d, ...rest } = x
+    return { ...rest, time } as Schedule
+  }
+  if (x.type === 'weekly') {
+    const days = hasDays ? x.days! : c.type === 'weekly' && c.days?.length ? c.days : c.type === 'daily' ? ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] : undefined
+    if (!days) throw new Error('A weekly schedule needs when.days (["mon","wed"]).')
+    if (!time) throw new Error('A weekly schedule needs when.time ("07:00").')
+    return { ...x, days, time } as Schedule
+  }
+  if (x.type === 'cron' && !x.expr) { if (c.type === 'cron' && c.expr) return { ...x, expr: c.expr } as Schedule; throw new Error('A cron schedule needs when.expr.') }
+  if (x.type === 'every' && !(Number(x.minutes) > 0)) { if (c.type === 'every' && c.minutes) return { ...x, minutes: c.minutes } as Schedule; throw new Error('An "every" schedule needs when.minutes.') }
+  return w
 }
 
 /** A time schedule with a valid place time zone (kept from before when a move doesn't name one); 'every' has none. */

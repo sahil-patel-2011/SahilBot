@@ -36,8 +36,9 @@ export function createQuestionHost(d: { db: Db; settings: { get(): Settings }; q
   return {
     config(threadId) {
       const t = d.db.getThread(threadId)
-      // Helper and ask_bot chats (a parent) answer to another run, never to the queue.
-      if (!t || t.parentId) return null
+      // Helper and ask_bot chats (a parent) answer to another run, never to the queue; a routine run beside the bot's
+      // busy chat is the bot's own work (its hard stops and Needs you apply, as when it runs in the chat itself).
+      if (!t || (t.parentId && !d.db.getState(t.id).routineHost)) return null
       const space = d.db.getSpace(t.spaceId)
       if (!space || !isAlwaysOnBot(space)) return null
       const cfg = botAutonomyConfig(d.settings.get(), space.id)

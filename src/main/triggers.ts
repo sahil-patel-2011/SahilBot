@@ -164,6 +164,25 @@ export function reminderMessage(t: { id: string; title: string; prompt: string }
   return { content: `⏰ Reminder: ${reminderText(t)}`, meta: { scheduled: t.id, reminder: true, aside: true } }
 }
 
+/** Tools whose results are files the chat shows as cards (as the renderer's filesFromSteps). */
+const MADE_FILE_TOOLS = new Set(['file_write', 'file_edit', 'create_document'])
+
+/**
+ * A routine's answer that ran beside the busy chat, as posted into it: the text with its sources, stock card and the
+ * files it made (they were made in the hidden side chat, so the card can't come from this chat's own steps).
+ */
+export function routineAside(t: { id: string; title: string }, runIn: string, last: { content: string; meta?: Record<string, unknown> }, after: Array<{ role: string; toolName?: string; meta?: Record<string, unknown>; id: string }>): { content: string; meta: Record<string, unknown> } {
+  const files = new Map<string, { key: string; path: string }>()
+  for (const m of after) {
+    const path = m.meta?.path
+    if (m.role !== 'tool' || !m.toolName || !MADE_FILE_TOOLS.has(m.toolName) || m.meta?.status !== 'ok' || typeof path !== 'string' || /\.html?$/i.test(path)) continue
+    files.delete(path)
+    files.set(path, { key: m.id, path })
+  }
+  const keep = Object.fromEntries((['sources', 'stock'] as const).filter((k) => last.meta?.[k] !== undefined).map((k) => [k, last.meta![k]]))
+  return { content: last.content, meta: { ...keep, ...(files.size ? { madeFiles: [...files.values()] } : {}), scheduled: t.id, routineTitle: t.title.replace(/^⏰\s*/, ''), aside: true, routineRun: runIn } }
+}
+
 /** What to say for a plain reminder: the thing to do, from its instructions ("to stretch" → "Stretch"). */
 export function reminderText(t: { title: string; prompt: string }): string {
   const title = t.title.replace(/^(⏰\s*)?(reminder:?\s*)/i, '').replace(/\s+reminder$/i, '').trim()

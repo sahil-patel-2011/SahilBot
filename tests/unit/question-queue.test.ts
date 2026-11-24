@@ -483,6 +483,26 @@ describe('unattended runs of an always-on bot keep Autonomous', () => {
     expect(log).toEqual(['ran npm ci'])
     expect(h.queue.inbox()).toMatchObject([{ kind: 'approval', approval: { tool: 'crm_refund' } }])
   })
+  test('a routine run beside the bot\'s busy chat keeps the bot\'s "Always ask for…" and its Needs you; the approval resumes in the bot\'s chat', async () => {
+    log.length = 0
+    const h = agentHarness([work], { botAutonomy: {} } as Partial<Settings>)
+    ;(h.settings as Settings).botAutonomy = { [h.space.id]: { alwaysAsk: ['tool:work'] } }
+    // As index.ts makes it: a hidden chat under the bot's chat, marked with the chat it posts into.
+    const side = h.db.createThread(h.space.id, 'autonomous', 'model-a', h.thread.id)
+    const st = h.db.getState(side.id); st.routineHost = h.thread.id; h.db.setState(side.id, st)
+    // A plain helper chat (no routineHost) still answers to its run, never to the queue.
+    const helper = h.db.createThread(h.space.id, 'autonomous', 'model-a', h.thread.id)
+    const qhost = createQuestionHost({ db: h.db, settings: { get: () => h.settings }, queue: h.queue, learner: new Learner(h.store) })
+    expect(qhost.config(side.id)).toMatchObject({ botId: h.space.id, alwaysAsk: ['tool:work'] })
+    expect(qhost.config(helper.id)).toBeNull()
+    llm.script.push({ toolCalls: [call('work', { part: 'send the digest' })], delay: 0 }, { content: 'The digest waits for your OK.', delay: 0 })
+    await (await h.agent.send({ threadId: side.id, text: '⏰ Digest\n\nSend the digest', meta: { scheduled: 'r' } }, { unattended: true })).done
+    expect(log).toEqual([])
+    const tool = h.db.listMessages(side.id).find((m) => m.role === 'tool' && m.toolName === 'work')!
+    expect(tool.content).toMatch(/Not done yet: this needs the user's OK/)
+    expect(tool.content).not.toMatch(/Skipped: this ran on a schedule/)
+    expect(h.queue.inbox()).toMatchObject([{ kind: 'approval', threadId: h.thread.id, hardStop: expect.stringMatching(/always ask/i) }])
+  })
   test('the main chat (not an always-on bot) works fully in Auto unattended; in Ask it skips what needs approval', async () => {
     log.length = 0
     const h = agentHarness([setup])

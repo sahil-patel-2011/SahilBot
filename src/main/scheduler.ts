@@ -90,7 +90,7 @@ export function nextRun(s: Schedule, from: Date): Date | null {
       return t
     }
     case 'weekly': {
-      const want = new Set(s.days.map((x) => DAYS.indexOf(x.slice(0, 3).toLowerCase())))
+      const want = new Set((Array.isArray(s.days) ? s.days : []).map((x) => DAYS.indexOf(x.slice(0, 3).toLowerCase())))
       for (let i = 0; i < 8; i++) {
         const t = atTime(from, s.time)
         t.setDate(t.getDate() + i)
@@ -104,6 +104,13 @@ export function nextRun(s: Schedule, from: Date): Date | null {
       // Runs when something arrives (onItems), never on the clock.
       return null
   }
+}
+
+/** A clock schedule missing what it runs on (a weekly with no days, a daily with no time) is a clear error, never a crash. */
+function checkSchedule(s: Schedule): void {
+  const x = s as Partial<{ days: unknown; time: unknown }>
+  if (s.type === 'weekly' && !(Array.isArray(x.days) && x.days.some((d) => typeof d === 'string' && DAYS.includes(d.slice(0, 3).toLowerCase())))) throw new Error('A weekly schedule needs days (["mon","wed"]).')
+  if ((s.type === 'daily' || s.type === 'weekly') && !(typeof x.time === 'string' && /^\d{1,2}(:\d{2})?/.test(x.time))) throw new Error('A daily or weekly schedule needs a time ("07:00").')
 }
 
 // One wording everywhere (routines screens, the schedule tool's replies, the chat's routine lines): "Weekdays at 7:30 AM ET".
@@ -269,6 +276,7 @@ export class Scheduler {
   create(t: { title: string; prompt: string; schedule: Schedule; spaceId: string; threadId?: string | null; enabled?: boolean }): ScheduledTask {
     if (!t.prompt.trim()) throw new Error('A scheduled task needs instructions.')
     if (t.prompt.length > 8000) throw new Error('Keep scheduled instructions under 8,000 characters.')
+    checkSchedule(t.schedule)
     const next = nextRun(t.schedule, this.now())
     if (!next && t.schedule.type !== 'when') throw new Error('That time has already passed.')
     const id = randomUUID().slice(0, 8)
@@ -287,6 +295,7 @@ export class Scheduler {
     if (!cur) throw new Error(`No scheduled task ${id}`)
     const n = { ...cur, ...patch }
     if (patch.prompt !== undefined && !n.prompt.trim()) throw new Error('A scheduled task needs instructions.')
+    if (patch.schedule) checkSchedule(patch.schedule)
     const next = n.enabled ? nextRun(n.schedule, this.now())?.getTime() ?? null : null
     if (n.enabled && next === null && n.schedule.type !== 'when') throw new Error('That time has already passed.')
     this.db.sql.prepare('UPDATE scheduled_tasks SET title=?, prompt=?, schedule=?, enabled=?, next_run=? WHERE id=?')
