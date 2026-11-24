@@ -122,3 +122,15 @@ describe('backup failures and legacy upgrade protection', () => {
     await expect(backupData(data, 'no recursive backup', { to: join(data, 'backups') })).rejects.toThrow('separate')
   })
 })
+
+describe('download progress', () => {
+  test('"90 of 215 MB": whole megabytes, never past the total, nothing without a size', async () => {
+    const { downloadedText } = await import('../../src/shared/bytes')
+    expect(downloadedText(90_400_000, 214_566_926)).toBe('90 of 215 MB')
+    expect(downloadedText(0, 214_566_926)).toBe('0 of 215 MB')
+    expect(downloadedText(214_566_926, 214_566_926)).toBe('215 of 215 MB')
+    expect(downloadedText(300_000_000, 214_566_926)).toBe('215 of 215 MB')
+    expect(downloadedText(undefined, 214_566_926)).toBe('0 of 215 MB')
+    expect(downloadedText(5, 0)).toBe('')
+  })
+})

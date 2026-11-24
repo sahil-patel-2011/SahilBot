@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { PendingRequest } from '@shared/types'
-import { botsOverview, CHECKIN_PROMPT, getCheckin, overviewTool, setCheckin } from '../../src/main/checkin'
+import { botsOverview, overviewTool, removeCheckin } from '../../src/main/checkin'
 import { Db } from '../../src/main/db'
 import { Scheduler } from '../../src/main/scheduler'
 
@@ -11,46 +11,26 @@ function setup(): { db: Db; s: Scheduler; main: string } {
   return { db, s, main }
 }
 
-describe('morning check-in', () => {
-  test('off by default; turning it on makes one daily routine on the main bot', () => {
+describe('morning check-in removed', () => {
+  test('the routine an earlier version made is deleted at startup; the setting goes with it', () => {
     const { db, s, main } = setup()
-    expect(getCheckin(db, s)).toEqual({ enabled: false, time: '08:30' })
-    expect(s.list()).toHaveLength(0)
-    expect(setCheckin(db, s, { enabled: true, time: '07:45' })).toEqual({ enabled: true, time: '07:45' })
-    const [t] = s.list()
-    expect(t).toMatchObject({ title: 'Morning check-in', spaceId: main, enabled: true, schedule: { type: 'daily', time: '07:45' }, prompt: CHECKIN_PROMPT })
-    // Re-timing and switching off reuse the same routine.
-    setCheckin(db, s, { enabled: true, time: '09:00' })
-    setCheckin(db, s, { enabled: false, time: '09:00' })
-    expect(s.list()).toHaveLength(1)
-    expect(s.list()[0]).toMatchObject({ enabled: false, schedule: { time: '09:00' } })
-    expect(getCheckin(db, s)).toEqual({ enabled: false, time: '09:00' })
-    setCheckin(db, s, { enabled: true, time: '09:00' })
-    expect(s.list()).toHaveLength(1)
-    expect(getCheckin(db, s).enabled).toBe(true)
+    const t = s.create({ title: 'Morning check-in', prompt: 'Give me a short morning check-in.', schedule: { type: 'daily', time: '08:30' }, spaceId: main, enabled: true })
+    db.setSetting('checkin', { taskId: t.id, time: '08:30' })
+    expect(removeCheckin(db, s)).toBe(true)
+    expect(s.get(t.id)).toBeUndefined()
+    expect(db.getSetting('checkin')).toBeUndefined()
+    // Next startup: nothing left to do.
+    expect(removeCheckin(db, s)).toBe(false)
   })
 
-  test('the switch follows the routine: pausing or deleting it turns the check-in off', () => {
-    const { db, s } = setup()
-    setCheckin(db, s, { enabled: true, time: '08:00' })
-    const id = s.list()[0].id
-    s.update(id, { prompt: 'My own wording.' } as never)
-    s.update(id, { enabled: false })
-    expect(getCheckin(db, s).enabled).toBe(false)
-    setCheckin(db, s, { enabled: true, time: '08:00' })
-    expect(s.get(id)!.prompt).toBe('My own wording.')
-    s.remove(id)
-    expect(getCheckin(db, s)).toEqual({ enabled: false, time: '08:00' })
-    setCheckin(db, s, { enabled: true, time: '08:00' })
-    expect(s.list()).toHaveLength(1)
-  })
-
-  test('bad times are refused; the prompt reads only and keeps it short', () => {
-    const { db, s } = setup()
-    expect(() => setCheckin(db, s, { enabled: true, time: '25:00' })).toThrow(/time/)
-    expect(CHECKIN_PROMPT).toMatch(/don't send/)
-    expect(CHECKIN_PROMPT).toMatch(/1–3 next actions/)
-    expect(CHECKIN_PROMPT).toMatch(/bots_overview/)
+  test('a routine the user made is never touched, even one with the same title', () => {
+    const { db, s, main } = setup()
+    const mine = s.create({ title: 'Morning check-in', prompt: 'My own wording.', schedule: { type: 'daily', time: '07:00' }, spaceId: main, enabled: true })
+    expect(removeCheckin(db, s)).toBe(false)
+    db.setSetting('checkin', { taskId: null, time: '08:30' })
+    expect(removeCheckin(db, s)).toBe(false)
+    expect(s.get(mine.id)?.enabled).toBe(true)
+    expect(db.getSetting('checkin')).toBeUndefined()
   })
 })
 

@@ -1116,13 +1116,6 @@ export interface UsageReport {
   totals: { cloudRequests: number; localRequests: number; input: number; output: number; usd: number }
 }
 
-/** The opt-in morning check-in: a daily routine on the main bot. */
-export interface CheckinSettings {
-  enabled: boolean
-  /** HH:MM, local time. */
-  time: string
-}
-
 /** A ready-made bot from packs/templates (Connect apps → Bot templates). */
 export interface BotTemplate {
   id: string
@@ -1153,6 +1146,17 @@ export interface GoogleConnectStatus {
   oauth: { builtin: boolean; ownClient: boolean; connected: boolean; configId?: string }
   mail: Array<{ account: string; address: string }>
   mailOpen: boolean
+}
+
+/** How Outlook is connected (Connect apps → Outlook, main/mail/outlook.ts): no tokens, just who and which app. */
+export interface OutlookConnectStatus {
+  /** This build ships SahilBot's own Microsoft app (Sign in with Microsoft works at once). */
+  builtin: boolean
+  /** The user saved their own Entra app's client ID (used instead of the built-in one). */
+  ownClient: boolean
+  ownClientId?: string
+  connected: boolean
+  address?: string
 }
 
 export interface ConnectorStatus {
@@ -1489,6 +1493,15 @@ export interface SahilBotApi {
     useOauth(): Promise<GoogleConnectLink>
     disconnect(): Promise<void>
   }
+  /** Connect apps → Outlook: Sign in with Microsoft (main/mail/outlook.ts); tokens never leave main. */
+  outlook: {
+    status(): Promise<OutlookConnectStatus>
+    /** Opens Microsoft's sign-in page in the browser; resolves once signed in (or rejects with what to do). */
+    signIn(): Promise<OutlookConnectStatus>
+    disconnect(): Promise<void>
+    /** The user's own Entra app's client ID (a GUID), or null to go back to SahilBot's own app. */
+    setClient(clientId: string | null): Promise<OutlookConnectStatus>
+  }
   vault: {
     list(): Promise<VaultEntry[]>
     set(entry: VaultEntry & { password?: string; totp?: string; clearTotp?: boolean }): Promise<VaultEntry[]>
@@ -1614,11 +1627,6 @@ export interface SahilBotApi {
     duplicate(spaceId: string): Promise<{ spaceId: string; threadId: string }>
     /** Each bot's status (Working / Pulling context / Done / Idle) and the model its last reply ran on. */
     status(): Promise<import('./bot-status').BotStatusMap>
-  }
-  /** The morning check-in routine on the main bot (off by default). */
-  checkin: {
-    get(): Promise<CheckinSettings>
-    set(c: CheckinSettings): Promise<CheckinSettings>
   }
   /** Undo a task's file changes (the Undo button under an answer): what it would undo, and doing it. */
   undo: {
@@ -1863,6 +1871,8 @@ export interface UpdateStatus {
   progress?: number
   /** The download's size in bytes. */
   size?: number
+  /** Bytes downloaded so far (while downloading). */
+  received?: number
   detail?: string
   checkedAt?: number
 }

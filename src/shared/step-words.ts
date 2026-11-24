@@ -73,6 +73,7 @@ export function plainStep(name: string, args: Args = {}): string {
     case 'find_tools': return 'Looking for the right tool'
     case 'schedule': return 'Setting up a routine'
     case 'manage_bot': case 'create_bot': case 'update_bot': return 'Setting up the bot'
+    case 'outlook': return /^calendar/.test(s('action')) ? 'Checking your calendar' : 'Checking your email'
     case 'mail': case 'gmail': case 'gmail_imap': case 'email': return 'Checking your email'
     case 'calendar': return 'Checking your calendar'
     case 'api_request': case 'http': return 'Contacting a service'

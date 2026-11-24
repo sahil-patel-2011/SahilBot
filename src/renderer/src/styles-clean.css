@@ -200,3 +200,35 @@
 
 /* The sidebar's show button in the chat header while it's hidden (clear of the window buttons). */
 .app.sb-hidden .main-header .sb-show { margin-left: 72px; }
+
+/* Bots like Grok Bot's sidebar: bigger rows with room between them, pinned bots as soft tiles. */
+.bot-list { gap: 4px; }
+.bot-row { position: relative; border-radius: 14px; }
+.br-btn { height: 60px; gap: 12px; padding: 0 12px 0 8px; }
+.br-avatar { width: 42px; height: 42px; }
+.br-name { font-size: 15px; font-weight: 600; }
+.br-preview { font-size: 13.5px; color: var(--text-3); }
+.br-preview.br-wait { color: var(--accent); }
+/* Pin from the row: a small button on hover (it takes the place of the unread mark while shown). */
+.br-pin { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; color: var(--text-2); background: var(--sidebar); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+.br-pin:hover { color: var(--text); background: var(--selected); }
+.bot-row:hover .br-pin, .br-pin:focus-visible { opacity: 1; pointer-events: auto; }
+.bot-row:hover .br-btn > .unread-dot, .bot-row:hover .br-btn > .unread-count, .bot-row:hover .br-btn > .need-dot { visibility: hidden; }
+.need-dot { box-shadow: none; }
+/* Pinned: soft tiles, three to a row; one pinned bot is a single centered tile. */
+.pin-grid { padding: 4px 0 12px; gap: 6px; justify-content: center; }
+.pin-widget { position: relative; width: calc(33.333% - 4px); padding: 0; }
+.pin-grid.one .pin-widget { width: 128px; }
+.pw-btn { background: var(--hover); padding: 12px 6px 10px; gap: 8px; border-radius: 18px; }
+.pw-btn:hover { background: var(--selected); }
+.pin-widget.active .pw-btn { background: var(--selected); }
+.pin-grid.one .pw-avatar, .pw-avatar { width: auto; height: auto; }
+.pin-grid.one .pw-name { font-size: 14px; }
+.pw-unpin { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, .14); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+.pin-widget:hover .pw-unpin, .pw-unpin:focus-visible { opacity: 1; pointer-events: auto; }
+.pw-unpin:hover { color: var(--text); }
+/* You, then Connect apps (Grok Bot's apps button). */
+.sb-bottom .sb-apps { flex: none; width: 36px; height: 36px; }
+.sb-me { position: relative; }
+.sb-me-dot { margin-left: auto; }
+@media (prefers-reduced-motion: reduce) { .br-pin, .pw-unpin { transition: none; } }

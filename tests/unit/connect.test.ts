@@ -108,9 +108,11 @@ describe('connect categories', () => {
     expect(chipOf('Design')).toBe('Design')
   })
   test('built-in apps stay in "Built in"; browser sign-ins sit next to the app they automate', () => {
-    // Cursor connects with an API key (Cloud Agents), so it's with the code apps, not built in.
-    expect(PRESETS.filter((p) => p.auth === 'app' && p.id !== 'cursor-app').every((p) => p.category === 'Built in')).toBe(true)
+    // Cursor connects with an API key (Cloud Agents), so it's with the code apps, not built in; Outlook signs in
+    // with Microsoft from its own panel, so it's with the communication apps.
+    expect(PRESETS.filter((p) => p.auth === 'app' && p.id !== 'cursor-app' && p.id !== 'outlook').every((p) => p.category === 'Built in')).toBe(true)
     expect(PRESETS.find((p) => p.id === 'cursor-app')?.category).toBe('Code')
+    expect(PRESETS.find((p) => p.id === 'outlook')?.category).toBe('Communication')
     expect(PRESETS.filter((p) => p.category === 'Built in').length).toBeGreaterThanOrEqual(2)
     // "Gmail (in SahilBot's browser)" is listed with Gmail (below its one-click connector), not apart from it.
     expect(['gmail-web', 'gcal-web', 'gdrive-web'].map((id) => preset(id).category)).toEqual(['gmail', 'gcal', 'gdrive'].map((id) => preset(id).category))

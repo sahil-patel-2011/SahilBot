@@ -7,6 +7,10 @@ With SahilBot's own registration shipped in the build, those apps become **one c
 provider's sign-in page in the user's browser, and there's nothing to paste. Users can still bring their own
 app (Connect apps → the app → **Use your own app**).
 
+Outlook is the twelfth: there's no MCP server SahilBot can use (Microsoft's hosted Microsoft 365 server only
+serves Anthropic's Claude apps), so SahilBot signs in to Microsoft itself and calls Microsoft Graph
+(`src/main/mail/outlook.ts`). It needs one Microsoft Entra app registration, under the key `outlook`.
+
 This page is the checklist per provider. It was researched on 2026-11-15 from official vendor docs only;
 links are under each provider. Where the docs didn't settle something, it says **unconfirmed**. Check those
 points in the console when you register.
@@ -20,13 +24,15 @@ points in the console when you register.
    {
      "slack":  { "clientId": "…", "redirect": "http://localhost:47613/callback" },
      "github": { "clientId": "…", "clientSecret": "…", "redirect": "http://127.0.0.1:47613/callback" },
-     "google": { "clientId": "….apps.googleusercontent.com", "clientSecret": "GOCSPX-…", "redirect": "loopback" }
+     "google": { "clientId": "….apps.googleusercontent.com", "clientSecret": "GOCSPX-…", "redirect": "loopback" },
+     "outlook": { "clientId": "1a2b3c4d-…-0123456789ab", "redirect": "loopback" }
    }
    ```
 
    - Keys are catalog ids (`slack`, `github`, `asana`, `hubspot`, `box`, `docusign`, `xero`, `zoom`,
      `front`, `crunchbase`). `google` is shared by Gmail, Calendar, Drive, Docs, Sheets, Slides and
-     BigQuery. A `gmail` (etc.) entry overrides it for that app alone.
+     BigQuery. A `gmail` (etc.) entry overrides it for that app alone. `outlook` is SahilBot's Microsoft
+     Entra app for Outlook mail and calendar: a GUID client ID, no secret, redirect `"loopback"`.
    - `redirect` is either `"loopback"` or an exact URI.
      - `"loopback"`: the provider accepts any `127.0.0.1` port. SahilBot listens on a free port per sign-in.
      - An exact URI must be `http://127.0.0.1|localhost:<port>/callback`.
@@ -327,6 +333,45 @@ A desktop app can't keep a client secret secret. Anyone can pull it out of the a
   https://support.google.com/cloud/answer/13464325 ·
   https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification
 
+### Outlook (Outlook.com and Microsoft 365 mail and calendar)
+
+- **Where to create it:** https://entra.microsoft.com → Applications → App registrations → **New
+  registration** (any Microsoft account works; a free Entra tenant is enough).
+  - Name: `SahilBot`.
+  - Supported account types: **"Accounts in any organizational directory (Any Microsoft Entra ID tenant -
+    Multitenant) and personal Microsoft accounts (e.g. Skype, Xbox)"**. SahilBot signs in on `/common`, so
+    work, school and personal (Outlook.com, Hotmail, Live) accounts all work.
+  - Redirect URI: platform **"Public client/native (mobile & desktop)"** (shown later under Authentication as
+    **"Mobile and desktop applications"**), URI `http://localhost`. Entra ignores the port of a loopback
+    redirect, so SahilBot listens on a free `127.0.0.1` port per sign-in and sends `http://localhost:<port>`.
+    Don't register it under **Web** or **Single-page application**: the code exchange then wants a secret
+    (AADSTS7000218) or an Origin header.
+  - Authentication → **Allow public client flows: Yes** (harmless, and avoids AADSTS7000218 on some tenants).
+- **API permissions:** Add a permission → Microsoft Graph → **Delegated**: `Mail.ReadWrite`, `Mail.Send`,
+  `Calendars.ReadWrite`, `User.Read`, `offline_access` (plus `openid` and `email`, which are there by
+  default). None needs admin consent for personal accounts; a work tenant can still require an admin to
+  approve the app.
+- **Config entry:** `"outlook": { "clientId": "<Application (client) ID>", "redirect": "loopback" }`.
+  - **No secret:** it's a public client. SahilBot refuses an `outlook` entry with a `clientSecret`, and
+    Microsoft refuses a secret from a desktop redirect anyway (AADSTS700025).
+  - `scopes` can't be set: SahilBot always asks for the list above.
+- **PKCE and public client:** yes (S256, per-sign-in `state`, one-shot loopback listener, 5-minute timeout).
+- **Tokens:** the refresh token is kept only in the Keychain (`outlook:refreshToken`); access tokens stay in
+  memory. Refresh tokens rotate and are saved on each refresh; `invalid_grant` signs the user out and asks
+  them to sign in again.
+- **Without a built-in client:** Connect apps → Outlook shows these same steps and a client-ID field, so each
+  user can register their own free app. With one, "Advanced" still lets them use their own.
+- **Review before public use:**
+  - **Publisher verification** (Entra → Branding & properties → verified publisher, needs a Microsoft
+    Partner Network ID): without it, users see "unverified" on the consent screen, and many work tenants
+    block user consent to unverified multitenant apps.
+  - Work tenants with user consent turned off need an admin to grant consent once for their organization.
+- **Docs:** https://learn.microsoft.com/entra/identity-platform/quickstart-register-app ·
+  https://learn.microsoft.com/entra/identity-platform/reply-url#localhost-exceptions ·
+  https://learn.microsoft.com/entra/identity-platform/v2-oauth2-auth-code-flow ·
+  https://learn.microsoft.com/graph/permissions-reference ·
+  https://learn.microsoft.com/entra/identity-platform/publisher-verification-overview
+
 ## Summary
 
 | Provider | App type | Redirect to register | Public PKCE client | Secret shipped | Before the public can use it |
@@ -342,3 +387,4 @@ A desktop app can't keep a client secret secret. Anyone can pull it out of the a
 | Front | Developer app + Front MCP | `http://localhost:47613/callback` (+ `http://localhost/callback`) | no | yes | Front partner team to go public |
 | Crunchbase | Custom OAuth client (or CIMD) | `http://127.0.0.1:47613/callback` | unconfirmed | likely | MCP seat per user |
 | Google | Desktop app client | loopback (any port) | yes | yes (optional per Google) | Developer Preview, verification, restricted-scope verification and CASA |
+| Outlook (Microsoft) | Entra app, Mobile and desktop platform | `http://localhost` (any port) | yes | no | publisher verification; admin consent in some work tenants |

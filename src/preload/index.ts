@@ -285,6 +285,10 @@ const api: SahilBotApi = {
     status: call('google:status') as never, useMail: call('google:useMail') as never, useAppPassword: call('google:useAppPassword') as never,
     useOauth: call('google:useOauth') as never, disconnect: call('google:disconnect') as never
   },
+  outlook: {
+    status: call('outlook:status') as never, signIn: call('outlook:signIn') as never,
+    disconnect: call('outlook:disconnect') as never, setClient: call('outlook:setClient') as never
+  },
   vault: {
     list: call('vault:list') as never, set: call('vault:set') as never, remove: call('vault:remove') as never,
     totpCode: call('vault:totpCode') as never, otpGrants: call('vault:otpGrants') as never, revokeOtpGrant: call('vault:revokeOtpGrant') as never,
@@ -411,7 +415,6 @@ const api: SahilBotApi = {
     }
   },
   botAutonomy: { setLevel: call('botAutonomy:setLevel') as never },
-  checkin: { get: call('checkin:get') as never, set: call('checkin:set') as never },
   watchlist: { get: call('watchlist:get') as never, set: call('watchlist:set') as never },
   markets: { quotes: call('markets:quotes') as never, card: call('markets:card') as never, search: call('markets:search') as never },
   cad: { onshapeTest: call('onshape:test') as never },

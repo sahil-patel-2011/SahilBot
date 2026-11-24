@@ -171,7 +171,7 @@ describe('no errors on a first run', () => {
       await settle(page)
 
       // 3. Connect an app: a custom connector with one-click OAuth to the local fake.
-      await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
+      await page.click('[data-testid="connect-apps"]')
       await page.click('[data-testid="preset-custom"]')
       await page.fill('.conn-form input >> nth=0', 'Tasks')
       await page.fill('[data-testid="conn-url"]', fake.url)

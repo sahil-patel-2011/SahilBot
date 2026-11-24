@@ -9,7 +9,7 @@ import { classifyTask, type TaskCategory } from './llm/task-classifier'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
-import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, PermissionState, SendInput, Settings, Space, UsageRow } from '@shared/types'
+import type { AlwaysOnStatus, BotShape, ChatEvent, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, PermissionState, SendInput, Settings, Space, UsageRow } from '@shared/types'
 import type { GoalPatch, MemoryItem, VoiceBarOptions, VoiceSession, VoiceStyle } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 // Cloud first, local opt-in (shared/local-mode.ts); attached folders are counted and indexed (knowledge/folder-scan.ts).
@@ -29,11 +29,11 @@ import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff, spe
 import { isAuto } from './llm/router'
 import { NotificationPermission, automationStatus, fileProbe, permissionsStatus, requestAutomation, settingsUrl } from './permissions-center'
 import { collectText, isLocal, spendHooks, streamChat, usageDetails } from './llm/client'
-import { ConnectorIcons, Connectors, PRESETS } from './connectors'
+import { ConnectorIcons, Connectors, PRESETS, openSignIn } from './connectors'
 import { OAUTH_CLIENTS_FILE, readBuiltinClients } from './oauth-clients'
 import { addTemplate, loadTemplates, type TemplateDeps } from './templates'
 import { BOT_FILE_EXT, BOT_FILE_MAX_BYTES, botFileFor, duplicateBot, importPreview, importTemplate, parseBotFile, PendingImports } from './bot-share'
-import { getCheckin, overviewTool, setCheckin } from './checkin'
+import { overviewTool, removeCheckin } from './checkin'
 import { aggregateUsage, providerOf, usageDashboard, usageDetailCsv, usageGlance, usageRows, usageScope, windowStart } from './usage'
 import { VoiceService } from './voice/service'
 import { Scheduler } from './scheduler'
@@ -131,6 +131,8 @@ import { mailTool } from './agent/tools/mail'
 import { resendTool, RESEND_KEY_SECRET } from './agent/tools/resend'
 import { gmailImapTool } from './agent/tools/gmail-imap'
 import { GoogleConnect } from './mail/google-connect'
+import { OutlookConnect } from './mail/outlook'
+import { outlookTool } from './agent/tools/outlook'
 import { mailRunner } from './mail/runner'
 import { TrustedSends } from './agent/trusted'
 import { chatParticipants, withChatDb } from './messages/chatdb'
@@ -950,10 +952,25 @@ app.whenReady().then(() => {
       return { builtin: !!connectors.builtin('gmail'), ownClient: !!connectors.googleClient() || !!cfg?.clientId, connected: connectors.presetConnected('gmail'), ...(cfg ? { configId: cfg.id } : {}) }
     }
   })
+  // Connect apps → Outlook: Microsoft sign-in (PKCE, public client) on a one-shot loopback listener; the refresh
+  // token stays in the Keychain (mail/outlook.ts). The client: the user's own Entra app, else SahilBot's built-in one.
+  const outlookConnect = new OutlookConnect({
+    db, secrets, changed: () => toWin('connectors:changed'),
+    builtinClientId: () => oauthClients.clients.outlook?.clientId,
+    // The system browser (a hidden test run only captures the URL: connectors.openSignIn).
+    openExternal: (url) => (/^https:\/\/login\.microsoftonline\.com\//.test(url) ? openSignIn(url) : undefined),
+    onSignedIn: () => {
+      if (HIDDEN) return
+      try { app.focus({ steal: true }) } catch { /* not on every platform */ }
+      showMain()
+    }
+  })
   registry.register(
     // Resend: transactional email with the user's own key (Connect apps → Resend), sent only to api.resend.com.
     { ...resendTool({ key: () => secrets.get(RESEND_KEY_SECRET), workspace: () => settings.get().workspaceDir }), core: false },
-    { ...gmailImapTool({ creds: () => googleConnect.credentials() }), core: false }
+    { ...gmailImapTool({ creds: () => googleConnect.credentials() }), core: false },
+    // Outlook: mail and calendar through Microsoft Graph with the user's own Microsoft sign-in (Connect apps → Outlook).
+    { ...outlookTool({ graph: () => (outlookConnect.connected() ? outlookConnect : null), address: () => outlookConnect.status().address }), core: false }
   )
   // Emailed sign-in codes: the Gmail connector when it's connected, else Mail.app (read in main, never shown to the model).
   setEmailCodeSource(gmailCodeSource((tool, args, signal) => connectors.callPresetTool('gmail', tool, args, signal)), () => connectors.presetConnected('gmail'))
@@ -1860,6 +1877,11 @@ app.whenReady().then(() => {
   handle('google:useAppPassword', (address: string, password: string) => googleConnect.useAppPassword(address, password))
   handle('google:useOauth', () => googleConnect.useOauth())
   handle('google:disconnect', () => googleConnect.disconnect())
+  // Connect apps → Outlook: only a status comes back (tokens never leave main).
+  handle('outlook:status', () => outlookConnect.status())
+  handle('outlook:signIn', () => outlookConnect.signIn())
+  handle('outlook:disconnect', () => outlookConnect.disconnect())
+  handle('outlook:setClient', (clientId: string | null) => outlookConnect.setClient(clientId))
   void connectors.connectAll()
   // Health: a tools/list check every few minutes; dropped connections reconnect with backoff.
   connectors.startHealth()
@@ -2172,8 +2194,8 @@ app.whenReady().then(() => {
   })
 
   // ---------------------------------------------------------------- morning check-in and usage
-  handle('checkin:get', () => getCheckin(db, scheduler))
-  handle('checkin:set', (c: CheckinSettings) => setCheckin(db, scheduler, c))
+  // The morning check-in is gone: an earlier version's routine is deleted once (a routine the user made stays).
+  try { removeCheckin(db, scheduler) } catch { /* never in the way of startup */ }
   // Stock watchlist (renderer-owned list; values cached from stock cards or a refresh).
   handle('watchlist:get', () => getWatchlist(db))
   handle('watchlist:set', (items: unknown) => setWatchlist(db, items))

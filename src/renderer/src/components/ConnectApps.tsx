@@ -1,6 +1,6 @@
 import { toast } from '../lib/toast'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { ConnectorConfig, ConnectorPreset, ConnectorStatus, GoogleConnectLink, GoogleConnectStatus, Skill } from '@shared/types'
+import type { ConnectorConfig, ConnectorPreset, ConnectorStatus, GoogleConnectLink, GoogleConnectStatus, OutlookConnectStatus, Skill } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
 import { AppIcon, IconStack, connectedApps, useAppIcons } from './ConnectedIcons'
@@ -22,7 +22,7 @@ const prettyTool = (n: string): string => n.replace(/[_\-.]+/g, ' ').replace(/^\
 const ACRONYMS = /^(pdf|pcb|sql|seo|ci|api|ios|gdt|dfm)$/i
 const prettySkill = (n: string): string => n.split('-').map((w) => (ACRONYMS.test(w) ? w.toUpperCase() : w)).join(' ').replace(/^\w/, (c) => c.toUpperCase())
 
-type View = 'browse' | 'manage' | 'form' | 'google' | 'setup' | 'key' | 'gmail'
+type View = 'browse' | 'manage' | 'form' | 'google' | 'setup' | 'key' | 'gmail' | 'outlook'
 
 /** An API-key app SahilBot talks to with its own tool (no MCP server, no connector config): Resend. */
 export const isNativeKeyApp = (p: Pick<ConnectorPreset, 'auth' | 'url'> | undefined): boolean => !!p && p.auth === 'apikey' && p.url.startsWith('app:')
@@ -82,6 +82,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
   const [cursorOn, setCursorOn] = useState(false)
   /** How Google is connected (one tile, three ways: Sign in with Google, the Mac's Mail app, an app password). */
   const [gstat, setGstat] = useState<GoogleConnectStatus | null>(null)
+  /** Outlook (Sign in with Microsoft, natively): who's signed in, and which Microsoft app it uses. */
+  const [ostat, setOstat] = useState<OutlookConnectStatus | null>(null)
   /** Test connection results by connector id. */
   const [tests, setTests] = useState<Record<string, { ok: boolean; text: string }>>({})
   /** "Check all": running, and its one-line result. */
@@ -98,6 +100,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     setCursorOn(!!(await api.settings.get().catch(() => null))?.hasCursorKey)
     setGoogle(await api.connectors.googleClient().catch(() => null))
     setGstat(await api.google?.status(false).catch(() => null) ?? null)
+    setOstat(await api.outlook?.status().catch(() => null) ?? null)
   }
   useEffect(() => {
     void api.connectors.presets().then(setPresets)
@@ -121,8 +124,10 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     // Native API-key apps (Resend) are connected when their key is saved; Google by the Mail app or an app password too.
     for (const p of presets) if (isNativeKeyApp(p) && keys.has(p.id)) apps.push({ id: `${p.id}-key`, presetId: p.id, name: p.name, color: p.color })
     if (gstat?.link && gstat.link.method !== 'oauth' && !apps.some((a) => a.presetId === 'gmail')) apps.push({ id: 'google-link', presetId: 'gmail', name: 'Gmail', color: '#EA4335' })
+    // Outlook is connected when signed in with Microsoft (no connector config).
+    if (ostat?.connected) apps.push({ id: 'outlook-link', presetId: 'outlook', name: 'Outlook', color: '#0078D4' })
     return apps
-  }, [configs, statuses, presets, cursorOn, keys, gstat])
+  }, [configs, statuses, presets, cursorOn, keys, gstat, ostat])
   /** An API-key app's key is saved (a connector's, or a native app's by its preset id). */
   const keyed = (p: ConnectorPreset, cfg: ConnectorConfig | undefined): boolean => (isNativeKeyApp(p) ? keys.has(p.id) : !!cfg && keys.has(cfg.id))
   /** What's missing before an app can connect: its one-time setup, Google setup or API key. */
@@ -161,6 +166,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     if (p.id === 'cursor-app') { if (onOpenSettings) { onClose(); onOpenSettings('connected') } else toast('Add your Cursor API key in Settings → Connected apps.'); return }
     // Google: one tile, three ways (Sign in with Google, the Mac's Mail app, an app password).
     if (p.id === 'gmail') { go('gmail'); return }
+    // Outlook: its own panel (Sign in with Microsoft, or your own Microsoft app).
+    if (p.id === 'outlook') { go('outlook'); return }
     // Native API-key apps (Resend): the key panel, to add, replace or forget the key.
     if (isNativeKeyApp(p)) { setKeyFor(p); go('key'); return }
     if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : p.url === 'app:maps' ? 'plan a 2-day walking itinerary in Lisbon with travel times between stops' : p.url === 'app:research' ? 'what do the latest guidelines and meta-analyses say about active surveillance for prostate cancer?' : 'add a reminder for tomorrow at 9'}".`); return }
@@ -302,6 +309,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
       p.id === 'cursor-app' ? (cursorOn ? ['Connected', 'done'] : ['Add key', 'add']) :
       p.id === 'gmail' && as !== 'reauth' ? (gstat?.link || st?.state === 'connected' ? ['Connected', 'done'] : busy ? ['Connecting…', 'ghost'] : ['Connect', 'add']) :
       isNativeKeyApp(p) ? (keys.has(p.id) ? ['Connected', 'done'] : ['Add key', 'add']) :
+      p.id === 'outlook' ? (ostat?.connected ? ['Connected', 'done'] : ['Connect', 'add']) :
       p.auth === 'app' ? ['Built in', 'ok'] :
       p.auth === 'browser' ? ['Sign in', 'ghost'] :
       st?.state === 'connected' ? ['Connected', 'done'] :
@@ -313,6 +321,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
       cfg ? ['Connect', 'solid'] : ['Add', 'add']
     const badge = st?.state === 'connected' || as === 'unavailable' || (isNativeKeyApp(p) && keys.has(p.id)) || p.id === 'gmail' ? null : connectBadge(p)
     const glink = p.id === 'gmail' ? gstat?.link : null
+    const olink = p.id === 'outlook' && ostat?.connected ? ostat : null
     const act = (): void => { if (!busy) void start(p) }
     return (
       <div key={p.id} className="ca-item" role="button" tabIndex={0} data-testid={`preset-${p.id}`} data-state={st?.state} data-app-state={as}
@@ -322,7 +331,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
           : <AppIcon src={icons[p.id]} name={p.name} color={p.color} />}
         <span className="ca-item-text">
           <b>{p.name}{badge && badge !== 'One click' && <small className={`ca-badge ui-pill ${BADGE_STYLE[badge].cls}`} data-testid={`badge-${p.id}`} title={badgeTitle(badge, p)}>{badge}</small>}</b>
-          <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && p.id !== 'gmail' && !p.builtinClient && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !p.builtinClient && !cfg?.clientId ? `${p.description} One-time setup first.` : glink ? `Connected${glink.address ? ` · ${glink.address}` : ''} · via ${GOOGLE_METHOD[glink.method]}` : p.auth === 'apikey' && !keyed(p, cfg) ? `${p.description} Paste your API key once.` : p.description}</span>
+          <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && p.id !== 'gmail' && !p.builtinClient && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !p.builtinClient && !cfg?.clientId ? `${p.description} One-time setup first.` : glink ? `Connected${glink.address ? ` · ${glink.address}` : ''} · via ${GOOGLE_METHOD[glink.method]}` : olink ? `Connected${olink.address ? ` · ${olink.address}` : ''}` : p.auth === 'apikey' && !keyed(p, cfg) ? `${p.description} Paste your API key once.` : p.description}</span>
         </span>
         {tone === 'done' && onTry && (
           <button className="ca-try" onClick={(e) => { e.stopPropagation(); onClose(); onTry(`What's new in ${p.name}?`) }} data-testid={`try-app-${p.id}`} title={`Start a chat that uses ${p.name}`}>Try it</button>
@@ -425,7 +434,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
 
   const manage = (): ReactNode => (
     <>
-      {configs.length === 0 && !cursorOn && (
+      {configs.length === 0 && !cursorOn && !ostat?.connected && (
         <div className="ca-empty">
           <b>No apps connected yet.</b>
           <span>Connect an app and SahilBot can use it in any chat.</span>
@@ -438,6 +447,11 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
           <AppIcon src={icons['cursor-app']} name="Cursor" color="#111111" />
           <div><b>Cursor</b><div className="hint">Cloud Agents · API key saved</div></div>
           <button className="btn" onClick={() => { if (onOpenSettings) { onClose(); onOpenSettings('connected') } }}>Manage key</button>
+        </div>}
+        {ostat?.connected && <div className="ca-app" data-testid="outlook-connection">
+          <AppIcon src={icons.outlook} name="Outlook" color="#0078D4" />
+          <div><b>Outlook</b><div className="hint">Mail and calendar{ostat.address ? ` · ${ostat.address}` : ''}</div></div>
+          <button className="btn" title="Disconnect Outlook or change the Microsoft app it uses" onClick={() => go('outlook')}>Manage</button>
         </div>}
         {configs.map((c) => {
           const st = status(c.id)
@@ -579,7 +593,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     : view === 'google' ? (googleBuiltin ? 'Use your own Google app' : 'Set up Google once')
     : view === 'setup' && setupFor ? (setupFor.builtinClient ? `Use your own ${setupFor.name} app` : `Set up ${setupFor.name} once`)
     : view === 'key' && keyFor ? (keyFor.auth === 'oauth' ? `Use a ${keyFor.name} API key instead` : `Connect ${keyFor.name}`)
-    : view === 'gmail' ? 'Connect Google' : 'Connect apps'
+    : view === 'gmail' ? 'Connect Google' : view === 'outlook' ? 'Connect Outlook' : 'Connect apps'
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -675,6 +689,9 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
               onOwnApp={() => { const p = presets.find((x) => x.id === 'gmail'); if (p) { setGoogleFor(p); go('google') } }}
               onDisconnectOauth={async () => { const id = gstat?.oauth.configId; if (id) await api.connectors.disconnect(id) }}
               onDone={() => go('browse')} />
+          )}
+          {view === 'outlook' && (
+            <OutlookConnect status={ostat} onChanged={load} onDone={() => go('browse')} />
           )}
           {view === 'google' && (
             <GoogleSetup
@@ -974,6 +991,101 @@ function GoogleConnect({ status, gmailPreset, onChanged, onSignIn, onOwnApp, onD
         <span className="hint" style={{ margin: '6px 0 0' }}>{passProblem ?? 'Needs 2-Step Verification on your Google account. The password stays in your Mac\'s Keychain.'}</span>
       </div>
       {gmailPreset && <span className="hint">{gmailPreset.description}</span>}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- Connect Outlook (Sign in with Microsoft)
+
+/** Same check as main (oauth-clients.ENTRA_CLIENT_ID), for feedback while typing. */
+export function entraClientProblem(raw: string): string | null {
+  const id = raw.trim()
+  if (!id) return 'Paste the Application (client) ID.'
+  if (/\s/.test(id)) return 'The client ID has spaces in it; copy it again.'
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return 'That isn\'t an Application (client) ID. It looks like 1a2b3c4d-1234-5678-9abc-0123456789ab (on your app\'s Overview page).'
+  return null
+}
+
+const ENTRA_APPS = 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade'
+const ENTRA_STEPS: Array<{ title: string; text: string }> = [
+  { title: 'Register a free app', text: 'At entra.microsoft.com (sign in with any Microsoft account): Applications → App registrations → New registration. Name it "SahilBot".' },
+  { title: 'Who can sign in', text: 'Supported account types: "Accounts in any organizational directory and personal Microsoft accounts".' },
+  { title: 'The redirect', text: 'Redirect URI: platform "Public client/native (mobile & desktop)", shown later as "Mobile and desktop applications", with the address below. Then press Register.' },
+  { title: 'Permissions', text: 'API permissions → Add a permission → Microsoft Graph → Delegated permissions: Mail.ReadWrite, Mail.Send, Calendars.ReadWrite, User.Read and offline_access.' },
+  { title: 'Paste the client ID here', text: 'Copy the "Application (client) ID" from the app\'s Overview page. No secret is needed.' }
+]
+
+/**
+ * Outlook, signed in with the user's own Microsoft account: "Sign in with Microsoft" (SahilBot's own
+ * Microsoft app when this build ships one), or the steps to register a free app of their own and its client
+ * ID (Advanced, or the only way when there's no built-in app). Once signed in: who, Disconnect, Done.
+ */
+function OutlookConnect({ status, onChanged, onDone }: {
+  status: OutlookConnectStatus | null
+  onChanged: () => Promise<void>
+  onDone: () => void
+}) {
+  const [busy, setBusy] = useState<string | null>(null)
+  const [err, setErr] = useState('')
+  const [adv, setAdv] = useState(false)
+  const [cid, setCid] = useState('')
+  const [touched, setTouched] = useState(false)
+  const run = async (what: string, fn: () => Promise<unknown>): Promise<void> => {
+    setBusy(what)
+    setErr('')
+    try { await fn(); await onChanged() } catch (e) { setErr(clean(e)) } finally { setBusy(null) }
+  }
+  if (!status) return <div className="hint">Checking Outlook…</div>
+  if (status.connected) {
+    return (
+      <div className="conn-form" data-testid="outlook-connect">
+        <div className="hint ok" data-testid="outlook-connected">Connected{status.address ? ` · ${status.address}` : ''}</div>
+        <p className="ca-lede">Chats can use your Outlook mail and calendar now: just ask, e.g. "what's on my Outlook calendar tomorrow?" SahilBot sends email only when you ask it to.</p>
+        {err && <div className="hint error">{err}</div>}
+        <div className="modal-actions">
+          <button className="btn" disabled={!!busy} data-testid="outlook-disconnect" title="Sign out of Outlook in SahilBot" onClick={() => void run('off', () => api.outlook.disconnect())}>{busy ? 'Disconnecting…' : 'Disconnect'}</button>
+          <button className="btn primary" onClick={onDone} data-testid="outlook-done">Done</button>
+        </div>
+      </div>
+    )
+  }
+  const canSignIn = status.builtin || status.ownClient
+  const showOwn = !status.builtin || adv || status.ownClient
+  const problem = entraClientProblem(cid)
+  const save = (): void => {
+    setTouched(true)
+    if (problem) return
+    void run('client', async () => { await api.outlook.setClient(cid.trim()); setCid(''); setTouched(false) })
+  }
+  return (
+    <div className="conn-form" data-testid="outlook-connect">
+      {err && <div className="hint error" data-testid="outlook-error">{err}</div>}
+      <p className="ca-lede" style={{ marginTop: 0 }}>Your Outlook.com or Microsoft 365 email and calendar. You sign in on Microsoft's own page; SahilBot searches, reads, drafts and adds events, and sends only when you ask.</p>
+      <div className="field">
+        <button className={`btn${canSignIn ? ' primary' : ''}`} disabled={!canSignIn || !!busy} data-testid="outlook-signin" onClick={() => void run('signin', () => api.outlook.signIn())}>{busy === 'signin' ? 'Finish signing in in your browser…' : 'Sign in with Microsoft'}</button>
+        {!canSignIn && <span className="hint" style={{ margin: 0 }}>This copy of SahilBot doesn't have its own Microsoft app yet. Register a free one below (about 5 minutes), paste its client ID, then sign in.</span>}
+        {status.ownClient && <span className="hint" style={{ margin: 0 }} data-testid="outlook-own-client">Signs in with your own Microsoft app{status.ownClientId ? ` …${status.ownClientId.slice(-4)}` : ''}.</span>}
+        {status.builtin && !status.ownClient && <button className="link-btn" onClick={() => setAdv((v) => !v)} aria-expanded={adv} data-testid="outlook-advanced">Advanced: use your own Microsoft app</button>}
+      </div>
+      {showOwn && (
+        <div className="field" data-testid="outlook-own-app">
+          <label>{status.builtin ? 'Your own Microsoft app (optional)' : 'Register your Microsoft app once'}</label>
+          <ol style={{ margin: '0 0 8px', paddingLeft: 20, display: 'grid', gap: 8 }}>
+            {ENTRA_STEPS.map((x) => <li key={x.title}><b>{x.title}</b><div className="hint" style={{ margin: '2px 0 0' }}>{x.text}</div></li>)}
+          </ol>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+            <a className="btn" href={ENTRA_APPS} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }} data-testid="outlook-entra-link">Open App registrations ↗</a>
+            <span className="hint" style={{ margin: 0 }}>Redirect URI:</span><CopyText text="http://localhost" />
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input value={cid} onChange={(e) => { setCid(e.target.value); setErr('') }} onBlur={() => cid && setTouched(true)} onKeyDown={(e) => { if (e.key === 'Enter') save() }}
+              placeholder="Application (client) ID" aria-label="Application (client) ID" spellCheck={false} autoComplete="off" data-testid="outlook-client-id" style={{ flex: '1 1 240px' }} />
+            <button className="btn primary" disabled={!!busy || !cid.trim() || (touched && !!problem)} onClick={save} data-testid="outlook-client-save">{busy === 'client' ? 'Saving…' : 'Save client ID'}</button>
+            {status.ownClient && <button className="btn" disabled={!!busy} data-testid="outlook-client-forget" title={status.builtin ? 'Sign in with SahilBot\'s own Microsoft app instead' : 'Forget your Microsoft app\'s client ID'} onClick={() => void run('client', () => api.outlook.setClient(null))}>{status.builtin ? 'Use SahilBot\'s app' : 'Forget client ID'}</button>}
+          </div>
+          {touched && problem && <span className="hint error" style={{ margin: '6px 0 0' }} data-testid="outlook-client-error">{problem}</span>}
+        </div>
+      )}
     </div>
   )
 }

@@ -24,6 +24,9 @@ import type { ConnectorPreset } from '@shared/types'
 //   scopes:              space-separated (or an array): asked for instead of the server's advertised set.
 //   "google":            shared by every Google app (Gmail, Calendar, Drive, Docs, Sheets, Slides,
 //                        BigQuery); a "gmail" entry would override it for Gmail alone.
+//   "outlook":           SahilBot's own Microsoft Entra app (Outlook mail and calendar, mail/outlook.ts): a
+//                        public client (no secret: Microsoft refuses one from a desktop app), its client ID a
+//                        GUID, redirect "loopback" (Entra's "Mobile and desktop" http://localhost, any port).
 // Keys starting with "$" or "_" are comments. Anything malformed is skipped (with a reason) and the app
 // falls back to "Use your own app" for that provider: a bad entry never blocks the rest.
 
@@ -42,6 +45,10 @@ export const OAUTH_CLIENTS_ENV = 'SAHILBOT_OAUTH_CLIENTS_JSON'
 export const OAUTH_CLIENTS_FILE = 'oauth-clients.json'
 /** The key whose client every Google app shares. */
 export const GOOGLE_CLIENT_ID_KEY = 'google'
+/** The key of SahilBot's own Microsoft Entra app (Outlook: mail/outlook.ts signs in with it natively). */
+export const OUTLOOK_CLIENT_ID_KEY = 'outlook'
+/** A Microsoft Entra application (client) ID. */
+export const ENTRA_CLIENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const PRINTABLE = /^[\x21-\x7e]+$/
 
@@ -65,6 +72,12 @@ export function parseBuiltinClients(raw: unknown, presets: Array<Pick<ConnectorP
   if (typeof raw !== 'object' || Array.isArray(raw)) return { clients, problems: ['oauth-clients: expected an object of { "<preset id>": { clientId, … } }'] }
   for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
     if (id.startsWith('$') || id.startsWith('_')) continue
+    if (id === OUTLOOK_CLIENT_ID_KEY) {
+      const o = parseOutlookClient(v)
+      if (typeof o === 'string') problems.push(`${id}: ${o} (skipped)`)
+      else clients[id] = o
+      continue
+    }
     const p = presets.find((x) => x.id === id)
     if (id !== GOOGLE_CLIENT_ID_KEY && (!p || (p.auth !== 'oauth-static' && p.auth !== 'google'))) { problems.push(`${id}: not a catalog app that needs its own OAuth app (skipped)`); continue }
     if (!v || typeof v !== 'object' || Array.isArray(v)) { problems.push(`${id}: expected { clientId, … } (skipped)`); continue }
@@ -90,6 +103,18 @@ export function parseBuiltinClients(raw: unknown, presets: Array<Pick<ConnectorP
     clients[id] = { clientId, ...(clientSecret ? { clientSecret } : {}), redirect, ...(scopes ? { scopes } : {}) }
   }
   return { clients, problems }
+}
+
+/** The "outlook" entry: a GUID client ID, no secret, loopback redirect. A string is what's wrong with it. */
+function parseOutlookClient(v: unknown): BuiltinClient | string {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return 'expected { clientId, … }'
+  const e = v as Record<string, unknown>
+  const clientId = typeof e.clientId === 'string' ? e.clientId.trim() : ''
+  if (!ENTRA_CLIENT_ID.test(clientId)) return 'clientId must be the Entra application (client) ID, a GUID like 00000000-0000-0000-0000-000000000000'
+  if (e.clientSecret !== undefined && e.clientSecret !== null && e.clientSecret !== '') return 'a public client has no clientSecret (Microsoft refuses one from a desktop app)'
+  if (e.redirect !== undefined && e.redirect !== null && e.redirect !== '' && e.redirect !== 'loopback') return 'redirect must be "loopback" (register http://localhost under "Mobile and desktop applications")'
+  if (e.scopes !== undefined && e.scopes !== null) return 'scopes are fixed by SahilBot (leave them out)'
+  return { clientId: clientId.toLowerCase(), redirect: 'loopback' }
 }
 
 /**

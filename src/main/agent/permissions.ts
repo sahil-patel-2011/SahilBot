@@ -50,7 +50,7 @@ const TERMINAL_SPEND = /\b(vercel|netlify|now)\s+domains?\s+(buy|purchase)\b|\bs
  * `cd payments-api`), an email body ("total $313.20", "quick tip") or a reminder ("Pay rent") is not a purchase.
  */
 const NO_SPEND_TOOLS = new Set(['run_command', 'git', 'code', 'jobs', 'file_read', 'file_write', 'file_edit', 'file_manage', 'create_document',
-  'doc_create', 'doc_edit', 'doc_export', 'doc_read', 'office', 'review_document', 'read_document_image', 'mail', 'gmail_imap', 'resend', 'mac',
+  'doc_create', 'doc_edit', 'doc_export', 'doc_read', 'office', 'review_document', 'read_document_image', 'mail', 'gmail_imap', 'outlook', 'resend', 'mac',
   'mac_apps', 'computer', 'ask_on_mac', 'schedule', 'memory', 'vault', 'todo', 'goal', 'follow_up', 'propose_plan', 'propose_idea', 'update_bot',
   'create_bot', 'manage_bot', 'finish_setup', 'message_bot', 'ask_bot', 'bots_overview', 'undo_changes', 'create_page', 'update_page', 'sites',
   'names', 'knowledge_search', 'knowledge_status', 'chat_history', 'maps', 'price_alert', 'stock_quote', 'stock_analyze', 'stock_compare',
