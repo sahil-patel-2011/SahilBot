@@ -21,7 +21,7 @@ const THINKING: Array<{ id: EffortChoice; sub: string }> = [
 /** Permission levels, least to most on its own. Bypass asks for a one-time confirmation the first time (App.tsx). */
 export const MODES: Array<{ id: PermissionMode; label: string; sub: string }> = [
   { id: 'ask', label: 'Ask', sub: 'Asks before every action that changes something' },
-  { id: 'auto', label: 'Auto', sub: 'Recommended. Works on its own; asks before money, passwords, deleting your data, mass sends and public posts' },
+  { id: 'auto', label: 'Auto', sub: 'Recommended. Does nearly everything itself; asks before buying, a password off its own site, or steps a web page or email suggested' },
   { id: 'bypass', label: 'Bypass', sub: 'Runs everything without asking, except purchases, passwords and one-time codes. Resets on restart' }
 ]
 

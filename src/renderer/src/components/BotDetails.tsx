@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
-import type { BotMaxSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space, Thread } from '@shared/types'
+import type { BotMaxSettings, LibraryItem, RoutineRun, ScheduledTask, Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
@@ -178,7 +178,6 @@ export function BotDetails(p: {
                   picks its own models and tools: none of that needs a switch. Anything else, ask the bot in chat. */}
               <div className="bd-section-title">Settings</div>
               <div className="bd-card" data-testid="bot-behaviour">
-                <AutonomyRow space={space} />
                 <button className="bd-row bd-row-btn" onClick={p.onCustomize} data-testid="bot-customize">
                   <span className="bd-row-text">Customize look and instructions…</span>
                   <span className="bd-chev"><I.Chevron size={14} /></span>
@@ -330,44 +329,6 @@ function Library({ spaceId }: { spaceId: string }) {
 function folderOf(path: string): string {
   const parts = path.split('/').filter(Boolean)
   return parts.length > 1 ? parts[parts.length - 2] : ''
-}
-
-/**
- * The permission level this bot's new chats start in (Settings keeps it; Bypass is only ever per chat). A bot
- * with its own job defaults to Auto, and changing it applies to its open conversation too.
- */
-function AutonomyRow({ space }: { space: Space }) {
-  const spaceId = space.id
-  const bot = space.kind === 'bot' && !space.isMain
-  const [s, setS] = useState<{ mine?: PermissionMode; app: PermissionMode; all: Record<string, PermissionMode> } | null>(null)
-  useEffect(() => {
-    let alive = true
-    void api.settings.get().then((x) => { if (alive) setS({ mine: x.botModes?.[spaceId], app: x.defaultMode ?? 'auto', all: x.botModes ?? {} }) })
-    return () => { alive = false }
-  }, [spaceId])
-  if (!s) return null
-  const names: Record<string, string> = { ask: 'Ask', auto: 'Auto', autonomous: 'Auto' }
-  const pick = (v: string): void => {
-    const all = { ...s.all }
-    if (v === '') delete all[spaceId]
-    else all[spaceId] = v as PermissionMode
-    setS({ ...s, mine: (v || undefined) as PermissionMode | undefined, all })
-    const saved = bot && v ? api.botAutonomy.setLevel(spaceId, v as PermissionMode) : api.settings.set({ botModes: all })
-    void Promise.resolve(saved).then(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
-  }
-  const mine = s.mine === 'autonomous' ? 'auto' : s.mine
-  const level = mine ?? (bot ? 'auto' : undefined)
-  const sub = level === 'ask' ? 'Asks before every change.' : level === 'auto' ? 'Works on its own; asks before money, passwords, deleting and posting.' : 'Each chat can change it under its message box.'
-  return (
-    <label className="bd-row">
-      <span className="bd-row-text">{bot ? 'Permissions' : 'Permissions for new chats'}<span className="bd-row-sub">{sub}</span></span>
-      <select className="bd-select" value={bot ? level : mine ?? ''} onChange={(e) => pick(e.target.value)} data-testid="bot-autonomy" aria-label="Permissions for new chats">
-        {!bot && <option value="">Default ({names[s.app] ?? 'Auto'})</option>}
-        <option value="ask">Ask</option>
-        <option value="auto">Auto</option>
-      </select>
-    </label>
-  )
 }
 
 /**

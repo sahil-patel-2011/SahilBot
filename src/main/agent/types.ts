@@ -103,6 +103,8 @@ export interface ToolContext {
   waitForUser?(question: string, done: () => Promise<boolean>, o?: { everyMs?: number; timeoutMs?: number; options?: string[] }): Promise<string>
   /** The user approved this exact call (an approval card), so commands it runs aren't sandboxed. */
   approved?: boolean
+  /** Auto let this call run without a card (not Ask mode): a saved login may sign in on its own site (never another one). */
+  autoRun?: boolean
   /** Run terminal commands under the write sandbox (advanced.sandboxCommands; default on). */
   sandbox?: boolean
 }
@@ -278,6 +280,10 @@ export interface PermissionInput {
    * its folder, git fetch/pull): Auto runs it (attended); Ask treats it as consequential.
    */
   consequential?: boolean | 'project'
+  /** It spends money (a payment, refund, charge, transfer, subscription or paid credits): Auto asks (spendsMoney()). */
+  spends?: boolean
+  /** A long-term memory save that reads like an instruction after reading outside content (memoryRisk): Auto asks. */
+  planted?: boolean
   /** A run with nobody watching (routine, goal wake-up, helper): Auto works cautiously (decide()). */
   unattended?: boolean
   /**

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { checkTaint, containsSecret, decide, isTainted, looksInstructionLike, memoryProvenance, memoryRisk, stricterMode, urlTainted } from '../../src/main/agent/permissions'
+import { checkTaint, containsSecret, decide, isTainted, looksInstructionLike, memoryProvenance, memoryRisk, spendsMoney, stricterMode, urlTainted } from '../../src/main/agent/permissions'
 import type { PermissionInput } from '../../src/main/agent/types'
 import type { PermissionMode, ToolEffect } from '../../src/shared/types'
 
@@ -11,8 +11,8 @@ const v = (p: Partial<PermissionInput>) => decide({ ...base, ...p }).verdict
 describe('mode x effect matrix', () => {
   const table: Record<PermissionMode, Record<ToolEffect, string>> = {
     ask: { read: 'allow', write_local: 'ask', write_external: 'ask', destructive: 'ask' },
-    auto: { read: 'allow', write_local: 'allow', write_external: 'ask', destructive: 'ask' },
-    autonomous: { read: 'allow', write_local: 'allow', write_external: 'ask', destructive: 'ask' },
+    auto: { read: 'allow', write_local: 'allow', write_external: 'allow', destructive: 'allow' },
+    autonomous: { read: 'allow', write_local: 'allow', write_external: 'allow', destructive: 'allow' },
     bypass: { read: 'allow', write_local: 'allow', write_external: 'allow', destructive: 'allow' }
   }
   for (const [mode, row] of Object.entries(table)) {
@@ -27,21 +27,33 @@ describe('always-allow', () => {
     expect(v({ mode: 'ask', effect: 'write_local', alwaysAllowed: true })).toBe('allow')
     expect(v({ mode: 'ask', effect: 'write_external', alwaysAllowed: true })).toBe('allow')
   })
-  test('destructive calls still ask in Ask and Auto even after "always"', () => {
+  test('destructive calls still ask in Ask even after "always"; Auto runs them (unless tainted)', () => {
     expect(v({ mode: 'ask', effect: 'destructive', alwaysAllowed: true })).toBe('ask')
-    expect(v({ mode: 'auto', effect: 'destructive', alwaysAllowed: true })).toBe('ask')
+    expect(v({ mode: 'auto', effect: 'destructive', alwaysAllowed: true })).toBe('allow')
+    expect(v({ mode: 'auto', effect: 'destructive', alwaysAllowed: true, tainted: true })).toBe('ask')
   })
 })
 
 describe('hard stops', () => {
-  test('ask in every mode while enabled, even after "always"', () => {
-    for (const mode of ['ask', 'auto', 'bypass'] as const) {
+  test('ask in Ask and Bypass while enabled, even after "always"; Auto runs a non-money stop itself', () => {
+    for (const mode of ['ask', 'bypass'] as const) {
+      expect(v({ mode, effect: 'write_external', hardStop: 'sends an email to pat@example.com', alwaysAllowed: true })).toBe('ask')
       expect(v({ mode, effect: 'write_external', hardStop: 'payment', alwaysAllowed: true })).toBe('ask')
     }
+    expect(v({ mode: 'auto', effect: 'write_external', hardStop: 'sends an email to pat@example.com', alwaysAllowed: true })).toBe('allow')
+    expect(v({ mode: 'auto', effect: 'write_external', hardStop: 'sends an email to pat@example.com', tainted: true })).toBe('ask')
+  })
+  test('money always asks in Auto, even after "always" and with hard stops off', () => {
+    const spends = spendsMoney('t', null, 'payment')
+    expect(spends).toBe(true)
+    expect(v({ mode: 'auto', effect: 'write_external', hardStop: 'payment', spends, alwaysAllowed: true })).toBe('ask')
+    expect(v({ mode: 'auto', effect: 'write_external', hardStop: 'payment', spends, hardStopsEnabled: false })).toBe('ask')
+    expect(decide({ ...base, mode: 'auto', effect: 'write_external', hardStop: 'payment', spends }).reason).toMatch(/^Spends money/)
   })
   test('Bypass skips them only when disabled in Settings > Advanced', () => {
     expect(v({ mode: 'bypass', effect: 'write_external', hardStop: 'payment', hardStopsEnabled: false })).toBe('allow')
-    expect(v({ mode: 'auto', effect: 'write_external', hardStop: 'payment', hardStopsEnabled: false })).toBe('ask')
+    expect(v({ mode: 'bypass', effect: 'write_external', hardStop: 'payment', hardStopsEnabled: true })).toBe('ask')
+    expect(v({ mode: 'ask', effect: 'write_external', hardStop: 'payment', hardStopsEnabled: false })).toBe('ask')
   })
 })
 
@@ -73,14 +85,15 @@ describe('secrets', () => {
 })
 
 describe('smarter Auto', () => {
-  test('routine outside actions run; consequential ones ask', () => {
+  test('routine and consequential outside actions both run; spending money asks', () => {
     expect(v({ mode: 'auto', effect: 'write_external', consequential: false })).toBe('allow')
-    expect(v({ mode: 'auto', effect: 'write_external', consequential: true })).toBe('ask')
-    expect(v({ mode: 'auto', effect: 'write_external' })).toBe('ask')
+    expect(v({ mode: 'auto', effect: 'write_external', consequential: true })).toBe('allow')
+    expect(v({ mode: 'auto', effect: 'write_external' })).toBe('allow')
+    expect(v({ mode: 'auto', effect: 'write_external', consequential: true, spends: true })).toBe('ask')
   })
-  test('routine is still asked when tainted, a hard stop, or in Ask mode', () => {
+  test('routine is still asked when tainted, spending money, or in Ask mode', () => {
     expect(v({ mode: 'auto', effect: 'write_external', consequential: false, tainted: true })).toBe('ask')
-    expect(v({ mode: 'auto', effect: 'write_external', consequential: false, hardStop: 'payment' })).toBe('ask')
+    expect(v({ mode: 'auto', effect: 'write_external', consequential: false, hardStop: 'payment', spends: spendsMoney('t', null, 'payment') })).toBe('ask')
     expect(v({ mode: 'ask', effect: 'write_external', consequential: false })).toBe('ask')
   })
 })

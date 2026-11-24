@@ -89,8 +89,11 @@ describe('quiet chat', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'Help me study for my chem quiz on stoichiometry')
     await page.getByTestId('send').click()
-    // While it works: one status line with a running timer.
-    await page.waitForSelector('[data-testid="turn-timer"]', { timeout: 15_000 })
+    // While it works (Grok Bot's way): its own opening line, then one quiet line saying what it's on. No timer.
+    await expect.poll(() => page.getByTestId('bot-working').innerText().catch(() => ''), { timeout: 15_000 }).toBe('Write the study guide')
+    expect(await page.locator('[data-testid="turn-timer"]').count()).toBe(0)
+    expect(await page.locator('[data-testid="steer-hint"]').count()).toBe(0)
+    expect(await page.getByTestId('thread').innerText()).toContain('On it, putting together a study guide')
     await shot(page, '1-working')
     await expect.poll(() => page.locator('[data-testid="stop"]').count(), { timeout: 30_000 }).toBe(0)
     await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').count()).toBe(2)

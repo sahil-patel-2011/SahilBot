@@ -98,8 +98,9 @@ export function Sidebar(p: {
   const bots = p.spaces.filter((s) => !s.hidden && s.kind !== 'project' && !pinnedIds.includes(s.id))
   const projects = p.spaces.filter((s) => s.kind === 'project' && !s.hidden && !pinnedIds.includes(s.id))
   const hidden = p.spaces.filter((s) => s.hidden && !s.isMain)
-  // Recents are the chats you started with New chat; talking to a bot (SahilBot's widget included) isn't one.
-  const recents = p.chats.filter((t) => !t.pinned && t.id !== p.mainThreadId)
+  // Recents are your own chats and agent tasks with SahilBot, the ones you typed in. Never a bot's conversation
+  // (SahilBot's widget included), and never one a routine, a Memory draft, another bot or a connected app started.
+  const recents = p.chats.filter((t) => !t.pinned && t.id !== p.mainThreadId && t.byUser !== false && !t.title.startsWith('⏰'))
   const colorsOf = (g: Space): string[] => g.members.map((id) => p.spaces.find((s) => s.id === id)?.color).filter((c): c is string => !!c)
 
   /** Pin, or move onto `target`'s place (after it when dragging down, before it when dragging up). */

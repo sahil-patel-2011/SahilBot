@@ -128,7 +128,7 @@ describe('attachments, folders and working folders', () => {
     await page.reload()
     await page.locator('[data-testid="space-item"]', { hasText: 'Docs Bot' }).click()
     await expect.poll(() => page.locator('[data-testid="bot-pill"]').innerText().catch(() => '')).toContain('Docs Bot')
-    await expect.poll(() => page.locator('[data-testid="working-folder"]').innerText()).toContain(basename(folder))
+    // (No folder chip under the message box: the bot simply works there.)
 
     llm.script.push(
       { toolCalls: [{ name: 'knowledge_search', arguments: '{"query":"launch codename","scope":"chat"}' }] },
@@ -148,10 +148,13 @@ describe('attachments, folders and working folders', () => {
     const wf = tmp('sb-wf-')
     const outside = tmp('sb-outside-')
     const { app, page } = await launch(tempProfile(), llm.url)
+    // No folder chip any more: the chat gets its working folder the way the bot sets one when you name a folder.
+    llm.script.push({ content: 'Hi! Which folder?' })
+    await send(page, 'hello')
+    await idle(page)
+    const tid = await page.evaluate(async () => (await window.foreman.threads.list())[0].id)
     await pickerReturns(app, [wf])
-    await page.click('[data-testid="working-folder"]')
-    await page.click('[data-testid="working-folder-pick"]')
-    await expect.poll(() => page.locator('[data-testid="working-folder"]').innerText()).toContain(basename(wf))
+    await page.evaluate((t) => window.foreman.attach.pickFolder(t), tid)
 
     llm.script.push(
       { toolCalls: [{ name: 'file_write', arguments: JSON.stringify({ path: 'inside.md', content: 'in the folder' }) }] },
@@ -168,8 +171,7 @@ describe('attachments, folders and working folders', () => {
     await card.locator('[data-testid="approve-once"]').click()
     await idle(page)
     expect(readFileSync(join(outside, 'escape.md'), 'utf8')).toBe('outside')
-    // The chat (now saved) still shows its working folder, set by its first message.
-    await expect.poll(() => page.locator('[data-testid="working-folder"]').innerText()).toContain(basename(wf))
+    // The chat keeps its working folder.
     expect(await page.evaluate(async () => { const t = (await window.foreman.threads.list())[0]; return (await window.foreman.attach.folder(t.id)).source })).toBe('chat')
 
     llm.script.push(

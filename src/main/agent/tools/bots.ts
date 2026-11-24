@@ -182,7 +182,7 @@ export interface ManageBotDeps {
   pin: (spaceId: string, on: boolean) => void
 }
 
-/** Delete, hide, show, pin or rename another bot when the user asks. Deleting always asks first. */
+/** Delete, hide, show, pin or rename another bot when the user asks (Ask mode asks before deleting). */
 export function manageBotTool(deps: ManageBotDeps, db: Db, changed: () => void): ToolDef<{ bot: string; action: 'delete' | 'hide' | 'show' | 'pin' | 'unpin' | 'rename'; name?: string }> {
   const find = (q: string) => {
     const bots = db.listSpaces().filter((s) => s.kind === 'bot')

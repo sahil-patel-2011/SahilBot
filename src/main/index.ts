@@ -113,7 +113,7 @@ import { cadDesignTool } from './cad/design-tool'
 import { macKeyStore, Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { requestedModel } from './agent/choices'
-import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels } from './spaces'
+import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels, migrateToAuto } from './spaces'
 import { ATTENDED_GRACE_MS, Learner, QuestionQueue, QuestionStore, createQuestionHost, notifyDevices as notifyQuestionDevices, toNeedsYou } from './agent/questions'
 import { DigestRunner } from './goals/digest'
 import { BrowserManager } from './browser/manager'
@@ -2194,6 +2194,7 @@ app.whenReady().then(() => {
   try { migrateBotAutonomy(db, settings.get()) } catch (e) { console.error('[autonomy]', (e as Error).message) }
   // Three permission levels (Ask / Auto / Bypass): 'autonomous' becomes Auto, and Auto chats lose a stale thinking level, once.
   try { migratePermissionLevels(db, settings.get(), (p) => settings.set(p)) } catch (e) { console.error('[levels]', (e as Error).message) }
+  try { migrateToAuto(db, settings.get(), (p) => settings.set(p)) } catch (e) { console.error('[auto]', (e as Error).message) }
   // Bots choose their own model and thinking (Auto for every request): stored overrides are cleared once.
   try { migrateBotModelEffort(db) } catch (e) { console.error('[bot-auto]', (e as Error).message) }
   // Each bot's Swarm setting became its Max setting (Off / Auto / Always, Max helpers).

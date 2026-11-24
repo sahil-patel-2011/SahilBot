@@ -317,7 +317,12 @@ export class Db {
       ${UNREAD_SQL('t')} AS unread_n,
       (SELECT CASE WHEN instr(ts.data, '"toolMode":"full"') > 0 THEN 'full'
                    WHEN instr(ts.data, '"toolMode":"chat"') > 0 OR instr(ts.data, '"toolMode":"quick"') > 0 THEN 'chat' END
-         FROM thread_state ts WHERE ts.thread_id = t.id) AS tool_mode
+         FROM thread_state ts WHERE ts.thread_id = t.id) AS tool_mode,
+      -- You typed in it yourself (not a routine, a Memory draft, another bot's handoff or a connected app).
+      EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.role = 'user'
+              AND json_extract(m.data, '$.meta.hidden') IS NULL AND json_extract(m.data, '$.meta.scheduled') IS NULL
+              AND json_extract(m.data, '$.meta.brainPrompt') IS NULL AND json_extract(m.data, '$.meta.handoff') IS NULL
+              AND json_extract(m.data, '$.meta.fromApp') IS NULL AND json_extract(m.data, '$.meta.mcpClientId') IS NULL) AS by_user
     FROM threads t`
 
   /** Files SahilBot made or changed, newest first (from successful file and document tool calls). */
@@ -643,7 +648,8 @@ function toThread(r: Row): Thread {
     parentId: (r.parent_id as string | null) ?? null,
     lastReadAt: (r.last_read_at as number | null) ?? (r.created_at as number),
     unreadCount: unreadN,
-    ...(r.tool_mode === 'full' || r.tool_mode === 'chat' ? { toolMode: r.tool_mode } : {})
+    ...(r.tool_mode === 'full' || r.tool_mode === 'chat' ? { toolMode: r.tool_mode } : {}),
+    ...(r.by_user !== undefined ? { byUser: !!r.by_user } : {})
   }
 }
 

@@ -102,8 +102,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
   // Privacy & Security
   { anchor: 'passwords', page: 'privacy', tab: 'passwords', title: 'Passwords & vault', words: 'vault passwords login card credit id passport license secure note master password touch id lock backup export import csv' },
-  { anchor: 'autonomy', page: 'permissions', title: 'Permissions for new chats', words: 'ask auto autonomy autonomous permission permissions mode approvals', keys: ['defaultMode', 'botModes'] },
-  { anchor: 'files-anywhere', page: 'permissions', title: 'Read and edit files anywhere', words: 'files folders anywhere full disk read edit write without asking approve documents desktop', keys: ['advanced.filesAnywhere'] },
+  { anchor: 'autonomy', page: 'permissions', title: 'What SahilBot may do', words: 'ask auto autonomy autonomous permission permissions mode approvals files folders anywhere passwords buying', keys: [] },
   { anchor: 'mac-permissions', page: 'permissions', title: 'Mac permissions', words: 'accessibility screen recording microphone full disk access automation notifications system settings' },
   { anchor: 'backups', page: 'privacy', tab: 'backups', title: 'Backups', words: 'backup copy restore recovery password api keys export memories decisions vault notes external drive time machine safe lost new mac', macOnly: true },
 
@@ -133,7 +132,9 @@ export const NOT_IN_SETTINGS = new Set([
   'appearance.codeWrap', 'appearance.hue', 'appearance.tint', 'appearance.reduceTransparency', 'appearance.fontSize', 'thinking', 'cloud.enabled',
   'cloud.hybrid', 'cloud.advisorModel', 'contextWindow', 'sampling', 'search.provider', 'search.searxngUrl', 'advanced.hardStopsEnabled',
   'advanced.devMode', 'customRules', 'menuBarIcon', 'keepAwakeWhileWorking', 'lidAwake', 'catchUpHours', 'routinesPaused', 'markets.quoteProvider',
-  'markets.secContact', 'learning.cloudAllowed', 'learning.dailyUsd', 'openaiEmbeddings', 'composer', 'composer.cmdEnter', 'composer.spellCheck'
+  'markets.secContact', 'learning.cloudAllowed', 'learning.dailyUsd', 'openaiEmbeddings', 'composer', 'composer.cmdEnter', 'composer.spellCheck',
+  // Permissions (Nov 2026): no levels or file switches; SahilBot runs on Auto and reaches any folder.
+  'defaultMode', 'botModes', 'advanced.filesAnywhere'
 ])
 
 /** Matches for a search: every word must appear in the title, words or page name. Best first. */

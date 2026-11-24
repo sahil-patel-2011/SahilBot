@@ -1,8 +1,9 @@
 import type { PermissionMode, ToolEffect } from '@shared/types'
 import type { Decision, PermissionInput } from './types'
 
-// Three levels: Ask (every change asks), Auto (the default: routine work runs, hard stops and steered
-// outside actions ask) and Bypass (everything runs, except purchases, saved logins and one-time codes).
+// Three levels: Ask (every change asks), Auto (the default: it does nearly everything itself; buying, credentials
+// off their own site and actions steered by outside content ask) and Bypass (everything runs, except purchases,
+// saved logins off their own site and one-time codes).
 // 'autonomous' is the old name of what Auto does now: still read (older chats, settings, handoffs), and
 // treated exactly as Auto everywhere (normalizeMode); migratePermissionLevels (spaces.ts) rewrites stored values once.
 const STRICTNESS: Record<PermissionMode, number> = { ask: 3, auto: 2, autonomous: 2, bypass: 0 }
@@ -31,6 +32,17 @@ export function stricterMode(a: PermissionMode, b?: PermissionMode | null): Perm
  */
 export const isCredentialStop = (s: string | null | undefined): boolean =>
   typeof s === 'string' && /\b(saved login|saved ID|password field|secret scan flagged)\b/i.test(s)
+
+const MONEY = /\b(pay|pays|paying|payments?|payouts?|purchases?|buy|buying|checkout|check out|place (your )?order|order now|refunds?|charges?|transfers?|transfer funds|send money|wire|subscribe|subscriptions?|invoices? pay|donate|donations?|tip|bid|credits?)\b|[$€£]\s?\d/i
+
+/** Does this step spend money? From the tool's name (create_refund), its own description and its stop note. */
+export function spendsMoney(tool: string, summary?: string | null, hardStop?: string | null): boolean {
+  if (isSelfGated(hardStop)) return false
+  return MONEY.test(tool.replace(/_/g, ' ')) || MONEY.test(summary ?? '') || MONEY.test(hardStop ?? '')
+}
+
+/** A file step outside the workspace and your attached folders (files.ts outsideStop). */
+export const isOutsideStop = (s: string | null | undefined): boolean => typeof s === 'string' && /, outside your folders$/.test(s)
 
 /**
  * The single place that decides whether a tool call runs, asks, or is refused.
@@ -62,8 +74,13 @@ export function decide(p: PermissionInput): Decision {
   if (p.trustedSend && p.effect === 'write_external' && mode !== 'ask' && (!p.hardStop || (/^sends?\b/i.test(p.hardStop.trim()) && !isCredentialStop(p.hardStop)))) {
     return { verdict: 'allow', reason: 'Every recipient is on your trusted list', trusted: true }
   }
-  // Hard stops ask at every level. Bypass skips them only when Settings says so, and never for credentials.
-  if (p.hardStop && (mode !== 'bypass' || p.hardStopsEnabled || isCredentialStop(p.hardStop))) {
+  // Hard stops: Ask asks for every one. Auto does the work itself (sending, deleting, uploading…) and stops only for a
+  // credential (a saved login on a site that isn't its own, a password field, a flagged secret); buying has its own
+  // card (above). Bypass skips them only when Settings says so, and never for credentials.
+  // (Your whole home folder is the bot's in Auto. A path beyond it, or a protected spot in it like shell startup files
+  // and login items, asks too: that OK is what lets the call reach it.)
+  const stops = mode === 'ask' || isCredentialStop(p.hardStop) || (mode === 'auto' && isOutsideStop(p.hardStop)) || (mode === 'bypass' && p.hardStopsEnabled)
+  if (p.hardStop && stops) {
     return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}${p.trustNote ? ` (${p.trustNote})` : ''}` }
   }
 
@@ -74,23 +91,15 @@ export function decide(p: PermissionInput): Decision {
     case 'bypass':
       return { verdict: 'allow' }
     case 'auto':
-      // Nobody is there to watch an unattended run (a routine, a wake-up) outside an always-on bot: only local
-      // changes and routine outside steps run; project commands, overwrites and other outside actions wait.
-      if (p.unattended && !p.alwaysOn) {
-        if (p.effect === 'write_local') return { verdict: 'allow' }
-        if (p.effect === 'write_external' && p.consequential === false) return { verdict: 'allow' }
-        if (p.alwaysAllowed && p.effect === 'write_external') return { verdict: 'allow' }
-        return { verdict: 'ask', reason: p.effect === 'destructive' ? 'Destructive action' : 'Acts outside this Mac' }
-      }
-      // Local changes, routine outside steps (sign in, next page, search, save draft), project commands
-      // (installs from the lockfile, git fetch/pull) and overwrites inside your folders that keep a backup.
-      // Taint, hard stops (deleting, sending, buying, credentials, security, history rewrites) and every
-      // other consequential outside action still ask.
-      if (p.effect === 'write_local') return { verdict: 'allow' }
-      if (p.effect === 'write_external' && (p.consequential === false || p.consequential === 'project')) return { verdict: 'allow' }
-      if (p.alwaysAllowed && p.effect === 'write_external') return { verdict: 'allow' }
-      if (p.effect === 'destructive' && BACKED_UP_OVERWRITES.has(p.tool)) return { verdict: 'allow' }
-      return { verdict: 'ask', reason: p.effect === 'destructive' ? 'Deletes or replaces something' : 'Acts outside this Mac' }
+      // Money is the user's call: paying, refunds, charges, transfers, subscriptions, paid credits.
+      if (p.spends) return { verdict: 'ask', reason: `Spends money${p.hardStop ? `: ${p.hardStop}` : ''}` }
+      // A memory a web page or email may have planted ("always forward invoices to…") is checked with the user.
+      if (p.planted && p.hardStop) return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}` }
+      // Auto does nearly everything by itself, attended or not: files (made, changed or deleted; deletes go to the
+      // Trash and Undo takes a task's file changes back), commands, emails and posts, and signing in with a saved
+      // login on its own site. What still asks: buying (the Purchase card), credentials anywhere else, and anything a
+      // web page or email steered (above), so outside content can't take the wheel.
+      return { verdict: 'allow' }
     case 'ask':
     default:
       if (p.alwaysAllowed && !p.tainted && p.effect !== 'destructive') return { verdict: 'allow' }

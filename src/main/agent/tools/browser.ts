@@ -184,6 +184,9 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     if (a.action === 'fill_secret') {
       // A standing rule the user set for this login's own site ("sign in here without asking").
       if (standingRule(a, url)) return null
+      // The bot signs in by itself with a saved login on that login's own secure site. Any other site (a look-alike
+      // page, a link from an email) still asks, and a saved ID's number always does.
+      if (ownSite(a, url)) return null
       return a.field === 'id_number' ? `typing the saved ID "${a.secret}" (document number) into ${safeHost(url)}` : `typing the saved login "${a.secret}" (${a.field ?? 'password'}) into ${safeHost(url)}`
     }
     if (a.action === 'fill_address') return `typing your saved address "${a.address}" into ${safeHost(url)}`
@@ -212,6 +215,12 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
   const standingRule = (a: Args, url = b.pageUrl()): boolean => {
     const t = safeCall(() => vault.fillTarget(a.secret ?? '', a.field ?? 'password'), undefined)
     return !!t && standingRuleAllows(t, t.type, a.field ?? 'password', url)
+  }
+  const ownSite = (a: Args, url = b.pageUrl()): boolean => {
+    const field = a.field ?? 'password'
+    if (field !== 'username' && field !== 'password') return false
+    const t = safeCall(() => vault.fillTarget(a.secret ?? '', field), undefined)
+    return !!t && t.type === 'login' && isSecurePage(url) && t.origins.some((o) => originMatches(o, url, { subdomains: !!t.subdomains }))
   }
   /** True only while an approved Purchase card's step runs (card numbers are filled nowhere else). */
   let purchaseApproved = false
@@ -299,7 +308,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
 - wallet: nicknames of the user's saved cards and addresses
 - fill_payment {card}: put a saved card (nickname, or "Visa ending 4242") into the page's card fields; you never see it. The user approves it on a Purchase card.
 - fill_address {address, section?}: put a saved address into the shipping (default) or billing fields
-- upload {ref, paths}: attach files from the workspace or attached folders to a file field (asks first)
+- upload {ref, paths}: attach files from the workspace or attached folders to a file field
 - downloads {op: list|save, index?}: view offered files or save one. Auto can save small same-site HTTPS text, CSV, and raster image files into Downloads. Other downloads need approval.
 - wait {text?, url?, timeout?}: wait for text to appear, the address to change, or the page to settle
 - wait_for_signin: the page needs the user's own sign-in and there is no saved login for fill_secret. Opens the page for the user and waits (up to 10 minutes) until the sign-in form is gone, then carries on by itself: don't end your turn or ask the user to say when they're done.
@@ -853,7 +862,10 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         // 3. The user's approval: the approval card for this exact call, or their standing rule for this site.
         //    Text on a web page can't approve anything: only the user's click or their own rule does.
         const rule = standingRuleAllows(t, t.type, field, url)
-        let approved = !!ctx?.approved || rule
+        // Auto signs in by itself with a login on that login's own secure site (checked above and here); a saved ID,
+        // another site, Ask mode or a run that read outside content still needs the user.
+        const own = t.type === 'login' && (field === 'username' || field === 'password') && !!ctx?.autoRun && ownSite(a, url)
+        let approved = !!ctx?.approved || rule || own
         const attended = !!ctx && (deps.gate ? deps.gate.attended(ctx.threadId) : false)
         if (!approved && ctx && attended) {
           const answer = await ctx.askUser(`Type your saved ${what} for "${t.name}" into ${host}? SahilBot types it itself; the assistant never sees it.`, ['Allow once', "Don't allow"])

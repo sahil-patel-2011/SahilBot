@@ -10,7 +10,7 @@ import { modeFlags } from '../lib/swarm-view'
 // Model, thinking and permissions: one picker under the box (components/ComposerPicker.tsx).
 import { ComposerPicker, MODES } from './ComposerPicker'
 // Attachments: drop, paste, the + menu (files, folder, screenshot) and the working folder (components/Attachments.tsx).
-import { AttachmentChips, DropOverlay, WorkFolderChip, useFolderCounts, type FolderProjects } from './Attachments'
+import { AttachmentChips, DropOverlay, useFolderCounts, type FolderProjects } from './Attachments'
 import { fromTransfer, mergeAttachments, oversize, rejectedText } from '../lib/attachments'
 import { toast } from '../lib/toast'
 import { findSecrets } from '@shared/secret-detect'
@@ -113,8 +113,6 @@ export const Composer = forwardRef<ComposerHandle, {
 }>(function Composer(p, ref) {
   const dev = useDevMode()
   // The "Enter adjusts · ⌘Enter waits" hint: the first time you're typing while a bot works, then never again.
-  const [firstSteer] = useState(() => { try { return !localStorage.getItem('sb.steerHint') } catch { return false } })
-  useEffect(() => { if (firstSteer && p.running) try { localStorage.setItem('sb.steerHint', '1') } catch { /* private */ } }, [firstSteer, p.running])
   const [dictating, setDictating] = useState(false)
   const dictatingRef = useRef(false)
   dictatingRef.current = dictating
@@ -125,7 +123,6 @@ export const Composer = forwardRef<ComposerHandle, {
   const [images, setImages] = useState<string[]>([])
   const [atts, setAtts] = useState<Attachment[]>([])
   const [drag, setDrag] = useState(false)
-  const [draftFolder, setDraftFolder] = useState<string | null>(null)
   const [deep, setDeep] = useState(false)
   // Max: on for this message (a bot whose Max setting is Always has it on for every request).
   const [maxOn, setMaxOn] = useState(false)
@@ -256,7 +253,7 @@ export const Composer = forwardRef<ComposerHandle, {
     // Council replaces the other modes for this message (see modeFlags); Max goes with Plan first and Deep Research.
     const sentText = text, sentImages = images, sentAtts = atts, sentKey = draftKey.current
     sending.current++
-    const result = p.onSend({ text: text.trim(), images, attachments: atts, ...(draftFolder && !p.threadId ? { workingFolder: draftFolder } : {}), ...modeFlags({ deep: deep || (!fromLink && requestStrategy(text).kind === 'research'), planFirst: !fromLink && requestStrategy(text).kind === 'plan', max: maxOn || (!fromLink && requestStrategy(text).kind === 'swarm') }), queue, ...(fromLink ? { fromLink } : {}) })
+    const result = p.onSend({ text: text.trim(), images, attachments: atts, ...modeFlags({ deep: deep || (!fromLink && requestStrategy(text).kind === 'research'), planFirst: !fromLink && requestStrategy(text).kind === 'plan', max: maxOn || (!fromLink && requestStrategy(text).kind === 'swarm') }), queue, ...(fromLink ? { fromLink } : {}) })
     setDeep(false)
     setMaxOn(false)
     setLinkText(null)
@@ -425,7 +422,7 @@ export const Composer = forwardRef<ComposerHandle, {
         </div>
       </div>
       <div className="under">
-        <WorkFolderChip threadId={p.threadId} inherited={p.inheritedFolder} draft={draftFolder} onDraft={setDraftFolder} projects={p.projects} onlyWhenSet={!dev} />
+        {/* No folder chip: the bot uses any folder on the Mac; you just name it in the chat. */}
         <span className="spacer" />
         {p.mode === 'bypass' && (
           <span className="bypass-chip" role="status" data-testid="bypass-chip"
@@ -438,12 +435,7 @@ export const Composer = forwardRef<ComposerHandle, {
         {dev && <ComposerPicker key={p.showModelThinking === false ? 'permissions' : 'full'} models={p.models} model={p.model} onModel={p.onModel} onAuto={p.onAuto} onRefreshModels={p.onRefreshModels} onManageModels={p.onManageModels}
           thinking={p.thinking} onThinking={p.onThinking} mode={p.mode} onMode={p.onMode} allowBypass={p.allowBypass} autoBot={p.autoBot} showModelThinking={p.showModelThinking} />}
       </div>
-      {p.running && !p.answering && (dev || firstSteer || p.steering) && (
-        <div className="steer-hint" data-testid="steer-hint">
-          <kbd>Enter</kbd> send now (SahilBot adjusts) · <kbd>⌘Enter</kbd> send after it finishes
-          {p.steering ? <span className="steering"> · <span className="spin" /> adjusting at its next step…</span> : null}
-        </div>
-      )}
+      {/* Enter sends right away, even while it works (it adjusts at its next step); nothing is shown under the box. */}
       {dictError && <div className="bypass-banner">{dictError}</div>}
       {linkText !== null && text.trim() !== '' && (
         <div className="bypass-banner" data-testid="link-prefill-banner">

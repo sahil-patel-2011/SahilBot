@@ -132,3 +132,5 @@
 .sb2 .nav-label-actions .nav-add.on,
 .sb2 .nav-label-actions .nav-add[data-testid="new-chat"] { opacity: 1; }
 @media (hover: none) { .sb2 .nav-label-actions .nav-add { opacity: 1; } }
+/* Grok Bot's working line: no bubble, just the turning icon and what it's doing. */
+.chat-root .status-line.bot-working { background: transparent; padding: 4px 0; font-size: 15px; gap: 12px; }

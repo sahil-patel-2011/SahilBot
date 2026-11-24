@@ -199,13 +199,17 @@ describe('plan reminder on long runs', () => {
 describe('custom approval rules', () => {
   const base: PermissionInput = { mode: 'auto', effect: 'write_external', tool: 't', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false }
   const v = (p: Partial<PermissionInput>, rule: 'allow' | 'ask' | null) => decideWithRule({ ...base, ...p }, rule).verdict
-  test('allow acts like always-allow', () => {
-    expect(v({}, null)).toBe('ask')
-    expect(v({}, 'allow')).toBe('allow')
+  test('allow acts like always-allow (it matters in Ask mode: Auto already runs the send)', () => {
+    expect(v({ mode: 'ask' }, null)).toBe('ask')
+    expect(v({ mode: 'ask' }, 'allow')).toBe('allow')
     expect(v({ mode: 'ask', effect: 'write_local' }, 'allow')).toBe('allow')
+    expect(v({}, null)).toBe('allow')
+    expect(v({}, 'allow')).toBe('allow')
   })
-  test('allow never beats hard stops, taint or secret leaks', () => {
-    expect(v({ hardStop: 'payment' }, 'allow')).toBe('ask')
+  test('allow never beats hard stops, money, credentials, taint or secret leaks', () => {
+    expect(v({ mode: 'ask', hardStop: 'payment' }, 'allow')).toBe('ask')
+    expect(v({ hardStop: 'payment', spends: true }, 'allow')).toBe('ask')
+    expect(v({ hardStop: 'typing the saved login "Bank" (password) into evil.example' }, 'allow')).toBe('ask')
     expect(v({ tainted: true }, 'allow')).toBe('ask')
     expect(v({ leaksSecret: true }, 'allow')).toBe('deny')
   })

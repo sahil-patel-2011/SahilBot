@@ -155,7 +155,7 @@ function LocalSetup() {
  * makes macOS quit and reopen SahilBot, and setup picks up on the same step instead of starting over.
  */
 const PROGRESS = 'sahilbot:onboarding-progress'
-type Progress = { step?: number; name?: string; last?: string; birthday?: string; workspace?: string; wantLocal?: boolean; importAfter?: boolean; anywhere?: boolean }
+type Progress = { step?: number; name?: string; last?: string; birthday?: string; workspace?: string; wantLocal?: boolean; importAfter?: boolean }
 const savedProgress = (): Progress => { try { return JSON.parse(localStorage.getItem(PROGRESS) ?? '{}') as Progress } catch { return {} } }
 
 export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (s: Settings) => void }) {
@@ -188,11 +188,10 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
     setStep(wantLocal ? 1.5 : 2)
   }
   // Last step: what SahilBot may use on this Mac (the Mac app only; the web UI has no macOS permissions).
-  const [anywhere, setAnywhere] = useState(resume.anywhere ?? settings.advanced.filesAnywhere !== false)
   // Every change is kept right away (a quit-and-reopen can come at any moment), and the name is saved too.
   useEffect(() => {
-    try { localStorage.setItem(PROGRESS, JSON.stringify({ step, name, last, birthday, workspace, wantLocal, importAfter, anywhere } satisfies Progress)) } catch { /* setup still works, it just can't resume */ }
-  }, [step, name, last, birthday, workspace, wantLocal, importAfter, anywhere])
+    try { localStorage.setItem(PROGRESS, JSON.stringify({ step, name, last, birthday, workspace, wantLocal, importAfter } satisfies Progress)) } catch { /* setup still works, it just can't resume */ }
+  }, [step, name, last, birthday, workspace, wantLocal, importAfter])
   useEffect(() => { if (step > 0 && name.trim()) void api.settings.set({ profile: profile() }).catch(() => undefined) }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
   const pickWorkspace = async (): Promise<void> => { const f = await api.pickFolder().catch(() => null); if (f) setWorkspace(f) }
   const connected = CLOUD.filter((c) => keys[c.id]).length
@@ -277,13 +276,9 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
             <p className="hint">So it can use your screen and apps, read and edit your files and tell you when it's done. macOS asks you about each one; you can change them any time in Settings → Privacy &amp; safety.</p>
             {/* No voice in setup: the microphone is asked for the first time you talk, and the voice is picked from your keys. */}
             {!isServerRuntime && <div className="onboard-perms" data-testid="onboarding-permissions"><MacPermissions title="" sub="" omit={['microphone']} /></div>}
-            <label className="onboard-import" data-testid="onboarding-files-anywhere">
-              <input type="checkbox" checked={anywhere} onChange={(e) => setAnywhere(e.target.checked)} />
-              Read and edit my files in any folder without asking (deleting still asks; system and secret places stay off limits)
-            </label>
             <div className="modal-actions">
               <button className="btn" onClick={() => setStep(wantLocal ? 1.5 : 1)}>Back</button>
-              <button className="btn primary" onClick={() => void api.settings.set({ advanced: { ...settings.advanced, filesAnywhere: anywhere } }).then(() => setStep(3))} data-testid="onboarding-perms-next">Continue</button>
+              <button className="btn primary" onClick={() => setStep(3)} data-testid="onboarding-perms-next">Continue</button>
             </div>
           </>
         )}

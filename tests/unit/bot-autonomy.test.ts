@@ -107,9 +107,12 @@ describe('an Autonomous bot: what runs, what asks', () => {
     expect(botVerdict({ effect: 'write_external', consequential: false, tool: 'gmail__create_draft', summary: 'Save a draft to Sam' })).toBe('allow')
     expect(botVerdict({ effect: 'destructive', tool: 'file_write', summary: 'Overwrite ~/SahilBot/notes.md (backup kept)' })).toBe('allow')
   })
-  test('a consequential outside action asks; "Always allow" lets a single send run', () => {
-    expect(botVerdict({ effect: 'write_external', consequential: true, tool: 'gmail__send_email', summary: 'Send email to sam@x.com' })).toBe('ask')
-    expect(botVerdict({ effect: 'write_external', consequential: true, tool: 'gmail__send_email', summary: 'Send email to sam@x.com', alwaysAllowed: true, args: { to: 'sam@x.com' } })).toBe('allow')
+  test('a single send runs in Auto; Ask asks unless "Always allow"; a send steered by outside content asks', () => {
+    const send = { effect: 'write_external' as const, consequential: true, tool: 'gmail__send_email', summary: 'Send email to sam@x.com', args: { to: 'sam@x.com' } }
+    expect(botVerdict(send)).toBe('allow')
+    expect(botVerdict({ ...send, tainted: true })).toBe('ask')
+    expect(botVerdict({ ...send, mode: 'ask' })).toBe('ask')
+    expect(botVerdict({ ...send, mode: 'ask', alwaysAllowed: true })).toBe('allow')
   })
   test('hard stops still stop, even with "Always allow" or an Allow rule', () => {
     const many = { to: Array.from({ length: MASS_SEND_MIN }, (_, i) => `p${i}@x.com`) }
@@ -179,10 +182,13 @@ describe('question defaults a deadline may use', () => {
 
 describe('unattended runs (routines, wake-ups)', () => {
   const v = (p: Partial<PermissionInput>) => decide({ ...base, unattended: true, ...p }).verdict
-  test('a chat that is not an always-on bot\'s stays cautious when nobody watches', () => {
-    expect(v({ effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('ask')
-    expect(v({ effect: 'destructive', tool: 'file_write' })).toBe('ask')
+  test('a chat that is not an always-on bot\'s works fully in Auto when nobody watches; Ask and taint still ask', () => {
+    expect(v({ effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('allow')
+    expect(v({ effect: 'destructive', tool: 'file_write' })).toBe('allow')
     expect(v({ effect: 'write_external', consequential: false })).toBe('allow')
+    expect(v({ effect: 'write_external', consequential: true, tool: 'gmail__send_email', tainted: true })).toBe('ask')
+    expect(v({ effect: 'write_external', consequential: true, tool: 'stripe__create_refund', spends: true })).toBe('ask')
+    expect(v({ mode: 'ask', effect: 'destructive', tool: 'file_write' })).toBe('ask')
   })
   test('an always-on bot at Auto keeps full Auto: project commands and backed-up overwrites run', () => {
     for (const mode of ['auto', 'autonomous'] as const) {
@@ -194,9 +200,11 @@ describe('unattended runs (routines, wake-ups)', () => {
     expect(v({ alwaysOn: true, mode: 'ask', effect: 'write_local' })).toBe('ask')
     expect(v({ alwaysOn: true, mode: 'ask', effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('ask')
   })
-  test('hard stops, taint and the purchase / code gates are exactly as before', () => {
-    expect(v({ alwaysOn: true, effect: 'write_external', consequential: true, tool: 'gmail__send_email' })).toBe('ask')
-    expect(v({ alwaysOn: true, effect: 'destructive', tool: 'file_manage', hardStop: 'deleting notes.txt (it goes to the Trash)' })).toBe('ask')
+  test('the bot\'s hard stops, taint and the purchase / code gates are exactly as before', () => {
+    // A single send runs in Auto now; deleting the user's data is still one of an always-on bot's own hard stops.
+    expect(v({ alwaysOn: true, effect: 'write_external', consequential: true, tool: 'gmail__send_email' })).toBe('allow')
+    expect(v({ alwaysOn: true, effect: 'write_external', consequential: true, tool: 'gmail__send_email', tainted: true })).toBe('ask')
+    expect(botVerdict({ unattended: true, alwaysOn: true, effect: 'destructive', tool: 'file_manage', hardStop: 'deleting notes.txt (it goes to the Trash)' })).toBe('ask')
     expect(v({ alwaysOn: true, effect: 'write_external', consequential: 'project', tool: 'run_command', tainted: true })).toBe('ask')
     expect(v({ alwaysOn: true, effect: 'read', tool: 'fetch_page', tainted: true })).toBe('ask')
     expect(v({ alwaysOn: true, effect: 'write_external', tool: 'browser', hardStop: `${PURCHASE_STOP}Place order` })).toBe('allow')

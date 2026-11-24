@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { decide, isCredentialStop, isPurchaseStop, normalizeMode, PERMISSION_MODES, PURCHASE_STOP, stricterMode } from '../../src/main/agent/permissions'
+import { decide, isCredentialStop, isPurchaseStop, normalizeMode, PERMISSION_MODES, PURCHASE_STOP, spendsMoney, stricterMode } from '../../src/main/agent/permissions'
 import { decideWithRule } from '../../src/main/agent/loop'
 import { isProjectCommand, outsidePaths, shellTool } from '../../src/main/agent/tools/shell'
 import type { PermissionInput } from '../../src/main/agent/types'
@@ -21,24 +21,40 @@ describe('autonomy levels: decide()', () => {
     ['a workspace write / build / test', { effect: 'write_local' }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
     ['a routine outside step (search, next page)', { effect: 'write_external', consequential: false }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
     ['a project command (npm ci, git pull)', { effect: 'write_external', tool: 'run_command', consequential: 'project' }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
-    ['a consequential outside action (send, push, post)', { effect: 'write_external', consequential: true }, { ask: 'ask', auto: 'ask', autonomous: 'ask', bypass: 'allow' }],
+    ['a consequential outside action (send, push, post)', { effect: 'write_external', consequential: true }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
+    ['a step that spends money (refund, charge, paid credits)', { effect: 'write_external', consequential: true, tool: 'stripe__create_refund', spends: true }, { ask: 'ask', auto: 'ask', autonomous: 'ask', bypass: 'allow' }],
     ['overwriting a file in your folders (backup kept)', { effect: 'destructive', tool: 'file_write' }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }],
-    ['a destructive call of another tool (connector delete)', { effect: 'destructive', tool: 'notion__delete_page' }, { ask: 'ask', auto: 'ask', autonomous: 'ask', bypass: 'allow' }]
+    ['a destructive call of another tool (connector delete)', { effect: 'destructive', tool: 'notion__delete_page' }, { ask: 'ask', auto: 'allow', autonomous: 'allow', bypass: 'allow' }]
   ]
   for (const [what, p, want] of table) {
     for (const mode of LEVELS) test(`${mode}: ${what} -> ${want[mode]}`, () => expect(v({ ...p, mode })).toBe(want[mode]))
   }
 
-  test('Autonomous still asks for every hard stop: deleting, sending, history rewrites, credentials, security', () => {
-    for (const stop of ['deleting notes.txt (it goes to the Trash)', '"git push --force" deletes files or rewrites history', 'sends a message to Mom', 'typing a password', 'changing security settings']) {
-      expect(v({ mode: 'autonomous', effect: 'destructive', tool: 'file_manage', hardStop: stop })).toBe('ask')
-      expect(v({ mode: 'autonomous', effect: 'write_external', consequential: 'project', hardStop: stop })).toBe('ask')
-      expect(v({ mode: 'autonomous', effect: 'write_local', hardStop: stop })).toBe('ask')
+  test('Autonomous runs deleting, sending, history rewrites and security stops itself; Ask asks; taint asks', () => {
+    for (const stop of ['deleting notes.txt (it goes to the Trash)', '"git push --force" deletes files or rewrites history', 'sends a message to Mom', 'changing security settings']) {
+      expect(v({ mode: 'autonomous', effect: 'destructive', tool: 'file_manage', hardStop: stop })).toBe('allow')
+      expect(v({ mode: 'autonomous', effect: 'write_external', consequential: 'project', hardStop: stop })).toBe('allow')
+      expect(v({ mode: 'autonomous', effect: 'write_local', hardStop: stop })).toBe('allow')
+      expect(v({ mode: 'ask', effect: 'destructive', tool: 'file_manage', hardStop: stop })).toBe('ask')
+      expect(v({ mode: 'autonomous', effect: 'destructive', tool: 'file_manage', hardStop: stop, tainted: true })).toBe('ask')
     }
   })
-  test('hard stops ask in Autonomous even with "Always allow" and an Allow rule', () => {
-    expect(v({ mode: 'autonomous', effect: 'write_external', hardStop: 'payment', alwaysAllowed: true })).toBe('ask')
-    expect(decideWithRule({ ...base, mode: 'autonomous', effect: 'destructive', tool: 'file_manage', hardStop: 'deleting x' }, 'allow').verdict).toBe('ask')
+  test('Autonomous still asks for credentials, files outside your folders and planted memories', () => {
+    for (const stop of ['typing the saved login "Bank" (password) into evil.example', 'typing the saved ID "Passport" (document number) into gov.example', 'typing into a password field', 'secret scan flagged a key in the body']) {
+      expect(isCredentialStop(stop)).toBe(true)
+      expect(v({ mode: 'autonomous', effect: 'write_external', hardStop: stop })).toBe('ask')
+      expect(v({ mode: 'autonomous', effect: 'write_external', hardStop: stop, alwaysAllowed: true })).toBe('ask')
+    }
+    expect(v({ mode: 'autonomous', effect: 'destructive', tool: 'file_manage', hardStop: 'deleting /etc/hosts, outside your folders' })).toBe('ask')
+    expect(v({ mode: 'autonomous', effect: 'write_local', tool: 'memory', hardStop: 'saves an instruction from a web page', planted: true })).toBe('ask')
+  })
+  test('money and credentials ask in Autonomous even with "Always allow" and an Allow rule', () => {
+    expect(v({ mode: 'autonomous', effect: 'write_external', hardStop: 'payment', spends: spendsMoney('t', null, 'payment'), alwaysAllowed: true })).toBe('ask')
+    expect(decideWithRule({ ...base, mode: 'autonomous', effect: 'write_external', hardStop: 'payment', spends: true }, 'allow').verdict).toBe('ask')
+    expect(decideWithRule({ ...base, mode: 'autonomous', effect: 'write_external', hardStop: 'typing into a password field' }, 'allow').verdict).toBe('ask')
+    // A delete runs in Auto anyway; in Ask an Allow rule still doesn't skip the hard stop.
+    expect(decideWithRule({ ...base, mode: 'autonomous', effect: 'destructive', tool: 'file_manage', hardStop: 'deleting x' }, 'allow').verdict).toBe('allow')
+    expect(decideWithRule({ ...base, mode: 'ask', effect: 'destructive', tool: 'file_manage', hardStop: 'deleting x' }, 'allow').verdict).toBe('ask')
   })
   test('anything tainted by web or app content asks in Autonomous', () => {
     expect(v({ mode: 'autonomous', effect: 'write_external', consequential: 'project', tainted: true })).toBe('ask')
@@ -58,10 +74,14 @@ describe('autonomy levels: decide()', () => {
     expect(decideWithRule({ ...base, effect: 'write_local' }, 'ask').verdict).toBe('ask')
     expect(decideWithRule({ ...base, effect: 'write_external', consequential: 'project' }, 'ask').verdict).toBe('ask')
   })
-  test('unattended runs (no always-on bot) stay cautious in Auto: only local changes and routine steps run', () => {
-    expect(v({ mode: 'autonomous', unattended: true, effect: 'write_external', consequential: 'project' })).toBe('ask')
-    expect(v({ mode: 'autonomous', unattended: true, effect: 'destructive', tool: 'file_write' })).toBe('ask')
+  test('unattended runs (no always-on bot) work as attended ones in Auto; taint and money still ask', () => {
+    expect(v({ mode: 'autonomous', unattended: true, effect: 'write_external', consequential: 'project' })).toBe('allow')
+    expect(v({ mode: 'autonomous', unattended: true, effect: 'write_external', consequential: true })).toBe('allow')
+    expect(v({ mode: 'autonomous', unattended: true, effect: 'destructive', tool: 'file_write' })).toBe('allow')
     expect(v({ mode: 'autonomous', unattended: true, effect: 'write_local' })).toBe('allow')
+    expect(v({ mode: 'autonomous', unattended: true, effect: 'write_external', consequential: true, tainted: true })).toBe('ask')
+    expect(v({ mode: 'autonomous', unattended: true, effect: 'write_external', consequential: true, spends: true })).toBe('ask')
+    expect(v({ mode: 'ask', unattended: true, effect: 'write_local' })).toBe('ask')
   })
   test('the stricter of two levels ("autonomous" is Auto\'s old name)', () => {
     expect(stricterMode('autonomous', 'auto')).toBe('auto')
@@ -158,7 +178,7 @@ describe('commands that write outside your folders ask', () => {
   test('toolchain, temp, URLs and the folders themselves are fine', () => {
     for (const c of ['npm test', `node ${ws}/build.js`, 'PATH=/opt/homebrew/bin:$PATH make', 'ls /usr/local/bin > tools.txt', 'curl https://example.com/a/b', 'echo x > /tmp/log', 'cat x > /dev/null', `${homedir()}/.nvm/versions/node/v20/bin/node x.js`]) expect(outsidePaths(c, [ws]), c).toEqual([])
   })
-  test('run_command treats such a write as acting outside (Auto and Autonomous ask)', () => {
+  test('run_command treats such a write as acting outside (Auto runs it in the write sandbox; Ask and taint ask)', () => {
     const tool = shellTool({ workspace: () => ws })
     const effect = tool.effect as (a: { command: string }, c: { roots: string[] }) => ToolEffect
     expect(effect({ command: 'echo hi > ~/.zshrc' }, { roots: [] })).toBe('write_external')
@@ -166,7 +186,11 @@ describe('commands that write outside your folders ask', () => {
     expect(effect({ command: 'cat ~/.zshrc' }, { roots: [] })).toBe('read')
     const attached = mkdtempSync(join(homedir() === '/' ? tmpdir() : tmpdir(), 'sb-att-'))
     expect(effect({ command: `touch ${attached}/x` }, { roots: [attached] })).toBe('write_local')
-    expect(v({ mode: 'autonomous', effect: effect({ command: 'echo hi > ~/.zshrc' }, { roots: [] }), tool: 'run_command', consequential: tool.consequential!({ command: 'echo hi > ~/.zshrc' }, { threadId: 't' }) })).toBe('ask')
+    const far = { effect: effect({ command: 'echo hi > ~/.zshrc' }, { roots: [] }), tool: 'run_command', consequential: tool.consequential!({ command: 'echo hi > ~/.zshrc' }, { threadId: 't' }) }
+    // Auto lets the call run; the write sandbox (writable: workspace, attached folders, cwd) is what keeps it off ~/.zshrc.
+    expect(v({ ...far, mode: 'autonomous' })).toBe('allow')
+    expect(v({ ...far, mode: 'ask' })).toBe('ask')
+    expect(v({ ...far, mode: 'autonomous', tainted: true })).toBe('ask')
   })
 })
 

@@ -48,7 +48,7 @@ describe('agent platform', () => {
     await app.close()
   })
 
-  test('run_command: changes run in Auto, deleting asks first', async () => {
+  test('run_command: Auto makes and deletes files without asking (you asked for it)', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'sb-cmd-'))
     writeFileSync(join(ws, 'old.txt'), 'bye')
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
@@ -60,14 +60,10 @@ describe('agent platform', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'make a file and delete old.txt')
     await page.keyboard.press('Enter')
-    const card = page.locator('[data-testid="approval-card"]')
-    await card.waitFor({ timeout: 15_000 })
-    // The first command already ran without asking; the delete waits for approval.
-    expect(readFileSync(join(ws, 'made.txt'), 'utf8').trim()).toBe('hello')
-    expect(existsSync(join(ws, 'old.txt'))).toBe(true)
-    expect(await card.innerText()).toMatch(/rm old\.txt/)
-    await card.locator('[data-testid="approve-once"]').click()
     await expect.poll(() => existsSync(join(ws, 'old.txt')), { timeout: 15_000 }).toBe(false)
+    expect(readFileSync(join(ws, 'made.txt'), 'utf8').trim()).toBe('hello')
+    expect(await page.locator('[data-testid="approval-card"]').count()).toBe(0)
+    await expect.poll(() => llm.script.length, { timeout: 15_000 }).toBe(0)
     const out = llm.requests.at(-1)!.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content).join('\n')
     expect(out).toContain('exit code 0')
     await app.close()
@@ -164,7 +160,7 @@ describe('steering and queueing', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'Paint the logo')
     await page.keyboard.press('Enter')
-    await page.locator('[data-testid="steer-hint"]').waitFor()
+    await page.locator('[data-testid="stop"]').waitFor()
     // Steer with Enter.
     await page.fill('[data-testid="composer-input"]', 'actually make it blue')
     await page.keyboard.press('Enter')
@@ -269,7 +265,7 @@ describe('plan, then execute', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'slow one')
     await page.keyboard.press('Enter')
-    await page.locator('[data-testid="steer-hint"]').waitFor()
+    await page.locator('[data-testid="stop"]').waitFor()
     await page.click('[data-testid="new-chat"]')
     await page.fill('[data-testid="composer-input"]', 'fast one')
     await page.keyboard.press('Enter')

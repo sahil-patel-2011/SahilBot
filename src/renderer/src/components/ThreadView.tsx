@@ -435,17 +435,42 @@ function StatusLine({ drafting, since, progress, doing }: { drafting: string | n
   )
 }
 
-/** A bot at work, Grok Bot's way: a quick "On it." from the bot, then just "<name> is working…". */
-function BotWorking({ name, ack, slow }: { name: string; ack: boolean; slow?: boolean }) {
+/**
+ * Working, Grok Bot's way (every chat outside Developer mode): the bot says it's on it (its own opening line when it
+ * wrote one; a plain "On it." if nothing came after a moment), then one quiet line, an icon and what it's doing
+ * ("Planning the Savannah trip"). No timer and no "Thinking…".
+ */
+function BotWorking({ name, ack, slow, label }: { name?: string; ack: boolean; slow?: boolean; label?: string | null }) {
+  // A quick answer needs no "On it.": it shows only when nothing has come after a moment.
+  const [late, setLate] = useState(false)
+  useEffect(() => {
+    if (!ack) return
+    const t = setTimeout(() => setLate(true), 1200)
+    return () => clearTimeout(t)
+  }, [ack])
+  const who = name ?? 'SahilBot'
+  const text = slow ? `${who} is still working. This is taking longer than usual; press Stop if you'd rather not wait` : label || (name ? `${name} is working` : 'Working on it')
   return (
     <>
-      {ack && <div className="row ai bot-ack" data-testid="bot-ack"><div className="bubble-wrap ai-col"><div className="bubble ai">On it.</div></div></div>}
+      {ack && late && <div className="row ai bot-ack" data-testid="bot-ack"><div className="bubble-wrap ai-col"><div className="bubble ai">On it.</div></div></div>}
       <div className="status-line bot-working" data-testid="status-line">
-        <span className="activity-dots live"><i /><i /><i /><i /></span>
-        <span className="activity-title shimmer" role="status" aria-live="polite" data-testid="bot-working">{slow ? `${name} is still working. This is taking longer than usual; press Stop if you'd rather not wait` : `${name} is working`}…</span>
+        <span className="work-orb" aria-hidden="true" />
+        <span className="activity-title" role="status" aria-live="polite" data-testid="bot-working">{text}</span>
       </div>
     </>
   )
+}
+
+/**
+ * What the working line says, steadiest first: a note from the app, the step of the bot's own plan it's on ("Find
+ * family hotels under $150"), then the tool step running now, then the one being prepared. Nothing: the default.
+ */
+export function workLabel(o: { progress?: string | null; drafting?: string | null; plan?: string | null; doing?: string | null }): string | null {
+  if (o.progress && !o.progress.startsWith('Still on it:')) return o.progress.replace(/\s+/g, ' ').slice(0, 120)
+  if (o.plan) return o.plan.replace(/\s+/g, ' ').slice(0, 80)
+  if (o.doing) return o.doing
+  if (o.drafting) return PREPARING[o.drafting] ?? null
+  return null
 }
 
 /**
@@ -620,6 +645,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const allTail = all[all.length - 1]
   // The status names the step that is running now: once it has its result, it's "Thinking" again, never a stale label.
   const liveStep = runningStep(allTail?.kind === 'activity' ? allTail.steps : undefined, running)
+  // The bot's own plan step for the working line, even where the plan card itself is hidden (outside Developer mode).
+  const allUser = (() => { for (let i = all.length - 1; i >= 0; i--) if (all[i].kind === 'user') return i; return -1 })()
+  const livePlan = (() => { for (let i = all.length - 1; i > allUser; i--) { const b = all[i]; if (b.kind === 'plan') return b } return undefined })()
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
   // A bot's chat keeps "<name> is working…" up while a checked answer is written out of sight (heldDrafts).
   const writingVisible = writing && !(quietBot && (last?.meta?.superseded || heldDrafts(messages).waiting.has(last!.id)))
@@ -678,7 +706,10 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
             )
           })}
           {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} thumb={p.tool === 'browser' ? lastBrowserShot(messages) : undefined} />))}
-          {showStatus && (quietBot ? <BotWorking name={botName!} ack={!repliedSince(messages)} slow={!!progress?.startsWith('Still on it:')} /> : <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={liveStep && !dev ? describe(liveStep)[2] : null} />)}
+          {showStatus && (dev
+            ? <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={null} />
+            : <BotWorking name={botName} ack={!repliedSince(messages)} slow={!!progress?.startsWith('Still on it:')}
+                label={workLabel({ progress, drafting, plan: livePlan ? (livePlan.items.find((x) => x.status === 'in_progress')?.text ?? livePlan.title ?? null) : null, doing: liveStep ? describe(liveStep)[2] : null })} />)}
           {!quietBot && running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
           {!running && lastText && !pending.length && (dev || (tailText?.kind === 'text' && (tailText.m.status === 'error' || tailText.m.status === 'stopped'))) && (
             <div className="after-actions">

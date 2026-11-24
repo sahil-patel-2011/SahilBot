@@ -71,7 +71,7 @@ import { autoPool, autoUnavailable, autoVariant } from '../llm/router'
 import { captureConstraints, hideCopiedSecrets, redactSecrets, renderNotes } from './notes'
 import { ContextManager, OUTPUT_RESERVE, ResultStore, upperEstimate, ServerTokenCounter, SUMMARY_INSTRUCTIONS, coreRoom, notesRoom, pinRunContext, resultLimit, taskBrief, transcriptTainted, withPinned, wrapToolOutput, type TokenCounter } from './context'
 import { TaskMemory, stepText, type WorkingMemoryPage } from './task-memory'
-import { ALWAYS_TAINT_CHECKED, appReadRisk, botHardStop, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, normalizeMode, ruleVerdict, stricterMode } from './permissions'
+import { ALWAYS_TAINT_CHECKED, appReadRisk, botHardStop, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, normalizeMode, ruleVerdict, spendsMoney, stricterMode } from './permissions'
 import { ATTENDED_GRACE_MS, isAlwaysOnBot } from './questions/policy'
 import type { TypedSlot } from './questions/queue'
 import { ALWAYS_ON_PROMPT, learnedLine, queuedApprovalText, queuedQuestionText, type BotQuestionConfig, type QuestionHost } from './questions/host'
@@ -4106,7 +4106,9 @@ export class Agent {
     // An always-on bot (not a helper): Auto works fully on a schedule too.
     const alwaysOn = !run.helper && !!this.d.questions?.config(thread.id)
     // Long-term memory: a save whose wording came from (or, after reading, reads like) fetched content asks.
-    const hardStop = tool.hardStop?.(args, { roots: state.roots ?? [], folder: state.folder }) ?? (tool.name === 'memory' ? memoryRisk(args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted) : null)
+    const own = tool.hardStop?.(args, { roots: state.roots ?? [], folder: state.folder }) ?? null
+    const planted = !own && tool.name === 'memory' ? memoryRisk(args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted) : null
+    const hardStop = own ?? planted
     // Every recipient on this bot's trusted list (or the user): the send stop lifts (decide()), within limits.
     const trust = effect === 'write_external' ? this.d.trustedSends?.check(run.speaker?.id ?? thread.spaceId, tool.name, args, hardStop) : undefined
     const decision = decideWithRule({
@@ -4116,6 +4118,8 @@ export class Agent {
       alwaysAllowed: state.alwaysAllow.includes(tool.name),
       hardStop,
       hardStopsEnabled: s.advanced.hardStopsEnabled,
+      spends: effect !== 'read' && spendsMoney(tool.name, summary, hardStop),
+      planted: !!planted,
       // A handoff from a run that read untrusted content: every outside action in this run asks, and so
       // does every terminal command (whatever its effect: a "local" command can still do anything).
       tainted: (!!run.forceTaint && (effect === 'write_external' || effect === 'destructive' || ALWAYS_TAINT_CHECKED.has(tool.name))) || checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText),
@@ -4431,6 +4435,7 @@ export class Agent {
         // Site playbooks outlive the run: any outside content in this chat (any turn), or activity titles in view, makes edits ask.
         || (tool.name === 'sites' && (ctx.track.web || ctx.untrusted.length > 0 || activityTexts(state.pins).length > 0)),
       approved,
+      autoRun: decision.verdict === 'allow' && normalizeMode(stricterMode(this.d.db.getThread(thread.id)?.permissionMode ?? thread.permissionMode, run.modeCap)) !== 'ask',
       sandbox: s.advanced.sandboxCommands !== false
     }
     toolCtx.invokeTool = async (name, rawArgs) => {

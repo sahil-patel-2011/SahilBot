@@ -101,6 +101,8 @@ export interface Thread {
   unreadCount?: number
   /** How the agent runs here: 'chat' (only conversation so far) or 'full' (it has done real work); unset = never ran / older chat. */
   toolMode?: 'chat' | 'full'
+  /** The user typed in it themselves (not only a routine, a Memory draft, a handoff or a connected app): Recents lists these. */
+  byUser?: boolean
 }
 
 export interface Sampling {

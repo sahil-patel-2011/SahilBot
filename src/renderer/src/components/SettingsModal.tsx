@@ -675,38 +675,14 @@ function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab:
 
 // ------------------------------------------------------------------ permissions
 
-const LEVELS: Array<{ id: 'ask' | 'auto'; title: string; sub: string; rec?: boolean }> = [
-  { id: 'auto', title: 'Auto', rec: true, sub: 'Works on its own. Asks before spending money, using a password, deleting your things, emailing lots of people or posting in public.' },
-  { id: 'ask', title: 'Ask first', sub: 'Checks with you before anything that changes something.' }
-]
-
-/** How much SahilBot does on its own, what the Mac lets it use, and rules for specific actions: one page. */
-function PermissionsPage({ s, patch }: P) {
-  const level = s.defaultMode === 'ask' ? 'ask' : 'auto'
+/** What SahilBot may do, and what the Mac lets it use. No levels or rules to set: it does the work, and asks only where it must. */
+function PermissionsPage(_: P) {
   return (
     <>
       <h2>Privacy &amp; safety</h2>
-      <div className="set-sub">What SahilBot may do without asking, and what your Mac lets it use.</div>
-      <section className="set-section" data-setting="autonomy">
-        <div className="set-label">New chats</div>
-        <div className="perm-levels" role="radiogroup" aria-label="Permissions for new chats">
-          {LEVELS.map((l) => (
-            <button key={l.id} type="button" role="radio" aria-checked={level === l.id} className={`perm-level${level === l.id ? ' on' : ''}`}
-              onClick={() => void patch({ defaultMode: l.id })} data-testid={`autonomy-${l.id}`}>
-              <span className="perm-radio" aria-hidden />
-              <span className="perm-level-text"><b>{l.title}</b>{l.rec && <span className="perm-rec">Recommended</span>}<span className="sub">{l.sub}</span></span>
-            </button>
-          ))}
-        </div>
-        <div className="perm-note"><I.Shield size={13} />Buying something, a password or a one-time code always needs you. Any chat can change this from the menu under its message box.</div>
-      </section>
-      <Section>
-        <Row id="files-anywhere" title="Read and edit files anywhere" sub="Your files in any folder, without asking first. Deleting still asks (files go to the Trash), and system, private and secret places stay off limits.">
-          <Toggle on={s.advanced.filesAnywhere !== false} onChange={(v) => void patch({ advanced: { ...s.advanced, filesAnywhere: v } })} label="Read and edit files anywhere" testId="files-anywhere" />
-        </Row>
-      </Section>
+      <div className="set-sub">SahilBot works on its own, anywhere on your Mac: files and folders, apps, the web and your connected accounts.</div>
+      <div className="perm-note" data-setting="autonomy" data-testid="perm-note"><I.Shield size={13} />It asks only before buying something, typing a saved password anywhere but that login's own site, or doing something a web page or email told it to. System and secret places (like your keychain and SSH keys) stay off limits. Undo takes back a task's file changes.</div>
       {!isServerRuntime && <MacPermissions />}
-      {/* No approval rules here: Ask or Auto is the one choice. "Always ask before X" is something you tell the bot in chat. */}
     </>
   )
 }
