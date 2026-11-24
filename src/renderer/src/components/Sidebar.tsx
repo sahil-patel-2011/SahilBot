@@ -6,7 +6,6 @@ import * as I from '../icons'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { duplicateBot, importBot, shareBot } from './BotShare'
 import { Target, useGoalsNeedingYou } from './TasksView'
-import { BrainIcon } from './BrainView'
 import { openUsageGlance } from './UsagePage'
 import { money, useSpend } from './SpendingLimit'
 import { countLabel } from '@shared/read-state'
@@ -113,6 +112,13 @@ export function Sidebar(p: {
     p.onPinned(rest)
   }
   const unpinSpace = (id: string): void => p.onPinned(allPinned.filter((x) => x !== id))
+  /** Pin or unpin from a button or the menu: it says what happened, with Undo (the order is kept). */
+  const togglePin = (s: Space): void => {
+    const before = allPinned
+    const on = !pinnedIds.includes(s.id)
+    if (on) pinSpace(s.id); else unpinSpace(s.id)
+    toast(on ? `Pinned ${s.name} to the top` : `Unpinned ${s.name}`, 'info', { action: { label: 'Undo', run: () => p.onPinned(before) } })
+  }
   const pinChat = (id: string, on: boolean): void => void api.threads.update(id, { pinned: on }).then(p.onChanged)
   const openSpace = (s: Space): void => (s.isMain ? p.onOpenMain() : p.onOpenBot(s.id))
   const isActive = (s: Space): boolean => s.id === p.activeSpaceId && (!s.isMain || (!!p.mainThreadId && p.activeThreadId === p.mainThreadId)) && p.view === 'home'
@@ -131,9 +137,7 @@ export function Sidebar(p: {
           run: () => { if (confirm(`Delete "${s.name}" and its conversation? You can undo it for a few minutes.`)) void deleteBotWithUndo(s, p.onChanged).catch((e) => toast((e as Error).message, 'error')) }
         }
       ] : [
-        pinnedIds.includes(s.id)
-          ? { label: 'Unpin', icon: <I.Pin size={15} />, run: () => unpinSpace(s.id) }
-          : { label: 'Pin', icon: <I.Pin size={15} />, run: () => pinSpace(s.id) },
+        { label: pinnedIds.includes(s.id) ? 'Unpin from top' : 'Pin to top', icon: <I.Pin size={15} />, run: () => togglePin(s) },
         { label: 'Mark as Unread', icon: <I.Sparkle size={15} />, run: () => void api.spaces.markUnread(s.id).then(p.onChanged) },
         'sep',
         { label: `Rename ${kind}`, icon: <I.Edit size={15} />, run: () => setRenaming(s.id) },
@@ -182,12 +186,11 @@ export function Sidebar(p: {
         // This month's spend at a glance ("$X used of $Y this month"); opens the compact usage card.
         { label: spendLabel(spend), icon: <I.Clock size={15} />, run: openUsageGlance },
         'sep',
-        { label: 'Memory', icon: <BrainIcon size={15} />, run: () => p.onView('brain'), testId: 'nav-brain' },
         { label: 'Library', icon: <I.Layers size={15} />, run: () => p.onView('files'), testId: 'nav-artifacts' },
         { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects'), testId: 'nav-projects' },
         { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled, testId: 'nav-scheduled' },
-        { label: 'Tasks', icon: <Target size={15} />, run: () => p.onView('tasks') },
-        { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect, testId: 'connect-apps' },
+        // Goals and anything waiting on you (each bot also shows an orange dot and "Waiting for you").
+        { label: goalsNeedYou ? `Tasks · ${goalsNeedYou > 9 ? '9+' : goalsNeedYou} waiting` : 'Tasks', icon: <Target size={15} />, run: () => p.onView('tasks'), testId: 'nav-tasks' },
         'sep',
         { label: 'Import bot…', icon: <I.Users size={15} />, run: () => void importBot() }
       ]
@@ -247,14 +250,17 @@ export function Sidebar(p: {
           {renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v }))}
         </>
       ) : (
-        <button className="pw-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.lastPreview ? `${s.name}: ${s.lastPreview.slice(0, 120)}` : s.name}>
+        <button className="pw-btn" onClick={() => openSpace(s)} data-testid={testId(s)} aria-label={s.name}>
           <span className="pw-avatar">
-            {avatar(s, pinnedSpaces.length === 1 ? 92 : 58)}
+            {avatar(s, pinnedSpaces.length === 1 ? 56 : 46)}
             {s.isMain && s.shape !== 'mascot' && <span className="pw-star"><Star /></span>}
             {(working(s) || needs(s) || (s.unread && !isActive(s))) && <span className="pw-status">{status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}</span>}
           </span>
           <span className={`pw-name${runName(working(s), needs(s))}`}>{s.name}</span>
         </button>
+      )}
+      {renaming !== s.id && (
+        <button className="pw-unpin" onClick={(e) => { e.stopPropagation(); togglePin(s) }} title={`Unpin ${s.name}`} aria-label={`Unpin ${s.name}`} data-testid="unpin-bot"><I.Close size={11} /></button>
       )}
     </div>
   )
@@ -268,18 +274,23 @@ export function Sidebar(p: {
           {renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v }))}
         </div>
       ) : (
-        <button className="br-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.lastPreview ? `${s.name}: ${s.lastPreview.replace(/\s+/g, ' ').slice(0, 160)}` : s.name}>
+        <button className="br-btn" onClick={() => openSpace(s)} data-testid={testId(s)}>
           <span className="br-avatar">{avatar(s, 40)}</span>
           <span className="br-text">
             <span className={`br-name${runName(working(s), needs(s))}`}>{s.name}</span>
             {(() => {
               // Working / Pulling context in place of the preview while it runs; nothing extra when Idle or Done.
-              const st = s.isMain || needs(s) ? null : sidebarStatusText(botStatus[s.id], !!s.unread)
+              // Something waits on you (a question, an approval, a plan): said in orange, like the dot.
+              if (needs(s)) return <span className="br-preview br-wait" data-testid={`sidebar-bot-waiting-${s.id}`}>Waiting for you{s.lastPreview ? `: ${s.lastPreview.replace(/\s+/g, ' ')}` : ''}</span>
+              const st = s.isMain ? null : sidebarStatusText(botStatus[s.id], !!s.unread)
               return st ? <span className="br-preview br-status" data-testid={`sidebar-bot-status-${s.id}`}>{st}</span> : <span className="br-preview">{rowSubtitle(s)}</span>
             })()}
           </span>
           {status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}
         </button>
+      )}
+      {renaming !== s.id && (
+        <button className="br-pin" onClick={(e) => { e.stopPropagation(); togglePin(s) }} title={`Pin ${s.name} to the top`} aria-label={`Pin ${s.name} to the top`} data-testid="pin-bot"><I.Pin size={14} /></button>
       )}
     </div>
   )
@@ -329,24 +340,13 @@ export function Sidebar(p: {
 
   return (
     <aside className={`sidebar sb2${dragging ? ' is-dragging' : ''}`} onDragOver={(e) => { if (dragging) e.preventDefault() }}>
-      {/* Grok Bot's shape, five things: search and new chat up top, your bots, Recents, Needs you (only when something
-          waits) and you. Library, Apps, Projects, Scheduled and Memory live in your profile menu. */}
+      {/* Grok Bot's shape: search and new chat up top, your bots (an orange dot when one waits for you, blue when
+          unread), Recents, and you with Connect apps. Library, Projects, Scheduled and Tasks live in your profile menu. */}
       <div className="sb-top drag">
         {p.onHide && <button className="sb-circle" onClick={p.onHide} title="Hide the sidebar (⌘B)" aria-label="Hide the sidebar (⌘B)" data-testid="sidebar-hide"><I.SidebarLeft size={16} /></button>}
         <button className="sb-circle" onClick={p.onSearch} title="Search bots, chats, commands and settings (⌘K)" aria-label="Search (⌘K)" data-testid="nav-search"><I.Search size={16} /></button>
         <button className="sb-circle" onClick={p.onNew} title="New chat (⌘N)" aria-label="New chat (⌘N)" data-testid="new-chat"><I.Plus size={16} /></button>
       </div>
-      {/* Only when something waits for you (or you're on it). */}
-      {(goalsNeedYou > 0 || p.view === 'tasks') && (
-        <nav className="sb-nav" aria-label="Main">
-          <button className={`sb-nav-item tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
-            title="Questions and approvals waiting for you, and your bots' goals" aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
-            <span className="sb-nav-icon"><I.Inbox size={16} /></span><span>Needs you</span>
-            {goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
-          </button>
-        </nav>
-      )}
-
       <div className="side-scroll">
         <div className={`pin-grid${over === 'pinned' ? ' drop' : ''}${dragging?.kind === 'space' || dragging?.kind === 'chat' ? ' dragging' : ''}${pinnedSpaces.length ? '' : ' empty'}${pinnedSpaces.length === 1 ? ' one' : ''}`} data-testid="pinned-top"
           onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('pinned') } }}
@@ -397,10 +397,12 @@ export function Sidebar(p: {
       <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
         {/* You: initials and your name (like Grok Bot). Click for Settings; right-click for scheduled, usage and more. */}
-        <button className={`sb-me${p.view === 'brain' || p.view === 'files' || p.view === 'projects' ? ' on' : ''}`} onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, Memory, Library, Apps, Projects and Scheduled${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
+        <button className={`sb-me${p.view === 'files' || p.view === 'projects' || p.view === 'tasks' ? ' on' : ''}`} onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, usage, Library, Projects, Scheduled and Tasks${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
           <span className="sb-me-avatar" aria-hidden="true">{me.initials || <I.Gear size={16} />}</span>
           {me.full ? <span className="sb-me-name">{me.full}</span> : <span className="sb-me-name muted">Settings</span>}
+          {goalsNeedYou > 0 && <span className="need-dot sb-me-dot" aria-label={`${goalsNeedYou} waiting in Tasks`} role="img" />}
         </button>
+        <button className="sb-circle sb-apps" onClick={p.onConnect} title="Connect apps" aria-label="Connect apps" data-testid="connect-apps"><I.AppsPlus size={17} /></button>
       </div>
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
     </aside>

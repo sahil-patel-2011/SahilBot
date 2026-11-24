@@ -3,6 +3,13 @@ import { launch, tempProfile } from './app'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 import { EXTRACT, brainFixture, brainReplies } from '../fixtures/brain-fixture'
 
+/** Memory isn't in the profile menu any more: ⌘K → Memory. */
+async function openMemory(page: import('playwright').Page): Promise<void> {
+  await page.click('[data-testid="nav-search"]')
+  await page.fill('[data-testid="palette-input"]', 'Memory')
+  await page.locator('.pal-item', { has: page.locator('.pal-label', { hasText: /^Memory/ }) }).first().click()
+}
+
 // Your brain, end to end and hidden: fake connected apps (SAHILBOT_BRAIN_FIXTURE) → the Brain page shows the
 // sources (on / needs sign-in) and the first-read estimate → OK → a sync on the local model writes facts and a
 // "Written for you" brief with source chips → Agent mode on → a prompt in Needs you → Draft it starts a normal
@@ -20,7 +27,7 @@ describe('Your brain', () => {
       await page.evaluate(() => window.foreman.settings.set({ local: { enabled: true }, userName: 'Sam' } as never))
       await page.evaluate(() => window.foreman.brain.setSettings({ quietHours: { start: '00:00', end: '00:00' } }))
 
-      await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-brain"]')
+      await openMemory(page)
       await page.locator('[data-testid="brain-view"]').waitFor()
       await expect.poll(() => page.locator('[data-testid="brain-source"][data-id="gmail"]').getAttribute('data-state')).toBe('on')
       expect(await page.locator('[data-testid="brain-source"][data-id="hubspot"]').getAttribute('data-state')).toBe('needs-sign-in')
@@ -31,7 +38,7 @@ describe('Your brain', () => {
       expect(await page.locator('[data-testid="brain-search"]').count()).toBe(0)
 
       // The first read waits for an OK on its estimate.
-      await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-brain"]')
+      await openMemory(page)
       const estimate = page.locator('[data-testid="brain-estimate"]', { hasText: 'Gmail' })
       await expect.poll(() => estimate.count(), { timeout: 15_000 }).toBe(1)
       expect(await estimate.innerText()).toMatch(/Read the last 30 days of Gmail: about 2 emails/)
@@ -60,7 +67,7 @@ describe('Your brain', () => {
       await expect.poll(async () => (await page.evaluate(() => window.foreman.brain.status())).settings.agentMode, { timeout: 10_000 }).toBe(true)
       await page.click('[data-testid="brain-refresh"]')
       await expect.poll(async () => (await page.evaluate(() => window.foreman.needsYou.list())).filter((x) => x.source === 'brain').length, { timeout: 20_000 }).toBeGreaterThan(0)
-      await page.click('[data-testid="nav-tasks"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-tasks"]')
       const prompt = page.locator('[data-testid="needs-you-item"][data-kind="prompt"]', { hasText: 'Sarah Lee asked for the revised proposal' })
       await prompt.waitFor()
       expect(await prompt.locator('[data-testid="needs-you-prompt-remind"]').innerText()).toMatch(/^Remind me/)
