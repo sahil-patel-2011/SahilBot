@@ -1160,7 +1160,7 @@ app.whenReady().then(() => {
   applyTheme(settings.get().theme)
 
   /** Calls that change what's unread refresh the Dock badge. */
-  const BADGE_IPC = new Set(['threads:update', 'threads:markRead', 'threads:remove', 'spaces:markUnread', 'spaces:update', 'spaces:remove', 'spaces:restore'])
+  const BADGE_IPC = new Set(['threads:update', 'threads:markRead', 'threads:remove', 'spaces:markUnread', 'spaces:markRead', 'spaces:update', 'spaces:remove', 'spaces:restore'])
   const handle = <A extends unknown[], R>(ch: string, fn: (...args: A) => R | Promise<R>): void => {
     if (BADGE_IPC.has(ch)) registerHandler(ch, async (_ctx, ...args) => { try { return await fn(...(args as A)) } finally { refreshBadge() } })
     else registerHandler(ch, (_ctx, ...args) => fn(...(args as A)))
@@ -1506,6 +1506,7 @@ app.whenReady().then(() => {
     if (patch.name) resetBotPrompt(id)
     return s
   })
+  handle('spaces:markRead', (id: string) => { db.markSpaceRead(id) })
   handle('spaces:markUnread', (id: string) => {
     const t = db.listThreads(id)[0]
     if (t) emit({ threadId: t.id, type: 'thread', thread: db.markUnread(t.id) })
