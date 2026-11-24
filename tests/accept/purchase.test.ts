@@ -85,8 +85,8 @@ describe('purchases: vault cards, the Purchase card, and the gate', () => {
     // Two Purchase cards: putting the card in, then placing the order. Neither went through a generic card.
     const purchases = seen.filter((s) => s.kind === 'purchase')
     expect(purchases).toHaveLength(2)
-    expect(seen.filter((s) => s.kind === 'approval').map((s) => s.text).join('\n')).toMatch(/saved address "Home"/)
-    expect(seen.filter((s) => s.kind === 'approval')).toHaveLength(1)
+    // Filling the saved address is routine in Auto: no generic card at all, only the Purchase cards.
+    expect(seen.filter((s) => s.kind === 'approval')).toHaveLength(0)
     const host = new URL(site.url).host
     expect(purchases[0].text).toMatch(/use a saved card\?/i)
     expect(purchases[0].text).toContain('Personal (Visa ending 4242)')

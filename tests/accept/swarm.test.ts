@@ -85,9 +85,10 @@ describe('bot swarms, council and ask_bot', () => {
       const main = (await window.foreman.spaces.list()).find((s) => s.isMain)!
       return (await window.foreman.threads.create(main.id)).id
     })
+    await page.evaluate((threadId) => window.foreman.chat.send({ threadId, text: 'Write our launch post', council: ['qwen3.8:27b', 'gemma4:12b'] }), tid)
+    // (Recents lists a chat once you've typed in it.)
     await page.reload()
     await page.locator('[data-testid="thread-item"]').first().click()
-    await page.evaluate((threadId) => window.foreman.chat.send({ threadId, text: 'Write our launch post', council: ['qwen3.8:27b', 'gemma4:12b'] }), tid)
     await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').last().innerText(), { timeout: 60_000 }).toContain('COUNCIL FINAL')
     const card = page.locator('[data-testid="council-card"]')
     await expect.poll(() => card.getAttribute('data-phase'), { timeout: 15_000 }).toBe('done')

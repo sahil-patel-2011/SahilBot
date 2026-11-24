@@ -81,12 +81,9 @@ describe('phase 3: browser pane + browser tools + vault', () => {
     expect(textResult).toContain('Thanks Sam Rivera')
     expect(textResult).toContain('A-1001')
 
-    // Credentials were hard stops (asked, even in Auto). Sending the form is consequential and asked;
-    // clicking "Sign in" and typing into fields are routine, so Auto ran them without interrupting.
-    expect(asked.filter((a) => /typing the saved login/i.test(a) && a.includes('This types one of your saved passwords'))).toHaveLength(2)
-    expect(asked.some((a) => a.includes('Send message'))).toBe(true)
-    expect(asked.some((a) => a.includes('Click button "Sign in"'))).toBe(false)
-    expect(asked).toHaveLength(3)
+    // Auto did it all itself: the saved login went to its own site (never another), and sending the form you asked
+    // for needed no OK. Nothing was asked.
+    expect(asked).toHaveLength(0)
 
     // The screenshot went to the model as an image on the next request.
     const lastReq = JSON.stringify(llm.requests.at(-1)!.messages)
@@ -168,9 +165,9 @@ describe('phase 3: browser pane + browser tools + vault', () => {
     expect(outs[4]).toContain('No visible change')
     // The covered button wasn't clicked, and the cover was named.
     expect(outs[5]).toMatch(/covered by a dialog "Cookie banner"; nothing was clicked/)
-    // A confirm dialog is answered Cancel by default and reported; saying OK is a hard stop the user approves.
+    // A confirm dialog is answered Cancel by default and reported; saying OK when asked to runs in Auto.
     expect(outs[6]).toContain('asked to confirm "Delete this widget forever?" and it was answered Cancel')
-    expect(asked.some((a) => a.includes('Delete this widget forever?'))).toBe(true)
+    expect(asked.some((a) => a.includes('Delete this widget forever?'))).toBe(false)
     expect(outs[8]).toContain('answered OK as you chose')
     expect(outs[9]).toContain('Widget deleted')
     await app.close()

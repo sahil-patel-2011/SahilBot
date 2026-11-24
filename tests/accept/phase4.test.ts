@@ -39,12 +39,9 @@ describe('phase 4: connectors + web search', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'Look up the launch date in my notes and send it to sam@acme.test')
     await page.keyboard.press('Enter')
-    // Reading ran on its own; sending is consequential, so Auto asks.
-    const card = page.locator('[data-testid="approval-card"]')
-    await card.waitFor({ timeout: 20_000 })
-    expect(await card.innerText()).toContain('Notes')
-    await card.locator('[data-testid="approve-once"]').click()
+    // Reading and sending (what you asked for) both run on their own in Auto.
     await idle(page)
+    expect(await page.locator('[data-testid="approval-card"]').count()).toBe(0)
     const tools = llm.requests.at(-1)!.messages.filter((m: any) => m.role === 'tool').map((m: any) => String(m.content))
     expect(tools.some((t: string) => t.includes('Launch date is Dec 1') && t.includes('trust="untrusted"'))).toBe(true)
     expect(tools.at(-1)).toContain('Sent to sam@acme.test')

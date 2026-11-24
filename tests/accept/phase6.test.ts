@@ -70,17 +70,16 @@ describe('phase 6: projects + scheduled tasks', () => {
     expect(list).toHaveLength(1)
     expect(list[0]).toMatchObject({ title: 'Tidy workspace', schedule: { type: 'daily', time: '09:00' }, enabled: true })
 
-    // Run it now from the Scheduled view: the delete would need approval, so it is skipped.
+    // Run it now from the Scheduled view: Auto does the delete you asked for, nobody watching (it goes to the Trash).
     llm.script.push(
       { toolCalls: [{ name: 'file_manage', arguments: '{"op":"delete","path":"old.txt"}' }] },
-      { content: 'I would delete old.txt, but that needs your OK.' }
+      { content: 'Deleted old.txt.' }
     )
     await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-scheduled"]')
     await page.locator('[data-testid="schedule-row"]').waitFor()
     await page.click('[data-testid="schedule-run"]')
     await expect.poll(async () => (await page.evaluate(() => window.foreman.schedules.list()))[0].lastStatus, { timeout: 20_000 }).toBe('done')
-    expect(existsSync(join(ws, 'old.txt'))).toBe(true)
-    expect(tools().at(-1)).toContain('ran on a schedule with nobody to approve it')
+    expect(existsSync(join(ws, 'old.txt'))).toBe(false)
     expect(JSON.stringify(llm.requests.at(-1)!.messages)).toContain('⏰ Tidy workspace')
     expect(await page.locator('[data-testid="approval-card"]').count()).toBe(0)
     await app.close()
