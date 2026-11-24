@@ -797,7 +797,7 @@ app.whenReady().then(() => {
     ...webTools(() => ({ ...settings.get().search, braveKey: secrets.get('braveKey') })),
     memoryTool(memory, db, skills, rules, () => worldRef.current),
     // Built in and always available (connector tools are found with find_tools).
-    isServer() ? workerBrowserTool() : { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since), sites }), core: true },
+    isServer() ? workerBrowserTool() : { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since), sites, userText: (id) => taskUserText(db.listMessages(id)) }), core: true },
     sitesTool(sites),
     { ...cursorTool(() => secrets.get('cursorKey'), () => settings.get().workspaceDir, () => !!settings.get().cursorLocalAgent), core: true },
     { ...macAppsTool(), core: true },

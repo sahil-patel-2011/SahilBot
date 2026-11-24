@@ -42,4 +42,13 @@ describe('human checks: bot wall in research, hand-over in sign-in or purchase',
     expect(wait).toHaveBeenCalledTimes(1)
     expect(fake.showToUser).toHaveBeenCalled()
   })
+
+  test('a site the user named in the request is theirs to get through: the check is handed over', async () => {
+    const { fake } = fakeBrowser()
+    const tool = browserTool(fake, {} as never, { userText: () => 'Open expedia.com/Hotels and find a room' })
+    const wait = vi.fn(async () => 'Done')
+    await tool.run({ action: 'navigate', url: 'https://www.expedia.com/Hotels' } as never, ctx(wait))
+    expect(wait).toHaveBeenCalledTimes(1)
+    expect(fake.showToUser).toHaveBeenCalled()
+  })
 })

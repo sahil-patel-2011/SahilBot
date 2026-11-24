@@ -76,6 +76,8 @@ export interface BrowserDeps {
   sms?: (sinceMs: number) => Promise<CodeMessage[]>
   /** Site playbooks: learns from each call, and adds what it knows when a known site opens. */
   sites?: SiteStore
+  /** What the user asked in this task: a site they named themselves is theirs to get through, not a bot wall. */
+  userText?: (threadId: string) => string
 }
 
 const DESTRUCTIVE = /\b(delete|remove|erase|destroy|discard|close account|deactivate|unsubscribe all|empty trash)\b/i
@@ -127,6 +129,12 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
    */
   const actedOn = new Set<string>()
   const siteKey = (ctx: ToolContext | undefined, url: string): string => `${ctx?.threadId ?? ''}|${safeHost(url)}`
+  /** The user named this site in their request ("Open example.com/check"): a human check there is theirs to pass. */
+  const namedSite = (ctx: ToolContext | undefined, url: string): boolean => {
+    const host = safeHost(url).replace(/^www\./, '')
+    if (!host || !ctx?.threadId) return false
+    try { return (deps.userText?.(ctx.threadId) ?? '').toLowerCase().includes(host.toLowerCase()) } catch { return false }
+  }
 
   const effect = (a: Args): ToolEffect => {
     switch (a.action) {
@@ -429,7 +437,7 @@ CAPTCHAs and "are you human" checks during a sign-in, form or purchase are the u
         seen.check = check
         const code = check === 'verification code'
         // Plain research (nothing typed, filled or bought on this site): a bot wall, not the user's job.
-        if (!code && !actedOn.has(siteKey(ctx, b.pageUrl()))) {
+        if (!code && !actedOn.has(siteKey(ctx, b.pageUrl())) && !namedSite(ctx, b.pageUrl())) {
           return { ...out, text: `${out.text}\n\n[This site shows a ${check}: a bot wall. Don't wait or ask the user; use another result from web_search or another reputable site, and say in one sentence which site blocked you.]`, display: `${out.display ?? ''} · ${check}: trying another source` }
         }
         if (!code) b.showToUser()
