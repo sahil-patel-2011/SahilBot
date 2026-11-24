@@ -159,3 +159,18 @@ describe('long-term memory planted by a page', () => {
     expect(looksInstructionLike('Lives in Austin, TX')).toBe(false)
   })
 })
+
+describe('money from connected apps (Auto asks)', () => {
+  test('stop notes, tool names in any case style, and connector money words all count', async () => {
+    const { spendsMoney } = await import('../../src/main/agent/permissions')
+    expect(spendsMoney('stripe__createRefund', null, null)).toBe(true)
+    expect(spendsMoney('paypal__capture_order', null, 'moves money in PayPal')).toBe(true)
+    expect(spendsMoney('brex__reimburse_expense', null, null)).toBe(true)
+    expect(spendsMoney('airwallex__create_beneficiary', null, null)).toBe(true)
+    expect(spendsMoney('mercury__approve_request', null, 'moves money from your Mercury account')).toBe(true)
+    expect(spendsMoney('x__do_thing', null, 'moves money or buys something')).toBe(true)
+    // Everyday steps don't.
+    expect(spendsMoney('file_write', 'Write notes.md', null)).toBe(false)
+    expect(spendsMoney('gmail__send', 'Send an email to pat@example.com', 'sends email from your Gmail to pat@example.com')).toBe(false)
+  })
+})

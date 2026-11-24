@@ -274,7 +274,7 @@ describe('edits made in Obsidian', () => {
 })
 
 describe('editing the user\'s own note (approval-gated)', () => {
-  test('always asks; needs the approval; keeps a history copy in the subfolder; Undo puts it back', async () => {
+  test('asks in Ask and Bypass (Auto lets it through); the tool still needs the approval; keeps a history copy in the subfolder; Undo puts it back', async () => {
     const s = setup()
     enable(s)
     const bot = s.db.createSpace('SahilBot', '#000', { isMain: true })
@@ -285,9 +285,13 @@ describe('editing the user\'s own note (approval-gated)', () => {
     expect(effect).toBe('destructive')
     expect(tool.hardStop!(args)).toBe(OBSIDIAN_EDIT_STOP)
     expect(tool.hardStop!({ action: 'read', note: 'x' })).toBeNull()
-    for (const mode of ['ask', 'auto', 'bypass'] as const) {
+    // The permission check: Ask and Bypass (hard stops on) ask, even after "always"; Auto lets the call through unless
+    // outside content steered it. The tool itself still edits only with the user's approval of this exact call (below).
+    for (const mode of ['ask', 'bypass'] as const) {
       expect(decide({ mode, effect, tool: 'vault', alwaysAllowed: true, hardStop: OBSIDIAN_EDIT_STOP, hardStopsEnabled: true } as never).verdict).toBe('ask')
     }
+    expect(decide({ mode: 'auto', effect, tool: 'vault', alwaysAllowed: true, hardStop: OBSIDIAN_EDIT_STOP, hardStopsEnabled: true } as never).verdict).toBe('allow')
+    expect(decide({ mode: 'auto', effect, tool: 'vault', alwaysAllowed: true, hardStop: OBSIDIAN_EDIT_STOP, hardStopsEnabled: true, tainted: true } as never).verdict).toBe('ask')
     const p = join(s.vaultDir, 'Projects', 'Lisbon move.md')
     const original = readFileSync(p, 'utf8')
     await expect(tool.run(args, { threadId: t.id, state: {} } as never)).rejects.toThrow(/needs their approval/)

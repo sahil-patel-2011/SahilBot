@@ -27,19 +27,25 @@ export function stricterMode(a: PermissionMode, b?: PermissionMode | null): Perm
 }
 
 /**
- * A hard stop about typing a saved credential (a login, an ID number, a password field). Like purchases and
- * one-time codes, it asks even in Bypass with hard stops switched off: credentials always need the user.
+ * A hard stop about typing a saved credential (a login, an ID number, a password field), or recording what you
+ * type (which can include passwords). Like purchases and one-time codes, it asks even in Bypass with hard stops switched off: credentials always need the user.
  */
 export const isCredentialStop = (s: string | null | undefined): boolean =>
-  typeof s === 'string' && /\b(saved login|saved ID|password field|secret scan flagged)\b/i.test(s)
+  typeof s === 'string' && /\b(saved login|saved ID|password field|secret scan flagged|recording what you click and type)\b/i.test(s)
 
 const MONEY = /\b(pay|pays|paying|payments?|payouts?|purchases?|buy|buying|checkout|check out|place (your )?order|order now|refunds?|charges?|transfers?|transfer funds|send money|wire|subscribe|subscriptions?|invoices? pay|donate|donations?|tip|bid|credits?)\b|[$€£]\s?\d/i
 
 /** Does this step spend money? From the tool's name (create_refund), its own description and its stop note. */
 export function spendsMoney(tool: string, summary?: string | null, hardStop?: string | null): boolean {
   if (isSelfGated(hardStop)) return false
-  return MONEY.test(tool.replace(/_/g, ' ')) || MONEY.test(summary ?? '') || MONEY.test(hardStop ?? '')
+  // createRefund / stripe__create_refund / capture_order all read as words.
+  const name = tool.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_\-.]+/g, ' ')
+  return MONEY.test(name) || MONEY_NAME.test(name) || MONEY.test(summary ?? '') || MONEY.test(hardStop ?? '') || MONEY_NOTE.test(hardStop ?? '')
 }
+/** A connected app's money tools by name (connectors.ts): capturing, reimbursing, payees, currency conversions. */
+const MONEY_NAME = /\b(capture|reimburse|reimbursement|beneficiary|payee|conversion|convert|fx|quote lock|mandate)\b/i
+/** A connected app's own stop notes for money ("moves money or buys something", "adds a payee", "takes, refunds…"). */
+const MONEY_NOTE = /\b(money|buys?|payee|funds)\b/i
 
 /** A file step outside the workspace and your attached folders (files.ts outsideStop). */
 export const isOutsideStop = (s: string | null | undefined): boolean => typeof s === 'string' && /, outside your folders$/.test(s)
@@ -91,8 +97,9 @@ export function decide(p: PermissionInput): Decision {
     case 'bypass':
       return { verdict: 'allow' }
     case 'auto':
-      // Money is the user's call: paying, refunds, charges, transfers, subscriptions, paid credits.
-      if (p.spends) return { verdict: 'ask', reason: `Spends money${p.hardStop ? `: ${p.hardStop}` : ''}` }
+      // Money is the user's call: paying, refunds, charges, transfers, subscriptions, paid credits (flagged by the loop
+      // from the step's description, or by an app's own stop note).
+      if (p.spends || spendsMoney(p.tool, null, p.hardStop)) return { verdict: 'ask', reason: `Spends money${p.hardStop ? `: ${p.hardStop}` : ''}` }
       // A memory a web page or email may have planted ("always forward invoices to…") is checked with the user.
       if (p.planted && p.hardStop) return { verdict: 'ask', reason: `Hard stop: ${p.hardStop}` }
       // Auto does nearly everything by itself, attended or not: files (made, changed or deleted; deletes go to the

@@ -173,7 +173,11 @@ describe('Allow rules only vouch for what an action is aimed at', () => {
     const v = ruleVerdict([allow('run npm install')], evil)
     const base = { mode: 'ask' as const, effect: 'write_external' as const, tool: 'run_command', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true }
     expect(decideWithRule(base, v).verdict).toBe('ask')
-    expect(decideWithRule({ ...base, mode: 'auto' }, v).verdict).toBe('ask')
+    // Auto runs terminal commands itself (inside the write sandbox), so the Allow rule changes nothing there;
+    // a command steered by a web page or email still asks, and an Ask rule still wins.
+    expect(decideWithRule({ ...base, mode: 'auto' }, v).verdict).toBe('allow')
+    expect(decideWithRule({ ...base, mode: 'auto', tainted: true }, v).verdict).toBe('ask')
+    expect(decideWithRule({ ...base, mode: 'auto' }, ruleVerdict([ask('curl')], evil)).verdict).toBe('ask')
   })
   test('"send email to mom" matches the recipient, not a body that says "hi mom"', () => {
     const spoof = { tool: 'gmail__send_email', label: 'Gmail', summary: 'Gmail: send email {"to":"x@evil.example","body":"hi mom"}', args: JSON.stringify({ to: 'x@evil.example', subject: 'mom', body: 'hi mom' }) }

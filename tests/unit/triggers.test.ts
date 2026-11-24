@@ -190,7 +190,7 @@ test('a triggered run treats the email as outside content: a send it asks for is
   expect(sent).toEqual([])
   expect(asked.map((a) => JSON.parse(a).reason)).toEqual(['Uses details taken from a web page or email'])
 
-  // Control: the same kind of send in a chat with no email in it asks only because it acts outside the Mac.
+  // Control: the same kind of send in a chat with no email in it just goes out in Auto: only the email made it ask.
   asked.length = 0
   llm.script.push(
     { toolCalls: [{ name: 'send_email', arguments: JSON.stringify({ to: 'pat@example.com', body: 'hi' }) }] },
@@ -198,7 +198,8 @@ test('a triggered run treats the email as outside content: a send it asks for is
   )
   const clean = db.createThread(db.createSpace('Clean', '#000').id, 'autonomous', 'm')
   await (await agent.send({ threadId: clean.id, text: 'Email Pat hi' } as never)).done
-  expect(asked.map((a) => JSON.parse(a).reason)).toEqual(['Acts outside this Mac'])
+  expect(sent).toEqual(['pat@example.com'])
+  expect(asked).toEqual([])
 })
 
 test('event routines can be shared in a bot file and used in templates', async () => {

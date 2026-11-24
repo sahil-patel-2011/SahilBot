@@ -483,14 +483,20 @@ describe('unattended runs of an always-on bot keep Autonomous', () => {
     expect(log).toEqual(['ran npm ci'])
     expect(h.queue.inbox()).toMatchObject([{ kind: 'approval', approval: { tool: 'crm_delete' } }])
   })
-  test('the main chat (not an always-on bot) still drops to Auto unattended', async () => {
+  test('the main chat (not an always-on bot) works fully in Auto unattended; in Ask it skips what needs approval', async () => {
     log.length = 0
     const h = agentHarness([setup])
     const main = h.db.createSpace('SahilBot', '#111', { isMain: true })
     const t = h.db.createThread(main.id, 'autonomous', 'model-a')
-    llm.script.push({ toolCalls: [call('setup', { cmd: 'npm ci' })], delay: 0 }, { content: 'Skipped.', delay: 0 })
+    llm.script.push({ toolCalls: [call('setup', { cmd: 'npm ci' })], delay: 0 }, { content: 'Set up.', delay: 0 })
     await (await h.agent.send({ threadId: t.id, text: 'Set up', meta: { scheduled: 'r' } }, { unattended: true })).done
+    expect(log).toEqual(['ran npm ci'])
+    // An Ask chat on a schedule: nobody is there to approve, so the command is skipped.
+    log.length = 0
+    const askT = h.db.createThread(main.id, 'ask', 'model-a')
+    llm.script.push({ toolCalls: [call('setup', { cmd: 'npm ci' })], delay: 0 }, { content: 'Skipped.', delay: 0 })
+    await (await h.agent.send({ threadId: askT.id, text: 'Set up', meta: { scheduled: 'r' } }, { unattended: true })).done
     expect(log).toEqual([])
-    expect(h.db.listMessages(t.id).find((m) => m.role === 'tool')!.content).toMatch(/ran on a schedule with nobody to approve it/)
+    expect(h.db.listMessages(askT.id).find((m) => m.role === 'tool')!.content).toMatch(/ran on a schedule with nobody to approve it/)
   })
 })

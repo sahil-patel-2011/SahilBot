@@ -13,7 +13,7 @@ vi.mock('electron', () => ({ shell: { trashItem: async () => undefined }, Browse
 const { VideoManager, videoTool, describeVideo, avatarEstimate, findTool, fitArgs, mp4Duration, phaseOf, publicHttps, parseJson, pick, CREDITS_PER_MIN } = await import('../../src/main/agent/tools/video')
 const { startFakeHeygen, TINY_MP4 } = await import('../fixtures/fake-heygen-mcp')
 const { intentTools, likelyTools, classifyTask, VIDEO_RE } = await import('../../src/main/agent/intent')
-const { decide } = await import('../../src/main/agent/permissions')
+const { decide, spendsMoney } = await import('../../src/main/agent/permissions')
 const { emptyState } = await import('../../src/main/agent/types')
 type VideoApp = import('../../src/main/agent/tools/video').VideoApp
 type RemoteTool = import('../../src/main/agent/tools/video').RemoteTool
@@ -239,10 +239,16 @@ describe('approval, cost and connecting', () => {
     expect(k.tool.consequential!(a, { threadId: 't' })).toBe(true)
     expect(avatarEstimate(SCRIPT_30S)).toEqual({ seconds: 30, credits: 16, low: 2 })
     expect(describeVideo(a)).toBe(`HeyGen: make the avatar video "Launch" (16:9, ~30 s from 75 words). Uses about 16 HeyGen credits (Avatar IV at ${CREDITS_PER_MIN.avatarIV}/min; as low as 2 on an Avatar III look).`)
+    // Paid HeyGen credits are money: the loop sets `spends` from the card's description (spendsMoney), so Auto asks.
+    const spends = spendsMoney('video', describeVideo(a), null)
+    expect(spends).toBe(true)
     for (const mode of ['ask', 'auto', 'autonomous'] as const) {
-      expect(decide({ mode, effect: 'write_external', tool: 'video', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true }).verdict, mode).toBe('ask')
-      expect(decide({ mode, effect: 'write_external', tool: 'video', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true, unattended: true }).verdict, mode).toBe('ask')
+      expect(decide({ mode, effect: 'write_external', tool: 'video', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true, spends }).verdict, mode).toBe('ask')
+      expect(decide({ mode, effect: 'write_external', tool: 'video', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true, spends, unattended: true }).verdict, mode).toBe('ask')
+      expect(decide({ mode, effect: 'write_external', tool: 'video', alwaysAllowed: true, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true, spends }).verdict, mode).toBe(mode === 'ask' ? 'allow' : 'ask')
     }
+    expect(decide({ mode: 'auto', effect: 'write_external', tool: 'video', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true, spends }).reason).toMatch(/^Spends money/)
+    expect(spendsMoney('video', describeVideo({ action: 'translate_video', video_url_or_path: 'https://example.com/v.mp4', target_language: 'French' }), null)).toBe(true)
     // Reads never ask.
     expect(k.tool.effect instanceof Function && k.tool.effect({ action: 'list_voices' }, { roots: [] })).toBe('read')
     expect(describeVideo({ action: 'translate_video', video_url_or_path: 'https://example.com/v.mp4', target_language: 'French' })).toContain('6 HeyGen credits per minute')

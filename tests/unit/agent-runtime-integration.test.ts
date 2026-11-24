@@ -21,7 +21,7 @@ beforeAll(async () => { llm = await startMockLlm() })
 afterAll(async () => { await llm.close() })
 beforeEach(() => { llm.script.length = 0; llm.requests.length = 0 })
 const call = (name: string, args: Record<string, unknown>) => ({ name, arguments: JSON.stringify(args) })
-function harness(tools: ToolDef[] = [], approval = 'deny') {
+function harness(tools: ToolDef[] = [], approval = 'deny', mode: 'ask' | 'auto' = 'auto') {
   const db = new Db(':memory:'), registry = new ToolRegistry(), workspaceDir = mkdtempSync(join(tmpdir(), 'runtime-integration-'))
   const results = new ResultStore(workspaceDir), model = { id: 'fixture', label: 'Fixture', provider: 'ollama', providerName: 'Local', enabled: true, installed: true, fits: true, tier: 2, maxFittingWindow: 65536, requiredGB: 1 } as ModelInfo
   const settings = { contextWindow: 32768, taskModels: { voice: '', background: '' }, sampling: {}, thinking: 'medium', advanced: { hardStopsEnabled: true }, workspaceDir, userName: 'Sam', defaultModel: model.id, hiddenModels: [], shownModels: [], cloud: { enabled: false, hybrid: false, advisorModel: '', maxConsultsPerRequest: 0 }, customRules: [] } as unknown as Settings
@@ -32,7 +32,7 @@ function harness(tools: ToolDef[] = [], approval = 'deny') {
     spaces: { getPrompt: () => '' } as never, memory: new MemoryStore(db), secretValues: () => [], fitWindow: (_m, w) => w, counter: () => ({ count: async (t: string) => estimate(t) }),
     emit: (e) => { if (e.type === 'pending') queueMicrotask(() => agent.respond(e.threadId, e.request.id, e.request.kind === 'plan' ? 'approve' : approval)) }
   })
-  const space = db.createSpace('Test', '#000'), thread = db.createThread(space.id, 'auto', model.id)
+  const space = db.createSpace('Test', '#000'), thread = db.createThread(space.id, mode, model.id)
   const run = async (text: string) => (await agent.send({ threadId: thread.id, text })).done
   const final = () => db.listMessages(thread.id).filter((m) => m.role === 'assistant' && m.kind === 'normal' && !m.meta?.superseded).at(-1)!
   return { db, agent, registry, thread, run, final, workspaceDir }
@@ -41,7 +41,8 @@ const tool = (name: string, effect: ToolDef['effect'], run: ToolDef['run']): Too
 
 test('nested workflows honor denial and never add orphan tool messages to provider history', async () => {
   let writes = 0
-  const h = harness([tool('send_fixture', 'write_external', async () => { writes++; return { text: 'sent' } })])
+  // An Ask chat, so the nested send asks (and the user declines).
+  const h = harness([tool('send_fixture', 'write_external', async () => { writes++; return { text: 'sent' } })], 'deny', 'ask')
   llm.script.push({ toolCalls: [call('workflow', { nodes: [{ id: 'send', op: 'call', tool: 'send_fixture', args: {} }] })], delay: 0 }, { content: 'The send was declined.', delay: 0 })
   await h.run('Run this workflow to send the fixture report')
   expect(writes).toBe(0)

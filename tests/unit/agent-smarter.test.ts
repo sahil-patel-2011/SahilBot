@@ -342,25 +342,26 @@ describe('activity context is untrusted', () => {
 })
 
 describe('Autonomous in unattended runs', () => {
-  test('an overwrite with a backup runs in an attended Autonomous chat, but is skipped when nobody is watching', async () => {
+  test('an overwrite with a backup runs in an Autonomous chat, attended or not; an unattended Ask chat skips it', async () => {
     let ran = 0
     const overwrite: ToolDef<{ path: string }> = {
       name: 'file_write', label: 'Write file', effect: 'destructive', description: 'overwrite a file',
       parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false },
       async run() { ran++; return { text: 'written' } }
     }
-    for (const unattended of [false, true]) {
+    for (const [mode, unattended] of [['autonomous', false], ['autonomous', true], ['ask', true]] as const) {
       const h = harness([model('model-a', 1)], [overwrite])
-      const t = h.db.createThread(h.space.id, 'autonomous', 'model-a')
+      const t = h.db.createThread(h.space.id, mode, 'model-a')
       llm.script.push({ toolCalls: [call('file_write', { path: 'notes.md' })], delay: 0 }, { content: 'ok', delay: 0 })
       const before = ran
       expect(await (await h.agent.send({ threadId: t.id, text: 'update my notes file' }, { unattended })).done).toBe('finished')
       const result = h.db.listMessages(t.id).find((m) => m.role === 'tool' && m.toolName === 'file_write')
-      if (unattended) {
-        expect(ran).toBe(before)
+      if (mode === 'ask') {
+        // Nobody is there to approve it: skipped, not done.
+        expect(ran, `${mode} unattended=${unattended}`).toBe(before)
         expect(result?.meta?.status).toBe('denied')
       } else {
-        expect(ran).toBe(before + 1)
+        expect(ran, `${mode} unattended=${unattended}`).toBe(before + 1)
         expect(result?.meta?.status).toBe('ok')
       }
     }

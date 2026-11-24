@@ -86,7 +86,7 @@ function harness(models: ModelInfo[], extra: Partial<Settings> = {}, tools: Tool
     counter: () => ({ count: async (t: string) => estimate(t) })
   })
   const space = db.createSpace('Alpha', '#336699')
-  const thread = (m: string | null = models[0].id, sp: Space = space): Thread => db.createThread(sp.id, 'auto', m)
+  const thread = (m: string | null = models[0].id, sp: Space = space, mode: 'ask' | 'auto' = 'auto'): Thread => db.createThread(sp.id, mode, m)
   const card = <T,>(t: Thread, key: 'swarm' | 'council' | 'askBot'): T | undefined => db.listMessages(t.id).filter((m) => m.kind === 'notice' && m.meta?.[key]).map((m) => m.meta![key] as T).at(-1)
   return { db, agent, events, settings, space, thread, card, prompts }
 }
@@ -454,7 +454,8 @@ describe('Council', () => {
       }
       return { content: 'unexpected', delay: 0 }
     })
-    const t = h.thread('claude-opus-5-5')
+    // An Ask chat: the send needs the user's approval, and only the user can give it.
+    const t = h.thread('claude-opus-5-5', undefined, 'ask')
     expect(await (await h.agent.send({ threadId: t.id, text: 'Send the launch report to the team', council: true })).done).toBe('finished')
     expect(sent).toBe(0)
     const board = h.card<CouncilBoard>(t, 'council')!

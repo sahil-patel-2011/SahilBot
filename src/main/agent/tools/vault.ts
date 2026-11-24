@@ -163,8 +163,8 @@ export function vaultTool(deps: VaultToolDeps): ToolDef<Args> {
       if (a.action === 'edit_obsidian_note') {
         if (!v.obsidianActive()) throw new Error('The user hasn\'t connected their Obsidian vault (Settings → Memory → Knowledge vault → Use my Obsidian vault).')
         if (tainted) throw new Error('After reading outside content, the user\'s own notes can\'t be changed. Tell the user what you would change instead.')
-        // Only after the user approved this exact call (the permission check always asks for it).
-        if (!ctx.approved) throw new Error('Editing the user\'s own Obsidian note needs their approval each time. Tell them what you would change, or ask them to turn hard stops back on (Settings → Permissions).')
+        // Only after the user approved this exact call, or Auto let it run (it keeps a history copy, and Undo puts it back).
+        if (!ctx.approved && !ctx.autoRun) throw new Error('Editing the user\'s own Obsidian note needs their approval each time. Tell them what you would change, or ask them to turn hard stops back on (Settings → Permissions).')
         const u = a.note ? theirs(a.note) : undefined
         if (!u) throw new Error(`No note "${a.note ?? ''}" in the user's Obsidian vault (search first; excluded folders are never read).`)
         const allText = [a.content, ...(a.points ?? [])].filter(Boolean).join('\n')

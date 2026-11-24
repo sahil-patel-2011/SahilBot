@@ -556,7 +556,7 @@ describe('the agent loop on the Responses API', () => {
     expect(out.call_id).toBe('call_88')
     expect(String(out.output)).toMatch(/declined/)
   })
-  test('hard stops still stop, even in autonomous mode', async () => {
+  test('paying still stops, even in autonomous mode', async () => {
     const ran: string[] = []
     const pay: ToolDef<{ amount: number }> = {
       name: 'pay_invoice', label: 'Pay', effect: 'write_external', description: 'pay an invoice',
@@ -571,7 +571,7 @@ describe('the agent loop on the Responses API', () => {
     const finished = h.run(t, 'pay the invoice')
     const r = await waitPending(h.agent, t.id)
     expect(r).toMatchObject({ kind: 'approval', tool: 'pay_invoice' })
-    expect(r!.reason).toMatch(/Hard stop/)
+    expect(r!.reason).toMatch(/^Spends money: payment/)
     h.agent.respond(t.id, r!.id, 'deny')
     expect(await finished).toBe('finished')
     expect(ran).toEqual([])

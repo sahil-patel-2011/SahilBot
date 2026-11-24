@@ -4,7 +4,7 @@ import type { ChatEvent, PurchaseInfo } from '../../src/shared/types'
 // Regression tests for the purchase / one-time-code / vault security review (probes a–d and popup).
 vi.mock('electron', () => ({}))
 const { classifyPurchase, PurchaseGate, isCheckoutUrl, benignClickLabel, otpSiteKey } = await import('../../src/main/browser/checkout')
-const { decide, PURCHASE_STOP } = await import('../../src/main/agent/permissions')
+const { decide, PURCHASE_STOP, spendsMoney } = await import('../../src/main/agent/permissions')
 const { browserTool, clickEffect } = await import('../../src/main/agent/tools/browser')
 const { pickCode, codeCandidate, codeSnippet, brandOf, domainOf, senderDomain } = await import('../../src/main/otp')
 const { originMatches } = await import('../../src/main/vault')
@@ -151,8 +151,13 @@ describe('probe a: purchases that used to slip through', () => {
     expect(tool.consequential!({ action: 'click', ref: 'e1' } as never, { threadId: 't' } as never)).toBe(true)
     expect(tool.consequential!({ action: 'type', ref: 'e2', text: 'x', submit: true } as never, { threadId: 't' } as never)).toBe(true)
     expect(tool.consequential!({ action: 'type', ref: 'e2', text: 'x' } as never, { threadId: 't' } as never)).toBe(false)
-    const v = decide({ mode: 'auto', effect: 'write_external', tool: 'browser', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true })
-    expect(v.verdict).toBe('ask')
+    // Auto clicks by itself; what stops a purchase is the browser's own Purchase card at the click (next tests).
+    // A click whose description shows money, a steered click and Ask mode still ask here.
+    const click = { mode: 'auto' as const, effect: 'write_external' as const, tool: 'browser', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true }
+    expect(decide(click).verdict).toBe('allow')
+    expect(decide({ ...click, spends: spendsMoney('browser', 'Click "Next $5" on shop.example', null) }).verdict).toBe('ask')
+    expect(decide({ ...click, tainted: true }).verdict).toBe('ask')
+    expect(decide({ ...click, mode: 'ask' }).verdict).toBe('ask')
   })
 
   test('unattended, helper and handoff runs never click or press Enter on a page with shopping signs', async () => {
