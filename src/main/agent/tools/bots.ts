@@ -219,7 +219,30 @@ export interface ManageBotDeps {
   pin: (spaceId: string, on: boolean) => void
   getPrompt?: (spaceId: string) => string
   setPrompt?: (spaceId: string, text: string) => void
+  /** Its name or instructions changed: its chats (and groups it is in) rebuild their frozen system prompt. */
+  resetPrompt?: (spaceId: string) => void
 }
+
+/**
+ * A bot's name or instructions changed: each of its chats (and each group it is in) rebuilds its frozen system prompt
+ * on its next step. A chat working right now keeps its prompt in memory, so that one is cleared once its run ends.
+ */
+export function resetBotPrompts(db: Db, spaceId: string, runs?: { isRunning: (threadId: string) => boolean; whenIdle: (threadId: string) => Promise<string> }): void {
+  const groups = db.listSpaces().filter((g) => g.kind === 'group' && g.members.includes(spaceId)).map((g) => g.id)
+  for (const t of [spaceId, ...groups].flatMap((id) => db.listThreads(id))) {
+    const clear = (): void => {
+      const st = db.getState(t.id)
+      if (!st.systemSnapshot && !Object.keys(st.leanSnapshots ?? {}).length && !Object.keys(st.snapshots ?? {}).length) return
+      st.systemSnapshot = undefined; st.leanSnapshots = {}; st.snapshots = {}
+      db.setState(t.id, st)
+    }
+    if (runs?.isRunning(t.id)) void runs.whenIdle(t.id).then((r) => { if (r === 'idle') clear() }, () => undefined)
+    else clear()
+  }
+}
+
+/** `name` as a whole word or phrase ("Ace" in "You are Ace.", never in "place"). */
+const wholeName = (name: string): RegExp => new RegExp(`(?<![\\p{L}\\p{N}_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_])`, 'gu')
 
 /** What the user's own words must say for each action (a page, an email or another bot can't ask). */
 const ASKED_ACTION: Record<BotAction, RegExp> = {
@@ -296,7 +319,7 @@ export function manageBotTool(deps: ManageBotDeps, db: Db, changed: () => void):
         if (!bot.isMain) for (const t of db.listThreads(bot.id)) db.updateThread(t.id, { title: name })
         // Its instructions say who it is ("You are Homework Helper…"): they follow the new name.
         const prompt = deps.getPrompt?.(bot.id)
-        if (prompt && deps.setPrompt && prompt.includes(bot.name)) deps.setPrompt(bot.id, prompt.split(bot.name).join(name))
+        if (prompt && deps.setPrompt && wholeName(bot.name).test(prompt)) deps.setPrompt(bot.id, prompt.replace(wholeName(bot.name), () => name))
         detail = ` (now ${name})`
       } else {
         const changes: string[] = []
@@ -315,9 +338,13 @@ export function manageBotTool(deps: ManageBotDeps, db: Db, changed: () => void):
         if (a.color && COLORS[a.color]) { db.updateSpace(bot.id, { color: COLORS[a.color] }); changes.push(`color ${a.color}`) }
         if (!changes.length) throw new Error('Say what to change: its instructions (the full new text), its icon or its color.')
         if (instructions && deps.getPrompt && deps.getPrompt(bot.id).trim() !== instructions) throw new Error('The new instructions did not read back correctly.')
-        // Changed from its own chat: its next step starts from the new profile.
-        if (bot.id === db.getThread(ctx.threadId)?.spaceId) { ctx.state.systemSnapshot = undefined; ctx.state.leanSnapshots = {}; ctx.state.snapshots = {} }
         detail = `: ${changes.join(', ')}`
+      }
+      // A new name or instructions reach the bot's ongoing conversation (its system prompt is frozen per chat), and
+      // this chat's next step too when it is the bot's own.
+      if (a.action === 'rename' || (a.action === 'update' && a.instructions?.trim())) {
+        deps.resetPrompt?.(bot.id)
+        if (bot.id === db.getThread(ctx.threadId)?.spaceId) { ctx.state.systemSnapshot = undefined; ctx.state.leanSnapshots = {}; ctx.state.snapshots = {} }
       }
       changed()
       if (a.action === 'delete') return { text: `Deleted ${bot.name} and its chat. This chat shows "Deleted ${bot.name} · Undo". If the user says undo or wants it back, call manage_bot with action "restore" and bot "${bot.name}". Tell the user in one short sentence that it is deleted and they can undo it.`, data: { undoBot: bot.id, name: bot.name }, display: `deleted ${bot.name}` }
