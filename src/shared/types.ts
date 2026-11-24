@@ -1323,7 +1323,9 @@ export interface SahilBotApi {
     /** Files and links from this bot's chats, newest first. */
     library(spaceId: string): Promise<LibraryItem[]>
     markUnread(id: string): Promise<void>
+    /** Deletes a bot; it can be brought back with restore for a few minutes (Undo). */
     remove(id: string): Promise<void>
+    restore(id: string): Promise<void>
     getPrompt(id: string): Promise<string>
     setPrompt(id: string, text: string): Promise<void>
     promptPath(id: string): Promise<string>

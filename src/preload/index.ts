@@ -64,6 +64,7 @@ const api: SahilBotApi = {
     create: call('spaces:create') as never,
     update: call('spaces:update') as never,
     remove: call('spaces:remove') as never,
+    restore: call('spaces:restore') as never,
     markUnread: call('spaces:markUnread') as never,
     getPrompt: call('spaces:getPrompt') as never,
     setPrompt: call('spaces:setPrompt') as never,

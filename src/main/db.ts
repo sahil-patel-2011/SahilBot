@@ -102,10 +102,15 @@ const MIGRATIONS: string[] = [
   // take any name, from the sidebar or by asking it in chat.
   `UPDATE spaces SET name = 'New bot' WHERE is_main = 1 AND name = 'SahilBot';`,
   // A bot's own icon (an emoji), like Grok Bot's per-bot icons; NULL = its shape's eyes.
-  `ALTER TABLE spaces ADD COLUMN icon TEXT;`
+  `ALTER TABLE spaces ADD COLUMN icon TEXT;`,
+  // A deleted bot waits here a few minutes (Undo) before it and its chat are really removed; NULL = not deleted.
+  `ALTER TABLE spaces ADD COLUMN trashed_at INTEGER;`
 ]
 
 type Row = Record<string, unknown>
+
+/** A chat whose bot was deleted (waiting out its Undo time) is in no list. */
+const NOT_TRASHED = 't.space_id NOT IN (SELECT id FROM spaces WHERE trashed_at IS NOT NULL)'
 
 /**
  * The usage table's newer columns (Settings → Usage): the providers' own token detail for each paid request.
@@ -235,7 +240,7 @@ export class Db {
         -- Your chats with the bot (not its helpers' hidden ones): marked unread, or with replies you haven't seen.
         (SELECT COUNT(*) FROM threads t WHERE t.space_id = s.id AND t.parent_id IS NULL AND (t.unread = 1 OR ${UNREAD_SQL('t')} > 0)) AS unread_count,
         (SELECT COALESCE(SUM(${UNREAD_SQL('t')}), 0) FROM threads t WHERE t.space_id = s.id AND t.parent_id IS NULL) AS unread_n
-      FROM spaces s ORDER BY s.is_main DESC, s.pinned DESC, COALESCE(last_at, s.created_at) DESC`).all() as Row[]
+      FROM spaces s WHERE s.trashed_at IS NULL ORDER BY s.is_main DESC, s.pinned DESC, COALESCE(last_at, s.created_at) DESC`).all() as Row[]
     return rows.map((r) => ({
       ...toSpace(r),
       lastPreview: plain(r.last_preview as string | null),
@@ -307,6 +312,30 @@ export class Db {
     this.sql.prepare('DELETE FROM spaces WHERE id = ?').run(id)
   }
 
+  /**
+   * Deletes a bot so it can still be undone: it leaves every list (bots, Recents, search) but it, its chat and its
+   * routines are kept until purgeSpace. restoreSpace brings it all back.
+   */
+  trashSpace(id: string, at = Date.now()): void {
+    this.sql.prepare('UPDATE spaces SET trashed_at = ? WHERE id = ? AND is_main = 0').run(at, id)
+  }
+
+  restoreSpace(id: string): boolean {
+    return Number(this.sql.prepare('UPDATE spaces SET trashed_at = NULL WHERE id = ? AND trashed_at IS NOT NULL').run(id).changes) > 0
+  }
+
+  /** When a bot was deleted (still undoable), else undefined. */
+  trashedAt(id: string): number | undefined {
+    const r = this.sql.prepare('SELECT trashed_at FROM spaces WHERE id = ?').get(id) as { trashed_at: number | null } | undefined
+    return r?.trashed_at ?? undefined
+  }
+
+  /** Deleted bots still waiting out their Undo time. */
+  trashedSpaces(): Array<{ id: string; name: string; trashedAt: number }> {
+    return (this.sql.prepare('SELECT id, name, trashed_at FROM spaces WHERE trashed_at IS NOT NULL').all() as Row[])
+      .map((r) => ({ id: r.id as string, name: r.name as string, trashedAt: r.trashed_at as number }))
+  }
+
   // ---------- threads ----------
   // tool_mode: a substring check on the saved agent state (JSON.stringify writes it exactly so) instead of
   // json_extract, which would parse every chat's whole state on each sidebar refresh.
@@ -358,7 +387,7 @@ export class Db {
   listThreads(spaceId?: string): Thread[] {
     const rows = spaceId
       ? this.sql.prepare(`${this.threadSelect} WHERE t.space_id = ? AND t.parent_id IS NULL ORDER BY t.pinned DESC, t.updated_at DESC`).all(spaceId)
-      : this.sql.prepare(`${this.threadSelect} WHERE t.parent_id IS NULL ORDER BY t.pinned DESC, t.updated_at DESC LIMIT 200`).all()
+      : this.sql.prepare(`${this.threadSelect} WHERE t.parent_id IS NULL AND ${NOT_TRASHED} ORDER BY t.pinned DESC, t.updated_at DESC LIMIT 200`).all()
     return (rows as Row[]).map(toThread)
   }
 
@@ -448,7 +477,7 @@ export class Db {
   searchThreads(q: string): Thread[] {
     const like = `%${q.replace(/[%_]/g, (c) => '\\' + c)}%`
     const rows = this.sql.prepare(`${this.threadSelect}
-      WHERE t.parent_id IS NULL AND (t.title LIKE ? ESCAPE '\\' OR EXISTS (
+      WHERE t.parent_id IS NULL AND ${NOT_TRASHED} AND (t.title LIKE ? ESCAPE '\\' OR EXISTS (
         SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.role IN ('user','assistant') AND m.content LIKE ? ESCAPE '\\'))
       ORDER BY t.updated_at DESC LIMIT 50`).all(like, like) as Row[]
     return rows.map(toThread)

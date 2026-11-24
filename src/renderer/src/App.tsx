@@ -187,6 +187,10 @@ export function App() {
   const openAnyChatRef = useRef<(id: string) => void>(() => undefined)
   const threadRef = useRef<string | null>(null)
   threadRef.current = thread?.id ?? null
+  /** The bot whose chat is open, and how to leave it when that bot is deleted (by asking, or from its profile). */
+  const threadSpaceRef = useRef<string | null>(null)
+  threadSpaceRef.current = thread?.spaceId ?? null
+  const openMainRef = useRef<() => void>(() => undefined)
   // Read-aloud plays here (voice mode has its own player).
   const speaker = useRef<Speaker | null>(null)
   const live = useRef({ speak: false, voiceOn: false })
@@ -268,7 +272,18 @@ export function App() {
 
   useEffect(() => api.chat.onEvent((e: ChatEvent) => {
     if (e.type !== 'delta') flushDeltas()
-    if (e.type === 'spaces') { void refreshSpaces(); return }
+    if (e.type === 'spaces') {
+      const was = spacesRef.current
+      void refreshSpaces().then((sp) => {
+        const cur = threadSpaceRef.current
+        if (!cur || sp.some((s) => s.id === cur)) return
+        // The bot whose chat is open was deleted (by asking it): back to the main chat, with Undo.
+        openMainRef.current()
+        const gone = was.find((s) => s.id === cur)
+        if (gone?.kind === 'bot') toast(`Deleted ${gone.name}`, 'ok', { action: { label: 'Undo', run: () => void api.spaces.restore(cur).catch((err) => toast((err as Error).message, 'error')) } })
+      })
+      return
+    }
     if (e.type === 'drafting') { setDrafting((d) => ({ ...d, [e.threadId]: e.tool })); return }
     if (e.type === 'tool_progress') { setToolProgress((p) => ({ ...p, [e.threadId]: e.text })); return }
     // A tool finished or the run ended: its progress line goes.
@@ -458,7 +473,10 @@ export function App() {
     window.addEventListener('sahilbot:compose', fill)
     window.addEventListener('sahilbot:compose-link', fillLink)
     window.addEventListener('sahilbot:open-watchlist', watch)
-    return () => { window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch); window.removeEventListener('sahilbot:send-text', sendText) }
+    // A bot card in chat ("Made Study Buddy · Open").
+    const openBotEvt = (e: Event): void => { const id = (e as CustomEvent<string>).detail; if (typeof id === 'string') void openBotRef.current(id) }
+    window.addEventListener('sahilbot:open-bot', openBotEvt)
+    return () => { window.removeEventListener('sahilbot:open-bot', openBotEvt); window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch); window.removeEventListener('sahilbot:send-text', sendText) }
   }, [])
 
   // Slash commands from the message box (lib/slash.ts).
@@ -650,6 +668,7 @@ export function App() {
   }
 
   openBotRef.current = openBot
+  openMainRef.current = () => void openMain()
   const onPalette = (a: PaletteAction): void => {
     setPalette(false)
     if (a.kind === 'new-chat') openMain()
@@ -1127,7 +1146,7 @@ export function App() {
         <Lazy fallback="panel">
           <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)}
             onCustomize={() => setEditor({ space: detailsSpace, mode: detailsSpace.kind })}
-            onChanged={() => void refreshSpaces()}
+            onChanged={() => void refreshSpaces().then((sp) => { if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain() })}
             onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }}
             onStartFresh={() => void startFresh(detailsSpace)}
             onOpenThread={(t) => { setPanel(null); setSpaceId(t.spaceId); setThread(t) }} />
