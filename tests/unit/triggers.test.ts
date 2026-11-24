@@ -188,7 +188,8 @@ test('a triggered run treats the email as outside content: a send it asks for is
   // You're there this time: it asks, and the reason is the email (not just "acts outside this Mac").
   await (await agent.send({ threadId: t.id, text: 'Follow up on that invoice' } as never)).done
   expect(sent).toEqual([])
-  expect(asked.map((a) => JSON.parse(a).reason)).toEqual(['Uses details taken from a web page or email'])
+  // (The card says what the email steered: an earlier turn's outside content still guards this one.)
+  expect(asked.map((a) => JSON.parse(a).reason)).toEqual(['Asks first: it sends to attacker@evil.example, an address you didn\'t give, after reading a web page or email'])
 
   // Control: the same kind of send in a chat with no email in it just goes out in Auto: only the email made it ask.
   asked.length = 0

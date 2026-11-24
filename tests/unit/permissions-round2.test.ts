@@ -17,8 +17,8 @@ const v = (p: Partial<PermissionInput>) => decide({ ...base, ...p })
 
 describe('command output is the user\'s own data unless it came from outside (APB-02, APB-03)', () => {
   test('only network commands, package runners, web addresses off this Mac and downloads count as outside', () => {
-    for (const c of ['ls ~/Desktop', 'cat notes.txt', 'npm test', 'npm run dev', 'python3 rename.py ~/Pictures', 'git status', 'open http://localhost:5173/']) expect(commandReadsOutside(c), c).toBe(false)
-    for (const c of ['curl https://example.com', 'wget example.com', 'git pull', 'cd app && gh pr view 3', 'npx create-vite app', 'python3 fetch.py https://news.example/today', 'ls ~/Downloads', 'cat ~/Downloads/invoice.txt']) expect(commandReadsOutside(c), c).toBe(true)
+    for (const c of ['ls ~/Desktop', 'cat notes.txt', 'npm test', 'npm run dev', 'python3 rename.py ~/Pictures', 'git status', 'open http://localhost:5173/', 'ls ~/Downloads']) expect(commandReadsOutside(c), c).toBe(false)
+    for (const c of ['curl https://example.com', 'wget example.com', 'git pull', 'cd app && gh pr view 3', 'npx create-vite app', 'python3 fetch.py https://news.example/today', 'cat ~/Downloads/invoice.txt']) expect(commandReadsOutside(c), c).toBe(true)
   })
   test('a dev server\'s localhost address is never "taken from a web page"', () => {
     const server = ['VITE v5 ready in 300 ms\n  Local: http://localhost:5173/']

@@ -629,6 +629,8 @@ const workedReply = (m: Message): boolean => m.role === 'assistant' && !!m.toolC
 export const QUICK_IN_FULL = '[From the app] This is a quick question: answer it directly from what you know. Use a tool only if it needs live information (news, prices, weather, schedules) or the user\'s own files, mail or accounts.'
 /** A next step outside most requests: offered after a finished answer, it waits for the user's yes (never nudged into). */
 const OUTSIDE_STEP = /\b(send|e-?mail|post|share|book|buy|order|purchase|pay|schedule|text|message|call|publish|forward|invite|tweet)\b/i
+/** A reply that points out an instruction outside content slipped in ("…create pwned.txt; I ignored that"). */
+export const IGNORED_INSTRUCTION = /\b(ignor(ed|ing)|did ?n[o']t (follow|do|act on))\b[^.?!\n]{0,80}\b(that|this|it|instructions?|requests?|asks?|commands?|line|note)\b|\b(instruction|request|command)s?\b[^.?!\n]{0,60}\bignor(ed|ing)\b|\b(which|that) i did ?n[o']t (do|follow)\b/i
 const KEEP_DRAFT = /^(✓|✔|✔️|ok|lgtm|all good|no changes?( needed)?)[.!]?$/i
 
 /** The hidden double-check before a real task's final answer; a complex one also critiques its draft against the goal. */
@@ -3349,7 +3351,9 @@ export class Agent {
       ...history.filter((m) => m.role === 'tool' && m.meta?.untrusted).slice(-20).map((m) => m.content),
       ...history.filter((m) => m.role === 'user' && isRelayed(m) && !m.meta?.helperTask).slice(-10).map(relayedText),
       // Emails and messages that set off a "when …" routine earlier in this chat stay outside content for later runs.
-      ...history.filter((m) => m.role === 'user' && Array.isArray(m.meta?.triggerUntrusted)).slice(-10).flatMap((m) => (m.meta!.triggerUntrusted as unknown[]).filter((t): t is string => typeof t === 'string'))
+      ...history.filter((m) => m.role === 'user' && Array.isArray(m.meta?.triggerUntrusted)).slice(-10).flatMap((m) => (m.meta!.triggerUntrusted as unknown[]).filter((t): t is string => typeof t === 'string')),
+      // So do a routine's answer posted beside a busy chat and what it read (triggers.ts routineAside).
+      ...history.filter((m) => m.role === 'assistant' && Array.isArray(m.meta?.routineUntrusted)).slice(-5).flatMap((m) => (m.meta!.routineUntrusted as unknown[]).filter((t): t is string => typeof t === 'string').concat(m.content))
     ]
     // The user's own data this chat read (files, folder listings, notes, command output: tool output that isn't
     // outside content), so a URL or form that would carry it to a site is caught (urlTainted, steeredRisk).
@@ -3368,7 +3372,7 @@ export class Agent {
       unchecked: false,
       // Research before asking: did this run look at anything yet, is it a task, was it nudged already.
       explored: false, task: false, askGated: false,
-      web: history.some((m) => (m.role === 'tool' && m.meta?.untrusted) || (m.role === 'user' && Array.isArray(m.meta?.triggerUntrusted))) || (run.seed?.untrusted.length ?? 0) > 1 || !!run.forceTaint,
+      web: history.some((m) => (m.role === 'tool' && m.meta?.untrusted) || (m.role === 'user' && Array.isArray(m.meta?.triggerUntrusted)) || (m.role === 'assistant' && Array.isArray(m.meta?.routineUntrusted))) || (run.seed?.untrusted.length ?? 0) > 1 || !!run.forceTaint,
       sawUntrusted: false
     }
     // "This turn": a helper inherits its lead's; otherwise only what this run reads (or was handed) counts.
@@ -3957,7 +3961,9 @@ export class Agent {
           // that offers one more step ("Saved invoice.pdf. Want me to email it to Jane?") is the next-step offer the
           // prompt asks for: it stays as written, and nothing unasked (an email, a post, a booking) is done for it.
           const offered = /\b(want me to|would you like me to|shall i|should i|do you want me to|like me to)\b([^?]*)\?/i.exec(finalAsk)?.[2] ?? ''
-          const unasked = OUTSIDE_STEP.test(offered) && !OUTSIDE_STEP.test(userText)
+          // (An offer right after pointing out an instruction a page, email or file slipped in, "I ignored that. Want me to
+          // remove that line?", is the user's call: never pushed.)
+          const unasked = (OUTSIDE_STEP.test(offered) && !OUTSIDE_STEP.test(userText)) || (untrusted.length > 0 && IGNORED_INSTRUCTION.test(finalAsk))
           const notDone = open.length > 0 || stalledAtStart || ((actions > 0 || routed?.task?.rule === 'semantic') && finalAsk.length < 400 && !track.changed)
           if (this.feat.continueNudge && mayBounce && asksToContinue && notDone && !unasked && !autonomyNudged && !run.unattended && (!chatRun || stalledAtStart) && step < HARD_CAP) {
             autonomyNudged = true
@@ -4656,14 +4662,18 @@ export class Agent {
     // wording came from fetched content, or that after reading it tells a later run what to do, asks (plantRisk).
     // Its reason replaces the tool's own stop (save_rule's "saving a standing rule…"), which Auto doesn't ask for.
     const own = tool.hardStop?.(args, { roots: state.roots ?? [], folder: state.folder }) ?? null
-    const planted = plantRisk(tool.name, args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted || !!run.forceTaint)
+    // Outside content in view: read by this run, or by an earlier turn of this chat (a bot's one ongoing conversation
+    // keeps it in the model's context, so it can still steer). Earlier content only counts for targets it names.
+    const thisRun = ctx.track.sawUntrusted || !!run.forceTaint
+    const inView = thisRun || ctx.untrusted.length > 0
+    const planted = plantRisk(tool.name, args, ctx.untrusted, ctx.userText, inView, !thisRun)
     const hardStop = planted ?? own
     // Every recipient on this bot's trusted list (or the user): the send stop lifts (decide()), within limits.
     const trust = effect === 'write_external' ? this.d.trustedSends?.check(run.speaker?.id ?? thread.spaceId, tool.name, args, hardStop) : undefined
     // An outside action a page or email this run read could have chosen without a copied string: an address nobody
     // gave, a file the page named, an upload to a site the user didn't name (steeredRisk).
-    const steered = (ctx.track.sawUntrusted || !!run.forceTaint) && !trust?.trusted
-      ? steeredRisk({ tool: tool.name, effect, args, summary, hardStop, untrusted: ctx.untrusted, private: ctx.private, userText: ctx.userText })
+    const steered = inView && !trust?.trusted
+      ? steeredRisk({ tool: tool.name, effect, args, summary, hardStop, untrusted: ctx.untrusted, private: ctx.private, userText: ctx.userText, earlier: !thisRun })
       : null
     const decision = decideWithRule({
       mode,
