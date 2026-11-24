@@ -1,6 +1,7 @@
 import { shell } from 'electron'
 import { execFileSync } from 'node:child_process'
 import { noteSeen } from './freshness'
+import { afterChange, beforeChange } from '../undo-journal'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import type { ToolEffect } from '@shared/types'
@@ -266,7 +267,10 @@ function edit(base: string, a: CodeArgs, ctx: Ctx, workspace: string): { text: s
     }
   })
   backup(workspace, full)
+  // In this task's undo journal (agent/undo-journal.ts), like file_edit.
+  beforeChange(ctx.threadId, full)
   writeFileSync(full, content)
+  afterChange(ctx.threadId, full)
   noteSeen(ctx.threadId, full)
   const d = unifiedDiff(shown, before, content)
   return {
@@ -308,6 +312,9 @@ async function applyPatch(base: string, a: CodeArgs, ctx: Ctx, workspace: string
   const summary = plan.map((p) => `${p.op === 'add' ? 'A' : p.op === 'delete' ? 'D' : p.moveShown ? 'R' : 'M'} ${p.shown}${p.moveShown ? ` → ${p.moveShown}` : ''}`).join('\n')
   const body = clipDiff(diffs.map((d) => d.text).filter(Boolean).join('\n'), 16_000)
   if (a.dry_run) return { text: `Patch preview (nothing written; +${added} −${removed}):\n${summary}${notes.length ? `\nNotes: ${notes.join('; ')}` : ''}\n${body}`, display: `patch preview: ${plan.length} file${plan.length > 1 ? 's' : ''}` }
+  // Every file the patch touches goes in this task's undo journal first (a move: the source and the new name).
+  const touched = plan.flatMap((p) => [p.full, ...(p.moveFull ? [p.moveFull] : [])])
+  for (const f of touched) beforeChange(ctx.threadId, f)
   for (const p of plan) {
     if (p.op === 'add') {
       mkdirSync(dirname(p.full), { recursive: true })
@@ -323,6 +330,7 @@ async function applyPatch(base: string, a: CodeArgs, ctx: Ctx, workspace: string
       } else if (p.after !== p.before) writeFileSync(p.full, p.after!)
     }
   }
+  for (const f of touched) afterChange(ctx.threadId, f)
   return {
     text: `Applied the patch (+${added} −${removed}):\n${summary}${notes.length ? `\nNotes: ${notes.join('; ')}` : ''}${plan.some((p) => p.op === 'delete') ? '\nDeleted files went to the Trash.' : ''}\n${body}`,
     display: `patched ${plan.length} file${plan.length > 1 ? 's' : ''} (+${added} −${removed})`,

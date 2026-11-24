@@ -424,3 +424,31 @@ describe('doc tools', () => {
     await expect(docRead.run({}, ctx('empty'))).rejects.toThrow(/no document yet/)
   })
 })
+
+// FFB-01 (save where asked): "make a PDF report and save it to my Downloads" lands in ~/Downloads, never in the
+// workspace's exports folder, and never over a file that is already there.
+test('doc_export saves where the user asked ("to"): a folder or a full path; a taken name gets " (2)"', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'docspace-home-'))
+  const was = process.env.HOME
+  process.env.HOME = home
+  try {
+    const ws = join(home, 'SahilBot')
+    const s = store()
+    const create = vi.fn<CreateDocumentFn>(async (path) => { writeFileSync(path, 'pdf bytes') })
+    const [docCreate, , , docExport] = docTools({ store: s, workspace: () => ws, create })
+    const c: ToolContext = { threadId: 'thread-to', signal: new AbortController().signal, workspaceDir: ws, docsDir: '', askUser: async () => '', state: { ...emptyState(), roots: [home] }, loadTools: () => [], searchTools: () => [], readResult: () => undefined }
+    await docCreate.run({ title: 'Q3 Report', markdown: 'Numbers' }, c)
+    const a = await docExport.run({ format: 'pdf', to: '~/Downloads' }, c)
+    expect(a.path).toBe(join(home, 'Downloads', 'q3-report.pdf'))
+    writeFileSync(join(home, 'Downloads', 'Report.pdf'), 'the user\'s report')
+    const b = await docExport.run({ format: 'pdf', to: '~/Downloads/Report.pdf' }, c)
+    expect(b.path).toBe(join(home, 'Downloads', 'Report (2).pdf'))
+    expect(readFileSync(join(home, 'Downloads', 'Report.pdf'), 'utf8')).toBe('the user\'s report')
+    expect(existsSync(join(ws, 'exports'))).toBe(false)
+    // Outside the home folder: a hard stop (asks first), like file_write.
+    expect(docExport.hardStop!({ format: 'pdf', to: mkdtempSync(join(tmpdir(), 'docspace-elsewhere-')) }, { roots: [home] })).toMatch(/outside your folders/)
+    expect(docExport.hardStop!({ format: 'pdf', to: '~/Desktop' }, { roots: [home] })).toBeNull()
+  } finally {
+    process.env.HOME = was
+  }
+})

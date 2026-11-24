@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -7,10 +7,12 @@ import { basename, dirname, join } from 'node:path'
 // already happened (Grok Bot reviewers: "approvals don't reverse anything"). Before a bot changes a file
 // (file_write, file_edit, file_manage move/copy, documents), the original is kept; after, the result's
 // fingerprint. Undo puts each file back the way it was and moves files the task created into a holding folder (never
-// deleted). A file someone changed since is left alone and reported. Kept on disk, so it survives a restart.
-// Commands a bot runs in the terminal aren't covered (their changes aren't known file by file).
+// deleted). A file someone changed since is left alone and reported. Kept on disk, so it survives a restart, for 30
+// days. A file or folder the bot deletes (file_manage delete, to the Trash) is copied first, so Undo brings it back.
+// Commands a bot runs in the terminal aren't covered (their changes aren't known file by file); deleting your files
+// with rm is refused for that reason (tools/shell.ts), so deletes go through file_manage.
 
-export interface UndoEntry { path: string; kind: 'modified' | 'created'; backup?: string; after?: string; at: number }
+export interface UndoEntry { path: string; kind: 'modified' | 'created'; backup?: string; after?: string; at: number; dir?: boolean }
 interface Manifest { threadId: string; key: string; entries: UndoEntry[]; undone?: number }
 export interface UndoResult { restored: string[]; removed: string[]; skipped: Array<{ path: string; why: string }> }
 
@@ -18,7 +20,28 @@ let root = join(tmpdir(), 'sahilbot-undo')
 /** This chat's current task (the message that started it): changes are grouped by it. */
 const current = new Map<string, string>()
 
-export function setUndoRoot(dir: string): void { root = dir }
+/** How long a task's undo copies are kept. */
+const KEEP_MS = 30 * 24 * 3600_000
+/** A file the task deleted: its fingerprint "after" the change. */
+const GONE = 'gone'
+
+export function setUndoRoot(dir: string): void {
+  root = dir
+  prune()
+}
+
+/** Removes undo copies of tasks older than 30 days (at start-up). */
+export function prune(now = Date.now()): void {
+  try {
+    for (const t of readdirSync(root)) {
+      const td = join(root, t)
+      for (const k of readdirSync(td)) {
+        const kd = join(td, k)
+        try { if (now - statSync(join(kd, 'manifest.json')).mtimeMs > KEEP_MS) rmSync(kd, { recursive: true, force: true }) } catch { /* not a task folder */ }
+      }
+    }
+  } catch { /* nothing kept yet */ }
+}
 export function beginRun(threadId: string, key: string): void { current.set(threadId, key) }
 export function currentRun(threadId: string): string | undefined { return current.get(threadId) }
 
@@ -35,20 +58,46 @@ function save(m: Manifest): void {
   writeFileSync(join(d, 'manifest.json'), JSON.stringify(m))
 }
 
-/** Before a bot writes, replaces or creates `full`: keeps the original (the first time this task touches it). */
-export function beforeChange(threadId: string | undefined, full: string): void {
+/** Folders bigger than this aren't copied before a delete (they stay in the Trash). */
+const MAX_DIR_FILES = 5000
+const MAX_DIR_BYTES = 500_000_000
+
+function smallFolder(dir: string): boolean {
+  let files = 0
+  let bytes = 0
+  const walk = (d: string): boolean => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name)
+      if (e.isDirectory()) { if (!walk(p)) return false; continue }
+      files++
+      try { bytes += lstatSync(p).size } catch { /* gone */ }
+      if (files > MAX_DIR_FILES || bytes > MAX_DIR_BYTES) return false
+    }
+    return true
+  }
+  try { return walk(dir) } catch { return false }
+}
+
+/**
+ * Before a bot writes, replaces, creates or deletes `full`: keeps the original (the first time this task touches it).
+ * `o.folder`: a folder about to be deleted is copied too (when it isn't huge).
+ */
+export function beforeChange(threadId: string | undefined, full: string, o: { folder?: boolean } = {}): void {
   const key = threadId ? current.get(threadId) : undefined
   if (!threadId || !key) return
   try {
     const m = load(threadId, key)
     if (m.undone || m.entries.some((e) => e.path === full)) return
-    const exists = existsSync(full) && lstatSync(full).isFile()
-    const entry: UndoEntry = { path: full, kind: exists ? 'modified' : 'created', at: Date.now() }
+    const isDir = !!o.folder && existsSync(full) && lstatSync(full).isDirectory()
+    if (isDir && !smallFolder(full)) return
+    const exists = isDir || (existsSync(full) && lstatSync(full).isFile())
+    const entry: UndoEntry = { path: full, kind: exists ? 'modified' : 'created', at: Date.now(), ...(isDir ? { dir: true } : {}) }
     if (exists) {
       const d = dirOf(threadId, key)
       mkdirSync(d, { recursive: true })
       entry.backup = join(d, `${m.entries.length}-${safe(basename(full))}.orig`)
-      copyFileSync(full, entry.backup)
+      if (isDir) cpSync(full, entry.backup, { recursive: true })
+      else copyFileSync(full, entry.backup)
     }
     m.entries.push(entry)
     save(m)
@@ -63,7 +112,7 @@ export function afterChange(threadId: string | undefined, full: string): void {
     const m = load(threadId, key)
     const e = m.entries.find((x) => x.path === full)
     if (!e) return
-    e.after = hash(full)
+    e.after = existsSync(full) ? (e.dir ? undefined : hash(full)) : GONE
     save(m)
   } catch { /* best effort */ }
 }
@@ -83,8 +132,21 @@ export function undoRun(threadId: string, key: string): UndoResult {
   const hold = join(dirOf(threadId, key), 'removed')
   for (const e of [...m.entries].reverse()) {
     const now = hash(e.path)
+    // A deleted file or folder: back from the copy kept before the delete, unless something new is there now.
+    if (e.after === GONE) {
+      if (existsSync(e.path)) { out.skipped.push({ path: e.path, why: 'something new is there now' }); continue }
+      try {
+        if (!e.backup) continue
+        mkdirSync(dirname(e.path), { recursive: true })
+        if (e.dir) cpSync(e.backup, e.path, { recursive: true })
+        else copyFileSync(e.backup, e.path)
+        out.restored.push(e.path)
+      } catch (err) { out.skipped.push({ path: e.path, why: (err as Error).message }) }
+      continue
+    }
     // Changed since the task (by you, or another task): left alone.
     if (e.after && now !== undefined && now !== e.after) { out.skipped.push({ path: e.path, why: 'it was changed after the task' }); continue }
+    if (e.dir) continue
     try {
       if (e.kind === 'modified' && e.backup) {
         mkdirSync(dirname(e.path), { recursive: true })
@@ -101,6 +163,23 @@ export function undoRun(threadId: string, key: string): UndoResult {
   m.undone = Date.now()
   save(m)
   return out
+}
+
+/**
+ * True when a task in this chat created `full` (and wasn't undone): the chat's own file, so rebuilding it replaces
+ * nothing of the user's, even after a restart.
+ */
+export function createdInThread(threadId: string, full: string): boolean {
+  try {
+    const td = join(root, safe(threadId))
+    for (const k of readdirSync(td)) {
+      try {
+        const m = JSON.parse(readFileSync(join(td, k, 'manifest.json'), 'utf8')) as Manifest
+        if (!m.undone && m.entries.some((e) => e.kind === 'created' && e.path === full)) return true
+      } catch { /* not a task folder */ }
+    }
+  } catch { /* nothing kept for this chat */ }
+  return false
 }
 
 /** The latest task in this chat (before the one running now) that changed files and isn't undone yet. */

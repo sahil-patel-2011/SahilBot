@@ -31,7 +31,8 @@ test('file_write refuses to replace a big file with a shortened view of it (unle
   const ws = mkdtempSync(join(tmpdir(), 'sb-shrink-'))
   const big = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n')
   writeFileSync(join(ws, 'big.txt'), big)
-  const t = tools(ws)
+  // The user asked to change it (else a new file would be saved beside it: tests/unit/never-replace.test.ts).
+  const t = Object.fromEntries(fileTools(() => ws, mkdtempSync(join(tmpdir(), 'sb-manual-')), { userText: () => 'Rewrite big.txt' }).map((x) => [x.name, x]))
   await t.file_read.run({ path: 'big.txt' }, ctx)
   await expect(t.file_write.run({ path: 'big.txt', content: 'line 0\nline 1\n' }, ctx)).rejects.toThrow(/delete the rest.*file_edit/)
   expect(readFileSync(join(ws, 'big.txt'), 'utf8')).toBe(big)

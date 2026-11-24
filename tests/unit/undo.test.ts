@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { fileTools } from '../../src/main/agent/tools/files'
-import { undoTool } from '../../src/main/agent/tools/undo'
-import { beginRun, changesOf, setUndoRoot, undoRun, undoSummary } from '../../src/main/agent/undo-journal'
+import { taskKeys, taskOf, undoTool } from '../../src/main/agent/tools/undo'
+import { codeTool } from '../../src/main/agent/tools/code'
+import { beforeChange, beginRun, changesOf, prune, setUndoRoot, undoRun, undoSummary } from '../../src/main/agent/undo-journal'
 import { noteSeen } from '../../src/main/agent/tools/freshness'
 import { Db } from '../../src/main/db'
 
@@ -20,7 +21,7 @@ test('undo puts a task\'s file changes back: edits, new files, moves; a file you
   writeFileSync(join(ws, 'notes.md'), 'original notes\n')
   writeFileSync(join(ws, 'plan.md'), 'original plan\n')
   writeFileSync(join(ws, 'old-name.txt'), 'keep me\n')
-  const t = Object.fromEntries(fileTools(() => ws, mkdtempSync(join(tmpdir(), 'sb-docs-'))).map((x) => [x.name, x]))
+  const t = Object.fromEntries(fileTools(() => ws, mkdtempSync(join(tmpdir(), 'sb-docs-')), { userText: () => 'Rewrite plan.md and fix notes.md' }).map((x) => [x.name, x]))
   const ctx = ctxFor('t-undo')
   for (const f of ['notes.md', 'plan.md']) noteSeen('t-undo', join(ws, f))
 
@@ -74,4 +75,51 @@ test('"undo that" in chat takes back the previous task; only when the user asked
   expect(r.text).toMatch(/Undone: removed packing\.md/)
   expect(existsSync(join(ws, 'packing.md'))).toBe(false)
   expect((await undo.run({}, ctxFor(th.id))).text).toMatch(/no file changes from an earlier task/)
+})
+
+test('a side question mid-task keeps Undo on the task\'s answer (taskOf skips asides and mid-task messages)', async () => {
+  setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-root-')))
+  const ws = mkdtempSync(join(tmpdir(), 'sb-undo-ws-'))
+  const db = new Db(':memory:')
+  const space = db.createSpace('Bot', '#000')
+  const th = db.createThread(space.id, 'auto', null)
+  const t = Object.fromEntries(fileTools(() => ws, mkdtempSync(join(tmpdir(), 'sb-docs-'))).map((x) => [x.name, x]))
+  const opener = db.insertMessage({ threadId: th.id, role: 'user', kind: 'normal', status: 'done', content: 'Make an invoice for Acme' })
+  beginRun(th.id, opener.id)
+  await t.file_write.run({ path: 'invoice.md', content: '# Invoice\n' }, ctxFor(th.id))
+  const aside = db.insertMessage({ threadId: th.id, role: 'user', kind: 'normal', status: 'done', content: '18% of $1,740?', meta: { aside: true } })
+  db.insertMessage({ threadId: th.id, role: 'assistant', kind: 'normal', status: 'done', content: '$313.20', meta: { aside: true, replyTo: aside.id } })
+  db.insertMessage({ threadId: th.id, role: 'user', kind: 'normal', status: 'done', content: 'add a due date too', meta: { steer: true } })
+  const answer = db.insertMessage({ threadId: th.id, role: 'assistant', kind: 'normal', status: 'done', content: 'Made invoice.md.' })
+  expect(taskOf(db, th.id, answer.id)).toBe(opener.id)
+  expect(changesOf(th.id, taskOf(db, th.id, answer.id)!)).toBeDefined()
+  expect(taskKeys(db, th.id)).not.toContain(aside.id)
+})
+
+test('code edits and apply_patch are in the undo journal too', async () => {
+  setUndoRoot(mkdtempSync(join(tmpdir(), 'sb-undo-root-')))
+  const root = mkdtempSync(join(tmpdir(), 'sb-undo-code-'))
+  writeFileSync(join(root, 'math.ts'), 'export const add = (a: number, b: number) => a - b\n')
+  const code = codeTool({ getWorkspace: () => root, trash: async () => undefined })
+  const ctx = { threadId: 't-code', state: { roots: [root], loaded: [], alwaysAllow: [], todos: [] }, workspaceDir: root, signal: new AbortController().signal } as never
+  beginRun('t-code', 'task-code')
+  await code.run({ action: 'edit', path: 'math.ts', old_string: 'a - b', new_string: 'a + b' }, ctx)
+  await code.run({ action: 'apply_patch', patch: '*** Begin Patch\n*** Add File: index.ts\n+export * from \'./math\'\n*** End Patch' }, ctx)
+  expect(readFileSync(join(root, 'math.ts'), 'utf8')).toContain('a + b')
+  expect(existsSync(join(root, 'index.ts'))).toBe(true)
+  const r = undoRun('t-code', 'task-code')
+  expect(readFileSync(join(root, 'math.ts'), 'utf8')).toContain('a - b')
+  expect(existsSync(join(root, 'index.ts'))).toBe(false)
+  expect(r.skipped).toEqual([])
+})
+
+test('undo copies older than 30 days are pruned at start-up', () => {
+  const root = mkdtempSync(join(tmpdir(), 'sb-undo-root-'))
+  setUndoRoot(root)
+  beginRun('t-old', 'task-old')
+  const ws = mkdtempSync(join(tmpdir(), 'sb-undo-ws-'))
+  beforeChange('t-old', join(ws, 'x.txt'))
+  expect(existsSync(join(root, 't-old', 'task-old', 'manifest.json'))).toBe(true)
+  prune(Date.now() + 31 * 24 * 3600_000)
+  expect(existsSync(join(root, 't-old', 'task-old'))).toBe(false)
 })

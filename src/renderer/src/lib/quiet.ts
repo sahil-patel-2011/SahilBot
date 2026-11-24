@@ -60,6 +60,12 @@ export function hasQuietContent(steps: Step[], docs: boolean): boolean {
     stocksFromSteps(steps).length > 0 || videosFromSteps(steps).length > 0 || (docs && docsFromSteps(steps).length > 0)
 }
 
+/** What a run made that the chat shows as a card (files, pictures, pages, videos, documents), its steps aside. */
+export function hasMadeArtifacts(steps: Step[], docs: boolean): boolean {
+  return galleryFromSteps(steps).length > 0 || filesFromSteps(steps).length > 0 || pagesFromSteps(steps).length > 0 ||
+    stocksFromSteps(steps).length > 0 || videosFromSteps(steps).length > 0 || (docs && docsFromSteps(steps).length > 0)
+}
+
 /** Lines the quiet chat leaves out: notes about models and thinking. */
 export const internalNotice = (m: Pick<Message, 'meta'>): boolean => !!m.meta?.internal
 
