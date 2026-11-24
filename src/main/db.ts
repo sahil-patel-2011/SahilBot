@@ -4,6 +4,7 @@ import type { EffortChoice, LibraryItem, Message, PermissionMode, Space, Thread 
 import { emptyState, type ThreadState } from './agent/types'
 import { KNOWLEDGE_SCHEMA } from './knowledge/schema'
 import { UNREAD_CAP } from '@shared/read-state'
+import { stripDirectives } from '@shared/directives'
 import { CONCEPTS, NOT_OWN_WORDS, conceptAlternatives, hasStem, hasWord, normalizeForRecall, wordStem } from './recall-expand'
 
 export const uid = (): string => randomUUID()
@@ -575,10 +576,10 @@ export class Db {
   }
 }
 
-/** Sidebar previews are plain text: drop Markdown punctuation and collapse whitespace. */
+/** Sidebar previews are plain text: drop internal markup, Markdown punctuation and extra whitespace. */
 export function plain(md: string | null | undefined): string | undefined {
   if (!md) return undefined
-  return md.replace(/```[\s\S]*?```/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|~]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 200)
+  return stripDirectives(md).replace(/```[\s\S]*?```/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|~]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 200)
 }
 
 function dataOf(m: Message): Record<string, unknown> {

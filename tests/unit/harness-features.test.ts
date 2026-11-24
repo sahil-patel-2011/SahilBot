@@ -98,3 +98,32 @@ test('a "done" claim backed by a successful tool of the same kind is not challen
   expect(claimBacked('I\'ve saved the summary to your notes.', ['web_search', 'fetch_page'])).toBe(false)
   expect(claimBacked('I\'ve saved it.', [])).toBe(false)
 })
+
+// Honesty (HTA-01/03): the common claims count, a long reply is still read, and the reply itself is no claim.
+test('"done" claims: created, wrote, added, updated… count when they name something in the world', async () => {
+  const { claimBacked, claimsDone: done } = await import('../../src/main/agent/harness-features')
+  for (const t of ['I created budget.xlsx in Downloads.', 'I\'ve written rename_photos.py to your Desktop.', 'I added the dentist to your calendar.', 'I\'ve updated the invoice.', 'I fixed the bug in app.ts.', 'I\'ve cancelled the order.', 'I\'ve downloaded the report.', 'I\'ve signed in to your account.', `${'Here is the long part. '.repeat(120)}I've emailed it to Sam.`])
+    expect(done(t), t).toBe(true)
+  for (const t of ['I wrote a short poem for you:', 'I\'ve added a section on hotels below.', 'I updated my answer above.', 'Done.', 'Here\'s what I created for you:\n\nA plan.', 'The store opened in 2010.'])
+    expect(done(t), t).toBe(false)
+  // Only the verbs it claims need backing (not "opened" in a sentence that claims nothing).
+  expect(claimBacked('I\'ve saved report.pdf. The store opened in 2010.', ['file_write'])).toBe(true)
+  expect(claimBacked('I created budget.xlsx in Downloads.', ['create_document'])).toBe(true)
+  expect(claimBacked('I\'ve moved the photos to the Trip folder.', ['file_manage'])).toBe(true)
+  expect(claimBacked('I\'ve emailed the invoice to Sam.', ['save_invoice'])).toBe(false)
+})
+
+test('a question for the user ends the run; a closing "anything else?" does not count', async () => {
+  const { asksUserNow } = await import('../../src/main/agent/harness-features')
+  for (const t of ['Which date works, Friday or Saturday?', 'I found two flights. Which one should I book?', 'What\'s the delivery address?'])
+    expect(asksUserNow(t), t).toBe(true)
+  for (const t of ['Saved it. Anything else?', 'Done. Let me know if you need anything else?', 'Saved budget.xlsx.', 'Here is the plan. Sound good?'])
+    expect(asksUserNow(t), t).toBe(false)
+})
+
+test('the prompts ask for one plain sentence about what could not be checked, never "all checks passed"', async () => {
+  const { chatPrompt, harnessPrompt } = await import('../../src/main/agent/prompt')
+  const base = { userName: 'Sam', workspaceDir: '/w', spacePrompt: '', spaceName: 'Main' }
+  expect(harnessPrompt(base)).toMatch(/anything you couldn't check, in one plain sentence\. Never write "all checks passed"/)
+  expect(chatPrompt(base)).toMatch(/Never say you did something \(saved, sent, booked\) unless a tool in this chat did it/)
+})

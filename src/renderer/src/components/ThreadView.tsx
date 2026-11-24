@@ -1,6 +1,6 @@
 import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { repliedSince } from '../lib/bot-working'
-import { heldDrafts } from '../lib/held-drafts'
+import { awaitingFinal, heldDrafts } from '../lib/held-drafts'
 import { PERMISSION_BUTTON, permissionAsked } from '../lib/permission-ask'
 import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
 import { filesFromMessages } from '../lib/ux'
@@ -559,14 +559,14 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     if (b.kind === 'notice' && internalNotice(b.m)) return dev
     // A bot's chat: the conversation only (what it did is one click away in Show work, not in the chat).
     if (quietBot && (b.kind === 'activity' || b.kind === 'plan' || b.kind === 'team' || b.kind === 'heavy' || b.kind === 'compacted')) return false
-    // ...one answer, posted once (Grok Bot's way): an answer still being double-checked stays out of sight, with
-    // "<name> is working…" up, until the checked one is final (90 seconds at most; a fix it finds is kept).
-    if (quietBot && b.kind === 'text' && b.m.meta?.superseded && b.m.meta?.checking) return false
+    // One answer, posted once (Grok Bot's way), in every chat: an answer the app checks before accepting it stays out
+    // of sight, with the working line up, until it is final. Nothing posted is pulled back (heldDrafts).
+    if (running && !dev && b.kind === 'text' && awaitingFinal(b.m)) return false
     // ...and no status notes ("The bot is continuing with…"). System lines Grok Bot shows too stay: "Paused routine ·
     // …", "Undid …", messages between bots, and cards that need you.
     if (quietBot && b.kind === 'notice' && !isCardNotice(b.m) && (typeof b.m.meta?.publicText === 'string' || Array.isArray(b.m.meta?.collaboration))) return false
     return dev || quietVisible(b, hasDocs)
-  }), [all, dev, hasDocs, asking, quietBot])
+  }), [all, dev, hasDocs, asking, quietBot, running])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
   // Long chats mount their latest WINDOW blocks; an older first unread grows the window to include it.
   const limit = windowLimit(win.threadId === threadId ? win.limit : WINDOW, bs.length, dividerAt)
@@ -649,8 +649,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const allUser = (() => { for (let i = all.length - 1; i >= 0; i--) if (all[i].kind === 'user') return i; return -1 })()
   const livePlan = (() => { for (let i = all.length - 1; i > allUser; i--) { const b = all[i]; if (b.kind === 'plan') return b } return undefined })()
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
-  // A bot's chat keeps "<name> is working…" up while a checked answer is written out of sight (heldDrafts).
-  const writingVisible = writing && !(quietBot && (last?.meta?.superseded || heldDrafts(messages).waiting.has(last!.id)))
+  // The working line stays up while an answer is written out of sight (checked before it's posted, heldDrafts).
+  const writingVisible = writing && !(last?.meta?.superseded || (!dev && awaitingFinal(last!)) || heldDrafts(messages).waiting.has(last!.id))
   const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writingVisible)
   const started = turnStart(messages, since)
   const approvalWaiting = pending.some((p) => p.kind === 'approval')
@@ -1110,7 +1110,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
         <div className="ai-foot">
           <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} latest={!!retry} />
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
-          {!!m.meta?.superseded && !!m.meta?.checking && <span className="result-checking">Double-checking…</span>}
+          {dev && !!m.meta?.superseded && !!m.meta?.checking && <span className="result-checking">Double-checking…</span>}
           {(() => { const kind = m.status !== 'streaming' ? permissionAsked(m.content) : undefined; return kind ? <button type="button" className="perm-ask" onClick={() => void api.permissions.request(kind).catch(() => api.permissions.open(kind))} data-testid="perm-ask">{PERMISSION_BUTTON[kind]}</button> : null })()}
           {(m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title={dev ? ((m.meta?.verification as { issues?: string[] }).issues ?? []).join('\n') : 'SahilBot couldn\'t confirm this worked. Check the result before relying on it.'}>Needs a check</span>}
         </div>

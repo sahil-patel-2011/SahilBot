@@ -4,7 +4,7 @@ import { asideSystem, isAside, quickMath } from './aside'
 import { beginRun } from './undo-journal'
 import { projectInstructions } from './project-instructions'
 import { checkMedicalAnswer, medicalNote } from './medical-check'
-import { ALL_FEATURES, claimBacked, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
+import { ALL_FEATURES, asksUserNow, claimBacked, claimsCant, claimsDone, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
 import { definiteFailure } from './runtime/policy'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -247,6 +247,8 @@ interface Run {
   checking?: { id: string; at: number }
   /** A new message came while it was only double-checking: end the run with the answer it has. */
   endWithDraft?: boolean
+  /** The next reply is written out of sight (meta.hold) until the app accepts it as final: it will be checked first. */
+  holdFinal?: boolean
   /** Messages to send as a fresh run once this one ends (sent while it was only double-checking). */
   afterRun?: string[]
   /** Resolves when the run (and its group speakers) has ended. */
@@ -492,7 +494,9 @@ export const modelSwitchNote = (from: string, to: string): string =>
 /** Tools that only keep the run's own books: a call to them is no change for the user to double-check. */
 const BOOKKEEPING = new Set(['todo', 'memory', 'ask_user', 'agent_control', 'checkpoint', 'notify', 'consult', 'find_tools', 'project_memory'])
 /** Reads that look at the work itself (a file, a folder, a command's output, the page, the screen). */
-const LOOKS_AT_WORK = new Set(['file_read', 'list_files', 'search_files', 'run_command', 'browser', 'computer', 'screenshot', 'read_document', 'git'])
+const LOOKS_AT_WORK = new Set(['file_read', 'list_files', 'search_files', 'run_command', 'browser', 'computer', 'screenshot', 'read_document', 'review_document', 'doc_read', 'read_document_image', 'git'])
+/** Tools that can do anything (a command, the browser, the Mac, a team): a "done" claim after one of them is taken as backed. */
+const CAN_DO_ANYTHING = new Set(['run_command', 'code', 'computer', 'browser', 'mac_apps', 'ask_on_mac', 'api_request', 'batch', 'cursor', 'office', 'agents', 'swarm', 'max', 'git'])
 /** The double-check's "nothing to fix" reply. */
 const KEEP_DRAFT = /^(✓|✔|✔️|ok|lgtm|all good|no changes?( needed)?)[.!]?$/i
 
@@ -3167,7 +3171,7 @@ export class Agent {
           this.d.emit({ threadId: thread.id, type: 'message', message: m })
         }
       }
-      draft.meta = { ...draft.meta, superseded: false, checking: false, checkSkipped: true }
+      draft.meta = { ...draft.meta, superseded: false, checking: false, checkSkipped: true, final: true }
       db.updateMessage(draft)
       this.d.emit({ threadId: thread.id, type: 'message', message: draft })
       verifyDraft = undefined
@@ -3190,6 +3194,12 @@ export class Agent {
       if (!state.todos.length) return undefined
       const i = state.todos.findIndex((t) => t.status !== 'done')
       return { at: i < 0 ? state.todos.length : i + 1, of: state.todos.length }
+    }
+    /** A final reply now would get the double-check (or a reviewer's): the same test the finish line uses below. */
+    const checksFinal = (): boolean => {
+      const complex = (routed?.tier === 3 && !this.d.db.getState(thread.id).voice) || actions >= 8
+      const reviewer = routed?.team?.reviewer !== model ? routed?.team?.reviewer : undefined
+      return !verified && !run.helper && !process.env.FOREMAN_NO_VERIFY && (!!reviewer || (!chatRun && (track.unchecked || (track.researched && (actions >= 3 || state.todos.length > 0)) || complex)))
     }
 
     // Intent tools are loaded once, when the run is (or turns into) agent work; the profile only gets slimmer.
@@ -3381,10 +3391,15 @@ export class Agent {
         }
 
         let assistant: Message
+        // Check first, post once: a reply the app may send back or double-check if it's final (after any action, with
+        // an open plan, or when the double-check will run) is written out of sight and shown once it's accepted.
+        // A step that ends in tool calls shows its words as usual; a quick answer with nothing to check streams live.
+        run.holdFinal = !!verifyDraft || actions > 0 || open.length > 0 || checksFinal()
         try {
           assistant = await this.stream(thread.id, model, prepared.wire, wireTools, window, run, speaker, routed, effortNow())
           stepsDone++
         } catch (e) {
+          run.holdFinal = false
           if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') throw e
           // One request ran past its limits (llm/request-guard.ts: idle or wall clock, too many server searches): the
           // model isn't at fault and another would run the same request as long, so the run stops with the reason.
@@ -3395,12 +3410,21 @@ export class Agent {
           if (switchModel(`${modelName()} failed (${(e as Error).message.replace(/\s+/g, ' ').slice(0, 140)})`, true, e as Error)) { step--; continue }
           throw e
         }
+        run.holdFinal = false
+        /** The reply stands as this run's answer: shown now (it was written out of sight). */
+        const accept = (): void => {
+          if (!assistant.meta?.hold || assistant.meta.final) return
+          assistant.meta = { ...assistant.meta, final: true }
+          db.updateMessage(assistant)
+          this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
+        }
         // Claude's server web search / fetch read outside content in this step (its text is already in the
         // untrusted list, see stream()): this run now counts as having read the web, like fetch_page.
         if (assistant.meta?.serverTools) { track.web = true; track.sawUntrusted = true; track.researched = true; track.explored = true }
         // Cut off by the output limit in the middle of a tool call: the call was dropped (see stream()),
         // never run with guessed arguments. Ask for a shorter one.
         if (assistant.meta?.droppedToolCall && step < HARD_CAP) {
+          accept()
           budget = Math.max(budget, step + 1)
           db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your last reply hit the output limit in the middle of a tool call, so the call was cut off and not run. Send a shorter call: for example split long content into several file_write calls with mode "append", or do fewer edits per call.' })
           continue
@@ -3450,7 +3474,8 @@ export class Agent {
             budget = Math.max(budget, step + 1)
             linkChecked = true
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] Your reply cites links that don't appear in any source you retrieved in this conversation:\n${unseen.map((u) => `- ${u}`).join('\n')}\nVerify them with fetch_page or web_search, or remove them. Then give your final answer again.` })
-            assistant.meta = { ...assistant.meta, superseded: true }
+            // checking: an answer already on screen stays there until the corrected one is written (never pulled back).
+            assistant.meta = { ...assistant.meta, superseded: true, checking: true }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
             continue
@@ -3472,7 +3497,7 @@ export class Agent {
               finalNudges++
               budget = Math.max(budget, step + 6)
               db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, medicalCheck: true, ...mine }, content: note })
-              assistant.meta = { ...assistant.meta, superseded: true }
+              assistant.meta = { ...assistant.meta, superseded: true, checking: true }
               db.updateMessage(assistant)
               this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
               continue
@@ -3510,35 +3535,42 @@ export class Agent {
               continue
             }
           }
-          // Test until green (the runtime's check, not a reminder): code changed and no passing test run since, so
-          // SahilBot runs the project's own test command; failures go back to the model to fix (3 rounds at most).
-          if (this.feat.testsAtEnd && track.codeEdited && !track.testsGreen && track.testRounds < 3 && !chatRun && step < HARD_CAP) {
-            const verdict = stricterMode(this.d.db.getThread(thread.id)?.permissionMode ?? thread.permissionMode, run.modeCap) === 'ask' ? undefined : await this.runProjectTests(thread.id, state, run.ctrl.signal)
-            if (verdict) {
-              track.testRounds++
-              if (verdict.ok) track.testsGreen = true
-              else {
-                budget = Math.max(budget, step + 6)
-                db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] You changed code, so the app ran the project's tests (${verdict.command}). They fail:\n${verdict.text}\nFix the failures, then finish. The app runs the tests again before accepting the result.` })
-                continue
-              }
-            }
-          }
-          // Autonomy: a task stopped to ask "want me to…?" about its own next step. Do it (risky actions still ask).
           // A reply the app sends back (it claimed, gave up or stopped short) is replaced by the next one, not left
-          // in the chat beside it.
+          // in the chat beside it; one already on screen stays there until the next one is written (heldDrafts).
           const bounce = (): void => {
-            assistant.meta = { ...assistant.meta, superseded: true }
+            assistant.meta = { ...assistant.meta, superseded: true, checking: true }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
           }
           // A real choice for the user ("Postgres or SQLite?", "which one…?") is left alone: that question is theirs.
           const finalAsk = assistant.content.trim()
           const asksToContinue = /\b(want me to|would you like me to|shall i|should i (go ahead|proceed|continue|start|do)|do you want me to|let me know if you(?:'d| would) like me to)\b[^?]{0,200}\?\s*(\((yes|y)\s*\/\s*(no|n)\))?\s*$/i.test(finalAsk) && !/\b(or|which|either)\b[^?]{0,120}\?\s*(\([^)]*\))?\s*$/i.test(finalAsk)
+          // It ends on a question for the user ("Which date works, Friday or Saturday?"): the run ends there, no nudge
+          // to keep going, no test run first. (Not a closing "Anything else?" or an offer to go on, above.)
+          const asksUser = asksUserNow(finalAsk) && !asksToContinue
+          // Test until green (the runtime's check, not a reminder): code changed and no passing test run since, so
+          // SahilBot runs the project's own test command; failures go back to the model to fix (3 rounds at most).
+          if (this.feat.testsAtEnd && track.codeEdited && !track.testsGreen && track.testRounds < 3 && !chatRun && !asksUser && step < HARD_CAP) {
+            const verdict = stricterMode(this.d.db.getThread(thread.id)?.permissionMode ?? thread.permissionMode, run.modeCap) === 'ask' ? undefined : await this.runProjectTests(thread.id, state, run.ctrl.signal)
+            if (verdict) {
+              track.testRounds++
+              if (verdict.ok) track.testsGreen = true
+              else {
+                budget = Math.max(budget, step + 6)
+                db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] You changed code, so the app ran the project's tests (${verdict.command}). They fail:\n${verdict.text}\nFix the failures, then finish with your complete answer for the user (your reply above isn't shown). The app runs the tests again before accepting the result.` })
+                bounce()
+                continue
+              }
+            }
+          }
+          // Autonomy: a task stopped to ask "want me to…?" about its own next step. Do it (risky actions still ask).
           // Asked for a task and stopped before doing anything ("I can do this. Want me to go ahead?"): the request was
           // the go-ahead. A long reply that already answered and offers more work is left alone.
           const stalledAtStart = actions === 0 && finalAsk.length < 300
-          if (this.feat.continueNudge && asksToContinue && (actions > 0 || open.length > 0 || routed?.task?.rule === 'semantic' || stalledAtStart) && !autonomyNudged && !run.unattended && (!chatRun || stalledAtStart) && step < HARD_CAP) {
+          // A finished task that offers one more step ("Saved invoice.pdf. Want me to email it to Sam?") is done: the
+          // offer is the user's to take, never an extra step taken unasked.
+          const taskDone = track.changed && open.length === 0 && !stalledAtStart
+          if (this.feat.continueNudge && asksToContinue && !taskDone && (actions > 0 || open.length > 0 || routed?.task?.rule === 'semantic' || stalledAtStart) && !autonomyNudged && !run.unattended && (!chatRun || stalledAtStart) && step < HARD_CAP) {
             autonomyNudged = true
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself before anything risky (sending, buying, deleting). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
@@ -3548,7 +3580,7 @@ export class Agent {
           // Said it, didn't do it (Grok Build's task discipline, Apache-2.0): a reply that announces an action
           // ("Publishing the post now", "I'll send you the link once it's up") with no tool call means the action
           // never happened. Make it happen (twice per run at most).
-          if (this.feat.announceNudge && !asksToContinue && promisesAction(assistant.content) && actionNudges < 2 && !run.unattended && (!chatRun || (actions === 0 && assistant.content.length < 300)) && step < HARD_CAP) {
+          if (this.feat.announceNudge && !asksToContinue && !asksUser && promisesAction(assistant.content) && actionNudges < 2 && !run.unattended && (!chatRun || (actions === 0 && assistant.content.length < 300)) && step < HARD_CAP) {
             actionNudges++
             budget = Math.max(budget, step + 6)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your reply says you are doing something (or will), but you made no tool call, so it did not happen. Do it now with the next concrete tool call, and keep going until it is actually done (the live link, the sent message, the saved file). If something truly blocks it, say plainly what.' })
@@ -3580,7 +3612,7 @@ export class Agent {
           // (a different tool, source or approach), once per run, in a plain chat too (a lookup that failed once
           // isn't an answer). A real blocker still gets said plainly.
           // Twice per run: the second time, it has to name other ways and try the best one.
-          if (this.feat.giveUpNudge && runFailures > 0 && failStreak > 0 && finalNudges < 3 && giveUpNudges < 2 && !asksToContinue && !run.unattended && step < HARD_CAP && givesUp(assistant.content)) {
+          if (this.feat.giveUpNudge && runFailures > 0 && failStreak > 0 && finalNudges < 3 && giveUpNudges < 2 && !asksToContinue && !asksUser && !run.unattended && step < HARD_CAP && givesUp(assistant.content)) {
             finalNudges++
             giveUpNudges++
             budget = Math.max(budget, step + 8)
@@ -3599,11 +3631,18 @@ export class Agent {
             bounce()
             continue
           }
-          // Says it's done, but no tool ran at all in this task, or its last write failed and nothing succeeded since: a false
-          // "I've saved it". Make it do it, or say plainly that it wasn't done (once per run).
-          // (Not when the user asked about earlier work: "did you save it?" "Yes, I saved it earlier.")
+          // Says it's done, but no tool of this run that does what it claims went through ("I've emailed it" after only
+          // saving a file), or its last write failed and nothing succeeded since: a false "I've saved it". Make it do it,
+          // or say plainly that it wasn't done (once per run); after that, or in a routine, the reply says it couldn't
+          // confirm it (below). A general tool (Terminal, the browser, the Mac) can do anything: it backs the claim.
+          // (Not when the user asked about earlier work: "did you save it?" "Yes, I saved it earlier." Nor a question
+          // answered in a plain chat: "It's scheduled for 3pm" describes, it doesn't claim.)
           const askedAboutPast = /\?\s*$/.test(opener?.content ?? '') && /\b(did|have|has|was|were)\s+(you|it|they)\b/i.test(opener?.content ?? '')
-          if (this.feat.falseClaimNudge && !asksToContinue && (!track.changed || (track.failedWrites?.size ?? 0) > 0) && finalNudges < 3 && claimNudges < 1 && !askedAboutPast && !opener?.meta?.questionAnswer && !opener?.meta?.approvalFor && !run.unattended && !chatRun && step < HARD_CAP && claimsDone(assistant.content) && !claimBacked(assistant.content, db.listMessages(thread.id).filter((m) => m.role === 'tool' && m.createdAt >= runStart && m.meta?.status === 'ok' && m.toolName).map((m) => m.toolName!))) {
+          const okTools = db.listMessages(thread.id).filter((m) => m.role === 'tool' && m.createdAt >= runStart && m.meta?.status === 'ok' && m.toolName).map((m) => m.toolName!)
+          const unbacked = this.feat.falseClaimNudge && !asksToContinue && !askedAboutPast && !opener?.meta?.questionAnswer && !opener?.meta?.approvalFor
+            && !(chatRun && /\?\s*$/.test(opener?.content ?? '')) && claimsDone(assistant.content) && !claimBacked(assistant.content, okTools)
+            && ((track.failedWrites?.size ?? 0) > 0 || !okTools.some((n) => CAN_DO_ANYTHING.has(n)))
+          if (unbacked && finalNudges < 3 && claimNudges < 1 && !run.unattended && step < HARD_CAP) {
             finalNudges++
             claimNudges++
             budget = Math.max(budget, step + 6)
@@ -3611,31 +3650,33 @@ export class Agent {
             bounce()
             continue
           }
-          // A steering message arrived while this answer was written: keep going with it.
-          if (run.steers?.length && step < HARD_CAP) { budget = Math.max(budget, step + 2); continue }
+          // A steering message arrived while this answer was written: keep going with it (this answer stands).
+          if (run.steers?.length && step < HARD_CAP) { accept(); budget = Math.max(budget, step + 2); continue }
           // Team of Experts on, but no team yet: send one.
           const lastUser = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
           if (lastUser?.meta?.team && !run.helper && !(this.teamUsed.get(state.rootId ?? thread.id) ?? 0) && !teamNudged && step < HARD_CAP) {
             teamNudged = true
             budget = Math.max(budget, step + 2)
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: `[From the app] ${lastUser.meta?.max ? 'Max (a research team) is on' : 'Team of Experts is on'} for this request, but you haven't used your team. Split the research into at least ${this.teamSize(thread).min} focused parts and send them with the ${lastUser.meta?.max ? 'max tool (strategy "team", tasks)' : 'agents tool'}, then compile their reports into the final answer.` })
-            assistant.meta = { ...assistant.meta, superseded: true }
+            assistant.meta = { ...assistant.meta, superseded: true, checking: true }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
             continue
           }
-          // Don't stop with an unfinished plan: one nudge per run.
-          if (open.length && !nudged && step < HARD_CAP) {
+          // Don't stop with an unfinished plan: one nudge per run. (A question for the user ends the run: the plan waits
+          // for their answer.) The reply goes back with it, so the next one is the only answer, not a second.
+          if (open.length && !nudged && !asksUser && step < HARD_CAP) {
             budget = Math.max(budget, step + 1)
             nudged = true
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: `[From the app] Your plan still has open items:\n${planText(state)}\nContinue working on them, or update the plan with todo (mark items done, or remove ones that no longer apply) and explain why.`, meta: { hidden: true, ...mine } })
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: `[From the app] Your plan still has open items:\n${planText(state)}\nContinue working on them, or update the plan with todo (mark items done, or remove ones that no longer apply) and explain why. Your reply above isn't shown to the user: end with your complete answer for them.`, meta: { hidden: true, ...mine } })
+            bounce()
             continue
           }
           // Planner + executor: the planner's done check against its success criteria comes first (agent/cua).
-          const cuaHold = step < HARD_CAP ? this.d.cua?.beforeFinish(thread.id, state) : undefined
+          const cuaHold = step < HARD_CAP && !asksUser ? this.d.cua?.beforeFinish(thread.id, state) : undefined
           if (cuaHold) {
             budget = Math.max(budget, step + 3)
-            assistant.meta = { ...assistant.meta, superseded: true }
+            assistant.meta = { ...assistant.meta, superseded: true, checking: true }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
             db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', content: cuaHold, meta: { hidden: true, ...mine } })
@@ -3651,7 +3692,7 @@ export class Agent {
             const report = completionReport(this.runtime, run.record.id, { required: state.taskPolicy?.requireVerification, criteria: state.acceptance?.map((c) => c.criterion), files, claims: this.research.list(run.record.id) })
             if (report.status === 'blocked' && evidenceRounds++ < 2 && step < HARD_CAP) {
               budget = Math.max(budget, step + 3)
-              assistant.meta = { ...assistant.meta, superseded: true, verification: report }
+              assistant.meta = { ...assistant.meta, superseded: true, checking: true, verification: report }
               db.updateMessage(assistant)
               const verifyHint = !files?.length || state.acceptance?.length || state.taskPolicy?.requireVerification ? ' Use agent_control verify after repairs.' : ''
               db.insertMessage({ threadId: thread.id, role: 'user', content: `[From the app] Completion checks are unresolved. Fix or clearly report these blockers; do not claim verified completion.${verifyHint}\n${report.issues.join('\n')}`, kind: 'normal', status: 'done', meta: { hidden: true, ...mine } })
@@ -3665,7 +3706,17 @@ export class Agent {
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
           }
+          // Still says it's done with nothing behind it (the one nudge is spent, or a routine nobody watches): it isn't
+          // passed on as done. One plain sentence, the same as an unresolved check's.
+          if (unbacked && !run.helper && !admitsUnverified(assistant.content) && !assistant.content.includes(UNVERIFIED_NOTE)) {
+            status = 'error'
+            assistant.content = `${assistant.content.trimEnd()}\n\n${UNVERIFIED_NOTE}`
+            db.updateMessage(assistant)
+            this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
+          }
           if (assistant.meta?.serverCompacted) storeBrief(assistant.id)
+          // Accepted: the one answer, posted now (written out of sight while it could still be checked or sent back).
+          accept()
           break
         }
 
@@ -3774,8 +3825,11 @@ export class Agent {
       }
     } catch (e) {
       if (run.endWithDraft && verifyDraft) { keepDraft(); status = 'finished' }
-      else if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') status = 'stopped'
-      else {
+      else if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') {
+        // Stopped while only double-checking an answer it already wrote: that answer stands (not a half-written one).
+        if (verifyDraft && run.checking) keepDraft()
+        status = 'stopped'
+      } else {
         status = 'error'
         if (!(e as { shown?: boolean }).shown) this.notice(thread.id, `Something went wrong: ${(e as Error).message}`)
       }
@@ -3824,7 +3878,7 @@ export class Agent {
     const wire = privacy ? maskWire(wireIn, privacy) : wireIn
     const restorer = privacy ? new StreamRestorer(privacy) : undefined
     const reasonRestorer = privacy ? new StreamRestorer(privacy) : undefined
-    const meta = { ...(speaker ? botMeta(speaker) : {}), ...(routed && !routed.manual ? { routed } : {}), ...(effort ? { effort } : {}) }
+    const meta = { ...(speaker ? botMeta(speaker) : {}), ...(routed && !routed.manual ? { routed } : {}), ...(effort ? { effort } : {}), ...(run.holdFinal ? { hold: true } : {}) }
     const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: '', kind: 'normal', status: 'streaming', model, meta: Object.keys(meta).length ? meta : undefined })
     this.d.emit({ threadId, type: 'message', message: m })
     let flushAt = Date.now()

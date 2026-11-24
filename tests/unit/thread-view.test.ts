@@ -146,3 +146,37 @@ describe('voice conversations in the chat', () => {
     expect(html).not.toContain('data-testid="user-bubble"')
   })
 })
+
+// Grok Bot head-to-head (RLB-01, ALD-04): check first, post once. An answer the app checks before accepting it is
+// not on screen while the run works, then shows once it is final; nothing that was posted is pulled back.
+describe('answers are posted once', () => {
+  const ask = (): Message => msg({ role: 'user', content: 'Plan the Savannah trip' })
+  for (const botName of [undefined, 'Trip Planner']) {
+    it(`a held answer shows only once it is final${botName ? ' (bot chat)' : ''}`, () => {
+      const q = ask()
+      const draft = msg({ content: 'Day 1: River Street walk.', meta: { hold: true } })
+      const render = (ms: Message[], running: boolean): string => renderToString(createElement(tv.ThreadView, { messages: ms, running, pending: [], actions, botName }))
+      // Written, not yet accepted: out of sight, the working line up.
+      let html = render([q, draft], true)
+      expect(html).not.toContain('River Street')
+      expect(html).toContain('data-testid="status-line"')
+      // Streaming out of sight: still the working line.
+      html = render([q, { ...draft, status: 'streaming' }], true)
+      expect(html).not.toContain('River Street')
+      expect(html).toContain('data-testid="status-line"')
+      // Final: shown, even while the run finishes up.
+      html = render([q, { ...draft, meta: { hold: true, final: true } }], true)
+      expect(html).toContain('River Street')
+      // After the run, whatever is left stands (never lost).
+      expect(render([q, draft], false)).toContain('River Street')
+    })
+  }
+
+  it('a bot chat keeps an answer it already showed on screen while it is checked, until the checked one is written', () => {
+    const q = ask()
+    const draft = msg({ content: 'Day 1: River Street walk.', meta: { superseded: true, checking: true } })
+    const html = renderToString(createElement(tv.ThreadView, { messages: [q, draft, msg({ role: 'user', content: '[From the app] check', meta: { hidden: true } })], running: true, pending: [], actions, botName: 'Trip Planner' }))
+    expect(html).toContain('River Street')
+    expect(html).not.toContain('Double-checking')
+  })
+})

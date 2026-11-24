@@ -10,4 +10,7 @@ test('"On it." shows until the bot replies after your latest message', () => {
   expect(repliedSince([m('user', 'Make a homework plan'), m('assistant', 'Working on the first part now.')])).toBe(true)
   expect(repliedSince([m('user', 'a'), m('assistant', 'b'), m('user', 'c')])).toBe(false)
   expect(repliedSince([m('user', 'a'), m('user', '[reminder]', { hidden: true })])).toBe(false)
+  // An answer written out of sight until it's checked isn't said yet; once final it is.
+  expect(repliedSince([m('user', 'Make a homework plan'), m('assistant', 'Here it is', { hold: true })])).toBe(false)
+  expect(repliedSince([m('user', 'Make a homework plan'), m('assistant', 'Here it is', { hold: true, final: true })])).toBe(true)
 })

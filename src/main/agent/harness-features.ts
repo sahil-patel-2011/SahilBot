@@ -80,13 +80,47 @@ export const straight = (t: string): string => (t ?? '').replace(/[\u2018\u2019\
 /** "I've saved it", "It's been sent", "Done: created the event": a reply saying an action happened. */
 /** Tool-name stems that do what a claimed verb says ("published" ↔ publish_post, "it's live" ↔ deploy). */
 const CLAIM_STEMS: Record<string, string[]> = {
-  saved: ['save', 'write', 'create', 'note'], sent: ['send', 'email', 'message', 'reply', 'post'], emailed: ['email', 'send', 'mail'],
+  saved: ['save', 'write', 'create', 'note', 'edit', 'export', 'memory'], sent: ['send', 'email', 'mail', 'message', 'reply', 'post'], emailed: ['email', 'send', 'mail'],
   published: ['publish', 'post', 'deploy', 'release'], posted: ['post', 'publish', 'send'], deployed: ['deploy', 'publish', 'release'],
   uploaded: ['upload', 'put', 'save'], booked: ['book', 'reserve'], scheduled: ['schedule', 'create_event', 'calendar'],
-  deleted: ['delete', 'remove', 'trash'], removed: ['remove', 'delete', 'trash'], filed: ['file', 'create', 'submit'],
-  submitted: ['submit', 'send', 'post'], shared: ['share', 'send'], moved: ['move', 'rename'], renamed: ['rename', 'move'],
+  deleted: ['delete', 'remove', 'trash', 'file_manage', 'manage_bot'], removed: ['remove', 'delete', 'trash', 'file_manage', 'manage_bot'], filed: ['file', 'create', 'submit'],
+  submitted: ['submit', 'send', 'post'], shared: ['share', 'send'], moved: ['move', 'rename', 'file_manage'], renamed: ['rename', 'move', 'file_manage', 'update_bot', 'manage_bot'],
   installed: ['install'], ordered: ['order', 'buy', 'purchase'], paid: ['pay', 'purchase'], replied: ['reply', 'send'],
-  messaged: ['message', 'send'], texted: ['text', 'send', 'message'], live: ['publish', 'deploy', 'post', 'launch', 'release']
+  messaged: ['message', 'send'], texted: ['text', 'send', 'message'], live: ['publish', 'deploy', 'post', 'launch', 'release'],
+  created: ['create', 'write', 'save', 'make', 'new', 'add', 'export', 'schedule', 'file_manage'], wrote: ['write', 'save', 'create', 'edit'], written: ['write', 'save', 'create', 'edit'],
+  added: ['add', 'create', 'write', 'edit', 'update', 'insert', 'append', 'schedule', 'memory'], updated: ['update', 'edit', 'write', 'set', 'patch', 'modify', 'save'],
+  fixed: ['edit', 'write', 'patch', 'fix', 'apply', 'update'], cancelled: ['cancel', 'delete', 'remove', 'update', 'schedule'], canceled: ['cancel', 'delete', 'remove', 'update', 'schedule'],
+  downloaded: ['download', 'fetch', 'save', 'export'], copied: ['copy', 'write', 'save', 'duplicate', 'file_manage'],
+  completed: ['complete', 'submit', 'update', 'todo'], 'signed in': ['sign', 'login', 'log_in', 'auth', 'browser'], 'logged in': ['login', 'log_in', 'sign', 'auth', 'browser']
+}
+
+// Verbs for actions in the world (not "I've written a summary below", which is the reply itself).
+const VERBS = '(saved|sent|emailed|published|posted|deployed|uploaded|booked|scheduled|deleted|removed|filed|submitted|shared|moved|renamed|installed|ordered|paid|replied|messaged|texted|cancell?ed|canceled|downloaded|signed in|logged in)'
+// Verbs that also describe the reply itself ("I've added a section below", "I wrote a short poem"): a claim only when
+// the sentence names something concrete in the world (a file, a path, an event, an order…).
+const TARGETED = '(created|wrote|written|added|updated|fixed|copied|completed)'
+const TARGET = /\b[\w-]+\.(pdf|docx?|xlsx|csv|txt|md|py|js|ts|tsx|json|html?|pptx|key|numbers|pages|png|jpe?g|zip|ics|sh|rb|go|swift)\b|~\/|\/Users\/|\b(file|folder|document|spreadsheet|workbook|calendar|event|reminder|contact|repo|repository|branch|pull request|account|order|subscription|booking|reservation|invoice|app|website|site|playlist|ticket|issue)s?\b/i
+const claimRe = (verbs: string): RegExp => new RegExp(`\\b(i('ve| have)?|we('ve| have)?)\\s+(just\\s+|now\\s+|already\\s+)?${verbs}\\b|\\b(it'?s|has|have|was|were)\\s+(now\\s+)?been\\s+${verbs}\\b`, 'i')
+const CLAIM = new RegExp(`${claimRe(VERBS).source}|\\b(it'?s|it is|they'?re|they are)\\s+(now\\s+)?(live|saved|sent|published|posted|booked|scheduled|deployed)\\b`, 'i')
+const CLAIM_TARGETED = claimRe(TARGETED)
+// Judged sentence by sentence: "I've saved it. Nothing was deleted." is a claim; "Nothing has been sent yet" isn't.
+const NEGATED = new RegExp(`\\b(not|never|nothing|n't|yet to|unable|couldn'?t|wasn'?t)\\b[^.!?]{0,30}(${VERBS.slice(1, -1)}|${TARGETED.slice(1, -1)})`, 'i')
+
+/** The verbs a reply claims as done, sentence by sentence (a long reply: its first and last 1,500 characters). */
+function claimedVerbs(text: string): string[] {
+  let t = straight(text).trim()
+  if (!t) return []
+  if (t.length > 3000) t = `${t.slice(0, 1500)}\n${t.slice(-1500)}`
+  const out = new Set<string>()
+  for (const sentence of t.split(/(?<=[.!?])\s+|\n+/)) {
+    const plain = CLAIM.test(sentence), targeted = CLAIM_TARGETED.test(sentence) && TARGET.test(sentence)
+    if ((!plain && !targeted) || NEGATED.test(sentence)) continue
+    // Not a claim about this run: a question, a conditional, a quote of the past ("you already saved…").
+    if (/\?\s*$/.test(sentence) || /\b(if you|once you|when you|you('ve| have)? (already )?(saved|sent|created))\b/i.test(sentence)) continue
+    const low = sentence.toLowerCase()
+    for (const v of Object.keys(CLAIM_STEMS)) if (new RegExp(`\\b${v}\\b`).test(low)) out.add(v)
+  }
+  return [...out]
 }
 
 /**
@@ -94,28 +128,25 @@ const CLAIM_STEMS: Record<string, string[]> = {
  * when a connector labels that tool read-only (many do). Every verb the reply claims needs a matching tool.
  */
 export function claimBacked(text: string, okTools: string[]): boolean {
-  const t = straight(text).toLowerCase()
-  const claimed = Object.keys(CLAIM_STEMS).filter((v) => new RegExp(`\\b${v}\\b`).test(t))
+  const claimed = claimedVerbs(text)
   if (!claimed.length || !okTools.length) return false
   const names = okTools.map((n) => n.toLowerCase())
   return claimed.every((v) => CLAIM_STEMS[v].some((stem) => names.some((n) => n.split(/__|[^a-z]+/).some((part) => part.startsWith(stem)) || n.includes(stem))))
 }
 
 export function claimsDone(text: string): boolean {
+  return claimedVerbs(text).length > 0
+}
+
+/**
+ * The reply ends on a question for the user ("Which date works, Friday or Saturday?", "What's the address?"): their
+ * answer is what comes next, so the run ends there. A closing "Anything else?" or "Let me know…?" isn't one.
+ */
+export function asksUserNow(text: string): boolean {
   const t = straight(text).trim()
-  if (!t || t.length > 1500) return false
-  // Verbs for actions in the world (not "I've written a summary below", which is the reply itself).
-  const verbs = '(saved|sent|emailed|published|posted|deployed|uploaded|booked|scheduled|deleted|removed|filed|submitted|shared|moved|renamed|installed|ordered|paid|replied|messaged|texted)'
-  const claim = new RegExp(`\\b(i('ve| have)?|we('ve| have)?)\\s+(just\\s+|now\\s+|already\\s+)?${verbs}\\b|\\b(it'?s|has|have|was|were)\\s+(now\\s+)?been\\s+${verbs}\\b|\\b(it'?s|it is|they'?re|they are)\\s+(now\\s+)?(live|saved|sent|published|posted|booked|scheduled|deployed)\\b`, 'i')
-  // Judged sentence by sentence: "I've saved it. Nothing was deleted." is a claim; "Nothing has been sent yet" isn't.
-  const negated = new RegExp(`\\b(not|never|nothing|n't|yet to|unable|couldn'?t|wasn'?t)\\b[^.!?]{0,30}${verbs}`, 'i')
-  for (const sentence of t.split(/(?<=[.!?])\s+/)) {
-    if (!claim.test(sentence) || negated.test(sentence)) continue
-    // Not a claim about this run: a question, a conditional, a quote of the past ("you already saved…").
-    if (/\?\s*$/.test(sentence) || /\b(if you|once you|when you|you('ve| have)? (already )?(saved|sent|created))\b/i.test(sentence)) continue
-    return true
-  }
-  return false
+  if (!/\?\s*(\([^)]*\))?\s*$/.test(t)) return false
+  const last = t.split(/(?<=[.!])\s+|\n+/).pop() ?? t
+  return !/\b(anything else|something else|any(thing)? more|any (other )?questions|need anything|help with anything|other (way|thing)s? i can|let me know|sound good|make sense|how does (that|this) (look|sound))\b/i.test(last)
 }
 
 /** "I couldn't get the churn rate: the report doesn't exist." A reply that gives up on the task. */

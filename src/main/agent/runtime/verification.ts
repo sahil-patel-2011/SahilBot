@@ -1,5 +1,6 @@
 import { lstatSync } from 'node:fs'
 import { basename, isAbsolute } from 'node:path'
+import { straight } from '../harness-features'
 import type { ResearchClaim } from './research'
 import type { RuntimeStore } from './store'
 
@@ -44,11 +45,13 @@ export function completionReport(store: RuntimeStore, runId: string, o: { requir
 /** The reply already tells the user it couldn't confirm the result ("I couldn't verify…", "not one I verified on screen"). */
 export function admitsUnverified(text: string): boolean {
   // A negation counts only when it is about doing or checking the work ("I couldn't open the file", "didn't confirm"),
-  // never a passing "can't" or "didn't" elsewhere in a reply that claims success.
-  const NEG = String.raw`(?:couldn'?t|could not|can'?t|cannot|wasn'?t able to|was not able to|unable to|didn'?t|did not|haven'?t|have not)`
+  // said of itself or the work (I, we, it, that…, or a sentence that starts with it), never a passing "can't" or
+  // "didn't" elsewhere in a reply that claims success ("I didn't need to run it twice", "you can't wait to see it").
+  const SUBJ = String.raw`(?:^|[.!?:;]\s*|\b(?:i'm|i|we|it|that|this|they)\s+(?:(?:was|were|am|is|are)\s+)?)`
+  const NEG = String.raw`(?:couldn'?t|could not|can'?t|cannot|wasn'?t able to|was not able to|unable to|didn'?t|did not|haven'?t been able to|have not been able to|haven'?t|have not)`
   const DO = String.raw`(?:verify|confirm|check|test|finish|complete|get|reach|access|open|load|run|see|find|read|save|send|click|connect|sign|log|do|make|start|install|fix|reproduce)`
-  return new RegExp(String.raw`\b${NEG}\s+(?:\w+\s+){0,2}?${DO}\w*\b`, 'i').test(text)
-    || /\b(not (yet )?(one i )?(verified|confirmed|checked)|unverified|unconfirmed|blocked (me|it|the)|was blocked|expected result|not sure|uncertain|to finish (the|this) (test|task))\b/i.test(text)
+  return new RegExp(String.raw`${SUBJ}${NEG}\s+(?!(?:need|want|have|wait|plan|mean|bother)\s+to\b)(?:\w+\s+)?${DO}\w*\b`, 'im').test(straight(text))
+    || /\b(not (yet )?(one i )?(verified|confirmed|checked)|unverified|unconfirmed|blocked (me|it|the)|was blocked|not the expected result|didn'?t (get|see|show) the expected result|not sure|uncertain|to finish (the|this) (test|task))\b/i.test(straight(text))
 }
 
 /** One plain sentence for a reply that sounds sure while the app's checks found something unresolved (no ids, no tool names). */

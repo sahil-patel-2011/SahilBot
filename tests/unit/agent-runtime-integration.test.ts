@@ -91,7 +91,13 @@ test('a reply that already says it couldn\'t confirm the result is shown as writ
   expect(admitsUnverified("Done: the invoice is sent. You can't reply to it from the app, but it went out.")).toBe(false)
   expect(admitsUnverified("Fixed it. The old code didn't handle empty lists.")).toBe(false)
   expect(admitsUnverified("I didn't confirm the total on screen.")).toBe(true)
-  expect(admitsUnverified('I was unable to reach the server.')).toBe(true)
+  expect(admitsUnverified('I was unable to reach the server.')).toBe(true)  // Only about doing the work, said of itself: not a pass-through "didn't need to", "you can't wait".
+  expect(admitsUnverified("I didn't need to run it twice, it's sent.")).toBe(false)
+  expect(admitsUnverified("You can't wait to see it: the deck is in Downloads.")).toBe(false)
+  expect(admitsUnverified('The expected result is in cell B4.')).toBe(false)
+  expect(admitsUnverified("I’m unable to verify the total.")).toBe(true)
+  expect(admitsUnverified("Couldn't verify the hotel link.")).toBe(true)
+  expect(admitsUnverified("I haven't been able to confirm the booking.")).toBe(true)
 })
 
 test('recorded-tool replay cannot execute a live write', async () => {
