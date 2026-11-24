@@ -1204,6 +1204,8 @@ export type VoiceUiEvent =
   | { type: 'stop-audio' }
   | { type: 'metric'; name: string; ms: number }
   | { type: 'error'; message: string }
+  /** A passing note (the standard voice took over, a request Grok turned down): a caption for a few seconds. */
+  | { type: 'notice'; message: string }
   | { type: 'download'; kind: string; progress: number; done?: boolean; error?: string; /** Started on its own (not a click): a toast says when it's ready. */ auto?: boolean; model?: string; label?: string }
 
 export type Schedule =

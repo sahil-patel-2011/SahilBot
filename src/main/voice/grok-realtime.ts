@@ -33,8 +33,12 @@ export interface GrokRealtimeOptions {
   /** The chat's bot does the work: returns what it did or found (its reply), streamed into one text. */
   doTask(request: string, signal: AbortSignal): Promise<string>
   emit(e: VoiceEvent): void
-  /** Charged when the conversation ends, by the minute (spending limit and usage). */
+  /** Charged as the conversation goes (each minute, and the rest when it ends): spending limit and usage. */
   charge?(usd: number, minutes: number): void
+  /** Checked every minute of the conversation: throws when the spending limit won't cover another minute or two. */
+  guard?(minutes: number): void
+  /** Hangs up after this long with nobody talking and no work running (default 5 minutes). */
+  idleMs?: number
   fetch?: typeof fetch
   socket?: (url: string, protocols: string[]) => RealtimeSocket
   now?: () => number
@@ -63,10 +67,12 @@ export const DO_TASK_TOOL = {
 }
 
 /** The instructions Grok gets: who it is, how to talk, and when to hand work to the bot. */
-export function grokVoiceInstructions(o: { botName: string; userName?: string; language?: string }): string {
+export function grokVoiceInstructions(o: { botName: string; userName?: string; language?: string; role?: string }): string {
   return [
     `You are ${o.botName}, talking with ${o.userName || 'the user'} out loud. Keep replies short and natural, one to three sentences, like a phone call. No lists, markdown, links or emoji.`,
+    o.role ? `What you're for: ${o.role.replace(/\s+/g, ' ').trim().slice(0, 300)}` : '',
     'You have no memory, files, apps or web access yourself. For anything that needs them, or any action, call do_task with the full request. Before calling it, say a few words such as "On it." Then tell the user the result briefly in your own words; offer details only if they ask.',
+    'Big jobs keep going in the chat even if the call ends: say so when one will take a while.',
     'Never claim you did something unless do_task says it was done. If it needs the user (an approval, a choice), ask them.',
     o.language ? `Speak ${o.language} unless the user switches.` : ''
   ].filter(Boolean).join('\n')
@@ -80,6 +86,17 @@ export class GrokRealtime {
   private queue: string[] = []
   private closed = false
   private replyText = ''
+  /** A response.create was sent and its response hasn't started yet: another one now would collide. */
+  private requested = false
+  /** Tool results that came back while Grok was talking: sent together when it finishes. */
+  private outputs: Array<{ callId: string; output: string }> = []
+  /** Talked over: what's still arriving of the cut-off reply isn't played. */
+  private cancelled = false
+  /** The reply being spoken: its item and how much audio of it went out (to tell Grok where it was cut off). */
+  private item: { id: string; sentMs: number; firstAt: number } | null = null
+  private timer: ReturnType<typeof setInterval> | null = null
+  private chargedMin = 0
+  private lastActive = 0
 
   constructor(private o: GrokRealtimeOptions) {}
 
@@ -103,9 +120,15 @@ export class GrokRealtime {
       ws.onerror = () => { clearTimeout(t); reject(new Error('Grok voice couldn\'t connect.')) }
     })
     this.startedAt = (this.o.now ?? Date.now)()
+    this.lastActive = this.startedAt
     ws.onmessage = (ev) => { try { this.handle(JSON.parse(String(ev.data))) } catch { /* not JSON */ } }
-    ws.onerror = () => this.o.emit({ type: 'error', message: 'Grok voice lost its connection.' })
+    // A socket error is followed by its close, which says so once (and offers Reconnect).
+    ws.onerror = () => undefined
     ws.onclose = () => { if (!this.closed) { this.o.emit({ type: 'error', message: 'Grok voice disconnected.' }); this.finish() } }
+    // Every minute: charge it (a crash or a forced quit loses at most a minute), check the spending limit still
+    // covers more, and hang up after a long silence.
+    this.timer = setInterval(() => this.minute(), 60_000)
+    ;(this.timer as { unref?: () => void }).unref?.()
     this.send({
       type: 'session.update',
       session: {
@@ -129,8 +152,46 @@ export class GrokRealtime {
 
   /** Something to say on its own between turns (a bot finished work started in this conversation). */
   announce(text: string): void {
-    if (this.responding) { this.queue.push(text); return }
-    this.send({ type: 'response.create', response: { instructions: `Briefly tell the user, in one or two sentences: ${text}` } })
+    if (this.responding || this.requested) { this.queue.push(text); return }
+    this.create({ instructions: `Briefly tell the user, in one or two sentences: ${text}` })
+  }
+
+  /** One response at a time: a new one only once the last has finished (the server refuses a second). */
+  private create(response?: Record<string, unknown>): void {
+    this.requested = true
+    this.send(response ? { type: 'response.create', response } : { type: 'response.create' })
+  }
+
+  /** Grok finished talking: tool results that came back meanwhile first (one reply for all), then what to announce. */
+  private flush(): void {
+    if (this.closed || this.responding || this.requested) return
+    if (this.outputs.length) {
+      for (const o of this.outputs.splice(0)) this.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: o.callId, output: o.output } })
+      this.create()
+      return
+    }
+    if (this.queue.length) this.announce(this.queue.shift()!)
+  }
+
+  /** The once-a-minute check (also called directly by tests). */
+  minute(): void {
+    if (this.closed || !this.startedAt) return
+    const now = (this.o.now ?? Date.now)()
+    const minutes = (now - this.startedAt) / 60_000
+    const whole = Math.floor(minutes)
+    if (whole > this.chargedMin) {
+      this.o.charge?.((whole - this.chargedMin) * GROK_VOICE_USD_PER_MIN, whole - this.chargedMin)
+      this.chargedMin = whole
+    }
+    try { this.o.guard?.(minutes) } catch {
+      this.o.emit({ type: 'error', message: 'Voice chat ended: the spending limit is reached.' })
+      this.close()
+      return
+    }
+    if (!this.tasks.size && !this.responding && now - this.lastActive >= (this.o.idleMs ?? 5 * 60_000)) {
+      this.o.emit({ type: 'error', message: 'Voice chat ended after a few quiet minutes.' })
+      this.close()
+    }
   }
 
   /** Ends the conversation (and any work it started stops waiting on it). */
@@ -143,11 +204,15 @@ export class GrokRealtime {
 
   private finish(): void {
     this.closed = true
-    for (const c of this.tasks.values()) c.abort()
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
+    // Hanging up stops waiting for the work, not the work: the bot finishes it in its chat ('hangup').
+    for (const c of this.tasks.values()) c.abort('hangup')
     this.tasks.clear()
     if (this.startedAt) {
       const minutes = Math.max(1 / 60, ((this.o.now ?? Date.now)() - this.startedAt) / 60_000)
-      this.o.charge?.(minutes * GROK_VOICE_USD_PER_MIN, minutes)
+      const rest = Math.max(0, minutes - this.chargedMin)
+      if (rest > 0) this.o.charge?.(rest * GROK_VOICE_USD_PER_MIN, rest)
       this.startedAt = 0
     }
     this.o.emit({ type: 'state', state: 'idle' })
@@ -161,9 +226,18 @@ export class GrokRealtime {
     const type = String(e.type ?? '')
     switch (type) {
       case 'input_audio_buffer.speech_started':
-        // You started talking: Grok stops (barge-in), the way a person would.
+        // You started talking: Grok stops (barge-in), the way a person would, and remembers only what you heard.
+        this.lastActive = (this.o.now ?? Date.now)()
         this.o.emit({ type: 'stop-audio' })
-        if (this.responding) this.send({ type: 'response.cancel' })
+        if (this.responding) {
+          this.cancelled = true
+          this.send({ type: 'response.cancel' })
+          if (this.item) {
+            const heard = Math.max(0, Math.min(this.item.sentMs, this.lastActive - this.item.firstAt))
+            this.send({ type: 'conversation.item.truncate', item_id: this.item.id, content_index: 0, audio_end_ms: Math.round(heard) })
+          }
+        }
+        this.item = null
         this.o.emit({ type: 'state', state: 'hearing' })
         return
       case 'input_audio_buffer.speech_stopped':
@@ -177,14 +251,25 @@ export class GrokRealtime {
         return
       case 'response.created':
         this.responding = true
+        this.requested = false
+        this.cancelled = false
+        this.item = null
         this.replyText = ''
         return
       case 'response.output_audio.delta':
       case 'response.audio.delta': {
         const b64 = typeof e.delta === 'string' ? e.delta : typeof e.audio === 'string' ? e.audio : ''
-        if (!b64) return
+        // The rest of a reply you talked over: dropped (it would start playing again).
+        if (!b64 || this.cancelled) return
+        const audio = fromPcm16Base64(b64)
+        const now = (this.o.now ?? Date.now)()
+        if (typeof e.item_id === 'string') {
+          if (this.item?.id !== e.item_id) this.item = { id: e.item_id, sentMs: 0, firstAt: now }
+          this.item.sentMs += audio.length / OUT_RATE * 1000
+        }
+        this.lastActive = now
         this.o.emit({ type: 'state', state: 'speaking' })
-        this.o.emit({ type: 'audio', audio: fromPcm16Base64(b64), rate: OUT_RATE })
+        this.o.emit({ type: 'audio', audio, rate: OUT_RATE })
         return
       }
       case 'response.output_audio_transcript.delta':
@@ -194,7 +279,7 @@ export class GrokRealtime {
       case 'response.output_audio_transcript.done':
       case 'response.audio_transcript.done': {
         const text = (typeof e.transcript === 'string' ? e.transcript : this.replyText).trim()
-        if (text) this.o.emit({ type: 'reply', text })
+        if (text && !this.cancelled) this.o.emit({ type: 'reply', text })
         this.replyText = ''
         return
       }
@@ -203,12 +288,19 @@ export class GrokRealtime {
         return
       case 'response.done':
         this.responding = false
+        this.requested = false
+        this.cancelled = false
+        this.lastActive = (this.o.now ?? Date.now)()
         if (!this.tasks.size) this.o.emit({ type: 'state', state: 'listening' })
-        if (this.queue.length) this.announce(this.queue.shift()!)
+        this.flush()
         return
       case 'error': {
+        // The server turned one request down (nothing to cancel, a reply already running…): the conversation goes
+        // on, so it's a passing note, not the bar's error state.
         const err = (e.error ?? e) as { message?: string }
-        this.o.emit({ type: 'error', message: `Grok voice: ${err.message ?? 'something went wrong'}` })
+        this.requested = false
+        this.o.emit({ type: 'notice', message: `Grok voice: ${err.message ?? 'something went wrong'}` })
+        this.flush()
         return
       }
     }
@@ -232,7 +324,10 @@ export class GrokRealtime {
       }
     }
     if (this.closed) return
-    this.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output } })
-    this.send({ type: 'response.create' })
+    this.lastActive = (this.o.now ?? Date.now)()
+    // Grok may be talking right now (you spoke while the bot worked, or it's announcing): the result waits for the
+    // end of that reply, then goes in with any others and one new reply.
+    this.outputs.push({ callId, output })
+    this.flush()
   }
 }

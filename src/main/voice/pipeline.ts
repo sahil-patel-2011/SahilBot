@@ -14,6 +14,8 @@ export type VoiceEvent =
   | { type: 'stop-audio' }
   | { type: 'metric'; name: 'first_audio_ms' | 'stt_ms'; ms: number }
   | { type: 'error'; message: string }
+  /** A passing note (fell back to the standard voice, a request the server turned down): shown briefly, never an error. */
+  | { type: 'notice'; message: string }
 
 export interface PipelineDeps {
   vad: Vad
