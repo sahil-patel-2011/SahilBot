@@ -206,3 +206,24 @@ test('countAsk / countMiss: exact words, character limits and bullet counts', ()
   expect(countMiss('Give me 3 bullet points on sleep', '- Rest\n- Mood')).toMatch(/has 2 bullets/)
 })
 
+// Review round 3 (IWA-01/05/06): the common ways of asking for a size are counted too.
+test('countAsks: a 50-word bio, in 30 words, spelled numbers, ranges, sentences, several asks at once', async () => {
+  const { countAsks } = await import('../../src/main/agent/harness-features')
+  expect(countAsk('Write a 50-word bio of a chef')).toEqual({ n: 50, unit: 'words', exact: true })
+  expect(countAsk('In 30 words, explain gravity')).toEqual({ n: 30, unit: 'words', exact: true })
+  expect(countAsk('Write a 50 word summary')).toEqual({ n: 50, unit: 'words', exact: true })
+  expect(countAsk('Write 100 words on space')).toEqual({ n: 100, unit: 'words', exact: true })
+  expect(countAsk('Write a 280-character post')).toEqual({ n: 280, unit: 'characters', exact: false })
+  expect(countAsk('Write exactly twenty words about dogs')).toEqual({ n: 20, unit: 'words', exact: true })
+  expect(countAsk('Keep it to 50 words')).toEqual({ n: 50, unit: 'words', exact: false })
+  expect(countAsk('Describe Paris in between 40 and 60 words')).toEqual({ n: 60, min: 40, unit: 'words', exact: false })
+  expect(countAsk('Explain photosynthesis in 3 sentences')).toEqual({ n: 3, unit: 'sentences', exact: true })
+  expect(countAsks('Write exactly 50 words, under 300 characters, on tea')).toEqual([{ n: 300, unit: 'characters', exact: false }, { n: 50, unit: 'words', exact: true }])
+  // Not a size to check.
+  for (const q of ['Write about 50 words on tea', 'Summarize these 3 sentences', 'I wrote 500 words, can you edit them?']) expect(countAsk(q), q).toBeUndefined()
+  expect(countMiss('Explain photosynthesis in 3 sentences', 'Plants use light. They make sugar. Oxygen is released.')).toBeUndefined()
+  expect(countMiss('Explain photosynthesis in 3 sentences', 'Plants use light. They make sugar.')).toMatch(/has 2 sentences; the user asked for exactly 3/)
+  expect(countMiss('Describe tea in between 5 and 8 words', 'Tea is warm.')).toMatch(/between 5 and 8/)
+  expect(countMiss('Write exactly 5 words, under 10 characters', 'One two three four five')).toMatch(/at most 10/)
+})
+

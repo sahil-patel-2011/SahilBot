@@ -42,7 +42,8 @@ export function quickMath(text: string): string | undefined {
   if (BARE.test(text.trim())) return undefined
   let t = asked.toLowerCase().replace(/\s*\b(per ?cent|pct)\b/g, '%')
   const money = t.includes('$')
-  t = t.replace(/[$,]/g, '').replace(/×/g, '*').replace(/x(?=\s*[\d(])/g, '*').replace(/÷/g, '/').replace(/\bsquared\b/g, '^2').replace(/\bcubed\b/g, '^3')
+  // Thousands commas only ("1,740"); "1,5" is a decimal comma, left in so the sum is not guessed.
+  t = t.replace(/\$/g, '').replace(/(?<=\d),(?=\d{3}(?!\d))/g, '').replace(/×/g, '*').replace(/x(?=\s*[\d(])/g, '*').replace(/÷/g, '/').replace(/\bsquared\b/g, '^2').replace(/\bcubed\b/g, '^3')
   const fmt = (v: number): string => (money ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : (Math.round(v * 1e6) / 1e6).toLocaleString('en-US', { maximumFractionDigits: 6 }))
   // A tip, tax or discount on an amount: the part and what it comes to ("20% tip on $85 = $17.00 ($102.00 total).").
   const pct = t.match(/^(\d+(?:\.\d+)?)\s*%\s*(tip|tax|off|discount)\s*(?:on|of|from|for)?\s*(\d+(?:\.\d+)?)$/)

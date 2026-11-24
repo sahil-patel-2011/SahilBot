@@ -82,6 +82,35 @@ describe('routing', () => {
     }
     expect(classifyTask('Write an essay on the causes of WW1').difficulty).toBe(2)
   })
+
+  // Review round 3 (IWA-01/02/05, IWD-01): a sized piece of writing is a reply, whatever document or site it names.
+  test('"a memo in 80 words", "a 3-sentence status report", "a one-paragraph brief" are chat writing, not office work', () => {
+    for (const q of ['Write a brief summary of the French Revolution in exactly 40 words', 'Write a memo to the team about the offsite in 80 words', 'Write a one-paragraph brief for a client about our new pricing', 'Write a 3-sentence status report on the website redesign', 'Write a 280-character post about our launch']) {
+      const d = classifyTask(q)
+      expect(d.category, q).toBe('writing')
+      expect(d.kind, q).toBe('chat')
+      expect(d.effort, q).toBe('medium')
+    }
+    expect(classifyTask('Write a brief summary of the French Revolution').kind).toBe('chat')
+    // Saved as a file, or a document to make: still agent work.
+    for (const q of ['Write a 50-word bio of a chef and save it as bio.md', 'Make me a project brief doc for the launch', 'Write a 3-page report on our sales as a PDF']) expect(classifyTask(q).kind, q).toBe('agent')
+  })
+
+  // Review round 3 (DAB-01/02): "by clicking the buttons" is screen work.
+  test('Calculator by clicking is computer use; the sum alone stays a chat', () => {
+    for (const q of ['Open Calculator and compute 245 × 18 by clicking the buttons', 'Use Calculator to multiply 245 by 18 by clicking the buttons', 'Open Notes and write hello']) {
+      const d = classifyTask(q)
+      expect(d.category, q).toBe('computer-use')
+      expect(d.kind, q).toBe('agent')
+    }
+    expect(classifyTask('What is 245 × 18?').kind).toBe('chat')
+  })
+})
+
+test('the screen pattern has no stray control characters (a "\\b" typed with one backslash)', async () => {
+  const src = (await import('node:fs')).readFileSync(new URL('../../src/main/llm/task-classifier.ts', import.meta.url), 'utf8')
+  expect(src.includes('\x08')).toBe(false)
+  expect(/\(and\|to\)\\b\|careers page/.test(src)).toBe(false)
 })
 
 describe('no brain read for quick asks', () => {

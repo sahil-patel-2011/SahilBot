@@ -43,3 +43,10 @@ test('a bare date, range or fraction is a reply, not arithmetic', () => {
   expect(quickMath('what is 3/4')).toBe('3/4 = 0.75.')
   expect(quickMath('100 - 7')).toBe('100 - 7 = 93.')
 })
+
+// Review round 3 (IWA-02): a European decimal comma is not a thousands separator.
+test('only thousands commas are dropped; "1,5 + 2" is not guessed as 15 + 2', () => {
+  expect(quickMath('1,5 + 2')).toBeUndefined()
+  expect(quickMath('18% of $1,740')).toBe('18% of $1,740 = $313.20.')
+  expect(quickMath('1,234,567 + 1')).toBe('1,234,567 + 1 = 1,234,568.')
+})

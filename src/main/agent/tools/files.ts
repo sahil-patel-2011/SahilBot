@@ -24,13 +24,6 @@ function canonical(p: string): string {
   try { return join(realpathSync(probe), relative(probe, p)) } catch { return p }
 }
 
-/**
- * Documents SahilBot created during this session: rebuilding one of its own files (a backup is kept) is local
- * work, not replacing something of the user's, so Auto doesn't stop to ask (found live: every rebuild of a
- * just-made report asked "Can delete or overwrite · Uses details taken from a web page").
- */
-const madeHere = new Set<string>()
-
 /** True when `p` is `root` or inside it (a root may also be a single attached file). */
 function within(root: string, p: string): boolean {
   return p === root || p.startsWith(root.endsWith(sep) ? root : root + sep)
@@ -461,7 +454,10 @@ export function fileTools(getWorkspace: () => string, docsDir: string, o: FileTo
     name: 'create_document',
     label: 'Document',
     core: true,
-    effect: (a, c) => { const p = safe(() => resolvePath(a.path, getWorkspace(), c.roots, { base: c.folder })); return p === undefined || (existsSync(p) && !madeHere.has(real(p))) ? 'destructive' : 'write_local' },
+    // Local work, like file_write: an existing file is rebuilt only when this chat made it or the user asked to change
+    // it (keep() saves "name (2).ext" otherwise), with a backup first. So a rebuild of the chat's own report, even
+    // after a restart, is never a "can delete or overwrite" step (found live: every rebuild asked, with web details).
+    effect: (a, c) => (safe(() => resolvePath(a.path, getWorkspace(), c.roots, { base: c.folder })) === undefined ? 'destructive' : 'write_local'),
     hardStop: (a, call) => outsideStop('writing', getWorkspace)(a.path, call),
     description: `Create (or rebuild) a polished document from data; it is reviewed automatically (fix every FAIL in the review, then present it).
 - .docx / .pdf: "markdown" (headings, lists, tables, bold, links, images ![alt](path "Caption"), charts as a \`\`\`chart fenced block of JSON {type: column|bar|line|area|pie|doughnut, title, categories, series: [{name, values}], number_format: "$#,##0"}, [TOC], <!-- pagebreak -->, <!-- landscape --> / <!-- portrait -->, footnotes text[^1] + [^1]: note, "Table: caption" under a table, > [!NOTE] / [!WARNING] callouts). Real Word styles, TOC with page numbers, bookmarks, numbered captions, numbers right-aligned, header rows repeat across pages, "Page X of Y". Options: theme (modern | classic | minimal; same look in PDF, Word, PowerPoint), template (memo | report | letter | meeting_notes | proposal | resume | invoice) with fields {to, from, cc, date, subject, recipient, recipient_address, sender, sender_address, salutation, closing, signature, subtitle, author, organization, prepared_for, prepared_by, attendees, facilitator, location, time, invoice_number, due_date, po_number, terms}, cover, toc (auto for long docs), subtitle, author, header, footer, page_numbers, orientation, page_size (letter|a4|legal), margins (inches: 1 or {top, right, bottom, left}), font_size (pt), fit_pages (e.g. 1: tightens spacing, then type and margins, within readable limits), font, citations [text | {text, url}]. The result reports the page count. Never unzip or hand-edit document XML: rebuild with these options instead.
@@ -598,7 +594,6 @@ Optional "accent" color like "#2563EB" (too-light accents are darkened for text 
       beforeChange(ctx.threadId, full)
       const r = await createDocument(full, spec, { readImage })
       afterChange(ctx.threadId, full)
-      if (!existed) madeHere.add(real(full))
       noteOwned(chatOf(ctx), full)
       const what = spec.slides ? `${r.slides ?? spec.slides.length} slides` : spec.sheets ? `${spec.sheets.length} sheet${spec.sheets.length > 1 ? 's' : ''}` : `${r.pages ? `${r.pages} page${r.pages === 1 ? '' : 's'}${/\.docx$/i.test(full) ? ' as Word lays it out' : ''}, ` : ''}${humanSize(r.bytes)}`
       let review = ''

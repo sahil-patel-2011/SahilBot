@@ -224,31 +224,83 @@ export function overLimit(userText: string, reply: string, toolText: string, wri
   return undefined
 }
 
-/** A count the user set for the reply ("exactly 150 words", "under 280 characters", "3 bullet points"). */
-type CountAsk = { n: number; unit: 'words' | 'characters' | 'bullets'; exact: boolean }
-const NUM: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 }
-export function countAsk(ask: string): CountAsk | undefined {
+/**
+ * A count the user set for the reply ("exactly 150 words", "under 280 characters", "3 bullet points", "a 50-word bio",
+ * "in 3 sentences", "between 40 and 60 words"): `n` is the count (the most, for a limit or range; 0 for no most),
+ * `min` the least. "About 50 words" sets nothing to check.
+ */
+type CountUnit = 'words' | 'characters' | 'bullets' | 'sentences'
+type CountAsk = { n: number; unit: CountUnit; exact: boolean; min?: number }
+const NUM: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+  sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90, hundred: 100
+}
+const N = '(\\d[\\d,]*|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:-(?:one|two|three|four|five|six|seven|eight|nine))?|(?:a |one )?hundred|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|one|two|three|four|five|six|seven|eight|nine|ten)'
+const U = '(words?|characters?|chars?|bullets?|bullet points?|sentences?)'
+const num = (w: string): number => {
+  const k = w.replace(/^(a|one) (?=hundred)/, '')
+  if (/^\d/.test(k)) return Number(k.replace(/,/g, ''))
+  const [tens, ones] = k.split('-')
+  return (NUM[tens] ?? NaN) + (ones ? NUM[ones] ?? NaN : 0)
+}
+const unitOf = (u: string): CountUnit => /^w/.test(u) ? 'words' : /^c/.test(u) ? 'characters' : /^b/.test(u) ? 'bullets' : 'sentences'
+/** Words before a number that make it not the reply's size ("these 3 sentences", "about 50 words", "I wrote 500 words"). */
+const NOT_SIZE = /\b(these|those|the|first|last|next|following|my|your|his|her|their|our|this|that|wrote|have|has|read|about|around|roughly|approximately|approx|nearly|almost|some|over|than|least)\s+$/
+const SIZE_RULES: Array<[RegExp, (m: RegExpMatchArray, t: string) => CountAsk | undefined]> = [
+  [new RegExp(`\\bbetween ${N} and ${N}\\s*${U}\\b|\\b${N}\\s*(?:-|to)\\s*${N}[- ]${U}\\b`, 'g'), (m) => {
+    const [a, b, u] = m[1] ? [m[1], m[2], m[3]] : [m[4], m[5], m[6]]
+    return { n: num(b), min: num(a), unit: unitOf(u), exact: false }
+  }],
+  [new RegExp(`\\b(?:under|fewer than|less than|at most|no more than|max(?:imum)?(?: of)?|within|up to|keep it (?:under|to)|limit(?:ed)? (?:it )?to)\\s+${N}[- ]?${U}\\b|\\b${N}[- ]?${U} or (?:less|fewer)\\b`, 'g'),
+    (m) => ({ n: num(m[1] ?? m[3]), unit: unitOf(m[2] ?? m[4]), exact: false })],
+  [new RegExp(`\\b(?:at least|more than|no fewer than|no less than|minimum(?: of)?)\\s+${N}[- ]?${U}\\b`, 'g'), (m) => ({ n: 0, min: num(m[1]), unit: unitOf(m[2]), exact: false })],
+  [new RegExp(`\\bexactly\\s+${N}[- ]?${U}\\b`, 'g'), (m) => ({ n: num(m[1]), unit: unitOf(m[2]), exact: true })],
+  // A size with no qualifier ("a 50-word bio", "in 30 words", "write 100 words", "3 bullet points", "in 3 sentences"):
+  // exact, except characters ("a 280-character post"), which are a limit.
+  [new RegExp(`\\b${N}[- ]${U}\\b`, 'g'), (m, t) => {
+    if (NOT_SIZE.test(t.slice(Math.max(0, (m.index ?? 0) - 20), m.index))) return undefined
+    const unit = unitOf(m[2])
+    return { n: num(m[1]), unit, exact: unit !== 'characters' }
+  }]
+]
+
+/** Every count the user set for the reply, one per unit (exact words and a character limit can both hold). */
+export function countAsks(ask: string): CountAsk[] {
   const t = straight(ask).toLowerCase()
-  const max = /\b(?:under|fewer than|less than|at most|no more than|max(?:imum)?(?: of)?|within|up to)\s+(\d[\d,]*)\s*(words|characters|chars)\b|\b(\d[\d,]*)\s*(words|characters|chars) or (?:less|fewer)\b/.exec(t)
-  if (max) return { n: Number((max[1] ?? max[3]).replace(/,/g, '')), unit: /^w/.test(max[2] ?? max[4]) ? 'words' : 'characters', exact: false }
-  const exact = /\bexactly\s+(\d[\d,]*|one|two|three|four|five|six|seven|eight|nine|ten)\s*(words|characters|chars|bullets?|bullet points)\b/.exec(t)
-  if (exact) { const n = NUM[exact[1]] ?? Number(exact[1].replace(/,/g, '')); return { n, unit: /^w/.test(exact[2]) ? 'words' : /^c/.test(exact[2]) ? 'characters' : 'bullets', exact: true } }
-  const bullets = /\b(\d|one|two|three|four|five|six|seven|eight|nine|ten)\s+bullet(?:s| points)\b/.exec(t)
-  if (bullets) return { n: NUM[bullets[1]] ?? Number(bullets[1]), unit: 'bullets', exact: true }
-  return undefined
+  const out: CountAsk[] = []
+  const used: Array<[number, number]> = []
+  for (const [re, read] of SIZE_RULES) {
+    for (const m of t.matchAll(re)) {
+      const at = m.index ?? 0
+      if (used.some(([a, b]) => at < b && at + m[0].length > a)) continue
+      const c = read(m, t)
+      if (!c || !Number.isFinite(c.n) || !(c.n > 0 || (c.min ?? 0) > 0) || out.some((o) => o.unit === c.unit)) continue
+      out.push(c)
+      used.push([at, at + m[0].length])
+    }
+  }
+  return out
+}
+
+/** The first count the user set for the reply (countAsks). */
+export function countAsk(ask: string): CountAsk | undefined {
+  return countAsks(ask)[0]
 }
 
 /** The reply's count against the user's: a note for one rewrite when it's off, else undefined. Markdown markers don't count. */
 export function countMiss(ask: string, reply: string): string | undefined {
-  const c = countAsk(ask)
-  if (!c || !(c.n > 0)) return undefined
   const text = reply.trim()
   const plain = text.replace(/[*_`#>]+/g, '').replace(/^\s*[-•]\s+/gm, '')
-  const got = c.unit === 'words' ? plain.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length
-    : c.unit === 'characters' ? [...text].length
-      : text.split('\n').filter((l) => /^\s*([-*•]|\d+[.)])\s+\S/.test(l)).length
-  if (c.exact ? got === c.n : got <= c.n) return undefined
-  return `[From the app] Your reply has ${got} ${c.unit}; the user asked for ${c.exact ? 'exactly' : 'at most'} ${c.n}. Rewrite it to fit, and output only the rewritten reply.`
+  for (const c of countAsks(ask)) {
+    const got = c.unit === 'words' ? plain.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length
+      : c.unit === 'characters' ? [...text].length
+        : c.unit === 'sentences' ? plain.split(/(?<=[.!?])\s+/).filter((x) => /[\p{L}\p{N}]/u.test(x)).length
+          : text.split('\n').filter((l) => /^\s*([-*•]|\d+[.)])\s+\S/.test(l)).length
+    if (c.exact ? got === c.n : (c.min === undefined || got >= c.min) && (!c.n || got <= c.n)) continue
+    const asked = c.exact ? `exactly ${c.n}` : c.min !== undefined && c.n ? `between ${c.min} and ${c.n}` : c.min !== undefined ? `at least ${c.min}` : `at most ${c.n}`
+    return `[From the app] Your reply has ${got} ${c.unit}; the user asked for ${asked}. Rewrite it to fit, and output only the rewritten reply.`
+  }
+  return undefined
 }
 
 /** "page 1 of 3", "next_cursor=p2", "has_more: true", "more results": the result has more pages. */
