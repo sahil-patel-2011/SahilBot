@@ -143,8 +143,20 @@ function claimedVerbs(text: string): string[] {
 export function claimBacked(text: string, okTools: string[]): boolean {
   const claimed = claimedVerbs(text)
   if (!claimed.length || !okTools.length) return false
-  const names = okTools.map((n) => n.toLowerCase())
-  return claimed.every((v) => CLAIM_STEMS[v].some((stem) => names.some((n) => n.split(/__|[^a-z]+/).some((part) => part.startsWith(stem)) || n.includes(stem))))
+  // A short stem ("get", "read", "post") must be a whole word of the name (getIssue, read_file, posts), never a piece
+  // of another word (budget_*, thread_*, postgres); a long one ("publish", "file_manage") may sit anywhere in it.
+  const tools = okTools.map((n) => ({ n: n.toLowerCase(), parts: n.split(/__|[^A-Za-z]+|(?<=[a-z])(?=[A-Z])/).map((x) => x.toLowerCase()).filter(Boolean) }))
+  const fits = (stem: string, t: { n: string; parts: string[] }): boolean => stem.length >= 5
+    ? t.parts.some((part) => part.startsWith(stem)) || t.n.includes(stem)
+    : t.parts.some((part) => part.startsWith(stem) && /^(s|es|ed|ing|er|ers)?$/.test(part.slice(stem.length)))
+  return claimed.every((v) => CLAIM_STEMS[v].some((stem) => tools.some((t) => fits(stem, t))))
+}
+
+const CHECK_VERBS = new Set(['verified', 'checked', 'tested', 'confirmed', 'double-checked'])
+/** Every "done" the reply claims is a check ("I've double-checked the math"), not an action in the world. */
+export function claimsOnlyChecks(text: string): boolean {
+  const v = claimedVerbs(text)
+  return v.length > 0 && v.every((x) => CHECK_VERBS.has(x))
 }
 
 /** The reply claims something went out (sent, posted, booked, paid…): a general tool backs it only by doing that. */

@@ -63,6 +63,12 @@ export function isGenericStop(target: string): boolean {
   return GENERIC.test(target)
 }
 
+/** A stop word that only points at the task at hand ("stop that", "cancel the task"): never a name of another chat. */
+const POINTER = /^(?:it|that|this|that one|this one|thing|whole thing|task|job|work|run|everything)$/
+export function pointsOnly(target: string): boolean {
+  return POINTER.test(target)
+}
+
 const key = (s: string): string => norm(s).replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim()
 
 /** The stop names one of these (a chat's title, the task's first words): "stop the invoice" ↔ "Invoice for Acme". */

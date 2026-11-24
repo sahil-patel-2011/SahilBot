@@ -360,12 +360,12 @@ export const Composer = forwardRef<ComposerHandle, {
             }
             // ↑ in an empty box: edit your last message (like ChatGPT and Claude).
             if (e.key === 'ArrowUp' && !text && !images.length && !atts.length && !p.running) { e.preventDefault(); window.dispatchEvent(new CustomEvent('sahilbot:edit-last')); return }
-            // ⌘↵ to send (Settings → You): a plain ↵ is a new line, ⌘↵ sends (steers while it works).
+            // ⌘↵ to send (Settings → You): a plain ↵ is a new line, ⌘↵ sends (steers while it works), ⌘⇧↵ queues.
             if (p.cmdEnter && e.key === 'Enter' && !e.nativeEvent.isComposing) {
               if (!(e.metaKey || e.ctrlKey)) return
               e.preventDefault()
               if (dictating) { void toggleDictation().then(() => requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-testid="send"]')?.click())); return }
-              send(false)
+              send(p.running && e.shiftKey)
               return
             }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -415,7 +415,7 @@ export const Composer = forwardRef<ComposerHandle, {
           {p.running && !p.answering && !canSend ? (
             <button className="c-btn primary stop" title="Stop (Esc)" aria-label="Stop (Esc)" onClick={p.onStop} data-testid="stop"><I.Stop /></button>
           ) : canSend ? (
-            <button className="c-btn primary send" title={p.running && !p.answering ? 'Send now: SahilBot adjusts what it is doing (⌘Enter sends after it finishes)' : 'Send (Enter)'} aria-label={p.running && !p.answering ? 'Send now: SahilBot adjusts what it is doing (⌘Enter sends after it finishes)' : 'Send (Enter)'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
+            <button className="c-btn primary send" title={p.running && !p.answering ? `Send now: SahilBot adjusts what it is doing (${p.cmdEnter ? '⌘⇧Enter' : '⌘Enter'} sends after it finishes)` : p.cmdEnter ? 'Send (⌘Enter)' : 'Send (Enter)'} aria-label={p.running && !p.answering ? `Send now: SahilBot adjusts what it is doing (${p.cmdEnter ? '⌘⇧Enter' : '⌘Enter'} sends after it finishes)` : p.cmdEnter ? 'Send (⌘Enter)' : 'Send (Enter)'} onClick={() => send(false)} data-testid="send" style={p.accent ? { background: p.accent } : undefined}><I.Up /></button>
           ) : (
             <button className="c-btn voice" title="Talk with your bot out loud (⇧⌘V)" aria-label="Talk" onClick={p.onVoice} data-testid="voice-btn"><I.Wave size={17} /></button>
           )}

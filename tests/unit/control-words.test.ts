@@ -134,6 +134,18 @@ describe('the finish line', () => {
     expect(statusLine(f, null)).toBe('')
     expect(statusLine({ ...f, paths: ['/w/a.md'], made: ['/w/a.md'], ms: 5000 }, null)).toBe('Stopped after 5 s · Made a.md in w')
   })
+  test('stopping another chat from this running one leaves this task finished, not "Stopped"', () => {
+    const ms = [
+      msg({ role: 'user', content: 'make the invoice', createdAt: 0 }),
+      tool('file_write', { path: '/Users/sahil/Downloads/invoice.pdf' }, 1000, { path: '/Users/sahil/Downloads/invoice.pdf' }),
+      msg({ role: 'user', content: 'cancel the trip plan', createdAt: 2000, meta: { steer: true, stopRequest: true } }),
+      msg({ role: 'assistant', content: 'Stopped Trip plan.', createdAt: 2100, meta: { stopNote: true } }),
+      msg({ role: 'assistant', content: 'Your invoice is ready.', createdAt: 20_000 })
+    ]
+    const f = runFacts(ms)!
+    expect(f.stopped).toBeFalsy()
+    expect(statusLine(f, null, { simple: true })).toBe('Done in 20 s · Made invoice.pdf in Downloads')
+  })
   test('"Stop everything" typed in an idle chat leaves its last task alone', () => {
     const done = [
       msg({ role: 'user', content: 'make the invoice', createdAt: 0 }),

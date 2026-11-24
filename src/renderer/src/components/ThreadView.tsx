@@ -688,8 +688,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const lastActivity = lastOf('activity')
   const lastPlan = lastOf('plan')
   // The pinned plan is this run's: a plan from before your latest message belongs to an earlier task.
-  // (A side question asked mid-task belongs to no run of its own: it never starts "this run".)
-  const isTurn = (b: Block): boolean => b.kind === 'user' && !b.m.meta?.aside
+  // (A side question asked mid-task, or steering, belongs to no run of its own: it never starts "this run".)
+  const isTurn = (b: Block): boolean => b.kind === 'user' && !b.m.meta?.aside && !b.m.meta?.steer
   const lastUser = (() => { for (let i = bs.length - 1; i >= 0; i--) if (isTurn(bs[i])) return i; return -1 })()
   const runPlan = lastPlan && bs.indexOf(lastPlan) > lastUser ? lastPlan : undefined
   const tail = bs[bs.length - 1]
@@ -713,7 +713,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   let tailText: Block | undefined
   for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind !== 'notice' && bs[i].kind !== 'compacted') { tailText = bs[i]; break }
   const lastText = tailText?.kind === 'text'
-  const lastUserId = lastUser >= 0 ? (bs[lastUser] as Extract<Block, { kind: 'user' }>).m.id : undefined
+  const lastUserId = (() => { for (let i = bs.length - 1; i >= 0; i--) { const b = bs[i]; if (b.kind === 'user' && !b.m.meta?.aside) return b.m.id } return undefined })()
   // This task did something (steps, a plan): "Show work" opens it in the side panel.
   const ranSteps = all.slice(allUser + 1).some((b) => b.kind === 'activity' || b.kind === 'plan')
   // The run failed outright (its notice says why in one line), or it was stopped: Retry is right under it.
@@ -837,7 +837,8 @@ function quietVisible(b: Block, docs: boolean): boolean {
     case 'plan': case 'compacted': return false
     case 'notice': return !internalNotice(b.m)
     case 'activity': return hasQuietContent(b.steps, docs)
-    case 'text': return !!(b.m.content || b.m.status === 'error' || b.m.status === 'stopped')
+    // (The double-check's own step words, "Let me re-read the invoice.", stay in Show work: never ahead of the answer.)
+    case 'text': return !(b.m.meta?.checkStep && b.m.status !== 'error') && !!(b.m.content || b.m.status === 'error' || b.m.status === 'stopped')
     case 'user': case 'qa': case 'team': case 'heavy': case 'idea': return true
     default: { const never: never = b; return never }
   }
@@ -1148,7 +1149,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
             )}
             {m.content}
           </div>
-          {!!m.meta?.steer && <div className="steered-tag" data-testid="steered"><I.Reply size={11} style={{ transform: 'scaleX(-1)' }} />Steered while working</div>}
+          {!!m.meta?.steer && !m.meta?.stopRequest && <div className="steered-tag" data-testid="steered"><I.Reply size={11} style={{ transform: 'scaleX(-1)' }} />Steered while working</div>}
           {Array.isArray(m.meta?.vaultOffers) && <ChatVaultOffers m={m} />}
           {reactions.bot && <span className="reaction left" title="SahilBot reacted" data-testid="bot-reaction">{reactions.bot}</span>}
         </div>

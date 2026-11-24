@@ -300,8 +300,61 @@ test('the stall note and a failed run are plain sentences', () => {
   expect(runFailedText(Object.assign(new Error('Model server returned 401: {"error":"bad key"}'), { status: 401 }))).toBe('Couldn\'t finish: the AI service refused its key. Check it in Settings → AI, then press Retry.')
   expect(runFailedText(Object.assign(new Error('Model server returned 500: {json}'), { status: 500 }))).toMatch(/^Couldn't finish: the AI service is having a server error right now\. Press Retry/)
   expect(runFailedText(new Error('weird'))).toBe('Couldn\'t finish this task. Press Retry to try again.')
+  // A bot has one ongoing conversation: never "Start a new chat".
+  expect(runFailedText(new Error('prompt is too long: 140000 tokens'))).toBe('Couldn\'t finish: this conversation got too long for the model. Use Start fresh, or ask for a smaller piece.')
   const m = (role: Message['role'], o: Partial<Message> = {}): Message => ({ id: Math.random().toString(), threadId: 't', role, content: 'x', kind: 'normal', status: 'done', createdAt: 0, ...o }) as Message
   expect(stopShown([m('user'), m('assistant', { status: 'stopped' })])).toBe(true)
   expect(stopShown([m('user'), m('assistant', { meta: { stopped: true } })])).toBe(true)
   expect(stopShown([m('assistant', { status: 'stopped' }), m('user'), m('tool')])).toBe(false)
+})
+
+// RLA-05 / acceptance "Stop by words … one message" (round 3): a typed stop that lands while the model writes leaves
+// one confirmation, never an empty "Stopped" bubble (or a held half-answer) above "Stopped.".
+test('a typed stop during a model step leaves "Stopped." as the only reply after it', async () => {
+  const slow = hanging()
+  slow.quick = true
+  const { db, agent, thread } = setup([slow])
+  llm.script.push(
+    { toolCalls: [{ name: 'slow_read', arguments: '{"q":"x"}' }], delay: 0 },
+    { reasoning: 'a b c d e f g h i j k l m n o p q r s t ', content: 'Done.', delay: 300 }
+  )
+  const t = thread('Test 5')
+  const { done } = await agent.send({ threadId: t.id, text: 'Test 5: read the Downloads folder' })
+  await until(() => llm.requests.length >= 2)
+  await new Promise((r) => setTimeout(r, 700))
+  expect(await agent.steer(t.id, 'Stop Test 5 now')).toBe('steered')
+  expect(await done).toBe('stopped')
+  const all = db.listMessages(t.id)
+  const at = all.findIndex((m) => m.content === 'Stop Test 5 now')
+  const after = all.filter((m, i) => m.role === 'assistant' && m.kind === 'normal' && !m.meta?.superseded && !m.toolCalls?.length && (i > at || m.status === 'stopped'))
+  expect(after.map((m) => m.content)).toEqual(['Stopped.'])
+})
+
+// MCC-02 (round 3): "Stop Test 5 now" typed in another running chat stops Test 5, not the chat it was typed in.
+test('a stop naming another running chat, typed in a running chat, stops the named one only', async () => {
+  const a = hanging('read_a'), b = hanging('read_b')
+  const { db, agent, thread } = setup([a, b])
+  llm.script.push({ toolCalls: [{ name: 'read_a', arguments: '{"q":"x"}' }], delay: 0 }, { toolCalls: [{ name: 'read_b', arguments: '{"q":"y"}' }], delay: 0 })
+  const inv = thread('Invoice'), t5 = thread('Test 5')
+  const ra = await agent.send({ threadId: inv.id, text: 'Make the invoice' })
+  await until(() => a.calls === 1)
+  const rb = await agent.send({ threadId: t5.id, text: 'Test 5: research printers' })
+  await until(() => b.calls === 1)
+  expect(await agent.steer(inv.id, 'Stop Test 5 now')).toBe('steered')
+  expect(await rb.done).toBe('stopped')
+  expect(assistantTexts(db, inv.id)).toEqual(['Stopped Test 5.'])
+  // The invoice is still working; "stop that" in it now means the invoice.
+  expect(agent.busy()).toBe(true)
+  expect(await agent.steer(inv.id, 'stop that now')).toBe('steered')
+  expect(await ra.done).toBe('stopped')
+  expect(assistantTexts(db, inv.id).at(-1)).toBe('Stopped.')
+})
+
+// RLA-03 polish (round 3): a reply stopped at the request's own limit keeps the advice (Retry would hit it again).
+test('a reply stopped at a request limit says why and what to do, not just "could not finish"', async () => {
+  const { replyErrorText } = await import('../../src/main/agent/loop')
+  const { capError } = await import('../../src/main/llm/request-guard')
+  expect(replyErrorText(capError('wall', { who: 'M' }))).toBe('This reply ran too long and was stopped. Ask for a narrower piece, or split the task into steps.')
+  expect(replyErrorText(capError('searches', { who: 'M', searches: 40, limit: 40 }))).toBe('This reply ran too many web searches and was stopped. Ask for a narrower search.')
+  expect(replyErrorText(new Error('weird'))).toBe('The bot could not finish this reply.')
 })

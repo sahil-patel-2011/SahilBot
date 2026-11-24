@@ -117,7 +117,9 @@ test('a "done" claim nothing backs is nudged once, then said plainly instead of 
     { content: 'I\'ve emailed the invoice to Sam.' }
   ], 'Make the invoice and email it to Sam')
   expect(r.hidden.some((h) => /nothing in this task actually did it|Your reply says it is done/.test(h))).toBe(true)
-  expect(r.status).toBe('error')
+  // An interactive chat ends 'finished' with the plain note (its plan closes, the Done toast shows); only a routine,
+  // which nobody watches, ends as an error.
+  expect(r.status).toBe('finished')
   expect(r.answers).toHaveLength(1)
   expect(r.answers[0].content).toContain(UNVERIFIED_NOTE)
 }, 60_000)
@@ -255,6 +257,59 @@ test('a plan left by a stopped task waits: an unrelated question is answered as 
   const st = r.db.getState(r.threadId)
   expect(planLive(st, { content: 'Continue.' })).toBe(true)
   expect(planLive(st, { content: 'What\'s the capital of France?' })).toBe(false)
+  // A plain "yes please" to some other question is not a return to the stopped task (RLA-08, round 3).
+  expect(planLive(st, { content: 'yes please' })).toBe(false)
+  expect(planLive(st, { content: 'ok, keep going' })).toBe(true)
+}, 60_000)
+
+const stopMidPlan = async (agent: Agent, threadId: string): Promise<void> => {
+  for (let i = 0; i < 200 && llm.requests.length < 2; i++) await new Promise((ok) => setTimeout(ok, 25))
+  await new Promise((ok) => setTimeout(ok, 150))
+  await agent.steer(threadId, 'stop')
+}
+
+test('a stopped task stays stopped when "yes please" answers some other question later', async () => {
+  const r = await run([
+    { toolCalls: [todo('in_progress')] },
+    { content: 'Looking at tables for Friday and Saturday evenings near downtown for four people.', delay: 150 }
+  ], 'Book us a dinner table this weekend', {
+    during: stopMidPlan,
+    then: [
+      { script: [{ content: 'Paris. Want me to quiz you on more capitals?' }], text: 'What\'s the capital of France?' },
+      { script: [{ content: 'Great! First one: Madrid is the capital of Spain.' }, { content: 'Back to the table booking.' }], text: 'yes please' }
+    ]
+  })
+  expect(r.status).toBe('finished')
+  const after = r.all.slice(r.before)
+  expect(after.some((m) => m.meta?.hidden && /plan still has open items/.test(m.content))).toBe(false)
+  expect(visible(after).map((m) => m.content)).toEqual(['Paris. Want me to quiz you on more capitals?', 'Great! First one: Madrid is the capital of Spain.'])
+  expect(r.db.getState(r.threadId).planPaused).toBe(true)
+}, 60_000)
+
+test('"yes" right after "Stopped." picks the stopped task up again', async () => {
+  const { resumesStopped } = await import('../../src/main/agent/loop')
+  const m = (role: Message['role'], content: string, meta?: Record<string, unknown>): Message => ({ id: Math.random().toString(), threadId: 't', role, content, kind: 'normal', status: 'done', createdAt: 0, meta }) as Message
+  const yes = m('user', 'yes')
+  expect(resumesStopped(yes, [m('user', 'Book a table'), m('assistant', 'Stopped.', { stopped: true }), yes])).toBe(true)
+  expect(resumesStopped(yes, [m('user', 'Capital of France?'), m('assistant', 'Paris. More?'), yes])).toBe(false)
+  expect(resumesStopped(m('user', 'Continue.'), [])).toBe(true)
+  expect(resumesStopped(m('user', 'pick it up where you left off'), [])).toBe(true)
+  expect(resumesStopped(m('user', 'continue the story about the dragon and the knight who went to the castle at night'), [])).toBe(false)
+})
+
+test('a stopped task\'s plan goes once a new task does real work of its own and finishes', async () => {
+  const r = await run([
+    { toolCalls: [todo('in_progress')] },
+    { content: 'Looking at tables for Friday and Saturday evenings near downtown for four people.', delay: 150 }
+  ], 'Book us a dinner table this weekend', {
+    during: stopMidPlan,
+    then: [{ script: [{ toolCalls: [{ name: 'save_invoice', arguments: JSON.stringify({ name: 'acme.pdf' }) }] }, { content: 'Saved acme.pdf.' }], text: 'Make the invoice PDF for Acme' }]
+  })
+  expect(r.status).toBe('finished')
+  expect(r.saves).toEqual(['acme.pdf'])
+  const st = r.db.getState(r.threadId)
+  expect(st.todos).toEqual([])
+  expect(st.planPaused).toBeUndefined()
 }, 60_000)
 
 test('an answer sent back for one more step stands when the next step fails', async () => {

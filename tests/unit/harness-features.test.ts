@@ -97,6 +97,23 @@ test('a "done" claim backed by a successful tool of the same kind is not challen
   expect(claimBacked('Published and emailed the link.', ['publish_post'])).toBe(false)
   expect(claimBacked('I\'ve saved the summary to your notes.', ['web_search', 'fetch_page'])).toBe(false)
   expect(claimBacked('I\'ve saved it.', [])).toBe(false)
+  // A short stem must be a whole word of the tool's name, never a piece of another one (round 3, HTA-01).
+  expect(claimBacked('I\'ve verified the totals.', ['thread_summary'])).toBe(false)
+  expect(claimBacked('I\'ve verified the totals.', ['budget_tracker'])).toBe(false)
+  expect(claimBacked('I\'ve verified the totals.', ['decode_url'])).toBe(false)
+  expect(claimBacked('I\'ve posted it.', ['postgres_query'])).toBe(false)
+  expect(claimBacked('I\'ve verified the totals.', ['file_read'])).toBe(true)
+  expect(claimBacked('I\'ve checked the issue.', ['mcp__jira__getIssue'])).toBe(true)
+  expect(claimBacked('I\'ve saved it to your notes.', ['notes_create'])).toBe(true)
+  expect(claimBacked('I\'ve moved it.', ['file_manage'])).toBe(true)
+})
+
+test('a reply that only claims a check ("I\'ve double-checked the math") is told apart from one that claims an action', async () => {
+  const { claimsOnlyChecks } = await import('../../src/main/agent/harness-features')
+  expect(claimsOnlyChecks('I\'ve double-checked the math: 18% of 1,740 is 313.2.')).toBe(true)
+  expect(claimsOnlyChecks('I\'ve verified the totals and sent it to Sam.')).toBe(false)
+  expect(claimsOnlyChecks('I\'ve emailed it to Sam.')).toBe(false)
+  expect(claimsOnlyChecks('Here is the answer.')).toBe(false)
 })
 
 // Honesty (HTA-01/03): the common claims count, a long reply is still read, and the reply itself is no claim.

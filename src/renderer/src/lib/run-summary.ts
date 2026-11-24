@@ -62,7 +62,8 @@ export function runFacts(messages: Message[]): RunFacts | null {
     }
   }
   const last = run[run.length - 1]
-  const stopped = run.some((m) => (m.role === 'user' && !!m.meta?.stopRequest) || (m.role === 'assistant' && (m.status === 'stopped' || !!m.meta?.stopped)))
+  // (A typed stop of another chat, sent while this one worked, is not a stop of this task: only the reply says so.)
+  const stopped = run.some((m) => m.role === 'assistant' && (m.status === 'stopped' || !!m.meta?.stopped))
   const paths = [...files]
   return { commands, files: files.size, jobs, actions, since: messages[start].createdAt, until: last.createdAt + 5000, paths, made: paths.filter((p) => made.has(p)), ms: Math.max(0, last.createdAt - messages[start].createdAt), stopped }
 }

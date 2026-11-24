@@ -109,6 +109,53 @@ describe('check first, post once', () => {
     } finally { process.env.FOREMAN_NO_VERIFY = '1' }
   })
 
+  // RLB-03 (round 3): the check's own step ("Let me re-read the notes.") is marked so the chat keeps it in Show work.
+  test('a double-check step is marked as the check\'s own step; the run\'s earlier steps are not', async () => {
+    delete process.env.FOREMAN_NO_VERIFY
+    try {
+      const h = harness([save, look])
+      llm.script.push(
+        { content: 'Saving it now.', toolCalls: [call('save_note', { v: 'y' })], delay: 0 },
+        { content: 'Saved y to your notes.', delay: 0 },
+        { content: 'Let me re-read the notes to confirm.', toolCalls: [call('look', { q: 'notes' })], delay: 0 },
+        { content: '✓', delay: 0 }
+      )
+      const t = h.thread()
+      expect(await h.run(t, 'Save a note that says y in my notes file')).toBe('finished')
+      const steps = h.db.listMessages(t.id).filter((m) => m.role === 'assistant' && m.toolCalls?.length)
+      expect(steps.map((m) => [m.content, !!m.meta?.checkStep])).toEqual([['Saving it now.', false], ['Let me re-read the notes to confirm.', true]])
+      // Every emit of the check step carried the mark (it was never shown as plain words first).
+      const emits = h.events.flatMap((e) => (e.type === 'message' && e.message.id === steps[1].id && !e.message.meta?.provisional ? [e.message] : []))
+      for (const m of emits) expect(m.meta?.checkStep).toBe(true)
+      expect(h.visible(t.id).filter((m) => !m.toolCalls?.length).map((m) => m.content)).toEqual(['Saved y to your notes.'])
+    } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+  })
+
+  // RLA-01 / acceptance "Trip plan" (round 3): a researched answer that changed nothing is posted after its one
+  // generation, with no second model turn to double-check it (the link check still guards its citations).
+  test('a research-only answer is not sent through a second double-check turn', async () => {
+    delete process.env.FOREMAN_NO_VERIFY
+    try {
+      const search: ToolDef<{ query: string }> = {
+        name: 'web_search', label: 'Search', effect: 'read', description: 'search the web',
+        parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
+        async run({ query }) { return { text: `results for ${query}` } }
+      }
+      const h = harness([search])
+      llm.script.push(
+        { toolCalls: [call('web_search', { query: 'savannah hotels' })], delay: 0 },
+        { toolCalls: [call('web_search', { query: 'savannah food' })], delay: 0 },
+        { toolCalls: [call('web_search', { query: 'savannah tours' })], delay: 0 },
+        { content: 'Day 1: River Street walk. Day 2: Forsyth Park.', delay: 0 }
+      )
+      const t = h.thread()
+      expect(await h.run(t, 'Plan a 2-day Savannah trip for 4 people under $1,500, research hotels, food and tours')).toBe('finished')
+      expect(llm.requests).toHaveLength(4)
+      expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /double-check/i.test(m.content))).toBe(false)
+      expect(h.visible(t.id).filter((m) => !m.toolCalls?.length).map((m) => m.content)).toEqual(['Day 1: River Street walk. Day 2: Forsyth Park.'])
+    } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+  })
+
   test('a link nobody retrieved comes out of the answer in place: it is never sent back or replaced', async () => {
     process.env.FOREMAN_NO_VERIFY = '1'
     const h = harness()
@@ -314,6 +361,66 @@ describe('one reply per question in a chat', () => {
     expect(llm.requests).toHaveLength(2)
     expect(h.visible(t.id).map((m) => m.content)).toEqual(['You have nothing on Friday.'])
     expect([...h.shown(t.id)].map((id) => h.db.getMessage(id)!.content)).toEqual(['You have nothing on Friday.'])
+  })
+})
+
+// IWD-01, HTA-03 (round 3): text the user asked the bot to write is not a claim about this run, and a reply already on
+// screen is never rewritten or turned into an error afterwards.
+describe('false-claim check on chat replies', () => {
+  const NOTE = /couldn't confirm this worked/
+  const nudged = (h: ReturnType<typeof harness>, id: string): boolean => h.db.listMessages(id).some((m) => m.role === 'user' && m.meta?.hidden && /\[From the app\] Your reply says/.test(m.content))
+  for (const [ask, reply] of [
+    ['Draft an email to Mr. Lopez telling him I turned in the homework', 'Here\'s a draft you can send:\n\nHi Mr. Lopez,\n\nI submitted the homework yesterday afternoon. Thank you for the extension.\n\nBest,\nSam'],
+    ['Write a very short story about a spy', 'The rain had not stopped all night. "I have sent it," she whispered, and the line went dead.'],
+    ['Write exactly 30 words about autumn', 'Autumn arrives quietly. The summer heat has been removed from the air, leaves turn gold and red, and evenings grow cool, calm, and short as the year winds down again.']
+  ] as const) {
+    test(`a requested draft is not a false claim: "${ask}"`, async () => {
+      process.env.FOREMAN_NO_VERIFY = '1'
+      const h = harness()
+      llm.script.push({ content: reply, delay: 0 })
+      const t = h.thread()
+      expect(await h.run(t, ask)).toBe('finished')
+      expect(llm.requests).toHaveLength(1)
+      expect(nudged(h, t.id)).toBe(false)
+      expect(h.visible(t.id).map((m) => m.content)).toEqual([reply])
+    })
+  }
+
+  test('"I\'ve double-checked the math" in a plain answer is left alone', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness()
+    llm.script.push({ content: 'I\'ve double-checked the math: 18% of 1,740 is 313.2.', delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'Calculate 18% of 1740')).toBe('finished')
+    expect(llm.requests).toHaveLength(1)
+    expect(nudged(h, t.id)).toBe(false)
+    expect(h.visible(t.id).map((m) => m.content)).toEqual(['I\'ve double-checked the math: 18% of 1,740 is 313.2.'])
+  })
+
+  test('a chat reply already on screen keeps its words; the unbacked claim is only marked', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness()
+    const reply = 'Here\'s the plan for Saturday: lunch at noon, then the park. I\'ve sent it to Jane.'
+    llm.script.push({ content: reply, delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'Make a plan for Saturday with Jane')).toBe('finished')
+    const [m] = h.visible(t.id)
+    expect(m.content).toBe(reply)
+    expect(m.content).not.toMatch(NOTE)
+    expect(m.meta?.unbackedClaim).toBe(true)
+    expect(llm.requests).toHaveLength(1)
+  })
+
+  test('a chat that opens with "I\'ve saved it" and ran nothing is still held, nudged and then noted', async () => {
+    process.env.FOREMAN_NO_VERIFY = '1'
+    const h = harness()
+    llm.script.push({ content: 'I\'ve saved it to your Downloads.', delay: 0 }, { content: 'I\'ve saved it to your Downloads.', delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'Hey, keep that list for later')).toBe('finished')
+    expect(nudged(h, t.id)).toBe(true)
+    const shown = h.visible(t.id)
+    expect(shown).toHaveLength(1)
+    expect(shown[0].content).toMatch(NOTE)
   })
 })
 

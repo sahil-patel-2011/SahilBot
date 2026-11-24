@@ -262,3 +262,45 @@ describe('a reply that froze halfway', () => {
       .toMatch(/^macOS may be asking/)
   })
 })
+
+// Round 3 (RLB-01/03, MCC-02, MCD-01/03): the double-check's own step words stay in Show work; a typed stop is one
+// line with no "Steered" tag and keeps the Show work chip; steering keeps the plan step as the working line.
+describe('stops, steers and the double-check', () => {
+  const render = (ms: Message[], running: boolean, o: { dev?: boolean; botName?: string } = {}): string => {
+    const view = createElement(tv.ThreadView, { messages: ms, running, pending: [], actions, botName: o.botName })
+    return renderToString(o.dev ? createElement(DevMode.Provider, { value: true }, view) : view)
+  }
+  it('a double-check step\'s words are not in the quiet chat, only in Developer mode', () => {
+    const ask = msg({ role: 'user', content: 'Total the invoice' })
+    const call = { id: 'k1', name: 'file_read', arguments: '{"path":"/w/invoice.md"}' }
+    const step = msg({ content: 'Let me re-read the invoice to confirm the totals.', toolCalls: [call], meta: { checkStep: true } })
+    const result = msg({ role: 'tool', toolCallId: 'k1', toolName: 'file_read', content: '<tool_output>ok</tool_output>', meta: { status: 'ok' } })
+    for (const botName of [undefined, 'Tutor']) expect(render([ask, step, result], true, { botName })).not.toContain('re-read the invoice')
+    expect(render([ask, step, result], true, { dev: true })).toContain('re-read the invoice')
+  })
+  it('a typed stop shows no "Steered while working" tag, and the Show work chip stays', () => {
+    const call = { id: 's1', name: 'web_search', arguments: '{"query":"printers"}' }
+    const ms = [
+      msg({ role: 'user', content: 'Test 5: research printers' }),
+      msg({ content: '', toolCalls: [call] }),
+      msg({ role: 'tool', toolCallId: 's1', toolName: 'web_search', content: '<tool_output>results</tool_output>', meta: { status: 'ok' } }),
+      msg({ role: 'user', content: 'Stop Test 5 now', meta: { steer: true, stopRequest: true } }),
+      msg({ content: 'Stopped.', meta: { stopped: true } })
+    ]
+    const html = render(ms, false)
+    expect(html).not.toContain('data-testid="steered"')
+    expect(html).toContain('data-testid="show-work"')
+    // Ordinary steering still says so.
+    expect(render([ms[0], msg({ role: 'user', content: 'make it 4 printers', meta: { steer: true } })], true)).toContain('data-testid="steered"')
+  })
+  it('after a steer the working line still names the plan step', () => {
+    const todo = { id: 't1', name: 'todo', arguments: JSON.stringify({ items: [{ text: 'Compare the printers', status: 'in_progress' }, { text: 'Write it up', status: 'pending' }] }) }
+    const ms = [
+      msg({ role: 'user', content: 'Research printers' }),
+      msg({ content: '', toolCalls: [todo] }),
+      msg({ role: 'tool', toolCallId: 't1', toolName: 'todo', content: '<tool_output>ok</tool_output>', meta: { status: 'ok' } }),
+      msg({ role: 'user', content: 'make it 4 printers', meta: { steer: true } })
+    ]
+    expect(render(ms, true, { botName: 'Tutor' })).toContain('Compare the printers')
+  })
+})

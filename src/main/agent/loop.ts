@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { isGenericStop, isStopAll, isStopRequest, namesMatch, stopTarget } from './stop-intent'
+import { isGenericStop, isStopAll, isStopRequest, namesMatch, pointsOnly, stopTarget } from './stop-intent'
+import { askFolderAccess, pathArgs, protectedFolders } from './tools/folder-access'
 import { plainStep } from '@shared/step-words'
 import { asideSystem, isAside, quickMath } from './aside'
 import { beginRun } from './undo-journal'
 import { projectInstructions } from './project-instructions'
 import { checkMedicalAnswer, isMedicalQuestion, medicalNote } from './medical-check'
-import { ALL_FEATURES, asksUserNow, claimBacked, claimsCant, claimsDone, claimsOutward, countAsk, countMiss, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
+import { ALL_FEATURES, asksUserNow, claimBacked, claimsCant, claimsDone, claimsOnlyChecks, claimsOutward, countAsk, countMiss, givesUp, morePages, overLimit, type HarnessFeatures } from './harness-features'
 import { definiteFailure } from './runtime/policy'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -401,12 +402,30 @@ export function continuesPlan(m?: Pick<Message, 'content' | 'meta'>): boolean {
   return /^\s*(continue|go on|keep going|resume|carry on|yes|yep|yeah|ok(ay)?|sure|do it|finish( it| up)?|go ahead|proceed|pick (it )?up)\b/i.test(m.content ?? '')
 }
 
+const RESUME = /^\s*(?:(?:ok(?:ay)?|yes|yeah|yep|sure|please|now|and)[,!.\s]+)*(?:please\s+)?(?:continue|go on|keep going|resume|carry on|finish (?:it|that|the task|up)|pick (?:it |that )?(?:back )?up)\b/i
+
+/**
+ * The user picks a task they stopped back up: "Continue.", "ok, keep going", "pick it up where you left off" (short),
+ * or a plain "yes" / "go ahead" right after the chat said "Stopped". A "yes please" days later, to some other
+ * question, is not a return to the stopped task.
+ */
+export function resumesStopped(m?: Pick<Message, 'content' | 'meta'> & { id?: string }, messages: Message[] = []): boolean {
+  if (!m) return false
+  const text = (m.content ?? '').trim()
+  if (RESUME.test(text) && text.split(/\s+/).length <= 10) return true
+  if (!continuesPlan(m)) return false
+  const i = messages.findIndex((x) => x.id === m.id)
+  const before = [...(i < 0 ? messages : messages.slice(0, i))].reverse()
+    .find((x) => x.role === 'assistant' && x.kind === 'normal' && !x.meta?.superseded && !x.meta?.aside && !x.meta?.stopNote && (!!x.content || x.status === 'stopped'))
+  return !!before && (before.status === 'stopped' || !!before.meta?.stopped)
+}
+
 /**
  * The plan drives this run: it has open items, and it isn't the plan of a task the user stopped (planPaused), unless
  * this message picks that task up again. A new, unrelated question after "Stop" is answered as itself.
  */
-export function planLive(state: Pick<ThreadState, 'todos' | 'planPaused'>, opener?: Pick<Message, 'content' | 'meta'>): boolean {
-  return state.todos.some((t) => t.status !== 'done') && (!state.planPaused || continuesPlan(opener))
+export function planLive(state: Pick<ThreadState, 'todos' | 'planPaused'>, opener?: Pick<Message, 'content' | 'meta'> & { id?: string }, messages: Message[] = []): boolean {
+  return state.todos.some((t) => t.status !== 'done') && (!state.planPaused || resumesStopped(opener, messages))
 }
 
 /** A task run (not a chat): hard enough, a task mode on, or a plan in progress. */
@@ -452,9 +471,22 @@ export function runFailedText(e: unknown): string {
   if (kind === 'auth') return 'Couldn\'t finish: the AI service refused its key. Check it in Settings → AI, then press Retry.'
   if (kind === 'quota') return 'Couldn\'t finish: the AI service is out of credit. Add credit or pick another model, then press Retry.'
   if (kind === 'budget') return 'Couldn\'t finish: this would go over your spending limit (Settings → AI & spending).'
-  if (kind === 'context') return 'Couldn\'t finish: this chat got too long for the model. Start a new chat, or ask for a smaller piece.'
+  if (kind === 'context') return 'Couldn\'t finish: this conversation got too long for the model. Use Start fresh, or ask for a smaller piece.'
   if (kind === 'other') return 'Couldn\'t finish this task. Press Retry to try again.'
   return `Couldn't finish: the AI service is ${KIND_WORDS[kind]} right now. Press Retry to try again.`
+}
+
+/** A reply that failed mid-stream, in one plain sentence under it (the raw error stays in Developer mode). */
+export function replyErrorText(e: unknown): string {
+  const reason = failureKind(e)
+  const cap = (e as { requestCap?: string } | undefined)?.requestCap
+  return reason === 'refusal' ? 'The provider declined this request under its usage policy.'
+    : reason === 'auth' ? 'The provider refused the API key.'
+    : reason === 'context' ? 'The conversation was too large to process.'
+    // A request stopped at its own limit (llm/request-guard.ts): the advice, since Retry would hit the same limit.
+    : cap === 'wall' ? 'This reply ran too long and was stopped. Ask for a narrower piece, or split the task into steps.'
+    : cap === 'searches' ? 'This reply ran too many web searches and was stopped. Ask for a narrower search.'
+    : reason === 'other' ? 'The bot could not finish this reply.' : `The selected service is ${KIND_WORDS[reason]}.`
 }
 
 /** A tool step in plain words for the stall note ("Reading a page"); "This step" when there are none. */
@@ -836,12 +868,14 @@ export class Agent {
     const top = [...this.runs].filter(([, r]) => !r.helper).map(([id]) => id)
     if (isStopAll(text)) return { ids: top, all: true }
     const here = this.runs.has(threadId)
-    if (here && isStopRequest(text)) return { ids: [threadId], all: false }
+    // A chat it names comes first: "Stop Test 5 now" typed in the running Invoice chat stops Test 5, not the invoice.
+    // A word that only points ("stop that now", "cancel the task") means the task at hand.
     const target = stopTarget(text)
-    if (!target) return null
-    const named = top.filter((id) => namesMatch(target, this.runNames(id)))
+    const named = target && !(here && pointsOnly(target)) ? top.filter((id) => namesMatch(target, this.runNames(id))) : []
+    if (named.includes(threadId)) return { ids: [threadId], all: false }
     if (named.length) return { ids: named, all: false }
-    return here && isGenericStop(target) ? { ids: [threadId], all: false } : null
+    if (here && (isStopRequest(text) || (target && isGenericStop(target)))) return { ids: [threadId], all: false }
+    return null
   }
 
   /** What a running chat is called: its title and its task's first words. */
@@ -1641,7 +1675,7 @@ export class Agent {
       const mins = Math.max(1, Math.round((now - last) / 60_000))
       // Says what is stuck ("reading a page is taking longer than usual"), and Retry / Skip end only that step.
       const step = run.current
-      if (step?.waitsOnYou) { this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: `${STALL_PREFIX} ${step.waitsOnYou}.`, step: step.label, stuck: true, waitingOnYou: true }); return }
+      if (step?.waitsOnYou) { this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: `${STALL_PREFIX} ${step.waitsOnYou}.`, step: step.label, stuck: true, waitingOnYou: true, ...(step.retryable === false ? { retryable: false } : {}) }); return }
       this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: stallNote(step?.label, mins, step?.retryable !== false), ...(step ? { step: step.label, stuck: true, ...(step.retryable === false ? { retryable: false } : {}) } : {}) })
     }, Math.max(250, Math.min(5_000, Math.floor(after / 4))))
     t.unref?.()
@@ -1906,6 +1940,9 @@ export class Agent {
       members[i].tokens = c.tokens
       ledger?.observe(members[i].id, c.usd)
     }
+    // Sent only when something changed: an unchanged board every 1.5 s would count as a sign of life and keep the
+    // stall watchdog from ever saying that a helper hangs.
+    let lastBoard = JSON.stringify(board)
     const tick = setInterval(() => {
       children.forEach((cid, i) => {
         if (!cid || members[i].status !== 'working') return
@@ -1913,6 +1950,9 @@ export class Agent {
         members[i].detail = last?.role === 'tool' ? String(last.meta?.display ?? last.toolName ?? '') : last?.content.replace(/\s+/g, ' ').slice(0, 90)
         measure(i)
       })
+      const now = JSON.stringify(board)
+      if (now === lastBoard) return
+      lastBoard = now
       show()
     }, 1500)
 
@@ -3119,7 +3159,8 @@ export class Agent {
     // Bot swarms: this bot's Swarm setting lists the swarm tool (never for helpers); a Swarm request loads it.
     applySwarmState(state, s, space, !!run.helper, () => db.listMessages(thread.id), (names) => registry.load(state, names))
     // The plan of a task the user stopped: "Continue." picks it up again; anything else leaves it waiting.
-    const resumed = !!state.planPaused && continuesPlan([...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside))
+    const pausedAtStart = !!state.planPaused
+    const resumed = pausedAtStart && ((ms) => resumesStopped([...ms].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside), ms))(db.listMessages(thread.id))
     if (resumed) delete state.planPaused
     let requestedChoice = requestedModel({ thread: db.getThread(thread.id), space: group ?? space, speaker, settings: s })
     const chosen = await this.chooseModel(requestedChoice, thread, state, this.warmFor(thread, run, state, speaker))
@@ -3521,7 +3562,7 @@ export class Agent {
     const checksFinal = (): boolean => {
       const complex = (routed?.tier === 3 && !this.d.db.getState(thread.id).voice) || actions >= 8
       const reviewer = routed?.team?.reviewer !== model ? routed?.team?.reviewer : undefined
-      return !verified && !run.helper && !process.env.FOREMAN_NO_VERIFY && (!!reviewer || (!chatRun && (track.unchecked || (track.researched && (actions >= 3 || state.todos.length > 0)) || complex)))
+      return !verified && !run.helper && !process.env.FOREMAN_NO_VERIFY && (!!reviewer || (!chatRun && (track.unchecked || (track.researched && track.changed && (actions >= 3 || state.todos.length > 0)) || complex)))
     }
 
     // Intent tools are loaded once, when the run is (or turns into) agent work; the profile only gets slimmer.
@@ -3868,7 +3909,7 @@ export class Agent {
           const complex = (routed?.tier === 3 && !this.d.db.getState(thread.id).voice) || actions >= 8
           // A change it already looked at (re-read the file, ran the tests, snapshotted the page) needs no second pass.
           const reviewer = routed?.team?.reviewer !== model ? routed?.team?.reviewer : undefined
-          const selfCheck = !chatRun && (track.unchecked || (track.researched && (actions >= 3 || state.todos.length > 0)) || complex)
+          const selfCheck = !chatRun && (track.unchecked || (track.researched && track.changed && (actions >= 3 || state.todos.length > 0)) || complex)
           if ((reviewer || selfCheck) && mayBounce && !verified && !asksUser && !run.helper && step < HARD_CAP && !process.env.FOREMAN_NO_VERIFY) {
             if (run.meter) run.meter.phase = 'verify'
             if (run.record) this.runtime.phase(run.record.id, 'verify')
@@ -4004,14 +4045,20 @@ export class Agent {
           const callArgs = (id?: string): string => runMsgs.flatMap((m) => m.toolCalls ?? []).find((c) => c.id === id)?.arguments ?? ''
           const outward = claimsOutward(assistant.content)
           const generalBacks = okCalls.some((m) => CAN_DO_ANYTHING.has(m.toolName!) && (!outward || OUTWARD_WORK.test(`${callArgs(m.toolCallId)}\n${m.content.slice(0, 3000)}`)))
+          // Text the user asked for (a draft email, a story: "I submitted the homework" is the draft's words), and "I've
+          // double-checked the math" in a plain answer with no tool, are not claims about this run.
+          const composing = chatRun && actions === 0 && (routed?.category === 'writing' || /^\s*(?:(?:please|can you|could you)\s+)?(?:draft|write|compose|rewrite|translate|summari[sz]e|proofread|reword|polish)\b/i.test(opener?.content ?? ''))
+          const onlyChecks = claimsOnlyChecks(assistant.content)
           const unbacked = this.feat.falseClaimNudge && !asksToContinue && !asksUser && !askedAboutPast && !opener?.meta?.questionAnswer && !opener?.meta?.approvalFor
-            && !(chatRun && /\?\s*$/.test(opener?.content ?? '')) && claimsDone(assistant.content) && !claimBacked(assistant.content, okTools)
+            && !(chatRun && /\?\s*$/.test(opener?.content ?? '')) && !composing && !(onlyChecks && chatRun && actions === 0) && claimsDone(assistant.content) && !claimBacked(assistant.content, okTools)
             && ((track.failedWrites?.size ?? 0) > 0 || !generalBacks)
           if (unbacked && mayBounce && finalNudges < 3 && claimNudges < 1 && !run.unattended && step < HARD_CAP) {
             finalNudges++
             claimNudges++
             budget = Math.max(budget, step + 6)
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Your reply says it is done, but nothing in this task actually did it: no tool that changes anything has run. Do it now with the right tool, then confirm with what the tool returned (the link, the file, the confirmation). If it can\'t be done, say plainly that it wasn\'t done and why.' })
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: onlyChecks
+              ? '[From the app] Your reply says you checked it, but no check ran in this task. Do the check now with the right tool, or drop that sentence.'
+              : '[From the app] Your reply says it is done, but nothing in this task actually did it: no tool that changes anything has run. Do it now with the right tool, then confirm with what the tool returned (the link, the file, the confirmation). If it can\'t be done, say plainly that it wasn\'t done and why.' })
             bounce()
             continue
           }
@@ -4046,6 +4093,8 @@ export class Agent {
           // Claude compacted on this final reply: the brief goes in after it, so the next message still carries
           // the goal and the user's rules from before the compaction block.
           const files = expectedFiles()
+          /** The user already read this reply (a chat streamed live): its words stand as written. */
+          const onScreen = !assistant.meta?.provisional && !run.helper
           if (run.record && !run.helper && !asksUser && (!chatRun || files?.length)) {
             if (state.acceptance?.length && evidenceRounds === 0) {
               await this.perform(thread, run, state, { id: `verify-${randomUUID()}`, name: 'agent_control', arguments: '{"action":"verify"}' }, { failures, untrusted, private: priv, userText, guard, track, window })
@@ -4061,16 +4110,21 @@ export class Agent {
             assistant.meta = { ...assistant.meta, verification: report, runId: run.record.id }
             // Unresolved checks: the details stay in meta.verification (the Needs-checking badge, developer mode). The user
             // reads plain words: a reply that already says it couldn't confirm the result stands as written; one that
-            // sounds sure gets one plain sentence, never ids, tool names or "reconcile with agent_control".
-            if (report.status === 'blocked' && !admitsUnverified(assistant.content)) { status = 'error'; assistant.content = `${assistant.content.trimEnd()}\n\n${UNVERIFIED_NOTE}` }
+            // sounds sure gets one plain sentence, never ids, tool names or "reconcile with agent_control". A reply
+            // already on screen is never rewritten (the badge says it). Only a routine, which nobody watches, fails.
+            if (report.status === 'blocked' && !admitsUnverified(assistant.content) && !onScreen) { if (run.unattended) status = 'error'; assistant.content = `${assistant.content.trimEnd()}\n\n${UNVERIFIED_NOTE}` }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
           }
           // Still says it's done with nothing behind it (the one nudge is spent, or a routine nobody watches): it isn't
-          // passed on as done. One plain sentence, the same as an unresolved check's.
+          // passed on as done. One plain sentence, the same as an unresolved check's (a reply already shown keeps its
+          // words: the Needs-checking badge says it).
           if (unbacked && !run.helper && !admitsUnverified(assistant.content) && !assistant.content.includes(UNVERIFIED_NOTE)) {
-            status = 'error'
-            assistant.content = `${assistant.content.trimEnd()}\n\n${UNVERIFIED_NOTE}`
+            if (onScreen) assistant.meta = { ...assistant.meta, unbackedClaim: true }
+            else {
+              if (run.unattended) status = 'error'
+              assistant.content = `${assistant.content.trimEnd()}\n\n${UNVERIFIED_NOTE}`
+            }
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
           }
@@ -4220,6 +4274,17 @@ export class Agent {
         db.updateMessage(back)
       }
     }
+    // Stopped by words: the typed stop's "Stopped." is the one confirmation. A step cut off before it showed anything
+    // (empty, or a reply held out of sight) goes, not a second "Stopped" bubble; a reply already on screen stays.
+    if (status === 'stopped' && run.stopConfirmed && !run.helper) {
+      for (const m of db.listMessages(thread.id)) {
+        if (m.role === 'assistant' && m.kind === 'normal' && m.createdAt >= runStart && m.status === 'stopped' && !m.toolCalls?.length && !m.meta?.stopped && !m.meta?.superseded && (!m.content || m.meta?.provisional)) {
+          m.meta = { ...m.meta, superseded: true }
+          db.updateMessage(m)
+          this.d.emit({ threadId: thread.id, type: 'message', message: m })
+        }
+      }
+    }
     for (const m of db.listMessages(thread.id)) if (m.role === 'assistant' && m.meta?.provisional && m.createdAt >= runStart) settle(m)
     this.d.cua?.end(thread.id, state, status)
     if (run.record && routed?.category && !run.replay) {
@@ -4234,6 +4299,9 @@ export class Agent {
     // the old task (kept when the run ended on a question to the user or at the step budget). A stopped one's plan
     // waits for "Continue." (below).
     if (!run.helper && state.todos.length && !state.planPaused && status === 'finished' && !endedAsking && !hitBudgetWrap) state.todos = []
+    // A stopped task's plan, left alone by a new task that did real work of its own and finished: the user moved on,
+    // so it goes (a quick chat in between keeps it for "Continue.").
+    if (!run.helper && pausedAtStart && state.planPaused && !resumed && status === 'finished' && actions > 0) { state.todos = []; delete state.planPaused }
     // A follow-up ("yes, do it") runs the way this request ended up running.
     if (!run.helper) { state.lastKind = chatRun ? 'chat' : 'agent'; state.lastEffort = effortPick === 'auto' ? effortNow() : undefined }
     // Stopped by the user with its plan still open: the plan waits for "Continue." instead of taking over the next message.
@@ -4280,6 +4348,9 @@ export class Agent {
     // send it back. A tool call shows a held step's words at once: only a final reply waits for the checks.
     let holding = screen && !provisional
     const show = (): void => {
+      // A step of the double-check ("Let me re-read the invoice."): its words stay in Show work, never narrated in the
+      // chat ahead of the answer it is checking.
+      if (run.checking && !run.helper && !m.meta?.checkStep) m.meta = { ...m.meta, checkStep: true }
       if (!m.meta?.provisional) return
       const { provisional: _p, ...rest } = m.meta
       m.meta = rest
@@ -4410,12 +4481,7 @@ export class Agent {
       const e = !run.ctrl.signal.aborted && step.ctrl.signal.aborted ? Object.assign(new Error(`${who} stopped answering.`), { stalled: true }) : err
       m.status = run.ctrl.signal.aborted ? 'stopped' : 'error'
       if (m.status === 'error') {
-        const reason = failureKind(e)
-        const publicError = reason === 'refusal' ? 'The provider declined this request under its usage policy.'
-          : reason === 'auth' ? 'The provider refused the API key.'
-          : reason === 'context' ? 'The conversation was too large to process.'
-          : reason === 'other' ? 'The bot could not finish this reply.' : `The selected service is ${KIND_WORDS[reason]}.`
-        m.meta = { ...m.meta, error: (e as Error).message, publicError }
+        m.meta = { ...m.meta, error: (e as Error).message, publicError: replyErrorText(e) }
         // The bubble already shows it; the run's catch shouldn't post it a second time.
         ;(e as Error & { shown?: boolean }).shown = true
       }
@@ -4973,6 +5039,10 @@ export class Agent {
     let out: ToolOutput
     try {
       const invoke = async (): Promise<ToolOutput> => {
+        // Any tool that opens Downloads, Desktop or Documents (office, doc_export, media…): macOS's one-time folder
+        // dialog is waited for without blocking the app, with a hint (tools/folder-access.ts; answered once per folder).
+        const folders = protectedFolders(pathArgs(args as Record<string, unknown>), toolCtx.workspaceDir)
+        if (folders.length) await askFolderAccess(folders, toolCtx)
         try { return await tool.run(args, toolCtx) } catch (error) {
           const recovery = recoveryPlan(tool.name, (error as Error).message, effect)
           if (!this.feat.toolRetry || run.ctrl.signal.aborted || !recovery.retry || !this.runtime.recoverAttempt(record.id, digest({ tool: tool.name, kind: recovery.kind }))) throw error

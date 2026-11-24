@@ -185,9 +185,14 @@ export async function runHeavy(h: HeavyHost): Promise<'finished' | 'stopped' | '
     spentUsd: 0
   }
   const children: Array<string | undefined> = []
-  const publish = (): void => {
+  let lastBoard = ''
+  const publish = (changedOnly = false): void => {
     board.spentUsd = ledger.spent()
-    h.publish(JSON.parse(JSON.stringify(board)) as HeavyBoard)
+    const now = JSON.stringify(board)
+    // (An unchanged board, re-sent by the tick, would look like progress to the stall watchdog.)
+    if (changedOnly && now === lastBoard) return
+    lastBoard = now
+    h.publish(JSON.parse(now) as HeavyBoard)
   }
   publish()
   const tick = setInterval(() => {
@@ -200,7 +205,7 @@ export async function runHeavy(h: HeavyHost): Promise<'finished' | 'stopped' | '
       a.detail = p.detail
       ledger.observe(a.id, p.usd)
     })
-    publish()
+    publish(true)
   }, h.tickMs ?? 1500)
 
   const settle = (i: number): void => {

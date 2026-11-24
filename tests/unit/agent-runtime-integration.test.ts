@@ -73,7 +73,8 @@ test('the final completion gate runs configured checks and exposes failure despi
   let checks = 0
   const h = harness([tool('check_fixture', 'read', async () => { checks++; return { text: 'fixture still failing', data: { passed: false } } })])
   llm.script.push({ toolCalls: [call('agent_control', { action: 'configure', checks: [{ criterion: 'fixture works', tool: 'check_fixture', args: {}, pointer: '/passed', equals: true }] })], delay: 0 }, ...Array.from({ length: 4 }, () => ({ content: 'Everything passed.', delay: 0 })))
-  expect(await h.run('Implement the fixture and verify the result')).toBe('error')
+  // (An interactive chat ends 'finished' with the plain note and the Needs-checking badge; only a routine fails.)
+  expect(await h.run('Implement the fixture and verify the result')).toBe('finished')
   expect(checks).toBe(1)
   expect(h.final().meta?.verification).toMatchObject({ status: 'blocked' })
   // The user reads one plain sentence, not the checks' ids and tool names (those stay in meta.verification).
@@ -106,6 +107,28 @@ test('a reply that already says it couldn\'t confirm the result is shown as writ
   expect(admitsUnverified("I couldn't find the report.")).toBe(true)
   expect(admitsUnverified("I couldn't get the page to load.")).toBe(true)
   expect(admitsUnverified("I didn't check the totals.")).toBe(true)
+  // A passing "can't" about something else is not an admission (round 3).
+  expect(admitsUnverified("Sent the invoice. I can't get you the PDF too.")).toBe(false)
+  expect(admitsUnverified('Booked the 7pm table. It can\'t do both nights.')).toBe(false)
+  expect(admitsUnverified("I couldn't get it to work.")).toBe(true)
+})
+
+// HTB-01/03 (round 3): a bot keeps one conversation, so an uncertain write from an earlier task must not fail every
+// later task's completion check (it still refuses a blind repeat of that write).
+test('an uncertain write from an earlier run does not block a later run in the same chat', async () => {
+  const { RuntimeStore } = await import('../../src/main/agent/runtime/store')
+  const { completionReport } = await import('../../src/main/agent/runtime/verification')
+  const db = new Db(':memory:')
+  const store = new RuntimeStore(db)
+  const space = db.createSpace('Test', '#000'), thread = db.createThread(space.id, 'auto', 'm')
+  const a = store.start(thread.id, 'opener-a')
+  const sent = store.begin(a, 'c1', 'gmail__send', { to: 'sam' }, 'write_external')
+  store.fail(sent.record.id, 'timed out', true)
+  expect(completionReport(store, a.id).status).toBe('blocked')
+  const b = store.start(thread.id, 'opener-b')
+  expect(completionReport(store, b.id).status).not.toBe('blocked')
+  // The same write is still never repeated blind.
+  expect(store.begin(b, 'c2', 'gmail__send', { to: 'sam' }, 'write_external').blocked).toMatch(/uncertain outcome/)
 })
 
 test('recorded-tool replay cannot execute a live write', async () => {

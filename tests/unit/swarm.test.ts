@@ -486,3 +486,20 @@ describe('UI plumbing', () => {
     expect(heavyOf({ kind: 'normal', meta: { heavy: board } })).toBeUndefined()
   })
 })
+
+// EHA-01 (round 3): a helper that hangs is a stall of the lead's chat. The team card is sent only when something
+// changed, so an unchanged board no longer counts as a sign of life and the watchdog can say what is stuck.
+describe('a hung helper', () => {
+  test('the lead chat gets the stall note while its helper says nothing', async () => {
+    process.env.FOREMAN_STALL_MS = '2000'
+    try {
+      const h = harness([SONNET], { swarm: { askAboveUsd: 100 } } as never)
+      leadAndHelpers(tasks(1), () => ({ reasoning: 'thinking about it slowly ', content: 'A report.', delay: 1600 }))
+      const t = h.thread()
+      expect(await (await h.agent.send({ threadId: t.id, text: 'research' })).done).toBe('finished')
+      const notes = h.events.filter((e) => e.type === 'tool_progress' && e.threadId === t.id && e.callId === 'watchdog')
+      expect(notes.length).toBeGreaterThan(0)
+      expect(notes.some((e) => (e as { stuck?: boolean }).stuck)).toBe(true)
+    } finally { delete process.env.FOREMAN_STALL_MS }
+  }, 30_000)
+})

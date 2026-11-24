@@ -27,6 +27,12 @@ export function protectedFolders(paths: unknown[], cwd?: string, home = homedir(
   return [...out]
 }
 
+/** The path-like arguments of any tool call (path, from, to, out, dir, file, paths): what it may open. */
+export function pathArgs(a: Record<string, unknown> | undefined): unknown[] {
+  const x = a ?? {}
+  return [x.path, x.from, x.to, x.out, x.dir, x.file, x.folder, ...(Array.isArray(x.paths) ? x.paths : [])]
+}
+
 /** The protected folders a shell command names or runs in ("ls ~/Downloads", "cd /Users/you/Desktop && …"). */
 export function commandFolders(command: string, cwd: string, home = homedir()): string[] {
   const named = [...command.matchAll(/(?:~|\$HOME|\/Users\/[^/\s'"]+|\/home\/[^/\s'"]+)\/(Downloads|Desktop|Documents)\b/g)].map((m) => join(home, m[1]))
@@ -43,8 +49,11 @@ const nameOf = (folder: string): string => folder.split(sep).filter(Boolean).pop
 export async function askFolderAccess(folders: string[], ctx: Pick<ToolContext, 'progress'>, o: { ms?: number; open?: (dir: string) => Promise<unknown> } = {}): Promise<void> {
   for (const dir of folders) {
     if (granted.has(dir)) continue
-    const hint = setTimeout(() => ctx.progress?.(`macOS may be asking to let SahilBot open your ${nameOf(dir)} folder. Look for its dialog and click OK`, { waitingOnYou: true }), o.ms ?? 3000)
+    let hinted = false
+    const hint = setTimeout(() => { hinted = true; ctx.progress?.(`macOS may be asking to let SahilBot open your ${nameOf(dir)} folder. Look for its dialog and click OK`, { waitingOnYou: true }) }, o.ms ?? 3000)
     try { await (o.open ?? readdir)(dir); granted.add(dir) } catch { /* refused or missing: the tool says so */ } finally { clearTimeout(hint) }
+    // Answered: the working line stops asking about a dialog that is gone.
+    if (hinted) ctx.progress?.(`Opened your ${nameOf(dir)} folder`)
   }
 }
 
