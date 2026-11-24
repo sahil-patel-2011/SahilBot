@@ -67,8 +67,10 @@ function save(m: Manifest): void {
 const MAX_DIR_FILES = 5000
 const MAX_DIR_BYTES = 500_000_000
 
-/** A folder too big to copy before a delete (Undo can't bring it back; the Trash still can). */
-export const tooBigToKeep = (full: string): boolean => { try { return lstatSync(full).isDirectory() && !smallFolder(full) } catch { return false } }
+/** A folder (or a single file) too big to copy before a delete (Undo can't bring it back; the Trash still can). */
+export const tooBigToKeep = (full: string): boolean => {
+  try { const st = lstatSync(full); return st.isDirectory() ? !smallFolder(full) : st.size > MAX_DIR_BYTES } catch { return false }
+}
 
 function smallFolder(dir: string): boolean {
   let files = 0
@@ -89,9 +91,10 @@ function smallFolder(dir: string): boolean {
 /**
  * Before a bot writes, replaces, creates or deletes `full`: keeps the original (the first time this task touches it).
  * `o.folder`: a folder about to be deleted is copied too (when it isn't huge). `o.newFolder`: a folder about to be
- * made there (a copy): Undo takes the whole folder away.
+ * made there (a copy): Undo takes the whole folder away. `o.movedFrom`: a file of the user's about to be moved here
+ * (Undo still takes it away, but it doesn't become the chat's own file).
  */
-export function beforeChange(threadId: string | undefined, full: string, o: { folder?: boolean; newFolder?: boolean } = {}): void {
+export function beforeChange(threadId: string | undefined, full: string, o: { folder?: boolean; newFolder?: boolean; movedFrom?: string } = {}): void {
   const key = threadId ? current.get(threadId) : undefined
   if (!threadId || !key) return
   try {
@@ -99,8 +102,10 @@ export function beforeChange(threadId: string | undefined, full: string, o: { fo
     if (m.undone || m.entries.some((e) => e.path === full)) return
     const isDir = !!o.folder && existsSync(full) && lstatSync(full).isDirectory()
     if (isDir && !smallFolder(full)) return
+    // A huge file about to be deleted isn't copied either (it stays in the Trash).
+    if (o.folder && !isDir && tooBigToKeep(full)) return
     const exists = isDir || (existsSync(full) && lstatSync(full).isFile())
-    const entry: UndoEntry = { path: full, kind: exists ? 'modified' : 'created', at: Date.now(), ...(isDir || (o.newFolder && !exists) ? { dir: true } : {}) }
+    const entry: UndoEntry = { path: full, kind: exists ? 'modified' : 'created', at: Date.now(), ...(isDir || (o.newFolder && !exists) ? { dir: true } : {}), ...(o.movedFrom && !exists ? { from: o.movedFrom } : {}) }
     if (exists) {
       const d = dirOf(threadId, key)
       mkdirSync(d, { recursive: true })
@@ -223,7 +228,8 @@ export function createdInThread(threadId: string, full: string): boolean {
         if (m.undone) continue
         for (const e of m.entries) {
           if (e.path !== full || e.dir) continue
-          if (e.kind === 'created') created = true
+          // (A file of the user's the chat moved here is still theirs.)
+          if (e.kind === 'created' && !e.from) created = true
           if (!newest || e.at >= newest.at) newest = e
         }
       } catch { /* not a task folder */ }

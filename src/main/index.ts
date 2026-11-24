@@ -790,7 +790,7 @@ app.whenReady().then(() => {
     // Office: review_document (core; every new document gets checked) and the office tool (find_tools("office"/"excel"/"pdf")):
     // spreadsheets read/edited in place, PDF forms, merge/split, batch file jobs, receipts, meeting notes.
     reviewDocumentTool({ getWorkspace: () => settings.get().workspaceDir }),
-    officeTool({ getWorkspace: () => settings.get().workspaceDir, markdownToPdf: async (md, title) => (await import('./docs/create')).renderPdf(md, { title }),
+    officeTool({ getWorkspace: () => settings.get().workspaceDir, userText: (id) => taskUserText(db.listMessages(id)), markdownToPdf: async (md, title) => (await import('./docs/create')).renderPdf(md, { title }),
       // Receipts without a text layer: Claude vision when an Anthropic key is saved and cloud is on.
       visionReceipt: (file, signal) => readReceipt({ access: apiAccess(settings), workspace: () => settings.get().workspaceDir }, file, signal) }),
     ...pageTools(pagesDir),

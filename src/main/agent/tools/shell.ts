@@ -7,7 +7,7 @@ import type { ToolEffect } from '@shared/types'
 import { homeGuarded, runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec, LOGIN_SHELL } from '../../code/proc'
 import { jobLine, jobs as defaultJobs, type JobManager, type WaitFor } from '../../jobs/manager'
 import type { ThreadState, ToolContext, ToolDef } from '../types'
-import { mayReplaceFile, noteOwned, ownedHere, refreshOwnedSince } from './freshness'
+import { mayReplaceFile, noteOwned, noteSeen, ownedHere, refreshOwnedSince } from './freshness'
 import { runStart } from '../undo-journal'
 import { askFolderAccess, commandFolders } from './folder-access'
 import { inForbidden, isSecretName } from '../../knowledge/ignore'
@@ -1319,8 +1319,8 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       })
       tick.flush()
       // Files this command made are this chat's own; its own files it changed stay its own.
-      for (const p of fresh) if (existsSync(p)) noteOwned(chat, p)
-      refreshOwnedSince(chat, ranAt)
+      for (const p of fresh) if (existsSync(p)) { noteOwned(chat, p); noteSeen(ctx.threadId, p) }
+      refreshOwnedSince(chat, ranAt, ctx.threadId)
       if (readyLine && out.stopped && ready.signal.aborted && !ctx.signal?.aborted) {
         const job = await startJob(jobs, { ...a, background: true }, cwd, ctx, sandbox)
         return { ...job, untrusted: outside, text: `${a.command} kept running after "${readyLine.slice(0, 120)}" (a server or watcher), so it was restarted as a background job instead of blocking. Use the job's URL below: it may differ from the line above.\n${job.text}` }

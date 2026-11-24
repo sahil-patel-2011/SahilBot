@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { overwriteTargets, permanentDeletes, shellTool } from '../../src/main/agent/tools/shell'
-import { noteOwned } from '../../src/main/agent/tools/freshness'
+import { noteOwned, noteSeen, staleReason } from '../../src/main/agent/tools/freshness'
 import { beginRun } from '../../src/main/agent/undo-journal'
 
 // Auto deletes without a card because deletes go to the Trash and Undo takes them back. rm can't be taken back, so a
@@ -148,5 +148,24 @@ test('run_command refuses writing over the user\'s file through $HOME, and a pip
     // A new name through $HOME is fine.
     await tool.run({ command: `echo hi > "$HOME/${rel}/new.py"` }, ctx)
     expect(readFileSync(join(ws, 'new.py'), 'utf8')).toBe('hi\n')
+  } finally { rmSync(ws, { recursive: true, force: true }) }
+})
+
+test('after the chat\'s own command changes its own file (sed -i), the next file_write or file_edit is not "edited outside"', async () => {
+  const ws = mkdtempSync(join(homedir(), '.sb-own-cmd-'))
+  try {
+    const f = join(ws, 'script.py')
+    writeFileSync(f, 'a = 1\n')
+    noteOwned('t-own-cmd', f)
+    noteSeen('t-own-cmd', f)
+    const tool = shellTool({ workspace: () => ws, userText: () => 'Write script.py' })
+    await new Promise((r) => setTimeout(r, 20))
+    await tool.run({ command: "sed -i.bak 's/1/2/' script.py && rm -f script.py.bak" }, ctxFor('t-own-cmd', ws))
+    expect(readFileSync(f, 'utf8')).toBe('a = 2\n')
+    expect(staleReason('t-own-cmd', f, 'script.py')).toBeUndefined()
+    // A change by someone else still is.
+    await new Promise((r) => setTimeout(r, 20))
+    writeFileSync(f, 'a = 3 # theirs\n')
+    expect(staleReason('t-own-cmd', f, 'script.py')).toMatch(/changed on disk/)
   } finally { rmSync(ws, { recursive: true, force: true }) }
 })

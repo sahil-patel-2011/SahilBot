@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { expect, test, vi } from 'vitest'
@@ -50,6 +50,19 @@ test('deleting a folder too big to copy says Undo can\'t bring it back (the Tras
   expect(big.text).toMatch(/too big to keep a copy, so Undo can't bring it back.*restore it from the Trash/)
   const small = await t.file_manage.run({ op: 'delete', path: 'small.txt' }, ctxFor('t-big', ws))
   expect(small.text).toMatch(/Undo brings it back/)
+})
+
+test('deleting one huge file copies nothing into the journal and says Undo can\'t bring it back', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'sb-undo-'))
+  setUndoRoot(root)
+  const ws = mkdtempSync(join(tmpdir(), 'sb-undo-hugefile-'))
+  writeFileSync(join(ws, 'video.mov'), '')
+  truncateSync(join(ws, 'video.mov'), 600_000_000)
+  const t = Object.fromEntries(fileTools(() => ws, ws).map((x) => [x.name, x]))
+  beginRun('t-hugefile', 'task-hugefile')
+  const r = await t.file_manage.run({ op: 'delete', path: 'video.mov' }, ctxFor('t-hugefile', ws))
+  expect(r.text).toMatch(/too big to keep a copy, so Undo can't bring it back/)
+  expect(changesOf('t-hugefile', 'task-hugefile')).toBeUndefined()
 })
 
 test('sheet_write in place is in the undo journal', async () => {

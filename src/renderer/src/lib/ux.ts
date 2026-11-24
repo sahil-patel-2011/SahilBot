@@ -32,6 +32,14 @@ export function nameFromJob(job: string): string {
 
 const FILE_TOOLS = new Set(['file_write', 'file_edit', 'create_document', 'office'])
 
+/** A tool result that made or changed a file: the file tools, a code edit or patch, a file copied with file_manage. */
+function madeFile(name: string, meta: Record<string, unknown> | undefined): boolean {
+  const display = typeof meta?.display === 'string' ? meta.display : ''
+  if (name === 'code') return /^(edited|patched) /.test(display)
+  if (name === 'file_manage') return /^copied /.test(display) && /\.[A-Za-z0-9]{1,8}$/.test(String(meta?.path ?? ''))
+  return FILE_TOOLS.has(name)
+}
+
 /**
  * One entry per file (the latest call wins), only for calls that succeeded and said where the file is.
  * exports: a live document saved as a file (doc_export) gets a file card too (when no document card shows it).
@@ -40,7 +48,7 @@ export function filesFromSteps(steps: Array<{ call: Pick<ToolCall, 'id' | 'name'
   const out = new Map<string, { key: string; path: string }>()
   for (const s of steps) {
     const path = s.result?.meta?.path
-    if (!(FILE_TOOLS.has(s.call.name) || (o.exports && s.call.name === 'doc_export')) || s.result?.meta?.status !== 'ok' || typeof path !== 'string' || /\.html?$/i.test(path)) continue
+    if (!(madeFile(s.call.name, s.result?.meta) || (o.exports && s.call.name === 'doc_export')) || s.result?.meta?.status !== 'ok' || typeof path !== 'string' || /\.html?$/i.test(path)) continue
     out.delete(path)
     out.set(path, { key: s.call.id, path })
   }
@@ -53,7 +61,7 @@ export function filesFromMessages(messages: Array<Pick<Message, 'role' | 'toolNa
   const out = new Map<string, { key: string; path: string }>()
   for (const m of messages) {
     const path = m.meta?.path
-    if (m.role !== 'tool' || !m.toolName || !FILE_TOOLS.has(m.toolName) || m.meta?.status !== 'ok' || typeof path !== 'string' || /\.html?$/i.test(path)) continue
+    if (m.role !== 'tool' || !m.toolName || !madeFile(m.toolName, m.meta) || m.meta?.status !== 'ok' || typeof path !== 'string' || /\.html?$/i.test(path)) continue
     out.delete(path)
     out.set(path, { key: m.id, path })
   }

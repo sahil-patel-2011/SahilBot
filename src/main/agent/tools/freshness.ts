@@ -68,13 +68,22 @@ export function refreshOwned(threadId: string | undefined, full: string): void {
   if (threadId && owned.get(threadId)?.has(full)) noteOwned(threadId, full)
 }
 
-/** A command this chat ran changed its own files (a formatter, a script it wrote): they stay its own. */
-export function refreshOwnedSince(threadId: string | undefined, since: number): void {
+/**
+ * A command this chat ran changed its own files (a formatter, sed -i, a script it wrote): they stay its own, and the
+ * chat has seen them as they are now (its next file_write or file_edit isn't refused as "edited outside this chat").
+ * `alsoSeen`: the thread that ran it, when that is a helper of the chat.
+ */
+export function refreshOwnedSince(threadId: string | undefined, since: number, alsoSeen?: string): void {
   const s = threadId ? owned.get(threadId) : undefined
   if (!s) return
   for (const [full, rec] of s) {
     if (rec.dir) continue
-    try { if (statSync(full).mtimeMs >= since - 1000) noteOwned(threadId, full) } catch { /* gone */ }
+    try {
+      if (statSync(full).mtimeMs < since - 1000) continue
+      noteOwned(threadId, full)
+      noteSeen(threadId, full)
+      if (alsoSeen && alsoSeen !== threadId) noteSeen(alsoSeen, full)
+    } catch { /* gone */ }
   }
 }
 
