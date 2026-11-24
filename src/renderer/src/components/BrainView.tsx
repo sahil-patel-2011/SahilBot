@@ -74,7 +74,10 @@ export function BrainView(p: { onConnect: () => void; onNeedsYou: () => void; on
   const now = useNow()
   const q = useRef({ query, filter })
   q.current = { query, filter }
-  const loadBriefs = (): void => { void api.brain.briefs({ query: q.current.query, filter: q.current.filter }).then(setBriefs).catch(() => setBriefs([])) }
+  const loadBriefs = (): void => {
+    const late = setTimeout(() => setBriefs((b) => b ?? []), 5_000)
+    void api.brain.briefs({ query: q.current.query, filter: q.current.filter }).then(setBriefs).catch(() => setBriefs([])).finally(() => clearTimeout(late))
+  }
   useEffect(() => { loadBriefs() }, [query, filter])
   useEffect(() => api.brain.onChanged(loadBriefs), [])
   if (!st) return <div className="page brain-page" data-testid="brain-view">{failed ? <div className="hint">Couldn’t load this page. <button className="link" onClick={reload} data-testid="brain-retry">Try again</button></div> : <div className="hint">Loading…</div>}</div>

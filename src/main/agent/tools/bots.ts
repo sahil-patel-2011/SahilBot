@@ -11,7 +11,7 @@ const COLORS: Record<string, string> = {
 const ASKED_NAME = /\b(re-?name|name (yourself|you|it)|your name|its name|call (yourself|you|it)|be called|go by)\b/i
 
 /** Lets a bot set its own standing instructions, color, and its name when the user asks for a new one in chat. */
-export function updateBotTool(db: Db, files: SpaceFiles, changed: () => void): ToolDef<{ instructions?: string; color?: string; name?: string; icon?: string }> {
+export function updateBotTool(db: Db, files: SpaceFiles, changed: () => void, resetPrompt?: (spaceId: string) => void): ToolDef<{ instructions?: string; color?: string; name?: string; icon?: string }> {
   return {
     name: 'update_bot',
     label: 'Bot profile',
@@ -50,6 +50,8 @@ export function updateBotTool(db: Db, files: SpaceFiles, changed: () => void): T
       ctx.state.systemSnapshot = undefined
       ctx.state.leanSnapshots = {}
       ctx.state.snapshots = {}
+      // Its other chats and the groups it is in pick up the new name and instructions too (as manage_bot does).
+      if (name || a.instructions) resetPrompt?.(bot.id)
       changed()
       const parts = [name && `name (now ${name})`, a.color && `color ${a.color}`, a.icon && `icon ${a.icon}`, a.instructions && 'instructions'].filter(Boolean)
       return { text: `Saved and read back your ${parts.join(', ')}. The updated profile applies in this conversation too.`, data: { name: saved!.name, instructions, verified }, verification: { passed: true, criterion: 'Bot profile saved', detail: `Read back the saved profile for ${saved!.name}.` }, display: `updated ${parts.join(', ')}` }
@@ -300,7 +302,8 @@ export function manageBotTool(deps: ManageBotDeps, db: Db, changed: () => void):
         deps.restore(gone.id)
         changed()
         const back = !db.trashedAt(gone.id) && !!db.getSpace(gone.id)
-        return { text: `Brought back ${gone.name} with its chat and routines.`, display: `brought back ${gone.name}`, verification: { passed: back, criterion: 'Bot restored', detail: `${gone.name} is in the bot list again.` } }
+        const now = db.getSpace(gone.id)?.name ?? gone.name
+        return { text: `Brought back ${gone.name}${now !== gone.name ? ` as ${now} (another bot is called ${gone.name} now)` : ''} with its chat and routines.`, display: `brought back ${gone.name}`, verification: { passed: back, criterion: 'Bot restored', detail: `${gone.name} is in the bot list again.` } }
       }
       const bots = db.listSpaces().filter((s) => s.kind === 'bot')
       const bot = find(a.bot, bots)

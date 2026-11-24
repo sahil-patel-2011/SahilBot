@@ -60,7 +60,8 @@ export function undoTool(db: Db, bots?: UndoBots): ToolDef<Record<string, never>
       const gone = bots?.lastDeleted(ctx.threadId)
       if (gone && gone.at >= (key ? db.getMessage(key)?.createdAt ?? 0 : 0)) {
         bots!.restore(gone.id)
-        return { text: `Brought back ${gone.name} with its chat and routines.`, display: `brought back ${gone.name}`, verification: { passed: !!db.listSpaces().some((s) => s.id === gone.id), criterion: 'Bot restored', detail: `${gone.name} is in the bot list again.` } }
+        const now = db.getSpace(gone.id)?.name ?? gone.name
+        return { text: `Brought back ${gone.name}${now !== gone.name ? ` as ${now} (another bot is called ${gone.name} now)` : ''} with its chat and routines.`, display: `brought back ${gone.name}`, verification: { passed: !!db.listSpaces().some((s) => s.id === gone.id), criterion: 'Bot restored', detail: `${gone.name} is in the bot list again.` } }
       }
       if (!key) return { text: 'There are no file changes from an earlier task in this chat to undo.', display: 'nothing to undo' }
       const files = changesOf(ctx.threadId, key)?.files.length ?? 0

@@ -867,7 +867,7 @@ app.whenReady().then(() => {
         return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, settings.get().sampling), maxTokens: 2000, effort: 'medium', signal }))
       }
     }),
-    updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
+    updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' }), (id) => resetBotPrompt(id)),
     // "Make me a … bot" and "delete the … bot" by asking, from any chat.
     createBotTool({
       create: (name, color, shape, icon) => { const r = templateDeps.createBot(name, color, shape as BotShape); if (icon) db.updateSpace(r.spaceId, { icon }); return r },

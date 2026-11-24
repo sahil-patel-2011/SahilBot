@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { Db } from '../../src/main/db'
-import { updateBotTool } from '../../src/main/agent/tools/bots'
+import { resetBotPrompts, updateBotTool } from '../../src/main/agent/tools/bots'
 import { emptyState } from '../../src/main/agent/types'
 
 // A bot renames itself when you ask it to in chat; nothing else (a web page, an email, another bot) can rename it.
@@ -54,4 +54,21 @@ test('the app\'s hidden notes never count as the user asking (the intro prompt m
   say('[From the app] the user is back', { hidden: true })
   await run({ name: 'Nova' })
   expect(db.getSpace(bot.id)!.name).toBe('Nova')
+})
+
+test('a rename or new instructions reset the bot\'s other chats and its groups, as manage_bot does', async () => {
+  const db = new Db(':memory:')
+  const prompts: Record<string, string> = {}
+  const files = { getPrompt: (id: string) => prompts[id] ?? '', setPrompt: (id: string, t: string) => { prompts[id] = t }, path: () => '' }
+  const tool = updateBotTool(db, files as never, () => undefined, (id) => resetBotPrompts(db, id))
+  const bot = db.mainSpace() ?? db.createSpace('New bot', '#000', { isMain: true })
+  const here = db.createThread(bot.id, 'auto', null)
+  const other = db.createThread(bot.id, 'auto', null)
+  const group = db.createSpace('Team', '#000', { kind: 'group', members: [bot.id] })
+  const gt = db.createThread(group.id, 'auto', null)
+  for (const t of [other, gt]) { const st = db.getState(t.id); st.systemSnapshot = 'Bot: New bot'; db.setState(t.id, st) }
+  db.insertMessage({ threadId: here.id, role: 'user', kind: 'normal', status: 'done', content: 'Rename yourself Study Buddy' })
+  await tool.run({ name: 'Study Buddy' } as never, { threadId: here.id, state: emptyState() } as never)
+  expect(db.getState(other.id).systemSnapshot).toBeUndefined()
+  expect(db.getState(gt.id).systemSnapshot).toBeUndefined()
 })

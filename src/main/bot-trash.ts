@@ -77,6 +77,14 @@ export function botTrash(db: Db, deps: BotTrashDeps) {
       clearTimeout(timers.get(id))
       timers.delete(id)
       db.restoreSpace(id)
+      // A bot with this name was made while it was deleted: the one brought back gets "(restored)", so a later
+      // "delete Homework Helper" never acts on the wrong one.
+      const back = db.getSpace(id)
+      if (back && db.listSpaces().some((x) => x.id !== id && x.kind === 'bot' && x.name.toLowerCase() === back.name.toLowerCase())) {
+        const name = `${back.name} (restored)`
+        db.updateSpace(id, { name })
+        for (const t of db.listThreads(id)) if (t.title === back.name) db.updateThread(t.id, { title: name })
+      }
       const rec = db.getSetting<TrashRecord>(key(id))
       for (const gid of rec?.groups ?? []) { const g = db.getSpace(gid); if (g && !g.members.includes(id)) db.updateSpace(gid, { members: [...g.members, id] }) }
       db.setSetting(key(id), null)

@@ -397,7 +397,7 @@ export function Sidebar(p: {
       <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
         {/* You: initials and your name (like Grok Bot). Click for Settings; right-click for scheduled, usage and more. */}
-        <button className="sb-me" onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, Memory, Library, Apps, Projects and Scheduled${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
+        <button className={`sb-me${p.view === 'brain' || p.view === 'files' || p.view === 'projects' ? ' on' : ''}`} onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, Memory, Library, Apps, Projects and Scheduled${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
           <span className="sb-me-avatar" aria-hidden="true">{me.initials || <I.Gear size={16} />}</span>
           {me.full ? <span className="sb-me-name">{me.full}</span> : <span className="sb-me-name muted">Settings</span>}
         </button>
