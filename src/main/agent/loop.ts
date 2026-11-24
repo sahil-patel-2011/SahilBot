@@ -901,7 +901,7 @@ export class Agent {
       // A chat with folders of its own can search them ("search my files"): knowledge_search is listed (appended once).
       if ((folder || att.some((a) => a.kind === 'folder')) && this.d.registry.get('knowledge_search') && !st.loaded.includes('knowledge_search')) st.loaded = [...st.loaded, 'knowledge_search']
       this.d.db.setState(thread.id, st)
-      if (folder && changed) notes.push(`[Working folder: ${folder}/ — relative paths in file tools and terminal commands start here, and you may read, create and edit files inside it (deleting asks; anywhere outside your folders asks first). knowledge_search with scope "chat" searches it.]`)
+      if (folder && changed) notes.push(`[Working folder: ${folder}/ — relative paths in file tools and terminal commands start here, and you may read, create and edit files inside it (deleting goes to the Trash and Undo can bring it back; anything in the home folder works directly; places outside it ask first). knowledge_search with scope "chat" searches it.]`)
       else if (!folder && changed) notes.push('[No working folder any more: relative paths are in the workspace again.]')
     }
     const user = this.d.db.insertMessage({

@@ -24,7 +24,7 @@ import { askBotOf, councilOf, groupMembers, heavyOf, isCardNotice, maxOf, maxTea
 import { MaxCard } from './MaxCard'
 import { useDevMode } from '../lib/dev-mode'
 import { THINKING_LABEL } from '../lib/picker'
-import { elapsed, galleryFromSteps, hasQuietContent, internalNotice, quietActions, turnStart } from '../lib/quiet'
+import { elapsed, galleryFromSteps, hasMadeArtifacts, hasQuietContent, internalNotice, quietActions, turnStart } from '../lib/quiet'
 
 type Block =
   | { kind: 'user'; m: Message }
@@ -556,6 +556,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const quietBot = !!botName && !dev
   const bs = useMemo(() => all.filter((b) => {
     if (b.kind === 'qa' && !b.answer && asking) return false
+    // A bot's chat still shows the cards of what a run made (the invoice, the picture, the page), never its steps.
+    if (quietBot && b.kind === 'activity' && hasMadeArtifacts(b.steps, hasDocs)) return true
     if (b.kind === 'notice' && internalNotice(b.m)) return dev
     // A bot's chat: the conversation only (what it did is one click away in Show work, not in the chat).
     if (quietBot && (b.kind === 'activity' || b.kind === 'plan' || b.kind === 'team' || b.kind === 'heavy' || b.kind === 'compacted')) return false
@@ -701,7 +703,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                 planLive={running && b === lastPlan}
                 members={b.kind === 'team' ? teams?.[b.id] : undefined}
                 editable={!running && b.kind === 'user' && b.m.id === lastUserId}
-                dev={dev} retry={!running && !pending.length && b === tailText && b.kind === 'text'} />
+                dev={dev} quietBot={quietBot} retry={!running && !pending.length && b === tailText && b.kind === 'text'} />
               </Fragment>
             )
           })}
@@ -756,6 +758,8 @@ type BlockProps = {
   editable: boolean
   /** Developer mode: every step, thinking, the model and its cost. */
   dev: boolean
+  /** A bot's chat (not Developer mode): a run shows only the cards of what it made. */
+  quietBot?: boolean
   /** The last reply, finished: Retry is in its hover tools. */
   retry: boolean
 }
@@ -773,8 +777,8 @@ function quietVisible(b: Block, docs: boolean): boolean {
 }
 
 /** A finished run in the quiet chat: what it made and the actions that matter, never its steps. */
-function QuietActivity({ steps, actions, hasDocs }: { steps: Step[]; actions: ThreadActions; hasDocs: boolean }) {
-  const done = quietActions(steps)
+function QuietActivity({ steps, actions, hasDocs, artifactsOnly }: { steps: Step[]; actions: ThreadActions; hasDocs: boolean; artifactsOnly?: boolean }) {
+  const done = artifactsOnly ? [] : quietActions(steps)
   return (
     <>
       {done.map((a) => <div key={a.key} className={`quiet-action${a.failed ? ' failed' : ''}`} data-testid="quiet-action">{a.failed ? <span aria-hidden>!</span> : <I.Check size={12} />}{a.text}</div>)}
@@ -836,7 +840,7 @@ export function sameBlock(a: Block, b: Block): boolean {
   }
 }
 
-const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, running, live, waitingApproval, planLive, members, editable, dev, retry }: BlockProps) {
+const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, running, live, waitingApproval, planLive, members, editable, dev, quietBot, retry }: BlockProps) {
   return (
     <div className={`block b-${b.kind}${cont ? ' cont' : ''}`}>
       {time && <div className="stamp">{time}</div>}
@@ -854,7 +858,7 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
       ) : b.kind === 'idea' ? (
         <IdeaCard id={b.id} idea={b.idea} why={b.why} outside={b.outside} threadId={b.threadId} busy={running} />
       ) : b.kind === 'activity' && !dev ? (
-        <QuietActivity steps={b.steps} actions={actions} hasDocs={hasDocs} />
+        <QuietActivity steps={b.steps} actions={actions} hasDocs={hasDocs} artifactsOnly={quietBot} />
       ) : b.kind === 'activity' ? (
         <>
           <Activity steps={b.steps} live={live} waitingApproval={waitingApproval} onOpenFile={actions.onOpenFile} />
@@ -885,7 +889,7 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
   )
 }, (a, b) => a.time === b.time && a.cont === b.cont && a.actions === b.actions && a.hasDocs === b.hasDocs && a.running === b.running &&
   a.live === b.live && a.waitingApproval === b.waitingApproval && a.planLive === b.planLive && a.members === b.members &&
-  a.editable === b.editable && a.dev === b.dev && a.retry === b.retry && sameBlock(a.b, b.b))
+  a.editable === b.editable && a.dev === b.dev && a.quietBot === b.quietBot && a.retry === b.retry && sameBlock(a.b, b.b))
 
 /**
  * The next step for an error, as a button: open the right Settings page for keys, limits and models, or

@@ -1,11 +1,11 @@
-import { join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { blocksToSlides, deckReview } from '@shared/slides'
 import type { DocExportFormat, DocSnapshot } from '@shared/types'
 import type { ToolContext, ToolDef } from '../types'
 import { exportDoc, type CreateDocumentFn } from '../../docspace/export'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { resolvePath } from './files'
+import { outsidePath, resolvePath } from './files'
 import { markdownToBlocks, stripIdMarkers } from '../../docspace/markdown'
 import { DocConflictError, type DocStore } from '../../docspace/store'
 import type { DocOp } from '../../docspace/ops'
@@ -270,24 +270,27 @@ Optional "summary": a short note for the version history.`,
     }
   }
 
-  const docExport: ToolDef<{ doc?: string; format: DocExportFormat; name?: string }> = {
+  const docExport: ToolDef<{ doc?: string; format: DocExportFormat; name?: string; to?: string }> = {
     name: 'doc_export',
     label: 'Document',
     core: false,
     group: 'Documents',
     effect: 'write_local',
-    description: 'Save a live document (Docs) as a file in the workspace\'s exports folder: docx, pdf, md or html; sheets: xlsx or csv (also md, html, pdf, docx). Optional "name" for the file. Returns the path.',
+    // Saving outside the home folder asks first (same rule as file_write).
+    hardStop: (a, call) => { const o = a.to ? outsidePath(a.to, deps.workspace(), call?.roots ?? [], call?.folder) : null; return o ? `writing ${o}, outside your folders` : null },
+    description: 'Save a live document (Docs) as a file: docx, pdf, md or html; sheets: xlsx or csv (also md, html, pdf, docx). When the user names a place (Downloads, Desktop, a folder), pass it as "to": a folder ("~/Downloads") or a full path ("~/Desktop/Report.pdf"); otherwise it goes in the workspace\'s exports folder. Optional "name" for the file. Never replaces an existing file (a taken name gets " (2)"). Returns the path.',
     parameters: {
       type: 'object',
       properties: {
         doc: { type: 'string' },
         format: { type: 'string', enum: ['docx', 'pdf', 'md', 'html', 'xlsx', 'csv', 'pptx', 'pptx_pictures', 'odp', 'png'], description: 'Decks: pptx (editable PowerPoint), pptx_pictures (each slide a picture: exact fonts and look), odp (Keynote, LibreOffice, Google Slides), pdf, png (a folder of slide images). Documents: docx or pdf. Sheets: xlsx or csv.' },
-        name: { type: 'string', maxLength: 100 }
+        name: { type: 'string', maxLength: 100 },
+        to: { type: 'string', description: 'Where to save it: a folder ("~/Downloads", "~/Desktop") or a full file path' }
       },
       required: ['format'],
       additionalProperties: false
     },
-    async run({ doc, format, name }, ctx) {
+    async run({ doc, format, name, to }, ctx) {
       const id = await resolve(doc, ctx)
       const snap = store.get(id)
       // Images in the export: the workspace and this chat's attached folders only.
@@ -299,7 +302,16 @@ Optional "summary": a short note for the version history.`,
         return readFileSync(p)
       }
       let notes: string[] = []
-      const path = await exportDoc(snap, format, join(ws, 'exports'), { name, create: deps.create, readImage, warnings: (w) => { notes = w } })
+      // Where the user asked: a folder, or a full path whose name is kept as written.
+      let dir = join(ws, 'exports')
+      let exact: string | undefined
+      if (to) {
+        const full = resolvePath(to, ws, roots(ctx), { base: ctx.state.folder, allowOutside: !!ctx.approved })
+        const folder = /[\\/]$/.test(to) || (existsSync(full) && statSync(full).isDirectory()) || !extname(full)
+        if (folder) dir = full
+        else { dir = dirname(full); exact = basename(full, extname(full)) }
+      }
+      const path = await exportDoc(snap, format, dir, { name: exact ?? name, exactName: !!exact || (!!to && !!name), create: deps.create, readImage, warnings: (w) => { notes = w } })
       const review = snap.content.kind === 'slides' ? deckReview(blocksToSlides(snap.content.blocks)) : []
       return { text: `Exported "${snap.title}" (version ${snap.version}) to ${path}.${review.length ? `\nDeck check: ${review.join(' ')} Fix with doc_edit and export again if the user should get the polished version.` : ''}${notes.length ? `\nExport notes (tell the user, or fix and export again): ${notes.slice(0, 8).join(' ')}` : ''}`, display: `exported ${path.split('/').pop()}`, path, meta: { ...card(snap), exported: path } }
     }

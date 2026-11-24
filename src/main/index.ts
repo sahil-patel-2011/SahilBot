@@ -154,6 +154,7 @@ import { apiRequestTool } from './agent/tools/api-request'
 import { chatHistoryTool } from './agent/tools/chat-history'
 import { taskOf, undoTask, undoTool } from './agent/tools/undo'
 import { changesOf, setUndoRoot, undoSummary } from './agent/undo-journal'
+import { taskUserText } from './agent/tools/freshness'
 import { manualTool } from './agent/tools/manual'
 import { VaultService } from './vault/service'
 import { workingMemoryPage } from './vault/working-memory'
@@ -782,7 +783,8 @@ app.whenReady().then(() => {
     undoTool(db),
     // The app's own manual (docs/*.md), searchable: the agent looks things up instead of guessing.
     manualTool(docsDir),
-    ...fileTools(() => settings.get().workspaceDir, docsDir),
+    // A file of the user's is replaced only when their own words in this task asked to change it (tools/freshness.ts).
+    ...fileTools(() => settings.get().workspaceDir, docsDir, { userText: (id) => taskUserText(db.listMessages(id)) }),
     // Office: review_document (core; every new document gets checked) and the office tool (find_tools("office"/"excel"/"pdf")):
     // spreadsheets read/edited in place, PDF forms, merge/split, batch file jobs, receipts, meeting notes.
     reviewDocumentTool({ getWorkspace: () => settings.get().workspaceDir }),

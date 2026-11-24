@@ -10,7 +10,8 @@ test('an overwrite after the user changed the file is refused; after a fresh rea
   const ws = mkdtempSync(join(tmpdir(), 'sb-stale-'))
   const file = join(ws, 'notes.md')
   writeFileSync(file, 'Meeting notes\n')
-  const [read, write] = fileTools(() => ws, ws)
+  // The user asked to change notes.md (a file they didn't ask about is never replaced: never-replace.test.ts).
+  const [read, write] = fileTools(() => ws, ws, { userText: () => 'Add "Budget approved" to notes.md' })
   const ctx = { threadId: 't-stale', state: { roots: [], loaded: [], alwaysAllow: [], todos: [] } } as never
   expect((await read.run({ path: 'notes.md' }, ctx)).text).toBe('Meeting notes\n')
 
@@ -29,11 +30,12 @@ test('an overwrite after the user changed the file is refused; after a fresh rea
   // Its own consecutive writes never trip it, and a file it never read is written as before.
   await write.run({ path: 'notes.md', content: 'v2\n' }, ctx)
   await write.run({ path: 'notes.md', content: 'v3\n' }, ctx)
-  // A file it never opened isn't replaced blind: it reads it first, picks another name, or asks.
+  // A file the user didn't ask about is never replaced, read or not: the new one goes beside it as "other (2).md".
   writeFileSync(join(ws, 'other.md'), 'x')
-  await expect(write.run({ path: 'other.md', content: 'y' }, ctx)).rejects.toThrow(/already exists and this chat hasn't opened it.*other-2\.md/)
+  expect((await write.run({ path: 'other.md', content: 'y' }, ctx)).text).toMatch(/other\.md already exists.*saved as other \(2\)\.md/)
   expect(readFileSync(join(ws, 'other.md'), 'utf8')).toBe('x')
   await read.run({ path: 'other.md' }, ctx)
-  await write.run({ path: 'other.md', content: 'y' }, ctx)
-  expect(readFileSync(join(ws, 'other.md'), 'utf8')).toBe('y')
+  await write.run({ path: 'other.md', content: 'z' }, ctx)
+  expect(readFileSync(join(ws, 'other.md'), 'utf8')).toBe('x')
+  expect(readFileSync(join(ws, 'other (2).md'), 'utf8')).toBe('z')
 })

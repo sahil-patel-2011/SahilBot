@@ -7,6 +7,7 @@ import type { ToolEffect } from '@shared/types'
 import { homeGuarded, runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec, LOGIN_SHELL } from '../../code/proc'
 import { jobLine, jobs as defaultJobs, type JobManager, type WaitFor } from '../../jobs/manager'
 import type { ThreadState, ToolContext, ToolDef } from '../types'
+import { ownedHere } from './freshness'
 import { inForbidden, isSecretName } from '../../knowledge/ignore'
 
 // Run a terminal command. What it can do decides who must approve it:
@@ -268,6 +269,76 @@ export function normalize(argv0: string[]): Normalized {
     break
   }
   return { argv, bg, verdict }
+}
+
+// ---------- permanent deletes ----------
+
+/** Build output, caches and temp files: deleting them with rm loses nothing of the user's. */
+const DISPOSABLE_DIRS = new Set(['node_modules', 'dist', 'build', 'out', '.cache', 'cache', 'coverage', 'target', '__pycache__', '.next', '.nuxt', '.turbo',
+  '.parcel-cache', '.pytest_cache', '.mypy_cache', '.ruff_cache', '.gradle', '.venv', 'venv', '.tox', 'tmp', 'temp', '.tmp', 'DerivedData', '.expo', '.svelte-kit', '.vite'])
+const DISPOSABLE_FILE = /\.(pyc|pyo|o|obj|class|log|tmp|swp|bak)$|^\.DS_Store$/i
+
+/** A path an rm may take away: build output, caches, temp folders, or something this chat made (`ours`). */
+function disposable(arg: string, cwd: string, ours?: (full: string) => boolean): boolean {
+  if (/[$`]/.test(arg)) return false
+  const expanded = arg === '~' ? HOME : arg.startsWith('~/') ? join(HOME, arg.slice(2)) : arg
+  if (/^~/.test(expanded)) return false
+  const full = resolve(cwd, expanded)
+  const parts = full.split(sep).filter(Boolean)
+  const name = parts[parts.length - 1] ?? ''
+  if (/[*?[]/.test(name)) {
+    // A glob: fine only when every match is build output (*.pyc) inside a folder that is.
+    return DISPOSABLE_FILE.test(name.replace(/^\*/, 'x')) || parts.slice(0, -1).some((p) => DISPOSABLE_DIRS.has(p))
+  }
+  if (parts.some((p) => DISPOSABLE_DIRS.has(p)) || DISPOSABLE_FILE.test(name)) return true
+  const tmp = [tmpdir(), '/tmp', '/private/tmp', '/var/folders', '/private/var/folders'].map((t) => realish(resolve(t)))
+  const real = realish(full)
+  if (tmp.some((t) => within(t, real) && real !== t)) return true
+  return !!ours && (ours(full) || ours(real))
+}
+
+/**
+ * What a command would delete for good that isn't build output, temp files or this chat's own: rm, unlink, shred,
+ * srm and find … -delete / -exec rm (also inside sh -c and $( )). git rm, rmdir (empty folders only) and trash are
+ * left out: those can be taken back. A delete of the user's files goes through file_manage delete instead (the Trash,
+ * and Undo brings it back); terminal changes aren't in the undo journal.
+ */
+export function permanentDeletes(cmd: string, cwd: string, ours?: (full: string) => boolean, depth = 0): string[] {
+  if (depth > 3) return []
+  const out: string[] = []
+  for (const inner of substitutions(cmd)) out.push(...permanentDeletes(inner, cwd, ours, depth + 1))
+  let here = cwd
+  for (const seg of splitCommand(cmd)) {
+    const argv = normalize(words(seg.text).argv).argv
+    const name = progName(argv[0] ?? '')
+    const args = argv.slice(1)
+    if (name === 'cd') { const to = args[0]; if (to && !/[$`]/.test(to)) here = resolve(here, to === '~' ? HOME : to.replace(/^~\//, `${HOME}/`)); continue }
+    if (/^(sh|bash|zsh|dash|ksh)$/.test(name)) {
+      const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a))
+      if (c >= 0 && args[c + 1]) out.push(...permanentDeletes(args[c + 1], here, ours, depth + 1))
+      continue
+    }
+    if (name === 'rm' || name === 'unlink' || name === 'shred' || name === 'srm') {
+      let opts = true
+      for (const a of args) {
+        if (opts && a === '--') { opts = false; continue }
+        if (opts && a.startsWith('-') && a !== '-') continue
+        if (!disposable(a, here, ours)) out.push(a)
+      }
+      continue
+    }
+    if (name === 'find') {
+      const deleting = args.includes('-delete') || args.some((a, i) => (a === '-exec' || a === '-execdir' || a === '-ok') && /^(rm|unlink|shred|srm)$/.test(progName(args[i + 1] ?? '')))
+      if (!deleting) continue
+      const roots: string[] = []
+      for (const a of args) { if (/^[-(!]/.test(a)) break; roots.push(a) }
+      // find's name filter can make it build output only ("find . -name '*.pyc' -delete").
+      const pattern = args[args.findIndex((a) => a === '-name' || a === '-iname') + 1]
+      const onlyJunk = !!pattern && args.some((a) => a === '-name' || a === '-iname') && (DISPOSABLE_FILE.test(pattern.replace(/^\*/, 'x')) || DISPOSABLE_DIRS.has(pattern))
+      for (const r of roots.length ? roots : ['.']) if (!onlyJunk && !disposable(r, here, ours)) out.push(r)
+    }
+  }
+  return [...new Set(out)]
 }
 
 // ---------- classifying one command ----------
@@ -1013,7 +1084,7 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       return null
     },
     describe: (a) => `${a.background ? 'Start in the background' : 'Run in Terminal'}: ${a.command.slice(0, 200)}${a.cwd ? ` (in ${a.cwd})` : ''} · ${whyOf(a)}`,
-    description: 'Run a shell command (zsh) on this Mac in the workspace or an attached/project folder, and get its output and exit code. Use it for builds, tests, git, scripts, file conversions and anything a terminal does. Prefer one clear command per call; check the exit code. Long-running processes (dev servers, watchers, long builds): set background: true, optionally with wait_for ({"text": "ready"}, {"regex": "Local:.*http"}, {"port": 5173}) to wait until it is up; you get a job id, the URL it prints and its first output, then use the jobs tool to read output, wait, stop or restart it (never use "&" or nohup). Deleting files always asks the user. Writing outside the workspace and attached folders is blocked unless the user approves the command. In code projects prefer the code tool (search, edit, apply_patch, run_tests, typecheck, lint) and the git tool: they return parsed, compact results.',
+    description: 'Run a shell command (zsh) on this Mac in the workspace or an attached/project folder, and get its output and exit code. Use it for builds, tests, git, scripts, file conversions and anything a terminal does. Prefer one clear command per call; check the exit code. Long-running processes (dev servers, watchers, long builds): set background: true, optionally with wait_for ({"text": "ready"}, {"regex": "Local:.*http"}, {"port": 5173}) to wait until it is up; you get a job id, the URL it prints and its first output, then use the jobs tool to read output, wait, stop or restart it (never use "&" or nohup). Never delete files of the user with rm: use file_manage delete (to the Trash, so Undo can bring them back); rm is for build output, caches, temp files and files you made in this chat. Writing outside the workspace and attached folders is blocked unless the user approves the command. In code projects prefer the code tool (search, edit, apply_patch, run_tests, typecheck, lint) and the git tool: they return parsed, compact results.',
     parameters: {
       type: 'object',
       properties: {
@@ -1039,6 +1110,12 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
     async run(a, ctx) {
       if (systemReason(a.command)) throw new Error('System-level commands (sudo, launchctl, defaults write, disk tools, shutdown, security settings) are not run by SahilBot. Ask the user to run it themselves in Terminal.')
       const cwd = cwdFor(a.cwd, ctx)
+      // rm can't be undone: the user's files are deleted with file_manage delete (to the Trash, and Undo brings them
+      // back). Build output, temp files and files this chat made can go with rm; an approved command runs as written.
+      if (!ctx.approved) {
+        const gone = permanentDeletes(a.command, cwd, (p) => ownedHere(ctx.state.rootId ?? ctx.threadId, p) || ownedHere(ctx.threadId, p))
+        if (gone.length) throw new Error(`Nothing was run: this would delete ${gone.slice(0, 3).join(', ')}${gone.length > 3 ? ` and ${gone.length - 3} more` : ''} for good, and that can't be undone. Delete the user's files with file_manage delete instead (each one goes to the Trash, so Undo can bring it back). rm is fine for build output, caches, temp files and files you made in this chat.`)
+      }
       const roots = ctx.state.roots ?? []
       const far = permissionChangeOutside(a.command, [ctx.workspaceDir, ...roots], cwd)
       if (far.length) throw new Error(`Changing permissions or owners outside your folders (${far.slice(0, 2).join(', ')}) is system-level: SahilBot doesn't run it. Ask the user to run it themselves in Terminal.`)
