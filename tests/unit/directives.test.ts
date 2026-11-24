@@ -28,3 +28,12 @@ test('the real Codex citation forms are removed too', () => {
 test('sidebar previews leave internal markup out', () => {
   expect(plain('Saved **invoice.pdf** :codex-file-citation[codex-file-citation]{path=/Users/s/inv.pdf} to Downloads.')).toBe('Saved invoice.pdf to Downloads.')
 })
+
+// RLB-03 (round 2): a citation glued to a word, one in parentheses, and a path with braces in it.
+test('a Codex citation glued to a word, in parentheses or with braces in its path is removed whole', () => {
+  expect(stripDirectives('Saved:codex-file-citation[codex-file-citation]{path=a.py}')).toBe('Saved')
+  expect(stripDirectives('Saved (:codex-file-citation[codex-file-citation]{path=a.py}) to Downloads.')).toBe('Saved to Downloads.')
+  expect(stripDirectives('Saved it :codex-file-citation[codex-file-citation]{line_range_start=1 path=/Users/s/My {weird} file.pdf} to Downloads.')).toBe('Saved it to Downloads.')
+  // Parentheses with something in them stay.
+  expect(stripDirectives('Saved (two copies) :codex-file-citation{path=a.py}.')).toBe('Saved (two copies).')
+})

@@ -1,5 +1,5 @@
 import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { repliedSince } from '../lib/bot-working'
+import { repliedSince, workingText } from '../lib/bot-working'
 import { awaitingFinal, heldDrafts } from '../lib/held-drafts'
 import { openPermission, PERMISSION_BUTTON, permissionAsked } from '../lib/permission-ask'
 import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
@@ -148,8 +148,8 @@ export function blocks(messages: Message[]): Block[] {
     if (m.meta?.superseded && !held.has(m.id)) continue
     // A Max hybrid's phase-1 brief is shown inside the Max card (the judged answer follows it).
     if (m.meta?.maxBrief && !m.toolCalls?.length) continue
-    // A reply the app may still send back (provisional) stays out of sight until it stands: never shown, then pulled.
-    const hasText = !m.meta?.provisional && !!(m.content || m.status === 'error' || m.status === 'stopped' || (m.reasoning && !m.toolCalls?.length))
+    // (A reply the app may still send back, provisional, is kept out of sight while the run works: see bs below.)
+    const hasText = !!(m.content || m.status === 'error' || m.status === 'stopped' || (m.reasoning && !m.toolCalls?.length))
     if (hasText) { act = null; out.push({ kind: 'text', m }) }
     if (m.toolCalls?.length) {
       for (const call of m.toolCalls) {
@@ -458,7 +458,7 @@ export function stallText(o: { who: string; label?: string | null; stall?: WorkP
 
 /**
  * Working, Grok Bot's way (every chat outside Developer mode): the bot says it's on it (its own opening line when it
- * wrote one; a plain "On it." if nothing came after a moment), then one quiet line, an icon and what it's doing
+ * wrote one; a plain "On it." in the working line if nothing came after a moment), then one quiet line, an icon and what it's doing
  * ("Planning the Savannah trip"). No timer and no "Thinking…". A step that hangs says what is stuck, with Retry and
  * Skip for that step alone; "Show work" opens the plan, sources and files.
  */
@@ -472,14 +472,13 @@ function BotWorking({ name, ack, label, stall, threadId, work }: { name?: string
   }, [ack])
   const who = name ?? 'SahilBot'
   const slow = stallText({ who, label, stall })
-  const text = slow ?? (label || (name ? `${name} is working` : 'Working on it'))
+  const text = workingText({ slow, label, ack, late, name })
   const step = (action: 'retry' | 'skip'): void => {
     if (!threadId) return
     void (action === 'retry' ? api.chat.retryStep(threadId) : api.chat.skipStep(threadId)).catch((e: Error) => toast(e.message, 'error'))
   }
   return (
     <>
-      {ack && late && <div className="row ai bot-ack" data-testid="bot-ack"><div className="bubble-wrap ai-col"><div className="bubble ai">On it.</div></div></div>}
       <div className="status-line bot-working" data-testid="status-line">
         <span className="work-orb" aria-hidden="true" />
         <span className="activity-title" role="status" aria-live="polite" data-testid="bot-working">{text}</span>

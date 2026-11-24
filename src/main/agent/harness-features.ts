@@ -78,33 +78,46 @@ export const PROFILES: Record<'sahilbot' | 'claude-code' | 'codex-cli' | 'grok-b
 export const straight = (t: string): string => (t ?? '').replace(/[\u2018\u2019\u02BC]/g, "'").replace(/[\u201C\u201D]/g, '"')
 
 /** "I've saved it", "It's been sent", "Done: created the event": a reply saying an action happened. */
+/** Tools that look at the work (for "I checked / verified / tested it"). */
+const LOOKS = ['read', 'fetch', 'browser', 'search', 'run_tests', 'run_command', 'code', 'review', 'agent_control', 'screenshot', 'computer', 'list', 'file_info', 'open_file', 'snapshot', 'get', 'grep', 'glob']
 /** Tool-name stems that do what a claimed verb says ("published" ↔ publish_post, "it's live" ↔ deploy). */
 const CLAIM_STEMS: Record<string, string[]> = {
   saved: ['save', 'write', 'create', 'note', 'edit', 'export', 'memory'], sent: ['send', 'email', 'mail', 'message', 'reply', 'post'], emailed: ['email', 'send', 'mail'],
   published: ['publish', 'post', 'deploy', 'release'], posted: ['post', 'publish', 'send'], deployed: ['deploy', 'publish', 'release'],
-  uploaded: ['upload', 'put', 'save'], booked: ['book', 'reserve'], scheduled: ['schedule', 'create_event', 'calendar'],
-  deleted: ['delete', 'remove', 'trash', 'file_manage', 'manage_bot'], removed: ['remove', 'delete', 'trash', 'file_manage', 'manage_bot'], filed: ['file', 'create', 'submit'],
-  submitted: ['submit', 'send', 'post'], shared: ['share', 'send'], moved: ['move', 'rename', 'file_manage'], renamed: ['rename', 'move', 'file_manage', 'update_bot', 'manage_bot'],
+  uploaded: ['upload', 'put', 'save'], booked: ['book', 'reserve'], scheduled: ['schedule', 'create_event', 'calendar'], rescheduled: ['schedule', 'update', 'calendar', 'event'],
+  deleted: ['delete', 'remove', 'trash', 'file_manage', 'manage_bot', 'schedule'], removed: ['remove', 'delete', 'trash', 'file_manage', 'manage_bot', 'schedule'], filed: ['file', 'create', 'submit'],
+  submitted: ['submit', 'send', 'post'], shared: ['share', 'send'], moved: ['move', 'rename', 'file_manage', 'schedule', 'update_bot', 'manage_bot'], renamed: ['rename', 'move', 'file_manage', 'update_bot', 'manage_bot'],
   installed: ['install'], ordered: ['order', 'buy', 'purchase'], paid: ['pay', 'purchase'], replied: ['reply', 'send'],
   messaged: ['message', 'send'], texted: ['text', 'send', 'message'], live: ['publish', 'deploy', 'post', 'launch', 'release'],
   created: ['create', 'write', 'save', 'make', 'new', 'add', 'export', 'schedule', 'file_manage'], wrote: ['write', 'save', 'create', 'edit'], written: ['write', 'save', 'create', 'edit'],
-  added: ['add', 'create', 'write', 'edit', 'update', 'insert', 'append', 'schedule', 'memory'], updated: ['update', 'edit', 'write', 'set', 'patch', 'modify', 'save'],
-  fixed: ['edit', 'write', 'patch', 'fix', 'apply', 'update'], cancelled: ['cancel', 'delete', 'remove', 'update', 'schedule'], canceled: ['cancel', 'delete', 'remove', 'update', 'schedule'],
+  added: ['add', 'create', 'write', 'edit', 'update', 'insert', 'append', 'schedule', 'memory'], updated: ['update', 'edit', 'write', 'set', 'patch', 'modify', 'save', 'schedule', 'manage_bot'],
+  fixed: ['edit', 'write', 'patch', 'fix', 'apply', 'update', 'schedule'], cancelled: ['cancel', 'delete', 'remove', 'update', 'schedule'], canceled: ['cancel', 'delete', 'remove', 'update', 'schedule'],
   downloaded: ['download', 'fetch', 'save', 'export'], copied: ['copy', 'write', 'save', 'duplicate', 'file_manage'],
-  completed: ['complete', 'submit', 'update', 'todo'], 'signed in': ['sign', 'login', 'log_in', 'auth', 'browser'], 'logged in': ['login', 'log_in', 'sign', 'auth', 'browser']
+  completed: ['complete', 'submit', 'update', 'todo'],
+  // "I checked the link", "I tested it": something that looks (a read, a page, a test run, the screen) backs it.
+  verified: LOOKS, checked: LOOKS, tested: LOOKS, confirmed: LOOKS, 'double-checked': LOOKS,
+  'signed in': ['sign', 'login', 'log_in', 'auth', 'browser'], 'logged in': ['login', 'log_in', 'sign', 'auth', 'browser']
 }
 
 // Verbs for actions in the world (not "I've written a summary below", which is the reply itself).
-const VERBS = '(saved|sent|emailed|published|posted|deployed|uploaded|booked|scheduled|deleted|removed|filed|submitted|shared|moved|renamed|installed|ordered|paid|replied|messaged|texted|cancell?ed|canceled|downloaded|signed in|logged in)'
+const VERBS = '(saved|sent|emailed|published|posted|deployed|uploaded|booked|scheduled|rescheduled|deleted|removed|filed|submitted|shared|moved|renamed|installed|ordered|paid|replied|messaged|texted|cancell?ed|canceled|downloaded|signed in|logged in)'
+// Checking verbs: "I've verified the totals", "I tested it on three photos" (said of itself only).
+const CHECKS = '(verified|checked|tested|confirmed|double-checked)'
 // Verbs that also describe the reply itself ("I've added a section below", "I wrote a short poem"): a claim only when
 // the sentence names something concrete in the world (a file, a path, an event, an order…).
 const TARGETED = '(created|wrote|written|added|updated|fixed|copied|completed)'
 const TARGET = /\b[\w-]+\.(pdf|docx?|xlsx|csv|txt|md|py|js|ts|tsx|json|html?|pptx|key|numbers|pages|png|jpe?g|zip|ics|sh|rb|go|swift)\b|~\/|\/Users\/|\b(file|folder|document|spreadsheet|workbook|calendar|event|reminder|contact|repo|repository|branch|pull request|account|order|subscription|booking|reservation|invoice|app|website|site|playlist|ticket|issue)s?\b/i
 const claimRe = (verbs: string): RegExp => new RegExp(`\\b(i('ve| have)?|we('ve| have)?)\\s+(just\\s+|now\\s+|already\\s+)?${verbs}\\b|\\b(it'?s|has|have|was|were)\\s+(now\\s+)?been\\s+${verbs}\\b`, 'i')
-const CLAIM = new RegExp(`${claimRe(VERBS).source}|\\b(it'?s|it is|they'?re|they are)\\s+(now\\s+)?(live|saved|sent|published|posted|booked|scheduled|deployed)\\b`, 'i')
+const CLAIM = new RegExp(`${claimRe(VERBS).source}|${claimRe(CHECKS).source}|\\b(it'?s|it is|they'?re|they are)\\s+(now\\s+)?(live|saved|sent|published|posted|booked|scheduled|deployed)\\b`, 'i')
+// Terse forms: "The meeting is booked for 3pm.", "Your email is sent.", "Saved to ~/Downloads.", "Invoice sent." (Not in a
+// sentence about what would or will happen: "Dry run: I would email them that the invoice is paid.")
+const TERSE = new RegExp(`\\b(the|your|that|this)\\s+(\\w+\\s+){1,3}(is|are|has been|have been)\\s+(now\\s+|all\\s+)?${VERBS}\\b`
+  + `|^\\s*(done[,.:!]?\\s*|all\\s+)?${VERBS}(\\s+(to|for|at|in|on|as|into|from|with|it|them|the|your|all|both|and)\\b|\\s+[\\w-]+\\.[a-z]{2,5}\\b|\\s+~?\\/|\\s*[.!:,]|\\s*$)`
+  + `|^\\s*[\\w-]+(\\s+[\\w-]+){0,2}\\s+${VERBS}\\s*[.!]?\\s*$`, 'i')
 const CLAIM_TARGETED = claimRe(TARGETED)
+const MODAL = /\b(would|will|won'?t|could|might|should|going to|i'?d|i'?ll|once|when|if)\b/i
 // Judged sentence by sentence: "I've saved it. Nothing was deleted." is a claim; "Nothing has been sent yet" isn't.
-const NEGATED = new RegExp(`\\b(not|never|nothing|n't|yet to|unable|couldn'?t|wasn'?t)\\b[^.!?]{0,30}(${VERBS.slice(1, -1)}|${TARGETED.slice(1, -1)})`, 'i')
+const NEGATED = new RegExp(`\\b(not|never|nothing|n't|yet to|unable|couldn'?t|wasn'?t)\\b[^.!?]{0,30}(${VERBS.slice(1, -1)}|${TARGETED.slice(1, -1)}|${CHECKS.slice(1, -1)})`, 'i')
 
 /** The verbs a reply claims as done, sentence by sentence (a long reply: its first and last 1,500 characters). */
 function claimedVerbs(text: string): string[] {
@@ -113,7 +126,7 @@ function claimedVerbs(text: string): string[] {
   if (t.length > 3000) t = `${t.slice(0, 1500)}\n${t.slice(-1500)}`
   const out = new Set<string>()
   for (const sentence of t.split(/(?<=[.!?])\s+|\n+/)) {
-    const plain = CLAIM.test(sentence), targeted = CLAIM_TARGETED.test(sentence) && TARGET.test(sentence)
+    const plain = CLAIM.test(sentence) || (TERSE.test(sentence) && !MODAL.test(sentence)), targeted = CLAIM_TARGETED.test(sentence) && TARGET.test(sentence)
     if ((!plain && !targeted) || NEGATED.test(sentence)) continue
     // Not a claim about this run: a question, a conditional, a quote of the past ("you already saved…").
     if (/\?\s*$/.test(sentence) || /\b(if you|once you|when you|you('ve| have)? (already )?(saved|sent|created))\b/i.test(sentence)) continue
@@ -133,6 +146,12 @@ export function claimBacked(text: string, okTools: string[]): boolean {
   const names = okTools.map((n) => n.toLowerCase())
   return claimed.every((v) => CLAIM_STEMS[v].some((stem) => names.some((n) => n.split(/__|[^a-z]+/).some((part) => part.startsWith(stem)) || n.includes(stem))))
 }
+
+/** The reply claims something went out (sent, posted, booked, paid…): a general tool backs it only by doing that. */
+export function claimsOutward(text: string): boolean {
+  return claimedVerbs(text).some((v) => OUTWARD.has(v))
+}
+const OUTWARD = new Set(['sent', 'emailed', 'published', 'posted', 'booked', 'ordered', 'paid', 'replied', 'messaged', 'texted', 'submitted', 'shared'])
 
 export function claimsDone(text: string): boolean {
   return claimedVerbs(text).length > 0

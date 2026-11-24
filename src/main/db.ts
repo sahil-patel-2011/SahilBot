@@ -234,6 +234,8 @@ export class Db {
         SELECT m2.content FROM threads t JOIN messages m2 ON m2.id = (
           SELECT m.id FROM messages m WHERE m.thread_id = t.id AND m.role IN ('user','assistant') AND m.content != ''
             AND json_extract(m.data, '$.meta.hidden') IS NULL AND json_extract(m.data, '$.meta.routineNotice') IS NULL
+            -- (Not a reply the chat doesn't show: one replaced by the next, or one still held for its checks.)
+            AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND json_extract(m.data, '$.meta.provisional') IS NULL
           ORDER BY m.seq DESC LIMIT 1)
         WHERE t.space_id = s.id
         ORDER BY m2.created_at DESC, m2.seq DESC LIMIT 1) AS last_preview,
@@ -343,6 +345,7 @@ export class Db {
   private threadSelect = `
     SELECT t.*, (SELECT m.content FROM messages m WHERE m.thread_id = t.id
                  AND m.role IN ('user','assistant') AND m.content != '' AND json_extract(m.data, '$.meta.hidden') IS NULL
+                 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND json_extract(m.data, '$.meta.provisional') IS NULL
                  ORDER BY m.seq DESC LIMIT 1) AS last_preview,
       ${UNREAD_SQL('t')} AS unread_n,
       (SELECT CASE WHEN instr(ts.data, '"toolMode":"full"') > 0 THEN 'full'
@@ -602,6 +605,8 @@ export class Db {
   /** Marks anything left 'streaming' by a crash or quit as stopped. */
   sweepStreaming(): void {
     this.sql.prepare(`UPDATE messages SET status = 'stopped' WHERE status = 'streaming'`).run()
+    // A reply held for its checks when the app quit (or crashed) mid-run: no run will settle it now, so it shows.
+    this.sql.prepare(`UPDATE messages SET data = json_remove(data, '$.meta.provisional') WHERE json_extract(data, '$.meta.provisional') IS NOT NULL`).run()
   }
 }
 

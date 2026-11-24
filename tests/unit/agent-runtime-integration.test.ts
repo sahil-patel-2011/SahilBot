@@ -98,6 +98,14 @@ test('a reply that already says it couldn\'t confirm the result is shown as writ
   expect(admitsUnverified("I’m unable to verify the total.")).toBe(true)
   expect(admitsUnverified("Couldn't verify the hotel link.")).toBe(true)
   expect(admitsUnverified("I haven't been able to confirm the booking.")).toBe(true)
+  // HTB-03 (round 2): a confident reply with a passing "didn't make" or "not sure you wanted…" is no admission.
+  expect(admitsUnverified("Sent the invoice. I didn't make any changes to the totals.")).toBe(false)
+  expect(admitsUnverified('Saved it. Not sure you wanted PDF.')).toBe(false)
+  expect(admitsUnverified("I didn't do anything else.")).toBe(false)
+  expect(admitsUnverified("I'm not sure it worked.")).toBe(true)
+  expect(admitsUnverified("I couldn't find the report.")).toBe(true)
+  expect(admitsUnverified("I couldn't get the page to load.")).toBe(true)
+  expect(admitsUnverified("I didn't check the totals.")).toBe(true)
 })
 
 test('recorded-tool replay cannot execute a live write', async () => {

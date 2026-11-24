@@ -16,3 +16,15 @@ test('"On it." shows until the bot replies after your latest message', () => {
   expect(repliedSince([m('user', 'Make a homework plan'), m('assistant', 'Here it is', { provisional: true })])).toBe(false)
   expect(repliedSince([m('user', 'Make a homework plan'), m('assistant', 'Here it is', {})])).toBe(true)
 })
+
+// RLB-01: "On it." is the working line's words (gone with the line when the run ends), never a bot bubble that vanishes.
+test('"On it." is said in the working line, then the step it is on replaces it', async () => {
+  const { workingText } = await import('../../src/renderer/src/lib/bot-working')
+  expect(workingText({ ack: true, late: false, name: 'Tutor' })).toBe('Tutor is working')
+  expect(workingText({ ack: true, late: true, name: 'Tutor' })).toBe('On it.')
+  expect(workingText({ ack: false, late: true, name: 'Tutor' })).toBe('Tutor is working')
+  expect(workingText({ ack: true, late: true, label: 'Making the invoice' })).toBe('Making the invoice')
+  expect(workingText({ ack: true, late: true, label: 'Making the invoice', slow: 'Still on it: saving is taking longer than usual' })).toBe('Still on it: saving is taking longer than usual')
+  const { readFileSync } = await import('node:fs')
+  expect(readFileSync('src/renderer/src/components/ThreadView.tsx', 'utf8')).not.toContain('bot-ack')
+})

@@ -127,3 +127,39 @@ test('the prompts ask for one plain sentence about what could not be checked, ne
   expect(harnessPrompt(base)).toMatch(/anything you couldn't check, plainly; never "all checks passed"/)
   expect(chatPrompt(base)).toMatch(/Never say you did something \(saved, sent, booked\) unless a tool in this chat did it/)
 })
+
+// HTA-01/03 (round 2): terse claims and "is + participle" claims count; questions, negations and explanations don't.
+test('terse "done" claims count: "Saved to Downloads.", "Invoice sent.", "The meeting is booked for 3pm."', () => {
+  for (const t of ['Saved to Downloads.', 'Saved budget.xlsx with the totals.', 'Done, the email is sent.', 'The meeting is booked for 3pm.', 'Invoice sent.', 'Sent.', 'Booked for 3pm on Friday.', 'Your reminder is scheduled for 7:00.'])
+    expect(claimsDone(t), t).toBe(true)
+  for (const t of ['Nothing is sent yet.', 'Is it saved?', 'Scheduled tasks run daily.', 'Posted prices may vary.', 'Emails are sent over SMTP.', 'Paris is the capital of France.', 'Your trip is planned.', 'Done: the change is made.'])
+    expect(claimsDone(t), t).toBe(false)
+})
+
+test('"I checked / verified / tested it" is a claim that something which looks must back', async () => {
+  const { claimBacked } = await import('../../src/main/agent/harness-features')
+  expect(claimsDone('I checked the link and it works.')).toBe(true)
+  expect(claimsDone('I haven\'t verified the totals.')).toBe(false)
+  expect(claimBacked('I checked the link and it works.', ['fetch_page'])).toBe(true)
+  expect(claimBacked('I tested the script on three photos.', ['file_write', 'run_command'])).toBe(true)
+  expect(claimBacked('I verified the totals.', ['file_write'])).toBe(false)
+})
+
+// SCA-03: "Move it to 7" / "Cancel it" after a successful schedule call is backed (no false nudge, no unverified note).
+test('a schedule or bot change backs "moved", "updated", "deleted"', async () => {
+  const { claimBacked } = await import('../../src/main/agent/harness-features')
+  expect(claimBacked('Done. I moved your Atlanta weather routine to 7:00 AM ET.', ['schedule'])).toBe(true)
+  expect(claimBacked('I\'ve updated your reminder to 7:00.', ['schedule'])).toBe(true)
+  expect(claimBacked('I\'ve deleted the routine.', ['schedule'])).toBe(true)
+  expect(claimBacked('I\'ve removed the reminder.', ['schedule'])).toBe(true)
+  expect(claimBacked('I\'ve renamed it to Study Buddy and moved it to the top.', ['manage_bot'])).toBe(true)
+  expect(claimBacked('I\'ve emailed the invoice to Sam.', ['schedule'])).toBe(false)
+})
+
+// HTA-01: a general tool backs "I've emailed it" only when it did something outward.
+test('claimsOutward names the claims that need an outward action', async () => {
+  const { claimsOutward } = await import('../../src/main/agent/harness-features')
+  expect(claimsOutward('I\'ve emailed it to Sam.')).toBe(true)
+  expect(claimsOutward('Posted on Reddit.')).toBe(true)
+  expect(claimsOutward('I\'ve saved invoice.pdf to Downloads.')).toBe(false)
+})
