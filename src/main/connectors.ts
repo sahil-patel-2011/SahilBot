@@ -578,6 +578,8 @@ export class ConnectorIcons {
 const MAX_TOOL_NAME = 64
 const SAFE_ENV_BLOCK = /^(NODE_OPTIONS|DYLD_|LD_|ELECTRON_)/
 /** Everyday words that don't say which app a request needs. */
+/** Makers with many apps: their name alone doesn't pick one of them. */
+const SUGGEST_MAKERS = new Set(['google', 'microsoft', 'apple', 'amazon', 'aws', 'meta', 'adobe', 'zoho', 'atlassian'])
 const SUGGEST_STOP = new Set(['and', 'the', 'for', 'with', 'your', 'you', 'any', 'all', 'from', 'into', 'files', 'file', 'data', 'sign', 'needs', 'setup', 'more', 'own', 'one', 'via', 'app', 'apps', 'read', 'find', 'search', 'get', 'list', 'make', 'new'])
 
 interface Live {
@@ -1716,11 +1718,20 @@ export class Connectors {
     // isn't Browserbase, and researching an app ("notion vs obsidian pricing") never asks to connect it.
     if (o.fullName) return open.filter((p) => usesApp(q, p.name)).sort((a, b) => Number(readyNow.get(b.id)) - Number(readyNow.get(a.id)))
     // Everyday words don't pick apps by name either ("data" isn't a request for Datadog or Crustdata).
-    const byName = open.filter((p) => words.some((w) => !SUGGEST_STOP.has(w) && (p.name.toLowerCase().includes(w) || p.id.startsWith(w))))
+    // Ranked, not in catalog order: the app named in full first ("Google Drive" is Drive, not Calendar), then the
+    // most distinct words matched; a maker's name alone (google, microsoft…) barely counts.
+    const nameScore = (p: ConnectorPreset): number => {
+      const name = p.name.toLowerCase()
+      let score = namedIn(q, p.name) ? 100 : 0
+      for (const w of new Set(words)) if (!SUGGEST_STOP.has(w) && (name.includes(w) || p.id.startsWith(w))) score += SUGGEST_MAKERS.has(w) ? 0.1 : 1
+      return score
+    }
+    const scored = open.map((p, i) => ({ p, i, s: nameScore(p) }))
+    const byName = scored.filter((x) => x.s > 0).sort((a, b) => b.s - a.s || Number(readyNow.get(b.p.id)) - Number(readyNow.get(a.p.id)) || a.i - b.i).map((x) => x.p)
     const byUse = open.filter((p) => !byName.includes(p) && words.some((w) => !SUGGEST_STOP.has(w) && p.description.toLowerCase().split(/[^a-z0-9]+/).includes(w)))
-    // Apps that connect in one click right now first within each group: the in-chat card connects them at once.
+    // Apps that connect in one click right now first: the in-chat card connects them at once.
     const ready = (xs: ConnectorPreset[]): ConnectorPreset[] => [...xs.filter((p) => readyNow.get(p.id)), ...xs.filter((p) => !readyNow.get(p.id))]
-    return [...ready(byName), ...ready(byUse)]
+    return [...byName, ...ready(byUse)]
   }
 
   /**
