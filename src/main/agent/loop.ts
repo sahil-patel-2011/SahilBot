@@ -4336,13 +4336,15 @@ export class Agent {
         const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
         // Nobody to answer (a schedule, a helper): just watch the page for a while.
         if (run.unattended) {
+          // A Mac permission only the user can switch on: nobody to see the card, so don't sit and wait.
+          if (o.permission) return 'unavailable'
           while (Date.now() < until && !run.ctrl.signal.aborted) { if (await done().catch(() => false)) return 'done'; await sleep(every) }
           return 'timeout'
         }
         // ask() puts the card on the asking chat when this run answers ask_bot (askVia): look for it there.
         const host = run.askVia ? { run: run.askVia.run, threadId: run.askVia.threadId } : { run, threadId: thread.id }
         const before = new Set(host.run.pending.keys())
-        const answered = this.ask(thread.id, run, { kind: 'question', question, options: o.options ?? ['Done', 'Skip'] })
+        const answered = this.ask(thread.id, run, { kind: 'question', question, options: o.options ?? ['Done', 'Skip'], ...(o.permission ? { permission: o.permission } : {}) })
         const id = [...host.run.pending.keys()].find((k) => !before.has(k))
         let finished: string | undefined
         void answered.then((a) => { finished ??= a })

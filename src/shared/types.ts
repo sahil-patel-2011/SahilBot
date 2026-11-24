@@ -418,6 +418,8 @@ export interface PendingRequest {
   options?: string[]
   /** A file outside your folders: the folder "Always allow" opens for this chat (approvals). */
   folder?: string
+  /** For a 'question' that waits on a Mac permission: the card's one-tap button opens that switch; it closes by itself once on. */
+  permission?: PermissionKind
 }
 
 export type ApprovalAnswer = 'once' | 'always' | 'deny'

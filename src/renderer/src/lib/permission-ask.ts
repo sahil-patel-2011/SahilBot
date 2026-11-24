@@ -16,3 +16,23 @@ export const PERMISSION_BUTTON: Record<AskedPermission, string> = {
   screen: 'Open Screen Recording settings',
   automation: 'Open Automation settings'
 }
+
+/** The bits of window.api.permissions the button uses (tests pass a fake). */
+export interface PermissionsApi {
+  request(kind: AskedPermission): Promise<'granted' | 'denied' | 'prompted' | 'opened'>
+  open(kind: AskedPermission): Promise<void>
+}
+
+/**
+ * The one-tap button: asks for the permission (that puts SahilBot in the list; macOS shows its own prompt only the
+ * very first time) and opens the pane on that list whenever no window of its own came up, so the tap always lands
+ * on the switch.
+ */
+export async function openPermission(api: PermissionsApi, kind: AskedPermission): Promise<void> {
+  try {
+    const r = await api.request(kind)
+    if (r === 'prompted') await api.open(kind)
+  } catch {
+    await api.open(kind).catch(() => undefined)
+  }
+}
