@@ -71,6 +71,7 @@ import { autoPool, autoUnavailable, autoVariant } from '../llm/router'
 import { captureConstraints, hideCopiedSecrets, redactSecrets, renderNotes } from './notes'
 import { ContextManager, OUTPUT_RESERVE, ResultStore, upperEstimate, ServerTokenCounter, SUMMARY_INSTRUCTIONS, coreRoom, notesRoom, pinRunContext, resultLimit, taskBrief, transcriptTainted, withPinned, wrapToolOutput, type TokenCounter } from './context'
 import { TaskMemory, stepText, type WorkingMemoryPage } from './task-memory'
+import { orderByCitations } from './citations'
 import { ALWAYS_TAINT_CHECKED, appReadRisk, botHardStop, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, normalizeMode, ruleVerdict, spendsMoney, stricterMode } from './permissions'
 import { ATTENDED_GRACE_MS, isAlwaysOnBot } from './questions/policy'
 import type { TypedSlot } from './questions/queue'
@@ -499,7 +500,7 @@ const KEEP_DRAFT = /^(✓|✔|✔️|ok|lgtm|all good|no changes?( needed)?)[.!]
 /** The hidden double-check before a real task's final answer; a complex one also critiques its draft against the goal. */
 export function verifyNote(o: { changed: boolean; researched: boolean; actions: number; complex: boolean; goal?: string }): string {
   const goal = o.goal?.replace(/\s+/g, ' ').trim().slice(0, 400)
-  return `[From the app] Before you finish, double-check your work:\n${o.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${o.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${o.complex ? `- Critique your draft against what the user asked for${goal ? ` ("${goal}")` : ''}: any requirement missed or only half done, any claim without evidence you saw, any edge case or caveat they should know. Fix what you find (a quick extra step is fine).\n` : ''}${o.actions >= 8 ? '- If this took a non-obvious procedure or several tries, save what worked with memory(action="save_skill") so next time is faster.\n' : ''}- Fix anything that's wrong.\nIf everything checks out and your answer above needs no change, reply with just ✓ and nothing else: that answer is kept as it is. Otherwise write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.`
+  return `[From the app] Before you finish, double-check your work:\n${o.changed ? '- Confirm each change actually happened (re-read the file, snapshot the page, or list the result).\n' : ''}${o.researched ? '- Check every fact, number and date in your answer against the sources you read; drop anything you can\'t back up.\n' : ''}${o.complex ? `- Critique your draft against what the user asked for${goal ? ` ("${goal}")` : ''}: any requirement missed or only half done, any claim without evidence you saw, any edge case or caveat they should know. Fix what you find (a quick extra step is fine).\n` : ''}- Fix anything that's wrong.\nIf everything checks out and your answer above needs no change, reply with just ✓ and nothing else: that answer is kept as it is. Otherwise write your final answer from scratch in plain, simple words: what you did, what you found, and anything the user should know. The user never saw your draft (this reply replaces it), so don't mention a draft, an earlier answer, corrections, or this check; a short "I opened the file to confirm it saved" is fine.`
 }
 
 /**
@@ -3149,9 +3150,10 @@ export class Agent {
       const all = db.listMessages(thread.id)
       // (Server web search / fetch sources from this run's earlier steps and this reply are added after them.)
       const srcs = [...sourcesSince(all, runStart), ...all.filter((x) => x.role === 'assistant' && x.createdAt >= runStart && Array.isArray(x.meta?.serverSources)).flatMap((x) => x.meta!.serverSources as Array<{ title: string; url: string }>), ...((m.meta?.serverSources as Array<{ title: string; url: string }> | undefined) ?? [])]
-        .filter((x, i, xs) => xs.findIndex((y) => y.url === x.url) === i).slice(0, 12)
+        .filter((x, i, xs) => xs.findIndex((y) => y.url === x.url) === i)
       if (!srcs.length) return
-      m.meta = { ...m.meta, sources: srcs }
+      // Numbered the way the answer numbers its citations, so "[2]" opens the page the answer meant.
+      m.meta = { ...m.meta, sources: orderByCitations(m.content, srcs).slice(0, 12) }
       db.updateMessage(m)
       this.d.emit({ threadId: thread.id, type: 'message', message: m })
     }

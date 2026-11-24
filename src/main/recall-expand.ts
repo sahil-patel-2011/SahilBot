@@ -54,6 +54,10 @@ export const CONCEPTS: Concept[] = [
 const NEEDS: Array<{ ask: RegExp; fact: RegExp; categories?: string[]; weight: number }> = [
   // Where they are: the weather, "near me", shipping to them, their time zone. Not "Mom lives in Phoenix".
   { ask: /\b(weather|forecast|near (me|us|here|my place|our place)|nearby|around here|close to (me|us|home)|in my (area|city|town|neighbou?rhood)|my (city|town|neighbou?rhood)|what time ?zone|my time ?zone|sunset|sunrise|ship (it|this|that|them) (to me|home)|deliver(ed)? (to me|here|home)|my commute)\b/i, fact: /^((i|we) )?(lives?|living|based|moved|located)\b|^home address\b|^(my |our )?address\b|^(my |our )?time ?zone\b/i, weight: 0.65 },
+  // Their own address ("forget my address", "what's my address"): where they live, however it was worded.
+  { ask: /\b(my (home |street |mailing )?address|our (home )?address|home address|where (i|we) live|where do (i|we) live|my (house|apartment|place)|our (house|apartment|place))\b/i, fact: /^((the )?user |i |we )?(lives?|living|based|moved|located|resides?)\b|^home\s*(address)?\s*[:\-]|^(my |our |home )?address\b|\b\d+ [\w.' -]{2,40} (street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|way|court|ct|place|pl|terrace|parkway|pkwy)\b/i, weight: 0.65 },
+  // Their own birthday: "born on…" counts even without the word birthday.
+  { ask: /\b(my (birthday|bday|birth ?date|date of birth)|when (i was|i'?m|was i|am i) born|how old am i)\b/i, fact: /^((the )?user |i )?(was )?born\b|^(my |the user'?s )?(birthday|bday|birth ?date|date of birth)\b/i, weight: 0.65 },
   // Food: their allergies and diet always matter (safety), whatever the dish is called.
   { ask: /\b(eat|eating|food|dinner|lunch|breakfast|brunch|recipes?|restaurants?|meals?|menu|cook(ing)?|snacks?|takeout|groceries|grocery|cuisine|paella|sushi|pizza|curry|tacos?|chowder|catering)\b/i, fact: /\b(allerg\w*|vegetarian|vegan|gluten|dairy[- ]free|kosher|halal|intoleran\w*|can'?t eat|doesn'?t eat|don'?t eat)\b/i, weight: 0.6 },
   // "Like I like", "the usual", "keep it short": how they like things done.

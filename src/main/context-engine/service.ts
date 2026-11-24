@@ -17,7 +17,7 @@ import { assemble, lookup, type Assembled } from './assemble'
 import { META_SOURCES } from './connectors-meta'
 import { forgetMirror, mirrorEntity } from './mirror'
 import { nameParts } from './resolve'
-import { CHILD_REL, cleanSnippet, screen } from './sensitive'
+import { CHILD_REL, categoriesOf, cleanSnippet, screen } from './sensitive'
 import { GraphStore, TRUST_RANK, normKey } from './store'
 
 // The context engine, put together: settings and privacy controls, the extraction job the idle
@@ -584,9 +584,10 @@ export class ContextEngine {
    * The memory tool's check (agent/tools/memory.ts): a memory follows the same rules as a People & Places
    * fact: secrets and identifiers never, and a sensitive category the user turned off not either.
    */
-  screenMemory(text: string): { ok: boolean; why?: string; label?: string } {
+  screenMemory(text: string): { ok: boolean; why?: string; label?: string; categories?: string[] } {
     const r = screen(text, this.settings().sensitive, { secretValues: this.d.secretValues?.() ?? [] })
-    if (r.ok) return { ok: true }
+    // Kept: which sensitive categories it touches (the memory tool saves those only when the user asked).
+    if (r.ok) { const categories = categoriesOf(text); return categories.length ? { ok: true, categories } : { ok: true } }
     const label = SENSITIVE_CATEGORIES.find((c) => c.id === r.why)?.label.toLowerCase()
     return { ok: false, why: r.why, ...(label ? { label } : {}) }
   }
