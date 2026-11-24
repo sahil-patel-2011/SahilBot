@@ -50,7 +50,7 @@ test.skipIf(!process.env.UI_SHOTS)('ui screenshots', async () => {
   await page.click('[data-testid="new-chat"]').catch(() => undefined); await page.waitForTimeout(800)
   // Settings, every page.
   await page.click('[data-testid="profile"]'); await page.waitForTimeout(1500)
-  for (const id of ['general', 'models', 'connected', 'memory', 'privacy', 'voice', 'server']) {
+  for (const id of ['general', 'models', 'connected', 'voice', 'privacy', 'server']) {
     await page.click(`[data-testid="settings-${id}"]`, { timeout: 3000 }).catch(() => undefined)
     await page.waitForTimeout(1500); snap(`10-settings-${id}`)
   }

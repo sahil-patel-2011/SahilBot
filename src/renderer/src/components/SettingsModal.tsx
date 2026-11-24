@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { WhatsNewList } from './WhatsNew'
 import { downloadedText } from '@shared/bytes'
 import type { ConnectorStatus, ModelInfo, ModelList, PermissionKind, ProviderId, Settings, Space, SystemInfo, UpdateStatus, VoiceStatus } from '@shared/types'
@@ -12,7 +12,7 @@ import { MemoryPage } from './MemoryManager'
 import { SecretVaultSettings } from './VaultSettings'
 import { BackupSettings } from './BackupSettings'
 import { UsagePage } from './UsagePage'
-import { SpendingLimitSection } from './SpendingLimit'
+import { SpendingLimitRow, SpendingLimitSection } from './SpendingLimit'
 import { McpSettings } from './McpSettings'
 import { ChatgptPlanSettings } from './ChatgptPlanSettings'
 import { GrokPlanSettings } from './GrokPlanSettings'
@@ -21,29 +21,29 @@ import { LocalModelsRow, VoiceOutputRow, localIsOn } from './LocalModels'
 import { AlwaysOnServerPage, PhoneAccessSection, PhonePage, ServerPage } from './ServerSettings'
 import { ClampText, Disclosure, InfoTip, Segmented, SetTabs as Tabs } from './ui'
 import { useDevMode } from '../lib/dev-mode'
-import { SECTION_HINT, SECTION_OF, LEGACY_PAGES, PAGE_TITLES, SETTINGS_INDEX, searchSettings, type SettingEntry, type SettingsPage } from '../lib/settings-index'
+import { SECTION_OF, LEGACY_PAGES, PAGE_TITLES, SETTINGS_INDEX, type SettingsPage } from '../lib/settings-index'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
 
-// Settings: nine pages, each with the few choices most people want on top and everything rarely used
-// behind one "Advanced" (or "More") row. Every option starts at the best choice, so most people never
-// need to come here. Every change saves right away (keys go to the Keychain). Search finds any setting
-// (lib/settings-index.ts) and jumps to it, opening its tab and any closed disclosure on the way.
+// Settings, Grok Bot's way: five pages (General, AI, Apps, Voice, Privacy), each a title and a few rows. Every
+// option starts at the best choice, so most people never need to come here, and every change saves right away
+// (keys go to the Keychain). Everything else (models, local models, usage, backups, developer tools) shows in
+// Developer mode only. ⌘K finds any setting (lib/settings-index.ts) and opens Settings right at it.
 
 type Page = SettingsPage
-const PAGES: Array<{ id: Page; icon: ReactNode; color: string }> = [
-  { id: 'general', icon: <I.Smile size={14} />, color: '#8e8e93' },
-  { id: 'models', icon: <I.Cpu size={14} />, color: '#5856d6' },
-  { id: 'connected', icon: <I.Plug size={14} />, color: '#007aff' },
-  { id: 'memory', icon: <I.Sparkle size={14} />, color: '#34c759' },
-  { id: 'privacy', icon: <I.Shield size={14} />, color: '#5ac8fa' },
-  { id: 'voice', icon: <I.Mic size={14} />, color: '#ff2d55' },
+const PAGES: Array<{ id: Page; icon: ReactNode }> = [
+  { id: 'general', icon: <I.Gear size={15} /> },
+  { id: 'models', icon: <I.Sparkle size={15} /> },
+  { id: 'connected', icon: <I.Plug size={15} /> },
+  { id: 'voice', icon: <I.Mic size={15} /> },
+  { id: 'privacy', icon: <I.Shield size={15} /> },
   // SahilBot Server: devices, pairing, notifications, audit (web UI); in the Mac app, the link to a server.
-  { id: 'server', icon: <I.Globe size={14} />, color: '#1f8a5b' }
+  { id: 'server', icon: <I.Globe size={15} /> }
 ]
 /**
  * SahilBot is a desktop app first: the phone and always-on server pages only show once one is in use (or in
- * Developer mode), so the list stays short. Everything else is one flat list; search finds any setting.
+ * Developer mode), so the list stays short. Memory isn't listed: it has its own place in the app (⌘K, the menu),
+ * and Settings still shows it when a link or a search opens it there.
  */
 /** A phone using the Mac (Phone access) sees its own page where SahilBot Server's browsers see the server's. */
 const onPhone = isServerRuntime && api?.serverHost === 'mac'
@@ -153,8 +153,11 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   initialPage?: string
 }) {
   // "#anchor" (the ⌘K search): open the setting's own page and tab, scrolled to it.
-  const anchored = initialPage?.startsWith('#') ? SETTINGS_INDEX.find((e) => e.anchor === initialPage.slice(1)) : undefined
-  const start = anchored ? { page: anchored.page, tab: anchored.tab } : resolvePage(initialPage)
+  const target = (id?: string): { page: Page; tab?: string; anchor?: string } => {
+    const e = id?.startsWith('#') ? SETTINGS_INDEX.find((x) => x.anchor === id.slice(1)) : undefined
+    return e ? { page: e.page, tab: e.tab, anchor: e.anchor } : resolvePage(id)
+  }
+  const start = target(initialPage)
   const [page, setPage] = useState<Page>(start.page)
   /** The section on screen: some pages (Spending, What it may do, Advanced) live inside another one. */
   const section = SECTION_OF[page] ?? 'general'
@@ -164,10 +167,20 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
     if (page !== section && sub[page]) setJump((j) => j ?? sub[page]!)
   }, [page, section])
   const [tabs, setTabs] = useState<Partial<Record<Page, string>>>(start.tab ? { [start.page]: start.tab } : {})
-  const [find, setFind] = useState('')
-  const [jump, setJump] = useState<string | null>(anchored?.anchor ?? null)
+  const [jump, setJump] = useState<string | null>(start.anchor ?? null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const dev = useDevMode()
+  // Already open, and ⌘K (or a link) picks another page or setting: go there.
+  const opened = useRef(initialPage)
+  useEffect(() => {
+    if (opened.current === initialPage) return
+    opened.current = initialPage
+    const t = target(initialPage)
+    setPage(t.page)
+    if (t.tab) setTabs((x) => ({ ...x, [t.page]: t.tab }))
+    if (t.anchor) setJump(t.anchor)
+    bodyRef.current?.scrollTo({ top: 0 })
+  }, [initialPage])
   const [remoteInUse, setRemoteInUse] = useState(false)
   useEffect(() => {
     if (isServerRuntime) return
@@ -176,7 +189,6 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   }, [])
   const showServer = isServerRuntime || dev || remoteInUse || page === 'server'
   const pages = PAGES.filter((x) => (!isServerRuntime || x.id !== 'voice') && (x.id !== 'server' || showServer))
-  const results = useMemo(() => searchSettings(find, { server: isServerRuntime }), [find])
   const [s, setS] = useState(settings)
   useEffect(() => setS(settings), [settings])
   const patch = async (p: SettingsPatchUi): Promise<Settings> => {
@@ -187,13 +199,6 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
   }
   const setTab = (p: Page) => (t: string): void => setTabs((x) => ({ ...x, [p]: t }))
   const go = (p: Page): void => { setPage(p); bodyRef.current?.scrollTo({ top: 0 }) }
-  /** A search result: its page and tab, then (once rendered) open whatever hides it and scroll to it. */
-  const pick = (e: SettingEntry): void => {
-    setPage(e.page)
-    if (e.tab) setTabs((x) => ({ ...x, [e.page]: e.tab }))
-    setFind('')
-    setJump(e.anchor)
-  }
   useEffect(() => {
     if (!jump) return
     let tries = 0
@@ -227,46 +232,28 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
             <button className="icon-btn nodrag" onClick={onClose} title="Back (Esc)" aria-label="Back" data-testid="settings-close"><I.Chevron size={16} style={{ transform: 'rotate(90deg)' }} /></button>
             <span className="set-nav-title">Settings</span>
           </div>
-          <div className="set-find nodrag"><I.Search size={14} />
-            <input placeholder="Search settings" value={find} onChange={(e) => setFind(e.target.value)} aria-label="Search settings" data-testid="settings-search"
-              onKeyDown={(e) => { if (e.key === 'Enter' && results[0]) pick(results[0]); if (e.key === 'Escape' && find) { e.preventDefault(); e.stopPropagation(); setFind('') } }} />
-          </div>
-          {find.trim() ? (
-            <div className="set-results" role="listbox" aria-label="Matching settings" data-testid="settings-results">
-              {results.length === 0 && <div className="set-results-empty">No setting matches “{find.trim()}”.</div>}
-              {results.slice(0, 14).map((r) => (
-                <button key={r.anchor} role="option" aria-selected={false} className="set-result" onClick={() => pick(r)} data-testid={`settings-result-${r.anchor}`}>
-                  <span className="set-result-title">{r.title}</span>
-                  <span className="set-result-where">{pageTitle(r.page)}{r.advanced ? ' · Advanced' : ''}</span>
-                </button>
-              ))}
-            </div>
-          ) : <>
-            {pages.map((p) => (
-              <button key={p.id} className={`set-nav-item${section === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`}>
-                <span className="set-tile" style={{ background: p.color }}>{p.icon}</span>
-                <span className="set-nav-text"><span>{pageTitle(p.id)}</span>{SECTION_HINT[p.id] && <small>{SECTION_HINT[p.id]}</small>}</span>
-              </button>
-            ))}
-          </>}
+          {/* A plain list of pages; ⌘K searches every setting. */}
+          {pages.map((p) => (
+            <button key={p.id} className={`set-nav-item${section === p.id ? ' on' : ''}`} onClick={() => go(p.id)} data-testid={`settings-${p.id}`} aria-current={section === p.id ? 'page' : undefined}>
+              <span className="set-nav-icon">{p.icon}</span>
+              <span className="set-nav-text">{pageTitle(p.id)}</span>
+            </button>
+          ))}
           {sys && <div className="set-nav-foot">SahilBot {sys.appVersion}</div>}
         </nav>
         <div className="set-body" ref={bodyRef} data-page={page} key={section}>
-          {section === 'general' && <>
-            {/* The basics only (at most ~8 settings). Look, routines, web search, rules and developer options are gone
-                from here: the bot picks sensible defaults, and anything else you just ask it for in chat. */}
-            <General s={s} patch={patch} />
-          </>}
+          {/* The basics only: the bot picks sensible defaults, and anything else you just ask it for in chat. */}
+          {section === 'general' && <General s={s} patch={patch} />}
           {section === 'models' && <>
             <ModelsPage s={s} models={models} patch={patch} onRefresh={onRefreshModels} />
-            <div data-setting="usage" className="set-subpage"><UsagePage /></div>
+            {(dev || page === 'usage') && <div data-setting="usage" className="set-subpage"><UsagePage /></div>}
           </>}
           {section === 'connected' && <ConnectedPage s={s} patch={patch} />}
           {section === 'memory' && <MemoryPage spaces={spaces ?? []} tab={tabs.memory ?? 'memories'} onTab={setTab('memory')} />}
           {section === 'voice' && <VoicePage s={s} models={models} patch={patch} />}
           {section === 'privacy' && <>
             <div data-setting="permissions-page"><PermissionsPage s={s} patch={patch} /></div>
-            <div className="set-subpage"><PrivacySecurityPage s={s} patch={patch} tab={tabs.privacy ?? 'passwords'} onTab={setTab('privacy')} /></div>
+            <PrivacySecurityPage s={s} patch={patch} tab={tabs.privacy ?? 'passwords'} onTab={setTab('privacy')} />
           </>}
           {section === 'server' && <div data-setting="server">{isServerRuntime ? (onPhone ? <PhonePage /> : <ServerPage />) : <AlwaysOnServerPage />}</div>}
         </div>
@@ -287,46 +274,51 @@ function PhoneAccessWhenUsed() {
   return dev || on ? <div data-setting="phone-access"><PhoneAccessSection /></div> : null
 }
 
+/** General: your name, email and phone, theme, open at login and updates. Developer mode adds the rest. */
 function General({ s, patch }: P) {
+  const dev = useDevMode()
   const [login, setLogin] = useState<string | null>(null)
   useEffect(() => { if (!isServerRuntime) void api.alwaysOn.status().then((st) => setLogin(st.loginItem)).catch(() => undefined) }, [s.openAtLogin])
   const loginHint = login === 'requires-approval' ? 'Allow SahilBot in System Settings → General → Login Items.' : login === 'unsupported' ? 'Works in the installed app.' : 'Starts hidden in the menu bar.'
   return (
     <>
-      <h2>You</h2>
-      <div className="set-sub">What SahilBot calls you, how it looks, and how it starts. Changes save as you go.</div>
+      <h2>{PAGE_TITLES.general}</h2>
       <Section>
-        <Row id="user-name" title="Your name" sub="SahilBot calls you by your first name.">
+        <Row id="user-name" title="Your name">
           <div style={{ display: 'flex', gap: 6 }}>
             <Field value={s.profile?.firstName ?? s.userName} width={130} placeholder="First name" label="First name" testId="me-first" onSave={(v) => void patch({ profile: { firstName: v, lastName: s.profile?.lastName ?? '' } })} />
             <Field value={s.profile?.lastName ?? ''} width={130} placeholder="Last name" label="Last name" testId="me-last" onSave={(v) => void patch({ profile: { firstName: s.profile?.firstName ?? s.userName, lastName: v } })} />
           </div>
         </Row>
-        <Row id="birthday" title="Birthday" sub="Optional. Used for reminders and sign-in later; stays on this Mac.">
+        {dev && <Row id="birthday" title="Birthday" sub="Optional. Stays on this Mac.">
           <Field value={s.profile?.birthday ?? ''} type="date" width={170} label="Birthday" testId="me-birthday" onSave={(v) => void patch({ profile: { firstName: s.profile?.firstName ?? s.userName, lastName: s.profile?.lastName ?? '', birthday: v } })} />
-        </Row>
+        </Row>}
         {/* Me: bots may always email or text these without asking (agent/trusted.ts). Commas separate several. */}
-        <Row id="me-contact" title="Your email and phone" sub="Bots can always message you here without asking.">
+        <Row id="me-contact" title="Your email and phone" sub="Your bots can always reach you here.">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <Field value={(s.me?.emails ?? []).join(', ')} width={220} placeholder="you@example.com" label="Your email" testId="me-emails" onSave={(v) => void patch({ me: { emails: v.split(/[,;\s]+/).filter(Boolean), phones: s.me?.phones ?? [] } })} />
             <Field value={(s.me?.phones ?? []).join(', ')} width={220} type="tel" placeholder="+1 555 010 1234" label="Your phone" testId="me-phones" onSave={(v) => void patch({ me: { emails: s.me?.emails ?? [], phones: v.split(/[,;]+/).map((x) => x.trim()).filter(Boolean) } })} />
           </div>
         </Row>
-        <Row id="workspace" title="Workspace folder" sub="Where SahilBot saves what it makes."><Field value={s.workspaceDir} width={280} label="Workspace folder" onSave={(v) => void patch({ workspaceDir: v })} /></Row>
+        {dev && <Row id="workspace" title="Workspace folder" sub="Where SahilBot saves what it makes."><Field value={s.workspaceDir} width={280} label="Workspace folder" onSave={(v) => void patch({ workspaceDir: v })} /></Row>}
         <Row id="theme" title="Theme">
           <Segmented value={s.theme} label="Theme" testIdPrefix="theme" onChange={(v) => void patch({ theme: v })} options={[{ id: 'system', label: 'System' }, { id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }]} />
         </Row>
         {!isServerRuntime && (
           <>
-            <Row id="quick-ask" title="Quick Ask shortcut" sub="A small SahilBot bar over any app.">
+            {dev && <Row id="quick-ask" title="Quick Ask shortcut" sub="A small SahilBot bar over any app.">
               <select className="set-select" value={s.quickKey} onChange={(e) => void patch({ quickKey: e.target.value })} data-testid="quick-key" aria-label="Quick Ask shortcut">
                 <option value="Alt+Space">⌥ Space</option><option value="Control+Space">⌃ Space</option><option value="CommandOrControl+Shift+Space">⌘⇧ Space</option><option value="Alt+Shift+Space">⌥⇧ Space</option><option value="">Off</option>
               </select>
-            </Row>
+            </Row>}
             <Row id="open-at-login" title="Open at login" sub={loginHint}><Toggle on={s.openAtLogin ?? false} onChange={(v) => void patch({ openAtLogin: v })} label="Open at login" testId="open-at-login" /></Row>
             <UpdatesRow />
           </>
         )}
+        {/* Turned on from ⌘K ("Developer mode"); here it can be turned off again. */}
+        {dev && <Row id="dev-mode" title="Developer mode" sub="Shows every step, tokens and cost, and every setting.">
+          <Toggle on onChange={(v) => void patch({ advanced: { ...s.advanced, devMode: v } })} label="Developer mode" testId="dev-mode" />
+        </Row>}
       </Section>
 
       {api.phoneAccess && <PhoneAccessWhenUsed />}
@@ -346,7 +338,7 @@ function UpdatesRow() {
   const text = !st ? 'Checking…'
     : st.state === 'checking' ? 'Checking for a new version…'
     : st.state === 'downloading' ? `Getting the update… ${st.progress ?? 0}%${st.size ? ` · ${downloadedText(st.received ?? ((st.progress ?? 0) / 100) * st.size, st.size)}` : ''}`
-    : st.state === 'ready' ? 'Ready. Restart to finish: your chats, bots and settings stay as they are, and a copy is saved first.'
+    : st.state === 'ready' ? 'Ready. Restart to finish; your chats and settings stay.'
     : st.state === 'installing' ? 'Saving a copy of your data and restarting…'
     : st.state === 'error' || st.state === 'unsupported' ? st.detail ?? 'Couldn\'t check for updates.'
     : st.state === 'idle' ? 'New versions download on their own.'
@@ -378,7 +370,10 @@ function cloudFacts(m: ModelInfo): string {
 /** Size on disk as Ollama reports it ("18.2 GB"). */
 const diskGB = (bytes: number): string => `${(bytes / 1e9).toFixed(bytes >= 10e9 ? 0 : 1)} GB`
 
+/** AI: the provider keys, a ChatGPT or Grok plan, and the monthly limit. Developer mode adds how answers are picked,
+ *  the models list, local models and the usage page. */
 function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | null; onRefresh: () => void }) {
+  const dev = useDevMode()
   const [providers, setProviders] = useState<Array<{ id: string; keyUrl?: string }>>([])
   useEffect(() => void api.providers().then(setProviders).catch(() => undefined), [])
   const link = (id: string): string | undefined => providers.find((p) => p.id === id)?.keyUrl
@@ -404,46 +399,50 @@ function ModelsPage({ s, models, patch, onRefresh }: P & { models: ModelList | n
   const grok = installed.filter((m) => m.provider === 'xai')
   return (
     <>
-      <h2>AI &amp; spending</h2>
-      <div className="set-sub">Connect at least one. Auto picks the right model for each request. Keys are encrypted with your Mac's Keychain and kept through updates.</div>
+      <h2>{PAGE_TITLES.models}</h2>
       {s.keysLocked && (
         <div className="banner" role="status" data-testid="keys-locked">
           <span className="banner-text"><b>{s.keysLocked.count === 1 ? '1 saved key is' : `${s.keysLocked.count} saved keys are`} locked right now, not lost.</b> macOS Keychain didn't answer (it may still be locked after login). Don't re-enter them: unlock your Mac and press Retry.</span>
           <span className="banner-actions"><button className="btn small primary" onClick={() => void api.settings.get().then((n) => { void patch({}); if (!n.keysLocked) toast('Your keys are back.', 'ok') })}>Retry</button></span>
         </div>
       )}
-      <Section title="Connect" sub="Switch a provider off to stop using it. Its key stays saved.">
+      <Section sub={dev ? 'Switch a provider off to stop using it. Its key stays saved.' : undefined}>
         <div data-setting="provider-switches" />
-        <Row id="key-anthropic" title={<>Claude{status('anthropic')}</>} sub={<>Anthropic API key · <a href={link('anthropic') ?? 'https://console.anthropic.com/settings/keys'} target="_blank" rel="noreferrer">get one</a></>} info="Used for every model named “claude-…”. Spending counts toward your monthly limit.">
+        <Row id="key-anthropic" title={<>Claude{status('anthropic')}</>} sub={<>API key · <a href={link('anthropic') ?? 'https://console.anthropic.com/settings/keys'} target="_blank" rel="noreferrer">get one</a></>} info={dev && 'Used for every model named “claude-…”. Spending counts toward your monthly limit.'}>
           <KeyField saved={saved('anthropic')} placeholder="sk-ant-…" testId="key-anthropic" onSave={saveKey('anthropic')} onTest={test('https://api.anthropic.com/v1')} />
           {power('anthropic', 'Claude')}
         </Row>
-        <Row id="key-openai" title={<>OpenAI{status('openai')}</>} sub={<>OpenAI API key · <a href={link('openai') ?? 'https://platform.openai.com/api-keys'} target="_blank" rel="noreferrer">get one</a></>} info="GPT models at cost; also voice and meaning search when you allow them. Spending counts toward your monthly limit.">
+        <Row id="key-openai" title={<>OpenAI{status('openai')}</>} sub={<>API key · <a href={link('openai') ?? 'https://platform.openai.com/api-keys'} target="_blank" rel="noreferrer">get one</a></>} info={dev && 'GPT models at cost; also voice and meaning search when you allow them. Spending counts toward your monthly limit.'}>
           <KeyField saved={saved('openai')} placeholder="sk-…" testId="key-openai" onSave={saveKey('openai')} onTest={test(openai)} />
           {power('openai', 'OpenAI')}
         </Row>
-        <Row id="key-xai" title={<>Grok{status('xai')}</>} sub={<>xAI API key · <a href={link('xai') ?? 'https://console.x.ai'} target="_blank" rel="noreferrer">get one</a></>}
-          info={<>Used for models named “grok-…”. Auto uses Grok for documents and knowledge work after Claude, and as a later choice elsewhere.{grok.length ? ` Available: ${grok.map(modelName).join(', ')}.` : ''}</>}>
+        <Row id="key-xai" title={<>Grok{status('xai')}</>} sub={<>API key · <a href={link('xai') ?? 'https://console.x.ai'} target="_blank" rel="noreferrer">get one</a></>}
+          info={dev && <>Used for models named “grok-…”. Auto uses Grok for documents and knowledge work after Claude, and as a later choice elsewhere.{grok.length ? ` Available: ${grok.map(modelName).join(', ')}.` : ''}</>}>
           <KeyField saved={saved('xai')} placeholder="xai-…" testId="key-xai" onSave={saveKey('xai')} onTest={test('https://api.x.ai/v1')} />
           {power('xai', 'Grok')}
         </Row>
       </Section>
-      <div data-setting="monthly-limit"><SpendingLimitSection s={s} patch={patch} /></div>
 
-      <Section title="How answers are picked">
-        <Row id="auto-prefers" title="Prefer" info="Best answers picks the strongest model for each request; price only breaks close ties. Balanced and Lowest cost give price more weight.">
-          <Segmented value={s.cloud.autoPrefers ?? 'best'} label="Prefer" testIdPrefix="auto-prefers" onChange={(v) => void patch({ cloud: { ...s.cloud, autoPrefers: v } })}
-            options={[{ id: 'best', label: 'Best answers' }, { id: 'balanced', label: 'Balanced' }, { id: 'cheapest', label: 'Lowest cost' }]} />
-        </Row>
-        <div data-setting="local-models"><LocalModelsRow s={s} patch={patch} onChanged={onRefresh} /></div>
-      </Section>
-
-      <Disclosure title="Use a ChatGPT or Grok subscription instead" sub="Your existing plan, through its app on this Mac, with no API charges" testId="models-subscriptions">
+      <Disclosure title="Use a ChatGPT or Grok subscription" sub="Your plan instead of an API key" testId="models-subscriptions">
         <div data-setting="chatgpt-plan"><ChatgptPlanSettings onRefresh={onRefresh} /></div>
         {api.runtime !== 'server' && <GrokPlanSettings onRefresh={onRefresh} />}
       </Disclosure>
-      {localIsOn(s) && <RecommendedLocal s={s} models={models} onRefresh={onRefresh} />}
 
+      {/* The limit: one row and this month's spend in one line (Developer mode: every mode spelled out). */}
+      {dev ? <div data-setting="monthly-limit"><SpendingLimitSection s={s} patch={patch} /></div>
+        : <Section><div data-setting="monthly-limit"><SpendingLimitRow s={s} patch={patch} /></div></Section>}
+
+      {dev && <>
+        <Section title="How answers are picked">
+          <Row id="auto-prefers" title="Prefer" info="Best answers picks the strongest model for each request; price only breaks close ties. Balanced and Lowest cost give price more weight.">
+            <Segmented value={s.cloud.autoPrefers ?? 'best'} label="Prefer" testIdPrefix="auto-prefers" onChange={(v) => void patch({ cloud: { ...s.cloud, autoPrefers: v } })}
+              options={[{ id: 'best', label: 'Best answers' }, { id: 'balanced', label: 'Balanced' }, { id: 'cheapest', label: 'Lowest cost' }]} />
+          </Row>
+          <div data-setting="local-models"><LocalModelsRow s={s} patch={patch} onChanged={onRefresh} /></div>
+        </Section>
+        {localIsOn(s) && <RecommendedLocal s={s} models={models} onRefresh={onRefresh} />}
+        <ModelList s={s} models={models} patch={patch} onRefresh={onRefresh} />
+      </>}
       {/* No Advanced section: Auto picks the model, thinking, routing and tools for each request. */}
     </>
   )
@@ -568,7 +567,9 @@ function OllamaSetup({ onReady }: { onReady: () => void }) {
 
 // ------------------------------------------------------------------ connected apps
 
+/** Apps: what's connected, and one button to connect more. Developer mode adds Cursor and MCP. */
 function ConnectedPage({ s, patch }: P) {
+  const dev = useDevMode()
   const [apps, setApps] = useState<Array<{ name: string; state: ConnectorStatus['state'] }> | null>(null)
   useEffect(() => {
     const load = (): void => void api.connectors.list().then((r) => {
@@ -582,16 +583,15 @@ function ConnectedPage({ s, patch }: P) {
   const waiting = (apps ?? []).filter((a) => a.state !== 'connected')
   return (
     <>
-      <h2>Apps</h2>
-      <div className="set-sub">Gmail, Calendar, Notion, Slack, GitHub and more. Bots use them when a task needs them.</div>
+      <h2>{PAGE_TITLES.connected}</h2>
       <Section>
         <Row id="connect-apps" testId="connected-summary"
           title={apps === null ? 'Checking…' : live.length ? `${live.length} connected` : 'Nothing connected yet'}
-          sub={apps === null ? undefined : [live.map((a) => a.name).join(', '), waiting.length ? `${waiting.length} need${waiting.length === 1 ? 's' : ''} attention: ${waiting.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ') || 'One click each; you sign in with the app itself.'}>
+          sub={apps === null ? undefined : [live.map((a) => a.name).join(', '), waiting.length ? `${waiting.length} need${waiting.length === 1 ? 's' : ''} attention: ${waiting.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ') || 'Gmail, Calendar, Notion, Slack and more.'}>
           <button className="btn primary" onClick={() => window.dispatchEvent(new Event('sahilbot:open-connect'))} data-testid="settings-connect-apps">Connect apps</button>
         </Row>
       </Section>
-      <Disclosure title="For developers" sub="Cursor coding agents, MCP for other apps, Shortcuts links" testId="connected-advanced">
+      {dev && <Disclosure title="For developers" sub="Cursor coding agents, MCP for other apps, Shortcuts links" testId="connected-advanced">
       <Section title="Cursor" sub="Hand coding work to Cursor Cloud Agents on your GitHub repos. Cursor is connected only by its API key." testId="connect-cursor">
         <Row title={<>Cursor{s.hasCursorKey ? <span className="tier-badge ok">Connected</span> : <span className="tier-badge">Not connected</span>}</>}
           sub={<>Cursor API key · <a href="https://cursor.com/dashboard?tab=integrations" target="_blank" rel="noreferrer">get one</a></>}>
@@ -604,7 +604,7 @@ function ConnectedPage({ s, patch }: P) {
         )}
       </Section>
         {!isServerRuntime && <div data-setting="mcp-server"><McpSettings /></div>}
-      </Disclosure>
+      </Disclosure>}
     </>
   )
 }
@@ -613,6 +613,7 @@ function ConnectedPage({ s, patch }: P) {
 
 /** Settings → Voice: the speech model picked for this Mac (it downloads itself), reading aloud, OpenAI's voice. */
 function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
+  const dev = useDevMode()
   const [voice, setVoice] = useState<VoiceStatus | null>(null)
   const [dl, setDl] = useState<{ progress: number; error?: string } | null>(null)
   useEffect(() => {
@@ -638,13 +639,13 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
     : `Downloading ${sp.mb} MB in the background${sp.using ? ` · ${sp.using.label} works meanwhile` : voice?.input === 'openai' ? ' · OpenAI transcribes meanwhile' : ''}`
   return (
     <>
-      <h2>Voice</h2>
-      <div className="set-sub">Dictate with ⌘D, talk with ⇧⌘V. Typed replies are never read aloud on their own: press the speaker on a message to hear it.</div>
+      <h2>{PAGE_TITLES.voice}</h2>
       <Section>
-        {localIsOn(s) && <Row id="speech-model" testId="voice-speech-model" title={sp ? <>{sp.label} <span className="hint" data-testid="voice-speech-reason">· {sp.reason}</span></> : 'Speech recognition'} sub={speechSub} info={sp?.why}>
+        <div data-setting="voice-openai"><VoiceOutputRow s={s} patch={patch} /></div>
+        {/* The speech model on this Mac (local models on): Developer mode only. */}
+        {dev && localIsOn(s) && <Row id="speech-model" testId="voice-speech-model" title={sp ? <>{sp.label} <span className="hint" data-testid="voice-speech-reason">· {sp.reason}</span></> : 'Speech recognition'} sub={speechSub} info={sp?.why}>
           {state}
         </Row>}
-        <div data-setting="voice-openai"><VoiceOutputRow s={s} patch={patch} /></div>
       </Section>
     </>
   )
@@ -653,19 +654,19 @@ function VoicePage({ s, models, patch }: P & { models: ModelList | null }) {
 // ------------------------------------------------------------------ privacy & security
 
 
-function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab: (t: string) => void }) {
-  // Three tabs: passwords, backups, and everything about what SahilBot may see (on one page).
+function PrivacySecurityPage({ tab, onTab }: P & { tab: string; onTab: (t: string) => void }) {
+  // Passwords; Developer mode adds a Backups tab.
+  const dev = useDevMode()
   const tabs = [
     { id: 'passwords', label: 'Passwords' },
-    { id: 'backups', label: 'Backups', hidden: isServerRuntime }
+    { id: 'backups', label: 'Backups', hidden: isServerRuntime || !dev }
   ]
   const want = tab === 'activity' || tab === 'sensitive' || tab === 'hybrid' ? 'privacy' : tab
   const cur = tabs.find((t) => t.id === want && !t.hidden)?.id ?? 'passwords'
   return (
     <>
-      <h3 className="set-h3">Passwords and backups</h3>
-      <div className="set-sub">Saved passwords and copies of your data.</div>
-      <Tabs value={cur} tabs={tabs} onChange={onTab} label="Privacy and security" />
+      <h3 className="set-h3">Passwords</h3>
+      {tabs.some((t) => t.id !== 'passwords' && !t.hidden) && <Tabs value={cur} tabs={tabs} onChange={onTab} label="Passwords and backups" />}
       {cur === 'passwords' && <div data-setting="passwords">{onPhone
         ? <div className="set-sub" data-testid="vault-on-mac">Saved passwords, cards and authenticator codes stay on your Mac and are never sent to this phone. Manage them in SahilBot on the Mac.</div>
         : <SecretVaultSettings embedded />}</div>}
@@ -678,12 +679,14 @@ function PrivacySecurityPage({ s, patch, tab, onTab }: P & { tab: string; onTab:
 
 /** What SahilBot may do, and what the Mac lets it use. No levels or rules to set: it does the work, and asks only where it must. */
 function PermissionsPage(_: P) {
+  const dev = useDevMode()
   return (
     <>
-      <h2>Privacy &amp; safety</h2>
-      <div className="set-sub">SahilBot works on its own, anywhere on your Mac: files and folders, apps, the web and your connected accounts.</div>
-      <div className="perm-note" data-setting="autonomy" data-testid="perm-note"><I.Shield size={13} />It asks only before buying something, typing a saved password anywhere but that login's own site, or doing something a web page or email told it to. System and secret places (like your keychain and SSH keys) stay off limits. Undo takes back a task's file changes.</div>
-      {!isServerRuntime && <MacPermissions />}
+      <h2>{PAGE_TITLES.privacy}</h2>
+      <div className="perm-note" data-setting="autonomy" data-testid="perm-note"><I.Shield size={13} />{dev
+        ? 'SahilBot works on its own, anywhere on your Mac. It asks only before buying something, typing a saved password anywhere but that login\'s own site, or doing something a web page or email told it to. System and secret places (like your keychain and SSH keys) stay off limits. Undo takes back a task\'s file changes.'
+        : 'It asks before buying anything or using a saved password.'}</div>
+      {!isServerRuntime && <MacPermissions sub="" />}
     </>
   )
 }

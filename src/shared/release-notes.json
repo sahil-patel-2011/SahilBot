@@ -25,7 +25,8 @@
           "While an update downloads you see how much is done: \"42% · 90 of 215 MB\"",
           "The morning check-in is gone: ask any bot for a daily summary instead",
           "Opening a bot clears its blue dot, even when it has older conversations",
-          "The chat header shows the bot's name once (no more \"New bot · New bot\"), and dozens of small labels across the app read cleaner"
+          "The chat header shows the bot's name once (no more \"New bot · New bot\"), and dozens of small labels across the app read cleaner",
+          "Settings is down to the basics: General, AI, Apps, Voice and Privacy (everything else is in Developer mode)"
         ]
       },
       {

@@ -964,7 +964,7 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
 export function errorFix(error: string): { label: string; run: () => void } | null {
   const settings = (page: string) => () => window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: page }))
   if (/spending|monthly (limit|cap)|budget|over the monthly/i.test(error)) return { label: 'Change the monthly limit', run: settings('#monthly-limit') }
-  if (/api key|401|403|unauthori[sz]ed|rejected|out of (api )?credit|insufficient_quota|no model|model is available|not available on this account/i.test(error)) return { label: 'Open AI & spending', run: settings('models') }
+  if (/api key|401|403|unauthori[sz]ed|rejected|out of (api )?credit|insufficient_quota|no model|model is available|not available on this account/i.test(error)) return { label: 'Open AI settings', run: settings('models') }
   if (/sign[- ]?in|reconnect|needs_auth|connector|connected app/i.test(error)) return { label: 'Open Connect apps', run: () => window.dispatchEvent(new Event('sahilbot:open-connect')) }
   return null
 }
