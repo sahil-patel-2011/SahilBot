@@ -34,6 +34,21 @@ describe('routing', () => {
     for (const q of ['build a Discord bot in Python', 'Make a bot for my Discord server', 'Make me a Telegram bot that posts the weather']) expect(classifyTask(q).category, q).toBe('coding')
   })
 
+  test('work handed to another bot by name is agent work (message_bot), whatever the subject (BTD-01)', () => {
+    const botNames = ['Homework Helper', 'Study Buddy']
+    for (const q of ['Ask Homework Helper to quiz me on moles', 'Ask the Homework Helper bot to make me a study plan for my chem test', 'Ask Homework Helper what a mole is',
+      'Have Study Buddy make me 5 algebra practice problems', 'Get Homework Helper to explain balancing equations', 'Send this to Study Buddy']) {
+      const d = classifyTask(q, { botNames })
+      expect(d.kind, q).toBe('agent')
+      expect(d.rule, q).toBe('agent-tools:relay')
+    }
+    // Without the bot's name it is the plain question it looks like; talking about a bot isn't a handoff.
+    expect(classifyTask('Ask Homework Helper to quiz me on moles').kind).toBe('chat')
+    expect(classifyTask('What can Homework Helper do?', { botNames }).rule).not.toBe('agent-tools:relay')
+    expect(classifyTask('Tell me about moles', { botNames }).kind).toBe('chat')
+    expect(classifyTask('Make me a Telegram bot that posts the weather', { botNames }).category).toBe('coding')
+  })
+
   test('a bot named before the word "bot" is a SahilBot bot too; "with its own icon" loads no image generator', () => {
     for (const q of ['Make me a Homework Helper bot for chemistry', 'Can you make me a chemistry tutor bot?', 'Make me a bot called Homework Helper 2 with its own icon']) {
       const d = classifyTask(q)

@@ -2718,6 +2718,7 @@ export class Agent {
       heavy: !!last?.meta?.heavy, team: !!last?.meta?.team || !!last?.meta?.max, deepResearch: !!last?.meta?.deepResearch, planFirst: !!last?.meta?.planFirst, council: !!last?.meta?.council,
       previousKind: state.lastKind, previousEffort: state.lastEffort, previousStudy: state.lastStudy,
       role: ((sp) => (sp && !sp.isMain && sp.kind === 'bot' ? [sp.name, sp.label].filter(Boolean).join(': ') : undefined))(this.d.db.getSpace(thread.spaceId)),
+      botNames: this.d.db.listSpaces().filter((sp) => sp.kind === 'bot' && sp.id !== thread.spaceId).map((sp) => sp.name),
       ...requestTokens({ text: last?.content ?? '', files, history: all.slice(Math.max(0, cut)).filter((m) => m !== last) })
     }
     let task = classifyRoute(last?.content ?? '', routeContext)
@@ -3388,6 +3389,7 @@ export class Agent {
     const kind = classifyTask(opener?.content ?? '', {
       flags: opener?.meta, files: attached, folders: ((opener?.meta?.folders as string[] | undefined) ?? []).length, openPlan, previous: state.lastKind,
       helper: run.helper, unattended: run.unattended, group: run.group,
+      botNames: db.listSpaces().filter((sp) => sp.kind === 'bot' && sp.id !== thread.spaceId).map((sp) => sp.name),
       // The router's decision for this request (same function): chat-vs-agent and the category never disagree.
       route: routed?.task
     })

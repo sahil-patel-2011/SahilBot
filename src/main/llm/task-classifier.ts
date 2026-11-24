@@ -83,6 +83,8 @@ export interface TaskContext {
   group?: boolean
   /** The bot answering: its name and instructions. A weak prior for vague requests ("fix it", "any news?"). */
   role?: string
+  /** The user's other bots by name: "Ask Homework Helper to quiz me" hands the work to that bot (message_bot). */
+  botNames?: string[]
   /** Estimated tokens of the new material (the message and its attached files): a huge one is a long-document task. */
   inputTokens?: number
   /** Estimated prompt size in tokens (new material plus the history that will be sent): the window must fit it. */
@@ -305,7 +307,15 @@ const MATH_HARD = /\b(prove|proof|show that|derive|derivation|theorem|lemma|olym
 
 // Mail, calendar, files and connectors
 const SELF = /^(call|phone|facetime|ring) [a-z]+( [a-z]+)?$|\b(remind me|set (a|an|my) (reminder|alarm|timer)|schedule (a|an|my)|(text|message|e-?mail) (?!to\b)[a-z]+ (that|saying|about)|send (an |a )?(e-?mail|text|message|invite|dm) to|every (day|morning|evening|night|week|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|month|hour)|each (day|week|morning)|daily (briefing|digest|summary)|send me a (summary|digest)|what'?s (on my )?schedul\w*|(what|which|any|list|show)( \w+){0,3} (routines|reminders)|my (routines|reminders|scheduled)|(cancel|delete|snooze|pause|resume|unpause|reschedule) (it|that|this|the [\w ]{1,20}(reminder|routine))|snooze (it|that|this|for|\d))\b/
-const RELAY = /\b((ask|tell|message) the \w+ bot|hand (it|this) to|let me show you|i'?ll show you|watch me (do|while)|teach you)\b/
+const RELAY = /\b((ask|tell|message|have|get) (the|my) ([\w-]+ ){1,3}bot\b|hand (it|this) to|let me show you|i'?ll show you|watch me (do|while)|teach you)\b/
+
+/** "Ask/tell/have/get/let <bot name> …", "send/hand/pass/give it to <bot name>": a request for that bot. */
+export function handsToBot(t: string, names?: string[]): boolean {
+  const ns = (names ?? []).map((n) => n.trim().toLowerCase()).filter((n) => n.length >= 3 && !/^(sahilbot|main|me|you)$/.test(n))
+  if (!ns.length) return false
+  const alt = ns.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  return new RegExp(`\\b((ask|tell|have|get|let|message|text|ping)|((send|hand|pass|give) (it|this|that) to))\\s+(the |my )?(${alt})(?![\\w-])`, 'i').test(t)
+}
 const MINE_MAIL = /\b(my|our) (\w+ )?(calendar|inbox|e-?mails?|mail|gmail|outlook|messages?|texts?|notes|reminders?|contacts|slack|events?|meetings?|appointments?|schedule|shopping list|to-?do list)\b|\bwhat did \w+ say\b|\b(her|his|their|the) last (e-?mail|message)\b|\blatest e-?mail\b|\b(emailed|texted|messaged|called|dm'?d) me\b|\bany (new )?(messages|e-?mails|mail|texts|replies)\b|\bmy \d{1,2}(:\d\d)? ?(am|pm)?\b.*\b(to|until|with)\b|\b(move|reschedule|push|cancel) my \w+ (with|to|meeting|call)\b/
 const FILE_ACT = /\b(organi[sz]e|move|rename|clean ?up|tidy|back ?up|sort|archive|delete|find|copy|zip|list)\b/
 const MINE_FILES = /\b(my|our|the) (\w+ )?(files|folders?|downloads|documents|desktop|photos|pictures|workspace)\b|~\/|\/users\/|(^|\s)\/[\w.-]+\/[\w.-]+/
@@ -583,6 +593,9 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     // A video made with the user's HeyGen app (tools/video.ts): credits and a file, so agent work.
     if (!question && has(VIDEO_RE, t)) return { category: 'agent-tools', rule: 'agent-tools:video', why: 'makes a video with HeyGen' }
     if (has(MESSAGE_ON, t)) return { category: 'agent-tools', rule: 'agent-tools:self', why: 'a message on a chat app' }
+    // Work handed to another of the user's bots by name ("Ask Homework Helper to quiz me on moles"), before the
+    // subject (math, code) decides: that bot does it, through message_bot.
+    if (handsToBot(t, ctx.botNames)) return { category: 'agent-tools', rule: 'agent-tools:relay', why: 'hands work to another bot' }
     // Driving a coding agent (Cursor, Codex, Claude Code): coding work, unless it's only a question about them.
     if (has(CODING_AGENT, t) && has(AGENT_HANDOFF, t) && !/\b(users|pattern|blink|textarea)\b/.test(t) && !/\b(write|draft) (a |the |me a )?(task )?(brief|prompt|spec)\b/.test(t) && !(question && !has(CODE_ACT, t) && !/\b(check|review|status|merge|safe to)\b/.test(t))) return { category: 'coding', rule: 'coding:agent', why: 'drives a coding agent' }
     // Distances or routes between several places: research with the maps tool.

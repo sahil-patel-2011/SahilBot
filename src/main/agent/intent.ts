@@ -135,6 +135,8 @@ export interface TaskContext {
   /** The chat's folder is a code project; the bot's role (instructions). */
   codeProject?: boolean
   role?: string
+  /** The user's other bots by name (a request handed to one of them is agent work). */
+  botNames?: string[]
   /** The decision the router already made for this request (loop.ts chooseModel): its kind is used as is. */
   route?: Pick<RouteClass, 'kind' | 'kindWhy'>
 }
@@ -163,7 +165,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     previousKind: ctx.previous,
     // Only the kind of the last request is known here: a follow-up keeps it (the category stands in for it).
     previousCategory: ctx.previousCategory ?? (ctx.previous === 'agent' ? 'agent-tools' : ctx.previous === 'chat' ? 'chat' : undefined),
-    codeProject: ctx.codeProject, role: ctx.role
+    codeProject: ctx.codeProject, role: ctx.role, botNames: ctx.botNames
   })
   return { kind: d.kind, why: d.kindWhy }
 }
