@@ -71,7 +71,7 @@ import { autoPool, autoUnavailable, autoVariant } from '../llm/router'
 import { captureConstraints, hideCopiedSecrets, redactSecrets, renderNotes } from './notes'
 import { ContextManager, OUTPUT_RESERVE, ResultStore, upperEstimate, ServerTokenCounter, SUMMARY_INSTRUCTIONS, coreRoom, notesRoom, pinRunContext, resultLimit, taskBrief, transcriptTainted, withPinned, wrapToolOutput, type TokenCounter } from './context'
 import { TaskMemory, stepText, type WorkingMemoryPage } from './task-memory'
-import { ALWAYS_TAINT_CHECKED, appReadRisk, botHardStop, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, memoryRisk, normalizeMode, ruleVerdict, spendsMoney, stricterMode } from './permissions'
+import { ALWAYS_TAINT_CHECKED, appReadRisk, botHardStop, checkTaint, containsSecret, decide, goalChangeRisk, isGoalMutation, memoryProvenance, normalizeMode, plantRisk, ruleVerdict, spendsMoney, steeredRisk, stricterMode } from './permissions'
 import { ATTENDED_GRACE_MS, isAlwaysOnBot } from './questions/policy'
 import type { TypedSlot } from './questions/queue'
 import { ALWAYS_ON_PROMPT, learnedLine, queuedApprovalText, queuedQuestionText, type BotQuestionConfig, type QuestionHost } from './questions/host'
@@ -3044,6 +3044,9 @@ export class Agent {
       // Emails and messages that set off a "when …" routine earlier in this chat stay outside content for later runs.
       ...history.filter((m) => m.role === 'user' && Array.isArray(m.meta?.triggerUntrusted)).slice(-10).flatMap((m) => (m.meta!.triggerUntrusted as unknown[]).filter((t): t is string => typeof t === 'string'))
     ]
+    // The user's own data this chat read (files, folder listings, notes, command output: tool output that isn't
+    // outside content), so a URL or form that would carry it to a site is caught (urlTainted, steeredRisk).
+    const priv: string[] = history.filter((m) => m.role === 'tool' && !m.meta?.untrusted && m.content).slice(-20).map((m) => m.content.slice(0, 20_000))
     let userText = [run.seed?.userText ?? '', userTextOf(history)].filter(Boolean).join('\n')
     // Set by execute(): did this run change anything or research anything? Then it gets a self-check pass.
     // sawUntrusted: this run has untrusted content in view (memory saves that read like instructions ask);
@@ -3721,7 +3724,7 @@ export class Agent {
           const files = expectedFiles()
           if (run.record && !run.helper && (!chatRun || files?.length)) {
             if (state.acceptance?.length && evidenceRounds === 0) {
-              await this.perform(thread, run, state, { id: `verify-${randomUUID()}`, name: 'agent_control', arguments: '{"action":"verify"}' }, { failures, untrusted, userText, guard, track, window })
+              await this.perform(thread, run, state, { id: `verify-${randomUUID()}`, name: 'agent_control', arguments: '{"action":"verify"}' }, { failures, untrusted, private: priv, userText, guard, track, window })
             }
             const report = completionReport(this.runtime, run.record.id, { required: state.taskPolicy?.requireVerification, criteria: state.acceptance?.map((c) => c.criterion), files, claims: this.research.list(run.record.id) })
             if (report.status === 'blocked' && evidenceRounds++ < 2 && step < HARD_CAP) {
@@ -3756,7 +3759,7 @@ export class Agent {
         // A step that works (tool calls): its words are shown with it now (only a final reply waits for the checks).
         settle(assistant)
         const editsBefore = track.edits
-        const ran = await this.executeAll(thread, run, state, assistant.toolCalls, { failures, untrusted, userText, guard, track, window })
+        const ran = await this.executeAll(thread, run, state, assistant.toolCalls, { failures, untrusted, private: priv, userText, guard, track, window })
         // (The check turned into a fix, executeAll: the old answer is no longer the one to fall back to.)
         if (verifyDraft && !run.checking) verifyDraft = undefined
         // Tests right after an edit (Codex-style "run the checks after applying the patch", on fast suites): the
@@ -4207,12 +4210,19 @@ export class Agent {
     const rule = ruleVerdict(s.customRules, { tool: tool.name, label: tool.label, summary, args: call.arguments })
     // An always-on bot (not a helper): Auto works fully on a schedule too.
     const alwaysOn = !run.helper && !!this.d.questions?.config(thread.id)
-    // Long-term memory: a save whose wording came from (or, after reading, reads like) fetched content asks.
+    // Text later runs follow (a memory, skill or standing rule; a routine's prompt; a bot's instructions): a save whose
+    // wording came from fetched content, or that after reading it tells a later run what to do, asks (plantRisk).
+    // Its reason replaces the tool's own stop (save_rule's "saving a standing rule…"), which Auto doesn't ask for.
     const own = tool.hardStop?.(args, { roots: state.roots ?? [], folder: state.folder }) ?? null
-    const planted = !own && tool.name === 'memory' ? memoryRisk(args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted) : null
-    const hardStop = own ?? planted
+    const planted = plantRisk(tool.name, args, ctx.untrusted, ctx.userText, ctx.track.sawUntrusted || !!run.forceTaint)
+    const hardStop = planted ?? own
     // Every recipient on this bot's trusted list (or the user): the send stop lifts (decide()), within limits.
     const trust = effect === 'write_external' ? this.d.trustedSends?.check(run.speaker?.id ?? thread.spaceId, tool.name, args, hardStop) : undefined
+    // An outside action a page or email this run read could have chosen without a copied string: an address nobody
+    // gave, a file the page named, an upload to a site the user didn't name (steeredRisk).
+    const steered = (ctx.track.sawUntrusted || !!run.forceTaint) && !trust?.trusted
+      ? steeredRisk({ tool: tool.name, effect, args, summary, hardStop, untrusted: ctx.untrusted, private: ctx.private, userText: ctx.userText })
+      : null
     const decision = decideWithRule({
       mode,
       effect,
@@ -4224,7 +4234,7 @@ export class Agent {
       planted: !!planted,
       // A handoff from a run that read untrusted content: every outside action in this run asks, and so
       // does every terminal command (whatever its effect: a "local" command can still do anything).
-      tainted: (!!run.forceTaint && (effect === 'write_external' || effect === 'destructive' || ALWAYS_TAINT_CHECKED.has(tool.name))) || checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText),
+      tainted: (!!run.forceTaint && (effect === 'write_external' || effect === 'destructive' || ALWAYS_TAINT_CHECKED.has(tool.name))) || checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText, ctx.private) || !!steered,
       leaksSecret: containsSecret(args, this.d.secretValues()),
       consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended && !alwaysOn, state }) : true,
       // Nobody watches an unattended run: Auto works cautiously there (decide()), except in an always-on
@@ -4281,6 +4291,9 @@ export class Agent {
         ctx.track.sawUntrusted = true
         // A handoff's own receipt ("Handed off to …") isn't outside content; a reply or a page is.
         if (!(o.call.name === 'message_bot' && /^Handed off to /.test(o.output.text))) ctx.track.web = true
+      } else if (ctx.private && o.output.text) {
+        ctx.private.push(o.output.text.slice(0, 20_000))
+        if (ctx.private.length > 30) ctx.private.shift()
       }
       // A screenshot's text is the same every time (Claude's computer toolset takes one after nearly every
       // action): the image tells whether anything changed, so it counts toward "the same result".
@@ -4703,6 +4716,8 @@ type CallStatus = 'ok' | 'invalid' | 'error' | 'denied' | 'repeat'
 interface ExecCtx {
   failures: Map<string, number>
   untrusted: string[]
+  /** The user's own data this chat read (tool output that isn't outside content), for the taint checks. */
+  private?: string[]
   userText: string
   guard: LoopGuard
   track: { changed: boolean; researched: boolean; unchecked?: boolean; web: boolean; sawUntrusted: boolean; explored?: boolean; task?: boolean; askGated?: boolean; codeEdited?: boolean; testsGreen?: boolean; testRounds?: number; edits?: number; failedWrites?: Set<string> }

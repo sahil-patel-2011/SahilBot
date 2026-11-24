@@ -120,7 +120,10 @@ describe('decide() with trusted recipients', () => {
   })
   test('always-on bot stops: a trusted send only stops for "always ask" or a code/password in the text', () => {
     const a = { tool: 'resend', effect: 'write_external' as const, args: { to: Array.from({ length: 8 }, (_, i) => `p${i}@x.com`) }, label: 'Resend', summary: 'Send email to the team: "please delete the old file"' }
-    expect(botHardStop(a)?.kind).toBeTruthy()
+    // Auto sends to many people and mentions of deleting without a card, in a bot as anywhere (only money, credentials
+    // and "always ask" stop a bot).
+    expect(botHardStop(a)).toBeNull()
+    expect(botHardStop({ ...a, summary: 'Send email: "your verification code is 123456"' })?.kind).toBe('credentials')
     expect(botHardStop({ ...a, trusted: true })).toBeNull()
     expect(botHardStop({ ...a, trusted: true, summary: 'Send email: "your verification code is 123456"' })?.kind).toBe('credentials')
     expect(botHardStop({ ...a, trusted: true, alwaysAsk: ['tool:resend'] })?.kind).toBe('always_ask')
