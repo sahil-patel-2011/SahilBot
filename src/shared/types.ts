@@ -1148,6 +1148,17 @@ export interface GoogleConnectStatus {
   mailOpen: boolean
 }
 
+/** How Outlook is connected (Connect apps → Outlook, main/mail/outlook.ts): no tokens, just who and which app. */
+export interface OutlookConnectStatus {
+  /** This build ships SahilBot's own Microsoft app (Sign in with Microsoft works at once). */
+  builtin: boolean
+  /** The user saved their own Entra app's client ID (used instead of the built-in one). */
+  ownClient: boolean
+  ownClientId?: string
+  connected: boolean
+  address?: string
+}
+
 export interface ConnectorStatus {
   id: string
   state: 'off' | 'disconnected' | 'connecting' | 'signing_in' | 'needs_auth' | 'connected' | 'error' | 'reconnecting'
@@ -1481,6 +1492,15 @@ export interface SahilBotApi {
     useAppPassword(address: string, password: string): Promise<GoogleConnectLink>
     useOauth(): Promise<GoogleConnectLink>
     disconnect(): Promise<void>
+  }
+  /** Connect apps → Outlook: Sign in with Microsoft (main/mail/outlook.ts); tokens never leave main. */
+  outlook: {
+    status(): Promise<OutlookConnectStatus>
+    /** Opens Microsoft's sign-in page in the browser; resolves once signed in (or rejects with what to do). */
+    signIn(): Promise<OutlookConnectStatus>
+    disconnect(): Promise<void>
+    /** The user's own Entra app's client ID (a GUID), or null to go back to SahilBot's own app. */
+    setClient(clientId: string | null): Promise<OutlookConnectStatus>
   }
   vault: {
     list(): Promise<VaultEntry[]>

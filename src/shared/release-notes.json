@@ -34,7 +34,8 @@
         "items": [
           "Commands in Terminal follow the same rule: no silent overwrite of your files, and Undo covers folders and spreadsheets",
           "Live voice calls are saved in the bot's chat",
-          "The right Google app connects, and the Mac calendar includes repeating events"
+          "The right Google app connects, and the Mac calendar includes repeating events",
+          "Outlook: connect your Outlook.com or Microsoft 365 mail and calendar with your Microsoft sign-in (Connect apps → Outlook); it sends only when you ask"
         ]
       }
     ]

@@ -285,6 +285,10 @@ const api: SahilBotApi = {
     status: call('google:status') as never, useMail: call('google:useMail') as never, useAppPassword: call('google:useAppPassword') as never,
     useOauth: call('google:useOauth') as never, disconnect: call('google:disconnect') as never
   },
+  outlook: {
+    status: call('outlook:status') as never, signIn: call('outlook:signIn') as never,
+    disconnect: call('outlook:disconnect') as never, setClient: call('outlook:setClient') as never
+  },
   vault: {
     list: call('vault:list') as never, set: call('vault:set') as never, remove: call('vault:remove') as never,
     totpCode: call('vault:totpCode') as never, otpGrants: call('vault:otpGrants') as never, revokeOtpGrant: call('vault:revokeOtpGrant') as never,

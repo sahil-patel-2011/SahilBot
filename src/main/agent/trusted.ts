@@ -103,6 +103,10 @@ export function sendRecipients(tool: string, args: unknown, lookup: RecipientLoo
     if (inner.action !== 'send') return null
     if ((inner.mode && inner.mode !== 'new') || inner.reply_to || inner.uid) return null
     raw = addressFields(inner)
+  } else if (tool === 'outlook') {
+    // Only a new email's explicit recipients: a reply, a saved draft or an invitation goes to people not known here.
+    if (inner.action !== 'send' || inner.draft_id || inner.id || inner.reply_to) return null
+    raw = addressFields(inner)
   } else {
     // Resend, Gmail's connector and other send tools: explicit recipients only; a reply tool without them is unknown.
     if (/(^|_)reply/i.test(tool) && !addressFields(inner)) return null

@@ -183,6 +183,10 @@ export const PRESETS: ConnectorPreset[] = [
   { id: 'livestorm', name: 'Livestorm', url: 'https://mcp.livestorm.co/mcp', color: '#00B37E', category: 'Communication', domain: 'livestorm.co', auth: 'oauth', description: 'Webinars, sessions and registrants.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR mcp.livestorm.co/register
   { id: 'bird', name: 'Bird', url: 'https://mcp.bird.com/', color: '#0E5CFF', category: 'Communication', domain: 'bird.com', auth: 'oauth', description: 'Email, SMS and WhatsApp through your Bird workspace; sending always asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR platform.bird.com/v1/oauth/register
   { id: 'superhuman-mail', name: 'Superhuman Mail', url: 'https://mcp.mail.superhuman.com/mcp', color: '#6E56CF', category: 'Communication', domain: 'superhuman.com', auth: 'oauth', description: 'Search, read and draft email in Superhuman; sending always asks.' }, // NEW 2026-11-15, swept 2026-11-15: 401+PRM, DCR mcp.auth.mail.superhuman.com/oauth2/register; URL from help.superhuman.com
+  // Outlook natively (mail/outlook.ts, agent/tools/outlook.ts): Microsoft's hosted Microsoft 365 MCP server only serves
+  // Anthropic's Claude apps, so SahilBot's own tool calls Microsoft Graph with the user's Microsoft sign-in. 'app':
+  // no connector config; its tile opens its own panel (Connect apps → Outlook), never "Built in".
+  { id: 'outlook', name: 'Outlook', url: 'app:outlook', color: '#0078D4', category: 'Communication', domain: 'outlook.live.com', auth: 'app', description: 'Outlook.com and Microsoft 365 mail and calendar: search, read, draft, schedule. Sends only when you ask.' },
   // Native (no MCP server): SahilBot's own resend tool calls Resend's REST API with the user's key (agent/tools/resend.ts).
   { id: 'resend', name: 'Resend', url: 'app:resend', color: '#111111', category: 'Communication', domain: 'resend.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://resend.com/api-keys', hint: 'Resend → API Keys → Create API Key ("Full access", or "Sending access" to only send).', placeholder: 're_…', pattern: '^re_[A-Za-z0-9_-]{8,}$' }, description: 'Email from your own domain: send, check delivery, list verified domains (sending asks unless every recipient is trusted).' }, // resend.com/docs/api-reference/introduction: Authorization: Bearer re_…; verified with GET /domains
   { id: 'mandrill', name: 'Mailchimp Transactional', url: 'https://mandrillapp.com/mcp', color: '#FFE01B', category: 'Communication', domain: 'mandrillapp.com', auth: 'apikey', apiKey: { in: 'header', name: 'Authorization', format: 'Bearer {key}', getKeyUrl: 'https://mandrillapp.com/settings', hint: 'Mandrill → Settings → API Keys → New API Key (a Transactional key, not a Marketing one).' }, description: 'Transactional email: templates, message status and sending (sending always asks).' }, // NEW 2026-11-15, swept 2026-11-15: initialize 200 with JSON-RPC error "Authorization: Bearer <api_key> required"; header from mailchimp.com/developer/transactional/guides/how-to-use-mailchimps-transactional-messaging-mcp/
@@ -1202,6 +1206,9 @@ export const NATIVE_KEY_APPS: Record<string, { secret: string; tools: string[]; 
   resend: { secret: RESEND_KEY_SECRET, tools: ['resend'], verify: (key, f) => verifyResendKey(f ?? ((url, init) => fetch(url, { ...init, redirect: 'error' }) as never), key) }
 }
 export const isNativeKeyApp = (id: string | undefined): boolean => !!id && Object.prototype.hasOwnProperty.call(NATIVE_KEY_APPS, id)
+/** Outlook signs in from its own panel (mail/outlook.ts): no connector, no in-chat Connect card. */
+export const OUTLOOK_PRESET = 'outlook'
+export const OUTLOOK_CONNECT_HINT = 'Outlook connects from its own panel: open Connect apps → Outlook and press "Sign in with Microsoft".'
 
 /**
  * The API key on the clipboard, if it looks like one for this app: the whole clipboard (trimmed, quotes and a
@@ -1745,6 +1752,7 @@ export class Connectors {
       if (!this.ready(p)) throw new Error(apiKeyNeeded(p))
       return this.nativeStatus(p.id)
     }
+    if (p?.id === OUTLOOK_PRESET) throw new Error(OUTLOOK_CONNECT_HINT)
     if (!p || p.auth === 'browser' || p.auth === 'app' || !p.url) throw new Error('This connector needs setup in Connect apps.')
     if (p.unavailable) throw new Error(p.unavailable)
     const existing = this.list().find((c) => c.preset === id)
