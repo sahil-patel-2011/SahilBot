@@ -37,8 +37,11 @@ export type DownloadEvent = { type: 'download'; kind: string; progress: number; 
 
 export interface VoiceHooks {
   emit(e: VoiceEvent | DownloadEvent): void
-  /** Sends text to the voice thread's agent and streams the reply text back. */
-  respond(text: string, signal: AbortSignal, onText: (t: string) => void): Promise<void>
+  /**
+   * Sends text to the voice thread's agent and streams the reply text back. `task`: the live voice's do_task (a
+   * request to do real work, not speech to answer out loud); it may resolve with the bot's final reply.
+   */
+  respond(text: string, signal: AbortSignal, onText: (t: string) => void, opts?: { task?: boolean }): Promise<void | string>
   /**
    * How replies may be spoken (llm-free): local voices allowed (local models on), and OpenAI's voice when
    * the user allowed it with a key saved (null otherwise). Without it: Kokoro when downloaded, else say.
@@ -57,7 +60,9 @@ export interface VoiceHooks {
    * Grok Voice 3.0 (live speech to speech) for this conversation: when the voice is Grok and an xAI key is saved
    * (null otherwise, and the usual speech-to-text → model → voice chain runs).
    */
-  live?(): { apiKey: string; baseUrl: string; instructions: string; voice?: string } | null
+  live?(): { apiKey: string; baseUrl: string; instructions: string; voice?: string } | { skip: string } | null
+  /** What was said in a live conversation (your words, Grok's spoken replies): kept in the chat. */
+  spoken?(who: 'user' | 'assistant', text: string): void
   /** What a live conversation cost so far (each minute, and the rest when it ends): spending limit and usage. */
   liveCharged?(usd: number): void
   /** Every minute of a live conversation: throws when the spending limit won't cover more. */
@@ -407,7 +412,7 @@ export class VoiceService {
     stt.language = this.style.language
     this.stt = stt
     await Promise.all([stt.start(), tts.warm()])
-    this.pipe ??= new VoicePipeline({ vad: this.vad, whisper: stt, tts, emit: (e) => this.hooks.emit(e), respond: (t, s, on) => this.hooks.respond(t, s, on) })
+    this.pipe ??= new VoicePipeline({ vad: this.vad, whisper: stt, tts, emit: (e) => this.hooks.emit(e), respond: async (t, s, on) => { await this.hooks.respond(t, s, on) } })
     return this.pipe
   }
 
@@ -419,13 +424,23 @@ export class VoiceService {
     this.live = null
     // Grok's live voice first, when it's the voice: one model listens, talks and hands work to the bot.
     const cfg = this.hooks.live?.()
-    if (cfg) {
+    // Grok's voice is the choice but can't be used now (the spending limit is too close): say why, once.
+    if (cfg && 'skip' in cfg) this.hooks.emit({ type: 'notice', message: `${cfg.skip} Using the standard voice.` })
+    else if (cfg) {
       const live = new GrokRealtime({
         apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, instructions: cfg.instructions, voice: cfg.voice,
-        emit: (e) => this.hooks.emit(e),
+        emit: (e) => {
+          if (e.type === 'transcript') this.hooks.spoken?.('user', e.text)
+          else if (e.type === 'reply') this.hooks.spoken?.('assistant', e.text)
+          this.hooks.emit(e)
+        },
         charge: (usd) => this.hooks.liveCharged?.(usd),
         guard: (minutes) => this.hooks.liveGuard?.(minutes),
-        doTask: async (request, signal) => { let out = ''; await this.hooks.respond(request, signal, (t) => { out += t }); return out }
+        doTask: async (request, signal) => {
+          let out = ''
+          const final = await this.hooks.respond(request, signal, (t) => { out += t }, { task: true })
+          return typeof final === 'string' && final.trim() ? final : out
+        }
       })
       try {
         await live.start()
