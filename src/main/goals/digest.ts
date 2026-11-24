@@ -32,7 +32,8 @@ export function buildDigest(d: DigestData): Digest {
   const finished = d.goals.filter((g) => g.status === 'done' && g.updatedAt >= d.since)
   const failed = d.routines.filter((r) => r.status === 'failed')
   const empty = !d.did.length && !d.routines.length && !d.pending.length && !d.review.length && !finished.length && !d.goals.some((g) => g.updatedAt >= d.since)
-  const out: string[] = [`**Daily digest · ${d.botName}** (since ${t(d.since)})`]
+  // Posted in the bot's own chat, under its name: the heading doesn't repeat it (the notification's title does).
+  const out: string[] = [`**Daily digest** (since ${t(d.since)})`]
   const done = [
     ...d.did.slice(-8).map((x) => `- ${line(x.text)}`),
     ...d.routines.filter((r) => r.status === 'succeeded').slice(0, 6).map((r) => `- Routine "${line(r.title, 60)}" ran (${t(r.at)})`),

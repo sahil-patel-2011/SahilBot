@@ -224,7 +224,8 @@
 .pin-widget.active .pw-btn { background: var(--selected); }
 .pin-grid.one .pw-avatar, .pw-avatar { width: auto; height: auto; }
 .pin-grid.one .pw-name { font-size: 14px; }
-.pw-unpin { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, .14); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+/* Top left: the top right corner is the status mark (working, needs you, unread), which it would cover. */
+.pw-unpin { position: absolute; top: 6px; left: 6px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, .14); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
 .pin-widget:hover .pw-unpin, .pw-unpin:focus-visible { opacity: 1; pointer-events: auto; }
 .pw-unpin:hover { color: var(--text); }
 /* You, then Connect apps (Grok Bot's apps button). */

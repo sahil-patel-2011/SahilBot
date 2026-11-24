@@ -48,6 +48,8 @@ export const Plug = (p: P) => <svg {...base(p)}><path d="M9 2v6M15 2v6M6 8h12v3a
 export const Close = (p: P) => <svg {...base(p)}><path d="M6 6l12 12M18 6 6 18" /></svg>
 export const External = (p: P) => <svg {...base(p)}><path d="M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" /></svg>
 export const Key = (p: P) => <svg {...base(p)}><circle cx="8" cy="15" r="4" /><path d="m10.8 12.2 9.2-9.2M17 6l3 3M14.5 8.5l2 2" /></svg>
+/** Usage: a small bar chart (Clock is Scheduled's). */
+export const Chart = (p: P) => <svg {...base(p)}><path d="M4 20h16M7 16v-4M12 16V7M17 16v-6" /></svg>
 export const Clock = (p: P) => <svg {...base(p)}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
 export const Play = (p: P) => <svg {...base(p)}><path d="M7 5v14l11-7L7 5Z" /></svg>
 export const Download = (p: P) => <svg {...base(p)}><path d="M12 4v11M7 10l5 5 5-5M5 20h14" /></svg>

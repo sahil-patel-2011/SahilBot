@@ -39,6 +39,8 @@ export function BotDetails(p: {
   onStartFresh?: () => void
   /** Opens one of the bot's earlier conversations. */
   onOpenThread?: (t: Thread) => void
+  /** Its run waits on your answer or OK (the status says so instead of "Working…"). */
+  waiting?: boolean
 }) {
   const { space } = p
   const [tab, setTab] = useState<Tab>('details')
@@ -139,7 +141,7 @@ export function BotDetails(p: {
               onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setName(space.name); e.stopPropagation(); e.currentTarget.blur() } }} />
             <input className="bd-label" value={label} onChange={(e) => setLabel(e.target.value)} onBlur={commitLabel} placeholder="Add a label" maxLength={80} aria-label="Label" data-testid="bot-label"
               onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setLabel(space.label ?? ''); e.stopPropagation(); e.currentTarget.blur() } }} />
-            {space.kind !== 'project' && <BotStatusLine space={space} />}
+            {space.kind !== 'project' && <BotStatusLine space={space} waiting={p.waiting} />}
             {space.kind !== 'project' && <BotCost spaceId={space.id} />}
           </div>
 

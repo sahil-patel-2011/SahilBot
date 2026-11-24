@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { Db } from '../../src/main/db'
 import { RUNS_KEPT, Scheduler, runOutcome, type RoutineEvent } from '../../src/main/scheduler'
-import { clock, describeSchedule, groupLibrary, when } from '../../src/renderer/src/routines'
+import { clock, describeSchedule, groupLibrary, midSentence, when } from '../../src/renderer/src/routines'
 import type { LibraryItem } from '../../src/shared/types'
 
 const at = (s: string) => new Date(s)
@@ -155,5 +155,15 @@ describe('bot label, notifications, library', () => {
     expect(lib.filter((x) => x.kind === 'file').map((x) => x.title)).toEqual(['notes.md'])
     expect(lib.filter((x) => x.kind === 'link').map((x) => x.url).sort()).toEqual(['https://example.com/docs', 'https://news.example.org/a'])
     expect(lib.find((x) => x.url === 'https://news.example.org/a')!.title).toBe('news.example.org')
+  })
+})
+
+describe('midSentence', () => {
+  test('a relative day reads lowercase inside a line ("next tomorrow at 7:30 AM"); dates keep their capitals', () => {
+    expect(midSentence('Tomorrow at 7:30 AM')).toBe('tomorrow at 7:30 AM')
+    expect(midSentence('Today at 9:02 AM')).toBe('today at 9:02 AM')
+    expect(midSentence('Yesterday at 9:02 AM')).toBe('yesterday at 9:02 AM')
+    expect(midSentence('Wed, Nov 25 at 7:30 AM')).toBe('Wed, Nov 25 at 7:30 AM')
+    expect(midSentence('Todayish')).toBe('Todayish')
   })
 })

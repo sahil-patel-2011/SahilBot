@@ -9,6 +9,7 @@ import '../styles-vault.css'
 import { ClampText, Disclosure } from './ui'
 import { PeopleView } from './PeopleView'
 import { ContextMenu } from './ContextMenu'
+import { plural } from '../lib/run-summary'
 
 // The Vault view: the notes your bots keep (src/main/vault), like a small Obsidian. A list with search
 // and area filters, the note itself with clickable [[links]] and its backlinks, a graph of how notes
@@ -166,7 +167,7 @@ export function VaultView(p: { onClose: () => void; initialPath?: string | null;
         <div className="vault-side-head">
           <div className="vault-title">
             <I.ListIcon size={16} />Notes
-            <span className="hint">{status ? `${status.notes} notes` : ''}</span>
+            <span className="hint">{status ? plural(status.notes, 'note') : ''}</span>
             <button className="icon-btn" title="New note" aria-label="New note" onClick={() => setCreating('')} data-testid="vault-new"><I.Plus size={15} /></button>
             <button className="icon-btn" title="Close (Esc)" aria-label="Close vault" onClick={p.onClose} data-testid="vault-close"><I.Close size={15} /></button>
           </div>

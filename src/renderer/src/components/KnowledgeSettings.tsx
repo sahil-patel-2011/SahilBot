@@ -5,6 +5,7 @@ import * as I from '../icons'
 import { Toggle } from './Toggle'
 import { toast } from '../lib/toast'
 import { ClampText } from './ui'
+import { plural } from '../lib/run-summary'
 
 // Settings → Advanced → Knowledge folders: the folders SahilBot can search (with counts), meaning search (an Ollama
 // embedding model) or keyword only, add/remove folders, pause and rebuild.
@@ -82,7 +83,7 @@ export function KnowledgeSettings({ embedded }: { embedded?: boolean } = {}) {
     void api.knowledge.search(q.trim(), { k: 8 }).then((r) => setHits(r.hits)).catch((e) => toast(clean(e)))
   }
   if (!st) return <>{!embedded && <h2>Knowledge</h2>}<div className="hint">Loading…</div></>
-  const state = st.paused ? 'Paused' : st.indexing ? `Indexing${st.queued ? ` · ${st.queued} files to go` : ''}…` : st.lastScan ? `Up to date · checked ${ago(st.lastScan)}` : 'Not checked yet'
+  const state = st.paused ? 'Paused' : st.indexing ? `Indexing${st.queued ? ` · ${plural(st.queued, 'file')} to go` : ''}…` : st.lastScan ? `Up to date · checked ${ago(st.lastScan)}` : 'Not checked yet'
   return (
     <div data-testid="knowledge-settings">
       {!embedded && <h2>Knowledge</h2>}
@@ -91,7 +92,7 @@ export function KnowledgeSettings({ embedded }: { embedded?: boolean } = {}) {
       </div>
 
       <Card title="Search">
-        <Line title={<>{st.totals.files.toLocaleString()} files · {st.totals.chunks.toLocaleString()} passages</>} sub={state} testId="knowledge-totals">
+        <Line title={<>{st.totals.files.toLocaleString()} {st.totals.files === 1 ? 'file' : 'files'} · {st.totals.chunks.toLocaleString()} {st.totals.chunks === 1 ? 'passage' : 'passages'}</>} sub={state} testId="knowledge-totals">
           <button className="btn" onClick={() => act(api.knowledge.setPaused(!st.paused))} data-testid="knowledge-pause">{st.paused ? 'Resume' : 'Pause'}</button>
           <button className="btn" onClick={() => { if (confirm('Rebuild the knowledge base? Every folder is read again from scratch; this can take a while for big folders.')) act(api.knowledge.rebuild()) }} data-testid="knowledge-rebuild">Rebuild</button>
         </Line>
@@ -122,9 +123,9 @@ export function KnowledgeSettings({ embedded }: { embedded?: boolean } = {}) {
             key={s.path}
             testId={`knowledge-source-${s.kind}`}
             title={<>{s.label}{KIND[s.kind] !== s.label && <> <span className="tier-badge">{KIND[s.kind]}</span></>}</>}
-            sub={<>{s.path}<br />{s.problem ? `Not indexed: ${s.problem}` : `${s.files.toLocaleString()} files${s.skipped ? ` · ${s.skipped} skipped` : ''} · ${s.lastIndexed ? `updated ${ago(s.lastIndexed)}` : 'not indexed yet'}${s.truncated ? ' · file limit reached (add smaller sub-folders instead)' : ''}`}</>}
+            sub={<>{s.path}<br />{s.problem ? `Not indexed: ${s.problem}` : `${s.files.toLocaleString()} ${s.files === 1 ? 'file' : 'files'}${s.skipped ? ` · ${s.skipped} skipped` : ''} · ${s.lastIndexed ? `updated ${ago(s.lastIndexed)}` : 'not indexed yet'}${s.truncated ? ' · file limit reached (add smaller sub-folders instead)' : ''}`}</>}
           >
-            {s.removable && <button className="icon-btn" title="Remove from knowledge" onClick={() => act(api.knowledge.removeFolder(s.path))}><I.Trash size={14} /></button>}
+            {s.removable && <button className="icon-btn" title="Remove from knowledge" aria-label={`Remove ${s.label} from knowledge`} onClick={() => act(api.knowledge.removeFolder(s.path))}><I.Trash size={14} /></button>}
           </Line>
         ))}
         <Line title="Add a folder" sub="Notes, papers, a Dropbox or iCloud folder, other projects. ~/Library and system folders can't be added.">

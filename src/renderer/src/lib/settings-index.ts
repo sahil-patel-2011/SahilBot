@@ -57,7 +57,7 @@ export const SECTION_HINT: Partial<Record<SettingsPage, string>> = {
   general: 'Your name, look, startup and updates',
   models: 'Which AI answers you, and what it may spend',
   connected: 'Gmail, Calendar, Notion and other services',
-  memory: 'What SahilBot remembers about you',
+  memory: 'What your bots know about you',
   privacy: 'What it may do on its own, passwords, backups',
   voice: 'Talking out loud and how it sounds',
   server: 'Use SahilBot from your phone or a server'

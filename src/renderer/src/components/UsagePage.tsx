@@ -105,9 +105,9 @@ export function UsagePage() {
 
       <div className="ud-tiles" data-testid="usage-tiles">
         <div className="us-tile"><span>This week</span><b>{money(d.week.usd)}</b><em>{tokens(d.week.tokens)} tokens</em></div>
-        <div className="us-tile"><span>This month</span><b>{money(d.monthTotals.usd)}</b><em>{num(d.monthTotals.requests)} requests</em></div>
+        <div className="us-tile"><span>This month</span><b>{money(d.monthTotals.usd)}</b><em>{num(d.monthTotals.requests)} {d.monthTotals.requests === 1 ? 'request' : 'requests'}</em></div>
         <div className="us-tile"><span>Lifetime spend</span><b>{money(life.usd)}</b><em>{life.since ? `since ${since(life.since)}` : 'nothing yet'}</em></div>
-        <div className="us-tile"><span>Lifetime tokens</span><b>{tokens(lifeTokens)}</b><em>{num(life.requests + life.local.requests)} requests</em></div>
+        <div className="us-tile"><span>Lifetime tokens</span><b>{tokens(lifeTokens)}</b><em>{num(life.requests + life.local.requests)} {life.requests + life.local.requests === 1 ? 'request' : 'requests'}</em></div>
       </div>
 
       {empty ? <div className="us-empty">No model requests yet.</div> : (

@@ -70,8 +70,8 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 6 }}>
           {isProject ? <span className="project-icon" style={{ background: color, width: 64, height: 64 }}><I.Folder size={28} /></span> : <SpaceAvatar color={color} shape={shape} icon={mode === 'bot' ? icon.trim() || null : null} size={64} group={isGroup ? members.map((id) => spaces.find((s) => s.id === id)?.color ?? '#999') : undefined} />}
           <div>
-            <h2>{space ? `Customize ${isGroup ? 'group' : isProject ? 'project' : space.isMain ? 'SahilBot' : 'bot'}` : isGroup ? 'New group chat' : isProject ? 'New project' : 'New bot'}</h2>
-            <div className="hint">{isGroup ? 'Bots in a group answer together and can hand work to each other with @Name.' : isProject ? 'A project is a folder plus instructions. Every chat in it can read and edit that folder.' : isNewBot ? 'Pick a name, an icon and a color. It asks what you need in its chat.' : 'Each bot has its own personality, look and conversation, and shares your memory.'}</div>
+            <h2>{space ? `Customize ${isGroup ? 'group' : isProject ? 'project' : 'bot'}` : isGroup ? 'New group chat' : isProject ? 'New project' : 'New bot'}</h2>
+            <div className="hint">{isGroup ? 'Bots in a group answer together and can hand work to each other with @Name.' : isProject ? 'A project is a folder plus instructions. Every chat in it can read and edit that folder.' : isNewBot ? 'Pick a name, an icon and a color.' : 'Each bot has its own personality, look and conversation, and shares your memory.'}</div>
           </div>
         </div>
         <div className="field"><label>Name</label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={isGroup ? 'e.g. Launch team' : isNewBot ? 'e.g. School Helper' : 'e.g. Research Bot'} disabled={space?.isMain} data-testid="bot-name" /></div>
@@ -86,7 +86,7 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
             </div>
             <div className="field"><label>Color</label>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{COLORS.map((c) => (
-                <button key={c} className="swatch" onClick={() => setColor(c)} aria-label={`Color ${c}`} aria-pressed={c === color} title={c} style={{ width: 22, height: 22, borderRadius: 7, background: c, outline: c === color ? '2px solid var(--text)' : 'none', outlineOffset: 2 }} />
+                <button key={c} className="swatch" onClick={() => setColor(c)} aria-label={`Color ${c}`} aria-pressed={c === color} style={{ width: 22, height: 22, borderRadius: 7, background: c, outline: c === color ? '2px solid var(--text)' : 'none', outlineOffset: 2 }} />
               ))}</div>
             </div>
             <h3>Instructions</h3>
@@ -95,13 +95,13 @@ export function BotEditor({ space, spaces, models, mode, onClose, onSaved }: {
         )}
         {!isGroup && !isProject && (() => {
           const look = (
-            <div className="field"><label>{isNewBot ? 'Icon and color' : 'Look'}</label>
+            <div className="field"><label>{isNewBot ? 'Shape and color' : 'Look'}</label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 6 }}>{SHAPES.map((sh) => (
-                  <button key={sh} className={`shape-pick${sh === shape ? ' on' : ''}`} onClick={() => setShape(sh)} title={sh} aria-label={`Shape ${sh}`} aria-pressed={sh === shape}><SpaceAvatar color={color} shape={sh} size={34} /></button>
+                  <button key={sh} className={`shape-pick${sh === shape ? ' on' : ''}`} onClick={() => setShape(sh)} aria-label={`Shape ${sh}`} aria-pressed={sh === shape}><SpaceAvatar color={color} shape={sh} size={34} /></button>
                 ))}</div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{COLORS.map((c) => (
-                  <button key={c} className="swatch" onClick={() => setColor(c)} aria-label={`Color ${c}`} aria-pressed={c === color} title={c} style={{ width: 22, height: 22, borderRadius: 7, background: c, outline: c === color ? '2px solid var(--text)' : 'none', outlineOffset: 2 }} />
+                  <button key={c} className="swatch" onClick={() => setColor(c)} aria-label={`Color ${c}`} aria-pressed={c === color} style={{ width: 22, height: 22, borderRadius: 7, background: c, outline: c === color ? '2px solid var(--text)' : 'none', outlineOffset: 2 }} />
                 ))}</div>
               </div>
             </div>

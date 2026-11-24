@@ -17,7 +17,7 @@ export function rowSubtitle(s: Pick<Space, 'kind' | 'members' | 'lastPreview' | 
   const preview = s.lastPreview?.replace(/\s+/g, ' ').trim() ?? ''
   if (preview.length >= 12 || preview.split(' ').length >= 3) return preview
   if (s.label?.trim()) return s.label.trim()
-  if (s.kind === 'group') return `${s.members.length} bots`
+  if (s.kind === 'group') return `${s.members.length} ${s.members.length === 1 ? 'bot' : 'bots'}`
   if (!preview) return 'No messages yet'
   return s.lastAt ? `Active ${since(s.lastAt)}` : 'Open the chat'
 }
@@ -86,4 +86,16 @@ export function distinctTitle(title: string | undefined | null, botName: string 
   const norm = (x: string | undefined | null): string => String(x ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
   const t = norm(title)
   return !!t && t !== norm(botName) && !/^(new chat|untitled|new conversation|chat)$/.test(t)
+}
+
+/**
+ * The microphone failing to start, in plain words: the browser's own errors ("Requested device not found",
+ * "Permission denied") mean nothing to most people. Anything else keeps its message.
+ */
+export function micErrorText(e: { name?: string; message?: string } | null | undefined): string {
+  const name = e?.name ?? ''
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || name === 'OverconstrainedError') return 'No microphone found. Connect one, or pick one in System Settings → Sound.'
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') return 'SahilBot can\'t use the microphone. Allow it in System Settings → Privacy & Security → Microphone.'
+  if (name === 'NotReadableError' || name === 'TrackStartError') return 'The microphone is busy in another app. Close it there and try again.'
+  return e?.message || 'The microphone didn\'t start. Try again.'
 }

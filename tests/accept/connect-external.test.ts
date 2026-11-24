@@ -74,11 +74,13 @@ describe('sign-in in the external browser, one click with a built-in client', ()
       await section.waitFor({ timeout: 10_000 })
       const ready = section.locator('[data-testid="section-ready"] [data-testid="preset-test-chatter"]')
       await ready.waitFor({ timeout: 10_000 })
-      // "One click" is the section's own heading, so its rows carry no badge; the exceptions do ("Needs setup").
+      // "One click" is the section's own heading, so its rows carry no badge; the exceptions sit under "Needs a
+      // one-time setup", which says it for them (no "Needs setup" pill on each row too).
       expect(await ready.locator('[data-testid="badge-test-chatter"]').count()).toBe(0)
       const setupGroup = section.locator('[data-testid="section-setup"]')
       expect(await setupGroup.innerText()).toContain('Needs a one-time setup')
-      expect(await setupGroup.locator('[data-testid="preset-test-legacy"] [data-testid="badge-test-legacy"]').innerText()).toBe('Needs setup')
+      expect(await setupGroup.locator('[data-testid="preset-test-legacy"]').count()).toBe(1)
+      expect(await setupGroup.locator('[data-testid="badge-test-legacy"]').count()).toBe(0)
       expect(await section.locator('[data-testid="section-ready"] [data-testid="preset-test-legacy"]').count()).toBe(0)
 
       // One click: no setup panel, no paste. The provider's page opens in the (captured) default browser.

@@ -1193,7 +1193,7 @@ export function App() {
       </main>
       {panel === 'details' && detailsSpace ? (
         <Lazy fallback="panel">
-          <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)}
+          <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)} waiting={needSpaces.has(detailsSpace.id)}
             onCustomize={() => setEditor({ space: detailsSpace, mode: detailsSpace.kind })}
             onChanged={() => void refreshSpaces().then((sp) => { if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain() })}
             onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }}
