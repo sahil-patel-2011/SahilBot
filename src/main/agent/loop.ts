@@ -99,7 +99,7 @@ import { OutcomeRouter, outcomeLines, verdictFromEmoji, verdictFromWords, type V
 import { requestStrategy } from '@shared/request-strategy'
 import { placementBlock } from '../workers'
 import { stripDirectives } from '@shared/directives'
-import { admitsUnverified, completionReport, UNVERIFIED_NOTE } from './runtime/verification'
+import { admitsUnverified, completionReport } from './runtime/verification'
 import { phaseTask } from './runtime/phase'
 import { taskGraphTool } from './runtime/graph'
 import { evaluationTool } from './runtime/evaluation'
@@ -113,9 +113,9 @@ import { StreamRestorer, applyAnswer, describe as describePrivate, detectInConte
  * No fixed step count: a run gets a budget that grows with the agent's own plan and with progress
  * (each finished plan item buys more room). HARD_CAP only stops a runaway loop.
  */
-export const START_BUDGET = 24
+export const START_BUDGET = 40
 /** Lookups (searches, page reads) after which a simple task is told it has enough and should answer. */
-export const SIMPLE_LOOKUPS = 15
+export const SIMPLE_LOOKUPS = 30
 const LOOKUP_TOOLS = new Set(['web_search', 'fetch_page', 'research', 'browser', 'maps', 'knowledge_search'])
 /**
  * 400: long real tasks (audits, migrations, research sweeps) run hundreds of steps, and the budget only gets
@@ -4120,8 +4120,6 @@ export class Agent {
           // Claude compacted on this final reply: the brief goes in after it, so the next message still carries
           // the goal and the user's rules from before the compaction block.
           const files = expectedFiles()
-          /** The user already read this reply (a chat streamed live): its words stand as written. */
-          const onScreen = !assistant.meta?.provisional && !run.helper
           if (run.record && !run.helper && !asksUser && (!chatRun || files?.length)) {
             if (state.acceptance?.length && evidenceRounds === 0) {
               await this.perform(thread, run, state, { id: `verify-${randomUUID()}`, name: 'agent_control', arguments: '{"action":"verify"}' }, { failures, untrusted, private: priv, userText, guard, track, window })
@@ -4135,23 +4133,17 @@ export class Agent {
               continue
             }
             assistant.meta = { ...assistant.meta, verification: report, runId: run.record.id }
-            // Unresolved checks: the details stay in meta.verification (the Needs-checking badge, developer mode). The user
-            // reads plain words: a reply that already says it couldn't confirm the result stands as written; one that
-            // sounds sure gets one plain sentence, never ids, tool names or "reconcile with agent_control". A reply
-            // already on screen is never rewritten (the badge says it). Only a routine, which nobody watches, fails.
-            if (report.status === 'blocked' && !admitsUnverified(assistant.content) && !onScreen) { if (run.unattended) status = 'error'; assistant.content = `${assistant.content.trimEnd()}\n\n${UNVERIFIED_NOTE}` }
+            // Unresolved checks: the details stay in meta.verification, and the reply gets a small "Needs a check" badge.
+            // Its words are the model's own: nothing is tacked onto them. Only a routine, which nobody watches, fails.
+            if (report.status === 'blocked' && !admitsUnverified(assistant.content) && run.unattended) status = 'error'
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
           }
           // Still says it's done with nothing behind it (the one nudge is spent, or a routine nobody watches): it isn't
-          // passed on as done. One plain sentence, the same as an unresolved check's (a reply already shown keeps its
-          // words: the Needs-checking badge says it).
-          if (unbacked && !run.helper && !admitsUnverified(assistant.content) && !assistant.content.includes(UNVERIFIED_NOTE)) {
-            if (onScreen) assistant.meta = { ...assistant.meta, unbackedClaim: true }
-            else {
-              if (run.unattended) status = 'error'
-              assistant.content = `${assistant.content.trimEnd()}\n\n${UNVERIFIED_NOTE}`
-            }
+          // passed on as done. The reply keeps its own words and gets the "Needs a check" badge.
+          if (unbacked && !run.helper && !admitsUnverified(assistant.content)) {
+            assistant.meta = { ...assistant.meta, unbackedClaim: true }
+            if (run.unattended) status = 'error'
             db.updateMessage(assistant)
             this.d.emit({ threadId: thread.id, type: 'message', message: assistant })
           }
@@ -4258,10 +4250,10 @@ export class Agent {
         // Still making progress (real work went through this step, nothing failing): keep going on its own instead of
         // stopping to ask the user to say "continue". Only in a chat the user is in (routines and helpers keep the plan-
         // based budget, so nothing unattended runs long on its own). HARD_CAP, the loop guard and the spending limit still stop
-        // runaway work; twelve extensions of 12 steps at most per run. A chat (lookups only) never runs past its budget.
-        if (step === budget && this.feat.autoContinue && !run.unattended && !run.helper && !chatRun && step < HARD_CAP && autoExtends < 12 && failStreak < 2 && ran.some((r) => r.status === 'ok' && !BOOKKEEPING.has(r.name))) {
+        // runaway work; thirty extensions of 20 steps at most per run. A chat (lookups only) never runs past its budget.
+        if (step === budget && this.feat.autoContinue && !run.unattended && !run.helper && !chatRun && step < HARD_CAP && autoExtends < 30 && failStreak < 2 && ran.some((r) => r.status === 'ok' && !BOOKKEEPING.has(r.name))) {
           autoExtends++
-          budget = Math.min(HARD_CAP, budget + 12)
+          budget = Math.min(HARD_CAP, budget + 20)
         }
 
         if (step === budget) {

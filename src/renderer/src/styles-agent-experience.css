@@ -39,3 +39,7 @@
 .work-orb::after { content: ''; position: absolute; top: 5px; left: 50%; width: 3px; height: 7px; margin-left: -1.5px; border-radius: 2px; background: var(--bg, #fff); }
 @keyframes work-orb-turn { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .work-orb { animation: none; } }
+/* The working line's bot: its own small face, gently bobbing while it works (still with reduced motion). */
+.work-face { flex: none; display: grid; place-items: center; width: 26px; height: 26px; animation: work-face-bob 1.6s ease-in-out infinite; }
+@keyframes work-face-bob { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-2px) scale(1.06); } }
+@media (prefers-reduced-motion: reduce) { .work-face { animation: none; } }

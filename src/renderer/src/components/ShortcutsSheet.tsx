@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 const GROUPS: Array<{ title: string; rows: Array<[string, string]> }> = [
   { title: 'Get around', rows: [['⌘N', 'New chat'], ['⌘1 – ⌘9', 'Open a bot (in sidebar order)'], ['⌥↑ / ⌥↓ or ⌃Tab', 'Previous / next bot'], ['⌘B', 'Hide or show the sidebar'], ['⌘K or ⇧⌘F', 'Search chats, bots and settings'], ['⌘F', 'Find in this chat'], ['⌘,', 'Settings'], ['⌘\\', 'Side panel: progress and files'], ['⇧⌘I', 'This bot\'s details: routines and library'], ['⌘/', 'This list']] },
   { title: 'Write and talk', rows: [['⌘I', 'Go to the message box'], ['Enter', 'Send'], ['⇧ Enter', 'New line'], ['⌘ Enter', 'While it works: send after it finishes'], ['⌘D', 'Dictate (tap, or hold and let go)'], ['⇧⌘V', 'Talk with your bot'], ['Esc', 'Stop the reply or the voice']] },
-  { title: 'Make and manage', rows: [['⇧⌘B', 'New bot'], ['⇧⌘P', 'New project'], ['⇧⌘S', 'Scheduled tasks'], ['⇧⌘E', 'Export this chat'], ['⇧⌘M', 'Max: the strongest answer for the next message']] },
+  { title: 'Make and manage', rows: [['⇧⌘B', 'Add a bot'], ['⇧⌘P', 'New project'], ['⇧⌘S', 'Scheduled tasks'], ['⇧⌘E', 'Export this chat'], ['⇧⌘M', 'Max: the strongest answer for the next message']] },
 ]
 
 const KEY: Record<string, string> = { 'Alt+Space': '⌥ Space', 'Control+Space': '⌃ Space', 'CommandOrControl+Shift+Space': '⇧⌘ Space', 'Alt+Shift+Space': '⌥⇧ Space' }

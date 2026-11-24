@@ -125,7 +125,7 @@ export function Sidebar(p: {
 
   const spaceMenu = (s: Space, e: React.MouseEvent): void => {
     e.preventDefault()
-    const kind = s.kind === 'group' ? 'Group' : s.kind === 'project' ? 'Project' : 'Bot'
+    const kind = s.kind === 'group' ? 'group' : s.kind === 'project' ? 'project' : 'bot'
     setMenu({
       x: e.clientX, y: e.clientY,
       items: s.hidden ? [
@@ -138,7 +138,7 @@ export function Sidebar(p: {
         }
       ] : [
         { label: pinnedIds.includes(s.id) ? 'Unpin from top' : 'Pin to top', icon: <I.Pin size={15} />, run: () => togglePin(s) },
-        { label: 'Mark as Unread', icon: <I.Sparkle size={15} />, run: () => void api.spaces.markUnread(s.id).then(p.onChanged) },
+        { label: 'Mark as unread', icon: <I.Sparkle size={15} />, run: () => void api.spaces.markUnread(s.id).then(p.onChanged) },
         'sep',
         { label: `Rename ${kind}`, icon: <I.Edit size={15} />, run: () => setRenaming(s.id) },
         { label: `Customize ${kind}…`, icon: <I.Gear size={15} />, run: () => p.onCustomize(s) },
@@ -146,8 +146,8 @@ export function Sidebar(p: {
           { label: 'Share as template…', icon: <I.Share size={15} />, run: () => void shareBot(s) },
           { label: 'Duplicate', icon: <I.Copy size={15} />, run: () => void duplicateBot(s) }
         ] as MenuItem[] : []),
-        'sep',
-        { label: 'Copy conversation ID', icon: <I.Copy size={15} />, run: () => void api.threads.list(s.id).then((ts) => navigator.clipboard.writeText(ts[0]?.id ?? s.id)) },
+        // Ids are for developers: only in Developer mode.
+        ...(dev ? ['sep', { label: 'Copy conversation ID', icon: <I.Copy size={15} />, run: () => void api.threads.list(s.id).then((ts) => navigator.clipboard.writeText(ts[0]?.id ?? s.id)) }] as MenuItem[] : []),
         ...(s.isMain ? [] : [
           'sep',
           { label: 'Hide from sidebar', icon: <I.Close size={15} />, run: () => void api.spaces.update(s.id, { hidden: true }).then(p.onChanged) },
@@ -166,9 +166,9 @@ export function Sidebar(p: {
       x: e.clientX, y: e.clientY,
       items: [
         { label: t.pinned ? 'Unpin' : 'Pin', icon: <I.Pin size={15} />, run: () => pinChat(t.id, !t.pinned) },
-        { label: 'Mark as Unread', icon: <I.Sparkle size={15} />, run: () => void api.threads.update(t.id, { unread: true }).then(p.onChanged) },
+        { label: 'Mark as unread', icon: <I.Sparkle size={15} />, run: () => void api.threads.update(t.id, { unread: true }).then(p.onChanged) },
         { label: 'Rename', icon: <I.Edit size={15} />, run: () => setRenaming(t.id) },
-        { label: 'Copy conversation ID', icon: <I.Copy size={15} />, run: () => void navigator.clipboard.writeText(t.id) },
+        ...(dev ? [{ label: 'Copy conversation ID', icon: <I.Copy size={15} />, run: () => void navigator.clipboard.writeText(t.id) }] as MenuItem[] : []),
         'sep',
         { label: 'Delete', icon: <I.Trash size={15} />, danger: true, run: () => { if (confirm(`Delete "${t.title}"?`)) void api.threads.remove(t.id).then(p.onChanged) } }
       ]
@@ -184,13 +184,14 @@ export function Sidebar(p: {
       items: [
         { label: 'Settings', icon: <I.Gear size={15} />, run: p.onSettings, testId: 'menu-settings' },
         // This month's spend at a glance ("$X used of $Y this month"); opens the compact usage card.
-        { label: spendLabel(spend), icon: <I.Clock size={15} />, run: openUsageGlance },
+        { label: spendLabel(spend), icon: <I.Chart size={15} />, run: openUsageGlance },
         'sep',
         { label: 'Library', icon: <I.Layers size={15} />, run: () => p.onView('files'), testId: 'nav-artifacts' },
         { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects'), testId: 'nav-projects' },
         { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled, testId: 'nav-scheduled' },
-        // Goals and anything waiting on you (each bot also shows an orange dot and "Waiting for you").
-        { label: goalsNeedYou ? `Tasks · ${goalsNeedYou > 9 ? '9+' : goalsNeedYou} waiting` : 'Tasks', icon: <Target size={15} />, run: () => p.onView('tasks'), testId: 'nav-tasks' },
+        // Goals and anything waiting on you (each bot also shows an orange dot and "Waiting for you"). Called
+        // "Needs you" like the page it opens and the ⌘K entry.
+        { label: goalsNeedYou ? `Needs you · ${goalsNeedYou > 9 ? '9+' : goalsNeedYou}` : 'Needs you', icon: <Target size={15} />, run: () => p.onView('tasks'), testId: 'nav-tasks' },
         'sep',
         { label: 'Import bot…', icon: <I.Users size={15} />, run: () => void importBot() }
       ]
@@ -228,7 +229,8 @@ export function Sidebar(p: {
 
   const testId = (s: Space): string => (s.isMain ? 'main-bot' : s.kind === 'project' ? 'project-item' : 'space-item')
   const needs = (s: Space): boolean => !!p.needSpaces?.has(s.id) && !isActive(s)
-  const working = (s: Space): boolean => !!p.runningSpaces?.has(s.id)
+  /** Waiting on you (a question, an approval) isn't working, even in the chat you have open: no spinner, no "Working…". */
+  const working = (s: Space): boolean => !!p.runningSpaces?.has(s.id) && !p.needSpaces?.has(s.id)
   /** Bots (and groups) count their unread replies; projects and SahilBot itself (its chats are listed below) just get the dot. */
   const botCount = (s: Space): number | undefined => (s.kind === 'project' || s.isMain ? undefined : s.unreadCount)
 
@@ -282,7 +284,7 @@ export function Sidebar(p: {
               // Working / Pulling context in place of the preview while it runs; nothing extra when Idle or Done.
               // Something waits on you (a question, an approval, a plan): said in orange, like the dot.
               if (needs(s)) return <span className="br-preview br-wait" data-testid={`sidebar-bot-waiting-${s.id}`}>Waiting for you{s.lastPreview ? `: ${s.lastPreview.replace(/\s+/g, ' ')}` : ''}</span>
-              const st = s.isMain ? null : sidebarStatusText(botStatus[s.id], !!s.unread)
+              const st = s.isMain || p.needSpaces?.has(s.id) ? null : sidebarStatusText(botStatus[s.id], !!s.unread)
               return st ? <span className="br-preview br-status" data-testid={`sidebar-bot-status-${s.id}`}>{st}</span> : <span className="br-preview">{rowSubtitle(s)}</span>
             })()}
           </span>
@@ -308,14 +310,15 @@ export function Sidebar(p: {
     </div>
   )
 
+  const chatWorking = (t: Thread): boolean => !!p.runningThreads?.has(t.id) && !p.needThreads?.has(t.id)
   const chatRow = (t: Thread) => (
     <div key={t.id} className={`nav-row${t.id === p.activeThreadId ? ' active' : ''}`} onContextMenu={(e) => chatMenu(t, e)} {...drag('chat', t.id)}>
       {renaming === t.id ? renameInput(t.id, t.title, (v) => api.threads.update(t.id, { title: v })) : (
         <button className="nav-btn chat" onClick={() => p.onOpenChat(t.id)} data-testid="thread-item" title={t.title}>
           {t.pinned && <I.Pin size={13} className="row-pin" />}
-          <span className={`t${runName(!!p.runningThreads?.has(t.id), !!p.needThreads?.has(t.id) && t.id !== p.activeThreadId)}`}>{t.title.replace(/^⏰ /, '')}</span>
+          <span className={`t${runName(chatWorking(t))}`}>{t.title.replace(/^⏰ /, '')}</span>
           {t.title.startsWith('⏰') && <I.Clock size={14} className="row-tail" />}
-          {status(!!p.runningThreads?.has(t.id), !!p.needThreads?.has(t.id) && t.id !== p.activeThreadId, t.unread && t.id !== p.activeThreadId)}
+          {status(chatWorking(t), !!p.needThreads?.has(t.id) && t.id !== p.activeThreadId, t.unread && t.id !== p.activeThreadId)}
         </button>
       )}
     </div>
@@ -397,10 +400,10 @@ export function Sidebar(p: {
       <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
         {/* You: initials and your name (like Grok Bot). Click for Settings; right-click for scheduled, usage and more. */}
-        <button className={`sb-me${p.view === 'files' || p.view === 'projects' || p.view === 'tasks' ? ' on' : ''}`} onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, usage, Library, Projects, Scheduled and Tasks${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
+        <button className={`sb-me${p.view === 'files' || p.view === 'projects' || p.view === 'tasks' ? ' on' : ''}`} onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, usage, Library, Projects, Scheduled and Needs you${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
           <span className="sb-me-avatar" aria-hidden="true">{me.initials || <I.Gear size={16} />}</span>
           {me.full ? <span className="sb-me-name">{me.full}</span> : <span className="sb-me-name muted">Settings</span>}
-          {goalsNeedYou > 0 && <span className="need-dot sb-me-dot" aria-label={`${goalsNeedYou} waiting in Tasks`} role="img" />}
+          {goalsNeedYou > 0 && <span className="need-dot sb-me-dot" aria-label={`${goalsNeedYou} waiting for you`} role="img" />}
         </button>
         <button className="sb-circle sb-apps" onClick={p.onConnect} title="Connect apps" aria-label="Connect apps" data-testid="connect-apps"><I.AppsPlus size={17} /></button>
       </div>

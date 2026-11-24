@@ -2,13 +2,13 @@ import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, 
 import { workingText } from '../lib/bot-working'
 import { awaitingFinal, heldDrafts } from '../lib/held-drafts'
 import { openPermission, PERMISSION_BUTTON, permissionAsked } from '../lib/permission-ask'
-import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
+import type { BotShape, CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
 import { filesFromMessages } from '../lib/ux'
 import { firstUnread } from '@shared/read-state'
 import { api } from '../api'
 import { ChatVaultOffers } from './VaultOffer'
 import { toast } from '../lib/toast'
-import { legibleOn } from '../brand'
+import { legibleOn, SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { describe, duration, runningStep, stepStatus, summarize, type Step } from '../lib/steps'
 import { plainProgress, plainStep } from '@shared/step-words'
@@ -467,7 +467,7 @@ export function stallText(o: { who: string; label?: string | null; stall?: WorkP
  * trip"). No canned "On it.", no timer and no "Thinking…". A step that hangs says what is stuck, with Retry and Skip
  * for that step alone; "Show work" opens the plan, sources and files.
  */
-function BotWorking({ name, label, stall, threadId, work }: { name?: string; label?: string | null; stall?: WorkProgress | null; threadId?: string; work?: boolean }) {
+function BotWorking({ name, face, label, stall, threadId }: { name?: string; face?: BotFace; label?: string | null; stall?: WorkProgress | null; threadId?: string }) {
   const who = name ?? 'SahilBot'
   const slow = stallText({ who, label, stall })
   const text = workingText({ slow, label, name })
@@ -478,7 +478,8 @@ function BotWorking({ name, label, stall, threadId, work }: { name?: string; lab
   return (
     <>
       <div className="status-line bot-working" data-testid="status-line">
-        <span className="work-orb" aria-hidden="true" />
+        {/* The bot itself, small, gently at work (its own color and face), instead of a generic spinner. */}
+        {face ? <span className="work-face" aria-hidden="true"><SpaceAvatar color={face.color} shape={face.shape} icon={face.icon} size={22} /></span> : <span className="work-orb" aria-hidden="true" />}
         <span className="activity-title" role="status" aria-live="polite" data-testid="bot-working">{text}</span>
         {slow && stall?.stuck && (
           <span className="stall-actions">
@@ -486,7 +487,6 @@ function BotWorking({ name, label, stall, threadId, work }: { name?: string; lab
             <button type="button" className="chip-btn" onClick={() => step('skip')} data-testid="stall-skip">Skip</button>
           </span>
         )}
-        {work && <button type="button" className="show-work" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>}
       </div>
     </>
   )
@@ -544,13 +544,17 @@ export function windowLimit(limit: number, total: number, dividerAt: number): nu
   return dividerAt < 0 ? limit : Math.max(limit, total - dividerAt + DIVIDER_CONTEXT)
 }
 
-export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, work, ready = true, unreadAfter = null, onAtBottom, voiceLive, botName }: {
+/** The chat's bot as the working line shows it: its own color and face. */
+export interface BotFace { color: string; shape?: BotShape; icon?: string | null }
+
+export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, work, ready = true, unreadAfter = null, onAtBottom, voiceLive, botName, botFace }: {
   messages: Message[]
   /**
    * A bot's chat (Grok Bot's way): only the conversation. While it works you see an "On it." from the bot and
    * "<name> is working…"; steps, plans, team boards, "Double-checking" and the timer stay out of sight.
    */
   botName?: string
+  botFace?: BotFace
   /** A voice conversation in progress (in this chat): its turns show only with its transcript on. */
   voiceLive?: { since: number; transcript: boolean; threadId?: string } | null
   /** Live Team of Experts boards by agents call id. */
@@ -710,8 +714,6 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind !== 'notice' && bs[i].kind !== 'compacted') { tailText = bs[i]; break }
   const lastText = tailText?.kind === 'text'
   const lastUserId = (() => { for (let i = bs.length - 1; i >= 0; i--) { const b = bs[i]; if (b.kind === 'user' && !b.m.meta?.aside) return b.m.id } return undefined })()
-  // This task did something (steps, a plan): "Show work" opens it in the side panel.
-  const ranSteps = all.slice(allUser + 1).some((b) => b.kind === 'activity' || b.kind === 'plan')
   // The run failed outright (its notice says why in one line), or it was stopped: Retry is right under it.
   const tailBlock = bs[bs.length - 1]
   const failedTail = tailBlock?.kind === 'notice' && !!tailBlock.m.meta?.runFailed
@@ -767,19 +769,12 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
           {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} thumb={p.tool === 'browser' ? lastBrowserShot(messages) : undefined} />))}
           {showStatus && (dev
             ? <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={null} />
-            : <BotWorking name={botName} stall={work ?? null} threadId={threadId} work={ranSteps}
+            : <BotWorking name={botName} face={botFace} stall={work ?? null} threadId={threadId}
                 label={workLabel({ progress, progressTool: work?.tool, progressWaiting: !!work?.waitingOnYou, drafting, plan: livePlan ? (livePlan.items.find((x) => x.status === 'in_progress')?.text ?? livePlan.title ?? null) : null, doing: doingPlain(liveStep) })} />)}
           {!quietBot && running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
           {!running && !pending.length && (retryable || (lastText && dev)) && (
             <div className="after-actions">
               <button className="chip-btn" onClick={stable.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>
-              {!dev && ranSteps && <button className="chip-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>}
-            </div>
-          )}
-          {/* A finished task: what it did is one click away (the plan, sources and files), never in the chat itself. */}
-          {!running && !pending.length && !dev && ranSteps && !retryable && (
-            <div className="after-actions">
-              <button className="chip-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>
             </div>
           )}
           {/* A template bot's starter tasks, under its first message until you ask something: a tap fills the chat box. */}
@@ -1190,7 +1185,8 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
             return fix && <button className="chip-btn err-fix" onClick={fix.run} data-testid="error-fix">{fix.label}</button>
           })()}
         </div>
-        {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && <SourceChips sources={m.meta!.sources as Array<{ title: string; url: string }>} />}
+        {/* The sites a reply read: Developer mode only (the reply's own [1] links still open them). */}
+        {dev && Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && <SourceChips sources={m.meta!.sources as Array<{ title: string; url: string }>} />}
         {/* A routine that ran beside a busy chat: the files it made in its own side chat. */}
         {Array.isArray(m.meta?.madeFiles) && <MadeFiles files={m.meta!.madeFiles as Array<{ key: string; path: string }>} onOpen={actions.onOpenFile} />}
         {reactions.user && (
@@ -1210,7 +1206,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
           {dev && !!m.meta?.superseded && !!m.meta?.checking && <span className="result-checking">Double-checking…</span>}
           {(() => { const kind = m.status !== 'streaming' ? permissionAsked(m.content) : undefined; return kind ? <button type="button" className="perm-ask" onClick={() => void openPermission(api.permissions, kind)} data-testid="perm-ask">{PERMISSION_BUTTON[kind]}</button> : null })()}
-          {(m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title={dev ? ((m.meta?.verification as { issues?: string[] }).issues ?? []).join('\n') : 'SahilBot couldn\'t confirm this worked. Check the result before relying on it.'}>Needs a check</span>}
+          {((m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' || !!m.meta?.unbackedClaim) && <span className="result-needs-check" title={dev ? (((m.meta?.verification as { issues?: string[] } | undefined)?.issues ?? []).join('\n') || 'Nothing in the run backed this claim') : 'SahilBot couldn\'t confirm this worked. Check the result before relying on it.'}>Needs a check</span>}
         </div>
       )}
     </div>

@@ -4,6 +4,7 @@ import type { ConnectorConfig, ConnectorPreset, ConnectorStatus, GoogleConnectLi
 import { api } from '../api'
 import * as I from '../icons'
 import { AppIcon, IconStack, connectedApps, useAppIcons } from './ConnectedIcons'
+import { plural } from '../lib/run-summary'
 import { APP_STATE_TEXT, CUSTOM_REDIRECT, MAIN_CHIPS, MORE_CATEGORIES, SECTION_ORDER, SETUP_GROUP, appState, checkSummary, connectBadge, keyProblem, matches, recommended, searchApps, splitSection, type AppState, type Badge } from '../lib/connect-catalog'
 
 const STATE_TEXT: Record<ConnectorStatus['state'], string> = {
@@ -162,15 +163,15 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
     // Built-in apps need nothing: just ask SahilBot to use them.
     // Kept in the catalog, but its server can't be used right now: say why instead of trying.
     if (p.unavailable) { setErr(`${p.name} is unavailable right now. ${p.unavailable}`); body.current?.scrollTo({ top: 0, behavior: 'smooth' }); return }
-    // Cursor: its API key lives in Settings → Connected apps (Cloud Agents).
-    if (p.id === 'cursor-app') { if (onOpenSettings) { onClose(); onOpenSettings('connected') } else toast('Add your Cursor API key in Settings → Connected apps.'); return }
+    // Cursor: its API key lives in Settings → Apps (Cloud Agents).
+    if (p.id === 'cursor-app') { if (onOpenSettings) { onClose(); onOpenSettings('connected') } else toast('Add your Cursor API key in Settings → Apps.'); return }
     // Google: one tile, three ways (Sign in with Google, the Mac's Mail app, an app password).
     if (p.id === 'gmail') { go('gmail'); return }
     // Outlook: its own panel (Sign in with Microsoft, or your own Microsoft app).
     if (p.id === 'outlook') { go('outlook'); return }
     // Native API-key apps (Resend): the key panel, to add, replace or forget the key.
     if (isNativeKeyApp(p)) { setKeyFor(p); go('key'); return }
-    if (p.auth === 'app') { toast(`${p.name} is built in. Just ask SahilBot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : p.url === 'app:maps' ? 'plan a 2-day walking itinerary in Lisbon with travel times between stops' : p.url === 'app:research' ? 'what do the latest guidelines and meta-analyses say about active surveillance for prostate cancer?' : 'add a reminder for tomorrow at 9'}".`); return }
+    if (p.auth === 'app') { toast(`${p.name} is built in. Just ask a bot, e.g. "${p.url === 'app:cursor' ? 'open this project in Cursor' : p.url === 'app:mail' ? 'what needs a reply in my inbox today?' : p.url === 'app:maps' ? 'plan a 2-day walking itinerary in Lisbon with travel times between stops' : p.url === 'app:research' ? 'what do the latest guidelines and meta-analyses say about active surveillance for prostate cancer?' : 'add a reminder for tomorrow at 9'}"`); return }
     const existing = configOf(p)
     // Google apps with no client at all (no built-in one, none of the user's own): set Google up first.
     if (p.auth === 'google' && !p.builtinClient && !google && !existing?.clientId && status(existing?.id ?? '')?.state !== 'connected') { setGoogleFor(p); go('google'); return }
@@ -299,7 +300,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
 
   // ---------------------------------------------------------------- rows
 
-  const item = (p: ConnectorPreset): ReactNode => {
+  /** inSetup: a row under the "Needs a one-time setup" heading, which already says so (no "Needs setup" pill or "One-time setup first."). */
+  const item = (p: ConnectorPreset, inSetup = false): ReactNode => {
     const cfg = configOf(p)
     const st = cfg ? status(cfg.id) : undefined
     const busy = st?.state === 'connecting' || st?.state === 'signing_in'
@@ -319,7 +321,8 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
       p.auth === 'oauth-static' && !cfg?.clientId && !p.builtinClient ? ['Set up', 'ghost'] :
       p.auth === 'apikey' && !keyed(p, cfg) ? ['Add key', 'add'] :
       cfg ? ['Connect', 'solid'] : ['Add', 'add']
-    const badge = st?.state === 'connected' || as === 'unavailable' || (isNativeKeyApp(p) && keys.has(p.id)) || p.id === 'gmail' ? null : connectBadge(p)
+    const pill = st?.state === 'connected' || as === 'unavailable' || (isNativeKeyApp(p) && keys.has(p.id)) || p.id === 'gmail' ? null : connectBadge(p)
+    const badge = inSetup && pill === 'Needs setup' ? null : pill
     const glink = p.id === 'gmail' ? gstat?.link : null
     const olink = p.id === 'outlook' && ostat?.connected ? ostat : null
     const act = (): void => { if (!busy) void start(p) }
@@ -331,7 +334,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
           : <AppIcon src={icons[p.id]} name={p.name} color={p.color} />}
         <span className="ca-item-text">
           <b>{p.name}{badge && badge !== 'One click' && <small className={`ca-badge ui-pill ${BADGE_STYLE[badge].cls}`} data-testid={`badge-${p.id}`} title={badgeTitle(badge, p)}>{badge}</small>}</b>
-          <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : p.auth === 'google' && p.id !== 'gmail' && !p.builtinClient && !google && !cfg ? `${p.description} One-time Google setup first.` : p.auth === 'oauth-static' && !p.builtinClient && !cfg?.clientId ? `${p.description} One-time setup first.` : glink ? `Connected${glink.address ? ` · ${glink.address}` : ''} · via ${GOOGLE_METHOD[glink.method]}` : olink ? `Connected${olink.address ? ` · ${olink.address}` : ''}` : p.auth === 'apikey' && !keyed(p, cfg) ? `${p.description} Paste your API key once.` : p.description}</span>
+          <span>{as === 'unavailable' && p.unavailable && !cfg ? `${APP_STATE_TEXT.unavailable}: ${p.unavailable}` : as === 'reauth' || as === 'unavailable' || (as === 'setup' && st?.state === 'error') ? APP_STATE_TEXT[as] : st?.state === 'needs_auth' || st?.state === 'error' || st?.state === 'reconnecting' ? STATE_TEXT[st.state] : !inSetup && p.auth === 'google' && p.id !== 'gmail' && !p.builtinClient && !google && !cfg ? `${p.description} One-time Google setup first.` : !inSetup && p.auth === 'oauth-static' && !p.builtinClient && !cfg?.clientId ? `${p.description} One-time setup first.` : glink ? `Connected${glink.address ? ` · ${glink.address}` : ''} · via ${GOOGLE_METHOD[glink.method]}` : olink ? `Connected${olink.address ? ` · ${olink.address}` : ''}` : p.auth === 'apikey' && !keyed(p, cfg) ? `${p.description} Paste your API key once.` : p.description}</span>
         </span>
         {tone === 'done' && onTry && (
           <button className="ca-try" onClick={(e) => { e.stopPropagation(); onClose(); onTry(`What's new in ${p.name}?`) }} data-testid={`try-app-${p.id}`} title={`Start a chat that uses ${p.name}`}>Try it</button>
@@ -366,14 +369,14 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
             <button className="ca-viewall" onClick={() => setChip(opts.viewAll!)}>View all {items.length}<I.Chevron size={13} style={{ transform: 'rotate(-90deg)' }} /></button>
           )}
         </div>
-        {shown.length > 0 && <div className="ca-list" data-testid="section-ready">{shown.map(item)}</div>}
+        {shown.length > 0 && <div className="ca-list" data-testid="section-ready">{shown.map((p) => item(p))}</div>}
         {setupShown.length > 0 && (
           <div className="ca-setup-group" data-testid="section-setup">
             <div className="ca-setup-head">
               <span>{SETUP_GROUP}</span>
-              <span className="ca-note">{setup.length} {setup.length === 1 ? 'app' : 'apps'} · your own app or API key, once</span>
+              <span className="ca-note">{plural(setup.length, 'app')} · your own app or API key</span>
             </div>
-            <div className="ca-list">{setupShown.map(item)}</div>
+            <div className="ca-list">{setupShown.map((p) => item(p, true))}</div>
           </div>
         )}
       </section>
@@ -473,7 +476,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
                   <b>{c.name}</b>
                   <span className={`ca-status ${state} app-${as}`} data-testid="connector-state">
                     <i />{shown}
-                    {state === 'connected' ? ` · ${off.size && names.length ? `${on} of ${names.length}` : st?.tools ?? 0} tools` : ''}
+                    {state === 'connected' ? ` · ${off.size && names.length ? `${on} of ${names.length} tools` : plural(st?.tools ?? 0, 'tool')}` : ''}
                     {state === 'reconnecting' && st?.retryAt ? ` · try ${st.attempt ?? 1} at ${new Date(st.retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}` : ''}
                     {st?.error ? ` · ${st.error}` : ''}
                   </span>
@@ -608,7 +611,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
           {view === 'browse' && (
             <button className="ca-count" onClick={() => go('manage')} data-testid="connected-count">
               <IconStack apps={connected} icons={icons} max={3} />
-              Your apps ({connected.length})<I.Chevron size={13} style={{ transform: 'rotate(-90deg)' }} />
+              {connected.length ? `Your apps (${connected.length})` : 'Your apps'}<I.Chevron size={13} style={{ transform: 'rotate(-90deg)' }} />
             </button>
           )}
           {view === 'manage' && configs.length > 0 && (
@@ -708,7 +711,7 @@ export function ConnectApps({ onClose, onBrowse, onOpenBot: _onOpenBot, onOpenSe
 
 /** "Working · 23 tools · 340 ms" for a Test connection result. */
 function healthText(st: ConnectorStatus): string {
-  if (st.state === 'connected') return `Working · ${st.toolNames?.length ?? st.tools} tools${typeof st.latencyMs === 'number' ? ` · answered in ${st.latencyMs} ms` : ''}`
+  if (st.state === 'connected') return `Working · ${plural(st.toolNames?.length ?? st.tools, 'tool')}${typeof st.latencyMs === 'number' ? ` · answered in ${st.latencyMs} ms` : ''}`
   if (st.state === 'needs_auth') return st.reason === 'expired' ? 'Needs sign-in again: press Reconnect.' : 'Needs sign-in: press Sign in.'
   if (st.state === 'reconnecting') return `Not reachable right now${st.error ? ` (${st.error})` : ''}. Reconnecting on its own.`
   return `${STATE_TEXT[st.state]}${st.error ? `: ${st.error}` : ''}`
@@ -859,7 +862,7 @@ export function ApiKeyPanel({ preset, hasKey, onDone, onCancel, onForget, compac
       // The paste box empties either way: the key now lives only in main.
       setKey('')
       setTouched(false)
-      if (st.state === 'connected') setOk(`Connected · ${st.toolNames?.length ?? st.tools} tools`)
+      if (st.state === 'connected') setOk(`Connected · ${plural(st.toolNames?.length ?? st.tools, 'tool')}`)
       else setErr(st.error ?? 'It didn\'t connect. Check the key and try again.')
       await onDone(st)
     } catch (e) {

@@ -10,8 +10,8 @@ type VState = 'starting' | 'idle' | 'listening' | 'hearing' | 'thinking' | 'spea
 const LABEL: Record<VState, string> = {
   starting: 'Getting ready…', idle: 'Paused', listening: 'Listening', hearing: 'Listening…', thinking: 'Working on it…', speaking: 'Speaking · talk to interrupt'
 }
-/** Main's setup errors, in plain words with the one thing to do. */
-const friendly = (e: string): string => /speech provider|api key|key in|models & keys/i.test(e) ? 'Voice isn\'t set up yet. Add an OpenAI (ChatGPT) or Grok key to talk out loud.' : /microphone|permission|notallowed/i.test(e) ? 'SahilBot can\'t hear you yet. Allow the microphone in System Settings → Privacy & Security.' : e
+/** Main's setup errors, in plain words with the one thing to do (the microphone's own, from lib/ux micErrorText, already are). */
+const friendly = (e: string): string => /speech provider|api key|key in|models & keys/i.test(e) ? 'Voice isn\'t set up yet. Add an OpenAI (ChatGPT) or Grok key to talk out loud.' : /microphone|permission|notallowed/i.test(e) && !/^(No microphone found|The microphone is busy)/.test(e) ? 'SahilBot can\'t hear you yet. Allow the microphone in System Settings → Privacy & Security.' : e
 const TASK_STATE: Record<VoiceTask['status'], string> = { working: 'working', 'needs-you': 'needs you', done: 'done', failed: 'didn\'t finish', stopped: 'stopped' }
 /** Errors that are about setup (a key, the microphone): the bar offers "Set up voice". Others offer "Reconnect". */
 export const setupError = (e: string): boolean => /speech provider|api key|key in|models & keys|xai key|openai key|microphone|permission|notallowed|not set up|spending limit/i.test(e)

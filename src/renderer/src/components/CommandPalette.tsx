@@ -38,10 +38,10 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       { a: { kind: 'connect' }, label: 'Connect apps', icon: ico(<I.Plug size={15} />), group: 'Go to' },
       { a: { kind: 'import-memory' }, label: 'Import memory from another AI', sub: 'ChatGPT, Claude, Gemini…', icon: ico(<I.Down size={15} />), group: 'Go to' },
       { a: { kind: 'settings' }, label: 'Settings', icon: ico(<I.Gear size={15} />), group: 'Go to', keys: ['⌘', ','] },
-      { a: { kind: 'usage' }, label: 'Usage', sub: 'Spend this month, tokens and lifetime totals', icon: ico(<I.Clock size={15} />), group: 'Go to' },
+      { a: { kind: 'usage' }, label: 'Usage', sub: 'Spend this month, tokens and lifetime totals', icon: ico(<I.Chart size={15} />), group: 'Go to' },
       // Shortcuts worth knowing: last in the default list, and found by searching.
       { a: { kind: 'panel' }, label: 'Toggle side panel', sub: 'Progress, browser, files and documents', icon: ico(<I.Panel size={15} />), group: 'Shortcuts', keys: ['⌘', '\\'] },
-      { a: { kind: 'voice' }, label: 'Voice chat', sub: 'Talk with SahilBot', icon: ico(<I.Wave size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'V'] },
+      { a: { kind: 'voice' }, label: 'Voice chat', sub: 'Talk with your bot', icon: ico(<I.Wave size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'V'] },
       { a: { kind: 'dictate' }, label: 'Dictate a message', sub: 'Speak into the message box', icon: ico(<I.Mic size={15} />), group: 'Shortcuts', keys: ['⌘', 'D'] },
       { a: { kind: 'shortcuts' }, label: 'Keyboard shortcuts', sub: 'Every shortcut on one page', icon: ico(<I.Panel size={15} />), group: 'Shortcuts', keys: ['⌘', '/'] },
       { a: { kind: 'max' }, label: 'Use an agent swarm', sub: 'Bring in specialists for your next request; models and roles are chosen automatically', icon: ico(<I.Bolt size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'M'] }
@@ -63,9 +63,10 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       a: { kind: 'setting', anchor: e.anchor }, label: e.title, sub: `Settings → ${PAGE_TITLES[e.page]}${e.advanced ? ' · Advanced' : ''}`,
       icon: ico(<I.Gear size={15} />), group: 'Settings'
     }))
-    // A setting whose title matches every word goes first; otherwise settings follow the bots, chats and commands.
+    // A setting whose title matches every word goes first (as the best match: the other settings, after the bots,
+    // chats and commands, keep the "Settings" heading, so it never shows twice); otherwise settings follow them.
     const strong = settings.filter((x) => t.split(/\s+/).every((w) => x.label.toLowerCase().includes(w)))
-    return strong.length && !found.some((x) => x.label.toLowerCase() === t) ? [...strong, ...found, ...settings.filter((x) => !strong.includes(x))] : [...found, ...settings]
+    return strong.length && !found.some((x) => x.label.toLowerCase() === t) ? [...strong.map((x) => ({ ...x, group: 'Best match' })), ...found, ...settings.filter((x) => !strong.includes(x))] : [...found, ...settings]
   }, [spaces, chats, q])
 
   useEffect(() => setSel(0), [q])

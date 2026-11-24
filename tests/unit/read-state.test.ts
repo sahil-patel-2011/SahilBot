@@ -260,3 +260,28 @@ describe('where the NEW divider goes', () => {
     expect(html).toContain('data-testid="show-earlier"')
   })
 })
+
+// "It puts a blue dot even if I click on it": opening a bot reads all its own conversations (an older one from
+// Start fresh, one another app started), so the dot clears; SahilBot's own chats and a project's keep their own dots.
+it('opening a bot clears its dot, older conversations included', async () => {
+  const { Db } = await import('../../src/main/db')
+  const db = new Db(':memory:')
+  const main = db.createSpace('SahilBot', '#111111', { isMain: true })
+  const bot = db.createSpace('Tutor', '#ff8800')
+  const old = db.createThread(bot.id, 'auto', 'm')
+  const cur = db.createThread(bot.id, 'auto', 'm')
+  const mainChat = db.createThread(main.id, 'auto', 'm')
+  await new Promise((r) => setTimeout(r, 5)) // replies come after the chats were opened
+  for (const t of [old, cur]) db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Here is your plan.', kind: 'normal', status: 'done' })
+  db.insertMessage({ threadId: mainChat.id, role: 'assistant', content: 'Hi!', kind: 'normal', status: 'done' })
+  const botRow = (): { unread?: boolean } => db.listSpaces().find((s) => s.id === bot.id)!
+  expect(botRow().unread).toBe(true)
+  db.markRead(cur.id)
+  // Only the open conversation read: the older one still lit the dot (the bug).
+  expect(botRow().unread).toBe(true)
+  db.markSpaceRead(bot.id)
+  expect(botRow().unread).toBe(false)
+  // SahilBot's own chats are listed one by one: opening SahilBot never reads them all.
+  db.markSpaceRead(main.id)
+  expect(db.getThread(mainChat.id)!.unread).toBe(true)
+})

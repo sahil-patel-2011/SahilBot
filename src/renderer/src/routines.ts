@@ -25,6 +25,11 @@ export function when(t: number, now = Date.now()): string {
   return dateTime(d)
 }
 
+/** A time from `when` inside a line ("· next tomorrow at 7:30 AM"): Today, Yesterday and Tomorrow lowercase there. */
+export function midSentence(text: string): string {
+  return text.replace(/^(Today|Yesterday|Tomorrow)\b/, (w) => w.toLowerCase())
+}
+
 /** A routine's next run beside its schedule: on the place's clock when it has one ("Wed, Nov 25 at 7:30 AM ET"), never the Mac's 4:30. */
 export function nextRunText(s: Schedule, nextRun: number, now = Date.now()): string {
   return 'tz' in s && s.tz ? nextLabel(s, nextRun) : when(nextRun, now)

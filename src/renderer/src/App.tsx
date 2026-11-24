@@ -3,6 +3,7 @@ import { autoLabel, isAutoModel } from '@shared/model-picker'
 import type { BrowserState, ChatEvent, EffortChoice, Message, ModelList, PendingRequest, PermissionMode, Settings, Space, SystemInfo, Thread } from '@shared/types'
 import { api, isServerRuntime } from './api'
 import { botOrder } from './lib/bot-order'
+import { distinctTitle } from './lib/ux'
 import { ShortcutsSheet } from './components/ShortcutsSheet'
 import { FindBar } from './components/FindBar'
 import { readableOn, SpaceAvatar } from './brand'
@@ -697,7 +698,8 @@ export function App() {
       setSpaceId(id)
       // Chats other apps opened with this bot ("From Cursor") aren't the user's own conversation.
       setThread(ts.find((t) => !/^From .+/.test(t.title)) ?? ts[0])
-      void refreshSpaces()
+      // Opening the bot is reading it: its blue dot clears (older conversations included).
+      void api.spaces.markRead(id).catch(() => undefined).finally(() => void refreshSpaces())
     } catch (e) { if (!stale()) { setNavTo(null); toast((e as Error).message, 'error') } }
   }
 
@@ -780,7 +782,8 @@ export function App() {
   const latestReplyRef = useRef(0)
   latestReplyRef.current = latestReply
   useEffect(() => {
-    if (!thread || !ready || !attention || !atBottomRef.current) return
+    // Open and in front of you is read (Grok Bot's way): no need to scroll to the bottom first.
+    if (!thread || !ready || !attention) return
     const id = thread.id
     const readAt = Math.max(readTo.current[id] ?? 0, thread.lastReadAt ?? 0)
     if ((!thread.unread && latestReply <= readAt) || marking.current.has(id)) return
@@ -1075,7 +1078,8 @@ export function App() {
                     ? <span className="proj-tile" style={{ background: chatBot.color, width: 22, height: 22, borderRadius: 7 }}><I.Folder size={12} /></span>
                     : <SpaceAvatar color={chatBot.color} shape={chatBot.shape} icon={chatBot.icon} size={22} group={chatBot.kind === 'group' ? memberColors : undefined} />}
                   <span className="pill-name">{chatBot.name}</span>
-                  {thread && !isBot && <span className="pill-title" data-testid="thread-title">{thread.title}</span>}
+                  {/* The chat's own title only when it says something the bot's name doesn't ("New bot · New bot" never). */}
+                  {thread && !isBot && distinctTitle(thread.title, chatBot.name) && <span className="pill-title" data-testid="thread-title">{thread.title}</span>}
                 </button>
               )}
               {thread && (
@@ -1153,6 +1157,7 @@ export function App() {
           <>
             <ThreadView key={thread.id} messages={messages} running={isRunning} pending={pending} teams={teams} voiceLive={voiceOn ? voiceLive : null}
               botName={botChatName}
+              botFace={chatBot && chatBot.kind !== 'project' ? { color: chatBot.color, shape: chatBot.shape, icon: chatBot.icon } : undefined}
               ready={ready} onAtBottom={onAtBottom}
               unreadAfter={opened?.id === thread.id && dividerKind({ space: spaces.find((s) => s.id === thread.spaceId), thread, messages }) ? opened.readAt : null}
               drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id]?.text ?? null} work={toolProgress[thread.id] ?? null}
@@ -1177,8 +1182,8 @@ export function App() {
                     : <span className="hint">Sends when {botChatName ?? 'SahilBot'} finishes</span>}
                 </div>
               )}
-              {/* The finish line: what was made, where, how long. A bot's chat (Grok Bot's way) shows it when the task made something or did real work. */}
-              {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} onlyMade={!dev && !!botChatName} />}
+              {/* The finish line, tokens and cost: Developer mode only. A normal chat ends on the answer itself. */}
+              {!isRunning && dev && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} onlyMade={!dev && !!botChatName} />}
               {chatInput}
             </div>
           </>
@@ -1190,7 +1195,7 @@ export function App() {
       </main>
       {panel === 'details' && detailsSpace ? (
         <Lazy fallback="panel">
-          <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)}
+          <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)} waiting={needSpaces.has(detailsSpace.id)}
             onCustomize={() => setEditor({ space: detailsSpace, mode: detailsSpace.kind })}
             onChanged={() => void refreshSpaces().then((sp) => { if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain() })}
             onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }}

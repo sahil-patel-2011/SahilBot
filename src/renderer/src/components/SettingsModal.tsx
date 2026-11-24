@@ -224,7 +224,7 @@ export function SettingsModal({ settings, models, sys, spaces, onClose, onSaved,
       <div className="settings-win">
         <nav className="set-nav">
           <div className="set-nav-top drag">
-            <button className="icon-btn nodrag" onClick={onClose} title="Back (Esc)" data-testid="settings-close"><I.Chevron size={16} style={{ transform: 'rotate(90deg)' }} /></button>
+            <button className="icon-btn nodrag" onClick={onClose} title="Back (Esc)" aria-label="Back" data-testid="settings-close"><I.Chevron size={16} style={{ transform: 'rotate(90deg)' }} /></button>
             <span className="set-nav-title">Settings</span>
           </div>
           <div className="set-find nodrag"><I.Search size={14} />

@@ -13,7 +13,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { id: 'research', name: '/research', hint: 'Deep research for the next message', keys: 'research deep sources search' },
   { id: 'max', name: '/max', hint: 'Max: several agents for the next message', keys: 'max swarm team agents' },
   { id: 'plan', name: '/plan', hint: 'Plan first, then ask before doing it', keys: 'plan think steps', keepsText: true },
-  { id: 'voice', name: '/voice', hint: 'Talk with SahilBot', keys: 'voice talk speak call' },
+  { id: 'voice', name: '/voice', hint: 'Talk with your bot', keys: 'voice talk speak call' },
   { id: 'artifacts', name: '/artifacts', hint: 'Open Artifacts: documents, decks, files', keys: 'artifacts files documents' },
   { id: 'settings', name: '/settings', hint: 'Open Settings', keys: 'settings preferences options config' },
   { id: 'whatsnew', name: '/whatsnew', hint: "What's new in this version", keys: 'whats new release notes changelog update version' }

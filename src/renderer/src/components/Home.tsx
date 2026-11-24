@@ -163,7 +163,7 @@ async function editFile(f: RecentFile): Promise<void> {
 type NewKind = 'doc' | 'slides' | 'sheet' | 'dashboard'
 const NEW_KINDS: Array<{ kind: NewKind; label: string; hint: string }> = [
   { kind: 'doc', label: 'Docs', hint: 'Reports, letters, plans' },
-  { kind: 'slides', label: 'Slides', hint: 'Decks you and SahilBot build' },
+  { kind: 'slides', label: 'Slides', hint: 'Decks and presentations' },
   { kind: 'sheet', label: 'Sheets', hint: 'Tables with formulas' },
   { kind: 'dashboard', label: 'Dashboards', hint: 'Numbers, charts and notes' }
 ]

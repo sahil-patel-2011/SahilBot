@@ -59,15 +59,17 @@ describe('fast path guidance (ALA-04, PCA-02, ARB, IWA, IWB)', () => {
     expect(full).toContain('Count before you send')
   })
 
-  test('typos, translation, homework and common health questions are answered directly', () => {
-    expect(chat).toContain('Translation: the translation first')
-    expect(full).toContain('Read through typos, shorthand and slang')
+  test('no answer-format rules of our own (the model writes the way its provider trained it); health questions still get a direct answer', () => {
+    for (const p of [chat, full]) {
+      expect(p).not.toMatch(/Lead with the answer|Be concise|Homework: the steps|Translation: the translation first|Product picks/)
+    }
     expect(chat).toContain('Common, well-established health questions: a direct, safe answer and when to see a doctor')
   })
 
-  test('the opening line doesn\'t push price hunting', () => {
-    expect(full).toContain("I'll check a few hotels and restaurants first.")
-    expect(full).not.toContain('real hotel and restaurant prices for those dates')
+  test('no scripted opening line or sample phrases the model would parrot', () => {
+    expect(full).not.toContain('On it, checking')
+    expect(full).not.toContain('texting a friend')
+    expect(full).not.toContain("I'll check a few hotels and restaurants first.")
   })
 })
 

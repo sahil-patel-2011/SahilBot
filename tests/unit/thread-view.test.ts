@@ -289,7 +289,7 @@ describe('stops, steers and the double-check', () => {
     ]
     const html = render(ms, false)
     expect(html).not.toContain('data-testid="steered"')
-    expect(html).toContain('data-testid="show-work"')
+    expect(html).not.toContain('data-testid="show-work"')
     // Ordinary steering still says so.
     expect(render([ms[0], msg({ role: 'user', content: 'make it 4 printers', meta: { steer: true } })], true)).toContain('data-testid="steered"')
   })

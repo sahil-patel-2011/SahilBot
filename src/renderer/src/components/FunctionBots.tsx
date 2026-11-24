@@ -82,9 +82,17 @@ export function sidebarStatusText(s: BotStatus | undefined, unread: boolean): st
 }
 
 /** The bot card's line: a status dot, the state, and the model its last reply ran on. */
-export function BotStatusLine({ space }: { space: Space }) {
+export function BotStatusLine({ space, waiting = false }: { space: Space; /** Its run waits on your answer or OK: not "Working…". */ waiting?: boolean }) {
   const map = useBotStatus()
   const s = withUnread(map[space.id], !!space.unread)
+  if (waiting) {
+    return (
+      <div className="bot-status st-need" data-testid={`bot-status-${space.id}`} data-state="need">
+        <span className="bs-dot" aria-hidden="true" />
+        <span className="bs-state">Waiting for you</span>
+      </div>
+    )
+  }
   return (
     <div className={`bot-status st-${s.state}`} data-testid={`bot-status-${space.id}`} data-state={s.state}>
       <span className="bs-dot" aria-hidden="true" />

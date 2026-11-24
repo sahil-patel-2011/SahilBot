@@ -8,6 +8,7 @@ import { Toggle } from './Toggle'
 import { FingerprintGlyph, LockGlyph } from './VaultAuthDialog'
 import '../styles-secure-vault.css'
 import { ClampText } from './ui'
+import { plural } from '../lib/run-summary'
 
 // Settings → Privacy & Security → Passwords. Everything here is metadata (names, sites, brand, last 4, expiry) except a Reveal,
 // which main sends only after Touch ID or the master password and this page hides again after 20 s.
@@ -482,8 +483,8 @@ function SecurityTab({ st, act, busy }: { st: VaultStatus; act: (fn: () => Promi
                   const b = backup
                   setBackup(null)
                   void act(async () => {
-                    if (b.mode === 'export') { const r = await api.vault.exportBackup(b.pw); if (r.ok) toast(`Saved ${r.count} items to ${r.path?.split('/').pop()}`, 'ok') }
-                    else { const r = await api.vault.importBackup(b.pw); if (r.ok) toast(`Imported ${r.added} items${r.skipped ? ` (${r.skipped} already saved)` : ''}`, 'ok') }
+                    if (b.mode === 'export') { const r = await api.vault.exportBackup(b.pw); if (r.ok) toast(`Saved ${plural(r.count ?? 0, 'item')} to ${r.path?.split('/').pop()}`, 'ok') }
+                    else { const r = await api.vault.importBackup(b.pw); if (r.ok) toast(`Imported ${plural(r.added ?? 0, 'item')}${r.skipped ? ` (${r.skipped} already saved)` : ''}`, 'ok') }
                   })
                 }}>{backup.mode === 'export' ? 'Choose where to save' : 'Choose the file'}</button>
             </div>

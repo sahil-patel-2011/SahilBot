@@ -1,4 +1,5 @@
 import { api } from '../api'
+import { micErrorText } from './ux'
 
 // Microphone in (16 kHz mono, 512-sample frames to main) and speech out (queued playback).
 
@@ -12,9 +13,14 @@ export class Mic {
   muted = false
 
   async start(): Promise<void> {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-    })
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      })
+    } catch (e) {
+      // "Requested device not found" → "No microphone found…" (voice mode and dictation show this).
+      throw new Error(micErrorText(e as Error))
+    }
     // Chromium resamples the mic to the context rate, so this yields 16 kHz directly.
     this.ctx = new AudioContext({ sampleRate: 16000 })
     const src = this.ctx.createMediaStreamSource(this.stream)
