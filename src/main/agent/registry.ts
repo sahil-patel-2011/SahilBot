@@ -18,7 +18,7 @@ export const QUICK_TOOLS = CHAT_TOOLS
  * review_document, cursor, mac_apps, agents, schedule, message_bot…) is one find_tools call away, and stays
  * listed once loaded. 'tiny' keeps fewer still, for when even 'small' leaves too little room.
  */
-export const SMALL_TOOLS = ['find_tools', 'web_search', 'fetch_page', 'memory', 'ask_user', 'todo', 'notes', 'file_read', 'file_write', 'file_manage', 'run_command', 'create_document', 'browser', 'manual'] as const
+export const SMALL_TOOLS = ['find_tools', 'web_search', 'fetch_page', 'memory', 'ask_user', 'todo', 'notes', 'file_read', 'file_write', 'file_edit', 'file_manage', 'run_command', 'create_document', 'browser', 'manual'] as const
 export const TINY_TOOLS = ['find_tools', 'web_search', 'fetch_page', 'memory', 'ask_user', 'todo', 'file_read', 'file_write', 'run_command'] as const
 const SMALL = new Set<string>(SMALL_TOOLS)
 const TINY = new Set<string>(TINY_TOOLS)
@@ -29,11 +29,11 @@ export const SMALL_WINDOW = 32768
 /** The most of the input budget (window minus the reply's room) the system prompt and tools may take. */
 export const FIXED_SHARE = 0.4
 /**
- * Above SMALL_WINDOW: the full agent set may take up to half the input budget. On a 64K local window that
- * keeps every tool (documents, plans, team, schedule…) and still leaves ~30K for the conversation, which
+ * Above SMALL_WINDOW: the full agent set may take up to 55% of the input budget. On a 64K local window that
+ * keeps every tool (documents, plans, team, schedule…) and still leaves ~27K for the conversation, which
  * compaction now keeps intact (notes and brief survive); a slimmer set there cost more than it saved.
  */
-export const FIXED_SHARE_LARGE = 0.5
+export const FIXED_SHARE_LARGE = 0.55
 
 /** A chat thread (the older 'quick' mode counts as one). */
 export const chatMode = (state: Pick<ThreadState, 'toolMode'>): boolean => state.toolMode === 'chat' || state.toolMode === 'quick'
@@ -241,7 +241,7 @@ export class ToolRegistry {
     return true
   }
 
-  search(query: string, state: ThreadState): Array<{ name: string; description: string; loaded: boolean; score: number; connector: boolean }> {
+  search(query: string, state: ThreadState): Array<{ name: string; description: string; loaded: boolean; score: number; connector: boolean; group?: string }> {
     const words = query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1)
     // Built-in tools that this thread's mode or profile doesn't list can be found (and loaded) too.
     const listed = new Set(this.listFor(state).map((t) => t.name))
@@ -250,7 +250,7 @@ export class ToolRegistry {
       .map((t) => {
         const hay = `${t.name} ${t.group ?? ''} ${t.description}`.toLowerCase()
         const score = words.reduce((n, w) => n + (hay.includes(w) ? (t.name.includes(w) || (t.group ?? '').toLowerCase().includes(w) ? 3 : 1) : 0), 0)
-        return { name: t.name, description: t.description, loaded: listed.has(t.name), score, connector: isConnectorTool(t) }
+        return { name: t.name, description: t.description, loaded: listed.has(t.name), score, connector: isConnectorTool(t), ...(t.group ? { group: t.group } : {}) }
       })
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score)

@@ -45,8 +45,8 @@ const SHAPE_PATHS: Record<string, string> = {
 }
 
 /** Bot avatar: a shape in the bot's color with two eyes. */
-export function SpaceAvatar({ color, shape = 'blob', size = 52, group }: { color: string; shape?: string; size?: number; group?: string[] }) {
-  if (shape === 'mascot' && !group?.length) return <Mascot size={size} />
+export function SpaceAvatar({ color, shape = 'blob', size = 52, group, icon }: { color: string; shape?: string; size?: number; group?: string[]; icon?: string | null }) {
+  if (shape === 'mascot' && !group?.length && !icon) return <Mascot size={size} />
   if (group?.length) {
     // Group chats show up to three member colors overlapping.
     return (
@@ -62,9 +62,11 @@ export function SpaceAvatar({ color, shape = 'blob', size = 52, group }: { color
   const eye = isLight(color) ? '#141414' : '#ffffff'
   return (
     <svg width={size} height={size} viewBox="0 0 52 52" style={{ flex: 'none' }}>
-      <path d={SHAPE_PATHS[shape] ?? SHAPE_PATHS.blob} fill={color} />
-      <ellipse cx="21" cy="22" rx="2.2" ry="3.8" fill={eye} transform="rotate(18 21 22)" />
-      <ellipse cx="30" cy="20" rx="2.2" ry="3.8" fill={eye} transform="rotate(18 30 20)" />
+      <path d={SHAPE_PATHS[shape === "mascot" ? "blob" : shape] ?? SHAPE_PATHS.blob} fill={color} />
+      {icon ? <text x="26" y="28" textAnchor="middle" dominantBaseline="central" fontSize="24" data-testid="bot-icon">{icon}</text> : <>
+        <ellipse cx="21" cy="22" rx="2.2" ry="3.8" fill={eye} transform="rotate(18 21 22)" />
+        <ellipse cx="30" cy="20" rx="2.2" ry="3.8" fill={eye} transform="rotate(18 30 20)" />
+      </>}
     </svg>
   )
 }

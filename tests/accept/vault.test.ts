@@ -75,7 +75,8 @@ describe('secrets vault: sign in by reference, lock, unlock', () => {
     await page.keyboard.press('Enter')
     const first = await drive(page, llm)
     expect(first.unlocks).toHaveLength(0)
-    expect(first.approvals.filter((a) => /typing the saved login "acme"/i.test(a))).toHaveLength(2)
+    // On the login's own site Auto signs in by itself: nothing to approve.
+    expect(first.approvals.filter((a) => /typing the saved login "acme"/i.test(a))).toHaveLength(0)
     const outs = toolTexts(llm)
     expect(outs.some((t) => t.includes('Filled the password for "acme". (The value is hidden from you.)'))).toBe(true)
     expect(outs.at(-1)).toContain('Welcome back, Sam')

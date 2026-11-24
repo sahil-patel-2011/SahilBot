@@ -5,7 +5,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { addRule, RULE_MAX_CHARS } from '../lib/approvalRules'
-import { approvalView, type ApprovalPreview } from '../lib/approval-view'
+import { approvalView, offersAlways, type ApprovalPreview } from '../lib/approval-view'
 import { Markdown } from './Markdown'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
@@ -13,6 +13,7 @@ import '../styles-privacy.css'
 // Lazy: Connect Apps is its own chunk; only a card for an app that still needs its setup (or a key) uses it.
 import { ApiKeyPanel, AppSetup, GoogleSetup, Lazy } from '../lazy'
 import { folderName } from '../lib/plain-approval'
+import { openPermission, PERMISSION_BUTTON, type AskedPermission } from '../lib/permission-ask'
 
 const EFFECT_TEXT: Record<string, string> = {
   read: 'Reads only',
@@ -180,6 +181,30 @@ function QuestionCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
             onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); (e.target as HTMLInputElement).blur() } if (e.key === 'Enter') { e.preventDefault(); send(own) } }} data-testid="question-own-input" />
           {own.trim() && <button className="btn primary small" disabled={sending} onClick={() => send(own)} data-testid="question-own-send">Send</button>}
         </label>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A Mac permission the task needs (Accessibility for clicking in other apps): shown by itself, whatever the reply
+ * says. One tap opens the switch; the card closes and the task carries on by itself once it's on.
+ */
+function PermissionCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+  const kind = req.permission!
+  const [opened, setOpened] = useState(false)
+  const open = (): void => {
+    setOpened(true)
+    void openPermission(api.permissions, kind as AskedPermission)
+  }
+  return (
+    <div className="pending permission-card" data-testid="permission-card" data-permission={kind}>
+      <div className="pending-title"><I.Shield size={15} /> {kind === 'accessibility' ? 'Allow SahilBot to use your Mac' : 'Allow SahilBot on this Mac'}</div>
+      {req.question && <div className="hint">{req.question}</div>}
+      {opened && <div className="hint" data-testid="permission-card-waiting">Turn on SahilBot in System Settings. This task continues by itself once it's on.</div>}
+      <div className="pending-actions">
+        <button className="btn primary" onClick={open} data-testid="permission-card-open">{PERMISSION_BUTTON[kind as AskedPermission] ?? 'Open System Settings'}</button>
+        <button className="btn" onClick={() => void onRespond(req.id, 'Not now')} data-testid="permission-card-skip">Not now</button>
       </div>
     </div>
   )
@@ -427,6 +452,7 @@ export function PendingCard({ req, onRespond, thumb }: { req: PendingRequest; on
   if (req.kind === 'connect' && req.preset) return <ConnectCard req={req} onRespond={onRespond} />
   if (req.kind === 'questions' && req.questions) return <QuestionsCard req={req} onRespond={onRespond} />
   if (req.kind === 'plan' && req.plan) return <PlanApprovalCard req={req} onRespond={onRespond} />
+  if (req.kind === 'question' && req.permission) return <PermissionCard req={req} onRespond={onRespond} />
   if (req.kind === 'question') return <QuestionCard req={req} onRespond={onRespond} />
   if (req.kind === 'privacy' && req.privacy) return <PrivacyCard req={req} onRespond={onRespond} />
   return <ApprovalCard req={req} onRespond={onRespond} thumb={thumb} />
@@ -439,11 +465,23 @@ const SENDS = /\b(send|sends|sending|post|posts|posting|publish|share|sharing|up
 const SECURITY = /\b(account or security settings|security settings|account settings|change (your |the )?password|password (change|reset)|reset (your |the )?password|2fa|two[- ]factor|mfa|recovery (email|phone)|api keys?|sign[- ]in settings|login settings|permission settings)\b/i
 const SECRET = /\b(fill secret|saved login|password field|vault)\b/i
 
+/** Opening or running something, with nothing deleted or overwritten: not "can't be undone". */
+const runsOnly = (text: string): boolean => /\b(open|opening|opens|runs? it|launch(es|ing)?|run(s|ning)? (a|the) (script|program|app))\b/i.test(text) && !/\b(delet|remov|overwrit|eras|wip|replac|rm\b|format)/i.test(text)
+
+/** What a "Make it a rule…" rule should say to match this action: its name and what it's aimed at (not the long summary). */
+export function ruleSeed(req: Pick<PendingRequest, 'tool' | 'label' | 'args'>): string {
+  let a: Record<string, unknown> = {}
+  try { a = JSON.parse(req.args ?? '{}') as Record<string, unknown> } catch { /* not JSON */ }
+  const cmd = typeof a.command === 'string' ? a.command.trim().split(/\s+/).slice(0, 2).join(' ') : ''
+  const target = typeof a.path === 'string' ? a.path : typeof a.url === 'string' ? (() => { try { return new URL(a.url as string).host } catch { return '' } })() : typeof a.app === 'string' ? a.app : cmd
+  return [req.label ?? req.tool ?? '', target].filter(Boolean).join(' ').trim()
+}
+
 /** Plain-English warnings for the risky parts of an action. */
 function approvalWarnings(req: PendingRequest): string[] {
   const text = words(req.tool, req.label, req.summary, req.reason)
   const out: string[] = []
-  if (req.effect === 'destructive') out.push(/\btrash\b/i.test(text) ? 'This moves it to the Trash' : "This can't be undone")
+  if (req.effect === 'destructive') out.push(/\btrash\b/i.test(text) ? 'This moves it to the Trash' : runsOnly(text) ? 'This runs a program on your Mac' : "This can't be undone")
   if (req.effect === 'write_external' && SENDS.test(text) && !SECRET.test(text)) out.push('This shares your data outside this chat')
   if (SECURITY.test(text)) out.push('This changes sign-in or security settings')
   else if (SECRET.test(text)) out.push('This types one of your saved passwords')
@@ -464,7 +502,7 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
   const warnings = approvalWarnings(req)
   const name = req.label ?? req.tool ?? 'this action'
   const [ruleOpen, setRuleOpen] = useState(false)
-  const [ruleText, setRuleText] = useState(() => (req.summary ?? name).slice(0, RULE_MAX_CHARS))
+  const [ruleText, setRuleText] = useState(() => (ruleSeed(req) || name).slice(0, RULE_MAX_CHARS))
   const [ruleAction, setRuleAction] = useState<'allow' | 'ask'>('allow')
   const [saving, setSaving] = useState(false)
   // A second Enter before the first save re-renders must not save the rule twice.
@@ -472,9 +510,11 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
   const ruleId = useId()
   const reason = reasonText(req.reason)
   const view = approvalView(req)
+  // Code and file bodies sit under Details: the card itself is one sentence (messages and clicks stay in view).
+  const inDetails = !!view.preview && (view.preview.kind === 'command' || view.preview.kind === 'file')
   // Which app or tool, unless the headline already says it plainly (saving a file, a command, a click).
   const who = view.preview && ['file', 'command', 'click'].includes(view.preview.kind) ? '' : name
-  const meta = [who, EFFECT_TEXT[req.effect ?? 'read'], reason && !warnings.some((w) => w.toLowerCase().includes(reason.toLowerCase())) ? reason : ''].filter(Boolean)
+  const meta = [who, req.effect === 'destructive' && runsOnly(words(req.tool, req.label, req.summary, req.reason)) ? 'Runs a program' : EFFECT_TEXT[req.effect ?? 'read'], reason && !warnings.some((w) => w.toLowerCase().includes(reason.toLowerCase())) ? reason : ''].filter(Boolean)
 
   const saveRule = async (): Promise<void> => {
     if (savingRef.current) return
@@ -509,24 +549,25 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
           {warnings.map((w) => <li key={w} className={danger ? 'danger' : undefined}>{w}</li>)}
         </ul>
       )}
-      {view.preview && <ApprovalPreviewBox p={view.preview} thumb={thumb} />}
-      {!!req.args && (
+      {view.preview && !inDetails && <ApprovalPreviewBox p={view.preview} thumb={thumb} />}
+      {(!!req.args || inDetails || !danger) && (
         <details className="pending-details ap-details" data-testid="approval-details">
-          <summary className="hint">Technical details</summary>
-          <pre className="pending-args">{req.args}</pre>
+          <summary className="hint">Details</summary>
+          {view.preview && inDetails && <ApprovalPreviewBox p={view.preview} thumb={thumb} />}
+          {!!req.args && <pre className="pending-args">{req.args}</pre>}
+          {!danger && !ruleOpen && <button className="link-btn ap-rule-link" onClick={() => setRuleOpen(true)} data-testid="approve-make-rule">Make it a rule…</button>}
         </details>
       )}
       <div className="pending-actions">
         <button className="btn primary" onClick={() => onRespond(req.id, 'once')} data-testid="approve-once">Allow once</button>
-        <button className="btn" title={req.folder ? `Files in ${req.folder} won't ask again in this chat` : `Don't ask again for ${name} in this chat`}
+        {offersAlways(req.reason) && <button className="btn" title={req.folder ? `Files in ${req.folder} won't ask again in this chat` : `Don't ask again for ${name} in this chat`}
           onClick={() => {
             // Say so only once SahilBot has taken it.
             void Promise.resolve(onRespond(req.id, 'always')).then(
               () => toast(req.folder ? `${folderName(req.folder)} is open to this chat now` : `${name} is allowed for the rest of this chat`, 'ok'),
               (e: unknown) => toast((e as Error)?.message ?? String(e), 'error'))
-          }} data-testid="approve-always">{req.folder ? `Always allow in “${folderName(req.folder)}”` : 'Always allow'}</button>
+          }} data-testid="approve-always">{req.folder ? `Always allow in “${folderName(req.folder)}”` : 'Always allow'}</button>}
         <button className="btn danger" onClick={() => onRespond(req.id, 'deny')} data-testid="approve-deny">Deny</button>
-        {!danger && !ruleOpen && <button className="link-btn ap-rule-link" onClick={() => setRuleOpen(true)} data-testid="approve-make-rule">Make it a rule…</button>}
       </div>
       {ruleOpen && (
         <div className="ap-rule" data-testid="approval-rule">
@@ -542,7 +583,7 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
             <button className="btn primary" disabled={saving || !ruleText.trim()} onClick={() => void saveRule()} data-testid="approval-rule-save">{saving ? 'Saving…' : 'Save rule'}</button>
             <button className="btn" onClick={() => setRuleOpen(false)}>Cancel</button>
           </div>
-          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”. Manage rules in Settings → Permissions.</div>
+          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”.</div>
         </div>
       )}
     </div>

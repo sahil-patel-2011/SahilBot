@@ -1,4 +1,6 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Page } from 'playwright'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { launch, tempProfile } from './app'
@@ -20,17 +22,19 @@ const shot = async (page: Page, name: string): Promise<void> => {
 }
 
 describe('quiet chat', () => {
-  test('Bots show teammate roles by default and reveal model details on opt-in', async () => {
+  test('A bot chat shows only the conversation by default; Developer mode reveals the team and its models', async () => {
     llm.models = ['qwen3.8:27b', 'gemma4:12b']
     const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_QUIET: '1', FOREMAN_NO_BRAIN: '', FOREMAN_RAM_GB: '64' })
     try {
       await page.evaluate(() => window.foreman.spaces.create({ name: 'Review Bot', intro: false }))
       await page.reload()
       await page.getByTestId('space-item').filter({ hasText: 'Review Bot' }).click()
-      await page.getByTestId('bot-permissions-picker').click()
-      expect(await page.getByTestId('picker-menu').getByTestId('model-option').count()).toBe(0)
-      expect(await page.getByTestId('mode-auto').getAttribute('aria-checked')).toBe('true')
-      await page.keyboard.press('Escape')
+      // Grok Bot's plain message box: no model or permissions picker (Auto picks; permissions are in the bot's profile),
+      // and no folder chip until the chat works in a folder.
+      await expect.poll(() => page.getByTestId('bot-pill').innerText().catch(() => '')).toContain('Review Bot')
+      expect(await page.getByTestId('bot-permissions-picker').count()).toBe(0)
+      expect(await page.getByTestId('model-picker').count()).toBe(0)
+      expect(await page.getByTestId('working-folder').count()).toBe(0)
       llm.script.push(
         { content: JSON.stringify({
           assessment: { goal: 'Suggest a name', work: 'answer', complexity: 'direct', impact: 'routine', deliverable: false, parts: [] },
@@ -46,18 +50,19 @@ describe('quiet chat', () => {
       await status.waitFor()
       expect(await page.getByTestId('stop').isVisible()).toBe(true)
       expect(await status.getByRole('status').evaluate((el) => getComputedStyle(el).animationName)).toBe('none')
+      // A bot's chat (Grok Bot's way): "<name> is working…", then the answer; the team card stays out of sight.
+      expect(await page.getByTestId('bot-working').innerText()).toContain('Review Bot is working')
+      await expect.poll(() => page.getByTestId('thread').innerText(), { timeout: 25_000 }).toContain('Hearth and Grain')
       const card = page.getByTestId('collaboration-card')
-      await expect.poll(() => card.innerText(), { timeout: 25_000 }).toContain('Complete')
-      expect(await card.innerText()).toContain('Second perspective')
-      expect(await card.locator('.collaboration-model').count()).toBe(0)
+      expect(await card.count()).toBe(0)
       expect(await page.locator('details.reasoning').count()).toBe(0)
       await shot(page, '4-bot-collaboration')
 
-      await page.getByTestId('profile').click()
-      await page.getByTestId('settings-search').fill('developer mode')
-      await page.getByTestId('settings-result-dev-mode').click()
-      await page.getByTestId('dev-mode').click()
-      await page.keyboard.press('Escape')
+      // Developer mode has no button any more (settings are basics only); turn it on directly.
+      await page.evaluate(() => window.foreman.settings.set({ advanced: { devMode: true } } as never))
+      await page.evaluate(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
+      // Developer mode shows the work: the team card with each teammate's model.
+      await expect.poll(() => card.innerText(), { timeout: 15_000 }).toContain('Second perspective')
       await expect.poll(() => card.locator('.collaboration-model').count()).toBe(2)
       expect(new Set(await card.locator('.collaboration-model').allTextContents()).size).toBe(2)
       expect(await page.getByTestId('model-picker').count()).toBe(1)
@@ -73,6 +78,9 @@ describe('quiet chat', () => {
 
   test('a task reads like a conversation: a short note, quiet work, the result', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_QUIET: '1' })
+    // Its own workspace: a study guide left by an earlier run would (rightly) not be overwritten unread.
+    const ws = mkdtempSync(join(tmpdir(), 'sb-quiet-ws-'))
+    await page.evaluate((w) => window.foreman.settings.set({ workspaceDir: w } as never), ws)
     await page.setViewportSize({ width: 1100, height: 760 })
     llm.script.push(
       { content: 'On it, putting together a study guide for your chem quiz.', reasoning: 'The user wants a stoichiometry study guide.', toolCalls: [{ name: 'todo', arguments: JSON.stringify({ items: [{ text: 'Write the study guide', status: 'in_progress' }] }) }], delay: 40 },
@@ -81,8 +89,11 @@ describe('quiet chat', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'Help me study for my chem quiz on stoichiometry')
     await page.getByTestId('send').click()
-    // While it works: one status line with a running timer.
-    await page.waitForSelector('[data-testid="turn-timer"]', { timeout: 15_000 })
+    // While it works (Grok Bot's way): its own opening line, then one quiet line saying what it's on. No timer.
+    await expect.poll(() => page.getByTestId('bot-working').innerText().catch(() => ''), { timeout: 15_000 }).toBe('Write the study guide')
+    expect(await page.locator('[data-testid="turn-timer"]').count()).toBe(0)
+    expect(await page.locator('[data-testid="steer-hint"]').count()).toBe(0)
+    expect(await page.getByTestId('thread').innerText()).toContain('On it, putting together a study guide')
     await shot(page, '1-working')
     await expect.poll(() => page.locator('[data-testid="stop"]').count(), { timeout: 30_000 }).toBe(0)
     await expect.poll(() => page.locator('[data-testid="assistant-bubble"]').count()).toBe(2)
@@ -90,7 +101,8 @@ describe('quiet chat', () => {
     expect(await page.locator('[data-testid="plan-card"]').count()).toBe(0)
     expect(await page.locator('details.reasoning').count()).toBe(0)
     expect(await page.locator('[data-testid="routed"]').count()).toBe(0)
-    expect(await page.locator('[data-testid="run-summary"]').count()).toBe(0)
+    // One plain finish line after real work, for everyone (Grok Bot head-to-head: "a finish line on every task").
+    expect(await page.locator('[data-testid="run-summary"]').count()).toBe(1)
     // What it made stays: the file card.
     expect(await page.locator('[data-testid="made-file"]').count()).toBe(1)
     await shot(page, '2-done')

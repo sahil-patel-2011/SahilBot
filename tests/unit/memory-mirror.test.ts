@@ -96,13 +96,12 @@ describe('memory mirror', () => {
     expect(shared).not.toContain('linter')
   })
 
-  test('a bot with the vault turned off is left alone', () => {
+  test('one vault: an old per-bot "off" no longer leaves a bot out (only the vault\'s own switch does)', () => {
     const h = setup()
     h.memory.save('Always ask before sending email.', 'rule', h.writer.id)
     h.vault.setBot(h.writer.id, { enabled: false })
     const r = h.mirror.sync()
-    expect(r.skipped).toBe(1)
-    expect(h.vault.list().some((n) => n.section === 'Bots/Writer')).toBe(false)
+    expect(r.skipped).toBe(0)
   })
 
   test('forgetting a memory removes it on the next sync; text outside the block is kept', () => {

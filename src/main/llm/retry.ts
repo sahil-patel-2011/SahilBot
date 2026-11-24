@@ -72,6 +72,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * is never repeated.
  */
 export async function* withRetries(open: () => AsyncGenerator<StreamPart>, signal?: AbortSignal): AsyncGenerator<StreamPart> {
+  // A provider that went silent (idle-guard.ts) gets one more try, not three: then another model takes over.
+  let idle = 0
   for (let attempt = 0; ; attempt++) {
     let produced = false
     let finished = false
@@ -84,6 +86,7 @@ export async function* withRetries(open: () => AsyncGenerator<StreamPart>, signa
       return
     } catch (e) {
       if (signal?.aborted || finished || attempt >= retryPolicy.retries) throw e
+      if ((e as { idle?: boolean }).idle && idle++ >= 1) throw e
       const r = retryInfo(e)
       if (!r.retry || (r.afterMs !== undefined && r.afterMs > retryPolicy.maxRetryAfterMs)) throw e
       if (produced) yield { type: 'reset' }

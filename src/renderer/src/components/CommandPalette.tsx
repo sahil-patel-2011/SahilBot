@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Space, Thread } from '@shared/types'
 import { Mascot, SpaceAvatar } from '../brand'
 import * as I from '../icons'
+import { BrainIcon } from './BrainView'
 import { openUsageGlance } from './UsagePage'
 import { PAGE_TITLES, searchSettings } from '../lib/settings-index'
 
 export type PaletteAction =
   | { kind: 'new-chat' } | { kind: 'new-bot' } | { kind: 'new-group' } | { kind: 'new-project' }
   | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'tasks' } | { kind: 'brain' } | { kind: 'connect' } | { kind: 'settings' }
-  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'max' } | { kind: 'vault' } | { kind: 'import-memory' } | { kind: 'usage' } | { kind: 'shortcuts' }
+  | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'max' } | { kind: 'import-memory' } | { kind: 'usage' } | { kind: 'shortcuts' }
   | { kind: 'open'; id: string } | { kind: 'chat'; id: string }
   /** A setting: Settings opens on its page and tab, scrolled to it (lib/settings-index.ts). */
   | { kind: 'setting'; anchor: string }
@@ -25,17 +26,16 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
   const items = useMemo(() => {
     const ico = (n: React.ReactNode): React.ReactNode => <span className="pal-icon">{n}</span>
     const commands: Item[] = [
-      { a: { kind: 'new-bot' }, label: 'New bot', icon: ico(<I.Plus size={16} />), group: 'Start' },
-      { a: { kind: 'new-chat' }, label: 'New chat', icon: ico(<I.Edit size={15} />), group: 'Start', keys: ['⌘', 'N'] },
+      { a: { kind: 'new-bot' }, label: 'Add a bot', icon: ico(<I.Plus size={16} />), group: 'Start' },
+      { a: { kind: 'new-chat' }, label: 'New chat', icon: ico(<I.Plus size={15} />), group: 'Start', keys: ['⌘', 'N'] },
       { a: { kind: 'new-group' }, label: 'Create group chat', icon: ico(<I.Users size={16} />), group: 'Start' },
       { a: { kind: 'new-project' }, label: 'New project', icon: ico(<I.Folder size={15} />), group: 'Start' },
       { a: { kind: 'projects' }, label: 'Projects', sub: 'All your projects', icon: ico(<I.Folder size={15} />), group: 'Go to' },
-      { a: { kind: 'files' }, label: 'Artifacts', sub: 'Documents, PDFs, decks and images your bots made', icon: ico(<I.File size={15} />), group: 'Go to' },
-      { a: { kind: 'tasks' }, label: 'Needs you', sub: 'Questions, approvals and your bots\' goals', icon: ico(<I.Check size={15} />), group: 'Go to' },
-      { a: { kind: 'brain' }, label: 'Brain', sub: 'What SahilBot knows from your accounts, briefs and Agent mode', icon: ico(<I.Sparkle size={15} />), group: 'Go to' },
+      { a: { kind: 'files' }, label: 'Library', sub: 'Documents, PDFs, decks and images your bots made', icon: ico(<I.Layers size={15} />), group: 'Go to' },
+      { a: { kind: 'tasks' }, label: 'Needs you', sub: 'Questions, approvals and your bots\' goals', icon: ico(<I.Inbox size={15} />), group: 'Go to' },
+      { a: { kind: 'brain' }, label: 'Memory', sub: 'What your bots know: people, projects, your accounts and Agent mode', icon: ico(<BrainIcon size={15} />), group: 'Go to' },
       { a: { kind: 'scheduled' }, label: 'Scheduled', sub: 'Routines and scheduled tasks', icon: ico(<I.Clock size={15} />), group: 'Go to' },
       { a: { kind: 'connect' }, label: 'Connect apps', icon: ico(<I.Plug size={15} />), group: 'Go to' },
-      { a: { kind: 'vault' }, label: 'Notes', sub: 'Your notes vault: people, projects, decisions', icon: ico(<I.ListIcon size={15} />), group: 'Go to' },
       { a: { kind: 'import-memory' }, label: 'Import memory from another AI', sub: 'ChatGPT, Claude, Gemini…', icon: ico(<I.Down size={15} />), group: 'Go to' },
       { a: { kind: 'settings' }, label: 'Settings', icon: ico(<I.Gear size={15} />), group: 'Go to', keys: ['⌘', ','] },
       { a: { kind: 'usage' }, label: 'Usage', sub: 'Spend this month, tokens and lifetime totals', icon: ico(<I.Clock size={15} />), group: 'Go to' },
@@ -51,7 +51,7 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       label: s.name + (s.hidden ? ' (hidden)' : ''),
       sub: s.lastPreview?.replace(/\s+/g, ' ').slice(0, 90),
       group: s.kind === 'project' ? 'Projects' : 'Bots',
-      icon: s.isMain ? <Mascot size={28} /> : s.kind === 'project' ? <span className="pal-icon" style={{ background: s.color, color: 'white' }}><I.Folder size={15} /></span> : <SpaceAvatar color={s.color} shape={s.shape} size={28} group={s.kind === 'group' ? s.members.map((id) => spaces.find((x) => x.id === id)?.color ?? '#999') : undefined} />
+      icon: s.isMain ? <Mascot size={28} /> : s.kind === 'project' ? <span className="pal-icon" style={{ background: s.color, color: 'white' }}><I.Folder size={15} /></span> : <SpaceAvatar color={s.color} shape={s.shape} icon={s.icon} size={28} group={s.kind === 'group' ? s.members.map((id) => spaces.find((x) => x.id === id)?.color ?? '#999') : undefined} />
     }))
     const recent: Item[] = chats.slice(0, 30).map((t) => ({ a: { kind: 'chat', id: t.id }, label: t.title.replace(/^⏰ /, ''), icon: ico(<I.Reply size={14} style={{ transform: 'scaleX(-1)' }} />), group: 'Chats' }))
     const t = q.trim().toLowerCase()

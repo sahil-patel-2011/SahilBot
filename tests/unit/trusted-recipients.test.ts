@@ -98,10 +98,12 @@ describe('decide() with trusted recipients', () => {
     expect(decide({ ...base, trustedSend: true, tainted: true }).verdict).toBe('allow')
     expect(decide({ ...base, mode: 'bypass', trustedSend: true }).verdict).toBe('allow')
   })
-  test('without it the send stop asks as before; Ask mode always asks', () => {
-    expect(decide(base)).toMatchObject({ verdict: 'ask', reason: expect.stringMatching(/^Hard stop: sends email/) })
-    expect(decide({ ...base, unattended: true, alwaysOn: true }).verdict).toBe('ask')
-    expect(decide({ ...base, trustNote: 'more than 10 recipients at once' }).reason).toMatch(/more than 10 recipients/)
+  test('without it Auto sends anyway (not as trusted) unless outside content steered it; Ask mode always asks', () => {
+    expect(decide(base)).toEqual({ verdict: 'allow' })
+    expect(decide({ ...base, unattended: true, alwaysOn: true }).verdict).toBe('allow')
+    expect(decide({ ...base, tainted: true })).toMatchObject({ verdict: 'ask', reason: 'Uses details taken from a web page or email' })
+    expect(decide({ ...base, mode: 'ask' })).toMatchObject({ verdict: 'ask', reason: expect.stringMatching(/^Hard stop: sends email/) })
+    expect(decide({ ...base, mode: 'ask', trustNote: 'more than 10 recipients at once' }).reason).toMatch(/more than 10 recipients/)
     expect(decide({ ...base, mode: 'ask', trustedSend: true }).verdict).toBe('ask')
   })
   test('purchases, one-time codes, credentials and secrets are untouched', () => {
@@ -112,12 +114,16 @@ describe('decide() with trusted recipients', () => {
     // Purchases and codes keep their own cards (allowed here, asked at the click), trusted or not.
     expect(decide({ ...base, hardStop: `${PURCHASE_STOP}Buy now` })).toEqual({ verdict: 'allow', reason: `${PURCHASE_STOP}Buy now` })
     expect(decide({ ...base, trustedSend: true, hardStop: `${OTP_STOP}example.com` }).trusted).toBeUndefined()
-    // Reads and local writes never take the trusted path.
-    expect(decide({ ...base, effect: 'destructive', trustedSend: true, hardStop: 'deletes' }).verdict).toBe('ask')
+    // Reads and local writes never take the trusted path (Auto runs a delete itself; Ask asks).
+    expect(decide({ ...base, effect: 'destructive', trustedSend: true, hardStop: 'deletes' }).trusted).toBeUndefined()
+    expect(decide({ ...base, mode: 'ask', effect: 'destructive', trustedSend: true, hardStop: 'deletes' }).verdict).toBe('ask')
   })
   test('always-on bot stops: a trusted send only stops for "always ask" or a code/password in the text', () => {
     const a = { tool: 'resend', effect: 'write_external' as const, args: { to: Array.from({ length: 8 }, (_, i) => `p${i}@x.com`) }, label: 'Resend', summary: 'Send email to the team: "please delete the old file"' }
-    expect(botHardStop(a)?.kind).toBeTruthy()
+    // Auto sends to many people and mentions of deleting without a card, in a bot as anywhere (only money, credentials
+    // and "always ask" stop a bot).
+    expect(botHardStop(a)).toBeNull()
+    expect(botHardStop({ ...a, summary: 'Send email: "your verification code is 123456"' })?.kind).toBe('credentials')
     expect(botHardStop({ ...a, trusted: true })).toBeNull()
     expect(botHardStop({ ...a, trusted: true, summary: 'Send email: "your verification code is 123456"' })?.kind).toBe('credentials')
     expect(botHardStop({ ...a, trusted: true, alwaysAsk: ['tool:resend'] })?.kind).toBe('always_ask')

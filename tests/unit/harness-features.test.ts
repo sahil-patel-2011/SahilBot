@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { claimsDone, givesUp, PROFILES, ALL_FEATURES } from '../../src/main/agent/harness-features'
+import { claimsDone, countAsk, countMiss, givesUp, PROFILES, ALL_FEATURES } from '../../src/main/agent/harness-features'
 
 test('a false "I\'ve done it" is a claim about the world, not the reply itself or the user\'s own work', () => {
   for (const t of ['I\'ve saved the summary to your note "Standup".', 'It\'s been sent to Acme.', 'The post has been published.', 'It\'s live at https://x.example'])
@@ -97,4 +97,133 @@ test('a "done" claim backed by a successful tool of the same kind is not challen
   expect(claimBacked('Published and emailed the link.', ['publish_post'])).toBe(false)
   expect(claimBacked('I\'ve saved the summary to your notes.', ['web_search', 'fetch_page'])).toBe(false)
   expect(claimBacked('I\'ve saved it.', [])).toBe(false)
+  // A short stem must be a whole word of the tool's name, never a piece of another one (round 3, HTA-01).
+  expect(claimBacked('I\'ve verified the totals.', ['thread_summary'])).toBe(false)
+  expect(claimBacked('I\'ve verified the totals.', ['budget_tracker'])).toBe(false)
+  expect(claimBacked('I\'ve verified the totals.', ['decode_url'])).toBe(false)
+  expect(claimBacked('I\'ve posted it.', ['postgres_query'])).toBe(false)
+  expect(claimBacked('I\'ve verified the totals.', ['file_read'])).toBe(true)
+  expect(claimBacked('I\'ve checked the issue.', ['mcp__jira__getIssue'])).toBe(true)
+  expect(claimBacked('I\'ve saved it to your notes.', ['notes_create'])).toBe(true)
+  expect(claimBacked('I\'ve moved it.', ['file_manage'])).toBe(true)
 })
+
+test('a reply that only claims a check ("I\'ve double-checked the math") is told apart from one that claims an action', async () => {
+  const { claimsOnlyChecks } = await import('../../src/main/agent/harness-features')
+  expect(claimsOnlyChecks('I\'ve double-checked the math: 18% of 1,740 is 313.2.')).toBe(true)
+  expect(claimsOnlyChecks('I\'ve verified the totals and sent it to Sam.')).toBe(false)
+  expect(claimsOnlyChecks('I\'ve emailed it to Sam.')).toBe(false)
+  expect(claimsOnlyChecks('Here is the answer.')).toBe(false)
+})
+
+// Honesty (HTA-01/03): the common claims count, a long reply is still read, and the reply itself is no claim.
+test('"done" claims: created, wrote, added, updated… count when they name something in the world', async () => {
+  const { claimBacked, claimsDone: done } = await import('../../src/main/agent/harness-features')
+  for (const t of ['I created budget.xlsx in Downloads.', 'I\'ve written rename_photos.py to your Desktop.', 'I added the dentist to your calendar.', 'I\'ve updated the invoice.', 'I fixed the bug in app.ts.', 'I\'ve cancelled the order.', 'I\'ve downloaded the report.', 'I\'ve signed in to your account.', `${'Here is the long part. '.repeat(120)}I've emailed it to Sam.`])
+    expect(done(t), t).toBe(true)
+  for (const t of ['I wrote a short poem for you:', 'I\'ve added a section on hotels below.', 'I updated my answer above.', 'Done.', 'Here\'s what I created for you:\n\nA plan.', 'The store opened in 2010.'])
+    expect(done(t), t).toBe(false)
+  // Only the verbs it claims need backing (not "opened" in a sentence that claims nothing).
+  expect(claimBacked('I\'ve saved report.pdf. The store opened in 2010.', ['file_write'])).toBe(true)
+  expect(claimBacked('I created budget.xlsx in Downloads.', ['create_document'])).toBe(true)
+  expect(claimBacked('I\'ve moved the photos to the Trip folder.', ['file_manage'])).toBe(true)
+  expect(claimBacked('I\'ve emailed the invoice to Sam.', ['save_invoice'])).toBe(false)
+})
+
+test('a question for the user ends the run; a closing "anything else?" does not count', async () => {
+  const { asksUserNow } = await import('../../src/main/agent/harness-features')
+  for (const t of ['Which date works, Friday or Saturday?', 'I found two flights. Which one should I book?', 'What\'s the delivery address?'])
+    expect(asksUserNow(t), t).toBe(true)
+  for (const t of ['Saved it. Anything else?', 'Done. Let me know if you need anything else?', 'Saved budget.xlsx.', 'Here is the plan. Sound good?'])
+    expect(asksUserNow(t), t).toBe(false)
+})
+
+test('the prompts ask for one plain sentence about what could not be checked, never "all checks passed"', async () => {
+  const { chatPrompt, harnessPrompt } = await import('../../src/main/agent/prompt')
+  const base = { userName: 'Sam', workspaceDir: '/w', spacePrompt: '', spaceName: 'Main' }
+  expect(harnessPrompt(base)).toMatch(/anything you couldn't check, plainly; never "all checks passed"/)
+  expect(chatPrompt(base)).toMatch(/Never say you did something \(saved, sent, booked\) unless a tool in this chat did it/)
+})
+
+// HTA-01/03 (round 2): terse claims and "is + participle" claims count; questions, negations and explanations don't.
+test('terse "done" claims count: "Saved to Downloads.", "Invoice sent.", "The meeting is booked for 3pm."', () => {
+  for (const t of ['Saved to Downloads.', 'Saved budget.xlsx with the totals.', 'Done, the email is sent.', 'The meeting is booked for 3pm.', 'Invoice sent.', 'Sent.', 'Booked for 3pm on Friday.', 'Your reminder is scheduled for 7:00.'])
+    expect(claimsDone(t), t).toBe(true)
+  for (const t of ['Nothing is sent yet.', 'Is it saved?', 'Scheduled tasks run daily.', 'Posted prices may vary.', 'Emails are sent over SMTP.', 'Paris is the capital of France.', 'Your trip is planned.', 'Done: the change is made.'])
+    expect(claimsDone(t), t).toBe(false)
+})
+
+test('"I checked / verified / tested it" is a claim that something which looks must back', async () => {
+  const { claimBacked } = await import('../../src/main/agent/harness-features')
+  expect(claimsDone('I checked the link and it works.')).toBe(true)
+  expect(claimsDone('I haven\'t verified the totals.')).toBe(false)
+  expect(claimBacked('I checked the link and it works.', ['fetch_page'])).toBe(true)
+  expect(claimBacked('I tested the script on three photos.', ['file_write', 'run_command'])).toBe(true)
+  expect(claimBacked('I verified the totals.', ['file_write'])).toBe(false)
+})
+
+// SCA-03: "Move it to 7" / "Cancel it" after a successful schedule call is backed (no false nudge, no unverified note).
+test('a schedule or bot change backs "moved", "updated", "deleted"', async () => {
+  const { claimBacked } = await import('../../src/main/agent/harness-features')
+  expect(claimBacked('Done. I moved your Atlanta weather routine to 7:00 AM ET.', ['schedule'])).toBe(true)
+  expect(claimBacked('I\'ve updated your reminder to 7:00.', ['schedule'])).toBe(true)
+  expect(claimBacked('I\'ve deleted the routine.', ['schedule'])).toBe(true)
+  expect(claimBacked('I\'ve removed the reminder.', ['schedule'])).toBe(true)
+  expect(claimBacked('I\'ve renamed it to Study Buddy and moved it to the top.', ['manage_bot'])).toBe(true)
+  expect(claimBacked('I\'ve emailed the invoice to Sam.', ['schedule'])).toBe(false)
+})
+
+// "Forget my address": a memory or about call backs "removed" / "deleted" (no false nudge, no unverified note).
+test('a memory or about call backs "removed", "deleted", "updated"', async () => {
+  const { claimBacked } = await import('../../src/main/agent/harness-features')
+  expect(claimBacked('I\'ve removed your address (42 Oak St) from memory.', ['memory'])).toBe(true)
+  expect(claimBacked('Removed your address from memory.', ['memory'])).toBe(true)
+  expect(claimBacked('Your address has been removed.', ['memory'])).toBe(true)
+  expect(claimBacked('I\'ve deleted everything about Mike.', ['about'])).toBe(true)
+  expect(claimBacked('I\'ve saved that Mike prefers mornings.', ['about'])).toBe(true)
+  expect(claimBacked('I\'ve emailed it.', ['memory'])).toBe(false)
+})
+
+// HTA-01: a general tool backs "I've emailed it" only when it did something outward.
+test('claimsOutward names the claims that need an outward action', async () => {
+  const { claimsOutward } = await import('../../src/main/agent/harness-features')
+  expect(claimsOutward('I\'ve emailed it to Sam.')).toBe(true)
+  expect(claimsOutward('Posted on Reddit.')).toBe(true)
+  expect(claimsOutward('I\'ve saved invoice.pdf to Downloads.')).toBe(false)
+})
+// Report IWA-01 / IWA-05 / IWA-06: an exact word or character count is counted by the app, not left to the model.
+test('countAsk / countMiss: exact words, character limits and bullet counts', () => {
+  expect(countAsk('Write exactly 150 words on why sleep matters.')).toEqual({ n: 150, unit: 'words', exact: true })
+  expect(countAsk('Write a tweet under 280 characters about coffee.')).toEqual({ n: 280, unit: 'characters', exact: false })
+  expect(countAsk('Give me 3 bullet points on why exercise matters.')).toEqual({ n: 3, unit: 'bullets', exact: true })
+  expect(countAsk('What is the capital of Australia?')).toBeUndefined()
+  const ten = 'Coffee wakes me up and makes mornings feel much brighter.'
+  expect(countMiss('Write exactly 10 words about coffee.', ten)).toBeUndefined()
+  expect(countMiss('Write exactly 10 words about coffee.', '**Coffee** wakes me up and makes mornings feel brighter.')).toMatch(/has 9 words; the user asked for exactly 10/)
+  expect(countMiss('Write a tweet under 20 characters', 'Coffee is great!')).toBeUndefined()
+  expect(countMiss('Write a tweet under 20 characters', 'Coffee is great, I love it!')).toMatch(/at most 20/)
+  expect(countMiss('Give me 3 bullet points on sleep', '- Rest\n- Mood\n- Focus')).toBeUndefined()
+  expect(countMiss('Give me 3 bullet points on sleep', '- Rest\n- Mood')).toMatch(/has 2 bullets/)
+})
+
+// Review round 3 (IWA-01/05/06): the common ways of asking for a size are counted too.
+test('countAsks: a 50-word bio, in 30 words, spelled numbers, ranges, sentences, several asks at once', async () => {
+  const { countAsks } = await import('../../src/main/agent/harness-features')
+  expect(countAsk('Write a 50-word bio of a chef')).toEqual({ n: 50, unit: 'words', exact: true })
+  expect(countAsk('In 30 words, explain gravity')).toEqual({ n: 30, unit: 'words', exact: true })
+  expect(countAsk('Write a 50 word summary')).toEqual({ n: 50, unit: 'words', exact: true })
+  expect(countAsk('Write 100 words on space')).toEqual({ n: 100, unit: 'words', exact: true })
+  expect(countAsk('Write a 280-character post')).toEqual({ n: 280, unit: 'characters', exact: false })
+  expect(countAsk('Write exactly twenty words about dogs')).toEqual({ n: 20, unit: 'words', exact: true })
+  expect(countAsk('Keep it to 50 words')).toEqual({ n: 50, unit: 'words', exact: false })
+  expect(countAsk('Describe Paris in between 40 and 60 words')).toEqual({ n: 60, min: 40, unit: 'words', exact: false })
+  expect(countAsk('Explain photosynthesis in 3 sentences')).toEqual({ n: 3, unit: 'sentences', exact: true })
+  expect(countAsks('Write exactly 50 words, under 300 characters, on tea')).toEqual([{ n: 300, unit: 'characters', exact: false }, { n: 50, unit: 'words', exact: true }])
+  // Not a size to check.
+  for (const q of ['Write about 50 words on tea', 'Summarize these 3 sentences', 'I wrote 500 words, can you edit them?']) expect(countAsk(q), q).toBeUndefined()
+  expect(countMiss('Explain photosynthesis in 3 sentences', 'Plants use light. They make sugar. Oxygen is released.')).toBeUndefined()
+  expect(countMiss('Explain photosynthesis in 3 sentences', 'Plants use light. They make sugar.')).toMatch(/has 2 sentences; the user asked for exactly 3/)
+  expect(countMiss('Describe tea in between 5 and 8 words', 'Tea is warm.')).toMatch(/between 5 and 8/)
+  expect(countMiss('Write exactly 5 words, under 10 characters', 'One two three four five')).toMatch(/at most 10/)
+})
+

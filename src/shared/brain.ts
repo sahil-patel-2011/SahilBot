@@ -186,7 +186,7 @@ export interface BrainPromptAction { id: BrainActionId; label: string; primary?:
 export interface BrainPrompt {
   id: string
   kind: BrainPromptKind
-  /** "Sarah Lee asked for the revised proposal by Friday. Draft it from the last version?" */
+  /** "a client asked for the revised proposal by Friday. Draft it from the last version?" */
   text: string
   detail?: string
   entityId?: string

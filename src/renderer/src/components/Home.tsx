@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { DocInfo, FilePreview, HomeIdea, Space, Thread } from '@shared/types'
+import type { DocInfo, FilePreview, Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { toast } from '../lib/toast'
 import { Mascot, SpaceAvatar } from '../brand'
@@ -58,13 +58,6 @@ export function FileCard({ f, onOpen }: { f: RecentFile; onOpen: (path: string) 
   )
 }
 
-/** Starter ideas under the box (personalized in main: ideas.ts); one click fills it in. */
-const ICON: Record<HomeIdea['icon'], ReactNode> = {
-  globe: <I.Globe size={14} />, clock: <I.Clock size={14} />, search: <I.Search size={14} />, cpu: <I.Cpu size={14} />, file: <I.File size={14} />,
-  video: <I.Video size={14} />, sparkle: <I.Sparkle size={14} />, edit: <I.Edit size={14} />, layers: <I.Layers size={14} />, image: <I.Image size={14} />,
-  inbox: <I.Inbox size={14} />, users: <I.Users size={14} />, listicon: <I.ListIcon size={14} />, bolt: <I.Bolt size={14} />, folder: <I.Folder size={14} />
-}
-
 /**
  * Your bots, first thing: each one's state, a Talk button (a voice conversation with that bot: it can go do the
  * work and tell you when it's done) and Open (its ongoing chat).
@@ -101,7 +94,7 @@ export function BotDeck({ bots, needSpaces, onOpen, onTalk, onNewBot, onSetup }:
           {list.map((b) => (
             <div key={b.id} className={`bot-card${needSpaces?.has(b.id) ? ' needs' : ''}`} data-testid="bot-card" data-id={b.id}>
               <button className="bot-card-main" onClick={() => onOpen(b.id)} title={`Open ${b.name}`}>
-                <SpaceAvatar color={b.color} shape={b.shape} size={34} />
+                <SpaceAvatar color={b.color} shape={b.shape} icon={b.icon} size={34} />
                 <span className="bot-card-text">
                   <b>{b.name}</b>
                   {b.label && <small>{b.label}</small>}
@@ -120,37 +113,22 @@ export function BotDeck({ bots, needSpaces, onOpen, onTalk, onNewBot, onSetup }:
   )
 }
 
-export function Home({ userName, onOpenFile, onViewFiles, composer, refreshKey, onIdea, deck }: {
-  /** The bot cards (BotDeck), shown above the quick question box. */
-  deck?: ReactNode
-  onIdea?: (text: string, deep?: boolean) => void
+/**
+ * The home screen, like Grok Bot's: a greeting and the message box, nothing else. No bot cards, idea chips or
+ * recent files under it (your bots are in the sidebar; files are in Library).
+ */
+export function Home({ userName, composer }: {
   userName: string
-  onOpenFile: (path: string) => void
-  onViewFiles: () => void
+  onOpenFile?: (path: string) => void
+  onViewFiles?: () => void
   composer: ReactNode
   refreshKey?: unknown
 }) {
-  const [files, setFiles] = useState<RecentFile[]>([])
-  const [ideas, setIdeas] = useState<HomeIdea[]>([])
-  useEffect(() => { void api.files.recent(3).then(setFiles) }, [refreshKey])
-  useEffect(() => { void api.files.ideas().then(setIdeas).catch(() => undefined) }, [refreshKey])
   return (
     <div className="home">
       <div className="home-hero">
         <div className="welcome"><Mascot size={40} /><h1>{greeting(userName)}</h1></div>
         {composer}
-        {onIdea && (
-          <div className="ideas" data-testid="ideas">
-            {ideas.slice(0, 4).map((x) => <button key={x.label} className={`idea${x.personal ? ' personal' : ''}`} title={x.personal ? 'Suggested from what you do with SahilBot' : undefined} onClick={() => onIdea(x.text)}>{ICON[x.icon]}{x.label}</button>)}
-          </div>
-        )}
-        {deck}
-        {files.length > 0 && (
-          <section className="home-files">
-            <div className="home-files-head"><span>Recent files</span><button className="link-btn" onClick={onViewFiles}>View all</button></div>
-            <div className="file-grid three">{files.map((f) => <FileCard key={f.path} f={f} onOpen={onOpenFile} />)}</div>
-          </section>
-        )}
       </div>
     </div>
   )
@@ -245,22 +223,22 @@ export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: strin
   const [files, setFiles] = useState<RecentFile[] | null>(null)
   const [q, setQ] = useState('')
   const [kind, setKind] = useState('all')
-  useEffect(() => { void (api.files.artifacts ? api.files.artifacts(500) : api.files.recent(200)).then(setFiles) }, [])
+  useEffect(() => { void (api.files.artifacts ? api.files.artifacts(500) : api.files.recent(200)).then(setFiles).catch(() => setFiles([])) }, [])
   const counts = new Map<string, number>()
   for (const f of files ?? []) counts.set(artifactKind(f.name), (counts.get(artifactKind(f.name)) ?? 0) + 1)
   const chips = [{ id: 'all', label: 'All', n: files?.length ?? 0 }, ...ARTIFACT_KINDS.map((k) => ({ id: k.id as string, label: k.label as string, n: counts.get(k.id) ?? 0 })), { id: 'other', label: 'Other', n: counts.get('other') ?? 0 }].filter((c) => c.id === 'all' || c.n > 0)
   const shown = (files ?? []).filter((f) => (kind === 'all' || artifactKind(f.name) === kind) && (!q || `${f.name} ${f.threadTitle}`.toLowerCase().includes(q.toLowerCase())))
   return (
     <div className="page" data-testid="files-view">
-      <div className="page-head"><h1>Artifacts</h1><input className="set-input page-search" placeholder="Search artifacts" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-      <div className="set-sub">Start a document, deck, sheet or dashboard that you and SahilBot edit together, or open the files your agents made. Click a file to preview it; the link under it opens the chat it came from.</div>
+      <div className="page-head"><h1>Library</h1><input className="set-input page-search" placeholder="Search your library" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+      <div className="set-sub">Start a doc, deck, sheet or dashboard, or open what your bots made. Click a file to preview it.</div>
       <MakeNew />
       {chips.length > 2 && (
         <div className="artifact-chips" role="tablist" aria-label="Kind" data-testid="artifact-kinds">
           {chips.map((c) => <button key={c.id} role="tab" aria-selected={kind === c.id} className={`artifact-chip${kind === c.id ? ' on' : ''}`} onClick={() => setKind(c.id)} data-testid={`artifact-kind-${c.id}`}>{c.label} <span>{c.n}</span></button>)}
         </div>
       )}
-      {files === null ? <div className="hint">Loading…</div> : shown.length === 0 ? <div className="empty-state"><I.File size={22} /><div>{files.length ? 'Nothing matches.' : 'No files yet. Ask for a report, a deck, a spreadsheet or an image, or export a document above, and it shows up here.'}</div></div> : (
+      {files === null ? <div className="hint">Loading…</div> : shown.length === 0 ? <div className="empty-state"><I.File size={22} /><div>{files.length ? 'Nothing matches.' : 'No files yet. Ask a bot for a report, a deck, a spreadsheet or an image, and it shows up here.'}</div></div> : (
         <div className="file-grid">
           {shown.map((f) => (
             <div key={f.path} className="file-wrap">
@@ -286,7 +264,7 @@ export function ProjectsView({ spaces, onOpen, onNew }: { spaces: Space[]; onOpe
   }, [spaces]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="page" data-testid="projects-view">
-      <div className="page-head"><h1>Projects</h1><button className="btn primary" onClick={onNew}><I.Plus size={15} /> New project</button></div>
+      <div className="page-head"><h1>Projects</h1><button className="btn primary" onClick={onNew} data-testid="new-project"><I.Plus size={15} /> New project</button></div>
       <div className="set-sub">A project is a folder, instructions and chats that share what they learn with each other.</div>
       {projects.length === 0 ? <div className="empty-state"><I.Folder size={22} /><div>No projects yet. Make one for a client, a codebase or anything you keep coming back to.</div></div> : (
         <div className="project-grid">

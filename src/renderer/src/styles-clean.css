@@ -33,18 +33,15 @@
 .sb-bots-label { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 4px 10px; min-height: 28px; font-size: 12.5px; font-weight: 600; color: var(--text-3); }
 .sb-bots-label .nav-add { opacity: 1; }
 
-/* Pinned bots: quiet rows at the top of the bot list, not big tiles. */
-.pin-grid { display: flex; flex-direction: column; gap: 1px; padding: 0; outline-offset: 0; }
-.pin-grid.empty.dragging { min-height: 40px; }
-.pin-widget { width: 100%; padding: 0; }
-.pw-btn { flex-direction: row; justify-content: flex-start; gap: 10px; height: 40px; padding: 0 10px; border-radius: 9px; text-align: left; }
-.pw-avatar, .pin-widget > .pw-avatar { width: 26px; height: 26px; margin: 0; }
-.pw-name { font-size: 14px; font-weight: 500; text-align: left; flex: 1; min-width: 0; }
-.pw-star { display: none; }
-.pw-avatar { position: relative; }
-.pw-avatar .pw-status { position: absolute; top: -3px; right: -5px; left: auto; bottom: auto; margin: 0; padding: 1px; border-radius: 999px; background: var(--sidebar) !important; display: flex; }
+/* Pinned bots: big avatars with their names at the top of the sidebar (like Grok Bot); one pin is extra big. */
+.pin-grid { padding: 6px 0 8px; gap: 0; }
+.pin-grid.one .pin-widget { width: 100%; }
+.pin-grid.one .pw-avatar { width: 96px; height: 96px; }
+.pw-btn { padding: 10px 4px; gap: 6px; border-radius: 18px; transition: background .16s ease-out, transform .16s ease-out; }
+.pw-btn:active { transform: scale(.97); }
+.pw-name { font-size: 13.5px; text-align: center; }
+.pin-grid.one .pw-name { font-size: 15px; }
 .pw-avatar .pw-status .need-dot, .pw-avatar .pw-status .unread-dot { width: 8px; height: 8px; }
-.pin-widget .rename { margin: 0; text-align: left; }
 
 /* Bots: one quiet row each (name, then a single grey line). */
 .bot-row { border-radius: 9px; }
@@ -163,3 +160,43 @@
 .find-bar .find-count { font-size: 12px; min-width: 64px; text-align: right; color: var(--text-2); }
 ::highlight(find) { background-color: rgba(255, 196, 0, .35); }
 ::highlight(find-current) { background-color: rgba(255, 140, 0, .75); color: #000; }
+
+/* Composer, bottom right (like Grok Bot): dictate in a soft grey circle, the voice conversation in a solid one. */
+.composer .c-btn[data-testid="dictate"] { width: 36px; height: 36px; background: var(--hover); color: var(--text-2); }
+.composer .c-btn[data-testid="dictate"]:hover { background: color-mix(in srgb, var(--text) 12%, transparent); color: var(--text); }
+.composer .c-btn.voice, .chat-root .composer .c-btn.voice { width: 40px; height: 40px; background: var(--text); color: var(--bg); }
+.composer .c-btn.voice:hover, .chat-root .composer .c-btn.voice:hover { background: var(--text); color: var(--bg); filter: none; opacity: .86; }
+.composer .c-btn.voice:active { transform: scale(.95); }
+.composer .c-btn[data-testid="dictate"].recording { background: var(--danger); color: #fff; }
+
+/* You, bottom left (like Grok Bot): initials in a circle, your name, then a compact Apps pill. */
+.sb-bottom .sb-me { flex: 1; min-width: 0; width: auto; height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 4px; border-radius: 12px; background: transparent; box-shadow: none; justify-content: flex-start; font: inherit; }
+.sb-bottom .sb-me:hover { background: var(--hover); }
+.sb-bottom .sb-me.on { background: var(--selected); }
+.sb-me-avatar { width: 32px; height: 32px; flex: none; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); font-size: 12.5px; font-weight: 600; letter-spacing: .02em; }
+.sb-me-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; color: var(--text); }
+.sb-me-name.muted { color: var(--text-2); }
+.sb-bottom .sb-connect { flex: none; width: auto; padding: 0 12px; gap: 6px; }
+
+/* Bot details → Routines → New routine: a small form (what, how often, when). */
+.bd-section-row { display: flex; align-items: center; justify-content: space-between; }
+.rt-form { display: flex; flex-direction: column; gap: 8px; padding: 12px; margin: 4px 0 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); animation: set-fade .14s ease both; }
+.rt-form-label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.rt-form-prompt { width: 100%; resize: vertical; min-height: 48px; }
+.rt-form-repeat, .rt-form-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.rt-form-repeat button, .rt-form-days button { padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; color: var(--text-2); }
+.rt-form-days button { width: 30px; padding: 5px 0; text-align: center; }
+.rt-form-repeat button.on, .rt-form-days button.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.rt-form-when { display: flex; gap: 6px; }
+.rt-form-when .set-input { width: auto; }
+.rt-form-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* An answer to one particular message (a side question while a job runs): a small quote of it above the reply. */
+.reply-to { display: flex; gap: 6px; align-items: baseline; max-width: 100%; margin: 0 0 4px 4px; font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reply-to > span { color: var(--text-3); }
+
+/* ⌘B: the sidebar folds away; the chat gets the whole window. */
+.app.sb-hidden > .sidebar { display: none; }
+
+/* The sidebar's show button in the chat header while it's hidden (clear of the window buttons). */
+.app.sb-hidden .main-header .sb-show { margin-left: 72px; }

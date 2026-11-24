@@ -69,6 +69,44 @@ export function cleanMcpServer(v: unknown): McpServerSettings {
   return { enabled: x.enabled === true, port }
 }
 
+/**
+ * Who the user is: first and last name (trimmed, at most 60 characters each) and a birthday that is a real past
+ * date within 120 years (YYYY-MM-DD), else none. With no names saved, a two-word userName (older setups) fills them.
+ */
+export function cleanProfile(v: unknown, userName = '', now = new Date()): { firstName: string; lastName: string; birthday?: string } {
+  const x = (v ?? {}) as { firstName?: unknown; lastName?: unknown; birthday?: unknown }
+  const text = (s: unknown): string => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, 60) : '')
+  let firstName = text(x.firstName), lastName = text(x.lastName)
+  if (!firstName && !lastName && text(userName)) {
+    const [f, ...more] = text(userName).split(' ')
+    firstName = f
+    lastName = more.join(' ')
+  }
+  const b = typeof x.birthday === 'string' ? x.birthday.trim() : ''
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(b) ? new Date(`${b}T12:00:00Z`) : null
+  const ok = !!d && !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === b && d.getTime() <= now.getTime() && d.getUTCFullYear() >= now.getUTCFullYear() - 120
+  return { firstName, lastName, ...(ok ? { birthday: b } : {}) }
+}
+
+/** The message box choices: two switches, both off by default (↵ sends; the Mac's spelling check is off). */
+export function cleanComposer(v: unknown): { cmdEnter: boolean; spellCheck: boolean } {
+  const x = (v ?? {}) as { cmdEnter?: unknown; spellCheck?: unknown }
+  return { cmdEnter: x.cmdEnter === true, spellCheck: x.spellCheck === true }
+}
+
+/**
+ * The profile and the first name kept together: a profile change sets userName to the first name; a userName
+ * change on its own (older callers) fills the names from it and keeps the birthday.
+ */
+function profileAndName(cur: Pick<Settings, 'profile' | 'userName'>, rest: Partial<Settings>): { profile: Settings['profile']; userName: string } {
+  if (rest.profile !== undefined) {
+    const profile = cleanProfile({ ...cur.profile, ...rest.profile })
+    return { profile, userName: rest.userName ?? (profile.firstName || cur.userName) }
+  }
+  if (rest.userName !== undefined) return { profile: cleanProfile({ birthday: cur.profile?.birthday }, rest.userName), userName: rest.userName }
+  return { profile: cur.profile, userName: cur.userName }
+}
+
 /** The user's own emails and phone numbers as saved: valid ones only, each kind in its own list, at most 5 of each. */
 export function cleanMe(v: unknown): { emails: string[]; phones: string[] } {
   const x = (v ?? {}) as { emails?: unknown; phones?: unknown }
@@ -128,7 +166,7 @@ export function cleanLocal(v: unknown): LocalSettings | undefined {
 /** Speech output settings as saved. */
 export function cleanVoiceOutput(v: unknown): VoiceOutputSettings {
   const x = (v ?? {}) as Partial<VoiceOutputSettings>
-  return { openai: x.openai === true, ...(['auto', 'openai', 'xai', 'off', 'chatgpt-app', 'grok-app'].includes(x.provider ?? '') ? { provider: x.provider } : {}) }
+  return { openai: x.openai === true, ...(['auto', 'openai', 'xai', 'off', 'chatgpt-app', 'grok-app', 'claude-app'].includes(x.provider ?? '') ? { provider: x.provider } : {}) }
 }
 
 export const MARKET_KEY_PROVIDERS: MarketKeyProvider[] = ['tiingo', 'polygon', 'alphavantage', 'finnhub']
@@ -248,7 +286,8 @@ export class SettingsStore {
       ...DEFAULTS, ...s, providers,
       taskModels: { ...DEFAULTS.taskModels, ...s.taskModels },
       cloud: { ...DEFAULTS.cloud, ...s.cloud },
-      appearance: { ...DEFAULT_APPEARANCE, ...s.appearance },
+      // One look for everyone (no text size, width or color settings any more): saved customizations are ignored.
+      appearance: DEFAULT_APPEARANCE,
       search: { ...DEFAULTS.search, ...s.search }, advanced: { ...DEFAULTS.advanced, ...s.advanced },
       customRules: cleanRules(s.customRules),
       catchUpHours: cleanCatchUpHours(s.catchUpHours),
@@ -262,7 +301,9 @@ export class SettingsStore {
       defaultMode: cleanLevel(s.defaultMode) ?? 'auto',
       botModes: cleanBotModes(s.botModes),
       thinking: isEffortChoice(s.thinking) ? s.thinking : 'auto',
-      me: cleanMe(s.me)
+      me: cleanMe(s.me),
+      profile: cleanProfile(s.profile, s.userName),
+      composer: cleanComposer(s.composer)
     }
   }
 
@@ -323,6 +364,8 @@ export class SettingsStore {
       grokPlan: rest.grokPlan ? { enabled: rest.grokPlan.enabled === true, preferSubscriptions: rest.grokPlan.preferSubscriptions !== false } : cur.grokPlan,
       botAutonomy: rest.botAutonomy !== undefined ? cleanBotAutonomyMap(rest.botAutonomy) : cur.botAutonomy,
       me: rest.me !== undefined ? cleanMe(rest.me) : cur.me,
+      ...profileAndName(cur, rest),
+      composer: rest.composer !== undefined ? cleanComposer({ ...cur.composer, ...rest.composer }) : cur.composer,
       learning: rest.learning !== undefined ? cleanLearning({
         ...cur.learning, ...rest.learning,
         // A switch the user flipped is theirs: later default changes leave it alone.

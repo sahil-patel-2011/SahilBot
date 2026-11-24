@@ -57,10 +57,10 @@ describe('slides: a native deck the bot and the user both edit', () => {
       await expect.poll(() => page.evaluate(() => { const a = document.activeElement; return a?.getAttribute('data-testid') === 'slide-point' && !a.textContent })).toBe(true)
       await page.keyboard.type('Press coverage')
       await page.locator('[data-testid="slide-add-stat"]').click()
-      await page.keyboard.press('Meta+a')
+      await page.keyboard.press('ControlOrMeta+a')
       await page.keyboard.type('3')
       await page.keyboard.press('Enter')
-      await page.keyboard.press('Meta+a')
+      await page.keyboard.press('ControlOrMeta+a')
       await page.keyboard.type('Partners')
       await shot(page, 'deck-edit')
       await page.locator('[data-testid="slide-add"]').click()
@@ -97,7 +97,7 @@ describe('slides: a native deck the bot and the user both edit', () => {
       await expect.poll(() => page.locator('.deck-present').count()).toBe(0)
 
       // Artifacts → Slides: a blank deck in its own chat.
-      await page.locator('[data-testid="nav-artifacts"], [data-testid="nav-files"]').first().click()
+      await page.click('[data-testid="profile"]'); await page.locator('[data-testid="nav-artifacts"], [data-testid="nav-files"]').first().click()
       await page.locator('[data-testid="make-new"]').waitFor({ timeout: 10_000 })
       await shot(page, 'artifacts')
       await page.locator('[data-testid="make-slides"]').click()
@@ -107,7 +107,7 @@ describe('slides: a native deck the bot and the user both edit', () => {
       await shot(page, 'new-deck')
 
       // Slash command: "/de" → /deck opens a new deck.
-      await page.locator('[data-testid="nav-artifacts"], [data-testid="nav-files"]').first().click()
+      await page.click('[data-testid="profile"]'); await page.locator('[data-testid="nav-artifacts"], [data-testid="nav-files"]').first().click()
       await page.keyboard.press('Meta+n')
       await page.fill('[data-testid="composer-input"]', '/de')
       await page.locator('[data-testid="slash-menu"]').waitFor({ timeout: 5_000 })
@@ -117,7 +117,7 @@ describe('slides: a native deck the bot and the user both edit', () => {
       expect(await page.locator('[data-testid="composer-input"]').inputValue()).toBe('')
 
       // Artifacts → Dashboards: a starter dashboard, drawn, with a chart from its table; exports to PDF.
-      await page.locator('[data-testid="nav-artifacts"], [data-testid="nav-files"]').first().click()
+      await page.click('[data-testid="profile"]'); await page.locator('[data-testid="nav-artifacts"], [data-testid="nav-files"]').first().click()
       await page.locator('[data-testid="make-dashboard"]').click()
       await page.locator('[data-testid="dashboard"]').waitFor({ timeout: 15_000 })
       expect(await page.locator('[data-testid="dashboard"] .db-tile').count()).toBe(2)

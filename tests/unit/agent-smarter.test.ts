@@ -208,6 +208,72 @@ describe('self-review', () => {
     expect(shown[0].meta?.keptDraft).toBe(true)
   })
 
+  test('a message sent while it only double-checks an answer ends that run with the answer and starts a fresh one', async () => {
+    const save: ToolDef<{ v: string }> = {
+      name: 'save_note', label: 'Save', effect: 'write_local', description: 'save something',
+      parameters: { type: 'object', properties: { v: { type: 'string' } }, required: ['v'], additionalProperties: false },
+      async run({ v }) { return { text: `saved ${v}` } }
+    }
+    const h = harness([model('model-a', 2)], [save])
+    llm.requests.length = 0
+    // The double-check is slow (a word every 400 ms); the user moves on while it runs.
+    llm.script.push({ toolCalls: [call('save_note', { v: 'z' })], delay: 0 }, { content: 'Saved z to your notes.', delay: 0 }, { content: 'Let me look at that again more carefully before I answer you here', delay: 400 }, { content: '2 + 2 = 4.', delay: 0 })
+    const t = h.thread()
+    const done = h.run(t, 'Save a note that says z in my notes file')
+    for (let i = 0; i < 100 && !h.events.some((e) => e.type === 'drafting' && (e as { tool?: string }).tool === 'verify'); i++) await new Promise((r) => setTimeout(r, 20))
+    // While it checks, the answer it wrote is still the one on screen (held, marked checking).
+    const draft = h.db.listMessages(t.id).find((m) => m.content === 'Saved z to your notes.')!
+    expect(draft.meta).toMatchObject({ superseded: true, checking: true })
+    await new Promise((r) => setTimeout(r, 600))
+    expect(await h.agent.steer(t.id, 'Thanks. What is 2 + 2?')).toBe('sent')
+    expect(await done).toBe('finished')
+    let ms = h.db.listMessages(t.id)
+    expect(ms.find((m) => m.id === draft.id)?.meta).toMatchObject({ superseded: false, checkSkipped: true })
+    // The half-written re-check is gone from view; the new message runs as its own request.
+    expect(ms.filter((m) => m.role === 'assistant' && m.content.startsWith('Let me look') && !m.meta?.superseded)).toHaveLength(0)
+    for (let i = 0; i < 100 && !h.db.listMessages(t.id).some((m) => m.content === '2 + 2 = 4.'); i++) await new Promise((r) => setTimeout(r, 30))
+    ms = h.db.listMessages(t.id)
+    const asked = ms.find((m) => m.role === 'user' && m.content === 'Thanks. What is 2 + 2?')
+    expect(asked?.meta?.steer).toBeFalsy()
+    expect(ms.at(-1)?.content).toBe('2 + 2 = 4.')
+  })
+
+  test('a double-check that finds a mistake and fixes it is real work: a long fix is never thrown away for the old answer', async () => {
+    // Review: run.checking stayed set while the check was fixing, so past 90 s the wrong first answer came back.
+    const realNow = Date.now
+    let skew = 0
+    const save: ToolDef<{ v: string }> = {
+      name: 'save_note', label: 'Save', effect: 'write_local', description: 'save something',
+      parameters: { type: 'object', properties: { v: { type: 'string' } }, required: ['v'], additionalProperties: false },
+      // The fix takes "two minutes".
+      async run({ v }) { if (v === 'fixed') skew += 120_000; return { text: `saved ${v}` } }
+    }
+    const h = harness([model('model-a', 2)], [save])
+    Date.now = () => realNow() + skew
+    try {
+      llm.script.push({ toolCalls: [call('save_note', { v: 'wrong' })], delay: 0 }, { content: 'Saved: total is $313.20.', delay: 0 }, { toolCalls: [call('save_note', { v: 'fixed' })], delay: 0 }, { content: 'Fixed it: the total is $331.20.', delay: 0 })
+      const t = h.thread()
+      expect(await h.run(t, 'Add up the receipts and save the total in my notes file')).toBe('finished')
+      const shown = h.db.listMessages(t.id).filter((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)
+      expect(shown.map((m) => m.content)).toEqual(['Fixed it: the total is $331.20.'])
+    } finally { Date.now = realNow }
+  })
+
+  test('pages the agent read in the browser show under its answer as sources', async () => {
+    // Grok Bot head-to-head: the trip plan's sources were in the side panel only; browser pages never reached the answer.
+    const browse: ToolDef<{ q: string }> = {
+      name: 'browse_page', label: 'Browser', effect: 'read', description: 'read a page in the browser',
+      parameters: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'], additionalProperties: false },
+      async run() { return { text: 'Fairfield Inn Savannah: $260/night', sources: [{ title: 'Fairfield Inn Savannah Downtown', url: 'https://www.marriott.com/savannah' }], read: true } }
+    }
+    const h = harness([model('model-a', 2)], [browse])
+    llm.script.push({ toolCalls: [call('browse_page', { q: 'savannah hotel' })], delay: 0 }, { content: 'The Fairfield Inn is about $260 a night.', delay: 0 })
+    const t = h.thread()
+    expect(await h.run(t, 'How much is the Fairfield Inn in Savannah per night?')).toBe('finished')
+    const answer = h.db.listMessages(t.id).filter((m) => m.role === 'assistant' && m.content && !m.meta?.superseded).at(-1)!
+    expect(answer.meta?.sources).toEqual([{ title: 'Fairfield Inn Savannah Downtown', url: 'https://www.marriott.com/savannah' }])
+  })
+
   test('verifyNote: self-review only for complex work', () => {
     expect(verifyNote({ changed: true, researched: false, actions: 2, complex: false })).not.toMatch(/Critique/)
     expect(verifyNote({ changed: false, researched: true, actions: 9, complex: true, goal: 'Plan my trip' })).toMatch(/Critique your draft against what the user asked for \("Plan my trip"\)/)
@@ -276,25 +342,26 @@ describe('activity context is untrusted', () => {
 })
 
 describe('Autonomous in unattended runs', () => {
-  test('an overwrite with a backup runs in an attended Autonomous chat, but is skipped when nobody is watching', async () => {
+  test('an overwrite with a backup runs in an Autonomous chat, attended or not; an unattended Ask chat skips it', async () => {
     let ran = 0
     const overwrite: ToolDef<{ path: string }> = {
       name: 'file_write', label: 'Write file', effect: 'destructive', description: 'overwrite a file',
       parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false },
       async run() { ran++; return { text: 'written' } }
     }
-    for (const unattended of [false, true]) {
+    for (const [mode, unattended] of [['autonomous', false], ['autonomous', true], ['ask', true]] as const) {
       const h = harness([model('model-a', 1)], [overwrite])
-      const t = h.db.createThread(h.space.id, 'autonomous', 'model-a')
+      const t = h.db.createThread(h.space.id, mode, 'model-a')
       llm.script.push({ toolCalls: [call('file_write', { path: 'notes.md' })], delay: 0 }, { content: 'ok', delay: 0 })
       const before = ran
       expect(await (await h.agent.send({ threadId: t.id, text: 'update my notes file' }, { unattended })).done).toBe('finished')
       const result = h.db.listMessages(t.id).find((m) => m.role === 'tool' && m.toolName === 'file_write')
-      if (unattended) {
-        expect(ran).toBe(before)
+      if (mode === 'ask') {
+        // Nobody is there to approve it: skipped, not done.
+        expect(ran, `${mode} unattended=${unattended}`).toBe(before)
         expect(result?.meta?.status).toBe('denied')
       } else {
-        expect(ran).toBe(before + 1)
+        expect(ran, `${mode} unattended=${unattended}`).toBe(before + 1)
         expect(result?.meta?.status).toBe('ok')
       }
     }

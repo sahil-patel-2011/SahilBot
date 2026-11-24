@@ -1,3 +1,4 @@
+import { conceptScore } from './recall-expand'
 import type { Db } from './db'
 import { uid } from './db'
 import { grantsPermissions, importSecret, importTime, parseExport, type ExportPreview } from './memory-import'
@@ -166,6 +167,14 @@ export function fuzzyScore(query: string, text: string): number {
     sum += best
   }
   return sum / q.length
+}
+
+/**
+ * How well a saved fact fits a request: the same words (fuzzyScore, typos included) or the same meaning
+ * (recall-expand.ts: "my boss" ↔ "Manager at work…", the weather ↔ where they live, food ↔ allergies).
+ */
+export function relevance(query: string, text: string, category?: string): number {
+  return Math.max(fuzzyScore(query, text), conceptScore(query, text, category))
 }
 
 /** Near-identical wording (same normalized text, or 80% of the words shared). */
@@ -360,7 +369,7 @@ export function rankMemories(all: Memory[], opts: RankOptions = {}): Array<{ m: 
   return all
     .filter((m) => m.spaceId === null || (opts.spaceId != null && m.spaceId === opts.spaceId))
     .map((m) => {
-      const rel = q ? fuzzyScore(q, m.content) : 0
+      const rel = q ? relevance(q, m.content, m.category) : 0
       const age = Math.max(0, now - m.updatedAt) / DAY
       const recency = Math.exp(-age / 45)
       const score = rel * 3 + KIND_WEIGHT[m.category] + recency + (m.spaceId ? 0.3 : 0)
@@ -368,6 +377,22 @@ export function rankMemories(all: Memory[], opts: RankOptions = {}): Array<{ m: 
     })
     .sort((a, b) => b.score - a.score || b.m.updatedAt - a.m.updatedAt)
 }
+
+/**
+ * Tokens of saved memories a run gets, by the model's context window: the old fixed 700 on small local
+ * windows, more on big ones. The extra room is only for memories that fit the request (renderBlock), so a big
+ * model sees more of what bears on the task, not every unrelated fact on every run.
+ */
+export function memoryBudget(window?: number): number {
+  if (!window || !Number.isFinite(window) || window <= 16_384) return BASE_MEMORY_TOKENS
+  if (window <= 40_000) return 1000
+  if (window <= 100_000) return 1500
+  if (window <= 300_000) return 2500
+  return 4000
+}
+
+/** The memory block's usual size; room past it goes only to memories that fit the request (renderBlock). */
+export const BASE_MEMORY_TOKENS = 700
 
 /** The sub-header over the user's past decisions in the memory block (decisions.ts saves them). */
 export const DECISION_HEADER = 'Past decisions by the user (follow unless the request says otherwise):'
@@ -439,9 +464,12 @@ export function renderBlock(all: Memory[], opts: RankOptions & { maxTokens?: num
   used += decisionUsed
   omitted += decisions.length - pickedDecisions.length
   const mainBudget = budget - logReserve
+  // Past the usual size, only memories that bear on the request (or say who the user is and how they want things).
+  const base = Math.min(budget, BASE_MEMORY_TOKENS) - logReserve
+  const fits = (m: Memory): boolean => !q || ['profile', 'rule', 'preference'].includes(m.category) || relevance(q, m.content, m.category) >= 0.3
   for (const { m } of others) {
     const cost = estTokens(line(m)) + 1
-    if (used + cost > mainBudget) { omitted++; continue }
+    if (used + cost > mainBudget || (used + cost > base && !fits(m))) { omitted++; continue }
     used += cost
     ;(isUntrusted(m) ? unverified : m.spaceId ? mine : shared).push(m)
   }
@@ -636,7 +664,7 @@ export class MemoryStore {
     const pool = this.list(spaceId)
     if (!q) return pool.slice(0, limit)
     return pool
-      .map((m) => ({ m, s: Math.max(fuzzyScore(q, m.content), m.id === q ? 1 : 0, fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
+      .map((m) => ({ m, s: Math.max(relevance(q, m.content, m.category), m.id === q ? 1 : 0, fuzzyScore(q, `${m.category} ${m.content}`) * 0.9) }))
       .filter((x) => x.s >= 0.34)
       .sort((a, b) => b.s - a.s || b.m.updatedAt - a.m.updatedAt)
       .slice(0, limit)
@@ -650,7 +678,7 @@ export class MemoryStore {
   forget(query: string, spaceId: string | null, opts: { all?: boolean; only?: 'shared' | 'space' } = {}): { removed: Memory[]; candidates: Memory[] } {
     const scored = this.list(spaceId)
       .filter((m) => !opts.only || (opts.only === 'shared' ? !m.spaceId : !!m.spaceId))
-      .map((m) => ({ m, s: m.id === query.trim() ? 1 : fuzzyScore(query, m.content) }))
+      .map((m) => ({ m, s: m.id === query.trim() ? 1 : relevance(query, m.content, m.category) }))
       .filter((x) => x.s >= 0.5)
       .sort((a, b) => b.s - a.s || b.m.updatedAt - a.m.updatedAt)
     if (!scored.length) return { removed: [], candidates: [] }

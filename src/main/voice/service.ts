@@ -9,6 +9,7 @@ import type { VoiceBarOptions, VoiceStatus, VoiceStyle } from '@shared/types'
 import { LANGUAGES, VOICES, clampSpeed } from './voices'
 import { SentenceSplitter } from './audio'
 import { VoicePipeline, type VoiceEvent } from './pipeline'
+import { GrokRealtime } from './grok-realtime'
 import { KokoroEngine, SayEngine, type TtsChoice, type TtsEngine } from './tts'
 import { EnergyVad, SileroVad, type Vad } from './vad'
 import { chooseStt, type SttChoice, type SpeechToText } from './stt'
@@ -36,8 +37,11 @@ export type DownloadEvent = { type: 'download'; kind: string; progress: number; 
 
 export interface VoiceHooks {
   emit(e: VoiceEvent | DownloadEvent): void
-  /** Sends text to the voice thread's agent and streams the reply text back. */
-  respond(text: string, signal: AbortSignal, onText: (t: string) => void): Promise<void>
+  /**
+   * Sends text to the voice thread's agent and streams the reply text back. `task`: the live voice's do_task (a
+   * request to do real work, not speech to answer out loud); it may resolve with the bot's final reply.
+   */
+  respond(text: string, signal: AbortSignal, onText: (t: string) => void, opts?: { task?: boolean }): Promise<void | string>
   /**
    * How replies may be spoken (llm-free): local voices allowed (local models on), and OpenAI's voice when
    * the user allowed it with a key saved (null otherwise). Without it: Kokoro when downloaded, else say.
@@ -52,6 +56,17 @@ export interface VoiceHooks {
   saveBench?(b: WhisperBench): void
   /** A spoken sentence (16 kHz mono) for the benchmark, or null when none can be made. */
   speechSample?(): Promise<Float32Array | null>
+  /**
+   * Grok Voice 3.0 (live speech to speech) for this conversation: when the voice is Grok and an xAI key is saved
+   * (null otherwise, and the usual speech-to-text → model → voice chain runs).
+   */
+  live?(): { apiKey: string; baseUrl: string; instructions: string; voice?: string } | { skip: string } | null
+  /** What was said in a live conversation (your words, Grok's spoken replies): kept in the chat. */
+  spoken?(who: 'user' | 'assistant', text: string): void
+  /** What a live conversation cost so far (each minute, and the rest when it ends): spending limit and usage. */
+  liveCharged?(usd: number): void
+  /** Every minute of a live conversation: throws when the spending limit won't cover more. */
+  liveGuard?(minutes: number): void
 }
 
 export interface VoiceOptions {
@@ -164,6 +179,11 @@ export class VoiceService {
     let t: TtsEngine
     try { t = this.engine() } finally { this.active = active }
     if (keep) { keep.setTts(t); this.pipe = keep }
+  }
+
+  /** A live Grok call in progress takes the voice bar's new voice or language now (no-op without one). */
+  updateLive(o: { voice?: string; instructions?: string }): void {
+    this.live?.update(o)
   }
 
   /** The voice bar's choices (Settings.voiceStyle); they apply to the conversation in progress too. */
@@ -397,11 +417,53 @@ export class VoiceService {
     stt.language = this.style.language
     this.stt = stt
     await Promise.all([stt.start(), tts.warm()])
-    this.pipe ??= new VoicePipeline({ vad: this.vad, whisper: stt, tts, emit: (e) => this.hooks.emit(e), respond: (t, s, on) => this.hooks.respond(t, s, on) })
+    this.pipe ??= new VoicePipeline({ vad: this.vad, whisper: stt, tts, emit: (e) => this.hooks.emit(e), respond: async (t, s, on) => { await this.hooks.respond(t, s, on) } })
     return this.pipe
   }
 
+  /** A Grok Voice 3.0 conversation in progress (instead of the pipeline). */
+  private live: GrokRealtime | null = null
+
   async startVoice(): Promise<void> {
+    this.live?.close()
+    this.live = null
+    // Grok's live voice first, when it's the voice: one model listens, talks and hands work to the bot.
+    const cfg = this.hooks.live?.()
+    // Grok's voice is the choice but can't be used now (the spending limit is too close): say why, once.
+    if (cfg && 'skip' in cfg) this.hooks.emit({ type: 'notice', message: `${cfg.skip} Using the standard voice.` })
+    else if (cfg) {
+      const live = new GrokRealtime({
+        apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, instructions: cfg.instructions, voice: cfg.voice,
+        emit: (e) => {
+          if (e.type === 'transcript') this.hooks.spoken?.('user', e.text)
+          else if (e.type === 'reply') this.hooks.spoken?.('assistant', e.text)
+          else if (e.type === 'ended') {
+            // An earlier call replaced by a new one: its end is nobody's news.
+            if (this.live !== live) return
+            this.live = null
+            if (this.active === 'voice') this.active = 'off'
+          }
+          this.hooks.emit(e)
+        },
+        charge: (usd) => this.hooks.liveCharged?.(usd),
+        guard: (minutes) => this.hooks.liveGuard?.(minutes),
+        doTask: async (request, signal) => {
+          let out = ''
+          const final = await this.hooks.respond(request, signal, (t) => { out += t }, { task: true })
+          return typeof final === 'string' && final.trim() ? final : out
+        }
+      })
+      try {
+        await live.start()
+        this.live = live
+        this.active = 'voice'
+        return
+      } catch (e) {
+        live.close()
+        // It couldn't connect: the usual voice chain takes over, and says why once.
+        this.hooks.emit({ type: 'notice', message: `${(e as Error).message} Using the standard voice instead.` })
+      }
+    }
     const p = await this.ensure()
     p.stop()
     p.mode = 'voice'
@@ -422,12 +484,19 @@ export class VoiceService {
   }
 
   stop(): void {
+    this.live?.close()
+    this.live = null
     this.pipe?.stop()
     this.active = 'off'
   }
 
   /** In a voice conversation: say this in the next pause (a bot's work finished or needs you). */
   announce(text: string): boolean {
+    if (this.active === 'voice' && this.live) {
+      if (this.live.isClosed) return false
+      this.live.announce(text)
+      return true
+    }
     if (this.active !== 'voice' || !this.pipe) return false
     this.pipe.announce(text)
     return true
@@ -460,6 +529,7 @@ export class VoiceService {
   }
 
   frame(samples: Float32Array): void {
+    if (this.active === 'voice' && this.live) { this.live.pushAudio(samples); return }
     if (this.active !== 'off') void this.pipe?.feed(samples)
   }
 

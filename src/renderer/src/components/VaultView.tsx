@@ -439,17 +439,6 @@ export function VaultSettings() {
           <div className="set-row-ctl"><Toggle on={s.enabled} onChange={(v) => void set({ enabled: v })} label="Keep a knowledge vault" testId="vault-enabled" /></div>
         </div>
         <div className="set-row">
-          <div className="set-row-text">
-            <div className="set-row-title">How much to remember</div>
-            <ClampText>More saves notes from every finished chat and gives bots more of them (best with big cloud models). Normal is lighter. Each bot can have its own in its details panel.</ClampText>
-          </div>
-          <div className="set-row-ctl">
-            <div className="vault-seg" role="radiogroup" aria-label="How much to remember">
-              {LEVELS.map((l) => <button key={l.v} role="radio" aria-checked={s.level === l.v} className={s.level === l.v ? 'on' : ''} onClick={() => void set({ level: l.v })} data-testid={`vault-level-${l.v}`}>{l.label}</button>)}
-            </div>
-          </div>
-        </div>
-        <div className="set-row">
           <div className="set-row-text"><div className="set-row-title">Mirror memories and decisions into the vault</div><ClampText>Every saved memory goes in a note per category (Shared/Memory), and your decisions go in a dated Decision log (Shared/Decisions). A bot's own memories stay in its own area. Change memories in Memory; the vault copy follows.</ClampText></div>
           <div className="set-row-ctl"><Toggle on={s.memories !== false} onChange={(v) => void set({ memories: v })} label="Mirror memories and decisions" testId="vault-memories" /></div>
         </div>

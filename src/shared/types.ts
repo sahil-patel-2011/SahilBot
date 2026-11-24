@@ -55,6 +55,8 @@ export interface Space {
   isMain: boolean
   /** Projects: the folder the project works in. */
   folder: string | null
+  /** The bot's own icon (an emoji) drawn on its colored shape; null = the shape's eyes. */
+  icon?: string | null
   pinned: boolean
   hidden: boolean
   /** For groups: member bot ids, in speaking order. */
@@ -99,6 +101,8 @@ export interface Thread {
   unreadCount?: number
   /** How the agent runs here: 'chat' (only conversation so far) or 'full' (it has done real work); unset = never ran / older chat. */
   toolMode?: 'chat' | 'full'
+  /** The user typed in it themselves (not only a routine, a Memory draft, a handoff or a connected app): Recents lists these. */
+  byUser?: boolean
 }
 
 export interface Sampling {
@@ -208,6 +212,8 @@ export interface Settings {
   appearance: Appearance
   /** Bots pinned to the top of the sidebar; null = just the main bot. */
   pinnedBots: string[] | null
+  /** SahilBot's own ongoing conversation (its widget opens it, like any bot's): kept out of Recents, which hold New chats only. */
+  mainThreadId?: string | null
   /** Read every reply aloud. */
   speakReplies: boolean
   /** Global shortcut for Quick Ask ('' = off). */
@@ -245,6 +251,10 @@ export interface Settings {
   userName: string
   /** The user's own email addresses and phone numbers (Settings → General): bots may always message them without asking. */
   me?: { emails: string[]; phones: string[] }
+  /** Who the user is (setup asks; Settings → You): first and last name, and a birthday (YYYY-MM-DD) if they gave it. userName is the first name. */
+  profile?: { firstName: string; lastName: string; birthday?: string }
+  /** The message box: ⌘↵ sends (↵ is a new line), and spelling is checked while typing. */
+  composer?: { cmdEnter?: boolean; spellCheck?: boolean }
   workspaceDir: string
   search: { provider: 'auto' | 'none' | 'brave' | 'searxng' | 'duckduckgo'; searxngUrl: string; hasBraveKey: boolean }
   advanced: {
@@ -408,6 +418,8 @@ export interface PendingRequest {
   options?: string[]
   /** A file outside your folders: the folder "Always allow" opens for this chat (approvals). */
   folder?: string
+  /** For a 'question' that waits on a Mac permission: the card's one-tap button opens that switch; it closes by itself once on. */
+  permission?: PermissionKind
 }
 
 export type ApprovalAnswer = 'once' | 'always' | 'deny'
@@ -878,7 +890,7 @@ export interface PurchaseInfo {
 export type ChatEvent =
   | { threadId: string; type: 'message'; message: Message }
   | { threadId: string; type: 'delta'; messageId: string; content?: string; reasoning?: string }
-  | { threadId: string; type: 'run'; status: 'started' | 'finished' | 'stopped' | 'error'; error?: string; spaceId?: string; title?: string }
+  | { threadId: string; type: 'run'; status: 'started' | 'finished' | 'stopped' | 'error'; error?: string; spaceId?: string; title?: string; byUser?: boolean }
   | { threadId: string; type: 'thread'; thread: Thread }
   | { threadId: string; type: 'pending'; request: PendingRequest }
   | { threadId: string; type: 'resolved'; id: string }
@@ -893,7 +905,11 @@ export type ChatEvent =
   /** Bots or groups changed (renamed, recolored by a bot): reload the sidebar. */
   | { threadId: string; type: 'spaces' }
   /** Live progress from a running tool call (latest test output line, what a Cursor agent is doing). */
-  | { threadId: string; type: 'tool_progress'; callId: string; tool: string; text: string }
+  /**
+   * A tool's progress line, or the stall watchdog's note (callId 'watchdog'): `step` names what is stuck and `stuck`
+   * offers Retry / Skip for it (chat.retryStep / chat.skipStep); `waitingOnYou`: it waits on your vault unlock.
+   */
+  | { threadId: string; type: 'tool_progress'; callId: string; tool: string; text: string; step?: string; stuck?: boolean; waitingOnYou?: boolean; retryable?: boolean }
 
 export interface Attachment {
   path: string
@@ -1185,7 +1201,7 @@ export type VoiceUiEvent =
   | { type: 'state'; state: 'idle' | 'listening' | 'hearing' | 'thinking' | 'speaking' }
   | { type: 'partial'; text: string }
   | { type: 'transcript'; text: string }
-  | { type: 'reply'; text: string }
+  | { type: 'reply'; text: string; whole?: boolean }
   /** Said on its own between turns: a bot's work started in this voice chat finished or needs you. */
   | { type: 'announce'; text: string }
   /** The work started in this voice chat, for the voice screen. */
@@ -1194,14 +1210,22 @@ export type VoiceUiEvent =
   | { type: 'stop-audio' }
   | { type: 'metric'; name: string; ms: number }
   | { type: 'error'; message: string }
+  /** A live call ended (by itself or hung up): stop the microphone and end the conversation. */
+  | { type: 'ended' }
+  /** A passing note (the standard voice took over, a request Grok turned down): a caption for a few seconds. */
+  | { type: 'notice'; message: string }
   | { type: 'download'; kind: string; progress: number; done?: boolean; error?: string; /** Started on its own (not a click): a toast says when it's ready. */ auto?: boolean; model?: string; label?: string }
 
 export type Schedule =
-  | { type: 'once'; at: string }
+  /** tz (IANA, e.g. "America/New_York"): the clock the times are in, when the user named a place ("Atlanta weather at
+   * 7:30" is 7:30 Eastern); absent = the Mac's own time zone. */
+  | { type: 'once'; at: string; tz?: string }
   | { type: 'every'; minutes: number }
-  | { type: 'daily'; time: string }
-  | { type: 'weekly'; days: string[]; time: string }
-  | { type: 'cron'; expr: string }
+  | { type: 'daily'; time: string; tz?: string }
+  | { type: 'weekly'; days: string[]; time: string; tz?: string }
+  | { type: 'cron'; expr: string; tz?: string }
+  /** Runs when something new arrives (an email, a message, a calendar event) that matches; see main/triggers.ts. */
+  | { type: 'when'; kind: 'email' | 'chat' | 'calendar' | 'meetings' | 'crm' | 'docs' | 'accounting' | 'any'; from?: string; contains?: string }
 
 export interface ScheduledTask {
   id: string
@@ -1305,11 +1329,13 @@ export interface SahilBotApi {
     startSetup(): Promise<{ space: Space; threadId: string }>
     list(): Promise<Space[]>
     create(input: { name?: string; color?: string; shape?: BotShape; kind?: 'bot' | 'group' | 'project'; members?: string[]; intro?: boolean; folder?: string }): Promise<{ space: Space; threadId: string }>
-    update(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort'>>): Promise<Space>
+    update(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort' | 'icon'>>): Promise<Space>
     /** Files and links from this bot's chats, newest first. */
     library(spaceId: string): Promise<LibraryItem[]>
     markUnread(id: string): Promise<void>
+    /** Deletes a bot; it can be brought back with restore for a few minutes (Undo). */
     remove(id: string): Promise<void>
+    restore(id: string): Promise<void>
     getPrompt(id: string): Promise<string>
     setPrompt(id: string, text: string): Promise<void>
     promptPath(id: string): Promise<string>
@@ -1391,6 +1417,8 @@ export interface SahilBotApi {
     remove(id: string): Promise<void>
     /** Test: runs it now without moving its schedule; progress arrives through onChange and runs(). */
     runNow(id: string): Promise<void>
+    /** Dry run: like Test, but every step that would change something is only listed, not done. */
+    dryRun(id: string): Promise<void>
     /** Run history, newest first (last 20). */
     runs(taskId: string): Promise<RoutineRun[]>
     onChange(cb: () => void): () => void
@@ -1592,6 +1620,11 @@ export interface SahilBotApi {
     get(): Promise<CheckinSettings>
     set(c: CheckinSettings): Promise<CheckinSettings>
   }
+  /** Undo a task's file changes (the Undo button under an answer): what it would undo, and doing it. */
+  undo: {
+    status(threadId: string, messageId: string): Promise<{ files: number } | null>
+    run(threadId: string, messageId: string): Promise<string>
+  }
   usage: {
     /** Last 30 days by model, bot and day, plus this month's spend against the cap. */
     report(): Promise<UsageReport>
@@ -1629,6 +1662,10 @@ export interface SahilBotApi {
     stop(threadId: string): Promise<void>
     /** Message a running agent: it takes it into account from its next step (or sends normally if idle). */
     steer(threadId: string, text: string): Promise<'steered' | 'sent'>
+    /** The stall note's Skip: ends only the step that hung (the task carries on without it). False: nothing to skip. */
+    skipStep(threadId: string): Promise<boolean>
+    /** The stall note's Retry: stops the step that hung and runs it again once. False: nothing to retry. */
+    retryStep(threadId: string): Promise<boolean>
     respond(threadId: string, requestId: string, answer: string): Promise<void>
     /** Drops the last reply and asks again. */
     retry(threadId: string): Promise<void>
@@ -3202,7 +3239,7 @@ export interface NeedsYouItem {
   botName: string
   threadId: string
   kind: 'question' | 'approval' | 'other' | 'prompt'
-  /** A brain prompt ("Sarah Lee asked for the revised proposal by Friday. Draft it?"): its actions and sources. */
+  /** A brain prompt ("a client asked for the revised proposal by Friday. Draft it?"): its actions and sources. */
   prompt?: { text: string; detail?: string; actions: import('./brain').BrainPromptAction[]; chips: import('./brain').SourceChip[]; question?: boolean; placeholder?: string; auto?: boolean }
   questions?: QueueQuestion[]
   approval?: { tool: string; label: string; summary?: string; reason?: string; folder?: string }

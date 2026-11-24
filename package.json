@@ -1,7 +1,7 @@
 {
   "name": "sahilbot",
   "productName": "SahilBot",
-  "version": "26.11.22",
+  "version": "26.11.24",
   "description": "SahilBot: a private, local-first AI assistant for your Mac",
   "main": "out/main/index.js",
   "private": true,
@@ -20,7 +20,10 @@
     "dist": "electron-vite build && electron-builder --mac",
     "voice:setup": "./scripts/voice-setup.sh",
     "postinstall": "node scripts/brand-dev.mjs",
-    "install:mac": "node scripts/install-mac.mjs"
+    "install:mac": "node scripts/install-mac.mjs",
+    "eval:scripted": "vitest run --config vitest.eval.config.mts",
+    "eval:real": "REAL_WORK=1 REAL_WORK_OUT=eval-results/real-work.json vitest run --config vitest.eval.config.mts",
+    "arena": "ARENA=1 ARENA_OUT=eval-results/arena.json vitest run --config vitest.arena.config.mts && node scripts/arena-report.mjs eval-results/arena.json"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
@@ -84,7 +87,12 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "SahilBot uses the microphone for dictation and voice mode. Your selected speech provider processes your audio.",
         "NSAppleEventsUsageDescription": "SahilBot controls apps like Notes, Reminders, Calendar and System Events when you ask it to use your Mac.",
-        "NSScreenCaptureUsageDescription": "SahilBot looks at your screen only while you have it use your computer for a task."
+        "NSScreenCaptureUsageDescription": "SahilBot looks at your screen only while you have it use your computer for a task.",
+        "NSDownloadsFolderUsageDescription": "SahilBot opens files here when you ask it to.",
+        "NSDesktopFolderUsageDescription": "SahilBot opens files here when you ask it to.",
+        "NSDocumentsFolderUsageDescription": "SahilBot opens files here when you ask it to.",
+        "NSCalendarsUsageDescription": "SahilBot reads your calendar when you ask about your schedule, including repeating events.",
+        "NSCalendarsFullAccessUsageDescription": "SahilBot reads your calendar when you ask about your schedule, including repeating events."
       },
       "icon": "build/icon.icns",
       "hardenedRuntime": true,
@@ -99,7 +107,7 @@
       "resources/**",
       "package.json",
       "!**/*.{map,d.ts,d.mts,d.cts,md,markdown}",
-    "!resources/oauth-clients.example.json",
+      "!resources/oauth-clients.example.json",
       "!**/{test,tests,__tests__,example,examples,docs,doc,.github}/**",
       "!node_modules/onnxruntime-node/bin/napi-v3/{linux,win32}/**",
       "!node_modules/onnxruntime-node/bin/napi-v3/darwin/x64/**",

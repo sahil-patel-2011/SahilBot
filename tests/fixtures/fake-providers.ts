@@ -317,6 +317,12 @@ export async function startFakeAnthropic(): Promise<FakeAnthropic> {
     if (req.method === 'POST' && url.startsWith('/v1/messages')) {
       const json = JSON.parse(await body(req))
       let out: ReturnType<typeof handle>
+      // A side answer (agent/aside.ts) is its own little exchange beside the job: not a step of the conversation.
+      if (isSideQuestion(Array.isArray(json.system) ? json.system.map((b: Block) => b.text).join('') : String(json.system ?? ''))) {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+        for (const ev of sideEvents(json.model)) res.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`)
+        return res.end()
+      }
       try {
         out = handle(json)
       } catch (e) {
@@ -394,6 +400,13 @@ export async function startFakeOpenAI(limit: number): Promise<FakeOpenAI> {
     const url = req.url ?? ''
     if (req.method === 'POST' && url.endsWith('/chat/completions')) {
       const json = JSON.parse(await body(req))
+      // A side answer (agent/aside.ts) is its own little exchange beside the job: not a step of the conversation.
+      if (isSideQuestion(String((json.messages as Block[])[0]?.content ?? ''))) {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+        res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: SIDE_REPLY }, finish_reason: null }] })}\n\n`)
+        res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`)
+        return res.end('data: [DONE]\n\n')
+      }
       requests++
       const msgs = json.messages as Block[]
       const isSummary = String(msgs[0]?.content ?? '').startsWith('You are compressing')
@@ -464,3 +477,21 @@ export function effectiveClaudeText(json: Record<string, any>): string {
   })
   return parts.join('\n')
 }
+
+/** Side answers (agent/aside.ts): their system prompt starts like this. */
+const SIDE_REPLY = 'Still working on it.'
+function isSideQuestion(system: string): boolean {
+  return system.startsWith('You are in the middle of a longer task')
+}
+function sideEvents(model: string): Array<Record<string, any>> {
+  const usage = { input_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 6 }
+  return [
+    { type: 'message_start', message: { id: 'msg_side', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { ...usage, output_tokens: 1 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: SIDE_REPLY } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage },
+    { type: 'message_stop' }
+  ]
+}
+

@@ -83,6 +83,8 @@ export interface TaskContext {
   group?: boolean
   /** The bot answering: its name and instructions. A weak prior for vague requests ("fix it", "any news?"). */
   role?: string
+  /** The user's other bots by name: "Ask Homework Helper to quiz me" hands the work to that bot (message_bot). */
+  botNames?: string[]
   /** Estimated tokens of the new material (the message and its attached files): a huge one is a long-document task. */
   inputTokens?: number
   /** Estimated prompt size in tokens (new material plus the history that will be sent): the window must fit it. */
@@ -275,12 +277,23 @@ const SNIPPET = /\b(write|give me|show me)\b.{0,25}\b(a |an )?(quick |small |sho
 const NOT_CODE = /\b(the snake|not the (programming )?language|not (about )?(code|programming))\b/
 /** Making a site, an app or a game is coding. */
 const BUILD_APP = /\b(build|make|create|code|develop)\b( me)? (a|an|the|my) ([\w-]+ ){0,2}(landing page|website|web ?site|web app|web page|ios app|android app|mobile app|app|game|bot|plugin)\b/
+/**
+ * "Make me a bot called Study Pal for chemistry": a SahilBot bot (create_bot), not code. A Discord, Slack or
+ * Telegram bot, or one in a programming language, is still coding (CODE_STRONG or a chat platform named).
+ */
+export const SAHILBOT_BOT = /\b(build|make|create|set up)\b( me)? (a|an|another|a new|my) (new )?(?!(web|website|site|app|chat|discord|slack|telegram|python|trading|crypto)\b)([\w-]+ ){0,3}bot\b(?! (in|with|using|for (discord|slack|telegram|twitch|whatsapp)))(\s+(called|named|for|that|to help|who|which|to)\b|\s*$|\s*[.!?,])/
+/** "Delete it", "undo", "bring it back", "give it a 🧪 icon": a short order about something just made (a bot, a file). */
+const SHORT_ORDER = /^(please )?((delete|remove|rename|hide|unhide|pin|unpin|restore|undo|un-?delete|trash)( (it|that|this|them|him|her|[\w-]+))?|(bring|put|get) (it|that|them|him|her|[\w-]+( [\w-]+){0,2}) back|give (it|him|her|them) (a|an|the|its|their) (\S+ ){0,2}(icon|emoji|colou?r))( (now|please|too|instead|then))?[\s.!]*$/
+const BOT_PLATFORM = /\b(discord|slack|telegram|twitch|whatsapp|reddit|twitter|x\.com|irc|(chat ?|chart )?bot for (my|our|the|a) (site|web ?site|app|store|shop|server))\b/
+/** Planning a trip ("plan a 3-day trip to Savannah", "a weekend itinerary") with the details that make it work: days, people, money. */
+const TRAVEL_PLAN = /\b(plan|planning|itinerar(y|ies)|organi[sz]e)\b.{0,40}\b(trip|vacation|getaway|weekend|visit|holiday)\b|\b\d+[- ]day (trip|itinerary|plan|vacation|getaway)\b|\bitinerar(y|ies)\b/
+const TRAVEL_SPECIFICS = /\b\d+ (people|adults|kids|of us|nights|days)\b|\bfamily of \d+\b|\$\s?\d|\bbudget\b|\bhotels?\b|\b\d+[- ]day\b/
 const INCIDENT = /\b(site is down|is down|outage|production is|in production|customers are complaining|500 errors?)\b/
 
 // Screen and browser
 const SITES = '(amazon|ebay|etsy|walmart|target|best buy|opentable|resy|airbnb|expedia|booking\\.com|kayak|uber|lyft|doordash|instacart|linkedin|twitter|facebook|instagram|youtube|reddit|netflix|canvas|blackboard|the dmv|my bank)'
 const APPS = '(safari|chrome|firefox|finder|system settings|settings app|preferences|spotify|apple music|numbers|keynote|pages app|figma|slack app|messages app|notes app|xcode|vs ?code|terminal|mail app|photos app|preview)'
-const COMPUTER = new RegExp(`\\b(click|double[- ]click|tap (on|the)|scroll( through)?|drag|type (it )?(in|into)|on (my|the) screen|my (mac|desktop) screen|open ${APPS}|in ${APPS}\\b|log ?in ?to\\b|log ?into\\b|sign ?in ?to\\b|sign ?into\\b|log ?in (at|on) |fill (out|in) (the|this|a|my) (\\w+ )?(form|application|fields?)|navigate to|go to (the )?(\\w+ )?(website|site|page|portal)|go to [\\w-]+\\.(com|org|net|io|gov|edu)|on (the|this|their|your|its|my) ([\\w-]+ )?(website|site|page|portal)|(through|via|using) (the )?([\\w-]+ ){0,2}(website|site|portal)|open (the )?[\\w-]+ app\\b|paste .{1,40} into|open (notes|reminders|calendar|messages|mail|photos|music|maps|calculator|textedit|word|excel|powerpoint) (and|to)\b|careers page|use (my|the) (browser|computer|mac)|take a screenshot|add (it|this|them|the \\w+( \\w+)?) to (my|the) cart|to my cart|check ?out (the|my)|check me in|play (my|the|some)|submit .{1,40} (to|on) |apply for .{1,60} (on|at|through) |(go to|open|on|in) (my )?${SITES}\\b.{0,40}\\b(orders?|account|profile|cart|settings|feed|return|cancel|book|reserve|post|unfollow|follow|like|comment|change)|(book|reserve) .{1,40}\\b(on|at|through) ${SITES})\\b`)
+const COMPUTER = new RegExp(`\\b(click(ing)?|double[- ]click|tap(ping)? (on|the)|press(ing)? the (\\w+ )?(buttons?|keys?)|use (the )?(calculator|notes|reminders|calendar|textedit|preview|photos|maps) (app )?to|scroll( through)?|drag|type (it )?(in|into)|on (my|the) screen|my (mac|desktop) screen|open ${APPS}|in ${APPS}\\b|log ?in ?to\\b|log ?into\\b|sign ?in ?to\\b|sign ?into\\b|log ?in (at|on) |fill (out|in) (the|this|a|my) (\\w+ )?(form|application|fields?)|navigate to|go to (the )?(\\w+ )?(website|site|page|portal)|go to [\\w-]+\\.(com|org|net|io|gov|edu)|on (the|this|their|your|its|my) ([\\w-]+ )?(website|site|page|portal)|(through|via|using) (the )?([\\w-]+ ){0,2}(website|site|portal)|open (the )?[\\w-]+ app\\b|paste .{1,40} into|open (notes|reminders|calendar|messages|mail|photos|music|maps|calculator|textedit|word|excel|powerpoint) (and|to)\\b|careers page|use (my|the) (browser|computer|mac)|take a screenshot|add (it|this|them|the \\w+( \\w+)?) to (my|the) cart|to my cart|check ?out (the|my)|check me in|play (my|the|some)|submit .{1,40} (to|on) |apply for .{1,60} (on|at|through) |(go to|open|on|in) (my )?${SITES}\\b.{0,40}\\b(orders?|account|profile|cart|settings|feed|return|cancel|book|reserve|post|unfollow|follow|like|comment|change)|(book|reserve) .{1,40}\\b(on|at|through) ${SITES})\\b`)
 const URL_OPEN = /\b(open|visit|go to|browse to)\b\s+(https?:\/\/|www\.)/
 const SHOP = /\b(buy|purchase)\b|\border (a|an|me|some|two|three|the|\d+)\b|\bship (it|them) to\b/
 
@@ -293,8 +306,16 @@ const MATH = /\b(what (is|are) the (chance|probability|odds)|chances? (that|of)|
 const MATH_HARD = /\b(prove|proof|show that|derive|derivation|theorem|lemma|olympiad|aime|imo|logic puzzle)\b/
 
 // Mail, calendar, files and connectors
-const SELF = /^(call|phone|facetime|ring) [a-z]+( [a-z]+)?$|\b(remind me|set (a|an|my) (reminder|alarm|timer)|schedule (a|an|my)|(text|message|e-?mail) (?!to\b)[a-z]+ (that|saying|about)|send (an |a )?(e-?mail|text|message|invite|dm) to|every (day|morning|evening|night|week|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|month|hour)|each (day|week|morning)|daily (briefing|digest|summary)|send me a (summary|digest))\b/
-const RELAY = /\b((ask|tell|message) the \w+ bot|hand (it|this) to|let me show you|i'?ll show you|watch me (do|while)|teach you)\b/
+const SELF = /^(call|phone|facetime|ring) [a-z]+( [a-z]+)?$|\b(remind me|set (a|an|my) (reminder|alarm|timer)|schedule (a|an|my)|(text|message|e-?mail) (?!to\b)[a-z]+ (that|saying|about)|send (an |a )?(e-?mail|text|message|invite|dm) to|every (day|morning|evening|night|week|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|month|hour)|each (day|week|morning)|daily (briefing|digest|summary)|send me a (summary|digest)|what'?s (on my )?schedul\w*|(what|which|any|list|show)( \w+){0,3} (routines|reminders)|my (routines|reminders|scheduled)|(cancel|delete|snooze|pause|resume|unpause|reschedule) (it|that|this|the [\w ]{1,20}(reminder|routine))|snooze (it|that|this|for|\d))\b/
+const RELAY = /\b((ask|tell|message|have|get) (the|my) ([\w-]+ ){1,3}bot\b|hand (it|this) to|let me show you|i'?ll show you|watch me (do|while)|teach you)\b/
+
+/** "Ask/tell/have/get/let <bot name> …", "send/hand/pass/give it to <bot name>": a request for that bot. */
+export function handsToBot(t: string, names?: string[]): boolean {
+  const ns = (names ?? []).map((n) => n.trim().toLowerCase()).filter((n) => n.length >= 3 && !/^(sahilbot|main|me|you)$/.test(n))
+  if (!ns.length) return false
+  const alt = ns.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  return new RegExp(`\\b((ask|tell|have|get|let|message|text|ping)|((send|hand|pass|give) (it|this|that) to))\\s+(the |my )?(${alt})(?![\\w-])`, 'i').test(t)
+}
 const MINE_MAIL = /\b(my|our) (\w+ )?(calendar|inbox|e-?mails?|mail|gmail|outlook|messages?|texts?|notes|reminders?|contacts|slack|events?|meetings?|appointments?|schedule|shopping list|to-?do list)\b|\bwhat did \w+ say\b|\b(her|his|their|the) last (e-?mail|message)\b|\blatest e-?mail\b|\b(emailed|texted|messaged|called|dm'?d) me\b|\bany (new )?(messages|e-?mails|mail|texts|replies)\b|\bmy \d{1,2}(:\d\d)? ?(am|pm)?\b.*\b(to|until|with)\b|\b(move|reschedule|push|cancel) my \w+ (with|to|meeting|call)\b/
 const FILE_ACT = /\b(organi[sz]e|move|rename|clean ?up|tidy|back ?up|sort|archive|delete|find|copy|zip|list)\b/
 const MINE_FILES = /\b(my|our|the) (\w+ )?(files|folders?|downloads|documents|desktop|photos|pictures|workspace)\b|~\/|\/users\/|(^|\s)\/[\w.-]+\/[\w.-]+/
@@ -303,7 +324,7 @@ const TOOLS_ACT = /\b(snooze|mark (them |it )?(as )?read|star|flag|mute|message|
 const CONNECTED = /\b(in|on|from) (pagerduty|jira|linear|github|sentry|datadog|stripe|shopify|notion|asana|hubspot|salesforce)\b/
 
 // Documents and data
-const OFFICE_OBJ = /\b(handouts?|leaflets?|brochures?|one-pagers?|brief|write-?up|google docs?|spreadsheets?|excel|xlsx|csv|google sheets?|sheets?|pivot( table)?|v?lookup|charts?|graphs?|dashboards?|slides?|slide deck|deck|powerpoint|pptx|presentations?|word (doc(ument)?|file)|docx|pdfs?|report|memo|invoices?|resume|cv|financial model|dcf|3-statement|gantt( chart)?|business plan|(launch|project|marketing|go-to-market|content|training|lesson) plan|one-pager|pitch deck|budget|tracker|totals?|columns?|data ?set|in word)\b/
+const OFFICE_OBJ = /\b(handouts?|leaflets?|brochures?|one-pagers?|(one-page|project|creative|design) brief|brief (doc|document)|write-?up|google docs?|spreadsheets?|excel|xlsx|csv|google sheets?|sheets?|pivot( table)?|v?lookup|charts?|graphs?|dashboards?|slides?|slide deck|deck|powerpoint|pptx|presentations?|word (doc(ument)?|file)|docx|pdfs?|report|memo|invoices?|resume|cv|financial model|dcf|3-statement|gantt( chart)?|business plan|(launch|project|marketing|go-to-market|content|training|lesson) plan|one-pager|pitch deck|budget|tracker|totals?|columns?|data ?set|in word)\b/
 /** A document named by its file name (summary.md, notes.txt). */
 const FILE_NAME = /\b[\w-]+\.(md|txt|pdf|docx?|xlsx?|csv|pptx?|rtf|key|numbers|pages)\b/
 const OFFICE_MAKE = /\b(make|create|build|put together|turn|convert|draft|write|prepare|generate|design|analy[sz]e|summari[sz]e|clean up|add|fill|update|recalculate|format|export|tailor|extract|save)\b/
@@ -316,7 +337,11 @@ const RESEARCH_DEEP = /\b(meta-?analys[ie]s|systematic reviews?|pmids?|clinical 
 
 // Writing
 const WRITING = /\b(write|rewrite|re-write|draft|edit|proofread|polish|reword|rephrase|tighten|copy ?edit|essay|blog( post)?|article|story|poem|haiku|cover letter|bio|newsletter|speech|caption|taglines?|headline|press release|letter|(e-?mail) (to|for)|linkedin post|tweet|toast|eulogy|wedding|personal statement|statement of purpose|copy for|hero section|sound (less|more) \w+|cut it to|less formal|more formal|novel|lyrics|write about|(reply|respond) to this|help me (reply|respond|word|phrase))\b/
-const WRITING_SHORT = /\b(haiku|poem|taglines?|tweet|rewrite this|edit this|make this|cut it to|reword|rephrase|less formal|more formal|sound (less|more))\b/
+/** A piece of writing with its size asked ("a 50-word bio", "a 3-sentence status report", "a memo in 80 words"). */
+const SIZED_WRITING = /^((please|can you|could you|hey|now)[,\s]+)*(write|draft|compose|rewrite)\b.*\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|forty|fifty|a hundred|a single)[- ](words?|sentences?|bullets?|bullet points?|characters?|chars?|paragraphs?)\b/
+/** The writing is to be kept or sent as a file, not answered in the reply. */
+const KEEP_AS_FILE = /\b(save|saved|as a (file|doc|document|pdf)|word doc(ument)?|docx|pdfs?|spreadsheets?|slides?|deck|attach\w*|send (it|this)|e-?mail (it|this)|post (it|this)|type (it|this)|paste (it|this))\b|\b[\w-]+\.(md|txt|pdf|docx?|rtf)\b/
+const WRITING_SHORT = /\b(haiku|poem|taglines?|tweet|rewrite this|edit this|make this|cut it to|reword|rephrase|less formal|more formal|sound (less|more)|thank[- ]you (note|card|message|text)|(short|quick|brief|two[- ]line|one[- ]line|\d+[- ]line|\d+[- ]sentence) (e-?mail|note|message|text|reply|bio|caption|toast)|([1-9]\d?|[12]\d\d) words?|\d+[- ](sentences?|characters?|chars?|bullets?)|(one|a single|a short)[- ](sentence|paragraph))\b/
 
 // Difficulty and effort signals
 const HARD = /\b(architecture|design (a|the) system|from scratch|end[- ]to[- ]end|entire|whole (app|codebase|project|thing|system)|complex|complicated|in[- ]depth|thorough(ly)?|comprehensive|exhaustive|detailed (analysis|report|plan)|production[- ](ready|quality|grade)|production|perfect(ly)?|carefully|best possible|multi-?step|literature review|deep dive|competitive analysis|market analysis|financial model|forecast|dcf|3-statement|pitch deck|business plan|launch plan|go-to-market|memory leak|every (form|page|file|module|endpoint|screen|place)|all the (forms|pages|modules|endpoints)|security|vulnerab\w*|full assembly|interferences?|for investors|whatever breaks|find out why|figure out (what|why)|feedforward)\b/
@@ -361,6 +386,8 @@ const ENG_UNITS = /\d.{0,40}\b(mm|cm|m|kg|g|n|kn|nm|n·m|mpa|gpa|psi|lbs?|ft|in|
 const DECISION = /\b(is it legal|am i allowed|is it (safe|ok) to|can i be (sued|fired)|should i|should we|is it worth|walk me through|which is better|or stay|can my)\b/
 const LONG_OUTPUT = /\b(\d{1,2},?\d{3}[- ]words?|\d+k[- ]words?|novel|book|whole manual|comprehensive|full report|literature review|10\+? slides|\d{2} slides)\b/
 const MULTI = /\b(and then|after that|then|once (that'?s|it'?s) done|finally)\b|,\s*(and )?(then )?(make|email|send|build|write|add|open|create|draft|save|post|remind|report|compare) (it|them|this|that|the|a|an|me|my|to|everything)\b/
+/** Where the one file goes ("save it to Downloads", "then open it"): part of making it, not another step. */
+const DESTINATION = /,?\s*(and )?(then )?(save|put|store) (it|this|them|that)( (to|in|into|as|on|at) [^,;]+?)?(?=$|[,;]|\.(\s|$))|,?\s*(and )?(then )?open (it|this|them|that)\b/g
 const LIVE = /\b(latest|current(ly)?|today|tonight|tomorrow|yesterday|last night|this (week|month|year)|right now|news|price|prices|stock|weather|score|release date|recent(ly)?|202\d|up[- ]to[- ]date)\b|https?:\/\//
 const ADVICE = /\b(itinerary|plan a|routine|recommend(ation)?s?|how should|what'?s a good|pros and cons|tips|advice|overwhelmed|stressed|anxious|depressed|lonely|vent|sad|grief|pain|injury|diet|ira|401k|roth|mortgage|tax(es)?|invest(ing|ment)?|budgeting)\b/
 const QUICK = /\b(quick|quickly|just|simple|simply|briefly|one-liner|small|tiny|short answer)\b/
@@ -502,7 +529,9 @@ export const RULE_CONFIDENCE: Record<string, number> = {
   // The fallbacks, where the rules run out (blind: chat 5/12, chat:question 5/9): below CONFIDENT.
   imperative: 0.5, chat: 0.55, 'chat:question': 0.65,
   // Added with holdout 4 (medical, travel, business, engineering, coding agents).
-  booking: 0.85, 'math:engineering': 0.85, 'coding:agent': 0.85, 'research:travel': 0.75, 'research:medical': 0.85
+  booking: 0.85, 'math:engineering': 0.85, 'coding:agent': 0.85, 'research:travel': 0.75, 'research:medical': 0.85,
+  // A new SahilBot bot by chat ("make me a bot called Study Pal"): one create_bot.
+  'agent-tools:bot': 0.85, 'agent-tools:short': 0.85
 }
 
 interface Picked { category: TaskCategory; rule: string; why: string }
@@ -532,7 +561,9 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
   const roleCat = roleCategory(ctx.role)
   // The CAD module's own reading (cad/cad-intent.ts): a build or change in CAD is always agent work.
   const cad = cadSignals(raw)
-  const codeish = !has(NOT_CODE, t) && (has(CODE_STRONG, t) || has(BUILD_APP, t) || ((ctx.codeProject || roleCat === 'coding') && has(CODE_WEAK, t)))
+  // A SahilBot bot to make ("a bot called Study Pal") is not code; a Discord bot or one in Python is.
+  const appBot = has(SAHILBOT_BOT, t) && !has(BOT_PLATFORM, t) && !has(CODE_STRONG, t)
+  const codeish = !has(NOT_CODE, t) && (has(CODE_STRONG, t) || (has(BUILD_APP, t) && !appBot) || ((ctx.codeProject || roleCat === 'coding') && has(CODE_WEAK, t)))
   const officeDeliverable = (has(OFFICE_OBJ, t) || has(FILE_NAME, t)) && has(OFFICE_MAKE, t)
   // A document named up front ("Create a resume in Word from …") beats code words further on (skills, data).
   const head = t.split(/\s+/).slice(0, 10).join(' ')
@@ -549,10 +580,14 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
       if (/^(send|email|post|forward) (it|this|that)\b/.test(t) && prevCat !== 'agent-tools') return { category: 'agent-tools', rule: 'follow-up:new', why: 'sends it' }
       return { category: prevCat!, rule: 'follow-up', why: 'follow-up to the last request' }
     }
+    if (!question && words <= 6 && has(SHORT_ORDER, t)) return { category: 'agent-tools', rule: 'agent-tools:short', why: 'a short order' }
     if (ctx.deepResearch) return { category: 'research', rule: 'deep-research', why: 'Deep Research' }
     if (!raw || /^[^\p{L}\p{N}]*$/u.test(raw) || (words === 1 && raw.length <= 2)) return { category: images ? 'vision' : 'chat', rule: images ? 'vision' : 'empty', why: images ? 'looks at an image' : 'nothing to do yet' }
     if ((has(GREETING, t) && words <= 4) || (words <= 12 && has(THANKS_ONLY, t)) || /^(please )?just say (hi|hello)\b/.test(t) || /^tell me a joke\b/.test(t)) return { category: 'chat', rule: 'small-talk', why: 'small talk' }
     if (has(INCIDENT, t) && has(/\b(deploy\w*|site|server|app|api|production)\b/, t)) return { category: 'coding', rule: 'incident', why: 'a production incident' }
+    // A sized piece of writing for the reply ("a memo in 80 words", "a 3-sentence status report on the website"):
+    // writing, whatever document or site it names, unless it is to be saved or sent as a file.
+    if (has(SIZED_WRITING, t) && !has(KEEP_AS_FILE, t) && !codeish && !files && !folders) return { category: 'writing', rule: 'writing', why: 'writing of a given size' }
     if (!question && has(URL_OPEN, t)) return { category: 'computer-use', rule: 'computer-use:url', why: 'opens a page' }
     if (!question && has(COMPUTER, t) && !(has(CODE_STRONG, t) && !/\b(safari|chrome|browser|screen|click)\b/.test(t))) return { category: 'computer-use', rule: 'computer-use', why: 'uses the screen' }
     if (!question && has(SHOP, t) && !has(/\b(should i|which|what|best)\b/, t)) return { category: 'computer-use', rule: 'shopping', why: 'shopping' }
@@ -565,10 +600,17 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     // A video made with the user's HeyGen app (tools/video.ts): credits and a file, so agent work.
     if (!question && has(VIDEO_RE, t)) return { category: 'agent-tools', rule: 'agent-tools:video', why: 'makes a video with HeyGen' }
     if (has(MESSAGE_ON, t)) return { category: 'agent-tools', rule: 'agent-tools:self', why: 'a message on a chat app' }
+    // Work handed to another of the user's bots by name ("Ask Homework Helper to quiz me on moles"), before the
+    // subject (math, code) decides: that bot does it, through message_bot.
+    if (handsToBot(t, ctx.botNames)) return { category: 'agent-tools', rule: 'agent-tools:relay', why: 'hands work to another bot' }
     // Driving a coding agent (Cursor, Codex, Claude Code): coding work, unless it's only a question about them.
     if (has(CODING_AGENT, t) && has(AGENT_HANDOFF, t) && !/\b(users|pattern|blink|textarea)\b/.test(t) && !/\b(write|draft) (a |the |me a )?(task )?(brief|prompt|spec)\b/.test(t) && !(question && !has(CODE_ACT, t) && !/\b(check|review|status|merge|safe to)\b/.test(t))) return { category: 'coding', rule: 'coding:agent', why: 'drives a coding agent' }
     // Distances or routes between several places: research with the maps tool.
     if (has(TRAVEL_COMPARE, t)) return { category: 'research', rule: 'research:travel', why: 'compares places on the map' }
+    // A trip to plan with its specifics (days, people, a budget): real work (a plan, prices, places on the map).
+    if (!question && has(TRAVEL_PLAN, t) && has(TRAVEL_SPECIFICS, t)) return { category: 'research', rule: 'research:travel', why: 'plans a trip' }
+    // A new SahilBot bot ("make me a bot called Study Pal for chemistry"): one create_bot, not code.
+    if (appBot && !question) return { category: 'agent-tools', rule: 'agent-tools:bot', why: 'makes a bot' }
     // Asked of the medical literature (summarize the meta-analyses, find recruiting trials, cite the guideline):
     // research. "What is a meta-analysis" isn't.
     if (has(MED_LIT, t) && has(LIT_ASK, t) && !has(DEFINITION, t) && words > 6 && !(/\bpmid:? ?\d{4,9}\b/.test(t) && !/\b(meta|trials?|guidelines?|reviews?)\b/.test(t))) return { category: 'research', rule: 'research:medical', why: 'medical literature' }
@@ -620,7 +662,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
   // In school work a "mole" is chemistry, not a medical worry.
   const stakes = has(STAKES, study ? t.replace(/\bmoles?\b/g, ' ') : t) && (category !== 'coding' || has(/\b(production|customers|outage|security)\b/, t))
   const longOutput = has(LONG_OUTPUT, t)
-  const multi = has(MULTI, t) && words > 6
+  const multi = has(MULTI, t.replace(DESTINATION, ' ')) && words > 6
   const hard = has(HARD, t)
   const quick = has(QUICK, t)
   const difficulty0 = ((): Tier => {
@@ -662,6 +704,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
         if (/^convert\b/.test(t) && words <= 12) return 1
         return 2
       case 'agent-tools':
+        if (pick.rule === 'agent-tools:bot' || pick.rule === 'agent-tools:short') return 1
         if (folders || multi || /\b(go through|everything|each one)\b/.test(t)) return 3
         return 2
       case 'vision':
@@ -707,13 +750,16 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (ctx.helper || ctx.unattended || ctx.group) return { kind: 'agent', why: ctx.helper ? 'helper agent' : ctx.unattended ? 'runs unattended' : 'group chat' }
     if (ctx.planFirst || ctx.team || ctx.deepResearch || ctx.heavy || ctx.council) return { kind: 'agent', why: ctx.planFirst ? 'Plan first is on' : ctx.team ? 'Team of Experts is on' : ctx.deepResearch ? 'Deep Research is on' : ctx.heavy ? 'Heavy is on' : 'Council is on' }
     if (folders) return { kind: 'agent', why: 'works with an attached folder' }
-    if (has(IMAGE_RE, t) && !question) return { kind: 'agent', why: 'makes a picture' }
+    if (has(IMAGE_RE, t) && !question && pick.rule !== 'agent-tools:bot') return { kind: 'agent', why: 'makes a picture' }
     if (files) return { kind: 'agent', why: 'reads attached files' }
     if (ctx.openPlan && words <= 20) return { kind: 'agent', why: 'a task is in progress' }
     if (pick.rule === 'follow-up') return { kind: ctx.previousKind ?? (AGENT_WORK.has(category) ? 'agent' : 'chat'), why: 'follow-up' }
     if (pick.rule === 'follow-up:new') return { kind: 'agent', why: 'follow-up that makes or sends something' }
     // Several asks, one of them done outside the reply (a file, an email, a booking): the agent does it.
     if (shaped && shape.acts && !question && category !== 'code-quick') return { kind: 'agent', why: 'several steps, one makes or sends something' }
+    // Names a file to make or change ("write the number to answer.txt", "set the database in config.json"): work on
+    // files, whatever the request's subject. A question about how to do it ("how do I set up package.json?") stays a reply.
+    if (FILE_ACTION.test(t) && !HOW_TO.test(t)) return { kind: 'agent', why: 'changes files' }
     switch (category) {
       case 'coding': case 'computer-use': case 'long-context': case 'agent-tools': case 'office':
         return { kind: 'agent', why: KIND_WHY[category] ?? 'agent work' }
@@ -774,6 +820,11 @@ export function consistent(c: Pick<TaskClass, 'category' | 'kind' | 'kindWhy'>):
   if ((c.category === 'chat' || c.category === 'code-quick') && c.kind === 'agent') return /is on|attached|in progress|helper|unattended|group|follow-up|files/.test(c.kindWhy)
   return true
 }
+
+/** A request to write or change a named file (a path with an extension). */
+const FILE_ACTION = /\b(write|save|set|change|update|edit|rename|add|put|create|fix|append|replace|delete|remove|record|store)\b[^.?!\n]{0,80}?\b[\w./-]+\.(txt|md|markdown|json|jsonc|js|jsx|ts|tsx|mjs|cjs|csv|tsv|py|rb|go|rs|java|kt|swift|c|h|cpp|cs|php|yaml|yml|toml|ini|cfg|conf|env|html|css|scss|xml|sql|sh|log)\b/
+/** "How do I…", "how can I…", "what's the best way to…": asking about it, not asking for it. */
+const HOW_TO = /^\s*(how (do|can|would|should) (i|you|we)|what'?s the (best )?way to|is it possible to|explain)\b/
 
 /** Simple chat or a quick question: the light path (no plan, no heavy tools) is enough. */
 export const isChatTask = (c: Pick<TaskClass, 'category' | 'difficulty'>): boolean => c.category === 'chat' && c.difficulty <= 1

@@ -21,9 +21,9 @@ export interface IdeaSignals {
 const GENERIC: HomeIdea[] = [
   { icon: 'globe', label: 'Plan a trip', text: 'Plan a 4-day trip to ' },
   { icon: 'sparkle', label: 'Use my Mac', text: 'On my Mac, ' },
-  { icon: 'cpu', label: 'Build an app', text: 'Build me a small web app that ' },
-  { icon: 'file', label: 'Make a deck', text: 'Make a polished slide deck about ' },
   { icon: 'clock', label: 'Morning brief', text: 'Every weekday at 8am, give me a short morning brief: today\'s calendar and reminders, the weather where I live, and the most important news about my work and interests.' },
+  { icon: 'file', label: 'Make a deck', text: 'Make a polished slide deck about ' },
+  { icon: 'cpu', label: 'Build an app', text: 'Build me a small web app that ' },
   { icon: 'search', label: 'Watch a page', text: 'Every morning, check https:// and tell me only if something important changed (price, availability, new posts).' },
   { icon: 'video', label: 'Make a video', text: 'Make a 30-second avatar video about ' }
 ]

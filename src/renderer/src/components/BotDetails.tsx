@@ -1,15 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import type { BotAutonomySettings, BotMaxSettings, LibraryItem, PermissionMode, RoutineRun, ScheduledTask, Space } from '@shared/types'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import type { BotMaxSettings, LibraryItem, RoutineRun, ScheduledTask, Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
-import { describeSchedule, groupLibrary, host, when } from '../routines'
+import { describeSchedule, groupLibrary, host, nextRunText, routineStatus, when } from '../routines'
 import { BotShareRows } from './BotShare'
 import { BotGoals } from './TasksView'
-import { VaultBotRows } from './VaultView'
-import { BotFolderRow } from './Attachments'
-import { AlwaysOnRows } from './NeedsYou'
 import { BotStatusLine } from './FunctionBots'
+import { deleteBotWithUndo } from '../lib/bot-delete'
 
 type Tab = 'details' | 'library'
 type Filter = 'all' | 'file' | 'link'
@@ -25,10 +23,6 @@ function accentOf(color: string | undefined): string {
 
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
 
-const More = ({ size = 16 }: { size?: number }): ReactNode => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
-)
-
 function Toggle({ on, onChange, label, testId }: { on: boolean; onChange: (v: boolean) => void; label: string; testId?: string }) {
   return (
     <button type="button" role="switch" aria-checked={on} aria-label={label} title={label} className={`rt-switch${on ? ' on' : ''}`} data-testid={testId}
@@ -39,7 +33,13 @@ function Toggle({ on, onChange, label, testId }: { on: boolean; onChange: (v: bo
 }
 
 /** Bot details panel (right side): profile, routines, library. Spec: design/bot-ui.md. */
-export function BotDetails(p: { space: Space; threadId: string | null; onClose: () => void; onCustomize: () => void; onChanged: () => void; onEditRoutine: (text: string) => void }) {
+export function BotDetails(p: {
+  space: Space; threadId: string | null; onClose: () => void; onCustomize: () => void; onChanged: () => void; onEditRoutine: (text: string) => void
+  /** A fresh conversation with this bot (it remembers everything; the current one moves to Past conversations). */
+  onStartFresh?: () => void
+  /** Opens one of the bot's earlier conversations. */
+  onOpenThread?: (t: Thread) => void
+}) {
   const { space } = p
   const [tab, setTab] = useState<Tab>('details')
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
@@ -51,9 +51,8 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
   const [err, setErr] = useState('')
   const [name, setName] = useState(space.name)
   const [label, setLabel] = useState(space.label ?? '')
-  const [notify, setNotify] = useState(space.notify !== false)
 
-  useEffect(() => { setName(space.name); setLabel(space.label ?? ''); setNotify(space.notify !== false) }, [space.id, space.name, space.label, space.notify])
+  useEffect(() => { setName(space.name); setLabel(space.label ?? '') }, [space.id, space.name, space.label])
   useEffect(() => { setOpenId(null); setMenuId(null); setConfirmId(null); setErr(''); setTab('details') }, [space.id])
 
   const load = useCallback(async (): Promise<void> => {
@@ -106,6 +105,10 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
     setStarting((s) => new Set(s).add(t.id))
     return act(() => api.schedules.runNow(t.id))
   }
+  const dryRun = (t: ScheduledTask): Promise<void> => {
+    setStarting((s) => new Set(s).add(t.id))
+    return act(() => api.schedules.dryRun(t.id))
+  }
   const edit = (t: ScheduledTask): void => { setMenuId(null); p.onEditRoutine(`Edit routine "${t.title}": `) }
   const remove = (t: ScheduledTask): Promise<void> => act(async () => {
     await api.schedules.remove(t.id)
@@ -126,17 +129,18 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
 
       {open ? (
         <RoutineView task={open} runs={runs[open.id] ?? []} running={running(open.id)} confirming={confirmId === open.id}
-          onPause={() => void setEnabled(open, !open.enabled)} onTest={() => void test(open)} onEdit={() => edit(open)}
+          onPause={() => void setEnabled(open, !open.enabled)} onTest={() => void test(open)} onDryRun={() => void dryRun(open)} onEdit={() => edit(open)}
           onDelete={() => setConfirmId(open.id)} onCancelDelete={() => setConfirmId(null)} onConfirmDelete={() => void remove(open)} err={err} />
       ) : (
         <>
           <div className="bd-hero">
-            <div className="bd-avatar"><SpaceAvatar color={space.color} shape={space.shape} size={88} /></div>
+            <div className="bd-avatar"><SpaceAvatar color={space.color} shape={space.shape} icon={space.icon} size={88} /></div>
             <input className="bd-name" value={name} onChange={(e) => setName(e.target.value)} onBlur={commitName} maxLength={60} aria-label="Bot name"
               onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setName(space.name); e.stopPropagation(); e.currentTarget.blur() } }} />
             <input className="bd-label" value={label} onChange={(e) => setLabel(e.target.value)} onBlur={commitLabel} placeholder="Add a label" maxLength={80} aria-label="Label" data-testid="bot-label"
               onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setLabel(space.label ?? ''); e.stopPropagation(); e.currentTarget.blur() } }} />
             {space.kind !== 'project' && <BotStatusLine space={space} />}
+            {space.kind !== 'project' && <BotCost spaceId={space.id} />}
           </div>
 
           <div className="bd-tabs" role="tablist">
@@ -150,78 +154,45 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
           {tab === 'details' ? (
             <div className="bd-body">
               {space.kind !== 'group' && <BotGoals spaceId={space.id} />}
-              <div className="bd-section-title">Routines</div>
-              <div className="bd-card">
-                {tasks.length === 0 && <div className="bd-empty">Ask in chat to set a routine.</div>}
-                {tasks.map((t) => (
-                  <div key={t.id} className={`rt-row${t.enabled ? '' : ' paused'}`} data-testid="routine-row">
-                    <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }} title={t.title}>
-                      <span className="rt-icon"><I.Clock size={16} /></span>
-                      <span className="rt-text">
-                        <b>{t.title}</b>
-                        <span>{running(t.id) ? 'Running…' : t.enabled ? describeSchedule(t.schedule) : 'Paused'}</span>
-                      </span>
-                    </button>
-                    <Toggle on={t.enabled} onChange={(v) => void setEnabled(t, v)} label={t.enabled ? 'Pause routine' : 'Resume routine'} testId="routine-toggle" />
-                    <div className="rt-menu-wrap">
-                      <button className="bd-icon" aria-label="Routine menu" aria-haspopup="menu" aria-expanded={menuId === t.id} onClick={() => setMenuId(menuId === t.id ? null : t.id)} data-testid="routine-menu"><More /></button>
-                      {menuId === t.id && (
-                        <Menu onClose={() => setMenuId(null)}>
-                          <button role="menuitem" disabled={running(t.id)} onClick={() => { setMenuId(null); void test(t) }} data-testid="routine-test"><I.Play size={14} /> {running(t.id) ? 'Running…' : 'Test'}</button>
-                          <button role="menuitem" onClick={() => edit(t)} data-testid="routine-edit"><I.Edit size={14} /> Edit</button>
-                          <button role="menuitem" className="danger" onClick={() => { setMenuId(null); setConfirmId(t.id) }} data-testid="routine-delete"><I.Trash size={14} /> Delete</button>
-                        </Menu>
-                      )}
+              {/* Routines are made, changed and removed by asking the bot in chat; here you see them and can pause one. */}
+              {tasks.length > 0 && <>
+                <div className="bd-section-title">Routines</div>
+                <div className="bd-card">
+                  {tasks.map((t) => (
+                    <div key={t.id} className={`rt-row${t.enabled ? '' : ' paused'}`} data-testid="routine-row">
+                      <button className="rt-main" onClick={() => { setMenuId(null); setOpenId(t.id) }} title={t.title}>
+                        <span className="rt-icon">{t.schedule.type === 'when' ? <I.Bolt size={16} /> : <I.Clock size={16} />}</span>
+                        <span className="rt-text">
+                          <b>{t.title}</b>
+                          <span data-testid="routine-status">{routineStatus(t, running(t.id))}</span>
+                        </span>
+                      </button>
+                      <Toggle on={t.enabled} onChange={(v) => void setEnabled(t, v)} label={t.enabled ? 'Pause routine' : 'Resume routine'} testId="routine-toggle" />
                     </div>
-                    {confirmId === t.id && (
-                      <div className="rt-confirm" role="alertdialog" aria-label="Delete routine">
-                        <span>Delete “{t.title}”? This can’t be undone.</span>
-                        <button className="bd-btn" onClick={() => setConfirmId(null)}>Cancel</button>
-                        <button className="bd-btn danger" onClick={() => void remove(t)} data-testid="routine-delete-confirm">Delete</button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+                <p className="bd-agent-note" data-testid="routine-hint">To add, change or remove one, just ask in the chat.</p>
+              </>}
               {err && <div className="bd-err" role="alert">{err}</div>}
 
-              {/* Settings, grouped: how it works, how it tells you, Max and the Vault. */}
-              <div className="bd-section-title">Behaviour</div>
+              {/* Just the basics. Notifications are automatic, memory is one vault that remembers the most, and the bot
+                  picks its own models and tools: none of that needs a switch. Anything else, ask the bot in chat. */}
+              <div className="bd-section-title">Settings</div>
               <div className="bd-card" data-testid="bot-behaviour">
-                <AutonomyRow space={space} />
-                {/* A bot chooses its own model and thinking for each request (never set per bot). */}
-                {(space.kind === 'group' || (space.kind === 'bot' && !space.isMain)) && (
-                  <div className="bd-row bd-row-readonly bd-row-compact" data-testid="bot-auto-line" title="This bot picks its model and how hard to think for each request, for the best result">
-                    <span className="bd-row-text">Model and thinking: automatic</span>
-                    <span className="bd-row-value">Auto</span>
-                  </div>
-                )}
-                {space.kind === 'bot' && <TrustedRow spaceId={space.id} />}
-                {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} part="behaviour" />}
-                <BotFolderRow space={space} onChanged={p.onChanged} />
                 <button className="bd-row bd-row-btn" onClick={p.onCustomize} data-testid="bot-customize">
                   <span className="bd-row-text">Customize look and instructions…</span>
                   <span className="bd-chev"><I.Chevron size={14} /></span>
                 </button>
+                {p.onStartFresh && space.kind === 'bot' && (
+                  <button className="bd-row bd-row-btn" onClick={p.onStartFresh} data-testid="bot-start-fresh">
+                    <span className="bd-row-text">Start a fresh conversation<span className="bd-row-sub">It still remembers everything; this one moves to Past conversations.</span></span>
+                    <span className="bd-chev"><I.Chevron size={14} /></span>
+                  </button>
+                )}
               </div>
-
-              <div className="bd-section-title">Notifications</div>
-              <div className="bd-card" data-testid="bot-notifications">
-                <div className="bd-row">
-                  <span className="bd-row-text">Notify me when it finishes or needs me</span>
-                  <Toggle on={notify} onChange={(v) => { setNotify(v); void saveSpace({ notify: v }) }} label="Notifications" testId="bot-notify" />
-                </div>
-                {space.kind === 'bot' && !space.isMain && <AlwaysOnRows spaceId={space.id} part="notifications" />}
-              </div>
-
-              <p className="bd-agent-note"><I.Sparkle size={13} /> Chooses its tools, models and specialist agents automatically. Ask it to plan first or use an agent swarm whenever you need.</p>
-              {space.kind !== 'group' && (
-                <>
-                  <div className="bd-section-title">Vault</div>
-                  <div className="bd-card" data-testid="bot-vault"><VaultBotRows spaceId={space.id} /></div>
-                </>
-              )}
+              {p.onOpenThread && space.kind === 'bot' && <PastConversations spaceId={space.id} current={p.threadId} onOpen={p.onOpenThread} />}
               <BotShareRows space={space} />
+              {!space.isMain && space.kind === 'bot' && <BotRemoveRows space={space} onChanged={p.onChanged} onClose={p.onClose} />}
             </div>
           ) : (
             <Library spaceId={space.id} />
@@ -232,24 +203,12 @@ export function BotDetails(p: { space: Space; threadId: string | null; onClose: 
   )
 }
 
-/** A small popover menu that closes on outside clicks. */
-function Menu({ children, onClose }: { children: ReactNode; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const down = (e: MouseEvent): void => { if (ref.current && !ref.current.contains(e.target as Node)) onClose() }
-    // Next tick, so the click that opened it doesn't close it.
-    const id = setTimeout(() => window.addEventListener('mousedown', down))
-    return () => { clearTimeout(id); window.removeEventListener('mousedown', down) }
-  }, [onClose])
-  return <div className="rt-menu" role="menu" ref={ref}>{children}</div>
-}
-
-function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: boolean; confirming: boolean; err: string; onPause: () => void; onTest: () => void; onEdit: () => void; onDelete: () => void; onCancelDelete: () => void; onConfirmDelete: () => void }) {
+function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: boolean; confirming: boolean; err: string; onPause: () => void; onTest: () => void; onDryRun: () => void; onEdit: () => void; onDelete: () => void; onCancelDelete: () => void; onConfirmDelete: () => void }) {
   const t = p.task
   return (
     <div className="bd-body rt-detail" data-testid="routine-detail">
       <div className="rt-head">
-        <span className="rt-icon big"><I.Clock size={20} /></span>
+        <span className="rt-icon big">{t.schedule.type === 'when' ? <I.Bolt size={20} /> : <I.Clock size={20} />}</span>
         <div>
           <h3>{t.title}</h3>
           <span className={`rt-state${p.running ? ' running' : t.enabled ? ' on' : ''}`}>{p.running ? 'Running…' : t.enabled ? 'Active' : 'Paused'}</span>
@@ -259,12 +218,16 @@ function RoutineView(p: { task: ScheduledTask; runs: RoutineRun[]; running: bool
       <div className="bd-card rt-facts">
         <div className="rt-fact"><label>Instruction</label><p className="rt-prompt">{t.prompt}</p></div>
         <div className="rt-fact"><label>When to run</label><p>{describeSchedule(t.schedule)}</p></div>
-        <div className="rt-fact"><label>Next run</label><p>{t.enabled && t.nextRun ? when(t.nextRun) : t.enabled ? 'Not scheduled' : 'Paused'}</p></div>
+        {t.schedule.type === 'when'
+          ? <div className="rt-fact"><label>Checks</label><p>{t.enabled ? 'About every 5 minutes while SahilBot is open' : 'Paused'}</p></div>
+          : <div className="rt-fact"><label>Next run</label><p>{t.enabled && t.nextRun ? nextRunText(t.schedule, t.nextRun) : t.enabled ? 'Not scheduled' : 'Paused'}</p></div>}
       </div>
 
       <div className="rt-actions">
         <button className="bd-btn" onClick={p.onPause}>{t.enabled ? 'Pause' : 'Resume'}</button>
         <button className="bd-btn" onClick={p.onTest} disabled={p.running} data-testid="routine-test">{p.running ? 'Running…' : 'Test'}</button>
+        {/* Reads for real, changes nothing: it lists what it would send, write or post. */}
+        <button className="bd-btn" onClick={p.onDryRun} disabled={p.running} title="Runs it now without changing anything: it lists what it would send, write or post" data-testid="routine-dry-run">Dry run</button>
         <button className="bd-btn" onClick={p.onEdit} data-testid="routine-edit">Edit</button>
         <button className="bd-btn danger" onClick={p.onDelete} data-testid="routine-delete">Delete</button>
       </div>
@@ -370,97 +333,6 @@ function folderOf(path: string): string {
 }
 
 /**
- * The permission level this bot's new chats start in (Settings keeps it; Bypass is only ever per chat). A bot
- * with its own job defaults to Auto, and changing it applies to its open conversation too.
- */
-function AutonomyRow({ space }: { space: Space }) {
-  const spaceId = space.id
-  const bot = space.kind === 'bot' && !space.isMain
-  const [s, setS] = useState<{ mine?: PermissionMode; app: PermissionMode; all: Record<string, PermissionMode> } | null>(null)
-  useEffect(() => {
-    let alive = true
-    void api.settings.get().then((x) => { if (alive) setS({ mine: x.botModes?.[spaceId], app: x.defaultMode ?? 'auto', all: x.botModes ?? {} }) })
-    return () => { alive = false }
-  }, [spaceId])
-  if (!s) return null
-  const names: Record<string, string> = { ask: 'Ask', auto: 'Auto', autonomous: 'Auto' }
-  const pick = (v: string): void => {
-    const all = { ...s.all }
-    if (v === '') delete all[spaceId]
-    else all[spaceId] = v as PermissionMode
-    setS({ ...s, mine: (v || undefined) as PermissionMode | undefined, all })
-    const saved = bot && v ? api.botAutonomy.setLevel(spaceId, v as PermissionMode) : api.settings.set({ botModes: all })
-    void Promise.resolve(saved).then(() => window.dispatchEvent(new Event('sahilbot:settings-changed')))
-  }
-  const mine = s.mine === 'autonomous' ? 'auto' : s.mine
-  const level = mine ?? (bot ? 'auto' : undefined)
-  const sub = level === 'ask' ? 'Asks before every change.' : level === 'auto' ? 'Works on its own; asks before money, passwords, deleting and posting.' : 'Each chat can change it in the composer.'
-  return (
-    <label className="bd-row">
-      <span className="bd-row-text">{bot ? 'Permissions' : 'Permissions for new chats'}<span className="bd-row-sub">{sub}</span></span>
-      <select className="bd-select" value={bot ? level : mine ?? ''} onChange={(e) => pick(e.target.value)} data-testid="bot-autonomy" aria-label="Permissions for new chats">
-        {!bot && <option value="">Default ({names[s.app] ?? 'Auto'})</option>}
-        <option value="ask">Ask</option>
-        <option value="auto">Auto</option>
-      </select>
-    </label>
-  )
-}
-
-/** Same shape check as main (agent/trusted.ts normalizeRecipient), for feedback while typing. */
-const looksLikeRecipient = (t: string): boolean => /^[^\s@<>]+@[^\s@<>]+\.[a-z]{2,}$/i.test(t) || /^\+?[\d\s().-]{5,20}$/.test(t) && t.replace(/\D/g, '').length >= 5
-
-/**
- * "Can message without asking": people this bot may email or text on its own (even unattended), as chips.
- * Main checks every recipient exactly against this list plus the user's own email and phone (agent/trusted.ts).
- */
-function TrustedRow({ spaceId }: { spaceId: string }) {
-  const [all, setAll] = useState<Record<string, Partial<BotAutonomySettings>> | null>(null)
-  const [draft, setDraft] = useState('')
-  const [bad, setBad] = useState(false)
-  useEffect(() => {
-    let alive = true
-    void api.settings.get().then((x) => { if (alive) setAll(x.botAutonomy ?? {}) })
-    return () => { alive = false }
-  }, [spaceId])
-  if (!all) return null
-  const list = all[spaceId]?.trustedRecipients ?? []
-  const save = (next: string[]): void => {
-    const map = { ...all, [spaceId]: { ...(all[spaceId] ?? {}), trustedRecipients: next } }
-    setAll(map)
-    void api.settings.set({ botAutonomy: map }).then((s) => { setAll(s.botAutonomy ?? map); window.dispatchEvent(new Event('sahilbot:settings-changed')) })
-  }
-  const add = (): void => {
-    const items = draft.split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean)
-    if (!items.length) return
-    if (items.some((t) => !looksLikeRecipient(t))) { setBad(true); return }
-    save([...list, ...items.filter((t) => !list.some((x) => x.toLowerCase() === t.toLowerCase()))].slice(0, 50))
-    setDraft('')
-    setBad(false)
-  }
-  return (
-    <div className="bd-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }} data-testid="bot-trusted">
-      <span className="bd-row-text">Can message without asking<span className="bd-row-sub">Emails and texts to only these people (and you) send on their own. Anyone else still asks.</span></span>
-      {list.length > 0 && (
-        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {list.map((w) => (
-            <span key={w} className="ui-pill bd-chip" data-testid="bot-trusted-chip">
-              {w}
-              <button className="bd-icon" style={{ width: 18, height: 18 }} aria-label={`Ask again before messaging ${w}`} title="Remove" onClick={() => save(list.filter((x) => x !== w))}><I.Close size={10} /></button>
-            </span>
-          ))}
-        </span>
-      )}
-      <span style={{ display: 'flex', gap: 8 }}>
-        <span className="tk-input" style={{ flex: 1 }}><input value={draft} placeholder="Email or phone number" maxLength={400} onChange={(e) => { setDraft(e.target.value); setBad(false) }} onKeyDown={(e) => { if (e.key === 'Enter') add() }} aria-label="Add someone this bot may message without asking" data-testid="bot-trusted-input" /></span>
-        <button className="bd-btn" onClick={add} disabled={!draft.trim()} data-testid="bot-trusted-add">Add</button>
-      </span>
-      {bad && <span className="bd-row-sub" role="alert">That isn't an email address or phone number.</span>}
-    </div>
-  )
-}
-
-/**
  * Max: Off (only when you turn it on in the composer) / Auto (teams up only for big tasks; default) / Always, Max helpers (1-50)
  * and what one Max run may spend in a routine. Older installs kept these as the Swarm setting (read as the fallback).
  */
@@ -485,7 +357,7 @@ export function MaxRows({ spaceId }: { spaceId: string }) {
   return (
     <>
       <label className="bd-row">
-        <span className="bd-row-text">Max<span className="bd-row-sub">{mode === 'off' ? 'Only when you turn Max on in the composer.' : mode === 'always' ? 'Every request runs many agents: a team, a swarm, judged attempts or a mix.' : 'Teams up only for big tasks (reports, big comparisons, many files); small ones stay with one agent.'}</span></span>
+        <span className="bd-row-text">Max<span className="bd-row-sub">{mode === 'off' ? 'Only when you turn Max on under the message box.' : mode === 'always' ? 'Every request runs many agents: a team, a swarm, judged attempts or a mix.' : 'Teams up only for big tasks (reports, big comparisons, many files); small ones stay with one agent.'}</span></span>
         <select className="bd-select" value={mode} onChange={(e) => save({ mode: e.target.value as BotMaxSettings['mode'] })} data-testid="bot-max-mode" aria-label="Max">
           <option value="off">Off</option>
           <option value="auto">Auto</option>
@@ -508,4 +380,78 @@ export function MaxRows({ spaceId }: { spaceId: string }) {
       )}
     </>
   )
+}
+
+/** Hide a bot from the sidebar, or delete it (asks first, then Undo): right in its profile, no right-click needed. */
+function BotRemoveRows({ space, onChanged, onClose }: { space: Space; onChanged: () => void; onClose: () => void }) {
+  const [confirm, setConfirm] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const hide = async (): Promise<void> => { await api.spaces.update(space.id, { hidden: !space.hidden }); onChanged() }
+  // Its chat closes with it (App's onChanged opens the main chat); a delete that can't happen says why, here.
+  const del = async (): Promise<void> => {
+    try { await deleteBotWithUndo(space, onChanged); onClose() } catch (e) { setError((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')) }
+  }
+  return (
+    <>
+      <div className="bd-section-title">Remove</div>
+      <div className="bd-card">
+        <button className="bd-row bd-row-btn" onClick={() => void hide()} data-testid="bot-hide">
+          <span className="bd-row-text">{space.hidden ? 'Show in the sidebar' : 'Hide from the sidebar'}<span className="bd-row-sub">{space.hidden ? 'It comes back with its chat and routines.' : 'Its chat and routines stay; find it under Hidden bots.'}</span></span>
+        </button>
+        {!confirm ? (
+          <button className="bd-row bd-row-btn danger" onClick={() => setConfirm(true)} data-testid="bot-delete">
+            <span className="bd-row-text">Delete {space.name}<span className="bd-row-sub">Removes the bot, its chat and its routines.</span></span>
+          </button>
+        ) : (
+          <div className="rt-confirm block" role="alertdialog" aria-label="Delete bot">
+            <span>Delete {space.name} and its chat? You can undo it for a few minutes.</span>
+            <button className="bd-btn" onClick={() => setConfirm(false)}>Cancel</button>
+            <button className="bd-btn danger" onClick={() => void del()} data-testid="bot-delete-confirm">Delete</button>
+          </div>
+        )}
+        {error && <div className="bd-row-sub danger" role="alert" data-testid="bot-delete-error">{error}</div>}
+      </div>
+    </>
+  )
+}
+
+/** A bot's earlier conversations (after Start fresh), newest first: one click reopens one. */
+function PastConversations({ spaceId, current, onOpen }: { spaceId: string; current: string | null; onOpen: (t: Thread) => void }) {
+  const [list, setList] = useState<Thread[]>([])
+  useEffect(() => {
+    let alive = true
+    // Chats other apps opened with this bot ("From Cursor") aren't conversations you had.
+    void api.threads.list(spaceId).then((ts) => { if (alive) setList(ts.filter((t) => t.id !== current && !/^From .+/.test(t.title))) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [spaceId, current])
+  if (!list.length) return null
+  return (
+    <>
+      <div className="bd-section-title">Past conversations</div>
+      <div className="bd-card" data-testid="bot-past">
+        {list.slice(0, 20).map((t) => (
+          <button key={t.id} className="bd-row bd-row-btn" onClick={() => onOpen(t)} data-testid="bot-past-item">
+            <span className="bd-row-text">{t.title}<span className="bd-row-sub">Last used {new Date(t.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: new Date(t.updatedAt).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' })}</span></span>
+            <span className="bd-chev"><I.Chevron size={14} /></span>
+          </button>
+        ))}
+      </div>
+    </>
+  )
+}
+
+/**
+ * What this bot cost this month, in plain numbers (Grok Bot reviewers: "the allowance is invisible"). Hidden until it
+ * has used something; free local models show as requests only.
+ */
+function BotCost({ spaceId }: { spaceId: string }) {
+  const [row, setRow] = useState<{ usd: number; requests: number } | null>(null)
+  useEffect(() => {
+    let alive = true
+    void api.usage.dashboard().then((d) => { const b = d.byBot.find((x) => x.spaceId === spaceId); if (alive) setRow(b ? { usd: b.usd, requests: b.requests } : null) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [spaceId])
+  if (!row || !row.requests) return null
+  const money = row.usd >= 0.01 ? `$${row.usd.toFixed(2)}` : row.usd > 0 ? 'under a cent' : 'free'
+  return <div className="bd-cost hint" data-testid="bot-cost">This month: {money} · {row.requests.toLocaleString()} request{row.requests === 1 ? '' : 's'}</div>
 }

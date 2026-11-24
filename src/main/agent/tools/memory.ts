@@ -1,8 +1,11 @@
 import type { Db } from '../../db'
 import { MEMORY_KINDS, SECRETISH, isBotKind, isUntrusted, normalizeKind, type Memory, type MemoryKind, type MemoryStore } from '../../memory'
+import { hasSecret } from '../../learning/extract'
 import type { SkillStore } from '../../skills'
 import type { RuleStore } from '../../rules'
 import type { ToolDef } from '../types'
+import { autoMemoryOn } from '../prompt'
+import { ASKED_TO_REMEMBER, ASK_ONLY_LABEL, askOnlyCategories, asksToRemember } from '../../context-engine/sensitive'
 
 type Args = {
   action: 'save' | 'list' | 'search' | 'forget' | 'read_skill' | 'save_skill' | 'save_rule' | 'about'
@@ -25,7 +28,22 @@ const quote = (s: string): string => `"${s.length > 140 ? `${s.slice(0, 137)}…
 export interface WorldLookup {
   about(query: string, spaceId: string | null): string
   /** The context engine's sensitive-category rules (Privacy): may this fact be kept? */
-  screenMemory?(text: string): { ok: boolean; why?: string; label?: string }
+  screenMemory?(text: string): { ok: boolean; why?: string; label?: string; categories?: string[] }
+  /** Drops facts (by key, and relations by type) from the user's own People & Places card; how many went. */
+  forgetUserFacts?(keys: string[], rels?: string[]): number
+}
+
+export { ASKED_TO_REMEMBER }
+
+/** What the user last typed in this chat (not the app's hidden notes, not a message relayed from another bot or app). */
+export function lastUserText(db: Db, threadId: string): string {
+  const ms = db.listMessages(threadId)
+  for (let i = ms.length - 1; i >= 0; i--) {
+    const m = ms[i]
+    if (m.role !== 'user' || m.meta?.hidden || m.meta?.handoff || m.meta?.helperTask || m.meta?.fromLink || typeof m.meta?.fromApp === 'string' || typeof m.meta?.mcpClientId === 'string') continue
+    return m.content
+  }
+  return ''
 }
 
 /** Wording taken from outside content is kept only as a quoted fact with where it came from. */
@@ -40,8 +58,8 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
     label: 'Memory',
     core: true,
     effect: (a) => (a.action === 'search' || a.action === 'list' || a.action === 'read_skill' || a.action === 'about' ? 'read' : 'write_local'),
-    // A standing rule changes what every future chat does: always the user's call, in every mode.
-    // (Memories and skills ask only when their text came from a web page or email: see memoryRisk.)
+    // A standing rule changes what every future chat does: Ask mode asks; Auto saves it unless its wording
+    // came from, or followed, a web page or email (permissions.ts). Memories and skills: see memoryRisk.
     hardStop: (a) => (a.action === 'save_rule' ? `saving a standing rule every chat will follow: "${String(a.rule ?? '').replace(/\s+/g, ' ').slice(0, 160)}"` : null),
     describe: (a) => a.action === 'save_rule' ? `Save the rule "${a.name}": ${String(a.rule ?? '').slice(0, 200)}`
       : a.action === 'save_skill' ? `Save the skill "${a.name}": ${String(a.description ?? '').slice(0, 160)}`
@@ -97,10 +115,10 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
 
       if (a.action === 'save_rule') {
         if (!rules) throw new Error('Rules are not available.')
-        if (SECRETISH.test(a.rule!)) throw new Error('Rules never hold secrets.')
+        if (SECRETISH.test(a.rule!) || hasSecret(`${a.name ?? ''}\n${a.rule}`)) throw new Error('Rules never hold secrets.')
         const scope = a.applies === 'this_project' && projectId ? `project:${projectId}` : a.applies === 'this_bot' && space && !space.isMain ? `bot:${space.id}` : 'everywhere'
         const r = rules.save({ name: a.name!, text: a.rule!, scope, category: 'Learned', source: 'learned' })
-        return { text: `Saved rule "${r.name}" (${scope === 'everywhere' ? 'all chats' : scope.startsWith('bot') ? 'this bot' : 'this project'}). It applies from the next new chat.${from}`, display: `saved rule "${r.name}"` }
+        return { text: `Saved rule "${r.name}" (${scope === 'everywhere' ? 'all chats' : scope.startsWith('bot') ? 'this bot' : 'this project'}). Follow it from now on, starting with this reply. Tell the user in a few words ("Got it: I'll always …"), no question.${from}`, display: `saved rule "${r.name}"` }
       }
       if (a.action === 'read_skill' || a.action === 'save_skill') {
         if (!skills) throw new Error('Skills are not available.')
@@ -112,7 +130,8 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           skills.used(sk.name)
           return { text: `# ${sk.name}\n${sk.description}\n\n${sk.body}`, display: `read skill "${sk.name}"` }
         }
-        if (SECRET_VALUE.test(a.steps!)) throw new Error('Skills never hold passwords, keys or tokens. Refer to saved logins by name instead.')
+        // The same check as memories (an API key copied from .env, a token, a card number), on every field.
+        if (SECRET_VALUE.test(a.steps!) || hasSecret([a.name, a.description, a.steps].join('\n'))) throw new Error('Skills never hold passwords, keys or tokens. Refer to saved logins by name instead.')
         const existing = skills.get(a.name!)
         // Skills the user wrote are theirs: save an improvement under a new name.
         if (existing?.source === 'you') throw new Error(`"${existing.name}" was written by the user; save an improved version under a new name instead.`)
@@ -132,6 +151,14 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
       if (a.action === 'save') {
         if (off) return { text: offText, display: 'memory is off' }
         if (SECRETISH.test(a.fact!)) throw new Error('That looks like a secret. Secrets are never stored in memory; saved logins belong in the password vault.')
+        // Saves the bot makes on its own (not the work log, not a job rule for itself): only what the user's
+        // settings allow. A bot keeps one ongoing chat, so its prompt can predate "Remember things automatically"
+        // being switched off: the setting is checked here, on every save.
+        const own = normalizeKind(a.category) !== 'worklog' && !(a.scope === 'bot' && normalizeKind(a.category) === 'rule')
+        const asked = asksToRemember(lastUserText(db, ctx.threadId))
+        if (own && !asked && !autoMemoryOn()) {
+          return { text: 'Remember things automatically is off (Settings → Memory): save only when the user asks you to remember something. Nothing was saved; don\'t mention it.', display: 'not saved (automatic memory is off)' }
+        }
         // The same rules as People & Places: identifiers are never kept, and a sensitive category the user
         // turned off (Settings → Privacy & Security) isn't either.
         const screened = world?.()?.screenMemory?.(a.fact!)
@@ -139,6 +166,10 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           throw new Error(screened.why === 'secret' || screened.why === 'identifier'
             ? 'That includes a number or code that is never stored in memory (passwords, card, account and ID numbers). Leave it out and save the rest, or don\'t save it.'
             : `The user turned off remembering ${screened.label ?? screened.why} details (Settings → Privacy & Security → Sensitive details), so it wasn't saved. Don't mention it again unless they bring it up.`)
+        }
+        const sensitive = askOnlyCategories(a.fact!)
+        if (own && !asked && sensitive.length) {
+          return { text: `A sensitive detail (${sensitive.map((c) => ASK_ONLY_LABEL[c]).join(', ')}): not saved automatically. Nothing was saved; don't mention it unless the user asks you to remember it.`, display: 'not saved (sensitive)' }
         }
         if (tainted) a = { ...a, fact: quotedFact(a.fact!) }
         // An unverified memory is never a rule.
@@ -161,8 +192,10 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         }
         const { memory: m, replaced } = memory.save(a.fact!, kind, spaceId, 'chat', provenance)
         const whereSaved = `${spaceId ? `for ${botName} only` : 'shared (about the user)'}${tainted ? ', marked unverified (from outside content)' : ''}`
+        // A lesson the bot keeps for itself after a correction ("When …, do …") is quiet, like the work log.
+        const quiet = m.category === 'worklog' || (m.category === 'rule' && !!spaceId && /^\s*when\b/i.test(m.content))
         return {
-          text: `${replaced ? `Updated memory ${m.id} (was: ${quote(replaced)})` : `Saved memory ${m.id}`} as ${m.category}, ${whereSaved}.${from}${m.category === 'worklog' ? '' : ` Tell the user in a few words inline, e.g. "Noted: ${m.content.length > 60 ? `${m.content.slice(0, 57)}…` : m.content}" (no question, no confirmation).`}`,
+          text: `${replaced ? `Updated memory ${m.id} (was: ${quote(replaced)})` : `Saved memory ${m.id}`} as ${m.category}, ${whereSaved}.${from}${quiet ? (m.category === 'worklog' ? '' : ' Don\'t mention it; just do it that way from now on.') : ` Tell the user in a few words inline, e.g. "Noted: ${m.content.length > 60 ? `${m.content.slice(0, 57)}…` : m.content}" (no question, no confirmation).`}`,
           display: `${m.category === 'worklog' ? 'logged' : replaced ? 'updated' : 'saved'} "${m.content.slice(0, 60)}"`
         }
       }
@@ -178,7 +211,13 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           const keep = new Set(items.map((m) => m.id))
           items = memory.search(a.query, botId, 100).filter((m) => keep.has(m.id))
         }
-        if (!items.length) return { text: 'Nothing saved yet.', display: 'nothing saved' }
+        // "What do you remember about me?" is about the user: the work log (what the bot did, routine runs)
+        // is left out unless asked for.
+        const logged = items.filter((m) => m.category === 'worklog').length
+        const withLog = a.scope === 'bot' || /\b(work ?log|did|done|have you (done|made)|ran|runs?|history)\b/i.test(a.query ?? '')
+        if (!withLog && logged) items = items.filter((m) => m.category !== 'worklog')
+        const logNote = !withLog && logged ? `(${logged} work-log entr${logged === 1 ? 'y' : 'ies'} not shown: ask "what have you done for me" to see ${logged === 1 ? 'it' : 'them'})` : ''
+        if (!items.length) return { text: logNote ? `Nothing saved about the user yet. ${logNote}` : 'Nothing saved yet.', display: 'nothing saved' }
         const groups = MEMORY_KINDS.map((k) => ({ k, ms: items.filter((m) => m.category === k) })).filter((g) => g.ms.length)
         const lines: string[] = []
         let shown = 0
@@ -191,6 +230,7 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           }
         }
         if (shown < items.length) lines.push(`(${items.length - shown} older entries not shown)`)
+        if (logNote) lines.push(logNote)
         lines.push('', 'Tell the user in plain words, grouped like this, without the ids. They can say "forget …" or edit everything in Settings → Memory.')
         return { text: lines.join('\n'), display: `${items.length} memories` }
       }
@@ -216,9 +256,20 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           }
         }
         const { removed: visible, candidates } = memory.forget(a.query!, botId, { all: a.all, only: a.scope === 'me' ? 'shared' : a.scope === 'bot' ? 'space' : undefined })
+        // "Forget my address / birthday / time zone": the same fact on the user's People & Places card goes too
+        // (it would otherwise keep reaching <context>).
+        const own = a.scope !== 'bot' && /\b(my|me|i|mine)\b/i.test(a.query!)
+        const facts = !own ? null
+          : /\b(address|home|house|apartment|flat|live|lives|living)\b/i.test(a.query!) ? { keys: ['address'], rels: /\b(live|lives|living|city|town)\b/i.test(a.query!) ? ['lives_in'] : [] }
+          : /\b(birthday|bday|born|date of birth)\b/i.test(a.query!) ? { keys: ['birthday'], rels: [] }
+          : /\btime ?zone\b/i.test(a.query!) ? { keys: ['timezone'], rels: [] } : null
+        let fromCard = 0
+        if (facts) { try { fromCard = world?.()?.forgetUserFacts?.(facts.keys, facts.rels) ?? 0 } catch { fromCard = 0 } }
+        const cardNote = fromCard ? ' Also removed from People & Places.' : ''
+        if (!visible.length && !candidates.length && fromCard) return { text: `Removed it from People & Places (no saved memory matched "${a.query}"). Confirm to the user what you removed.`, display: 'forgot it' }
         if (visible.length) {
           return {
-            text: `Forgot ${visible.length === 1 ? quote(visible[0].content) : `${visible.length} memories:\n${visible.map((m) => `- ${quote(m.content)}`).join('\n')}`}. Confirm to the user exactly what you removed.`,
+            text: `Forgot ${visible.length === 1 ? quote(visible[0].content) : `${visible.length} memories:\n${visible.map((m) => `- ${quote(m.content)}`).join('\n')}`}.${cardNote} Confirm to the user exactly what you removed.`,
             display: `forgot ${visible.length === 1 ? `"${visible[0].content.slice(0, 50)}"` : `${visible.length} memories`}`
           }
         }
@@ -228,7 +279,22 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
             display: `${candidates.length} possible matches`
           }
         }
-        return { text: `No saved memory matches "${a.query}". Nothing was removed. (If it was something said earlier in this chat, it was never saved.)`, display: 'no match' }
+        // Nothing matched the words: show what is saved of that kind, so the model can forget by id or ask,
+        // rather than telling the user it was never saved.
+        const kindOf = (q: string): MemoryKind | null => /\b(address|live|lives|living|home|house|apartment|place|city|town|time ?zone)\b/i.test(q) ? 'location'
+          : /\b(birthday|bday|born|anniversary|deadline|date)\b/i.test(q) ? 'date'
+          : /\b(prefer|preference|like|likes|favou?rite)\b/i.test(q) ? 'preference'
+          : /\b(job|work|employer|company|office)\b/i.test(q) ? 'work' : null
+        const kind = kindOf(a.query!)
+        const near = off || !kind ? [] : memory.list(botId).filter((m) => mine(m) && m.category !== 'worklog' && (m.category === kind || (kind === 'date' && m.category === 'profile') || (kind === 'location' && m.category === 'profile')))
+          .filter((m) => a.scope !== 'me' || !m.spaceId).filter((m) => a.scope !== 'bot' || !!m.spaceId).slice(0, 5)
+        if (near.length) {
+          return {
+            text: `No memory matched "${a.query}" by its words; nothing removed yet. Saved ${KIND_TITLE[kind!].toLowerCase()} memories that could be it:\n${near.map((m) => `- [${m.id}] ${m.content}`).join('\n')}\nForget the right one by id, or ask the user which they meant. Don't say it was never saved.`,
+            display: `${near.length} possible matches`
+          }
+        }
+        return { text: `No saved memory matches "${a.query}". Nothing was removed.`, display: 'no match' }
       }
 
       /** What the user's other bots learned that matches (read-only; never their rules). */

@@ -241,7 +241,7 @@ function openActivitySettings(): void {
   window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: 'privacy:activity' }))
 }
 
-function PrivacyPanel({ status, onChange, onUndo }: { status: ContextEngineStatus; onChange: (s: ContextEngineStatus) => void; onUndo: (trashId: string) => void }) {
+export function PrivacyPanel({ status, onChange, onUndo }: { status: ContextEngineStatus; onChange: (s: ContextEngineStatus) => void; onUndo: (trashId: string) => void }) {
   const s = status.settings
   const [act, setAct] = useState<ActivityStatus | null>(null)
   const loadAct = useCallback((): void => { try { void api.activity?.status().then(setAct).catch(() => undefined) } catch { /* not in this runtime */ } }, [])
@@ -386,3 +386,15 @@ function PrivacyPanel({ status, onChange, onUndo }: { status: ContextEngineStatu
     </div>
   )
 }
+
+/**
+ * Settings → Memory → What it learns from: the sources bots learn about your people and places from, a pause,
+ * and what was recently removed. (The cards and notes themselves have no view: they're the bots' memory.)
+ */
+export function LearningSources() {
+  const [st, setSt] = useState<ContextEngineStatus | null>(null)
+  useEffect(() => { void api.people.status().then(setSt).catch(() => undefined); return api.people.onChanged(() => void api.people.status().then(setSt).catch(() => undefined)) }, [])
+  if (!st) return <div className="hint">Loading…</div>
+  return <PrivacyPanel status={st} onChange={setSt} onUndo={(t) => void api.people.undo(t).then(() => api.people.status().then(setSt)).then(() => toast('Put back.', 'ok')).catch((e) => toast(clean(e), 'error'))} />
+}
+

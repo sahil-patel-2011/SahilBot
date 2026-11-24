@@ -10,6 +10,7 @@ import { def as providerDef } from '../llm/providers'
 import { pick } from '../llm/router'
 import { isUntrusted, rankMemories, similar, type Memory, type MemoryStore } from '../memory'
 import type { SkillStore } from '../skills'
+import type { Optins } from '../context-engine/sensitive'
 import { cleanLearning } from '../settings'
 import { dayKey } from '../usage'
 import {
@@ -60,6 +61,8 @@ export interface LearningDeps {
   /** That chat is running right now (left alone until it's done). */
   isRunning?: (threadId: string) => boolean
   secretValues?: () => string[]
+  /** The user's sensitive-category choices (Privacy): a category turned off is never learned. */
+  sensitive?: () => Optins | undefined
   /** A chat a connected app started. */
   isAppThread?: (threadId: string) => boolean
   fitWindow?: (model: string, window: number) => number
@@ -394,8 +397,11 @@ export class LearningService {
       // The chat read outside content (a page, email, another app's output): a rule learned from it
       // waits for the user's OK instead of being saved.
       const sawOutside = chatHasUntrusted(msgs)
+      const userMessages = msgs.filter((m) => m.role === 'user' && !m.meta?.hidden && !isRelayed(m)).map((m) => m.content)
+      let optins: Optins | undefined
+      try { optins = this.d.sensitive?.() } catch { optins = undefined }
       for (const c of parseMemoryCandidates(reply)) {
-        const v = vetCandidate(c, { userText, origin, existing: memory.list(botId), rejected: this.store.state().rejected, secretValues: this.d.secretValues?.() ?? [], canHoldBotRules: !!botId })
+        const v = vetCandidate(c, { userText, origin, existing: memory.list(botId), rejected: this.store.state().rejected, secretValues: this.d.secretValues?.() ?? [], canHoldBotRules: !!botId, userMessages, optins })
         if (!v.ok) continue
         const spaceId = v.bot ? botId : c.kind === 'project' && space?.kind === 'project' ? space.id : null
         const where = spaceId ? `only ${space?.name ?? 'this bot'}` : 'shared (about you)'

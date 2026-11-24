@@ -24,6 +24,9 @@ describe('phase 6: projects + scheduled tasks', () => {
     writeFileSync(join(folder, 'brief.md'), 'Client: Acme. Deadline Dec 1.')
     const { app, page } = await launch(tempProfile(), llm.url)
     await app.evaluate(({ dialog }, f) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [f] })) as never }, folder)
+    // Projects live in the profile menu (Grok Bot's sidebar has no Projects section until you have one).
+    await page.click('[data-testid="profile"]')
+    await page.click('[data-testid="nav-projects"]')
     await page.click('[data-testid="new-project"]')
     await page.fill('[data-testid="bot-name"]', 'Acme launch')
     await page.click('[data-testid="project-folder"]')
@@ -45,8 +48,9 @@ describe('phase 6: projects + scheduled tasks', () => {
     expect(sys).toContain(`Project folder (read and edit with absolute paths): `)
     expect(tools()[0]).toContain('Deadline Dec 1')
     expect(existsSync(join(folder, 'summary.md'))).toBe(true)
-    // Sidebar lists the project; its home lists the chat.
-    expect(await page.locator('[data-testid="project-item"]').innerText()).toContain('Acme launch')
+    // Projects (in the profile menu) list the project.
+    await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-projects"]')
+    expect(await page.locator('[data-testid="projects-view"]').innerText()).toContain('Acme launch')
     await app.close()
   })
 
@@ -67,17 +71,16 @@ describe('phase 6: projects + scheduled tasks', () => {
     expect(list).toHaveLength(1)
     expect(list[0]).toMatchObject({ title: 'Tidy workspace', schedule: { type: 'daily', time: '09:00' }, enabled: true })
 
-    // Run it now from the Scheduled view: the delete would need approval, so it is skipped.
+    // Run it now from the Scheduled view: Auto does the delete you asked for, nobody watching (it goes to the Trash).
     llm.script.push(
       { toolCalls: [{ name: 'file_manage', arguments: '{"op":"delete","path":"old.txt"}' }] },
-      { content: 'I would delete old.txt, but that needs your OK.' }
+      { content: 'Deleted old.txt.' }
     )
-    await page.click('[data-testid="nav-scheduled"]')
+    await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-scheduled"]')
     await page.locator('[data-testid="schedule-row"]').waitFor()
     await page.click('[data-testid="schedule-run"]')
     await expect.poll(async () => (await page.evaluate(() => window.foreman.schedules.list()))[0].lastStatus, { timeout: 20_000 }).toBe('done')
-    expect(existsSync(join(ws, 'old.txt'))).toBe(true)
-    expect(tools().at(-1)).toContain('ran on a schedule with nobody to approve it')
+    expect(existsSync(join(ws, 'old.txt'))).toBe(false)
     expect(JSON.stringify(llm.requests.at(-1)!.messages)).toContain('⏰ Tidy workspace')
     expect(await page.locator('[data-testid="approval-card"]').count()).toBe(0)
     await app.close()

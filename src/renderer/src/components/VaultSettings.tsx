@@ -26,6 +26,17 @@ const TABS: Array<{ id: Tab; label: string; type?: VaultItemType }> = [
   { id: 'security', label: 'Security' },
   { id: 'activity', label: 'History' }
 ]
+// Four tabs; each shows its kinds one under the other (logins with API keys, IDs with notes and addresses,
+// security with its history), so the row stays short.
+type Group = 'logins' | 'cards' | 'ids' | 'security'
+const GROUPS: Array<{ id: Group; label: string; parts: Tab[] }> = [
+  { id: 'logins', label: 'Logins', parts: ['logins', 'apiKeys'] },
+  { id: 'cards', label: 'Cards', parts: ['cards'] },
+  { id: 'ids', label: 'IDs & notes', parts: ['ids', 'notes', 'addresses'] },
+  { id: 'security', label: 'Security', parts: ['security', 'activity'] }
+]
+const ofTab = (x: (typeof TABS)[number], items: VaultItemSummary[]): VaultItemSummary[] =>
+  items.filter((i) => i.type === x.type && (x.type !== 'login' || (x.id === 'apiKeys' ? i.kind === 'api_key' : i.kind !== 'api_key')))
 const NOUN: Record<VaultItemType, string> = { login: 'login', card: 'card', identity: 'ID', note: 'secure note', address: 'address' }
 const ID_KINDS = [['passport', 'Passport'], ['driver_license', "Driver's license"], ['national_id', 'National ID'], ['other', 'Other']] as const
 const AUTOLOCK = [1, 5, 15, 30, 60, 240, 0]
@@ -59,7 +70,7 @@ function protection(st: VaultStatus): string {
 export function SecretVaultSettings({ embedded }: { embedded?: boolean } = {}) {
   const [st, setSt] = useState<VaultStatus | null>(null)
   const [items, setItems] = useState<VaultItemSummary[]>([])
-  const [tab, setTab] = useState<Tab>('logins')
+  const [tab, setTab] = useState<Group>('logins')
   const [busy, setBusy] = useState(false)
   const refresh = useCallback(async () => {
     const [s, i] = await Promise.all([api.vault.status(), api.vault.items()])
@@ -75,7 +86,7 @@ export function SecretVaultSettings({ embedded }: { embedded?: boolean } = {}) {
     try { await fn(); await refresh(); if (ok) toast(ok, 'ok') } catch (e) { toast(clean(e), 'error') } finally { setBusy(false) }
   }
   if (!st) return <>{!embedded && <h2>Vault</h2>}<div className="set-sub">Loading…</div></>
-  const t = TABS.find((x) => x.id === tab)!
+  const group = GROUPS.find((g) => g.id === tab)!
   return (
     <>
       {!embedded && <h2>Vault</h2>}
@@ -109,18 +120,24 @@ export function SecretVaultSettings({ embedded }: { embedded?: boolean } = {}) {
       {st.legacy.unreadable.length > 0 && <div className="sv-banner">Couldn't read {st.legacy.unreadable.join(', ')} from the old format (the Keychain no longer opens it). Add {st.legacy.unreadable.length === 1 ? 'it' : 'them'} again.</div>}
 
       <div className="pw-tabs sv-tabs" role="tablist">
-        {TABS.map((x) => (
-          <button key={x.id} role="tab" aria-selected={tab === x.id} className={`pw-tab${tab === x.id ? ' on' : ''}`} onClick={() => setTab(x.id)} data-testid={`vault-tab-${x.id}`}>
-            {x.label}{x.type && items.filter((i) => i.type === x.type && (x.type !== 'login' || (x.id === 'apiKeys' ? i.kind === 'api_key' : i.kind !== 'api_key'))).length > 0 ? <span className="sv-count">{items.filter((i) => i.type === x.type && (x.type !== 'login' || (x.id === 'apiKeys' ? i.kind === 'api_key' : i.kind !== 'api_key'))).length}</span> : null}
-          </button>
-        ))}
+        {GROUPS.map((g) => {
+          const n = g.parts.reduce((k, id) => { const x = TABS.find((t) => t.id === id)!; return k + (x.type ? ofTab(x, items).length : 0) }, 0)
+          return (
+            <button key={g.id} role="tab" aria-selected={tab === g.id} className={`pw-tab${tab === g.id ? ' on' : ''}`} onClick={() => setTab(g.id)} data-testid={`vault-tab-${g.id}`}>
+              {g.label}{n > 0 ? <span className="sv-count">{n}</span> : null}
+            </button>
+          )
+        })}
       </div>
 
-      {t.type && <ItemsTab key={tab} type={t.type} apiKey={tab === 'apiKeys'} items={items.filter((i) => i.type === t.type && (t.type !== 'login' || (tab === 'apiKeys' ? i.kind === 'api_key' : i.kind !== 'api_key')))} addresses={items.filter((i) => i.type === 'address')} st={st} onChange={refresh} />}
+      {group.parts.map((id) => {
+        const x = TABS.find((t) => t.id === id)!
+        return x.type ? <ItemsTab key={id} type={x.type} apiKey={id === 'apiKeys'} items={ofTab(x, items)} addresses={items.filter((i) => i.type === 'address')} st={st} onChange={refresh} /> : null
+      })}
       {tab === 'logins' && <OtpGrants />}
       {tab === 'logins' && <NeverSave />}
       {tab === 'security' && <SecurityTab st={st} act={act} busy={busy} />}
-      {tab === 'activity' && <Activity />}
+      {tab === 'security' && <Activity />}
     </>
   )
 }

@@ -82,7 +82,8 @@ left out; never ask the user to re-import them.
 Saved memories, finished chats, indexed files and connected apps' results also become an entity graph
 (people, places, organizations, events, dates…) while the app is idle. memory(action="about",
 query) shows everything known about one of them. Forgetting a memory removes the facts it gave. The
-user manages it in Vault → People & Places (edit, merge, forget with Undo, privacy, export).
+user has no view of these cards: they ask you to forget someone (memory or vault remove), and they turn
+learning sources on or off in Settings → Memory → What it learns from (with a pause and Undo for removals).
 
 ## The knowledge vault
 Beyond memories, a vault of linked Markdown notes (people, projects, decisions, research, how-tos,

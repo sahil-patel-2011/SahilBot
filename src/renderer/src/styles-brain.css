@@ -1,11 +1,11 @@
 /* Your brain (BrainView, BrainSettings) and Agent mode's prompts in Needs you. Tokens only: light and dark. */
 
-.brain-page { padding-left: max(28px, calc((100% - 1120px) / 2)); padding-right: max(28px, calc((100% - 1120px) / 2)); }
 .brain-head { align-items: flex-end; flex-wrap: wrap; row-gap: 10px; }
 .brain-title { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; min-width: 0; }
 .brain-updated { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-3); white-space: nowrap; }
 .brain-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
 .brain-updated.live { color: var(--text-2); }
+.brain-updated.never .brain-dot { background: var(--text-3); }
 .brain-updated.live .brain-dot { background: var(--accent); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); animation: brain-pulse 1.4s ease-out infinite; }
 @keyframes brain-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); } 100% { box-shadow: 0 0 0 7px transparent; } }
 @media (prefers-reduced-motion: reduce) { .brain-updated.live .brain-dot { animation: none; } }

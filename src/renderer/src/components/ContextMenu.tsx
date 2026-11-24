@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
-export type MenuItem = 'sep' | { label: string; icon?: ReactNode; danger?: boolean; run: () => void }
+export type MenuItem = 'sep' | { label: string; icon?: ReactNode; danger?: boolean; run: () => void; testId?: string }
 
 /** Right-click menu at the pointer, kept inside the window. */
 export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
@@ -21,7 +21,7 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
   return (
     <div className="ctx-menu" ref={ref} style={{ left: pos.x, top: pos.y }} role="menu">
       {items.map((it, i) => it === 'sep' ? <div key={i} className="menu-sep" /> : (
-        <button key={i} className={`menu-item${it.danger ? ' danger' : ''}`} onClick={() => { onClose(); it.run() }} role="menuitem">
+        <button key={i} className={`menu-item${it.danger ? ' danger' : ''}`} onClick={() => { onClose(); it.run() }} role="menuitem" data-testid={it.testId}>
           {it.icon}{it.label}
         </button>
       ))}

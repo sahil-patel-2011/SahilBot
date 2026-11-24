@@ -64,7 +64,11 @@ export function goalStateLine(g: Goal, now = Date.now()): string {
 /** Live list of every goal (refreshes on goals:changed and once a minute for "next check-in" times). */
 export function useGoals(): { goals: Goal[] | null; reload: () => void } {
   const [goals, setGoals] = useState<Goal[] | null>(null)
-  const reload = useCallback(() => { void api.goals.list().then(setGoals).catch(() => setGoals([])) }, [])
+  // A load that hangs shows the empty page after 5 s instead of "Loading…" for good (a late answer still lands).
+  const reload = useCallback(() => {
+    const late = setTimeout(() => setGoals((g) => g ?? []), 5_000)
+    void api.goals.list().then(setGoals).catch(() => setGoals([])).finally(() => clearTimeout(late))
+  }, [])
   useEffect(() => {
     reload()
     const off = api.goals.onChange(reload)
@@ -99,13 +103,13 @@ export function TasksView(p: { spaces: Space[]; onOpenChat: (threadId: string, b
             <button role="tab" aria-selected={!bot} className={!bot ? 'on' : ''} onClick={() => setBot(null)}>All bots</button>
             {bots.map((b) => (
               <button key={b.id} role="tab" aria-selected={bot === b.id} className={bot === b.id ? 'on' : ''} onClick={() => setBot(b.id)}>
-                <SpaceAvatar color={b.color} shape={b.shape} size={16} />{b.name}
+                <SpaceAvatar color={b.color} shape={b.shape} icon={b.icon} size={16} />{b.name}
               </button>
             ))}
           </div>
         )}
       </div>
-      <div className="set-sub">Goals your bots pursue over hours or days. They check in on their own, stay inside each goal’s budget, and leave anything risky for you.</div>
+      <div className="set-sub">Questions and approvals from your bots, plus the longer goals they’re working on.</div>
       <NeedsYouInbox spaces={p.spaces} onOpenChat={(threadId, botId) => p.onOpenChat(threadId, botId)} />
       {paused && (
         <div className="tk-banner" role="status">
@@ -159,7 +163,7 @@ function GoalCard({ goal: g, bot, column, onOpen, reload }: { goal: Goal; bot?: 
   return (
     <article className={`tk-card${finished ? ' finished' : ''}`} data-testid="goal-card" data-status={g.status} style={{ '--bot': bot?.color ?? 'var(--accent)' } as React.CSSProperties}>
       <div className="tk-card-top">
-        {bot ? <SpaceAvatar color={bot.color} shape={bot.shape} size={26} /> : <span className="tk-noavatar" />}
+        {bot ? <SpaceAvatar color={bot.color} shape={bot.shape} icon={bot.icon} size={26} /> : <span className="tk-noavatar" />}
         <span className="tk-bot">{bot?.name ?? 'Deleted bot'}</span>
         {g.running && <span className="tk-live" title="Working now"><span className="row-spin" />Working</span>}
         {!g.running && column === 'needs' && <span className="tk-chip needs">{g.status === 'blocked' ? 'Blocked' : 'Needs you'}</span>}
@@ -273,11 +277,13 @@ export function BotGoals({ spaceId }: { spaceId: string }) {
   const [openId, setOpenId] = useState<string | null>(null)
   const mine = (goals ?? []).filter((g) => g.botId === spaceId && g.status !== 'abandoned')
   const toggle = (g: Goal, on: boolean): void => { void run(() => api.goals.update(g.id, { status: on ? 'active' : 'paused' })).then(reload) }
+  // No goals: nothing to show (ask the bot in chat to take one on).
+  if (!mine.length) return null
   return (
     <>
       <div className="bd-section-title">Goals</div>
       <div className="bd-card" data-testid="bot-goals">
-        {goals !== null && mine.length === 0 && <div className="bd-empty">Ask in chat for something that takes days to start a goal.</div>}
+        {goals !== null && mine.length === 0 && <div className="bd-empty">No goals yet. Ask for something that takes days, like “track these 5 stocks weekly”.</div>}
         {mine.map((g) => {
           const finished = g.status === 'done'
           const on = !finished && g.status !== 'paused' && g.status !== 'waiting_user' && g.status !== 'blocked'

@@ -78,15 +78,62 @@ export const PROFILES: Record<'sahilbot' | 'claude-code' | 'codex-cli' | 'grok-b
 export const straight = (t: string): string => (t ?? '').replace(/[\u2018\u2019\u02BC]/g, "'").replace(/[\u201C\u201D]/g, '"')
 
 /** "I've saved it", "It's been sent", "Done: created the event": a reply saying an action happened. */
+/** Tools that look at the work (for "I checked / verified / tested it"). */
+const LOOKS = ['read', 'fetch', 'browser', 'search', 'run_tests', 'run_command', 'code', 'review', 'agent_control', 'screenshot', 'computer', 'list', 'file_info', 'open_file', 'snapshot', 'get', 'grep', 'glob']
 /** Tool-name stems that do what a claimed verb says ("published" ↔ publish_post, "it's live" ↔ deploy). */
 const CLAIM_STEMS: Record<string, string[]> = {
-  saved: ['save', 'write', 'create', 'note'], sent: ['send', 'email', 'message', 'reply', 'post'], emailed: ['email', 'send', 'mail'],
+  saved: ['save', 'write', 'create', 'note', 'edit', 'export', 'memory', 'about'], sent: ['send', 'email', 'mail', 'message', 'reply', 'post'], emailed: ['email', 'send', 'mail'],
   published: ['publish', 'post', 'deploy', 'release'], posted: ['post', 'publish', 'send'], deployed: ['deploy', 'publish', 'release'],
-  uploaded: ['upload', 'put', 'save'], booked: ['book', 'reserve'], scheduled: ['schedule', 'create_event', 'calendar'],
-  deleted: ['delete', 'remove', 'trash'], removed: ['remove', 'delete', 'trash'], filed: ['file', 'create', 'submit'],
-  submitted: ['submit', 'send', 'post'], shared: ['share', 'send'], moved: ['move', 'rename'], renamed: ['rename', 'move'],
+  uploaded: ['upload', 'put', 'save'], booked: ['book', 'reserve'], scheduled: ['schedule', 'create_event', 'calendar'], rescheduled: ['schedule', 'update', 'calendar', 'event'],
+  deleted: ['delete', 'remove', 'trash', 'file_manage', 'manage_bot', 'schedule', 'memory', 'about'], removed: ['remove', 'delete', 'trash', 'file_manage', 'manage_bot', 'schedule', 'memory', 'about'], filed: ['file', 'create', 'submit'],
+  submitted: ['submit', 'send', 'post'], shared: ['share', 'send'], moved: ['move', 'rename', 'file_manage', 'schedule', 'update_bot', 'manage_bot'], renamed: ['rename', 'move', 'file_manage', 'update_bot', 'manage_bot'],
   installed: ['install'], ordered: ['order', 'buy', 'purchase'], paid: ['pay', 'purchase'], replied: ['reply', 'send'],
-  messaged: ['message', 'send'], texted: ['text', 'send', 'message'], live: ['publish', 'deploy', 'post', 'launch', 'release']
+  messaged: ['message', 'send'], texted: ['text', 'send', 'message'], live: ['publish', 'deploy', 'post', 'launch', 'release'],
+  created: ['create', 'write', 'save', 'make', 'new', 'add', 'export', 'schedule', 'file_manage'], wrote: ['write', 'save', 'create', 'edit'], written: ['write', 'save', 'create', 'edit'],
+  added: ['add', 'create', 'write', 'edit', 'update', 'insert', 'append', 'schedule', 'memory'], updated: ['update', 'edit', 'write', 'set', 'patch', 'modify', 'save', 'schedule', 'manage_bot', 'memory', 'about'],
+  fixed: ['edit', 'write', 'patch', 'fix', 'apply', 'update', 'schedule'], cancelled: ['cancel', 'delete', 'remove', 'update', 'schedule'], canceled: ['cancel', 'delete', 'remove', 'update', 'schedule'],
+  downloaded: ['download', 'fetch', 'save', 'export'], copied: ['copy', 'write', 'save', 'duplicate', 'file_manage'],
+  completed: ['complete', 'submit', 'update', 'todo'],
+  // "I checked the link", "I tested it": something that looks (a read, a page, a test run, the screen) backs it.
+  verified: LOOKS, checked: LOOKS, tested: LOOKS, confirmed: LOOKS, 'double-checked': LOOKS,
+  'signed in': ['sign', 'login', 'log_in', 'auth', 'browser'], 'logged in': ['login', 'log_in', 'sign', 'auth', 'browser']
+}
+
+// Verbs for actions in the world (not "I've written a summary below", which is the reply itself).
+const VERBS = '(saved|sent|emailed|published|posted|deployed|uploaded|booked|scheduled|rescheduled|deleted|removed|filed|submitted|shared|moved|renamed|installed|ordered|paid|replied|messaged|texted|cancell?ed|canceled|downloaded|signed in|logged in)'
+// Checking verbs: "I've verified the totals", "I tested it on three photos" (said of itself only).
+const CHECKS = '(verified|checked|tested|confirmed|double-checked)'
+// Verbs that also describe the reply itself ("I've added a section below", "I wrote a short poem"): a claim only when
+// the sentence names something concrete in the world (a file, a path, an event, an order…).
+const TARGETED = '(created|wrote|written|added|updated|fixed|copied|completed)'
+const TARGET = /\b[\w-]+\.(pdf|docx?|xlsx|csv|txt|md|py|js|ts|tsx|json|html?|pptx|key|numbers|pages|png|jpe?g|zip|ics|sh|rb|go|swift)\b|~\/|\/Users\/|\b(file|folder|document|spreadsheet|workbook|calendar|event|reminder|contact|repo|repository|branch|pull request|account|order|subscription|booking|reservation|invoice|app|website|site|playlist|ticket|issue)s?\b/i
+const claimRe = (verbs: string): RegExp => new RegExp(`\\b(i('ve| have)?|we('ve| have)?)\\s+(just\\s+|now\\s+|already\\s+)?${verbs}\\b|\\b(it'?s|has|have|was|were)\\s+(now\\s+)?been\\s+${verbs}\\b`, 'i')
+const CLAIM = new RegExp(`${claimRe(VERBS).source}|${claimRe(CHECKS).source}|\\b(it'?s|it is|they'?re|they are)\\s+(now\\s+)?(live|saved|sent|published|posted|booked|scheduled|deployed)\\b`, 'i')
+// Terse forms: "The meeting is booked for 3pm.", "Your email is sent.", "Saved to ~/Downloads.", "Invoice sent." (Not in a
+// sentence about what would or will happen: "Dry run: I would email them that the invoice is paid.")
+const TERSE = new RegExp(`\\b(the|your|that|this)\\s+(\\w+\\s+){1,3}(is|are|has been|have been)\\s+(now\\s+|all\\s+)?${VERBS}\\b`
+  + `|^\\s*(done[,.:!]?\\s*|all\\s+)?${VERBS}(\\s+(to|for|at|in|on|as|into|from|with|it|them|the|your|all|both|and)\\b|\\s+[\\w-]+\\.[a-z]{2,5}\\b|\\s+~?\\/|\\s*[.!:,]|\\s*$)`
+  + `|^\\s*[\\w-]+(\\s+[\\w-]+){0,2}\\s+${VERBS}\\s*[.!]?\\s*$`, 'i')
+const CLAIM_TARGETED = claimRe(TARGETED)
+const MODAL = /\b(would|will|won'?t|could|might|should|going to|i'?d|i'?ll|once|when|if)\b/i
+// Judged sentence by sentence: "I've saved it. Nothing was deleted." is a claim; "Nothing has been sent yet" isn't.
+const NEGATED = new RegExp(`\\b(not|never|nothing|n't|yet to|unable|couldn'?t|wasn'?t)\\b[^.!?]{0,30}(${VERBS.slice(1, -1)}|${TARGETED.slice(1, -1)}|${CHECKS.slice(1, -1)})`, 'i')
+
+/** The verbs a reply claims as done, sentence by sentence (a long reply: its first and last 1,500 characters). */
+function claimedVerbs(text: string): string[] {
+  let t = straight(text).trim()
+  if (!t) return []
+  if (t.length > 3000) t = `${t.slice(0, 1500)}\n${t.slice(-1500)}`
+  const out = new Set<string>()
+  for (const sentence of t.split(/(?<=[.!?])\s+|\n+/)) {
+    const plain = CLAIM.test(sentence) || (TERSE.test(sentence) && !MODAL.test(sentence)), targeted = CLAIM_TARGETED.test(sentence) && TARGET.test(sentence)
+    if ((!plain && !targeted) || NEGATED.test(sentence)) continue
+    // Not a claim about this run: a question, a conditional, a quote of the past ("you already saved…").
+    if (/\?\s*$/.test(sentence) || /\b(if you|once you|when you|you('ve| have)? (already )?(saved|sent|created))\b/i.test(sentence)) continue
+    const low = sentence.toLowerCase()
+    for (const v of Object.keys(CLAIM_STEMS)) if (new RegExp(`\\b${v}\\b`).test(low)) out.add(v)
+  }
+  return [...out]
 }
 
 /**
@@ -94,28 +141,43 @@ const CLAIM_STEMS: Record<string, string[]> = {
  * when a connector labels that tool read-only (many do). Every verb the reply claims needs a matching tool.
  */
 export function claimBacked(text: string, okTools: string[]): boolean {
-  const t = straight(text).toLowerCase()
-  const claimed = Object.keys(CLAIM_STEMS).filter((v) => new RegExp(`\\b${v}\\b`).test(t))
+  const claimed = claimedVerbs(text)
   if (!claimed.length || !okTools.length) return false
-  const names = okTools.map((n) => n.toLowerCase())
-  return claimed.every((v) => CLAIM_STEMS[v].some((stem) => names.some((n) => n.split(/__|[^a-z]+/).some((part) => part.startsWith(stem)) || n.includes(stem))))
+  // A short stem ("get", "read", "post") must be a whole word of the name (getIssue, read_file, posts), never a piece
+  // of another word (budget_*, thread_*, postgres); a long one ("publish", "file_manage") may sit anywhere in it.
+  const tools = okTools.map((n) => ({ n: n.toLowerCase(), parts: n.split(/__|[^A-Za-z]+|(?<=[a-z])(?=[A-Z])/).map((x) => x.toLowerCase()).filter(Boolean) }))
+  const fits = (stem: string, t: { n: string; parts: string[] }): boolean => stem.length >= 5
+    ? t.parts.some((part) => part.startsWith(stem)) || t.n.includes(stem)
+    : t.parts.some((part) => part.startsWith(stem) && /^(s|es|ed|ing|er|ers)?$/.test(part.slice(stem.length)))
+  return claimed.every((v) => CLAIM_STEMS[v].some((stem) => tools.some((t) => fits(stem, t))))
 }
 
+const CHECK_VERBS = new Set(['verified', 'checked', 'tested', 'confirmed', 'double-checked'])
+/** Every "done" the reply claims is a check ("I've double-checked the math"), not an action in the world. */
+export function claimsOnlyChecks(text: string): boolean {
+  const v = claimedVerbs(text)
+  return v.length > 0 && v.every((x) => CHECK_VERBS.has(x))
+}
+
+/** The reply claims something went out (sent, posted, booked, paid…): a general tool backs it only by doing that. */
+export function claimsOutward(text: string): boolean {
+  return claimedVerbs(text).some((v) => OUTWARD.has(v))
+}
+const OUTWARD = new Set(['sent', 'emailed', 'published', 'posted', 'booked', 'ordered', 'paid', 'replied', 'messaged', 'texted', 'submitted', 'shared'])
+
 export function claimsDone(text: string): boolean {
+  return claimedVerbs(text).length > 0
+}
+
+/**
+ * The reply ends on a question for the user ("Which date works, Friday or Saturday?", "What's the address?"): their
+ * answer is what comes next, so the run ends there. A closing "Anything else?" or "Let me know…?" isn't one.
+ */
+export function asksUserNow(text: string): boolean {
   const t = straight(text).trim()
-  if (!t || t.length > 1500) return false
-  // Verbs for actions in the world (not "I've written a summary below", which is the reply itself).
-  const verbs = '(saved|sent|emailed|published|posted|deployed|uploaded|booked|scheduled|deleted|removed|filed|submitted|shared|moved|renamed|installed|ordered|paid|replied|messaged|texted)'
-  const claim = new RegExp(`\\b(i('ve| have)?|we('ve| have)?)\\s+(just\\s+|now\\s+|already\\s+)?${verbs}\\b|\\b(it'?s|has|have|was|were)\\s+(now\\s+)?been\\s+${verbs}\\b|\\b(it'?s|it is|they'?re|they are)\\s+(now\\s+)?(live|saved|sent|published|posted|booked|scheduled|deployed)\\b`, 'i')
-  // Judged sentence by sentence: "I've saved it. Nothing was deleted." is a claim; "Nothing has been sent yet" isn't.
-  const negated = new RegExp(`\\b(not|never|nothing|n't|yet to|unable|couldn'?t|wasn'?t)\\b[^.!?]{0,30}${verbs}`, 'i')
-  for (const sentence of t.split(/(?<=[.!?])\s+/)) {
-    if (!claim.test(sentence) || negated.test(sentence)) continue
-    // Not a claim about this run: a question, a conditional, a quote of the past ("you already saved…").
-    if (/\?\s*$/.test(sentence) || /\b(if you|once you|when you|you('ve| have)? (already )?(saved|sent|created))\b/i.test(sentence)) continue
-    return true
-  }
-  return false
+  if (!/\?\s*(\([^)]*\))?\s*$/.test(t)) return false
+  const last = t.split(/(?<=[.!])\s+|\n+/).pop() ?? t
+  return !/\b(anything else|something else|any(thing)? more|any (other )?questions|need anything|help with anything|other (way|thing)s? i can|let me know|sound good|make sense|how does (that|this) (look|sound))\b/i.test(last)
 }
 
 /** "I couldn't get the churn rate: the report doesn't exist." A reply that gives up on the task. */
@@ -158,6 +220,85 @@ export function overLimit(userText: string, reply: string, toolText: string, wri
     const near = i >= 0 ? said.slice(Math.max(0, i - 45), i + n.length + 45) : ''
     const setAside = /\b(skipp|exclud|over (your|the)? ?budget|above|instead of|not |avoid|too expensive|ruled out|left out|didn'?t)/.test(near)
     if (args.includes(n) || (i >= 0 && !setAside)) return { limitText: `${m[1] ?? m[3]} $${limitRaw}`, item: name, priceText: `$${p[2]}` }
+  }
+  return undefined
+}
+
+/**
+ * A count the user set for the reply ("exactly 150 words", "under 280 characters", "3 bullet points", "a 50-word bio",
+ * "in 3 sentences", "between 40 and 60 words"): `n` is the count (the most, for a limit or range; 0 for no most),
+ * `min` the least. "About 50 words" sets nothing to check.
+ */
+type CountUnit = 'words' | 'characters' | 'bullets' | 'sentences'
+type CountAsk = { n: number; unit: CountUnit; exact: boolean; min?: number }
+const NUM: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+  sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90, hundred: 100
+}
+const N = '(\\d[\\d,]*|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:-(?:one|two|three|four|five|six|seven|eight|nine))?|(?:a |one )?hundred|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|one|two|three|four|five|six|seven|eight|nine|ten)'
+const U = '(words?|characters?|chars?|bullets?|bullet points?|sentences?)'
+const num = (w: string): number => {
+  const k = w.replace(/^(a|one) (?=hundred)/, '')
+  if (/^\d/.test(k)) return Number(k.replace(/,/g, ''))
+  const [tens, ones] = k.split('-')
+  return (NUM[tens] ?? NaN) + (ones ? NUM[ones] ?? NaN : 0)
+}
+const unitOf = (u: string): CountUnit => /^w/.test(u) ? 'words' : /^c/.test(u) ? 'characters' : /^b/.test(u) ? 'bullets' : 'sentences'
+/** Words before a number that make it not the reply's size ("these 3 sentences", "about 50 words", "I wrote 500 words"). */
+const NOT_SIZE = /\b(these|those|the|first|last|next|following|my|your|his|her|their|our|this|that|wrote|have|has|read|about|around|roughly|approximately|approx|nearly|almost|some|over|than|least)\s+$/
+const SIZE_RULES: Array<[RegExp, (m: RegExpMatchArray, t: string) => CountAsk | undefined]> = [
+  [new RegExp(`\\bbetween ${N} and ${N}\\s*${U}\\b|\\b${N}\\s*(?:-|to)\\s*${N}[- ]${U}\\b`, 'g'), (m) => {
+    const [a, b, u] = m[1] ? [m[1], m[2], m[3]] : [m[4], m[5], m[6]]
+    return { n: num(b), min: num(a), unit: unitOf(u), exact: false }
+  }],
+  [new RegExp(`\\b(?:under|fewer than|less than|at most|no more than|max(?:imum)?(?: of)?|within|up to|keep it (?:under|to)|limit(?:ed)? (?:it )?to)\\s+${N}[- ]?${U}\\b|\\b${N}[- ]?${U} or (?:less|fewer)\\b`, 'g'),
+    (m) => ({ n: num(m[1] ?? m[3]), unit: unitOf(m[2] ?? m[4]), exact: false })],
+  [new RegExp(`\\b(?:at least|more than|no fewer than|no less than|minimum(?: of)?)\\s+${N}[- ]?${U}\\b`, 'g'), (m) => ({ n: 0, min: num(m[1]), unit: unitOf(m[2]), exact: false })],
+  [new RegExp(`\\bexactly\\s+${N}[- ]?${U}\\b`, 'g'), (m) => ({ n: num(m[1]), unit: unitOf(m[2]), exact: true })],
+  // A size with no qualifier ("a 50-word bio", "in 30 words", "write 100 words", "3 bullet points", "in 3 sentences"):
+  // exact, except characters ("a 280-character post"), which are a limit.
+  [new RegExp(`\\b${N}[- ]${U}\\b`, 'g'), (m, t) => {
+    if (NOT_SIZE.test(t.slice(Math.max(0, (m.index ?? 0) - 20), m.index))) return undefined
+    const unit = unitOf(m[2])
+    return { n: num(m[1]), unit, exact: unit !== 'characters' }
+  }]
+]
+
+/** Every count the user set for the reply, one per unit (exact words and a character limit can both hold). */
+export function countAsks(ask: string): CountAsk[] {
+  const t = straight(ask).toLowerCase()
+  const out: CountAsk[] = []
+  const used: Array<[number, number]> = []
+  for (const [re, read] of SIZE_RULES) {
+    for (const m of t.matchAll(re)) {
+      const at = m.index ?? 0
+      if (used.some(([a, b]) => at < b && at + m[0].length > a)) continue
+      const c = read(m, t)
+      if (!c || !Number.isFinite(c.n) || !(c.n > 0 || (c.min ?? 0) > 0) || out.some((o) => o.unit === c.unit)) continue
+      out.push(c)
+      used.push([at, at + m[0].length])
+    }
+  }
+  return out
+}
+
+/** The first count the user set for the reply (countAsks). */
+export function countAsk(ask: string): CountAsk | undefined {
+  return countAsks(ask)[0]
+}
+
+/** The reply's count against the user's: a note for one rewrite when it's off, else undefined. Markdown markers don't count. */
+export function countMiss(ask: string, reply: string): string | undefined {
+  const text = reply.trim()
+  const plain = text.replace(/[*_`#>]+/g, '').replace(/^\s*[-•]\s+/gm, '')
+  for (const c of countAsks(ask)) {
+    const got = c.unit === 'words' ? plain.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length
+      : c.unit === 'characters' ? [...text].length
+        : c.unit === 'sentences' ? plain.split(/(?<=[.!?])\s+/).filter((x) => /[\p{L}\p{N}]/u.test(x)).length
+          : text.split('\n').filter((l) => /^\s*([-*•]|\d+[.)])\s+\S/.test(l)).length
+    if (c.exact ? got === c.n : (c.min === undefined || got >= c.min) && (!c.n || got <= c.n)) continue
+    const asked = c.exact ? `exactly ${c.n}` : c.min !== undefined && c.n ? `between ${c.min} and ${c.n}` : c.min !== undefined ? `at least ${c.min}` : `at most ${c.n}`
+    return `[From the app] Your reply has ${got} ${c.unit}; the user asked for ${asked}. Rewrite it to fit, and output only the rewritten reply.`
   }
   return undefined
 }

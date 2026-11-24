@@ -16,4 +16,41 @@ describe('Db', () => {
     db.deleteSpace(s.id)
     expect(db.listMessages(t.id)).toEqual([])
   })
+
+  // RLC-01 / RLB-01: the sidebar never previews a reply the chat doesn't show (replaced, or still held for its checks).
+  test('previews skip superseded and provisional replies', () => {
+    const db = new Db(':memory:')
+    const s = db.createSpace('Work', '#000000')
+    const t = db.createThread(s.id, 'auto', 'm')
+    db.insertMessage({ threadId: t.id, role: 'user', content: 'Make the budget', kind: 'normal', status: 'done' })
+    db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Saved budget.xlsx.', kind: 'normal', status: 'done' })
+    db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Let me re-check the totals.', kind: 'normal', status: 'done', meta: { superseded: true } })
+    db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Still checking', kind: 'normal', status: 'streaming', meta: { provisional: true } })
+    expect(db.listSpaces()[0].lastPreview).toBe('Saved budget.xlsx.')
+    expect(db.getThread(t.id)?.lastPreview).toBe('Saved budget.xlsx.')
+  })
+
+  // RLB-01: a reply held for its checks when the app quit mid-run shows after the restart.
+  test('sweepStreaming shows a reply left held by a quit or crash', () => {
+    const db = new Db(':memory:')
+    const s = db.createSpace('Work', '#000000')
+    const t = db.createThread(s.id, 'auto', 'm')
+    const m = db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Day 1: River Street.', kind: 'normal', status: 'done', meta: { provisional: true, sources: [] } })
+    db.sweepStreaming()
+    const after = db.listMessages(t.id).find((x) => x.id === m.id)!
+    expect(after.meta?.provisional).toBeUndefined()
+    expect(after.meta?.sources).toEqual([])
+  })
+
+  test('the startup sweep: a streaming reply is stopped, and one left out of sight (provisional) stands', () => {
+    const db = new Db(':memory:')
+    const t = db.createThread(db.createSpace('Work', '#000000').id, 'auto', 'm')
+    const a = db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Saved invoice.pdf', kind: 'normal', status: 'done', meta: { provisional: true, sources: [] } })
+    const b = db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Half', kind: 'normal', status: 'streaming', meta: { provisional: true } })
+    db.sweepStreaming()
+    expect(db.getMessage(a.id)?.meta?.provisional).toBeUndefined()
+    expect(db.getMessage(a.id)?.meta?.sources).toEqual([])
+    expect(db.getMessage(b.id)?.status).toBe('stopped')
+    expect(db.getMessage(b.id)?.meta?.provisional).toBeUndefined()
+  })
 })

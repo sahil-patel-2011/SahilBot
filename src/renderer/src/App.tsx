@@ -8,7 +8,7 @@ import { FindBar } from './components/FindBar'
 import { readableOn, SpaceAvatar } from './brand'
 import { CommandPalette, type PaletteAction } from './components/CommandPalette'
 import { Composer, type ComposerHandle, type Outgoing } from './components/Composer'
-import { BotDeck, FilesView, Home, ProjectsView } from './components/Home'
+import { FilesView, Home, ProjectsView } from './components/Home'
 import { WhatsNewOnce } from './components/WhatsNew'
 import { pruneDrafts } from './lib/drafts'
 import { installFocusTrap } from './lib/focus-trap'
@@ -17,7 +17,8 @@ import { BrainView } from './components/BrainView'
 import { RightPanel, type PanelTab } from './components/RightPanel'
 import { JobsChip, RunSummary } from './components/JobsPanel'
 import { Sidebar, type MainView } from './components/Sidebar'
-import { ThreadView } from './components/ThreadView'
+import { ThreadView, type WorkProgress } from './components/ThreadView'
+import { queueWords, stopWords } from './lib/queue-words'
 import { ProjectHome } from './components/ProjectHome'
 import * as I from './icons'
 import { Popover } from './components/Popover'
@@ -34,7 +35,6 @@ import { BotDetails, BotEditor, ConnectApps, Lazy, Onboarding, preloadSurfaces, 
 type Editor = { space: Space | null; mode: 'bot' | 'group' | 'project' } | null
 
 // The knowledge vault view and the "Import memory" dialog (their own chunks; opened by events, see below).
-const VaultView = lazy(async () => ({ default: (await import('./components/VaultView')).VaultView }))
 const ImportMemoryDialog = lazy(async () => ({ default: (await import('./components/ImportMemoryDialog')).ImportMemoryDialog }))
 
 /** Models a council can sit with (the Council chip shows with two or more). */
@@ -53,7 +53,13 @@ export function App() {
   const [spaces, setSpaces] = useState<Space[]>([])
   const [chats, setChats] = useState<Thread[]>([])
   const [spaceId, setSpaceId] = useState<string | null>(null)
+  /** The bot just clicked in the sidebar, highlighted while its chat loads. */
+  const [navTo, setNavTo] = useState<string | null>(null)
   const [thread, setThread] = useState<Thread | null>(null)
+  useEffect(() => { setNavTo(null) }, [spaceId, thread?.id])
+  /** Each navigation's number: a bot still loading when you went elsewhere never opens over where you went. */
+  const navSeq = useRef(0)
+  const navAway = (): void => { navSeq.current++; setNavTo(null) }
   const [messages, setMessages] = useState<Message[]>([])
   /** The open chat once its messages are fetched, with your read mark from when you opened it (the NEW divider). */
   const [opened, setOpened] = useState<{ id: string; readAt: number } | null>(null)
@@ -62,6 +68,12 @@ export function App() {
   const [progress, setProgress] = useState<Record<string, Extract<ChatEvent, { type: 'progress' }>>>({})
   /** The right side: a RightPanel tab, or the bot details panel (opened from the header pill). */
   const [panel, setPanel] = useState<PanelTab | 'details' | null>(null)
+  // "Show work" on the status line opens the plan, sources and files; the first time a task runs it opens by itself.
+  useEffect(() => {
+    const show = (): void => setPanel('progress')
+    window.addEventListener('sahilbot:show-work', show)
+    return () => window.removeEventListener('sahilbot:show-work', show)
+  }, [])
   /** Open questions/approvals/plans per chat, for the sidebar's "needs you" dot. */
   const [needs, setNeeds] = useState<Record<string, string[]>>({})
   // A reopened window picks up chats that were already waiting on you.
@@ -86,25 +98,36 @@ export function App() {
     return () => { window.removeEventListener('sahilbot:open-settings', open); window.removeEventListener('sahilbot:open-connect', connect) }
   }, [])
   const [showConnect, setShowConnect] = useState(false)
+  /** Going somewhere from anywhere (the menu bar, ⌘K, a link): Settings and the other overlays close first, so the page you picked shows. */
+  const leave = (): void => { setShowSettings(false); setSettingsPage(undefined); setShowConnect(false); setShowScheduled(false) }
+  // ...and whatever moved you (a toast's "Open chat", a file's chat, a notification), a new page or chat closes it too.
+  const navKey = `${view}|${thread?.id ?? ''}|${spaceId ?? ''}`
+  const lastNav = useRef(navKey)
+  // (Not the app picking its first bot as it starts: Settings opened with ⌘, while it loads stays open.)
+  const booted = useRef(false)
+  useEffect(() => {
+    if (lastNav.current === navKey) return
+    lastNav.current = navKey
+    if (!booted.current) { booted.current = !!spaceId; if (booted.current) return }
+    leave()
+  }, [navKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const [editor, setEditor] = useState<Editor>(null)
   const [palette, setPalette] = useState(false)
   const [shortcuts, setShortcuts] = useState(false)
   const [finding, setFinding] = useState(false)
+  // ⌘B: hide or show the sidebar (remembered on this Mac).
+  const [sidebarHidden, setSidebarHidden] = useState(() => { try { return localStorage.getItem('sb-hidden') === '1' } catch { return false } })
+  useEffect(() => { try { localStorage.setItem('sb-hidden', sidebarHidden ? '1' : '0') } catch { /* private mode */ } }, [sidebarHidden])
   /** Bypass picked for the first time: what to do once the user confirms (null: no dialog). */
   const [bypassAsk, setBypassAsk] = useState<(() => void) | null>(null)
-  // The Vault view (in the main area) and the memory import dialog: opened from the palette, Settings
-  // or a bot's details through window events, so those surfaces don't need props from here.
-  const [vaultOpen, setVaultOpen] = useState<{ path: string | null; tab?: 'people' } | null>(null)
+  // The memory import dialog: opened from the palette or Settings through a window event. (The bots' notes have
+  // no view: they're the bots' own memory; the user asks a bot to remove or export them.)
   const [importOpen, setImportOpen] = useState(false)
   useEffect(() => {
-    const openVault = (e: Event): void => { const d = (e as CustomEvent).detail as { path?: string | null; tab?: 'people' } | undefined; setVaultOpen({ path: d?.path ?? null, tab: d?.tab }); setShowSettings(false) }
     const openImport = (): void => setImportOpen(true)
-    window.addEventListener('sahilbot:open-vault', openVault)
     window.addEventListener('sahilbot:import-memory', openImport)
-    return () => { window.removeEventListener('sahilbot:open-vault', openVault); window.removeEventListener('sahilbot:import-memory', openImport) }
+    return () => window.removeEventListener('sahilbot:import-memory', openImport)
   }, [])
-  // Opening a chat, a bot or another view leaves the vault.
-  useEffect(() => { setVaultOpen(null) }, [thread?.id, spaceId, view])
   const [voiceOn, setVoiceOn] = useState(false)
   /** ⌘D held or tapped (App's key handler). */
   const holdD = useRef<{ done: boolean; held: boolean; timer?: ReturnType<typeof setTimeout> } | null>(null)
@@ -123,7 +146,8 @@ export function App() {
     window.addEventListener('sahilbot:settings-changed', fn)
     return () => window.removeEventListener('sahilbot:settings-changed', fn)
   }, [])
-  const [toolProgress, setToolProgress] = useState<Record<string, string | null>>({})
+  /** A tool's live progress line, or the stall watchdog's note (tool 'watchdog': what is stuck, with Retry / Skip). */
+  const [toolProgress, setToolProgress] = useState<Record<string, WorkProgress | null>>({})
   const [runSince, setRunSince] = useState<Record<string, number>>({})
   // Bots with an open question or approval waiting in Needs you (the bot kept working): their sidebar row shows
   // the accent "needs you" dot like a card open in a running chat does.
@@ -139,6 +163,8 @@ export function App() {
   }, [])
   // Messages typed while SahilBot is working wait here and go out when the run ends.
   const [queue, setQueue] = useState<Record<string, Outgoing[]>>({})
+  /** Chats whose queued messages wait for you after a Stop (a stop ends the work; it never starts the next item). */
+  const [heldQueue, setHeldQueue] = useState<Set<string>>(new Set())
   const [renamingTitle, setRenamingTitle] = useState(false)
   const [teams, setTeams] = useState<Record<string, import('@shared/types').TeamMember[]>>({})
   const [teamOn, setTeamOn] = useState(false)
@@ -175,15 +201,21 @@ export function App() {
   const newChatRef = useRef<() => void>(() => undefined)
   // For ⌘1–9 (the key handler is set up once): the bots and pins as they are now.
   const spacesRef = useRef<Space[]>([])
+  const spaceIdRef = useRef<string | null>(null)
   const pinnedRef = useRef<string[] | undefined>(undefined)
   const openBotRef = useRef<(id: string) => Promise<void>>(async () => undefined)
   const openAnyChatRef = useRef<(id: string) => void>(() => undefined)
   const threadRef = useRef<string | null>(null)
   threadRef.current = thread?.id ?? null
+  /** The bot whose chat is open, and how to leave it when that bot is deleted (by asking, or from its profile). */
+  const threadSpaceRef = useRef<string | null>(null)
+  threadSpaceRef.current = thread?.spaceId ?? null
+  const openMainRef = useRef<() => void>(() => undefined)
   // Read-aloud plays here (voice mode has its own player).
   const speaker = useRef<Speaker | null>(null)
   const live = useRef({ speak: false, voiceOn: false })
-  live.current = { speak: !!settings?.speakReplies, voiceOn }
+  // Typed chats are never read aloud on their own (the speaker on a message does it); voice conversations talk.
+  live.current = { speak: false, voiceOn }
 
   const main = spaces.find((s) => s.isMain)
   const space = spaces.find((s) => s.id === spaceId) ?? main
@@ -260,9 +292,22 @@ export function App() {
 
   useEffect(() => api.chat.onEvent((e: ChatEvent) => {
     if (e.type !== 'delta') flushDeltas()
-    if (e.type === 'spaces') { void refreshSpaces(); return }
+    if (e.type === 'spaces') {
+      const was = spacesRef.current
+      void refreshSpaces().then((sp) => {
+        const cur = threadSpaceRef.current
+        if (!cur || sp.some((s) => s.id === cur)) return
+        // The bot whose chat is open was deleted (by asking it): back to the main chat, with Undo.
+        openMainRef.current()
+        const gone = was.find((s) => s.id === cur)
+        if (gone?.kind === 'bot') toast(`Deleted ${gone.name}`, 'ok', { action: { label: 'Undo', run: () => void api.spaces.restore(cur).catch((err) => toast((err as Error).message, 'error')) } })
+      })
+      return
+    }
     if (e.type === 'drafting') { setDrafting((d) => ({ ...d, [e.threadId]: e.tool })); return }
-    if (e.type === 'tool_progress') { setToolProgress((p) => ({ ...p, [e.threadId]: e.text })); return }
+    if (e.type === 'tool_progress') { setToolProgress((p) => ({ ...p, [e.threadId]: e.text ? { text: e.text, tool: e.tool, step: e.step, stuck: e.stuck, ...(e.retryable === false ? { retryable: false } : {}), ...(e.waitingOnYou ? { waitingOnYou: true } : {}) } : null })); return }
+    // Anything else from a chat after a stall note (a reply streaming again, a new step): the note goes.
+    if ('threadId' in e && e.type !== 'thread') setToolProgress((p) => (p[e.threadId]?.tool === 'watchdog' ? { ...p, [e.threadId]: null } : p))
     // A tool finished or the run ended: its progress line goes.
     if ((e.type === 'message' && e.message.role === 'tool') || (e.type === 'run' && e.status !== 'started')) setToolProgress((p) => (p[e.threadId] ? { ...p, [e.threadId]: null } : p))
     if (e.type === 'run') {
@@ -271,6 +316,8 @@ export function App() {
       else {
         setDrafting((d) => ({ ...d, [e.threadId]: null }))
         setSteering((s) => ({ ...s, [e.threadId]: 0 }))
+        // Stopped (the button, Esc, typed words): what was queued stays as chips until you send it, never by itself.
+        if (e.status === 'stopped' && e.byUser) setHeldQueue((h) => (h.has(e.threadId) ? h : new Set(h).add(e.threadId)))
         // A problem in a chat you're not looking at says where, with a way there (that chat has Retry).
         const elsewhere = e.threadId !== threadRef.current
         if (e.status === 'error' && e.error) toast(e.error, 'error', elsewhere ? { action: { label: 'Open chat', run: () => openAnyChatRef.current(e.threadId) } } : {})
@@ -298,7 +345,7 @@ export function App() {
       // Read the finished reply aloud when that's switched on.
       if (e.status === 'finished' && live.current.speak && !live.current.voiceOn && e.threadId === threadRef.current) {
         void api.threads.messages(e.threadId).then((ms) => {
-          const last = [...ms].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)
+          const last = [...ms].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded && !m.meta?.provisional)
           if (last) void api.voice.speak(last.content)
         })
       }
@@ -353,17 +400,17 @@ export function App() {
 
   // Menu bar commands.
   useEffect(() => api.onMenu((a) => {
-    if (a === 'new-chat') { setSpaceId(null); setThread(null) }
-    else if (a === 'new-bot') setEditor({ space: null, mode: 'bot' })
-    else if (a === 'new-project') setEditor({ space: null, mode: 'project' })
+    if (a === 'new-chat') { leave(); setSpaceId(null); setThread(null); setView('home') }
+    else if (a === 'new-bot') { leave(); setEditor({ space: null, mode: 'bot' }) }
+    else if (a === 'new-project') { leave(); setEditor({ space: null, mode: 'project' }) }
     else if (a === 'settings') setShowSettings(true)
-    else if (a === 'scheduled') setShowScheduled(true)
-    else if (a === 'connect') setShowConnect(true)
+    else if (a === 'scheduled') { leave(); setShowScheduled(true) }
+    else if (a === 'connect') { leave(); setShowConnect(true) }
     else if (a === 'toggle-panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
     else if (a === 'search') setPalette(true)
     else if (a === 'shortcuts') setShortcuts(true)
-    else if (a === 'needs-you') { setVaultOpen(null); setThread(null); setView('tasks') }
-    else if (a === 'brain') { setVaultOpen(null); setThread(null); setView('brain') }
+    else if (a === 'needs-you') { leave(); setThread(null); setView('tasks') }
+    else if (a === 'brain') { leave(); setThread(null); setView('brain') }
     else if (a === 'export' && threadRef.current) void api.chat.exportThread(threadRef.current).then((p) => p && toast(`Saved to ${p.split('/').pop()}`, 'ok'))
   }), [])
 
@@ -450,7 +497,10 @@ export function App() {
     window.addEventListener('sahilbot:compose', fill)
     window.addEventListener('sahilbot:compose-link', fillLink)
     window.addEventListener('sahilbot:open-watchlist', watch)
-    return () => { window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch); window.removeEventListener('sahilbot:send-text', sendText) }
+    // A bot card in chat ("Made Study Buddy · Open").
+    const openBotEvt = (e: Event): void => { const id = (e as CustomEvent<string>).detail; if (typeof id === 'string') void openBotRef.current(id) }
+    window.addEventListener('sahilbot:open-bot', openBotEvt)
+    return () => { window.removeEventListener('sahilbot:open-bot', openBotEvt); window.removeEventListener('sahilbot:compose', fill); window.removeEventListener('sahilbot:compose-link', fillLink); window.removeEventListener('sahilbot:open-watchlist', watch); window.removeEventListener('sahilbot:send-text', sendText) }
   }, [])
 
   // Slash commands from the message box (lib/slash.ts).
@@ -474,12 +524,31 @@ export function App() {
     const k = (e: KeyboardEvent): void => {
       if (e.metaKey && e.key === 'n') { e.preventDefault(); newChatRef.current() }
       if (e.metaKey && e.key === 'k') { e.preventDefault(); setPalette(true) }
+      if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); setPalette(true) }
+      if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarHidden((v) => !v) }
+      // ⌃Tab / ⌃⇧Tab: the next / previous bot.
+      if (e.ctrlKey && !e.metaKey && e.key === 'Tab') {
+        const order = botOrder(spacesRef.current, pinnedRef.current)
+        const at = order.findIndex((b) => b.id === spaceIdRef.current)
+        const b = order[at < 0 ? 0 : (at + (e.shiftKey ? -1 : 1) + order.length) % order.length]
+        if (b) { e.preventDefault(); void openBotRef.current(b.id) }
+      }
       if (e.metaKey && e.key === ',') { e.preventDefault(); setShowSettings(true) }
       if (e.metaKey && e.key === '/') { e.preventDefault(); setShortcuts(true) }
       // ⌘F: find in the open chat.
       if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'f' && threadRef.current) { e.preventDefault(); setFinding(true) }
+      // ⌘I: the message box. ⇧⌘I: this bot's details (routines, library). ⌥↑ / ⌥↓: the previous / next bot.
+      if (e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); composer.current?.focus() }
+      if (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'i') { e.preventDefault(); setPanel((p) => (p === 'details' ? null : 'details')) }
+      if (e.altKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !(e.target as HTMLElement)?.closest?.('textarea, input, [contenteditable="true"]')) {
+        const order = botOrder(spacesRef.current, pinnedRef.current)
+        const at = order.findIndex((b) => b.id === spaceIdRef.current)
+        const b = order[at < 0 ? 0 : (at + (e.key === 'ArrowDown' ? 1 : -1) + order.length) % order.length]
+        if (b) { e.preventDefault(); void openBotRef.current(b.id) }
+      }
       // ⌘1–9: open a bot, in the sidebar's order.
-      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) {
+      // (Not while ⌘K is open: there ⌘1–9 pick its rows.)
+      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key) && !e.defaultPrevented && !document.querySelector('[data-testid="palette"]')) {
         const b = botOrder(spacesRef.current, pinnedRef.current)[Number(e.key) - 1]
         if (b) { e.preventDefault(); void openBotRef.current(b.id) }
       }
@@ -521,11 +590,54 @@ export function App() {
     return () => { window.removeEventListener('keydown', k); window.removeEventListener('keyup', up) }
   }, [])
 
-  const openMain = (): void => { setVaultOpen(null); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
-  newChatRef.current = openMain
+  // Picking anything in the sidebar leaves Settings (it used to stay over the page you picked).
+  /** New chat (+, ⌘N): a fresh conversation on the home screen; it shows in Recents once you send. */
+  const newChat = (): void => { navAway(); setShowSettings(false); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
+  /**
+   * SahilBot's widget: its one ongoing conversation, like any bot's (Grok Bot's way). Never a new Recents entry;
+   * Recents hold only the chats you start with New chat.
+   */
+  const openMain = async (): Promise<void> => {
+    if (!main) return newChat()
+    navAway()
+    setShowSettings(false)
+    const saved = settings?.mainThreadId
+    let t = saved ? (await api.threads.list(main.id)).find((x) => x.id === saved) : undefined
+    if (!t) {
+      t = await api.threads.create(main.id) as Thread
+      await api.threads.update(t.id, { title: main.name })
+      setSettings(await api.settings.set({ mainThreadId: t.id }))
+    }
+    setSpaceId(main.id)
+    setThread(t)
+    setView('home')
+  }
+  newChatRef.current = newChat
+  /**
+   * A fresh conversation with a bot (Grok Bot reviewers: "each Bot is one unbounded thread", no fresh session).
+   * The bot remembers everything (memories, its notes, what you said in its other conversations); the old one is in
+   * its profile under Past conversations. SahilBot's own conversation moves too.
+   */
+  const startFresh = async (bot: Space): Promise<void> => {
+    if (thread && thread.spaceId === bot.id) {
+      const day = new Date(thread.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      if (thread.title === bot.name) await api.threads.update(thread.id, { title: `${bot.name} · until ${day}` })
+    }
+    let t = await api.threads.create(bot.id) as Thread
+    t = await api.threads.update(t.id, { title: bot.name })
+    if (bot.isMain) setSettings(await api.settings.set({ mainThreadId: t.id }))
+    setPanel(null)
+    setSpaceId(bot.id)
+    setThread(t)
+    void refreshSpaces()
+    toast(`Fresh start with ${bot.name}. It still remembers everything.`, 'ok')
+  }
   spacesRef.current = spaces
+  spaceIdRef.current = spaceId
   pinnedRef.current = settings?.pinnedBots ?? undefined
   const openChat = async (id: string): Promise<void> => {
+    navAway()
+    setShowSettings(false)
     const t = chats.find((x) => x.id === id) ?? (await api.threads.list(main?.id)).find((x) => x.id === id)
     if (!t) return
     setSpaceId(t.spaceId)
@@ -554,32 +666,47 @@ export function App() {
   startSetupRef.current = startSetup
   /** A bot has one ongoing conversation (created on first open). */
   const openBot = async (id: string): Promise<void> => {
+    setShowSettings(false)
+    // Highlighted at once (its chat loads after), so the sidebar never lags a click behind. The bot itself is
+    // selected only once its chat is ready, so nothing typed in between is lost when the message box switches chats.
+    const seq = ++navSeq.current
+    setNavTo(id)
     setView('home')
-    const sp = await api.spaces.list()
-    const s = sp.find((x) => x.id === id)
-    if (s?.isMain) return openMain()
-    if (s?.hidden) await api.spaces.update(id, { hidden: false })
-    // Projects open on their home (folder, instructions, chats).
-    if (s?.kind === 'project') {
+    // You went somewhere else while it loaded (New chat, another bot, Settings): this one stays closed.
+    const stale = (): boolean => seq !== navSeq.current
+    try {
+      const sp = await api.spaces.list()
+      if (stale()) return
+      const s = sp.find((x) => x.id === id)
+      if (s?.isMain) return openMain()
+      if (s?.hidden) await api.spaces.update(id, { hidden: false })
+      // Projects open on their home (folder, instructions, chats).
+      if (s?.kind === 'project') {
+        if (stale()) return
+        setSpaceId(id)
+        setThread(null)
+        void refreshSpaces()
+        return
+      }
+      let ts = await api.threads.list(id)
+      if (!ts.length) {
+        const t = await api.threads.create(id)
+        ts = [await api.threads.update(t.id, { title: s?.name ?? 'Chat' })]
+      }
+      if (stale()) return
       setSpaceId(id)
-      setThread(null)
+      // Chats other apps opened with this bot ("From Cursor") aren't the user's own conversation.
+      setThread(ts.find((t) => !/^From .+/.test(t.title)) ?? ts[0])
       void refreshSpaces()
-      return
-    }
-    let ts = await api.threads.list(id)
-    if (!ts.length) {
-      const t = await api.threads.create(id)
-      ts = [await api.threads.update(t.id, { title: s?.name ?? 'Chat' })]
-    }
-    setSpaceId(id)
-    // Chats other apps opened with this bot ("From Cursor") aren't the user's own conversation.
-    setThread(ts.find((t) => !/^From .+/.test(t.title)) ?? ts[0])
-    void refreshSpaces()
+    } catch (e) { if (!stale()) { setNavTo(null); toast((e as Error).message, 'error') } }
   }
 
   openBotRef.current = openBot
+  openMainRef.current = () => void openMain()
   const onPalette = (a: PaletteAction): void => {
     setPalette(false)
+    // Anything but a Settings page is somewhere else: Settings closes first (report SUB-07).
+    if (a.kind !== 'settings' && a.kind !== 'usage' && a.kind !== 'setting' && a.kind !== 'shortcuts' && a.kind !== 'dictate' && a.kind !== 'max') leave()
     if (a.kind === 'new-chat') openMain()
     else if (a.kind === 'new-bot') setEditor({ space: null, mode: 'bot' })
     else if (a.kind === 'new-group') setEditor({ space: null, mode: 'group' })
@@ -593,7 +720,6 @@ export function App() {
     else if (a.kind === 'voice') setVoiceOn(true)
     else if (a.kind === 'dictate') requestAnimationFrame(() => composer.current?.toggleDictation())
     else if (a.kind === 'max') requestAnimationFrame(() => composer.current?.toggleMax())
-    else if (a.kind === 'vault') setVaultOpen({ path: null })
     else if (a.kind === 'import-memory') setImportOpen(true)
     else if (a.kind === 'chat') void openAnyChat(a.id)
     else if (a.kind === 'usage') { setSettingsPage('usage'); setShowSettings(true) }
@@ -604,7 +730,7 @@ export function App() {
   // Send the next queued message as soon as the thread is free.
   useEffect(() => {
     for (const [tid, items] of Object.entries(queue)) {
-      if (!items.length || running.has(tid) || sendingRef.current.has(tid)) continue
+      if (!items.length || running.has(tid) || sendingRef.current.has(tid) || heldQueue.has(tid)) continue
       const first = items[0]
       sendingRef.current.add(tid)
       setQueue((q) => ({ ...q, [tid]: (q[tid] ?? []).filter((x) => x !== first) }))
@@ -614,7 +740,8 @@ export function App() {
         toast(e.message, 'error')
       })
     }
-  }, [queue, running])
+  }, [queue, running, heldQueue])
+  const releaseQueue = (tid: string): void => setHeldQueue((h) => { if (!h.has(tid)) return h; const n = new Set(h); n.delete(tid); return n })
 
   // The mini window follows the chat it was opened for, even when another chat is open here.
   const miniOther = mini.on && mini.threadId && mini.threadId !== thread?.id ? mini.threadId : null
@@ -719,6 +846,8 @@ export function App() {
   const isProject = space?.kind === 'project'
   /** Whose chat this is: the bot, group or project; plain chats belong to SahilBot itself. */
   const chatBot = isBot || isProject ? space : main
+  /** A bot's conversation (SahilBot's own one included, not New chats): shown the quiet way, just the conversation. */
+  const botChatName = (() => { const sp = thread ? spaces.find((x) => x.id === thread.spaceId) : undefined; return thread && sp && sp.kind === 'bot' && (!sp.isMain || thread.id === settings?.mainThreadId) ? sp.name : undefined })()
 
   const patchThread = async (patch: Parameters<typeof api.threads.update>[1]): Promise<void> => {
     if (!thread) return
@@ -728,6 +857,10 @@ export function App() {
   /** Sends what you typed; false when it didn't go through (the box gets the text back). */
   const send = async (o: Outgoing): Promise<boolean> => {
     // A bot asked a question: what you type is the answer (but never unedited text from a link).
+    // A typed stop stops, even under an open question or plan card (never that card's answer).
+    if (thread && running.has(thread.id) && !o.fromLink && !o.queue && stopWords(o.text, thread.title)) {
+      try { await api.chat.steer(thread.id, o.text); return true } catch (e) { toast((e as Error).message, 'error'); return false }
+    }
     if (question && thread && o.fromLink) { toast('Text from a link can\'t answer this. Edit it, or answer the card above.', 'error'); return false }
     if (question && thread) {
       // Typing answers the card: one answer for every question, or approval / changes for a plan.
@@ -739,7 +872,8 @@ export function App() {
     if (thread && running.has(thread.id)) {
       // ⌘Enter (or attachments): wait until it's done. Enter: steer the agent now.
       // Link text waits too: a steer can't carry its "from a link" mark.
-      if (o.queue || o.fromLink || o.attachments.length || o.images.length) { setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] })); return true }
+      // Words queue it too: "when you're done, also…", "after that, …" waits for this task to finish.
+      if (o.queue || o.fromLink || o.attachments.length || o.images.length || queueWords(o.text)) { releaseQueue(thread.id); setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] })); return true }
       try { await api.chat.steer(thread.id, o.text); return true } catch (e) { toast((e as Error).message, 'error'); return false }
     }
     let t = thread
@@ -777,9 +911,10 @@ export function App() {
   }
   /** Any chat, in any bot or project (e.g. the one a file came from). */
   const openAnyChat = async (id: string): Promise<void> => {
+    navAway()
     for (const sp of spaces) {
       const t = (await api.threads.list(sp.id)).find((x) => x.id === id)
-      if (t) { setSpaceId(sp.id); setThread(t); setView('home'); return }
+      if (t) { leave(); setSpaceId(sp.id); setThread(t); setView('home'); return }
     }
   }
   openAnyChatRef.current = (id) => void openAnyChat(id)
@@ -792,6 +927,8 @@ export function App() {
       inheritedFolder={space?.kind === 'group' ? null : space?.folder ?? null}
       running={isRunning}
       answering={!!question}
+      cmdEnter={settings?.composer?.cmdEnter === true}
+      spellCheck={settings?.composer?.spellCheck === true}
       onSend={(o) => send(o)}
       onStop={() => thread && void api.chat.stop(thread.id)}
       models={models}
@@ -874,35 +1011,38 @@ export function App() {
 
   return (
     <DevMode.Provider value={dev}>
-    <div className={`app${dev ? ' dev model-details' : ''}`}>
+    <div className={`app${dev ? ' dev model-details' : ''}${sidebarHidden ? ' sb-hidden' : ''}`}>
       <WhatsNewOnce />
       <Toasts />
       {/* The secrets vault's unlock / confirm dialog: main asks, this only shows it. */}
       <VaultAuthDialog />
       <Sidebar
+        onHide={() => setSidebarHidden(true)}
         spaces={spaces}
         chats={chats}
-        activeSpaceId={space?.id ?? null}
+        activeSpaceId={navTo ?? space?.id ?? null}
         activeThreadId={thread?.id ?? null}
         userName={settings.userName}
-        onOpenMain={openMain}
+        profile={settings.profile}
+        onOpenMain={() => void openMain()}
+        mainThreadId={settings?.mainThreadId ?? null}
         onOpenBot={(id) => void openBot(id)}
         onOpenChat={(id) => void openChat(id)}
-        onNew={openMain}
+        onNew={newChat}
         onNewBot={() => setEditor({ space: null, mode: 'bot' })}
         onSetupBot={() => void startSetup(false)}
         onSearch={() => setPalette(true)}
         view={view}
-        onView={(v) => { setVaultOpen(null); setView(v); setThread(null) }}
+        onView={(v) => { navAway(); setShowSettings(false); setView(v); setThread(null) }}
         modelLabel={dev ? `${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}` : undefined}
         onCustomize={(s) => setEditor({ space: s, mode: s.kind })}
         onChanged={() => void refreshSpaces().then((sp) => {
           if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain()
           else if (thread) void api.threads.list(thread.spaceId).then((ts) => { if (!ts.some((t) => t.id === thread.id)) openMain() })
         })}
-        onSettings={() => setShowSettings(true)}
-        onConnect={() => setShowConnect(true)}
-        onScheduled={() => setShowScheduled(true)}
+        onSettings={() => { navAway(); setShowSettings(true) }}
+        onConnect={() => { leave(); setShowConnect(true) }}
+        onScheduled={() => { leave(); setShowScheduled(true) }}
         onNewProject={() => setEditor({ space: null, mode: 'project' })}
         runningThreads={running}
         runningSpaces={new Set(Object.values(runSpaces))}
@@ -920,9 +1060,10 @@ export function App() {
         )}
         <header className="main-header drag">
           <div className="header-title">
+            {sidebarHidden && <button className="icon-btn nodrag sb-show" onClick={() => setSidebarHidden(false)} title="Show the sidebar (⌘B)" aria-label="Show the sidebar (⌘B)" data-testid="sidebar-show"><I.SidebarLeft size={17} /></button>}
             {isProject && space && <button className="crumb" onClick={() => setThread(null)} title="Project home"><I.Folder size={14} />{space.name}</button>}
           </div>
-          {chatBot && !vaultOpen && !voiceOn && (thread || (isBot && view === 'home')) && (
+          {chatBot && !voiceOn && (thread || (isBot && view === 'home')) && (
             <div className={`chat-pill${panel === 'details' ? ' on' : ''}`}>
               {renamingTitle && thread ? (
                 <input className="title-edit" autoFocus defaultValue={thread.title}
@@ -932,7 +1073,7 @@ export function App() {
                 <button className="bot-pill" onClick={() => setPanel((p) => (p === 'details' ? null : 'details'))} data-testid="bot-pill" title={`${chatBot.name}: settings, routines and files`}>
                   {chatBot.kind === 'project'
                     ? <span className="proj-tile" style={{ background: chatBot.color, width: 22, height: 22, borderRadius: 7 }}><I.Folder size={12} /></span>
-                    : <SpaceAvatar color={chatBot.color} shape={chatBot.shape} size={22} group={chatBot.kind === 'group' ? memberColors : undefined} />}
+                    : <SpaceAvatar color={chatBot.color} shape={chatBot.shape} icon={chatBot.icon} size={22} group={chatBot.kind === 'group' ? memberColors : undefined} />}
                   <span className="pill-name">{chatBot.name}</span>
                   {thread && !isBot && <span className="pill-title" data-testid="thread-title">{thread.title}</span>}
                 </button>
@@ -976,14 +1117,15 @@ export function App() {
                 </span>
               )
             })()}
-            {(thread || isBot || !!browser?.tabs.length || panel === 'browser') && (
+            {/* Like Grok Bot's clean header: the browser button only when there are pages to see (⌘\\ and Show work still work). */}
+            {((dev && (thread || isBot)) || !!browser?.tabs.length || panel === 'browser') && (
             <button className={`icon-btn globe${panel === 'browser' ? ' on' : ''}`} title={browser?.controlling ? 'Browser: SahilBot is using it now (click to watch)' : 'Browser: the web pages SahilBot opens'} aria-label="Browser" onClick={() => setPanel((p) => (p === 'browser' ? null : 'browser'))} data-testid="toggle-browser">
               <I.Globe size={17} />
               {!!browser?.tabs.length && <span className={`globe-dot${browser.controlling ? ' live' : ''}`} />}
             </button>
             )}
-            {(thread || isBot) && (
-            <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Side panel: progress, files and documents (⌘\)" aria-label="Side panel" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
+            {(thread || isBot) && (dev || (panel && panel !== 'details') || plan.length > 0 || (prog?.actions ?? 0) > 0 || messages.some((m) => m.role === 'tool')) && (
+            <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Show work: the plan, steps, files and sources (⌘\)" aria-label="Show work" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
             )}
             {isServerRuntime && <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={() => setShowSettings(true)} data-testid="header-settings"><I.Gear size={17} /></button>}
           </div>
@@ -999,9 +1141,7 @@ export function App() {
           </div>
         )}
 
-        {vaultOpen ? (
-          <Lazy><VaultView initialPath={vaultOpen.path} initialTab={vaultOpen.tab} onClose={() => setVaultOpen(null)} /></Lazy>
-        ) : view === 'tasks' && !thread ? (
+        {view === 'tasks' && !thread ? (
           <TasksView spaces={spaces} onOpenChat={(threadId) => void openAnyChat(threadId)} />
         ) : view === 'brain' && !thread ? (
           <BrainView onConnect={() => setShowConnect(true)} onNeedsYou={() => setView('tasks')} onOpenChat={(threadId) => void openAnyChat(threadId)} />
@@ -1012,9 +1152,10 @@ export function App() {
         ) : thread ? (
           <>
             <ThreadView key={thread.id} messages={messages} running={isRunning} pending={pending} teams={teams} voiceLive={voiceOn ? voiceLive : null}
+              botName={botChatName}
               ready={ready} onAtBottom={onAtBottom}
               unreadAfter={opened?.id === thread.id && dividerKind({ space: spaces.find((s) => s.id === thread.spaceId), thread, messages }) ? opened.readAt : null}
-              drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id] ?? null}
+              drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id]?.text ?? null} work={toolProgress[thread.id] ?? null}
               actions={{
                 onRetry: () => void api.chat.retry(thread.id).catch((e: Error) => toast(e.message, 'error')),
                 onEditLast: (text) => void api.chat.editLast(thread.id, text).catch((e: Error) => toast(e.message, 'error')),
@@ -1022,7 +1163,8 @@ export function App() {
                 onReact: (id, emoji) => void api.threads.react(id, emoji),
                 onReply: (text) => composer.current?.insert(`> ${text.replace(/\s+/g, ' ').slice(0, 220)}\n`),
                 onOpenFile: openFile,
-                onOpenDoc: openDoc
+                onOpenDoc: openDoc,
+                liveBot: (id) => spaces.find((s) => s.id === id) ?? null
               }} />
             <div className="composer-wrap">
               {(queue[thread.id] ?? []).length > 0 && (
@@ -1030,29 +1172,30 @@ export function App() {
                   {(queue[thread.id] ?? []).map((q, i) => (
                     <span key={i} className="queued-item"><I.Clock size={12} />{q.text.slice(0, 60) || 'Attachment'}<button onClick={() => setQueue((x) => ({ ...x, [thread.id]: x[thread.id].filter((_, j) => j !== i) }))}>×</button></span>
                   ))}
-                  <span className="hint">Sends when SahilBot finishes</span>
+                  {heldQueue.has(thread.id)
+                    ? <button type="button" className="chip-btn" onClick={() => releaseQueue(thread.id)} data-testid="queued-send">{isRunning ? 'Send when done' : 'Send now'}</button>
+                    : <span className="hint">Sends when {botChatName ?? 'SahilBot'} finishes</span>}
                 </div>
               )}
-              {dev && !isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} />}
+              {/* The finish line: what was made, where, how long. A bot's chat (Grok Bot's way) shows it when the task made something or did real work. */}
+              {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} onlyMade={!dev && !!botChatName} />}
               {chatInput}
             </div>
           </>
         ) : isProject && space ? (
           <ProjectHome project={space} onOpen={(t) => setThread(t)} onEdit={() => setEditor({ space, mode: 'project' })} composer={composerEl} />
         ) : (
-          <Home userName={settings.userName} onOpenFile={openFile} onViewFiles={() => setView('files')} composer={chatInput} refreshKey={running.size}
-            // Your bots under the box once you have some (the sidebar's New bot makes the first one).
-            deck={spaces.some((b) => b.kind === 'bot' && !b.hidden && !b.isMain) ? <BotDeck bots={spaces} needSpaces={needSpaces} onOpen={(id) => void openBot(id)} onNewBot={() => setEditor({ space: null, mode: 'bot' })}
-              onTalk={(id) => { setSpaceId(id); setThread(null); setVoiceKey((k) => k + 1); setVoiceOn(true) }} onSetup={(talk) => void startSetup(talk)} /> : undefined}
-            onIdea={(text, deep) => { composer.current?.replace(text); composer.current?.setDeep(!!deep) }} />
+          <Home userName={settings.userName} composer={chatInput} />
         )}
       </main>
       {panel === 'details' && detailsSpace ? (
         <Lazy fallback="panel">
           <BotDetails space={detailsSpace} threadId={thread?.id ?? null} onClose={() => setPanel(null)}
             onCustomize={() => setEditor({ space: detailsSpace, mode: detailsSpace.kind })}
-            onChanged={() => void refreshSpaces()}
-            onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }} />
+            onChanged={() => void refreshSpaces().then((sp) => { if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain() })}
+            onEditRoutine={(text) => { composer.current?.replace(text); requestAnimationFrame(() => composer.current?.focus()) }}
+            onStartFresh={() => void startFresh(detailsSpace)}
+            onOpenThread={(t) => { setPanel(null); setSpaceId(t.spaceId); setThread(t) }} />
         </Lazy>
       ) : panel && panel !== 'details' && (
         <RightPanel tab={panel} onTab={setPanel} hidden={modal} messages={messages} file={file}

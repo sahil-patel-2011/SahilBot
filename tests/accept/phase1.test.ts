@@ -21,14 +21,12 @@ describe('phase 1: shell + streaming chat + model selector + persistence', () =>
     const options = page.locator('[data-testid="model-option"]:not([data-auto])')
     await expect.poll(() => options.count()).toBe(1)
     expect(await options.first().innerText()).toContain('Qwen3.8 27B')
-    // Switch Llama on in Settings → Models; it then shows with its reduced window.
+    // Switch Llama on (Settings has no model list any more: Auto picks; the setting is still honored); it then
+    // shows with its reduced window.
     await page.keyboard.press('Escape')
-    await page.keyboard.press('Meta+,')
-    await page.click('[data-testid="settings-models"]')
-    // The model list lives under Models & Keys → Advanced.
-    await page.click('[data-testid="models-advanced"] > summary')
-    await page.click('[data-testid="model-toggle-llama3.3:70b"]')
-    await page.click('[data-testid="settings-close"]')
+    await page.evaluate(async () => { const s = await window.foreman.settings.get(); await window.foreman.settings.set({ hiddenModels: s.hiddenModels.filter((x) => x !== 'llama3.3:70b'), shownModels: [...new Set([...s.shownModels, 'llama3.3:70b'])] }) })
+    await page.evaluate(() => window.foreman.models.list())
+    await page.reload()
     await page.click('[data-testid="model-picker"]')
     await expect.poll(() => options.count()).toBe(2)
     const llama = options.filter({ hasText: 'Llama 3.3 70B' })

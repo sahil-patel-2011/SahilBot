@@ -129,16 +129,16 @@ describe('routine runs', () => {
 })
 
 describe('bot label, notifications, library', () => {
-  test('label and notify persist; notify defaults on', () => {
+  test('label persists; notifications are automatic for every bot (no per-bot switch)', () => {
     const db = new Db(':memory:')
     const s = db.createSpace('Bot', '#000')
     expect(s.label).toBeNull()
     expect(s.notify).toBe(true)
     const u = db.updateSpace(s.id, { label: '  Homework   helper ', notify: false })
     expect(u.label).toBe('Homework helper')
-    expect(u.notify).toBe(false)
+    expect(u.notify).toBe(true)
     expect(db.updateSpace(s.id, { label: '' }).label).toBeNull()
-    expect(db.updateSpace(s.id, { name: 'Renamed' })).toMatchObject({ notify: false, label: null })
+    expect(db.updateSpace(s.id, { name: 'Renamed' })).toMatchObject({ notify: true, label: null })
   })
   test('library: files the bot made, sources it cited and links you sent, only from its own chats', () => {
     const db = new Db(':memory:')

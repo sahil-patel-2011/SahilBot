@@ -4,6 +4,8 @@ import type { EffortChoice, LibraryItem, Message, PermissionMode, Space, Thread 
 import { emptyState, type ThreadState } from './agent/types'
 import { KNOWLEDGE_SCHEMA } from './knowledge/schema'
 import { UNREAD_CAP } from '@shared/read-state'
+import { stripDirectives } from '@shared/directives'
+import { CONCEPTS, NOT_OWN_WORDS, conceptAlternatives, hasStem, hasWord, normalizeForRecall, wordStem } from './recall-expand'
 
 export const uid = (): string => randomUUID()
 
@@ -96,10 +98,20 @@ const MIGRATIONS: string[] = [
    CREATE INDEX IF NOT EXISTS messages_streaming ON messages(status) WHERE status = 'streaming';`,
   // Thinking chosen per bot and per chat ('auto' or a level; NULL = inherit), like the model.
   `ALTER TABLE spaces ADD COLUMN effort TEXT;
-   ALTER TABLE threads ADD COLUMN effort TEXT;`
+   ALTER TABLE threads ADD COLUMN effort TEXT;`,
+  // The main bot isn't called SahilBot (that's the app) unless the user named it: it's a "New bot" that can
+  // take any name, from the sidebar or by asking it in chat.
+  `UPDATE spaces SET name = 'New bot' WHERE is_main = 1 AND name = 'SahilBot';`,
+  // A bot's own icon (an emoji), like Grok Bot's per-bot icons; NULL = its shape's eyes.
+  `ALTER TABLE spaces ADD COLUMN icon TEXT;`,
+  // A deleted bot waits here a few minutes (Undo) before it and its chat are really removed; NULL = not deleted.
+  `ALTER TABLE spaces ADD COLUMN trashed_at INTEGER;`
 ]
 
 type Row = Record<string, unknown>
+
+/** A chat whose bot was deleted (waiting out its Undo time) is in no list. */
+const NOT_TRASHED = 't.space_id NOT IN (SELECT id FROM spaces WHERE trashed_at IS NOT NULL)'
 
 /**
  * The usage table's newer columns (Settings → Usage): the providers' own token detail for each paid request.
@@ -169,7 +181,7 @@ const READ_AT = (t: string): string => `COALESCE(${t}.last_read_at, ${t}.created
 export const UNREAD_SQL = (t: string): string => `(CASE WHEN ${t}.updated_at > ${READ_AT(t)} THEN (
     SELECT COUNT(*) FROM (SELECT 1 FROM messages m WHERE m.thread_id = ${t}.id AND m.created_at > ${READ_AT(t)}
       AND m.role = 'assistant' AND m.kind = 'normal' AND m.content != ''
-      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0
+      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.provisional'), 0) = 0
       AND json_extract(m.data, '$.meta.routineNotice') IS NULL
       LIMIT ${UNREAD_CAP})) ELSE 0 END)`
 
@@ -222,6 +234,8 @@ export class Db {
         SELECT m2.content FROM threads t JOIN messages m2 ON m2.id = (
           SELECT m.id FROM messages m WHERE m.thread_id = t.id AND m.role IN ('user','assistant') AND m.content != ''
             AND json_extract(m.data, '$.meta.hidden') IS NULL AND json_extract(m.data, '$.meta.routineNotice') IS NULL
+            -- (Not a reply the chat doesn't show: one replaced by the next, or one still held for its checks.)
+            AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND json_extract(m.data, '$.meta.provisional') IS NULL
           ORDER BY m.seq DESC LIMIT 1)
         WHERE t.space_id = s.id
         ORDER BY m2.created_at DESC, m2.seq DESC LIMIT 1) AS last_preview,
@@ -229,7 +243,7 @@ export class Db {
         -- Your chats with the bot (not its helpers' hidden ones): marked unread, or with replies you haven't seen.
         (SELECT COUNT(*) FROM threads t WHERE t.space_id = s.id AND t.parent_id IS NULL AND (t.unread = 1 OR ${UNREAD_SQL('t')} > 0)) AS unread_count,
         (SELECT COALESCE(SUM(${UNREAD_SQL('t')}), 0) FROM threads t WHERE t.space_id = s.id AND t.parent_id IS NULL) AS unread_n
-      FROM spaces s ORDER BY s.is_main DESC, s.pinned DESC, COALESCE(last_at, s.created_at) DESC`).all() as Row[]
+      FROM spaces s WHERE s.trashed_at IS NULL ORDER BY s.is_main DESC, s.pinned DESC, COALESCE(last_at, s.created_at) DESC`).all() as Row[]
     return rows.map((r) => ({
       ...toSpace(r),
       lastPreview: plain(r.last_preview as string | null),
@@ -244,9 +258,9 @@ export class Db {
     return r ? toSpace(r) : undefined
   }
 
-  createSpace(name: string, color: string, extra: Partial<Pick<Space, 'shape' | 'kind' | 'isMain' | 'members' | 'folder'>> = {}, id = uid()): Space {
-    this.sql.prepare('INSERT INTO spaces(id, name, color, created_at, shape, kind, is_main, members, folder) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(id, name, color, Date.now(), extra.shape ?? 'blob', extra.kind ?? 'bot', extra.isMain ? 1 : 0, JSON.stringify(extra.members ?? []), extra.folder ?? null)
+  createSpace(name: string, color: string, extra: Partial<Pick<Space, 'shape' | 'kind' | 'isMain' | 'members' | 'folder' | 'icon'>> = {}, id = uid()): Space {
+    this.sql.prepare('INSERT INTO spaces(id, name, color, created_at, shape, kind, is_main, members, folder, icon) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(id, name, color, Date.now(), extra.shape ?? 'blob', extra.kind ?? 'bot', extra.isMain ? 1 : 0, JSON.stringify(extra.members ?? []), extra.folder ?? null, cleanIcon(extra.icon))
     return this.getSpace(id)!
   }
 
@@ -255,13 +269,13 @@ export class Db {
     return r ? toSpace(r) : undefined
   }
 
-  updateSpace(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort'>>): Space {
+  updateSpace(id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'folder' | 'label' | 'notify' | 'effort' | 'icon'>>): Space {
     const cur = this.getSpace(id)
     if (!cur) throw new Error(`No space ${id}`)
     const n = { ...cur, ...patch }
     const label = typeof n.label === 'string' ? n.label.replace(/\s+/g, ' ').trim().slice(0, 80) || null : null
-    this.sql.prepare('UPDATE spaces SET name = ?, color = ?, shape = ?, pinned = ?, hidden = ?, members = ?, model = ?, folder = ?, label = ?, notify = ?, effort = ? WHERE id = ?')
-      .run(n.name, n.color, n.shape, n.pinned ? 1 : 0, n.hidden ? 1 : 0, JSON.stringify(n.members), n.model, n.folder, label, n.notify === false ? 0 : 1, effortOrNull(n.effort), id)
+    this.sql.prepare('UPDATE spaces SET name = ?, color = ?, shape = ?, pinned = ?, hidden = ?, members = ?, model = ?, folder = ?, label = ?, notify = ?, effort = ?, icon = ? WHERE id = ?')
+      .run(n.name, n.color, n.shape, n.pinned ? 1 : 0, n.hidden ? 1 : 0, JSON.stringify(n.members), n.model, n.folder, label, n.notify === false ? 0 : 1, effortOrNull(n.effort), cleanIcon(n.icon), id)
     return this.getSpace(id)!
   }
 
@@ -271,7 +285,7 @@ export class Db {
       SELECT json_extract(m.data, '$.meta.path') AS path, MAX(m.created_at) AS at, m.thread_id AS threadId
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE t.space_id = ? AND m.role = 'tool' AND json_extract(m.data, '$.meta.path') IS NOT NULL AND json_extract(m.data, '$.meta.status') = 'ok'
-        AND json_extract(m.data, '$.toolName') IN ('file_write', 'create_document', 'file_manage', 'create_page', 'update_page')
+        AND json_extract(m.data, '$.toolName') IN ('file_write', 'file_edit', 'create_document', 'file_manage', 'create_page', 'update_page')
       GROUP BY path ORDER BY at DESC LIMIT ?`).all(spaceId, limit) as Row[]
     const cited = this.sql.prepare(`
       SELECT json_extract(s.value, '$.url') AS url, json_extract(s.value, '$.title') AS title, MAX(m.created_at) AS at, m.thread_id AS threadId
@@ -301,17 +315,47 @@ export class Db {
     this.sql.prepare('DELETE FROM spaces WHERE id = ?').run(id)
   }
 
+  /**
+   * Deletes a bot so it can still be undone: it leaves every list (bots, Recents, search) but it, its chat and its
+   * routines are kept until purgeSpace. restoreSpace brings it all back.
+   */
+  trashSpace(id: string, at = Date.now()): void {
+    this.sql.prepare('UPDATE spaces SET trashed_at = ? WHERE id = ? AND is_main = 0').run(at, id)
+  }
+
+  restoreSpace(id: string): boolean {
+    return Number(this.sql.prepare('UPDATE spaces SET trashed_at = NULL WHERE id = ? AND trashed_at IS NOT NULL').run(id).changes) > 0
+  }
+
+  /** When a bot was deleted (still undoable), else undefined. */
+  trashedAt(id: string): number | undefined {
+    const r = this.sql.prepare('SELECT trashed_at FROM spaces WHERE id = ?').get(id) as { trashed_at: number | null } | undefined
+    return r?.trashed_at ?? undefined
+  }
+
+  /** Deleted bots still waiting out their Undo time. */
+  trashedSpaces(): Array<{ id: string; name: string; trashedAt: number }> {
+    return (this.sql.prepare('SELECT id, name, trashed_at FROM spaces WHERE trashed_at IS NOT NULL').all() as Row[])
+      .map((r) => ({ id: r.id as string, name: r.name as string, trashedAt: r.trashed_at as number }))
+  }
+
   // ---------- threads ----------
   // tool_mode: a substring check on the saved agent state (JSON.stringify writes it exactly so) instead of
   // json_extract, which would parse every chat's whole state on each sidebar refresh.
   private threadSelect = `
     SELECT t.*, (SELECT m.content FROM messages m WHERE m.thread_id = t.id
                  AND m.role IN ('user','assistant') AND m.content != '' AND json_extract(m.data, '$.meta.hidden') IS NULL
+                 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND json_extract(m.data, '$.meta.provisional') IS NULL
                  ORDER BY m.seq DESC LIMIT 1) AS last_preview,
       ${UNREAD_SQL('t')} AS unread_n,
       (SELECT CASE WHEN instr(ts.data, '"toolMode":"full"') > 0 THEN 'full'
                    WHEN instr(ts.data, '"toolMode":"chat"') > 0 OR instr(ts.data, '"toolMode":"quick"') > 0 THEN 'chat' END
-         FROM thread_state ts WHERE ts.thread_id = t.id) AS tool_mode
+         FROM thread_state ts WHERE ts.thread_id = t.id) AS tool_mode,
+      -- You typed in it yourself (not a routine, a Memory draft, another bot's handoff or a connected app).
+      EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.role = 'user'
+              AND json_extract(m.data, '$.meta.hidden') IS NULL AND json_extract(m.data, '$.meta.scheduled') IS NULL
+              AND json_extract(m.data, '$.meta.brainPrompt') IS NULL AND json_extract(m.data, '$.meta.handoff') IS NULL
+              AND json_extract(m.data, '$.meta.fromApp') IS NULL AND json_extract(m.data, '$.meta.mcpClientId') IS NULL) AS by_user
     FROM threads t`
 
   /** Files SahilBot made or changed, newest first (from successful file and document tool calls). */
@@ -320,7 +364,7 @@ export class Db {
       SELECT json_extract(m.data, '$.meta.path') AS path, m.thread_id AS threadId, t.title AS threadTitle, MAX(m.created_at) AS createdAt, json_extract(m.data, '$.toolName') AS tool
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE m.role = 'tool' AND json_extract(m.data, '$.meta.path') IS NOT NULL AND json_extract(m.data, '$.meta.status') = 'ok'
-        AND json_extract(m.data, '$.toolName') IN ('file_write', 'create_document', 'create_page', 'update_page')
+        AND json_extract(m.data, '$.toolName') IN ('file_write', 'file_edit', 'create_document', 'create_page', 'update_page')
       GROUP BY path ORDER BY createdAt DESC LIMIT ?`).all(limit) as Row[]
     return rows.map((r) => ({ path: r.path as string, threadId: r.threadId as string, threadTitle: r.threadTitle as string, createdAt: r.createdAt as number, tool: r.tool as string }))
   }
@@ -347,7 +391,7 @@ export class Db {
   listThreads(spaceId?: string): Thread[] {
     const rows = spaceId
       ? this.sql.prepare(`${this.threadSelect} WHERE t.space_id = ? AND t.parent_id IS NULL ORDER BY t.pinned DESC, t.updated_at DESC`).all(spaceId)
-      : this.sql.prepare(`${this.threadSelect} WHERE t.parent_id IS NULL ORDER BY t.pinned DESC, t.updated_at DESC LIMIT 200`).all()
+      : this.sql.prepare(`${this.threadSelect} WHERE t.parent_id IS NULL AND ${NOT_TRASHED} ORDER BY t.pinned DESC, t.updated_at DESC LIMIT 200`).all()
     return (rows as Row[]).map(toThread)
   }
 
@@ -360,22 +404,42 @@ export class Db {
    */
   recallUserSaid(query: string, excludeThreadId: string, limit = 6): Array<{ threadId: string; title: string; text: string; at: number }> {
     const STOP = new Set('about above after again also because been before being below between both could does doing down during each from further have having here into itself just more most other over same should some such than that their them then there these they this those through under until very were what when where which while will with would your yours make made want need like please thanks thank help'.split(' '))
-    const words = [...new Set((query.toLowerCase().match(/[a-z0-9][a-z0-9'-]{3,}/g) ?? []).filter((w) => !STOP.has(w)))].slice(0, 8)
     const here = this.getThread(excludeThreadId)
-    if (!words.length || !here) return []
+    if (!here) return []
+    // Search units, each counted once: the request's own words (4+ letters, whole words starting with them), and
+    // each concept it names by the words a message about it would use ("my landlord" → landlord, rent, lease;
+    // recall-expand.ts). A plain word that belongs to a named concept is counted with the concept.
+    const concepts = conceptAlternatives(query).slice(0, 4)
+    const conceptWords = new Set(concepts.flatMap((c) => [...c.words, ...CONCEPTS[c.concept].ask.flatMap((a) => normalizeForRecall(a).split(' '))]))
+    const plain = [...new Set((query.toLowerCase().match(/[a-z0-9][a-z0-9'-]{3,}/g) ?? []).filter((w) => !STOP.has(w)).map(wordStem).filter((w) => w.length >= 3 && !conceptWords.has(w)))].slice(0, 8)
+    const units: Array<{ stems?: string[]; words?: string[] }> = [...plain.map((w) => ({ stems: [w] })), ...concepts.map((c) => ({ words: c.words }))]
+    if (!units.length) return []
     this.sql.exec('CREATE INDEX IF NOT EXISTS messages_role_at ON messages(role, created_at)')
-    const esc = (w: string): string => `%${w.replace(/[%_\\]/g, (c) => '\\' + c)}%`
-    const score = words.map(() => `(CASE WHEN lower(r.content) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END)`).join(' + ')
-    const notMine = ['hidden', 'handoff', 'teach', 'helperTask', 'fromLink', 'mcpClientId', 'fromApp', 'scheduled', 'goalRun', 'superseded', 'relayed']
-      .map((k) => `json_extract(m.data, '$.meta.${k}') IS NULL OR json_extract(m.data, '$.meta.${k}') IN (0, '')`).map((c) => `(${c})`).join(' AND ')
-    const rows = this.sql.prepare(`WITH r AS (
-        SELECT m.thread_id AS threadId, t.title AS title, m.content AS content, m.created_at AS at
+    const like = (w: string): string => `%${w.replace(/[%_\\]/g, (c) => '\\' + c)}%`
+    const patterns = units.flatMap((u) => [...(u.stems ?? []), ...(u.words ?? [])]).map(like)
+    const notMine = NOT_OWN_WORDS.map((k) => `json_extract(m.data, '$.meta.${k}') IS NULL OR json_extract(m.data, '$.meta.${k}') IN (0, '')`).map((c) => `(${c})`).join(' AND ')
+    // A cheap prefilter in SQL (any unit's letters anywhere, newest first), then whole-word scoring here.
+    const rows = (this.sql.prepare(`WITH r AS (
+        SELECT m.thread_id AS threadId, t.title AS title, m.content AS content, lower(m.content) AS lc, m.created_at AS at
         FROM messages m JOIN threads t ON t.id = m.thread_id
         WHERE m.role = 'user' AND m.kind = 'normal' AND m.status = 'done' AND t.space_id = ? AND m.thread_id != ? AND t.parent_id IS NULL
           AND length(m.content) BETWEEN 12 AND 20000 AND ${notMine}
         ORDER BY m.created_at DESC LIMIT 4000)
-      SELECT threadId, title, content AS text, at, (${score}) AS hits FROM r ORDER BY hits DESC, at DESC LIMIT 40`)
-      .all(here.spaceId, excludeThreadId, ...words.map(esc)) as Array<{ threadId: string; title: string; text: string; at: number; hits: number }>
+      SELECT threadId, title, content AS text, at FROM r WHERE ${patterns.map(() => "lc LIKE ? ESCAPE '\\'").join(' OR ')} ORDER BY at DESC LIMIT 300`)
+      .all(here.spaceId, excludeThreadId, ...patterns) as Array<{ threadId: string; title: string; text: string; at: number }>)
+      .map((r) => {
+        const body = normalizeForRecall(r.text), title = normalizeForRecall(r.title ?? '')
+        const hit = (t: string, u: typeof units[number]): boolean => (u.stems ?? []).some((st) => hasStem(t, st)) || (u.words ?? []).some((w) => hasWord(t, w))
+        // A two-word phrase for the concept ("weekly report" for "weekly update") is as strong as two words.
+        const weight = (u: typeof units[number]): number => (u.words ?? []).some((w) => w.includes(' ') && hasWord(body, w)) ? 2 : 1
+        const inBody = units.filter((u) => hit(body, u)).reduce((n, u) => n + weight(u), 0)
+        // The chat's title adds what the message itself doesn't say ("our flight" in the "Lisbon trip" chat), but
+        // only for a message that matches on its own too.
+        const inTitle = inBody ? units.filter((u) => !hit(body, u) && hit(title, u)).length : 0
+        return { ...r, hits: inBody + inTitle }
+      })
+      .sort((a, b) => b.hits - a.hits || b.at - a.at)
+    const words = units
     const need = Math.min(2, words.length)
     const out: Array<{ threadId: string; title: string; text: string; at: number }> = []
     const perThread = new Map<string, number>()
@@ -417,7 +481,7 @@ export class Db {
   searchThreads(q: string): Thread[] {
     const like = `%${q.replace(/[%_]/g, (c) => '\\' + c)}%`
     const rows = this.sql.prepare(`${this.threadSelect}
-      WHERE t.parent_id IS NULL AND (t.title LIKE ? ESCAPE '\\' OR EXISTS (
+      WHERE t.parent_id IS NULL AND ${NOT_TRASHED} AND (t.title LIKE ? ESCAPE '\\' OR EXISTS (
         SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.role IN ('user','assistant') AND m.content LIKE ? ESCAPE '\\'))
       ORDER BY t.updated_at DESC LIMIT 50`).all(like, like) as Row[]
     return rows.map(toThread)
@@ -469,7 +533,7 @@ export class Db {
    */
   markUnread(id: string): Thread {
     const last = this.sql.prepare(`SELECT MAX(m.created_at) AS at FROM messages m WHERE m.thread_id = ? AND m.role = 'assistant' AND m.kind = 'normal' AND m.content != ''
-      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND json_extract(m.data, '$.meta.routineNotice') IS NULL`).get(id) as { at: number | null } | undefined
+      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.provisional'), 0) = 0 AND json_extract(m.data, '$.meta.routineNotice') IS NULL`).get(id) as { at: number | null } | undefined
     const r = this.sql.prepare('UPDATE threads SET unread = 1, last_read_at = CASE WHEN ? IS NULL THEN last_read_at ELSE MIN(COALESCE(last_read_at, created_at), ? - 1) END WHERE id = ?')
       .run(last?.at ?? null, last?.at ?? null, id)
     if (!r.changes) throw new Error(`No thread ${id}`)
@@ -541,18 +605,29 @@ export class Db {
   /** Marks anything left 'streaming' by a crash or quit as stopped. */
   sweepStreaming(): void {
     this.sql.prepare(`UPDATE messages SET status = 'stopped' WHERE status = 'streaming'`).run()
+    // A reply held for its checks when the app quit (or crashed) mid-run: no run will settle it now, so it shows.
+    this.sql.prepare(`UPDATE messages SET data = json_remove(data, '$.meta.provisional') WHERE json_extract(data, '$.meta.provisional') IS NOT NULL`).run()
   }
 }
 
-/** Sidebar previews are plain text: drop Markdown punctuation and collapse whitespace. */
+/** Sidebar previews are plain text: drop internal markup, Markdown punctuation and extra whitespace. */
 export function plain(md: string | null | undefined): string | undefined {
   if (!md) return undefined
-  return md.replace(/```[\s\S]*?```/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|~]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 200)
+  return stripDirectives(md).replace(/```[\s\S]*?```/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|~]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 200)
 }
 
 function dataOf(m: Message): Record<string, unknown> {
   const { reasoning, toolCalls, toolCallId, toolName, images, model, meta } = m
   return { reasoning, toolCalls, toolCallId, toolName, images, model, meta }
+}
+
+/** A bot icon: one emoji (or a couple of characters), nothing longer; anything else is no icon. */
+export function cleanIcon(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const t = v.trim()
+  if (!t || t.length > 16 || /[<>{}\\/]/.test(t)) return null
+  const chars = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(t)]
+  return chars.length <= 2 ? t : null
 }
 
 function toSpace(r: Row): Space {
@@ -568,8 +643,10 @@ function toSpace(r: Row): Space {
     members: JSON.parse((r.members as string) ?? '[]') as string[],
     model: (r.model as string | null) ?? null,
     folder: (r.folder as string | null) ?? null,
+    icon: (r.icon as string | null) ?? null,
     label: (r.label as string | null) ?? null,
-    notify: r.notify !== 0,
+    // Notifications are automatic for every bot (no per-bot switch any more): it tells you when it finishes or needs you.
+    notify: true,
     effort: effortOrNull(r.effort),
     createdAt: r.created_at as number
   }
@@ -606,7 +683,8 @@ function toThread(r: Row): Thread {
     parentId: (r.parent_id as string | null) ?? null,
     lastReadAt: (r.last_read_at as number | null) ?? (r.created_at as number),
     unreadCount: unreadN,
-    ...(r.tool_mode === 'full' || r.tool_mode === 'chat' ? { toolMode: r.tool_mode } : {})
+    ...(r.tool_mode === 'full' || r.tool_mode === 'chat' ? { toolMode: r.tool_mode } : {}),
+    ...(r.by_user !== undefined ? { byUser: !!r.by_user } : {})
   }
 }
 

@@ -12,6 +12,11 @@ describe('on-demand tools from the request', () => {
     expect(intentTools('Clean up my inbox', known)).toEqual(['mail'])
     expect(intentTools('Draft a memo about the new schedule', known)).toEqual(['doc_create', 'doc_read', 'doc_edit', 'doc_export'])
   })
+  test('an email to write from the user\'s words loads no mail tools; reading, replying or sending does (IWD-01)', () => {
+    for (const q of ['Draft a two-line email to my landlord about the leak', 'Write a short email to my teacher saying I will be late', 'Compose an email to Jane thanking her',
+      'Can you help me write an email to my boss asking for Friday off?', 'I need to email my landlord about a leak, write it for me']) expect(intentTools(q, known), q).not.toContain('mail')
+    for (const q of ['Write an email to Jane and send it', 'Draft a reply to the email from my landlord', 'Clean up my inbox', 'Write an email to Jane about what my emails from Bob said']) expect(intentTools(q, known), q).toContain('mail')
+  })
   test('small talk and plain questions load nothing extra', () => {
     expect(intentTools('hey, how are you?', known)).toEqual([])
     expect(intentTools('What is 15% of 240?', known)).toEqual([])

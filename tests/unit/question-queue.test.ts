@@ -278,9 +278,9 @@ const work: ToolDef<{ part: string }> = {
   async run({ part }) { log.push(part); return { text: `did ${part}` } }
 }
 const remove: ToolDef<{ id: string }> = {
-  name: 'crm_delete', label: 'CRM', effect: 'destructive', description: 'delete a CRM record', describe: ({ id }) => `Delete record ${id}`,
+  name: 'crm_refund', label: 'CRM', effect: 'destructive', description: 'refund a CRM order (money: a hard stop for an always-on bot; deletes are not)', describe: ({ id }) => `Refund order ${id}`,
   parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
-  async run({ id }) { log.push(`deleted ${id}`); return { text: `deleted ${id}` } }
+  async run({ id }) { log.push(`refunded ${id}`); return { text: `refunded ${id}` } }
 }
 
 describe('an always-on bot keeps working while a question waits', () => {
@@ -342,21 +342,21 @@ describe('an always-on bot keeps working while a question waits', () => {
     log.length = 0
     const h = agentHarness([work, remove])
     llm.script.push(
-      { toolCalls: [call('crm_delete', { id: 'r42' })], delay: 0 },
+      { toolCalls: [call('crm_refund', { id: 'r42' })], delay: 0 },
       { toolCalls: [call('work', { part: 'tidy the rest' })], delay: 0 },
-      { content: 'Tidied; deleting r42 waits for your OK.', delay: 0 }
+      { content: 'Tidied; refunding r42 waits for your OK.', delay: 0 }
     )
     await (await h.agent.send({ threadId: h.thread.id, text: 'Clean up the CRM' })).done
     expect(log).toEqual(['tidy the rest'])
-    const tool = h.db.listMessages(h.thread.id).find((m) => m.role === 'tool' && m.toolName === 'crm_delete')!
+    const tool = h.db.listMessages(h.thread.id).find((m) => m.role === 'tool' && m.toolName === 'crm_refund')!
     expect(tool.content).toMatch(/Not done yet: this needs the user's OK/)
     const [item] = h.queue.inbox()
-    expect(item).toMatchObject({ kind: 'approval', approval: { tool: 'crm_delete', summary: 'Delete record r42' } })
+    expect(item).toMatchObject({ kind: 'approval', approval: { tool: 'crm_refund', summary: 'Refund order r42' } })
 
-    llm.script.push({ toolCalls: [call('crm_delete', { id: 'r42' })], delay: 0 }, { content: 'Deleted r42.', delay: 0 })
+    llm.script.push({ toolCalls: [call('crm_refund', { id: 'r42' })], delay: 0 }, { content: 'Refunded r42.', delay: 0 })
     await h.queue.answer(item.id, 'approve')
     await h.idle()
-    expect(log).toEqual(['tidy the rest', 'deleted r42'])
+    expect(log).toEqual(['tidy the rest', 'refunded r42'])
     expect(h.events.some((e) => e.type === 'pending')).toBe(false)
   })
 
@@ -478,19 +478,45 @@ describe('unattended runs of an always-on bot keep Autonomous', () => {
   test('a routine in an Autonomous bot runs project commands; hard stops still wait in Needs you', async () => {
     log.length = 0
     const h = agentHarness([setup, remove])
-    llm.script.push({ toolCalls: [call('setup', { cmd: 'npm ci' })], delay: 0 }, { toolCalls: [call('crm_delete', { id: 'r1' })], delay: 0 }, { content: 'Set up; the delete waits for you.', delay: 0 })
+    llm.script.push({ toolCalls: [call('setup', { cmd: 'npm ci' })], delay: 0 }, { toolCalls: [call('crm_refund', { id: 'r1' })], delay: 0 }, { content: 'Set up; the refund waits for you.', delay: 0 })
     await (await h.agent.send({ threadId: h.thread.id, text: '⏰ Nightly\n\nSet up and clean up', meta: { scheduled: 'r' } }, { unattended: true })).done
     expect(log).toEqual(['ran npm ci'])
-    expect(h.queue.inbox()).toMatchObject([{ kind: 'approval', approval: { tool: 'crm_delete' } }])
+    expect(h.queue.inbox()).toMatchObject([{ kind: 'approval', approval: { tool: 'crm_refund' } }])
   })
-  test('the main chat (not an always-on bot) still drops to Auto unattended', async () => {
+  test('a routine run beside the bot\'s busy chat keeps the bot\'s "Always ask for…" and its Needs you; the approval resumes in the bot\'s chat', async () => {
+    log.length = 0
+    const h = agentHarness([work], { botAutonomy: {} } as Partial<Settings>)
+    ;(h.settings as Settings).botAutonomy = { [h.space.id]: { alwaysAsk: ['tool:work'] } }
+    // As index.ts makes it: a hidden chat under the bot's chat, marked with the chat it posts into.
+    const side = h.db.createThread(h.space.id, 'autonomous', 'model-a', h.thread.id)
+    const st = h.db.getState(side.id); st.routineHost = h.thread.id; h.db.setState(side.id, st)
+    // A plain helper chat (no routineHost) still answers to its run, never to the queue.
+    const helper = h.db.createThread(h.space.id, 'autonomous', 'model-a', h.thread.id)
+    const qhost = createQuestionHost({ db: h.db, settings: { get: () => h.settings }, queue: h.queue, learner: new Learner(h.store) })
+    expect(qhost.config(side.id)).toMatchObject({ botId: h.space.id, alwaysAsk: ['tool:work'] })
+    expect(qhost.config(helper.id)).toBeNull()
+    llm.script.push({ toolCalls: [call('work', { part: 'send the digest' })], delay: 0 }, { content: 'The digest waits for your OK.', delay: 0 })
+    await (await h.agent.send({ threadId: side.id, text: '⏰ Digest\n\nSend the digest', meta: { scheduled: 'r' } }, { unattended: true })).done
+    expect(log).toEqual([])
+    const tool = h.db.listMessages(side.id).find((m) => m.role === 'tool' && m.toolName === 'work')!
+    expect(tool.content).toMatch(/Not done yet: this needs the user's OK/)
+    expect(tool.content).not.toMatch(/Skipped: this ran on a schedule/)
+    expect(h.queue.inbox()).toMatchObject([{ kind: 'approval', threadId: h.thread.id, hardStop: expect.stringMatching(/always ask/i) }])
+  })
+  test('the main chat (not an always-on bot) works fully in Auto unattended; in Ask it skips what needs approval', async () => {
     log.length = 0
     const h = agentHarness([setup])
     const main = h.db.createSpace('SahilBot', '#111', { isMain: true })
     const t = h.db.createThread(main.id, 'autonomous', 'model-a')
-    llm.script.push({ toolCalls: [call('setup', { cmd: 'npm ci' })], delay: 0 }, { content: 'Skipped.', delay: 0 })
+    llm.script.push({ toolCalls: [call('setup', { cmd: 'npm ci' })], delay: 0 }, { content: 'Set up.', delay: 0 })
     await (await h.agent.send({ threadId: t.id, text: 'Set up', meta: { scheduled: 'r' } }, { unattended: true })).done
+    expect(log).toEqual(['ran npm ci'])
+    // An Ask chat on a schedule: nobody is there to approve, so the command is skipped.
+    log.length = 0
+    const askT = h.db.createThread(main.id, 'ask', 'model-a')
+    llm.script.push({ toolCalls: [call('setup', { cmd: 'npm ci' })], delay: 0 }, { content: 'Skipped.', delay: 0 })
+    await (await h.agent.send({ threadId: askT.id, text: 'Set up', meta: { scheduled: 'r' } }, { unattended: true })).done
     expect(log).toEqual([])
-    expect(h.db.listMessages(t.id).find((m) => m.role === 'tool')!.content).toMatch(/ran on a schedule with nobody to approve it/)
+    expect(h.db.listMessages(askT.id).find((m) => m.role === 'tool')!.content).toMatch(/ran on a schedule with nobody to approve it/)
   })
 })

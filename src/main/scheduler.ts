@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { RoutineRun, Schedule, ScheduledTask } from '@shared/types'
 import type { Db } from './db'
+import { describeSchedule, hasOffset } from '@shared/when'
+import { pickItems, triggerNote, TRIGGER_BATCH, TRIGGER_DAILY_MAX, TRIGGER_TEST_NOTE, type TriggerItem } from './triggers'
 
 // Scheduled tasks: once / daily / weekly / every N minutes / cron. Due tasks run as normal agent
 // turns in an unattended mode where anything that would need approval is skipped, not done.
@@ -46,8 +48,35 @@ function atTime(base: Date, time: string): Date {
   return d
 }
 
+/** A usable IANA time zone name. */
+export function validTz(tz: unknown): tz is string {
+  if (typeof tz !== 'string' || !tz) return false
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true } catch { return false }
+}
+
+/** The wall-clock time in `tz` at instant `d`, as a Date whose local fields read that time. */
+function wallIn(d: Date, tz: string): Date {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    .formatToParts(d).map((x) => [x.type, x.value]))
+  return new Date(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second), d.getMilliseconds())
+}
+
+/** The instant whose wall-clock time in `tz` is `wall`'s local fields (inverse of wallIn). */
+function fromWall(wall: Date, tz: string): Date {
+  let t = wall.getTime()
+  for (let i = 0; i < 3; i++) t += wall.getTime() - wallIn(new Date(t), tz).getTime()
+  return new Date(t)
+}
+
 /** Next run strictly after `from`, or null when a one-off has passed. */
 export function nextRun(s: Schedule, from: Date): Date | null {
+  // A place's own clock: work it out on that clock, then turn it back into a real moment.
+  // (A one-off with its own offset, "…Z" or "…-05:00", is already a real moment.)
+  if ('tz' in s && validTz(s.tz) && !(s.type === 'once' && hasOffset(s.at))) {
+    const { tz, ...rest } = s
+    const at = nextRun(rest as Schedule, wallIn(from, tz))
+    return at && fromWall(at, tz)
+  }
   switch (s.type) {
     case 'once': {
       const at = new Date(s.at)
@@ -61,7 +90,7 @@ export function nextRun(s: Schedule, from: Date): Date | null {
       return t
     }
     case 'weekly': {
-      const want = new Set(s.days.map((x) => DAYS.indexOf(x.slice(0, 3).toLowerCase())))
+      const want = new Set((Array.isArray(s.days) ? s.days : []).map((x) => DAYS.indexOf(x.slice(0, 3).toLowerCase())))
       for (let i = 0; i < 8; i++) {
         const t = atTime(from, s.time)
         t.setDate(t.getDate() + i)
@@ -71,17 +100,48 @@ export function nextRun(s: Schedule, from: Date): Date | null {
     }
     case 'cron':
       return nextCron(s.expr, from)
+    case 'when':
+      // Runs when something arrives (onItems), never on the clock.
+      return null
   }
 }
 
-export function describeSchedule(s: Schedule): string {
-  switch (s.type) {
-    case 'once': return `once on ${new Date(s.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
-    case 'every': return s.minutes % 60 === 0 ? `every ${s.minutes / 60} hour${s.minutes === 60 ? '' : 's'}` : `every ${s.minutes} minutes`
-    case 'daily': return `every day at ${s.time}`
-    case 'weekly': return `every ${s.days.map((d) => d.slice(0, 3)).join(', ')} at ${s.time}`
-    case 'cron': return `cron ${s.expr}`
+/** A clock schedule missing what it runs on (a weekly with no days, a daily with no time) is a clear error, never a crash. */
+function checkSchedule(s: Schedule): void {
+  const x = s as Partial<{ days: unknown; time: unknown }>
+  if (s.type === 'weekly' && !(Array.isArray(x.days) && x.days.some((d) => typeof d === 'string' && DAYS.includes(d.slice(0, 3).toLowerCase())))) throw new Error('A weekly schedule needs days (["mon","wed"]).')
+  if ((s.type === 'daily' || s.type === 'weekly') && !(typeof x.time === 'string' && /^\d{1,2}(:\d{2})?/.test(x.time))) throw new Error('A daily or weekly schedule needs a time ("07:00").')
+}
+
+// One wording everywhere (routines screens, the schedule tool's replies, the chat's routine lines): "Weekdays at 7:30 AM ET".
+export { describeSchedule }
+
+const QUEUE_KEY = 'triggerQueue'
+
+/** A calendar event without its version: "abc:1732000000000" and "abc:1732000500000" are one event. */
+export function eventKey(x: Pick<TriggerItem, 'source' | 'id'>): string {
+  return `${x.source}:${x.id.replace(/:\d{9,}$/, '')}`
+}
+
+/** One version per calendar event in a read (an edit gives it a new id): the newest, so it runs and counts once. */
+export function newestVersions(items: TriggerItem[]): TriggerItem[] {
+  const newest = new Map<string, TriggerItem>()
+  for (const x of items) {
+    if (x.kind !== 'calendar') continue
+    const k = eventKey(x), cur = newest.get(k)
+    if (!cur || (x.at ?? 0) >= (cur.at ?? 0)) newest.set(k, x)
   }
+  return items.filter((x) => x.kind !== 'calendar' || newest.get(eventKey(x)) === x)
+}
+
+/** What a routine run is: a test, a late catch-up, a dry run, or set off by new items (`event`). */
+export interface RunInfo {
+  id: string
+  test: boolean
+  late?: number
+  dry?: boolean
+  /** The items that set off a "when …" routine: the fenced note the bot reads and the raw text (for the taint check). */
+  event?: { note: string; untrusted: string[]; count: number }
 }
 
 type Row = Record<string, unknown>
@@ -197,7 +257,7 @@ export class Scheduler {
   wakeups?: () => Promise<void>
 
   /** `late` (on a run) = when a missed run was due; it is running late now. */
-  constructor(private db: Db, private run: (task: ScheduledTask, run: { id: string; test: boolean; late?: number }) => Promise<RunResult>, private changed: () => void, private now = () => new Date()) {
+  constructor(private db: Db, private run: (task: ScheduledTask, run: RunInfo) => Promise<RunResult>, private changed: () => void, private now = () => new Date()) {
     // Runs cut short by a quit or crash can't still be running.
     this.db.sql.prepare(`UPDATE routine_runs SET status = 'failed', finished_at = COALESCE(finished_at, started_at), reason = 'SahilBot closed before it finished' WHERE status = 'running'`).run()
   }
@@ -227,14 +287,16 @@ export class Scheduler {
   create(t: { title: string; prompt: string; schedule: Schedule; spaceId: string; threadId?: string | null; enabled?: boolean }): ScheduledTask {
     if (!t.prompt.trim()) throw new Error('A scheduled task needs instructions.')
     if (t.prompt.length > 8000) throw new Error('Keep scheduled instructions under 8,000 characters.')
+    checkSchedule(t.schedule)
     const next = nextRun(t.schedule, this.now())
-    if (!next) throw new Error('That time has already passed.')
+    if (!next && t.schedule.type !== 'when') throw new Error('That time has already passed.')
     const id = randomUUID().slice(0, 8)
     const on = t.enabled !== false
     this.db.sql.prepare('INSERT INTO scheduled_tasks(id, title, prompt, schedule, space_id, thread_id, enabled, next_run, created_at) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(id, t.title.trim() || 'Scheduled task', t.prompt.trim(), JSON.stringify(t.schedule), t.spaceId, t.threadId ?? null, on ? 1 : 0, on ? next.getTime() : null, Date.now())
+      .run(id, t.title.trim() || 'Scheduled task', t.prompt.trim(), JSON.stringify(t.schedule), t.spaceId, t.threadId ?? null, on ? 1 : 0, on && next ? next.getTime() : null, Date.now())
     this.changed()
     const task = this.get(id)!
+    if (task.schedule.type === 'when') this.arm(id)
     this.emit({ type: 'created', task })
     return task
   }
@@ -244,12 +306,15 @@ export class Scheduler {
     if (!cur) throw new Error(`No scheduled task ${id}`)
     const n = { ...cur, ...patch }
     if (patch.prompt !== undefined && !n.prompt.trim()) throw new Error('A scheduled task needs instructions.')
+    if (patch.schedule) checkSchedule(patch.schedule)
     const next = n.enabled ? nextRun(n.schedule, this.now())?.getTime() ?? null : null
-    if (n.enabled && next === null) throw new Error('That time has already passed.')
+    if (n.enabled && next === null && n.schedule.type !== 'when') throw new Error('That time has already passed.')
     this.db.sql.prepare('UPDATE scheduled_tasks SET title=?, prompt=?, schedule=?, enabled=?, next_run=? WHERE id=?')
       .run(n.title, n.prompt, JSON.stringify(n.schedule), n.enabled ? 1 : 0, next, id)
     this.changed()
     const task = this.get(id)!
+    if (task.schedule.type === 'when' && (cur.schedule.type !== 'when' || (!cur.enabled && task.enabled))) this.arm(id)
+    if (!task.enabled) this.unqueue(id)
     if (cur.enabled !== task.enabled) this.emit({ type: task.enabled ? 'resumed' : 'paused', task })
     else if (cur.title !== task.title || cur.prompt !== task.prompt || JSON.stringify(cur.schedule) !== JSON.stringify(task.schedule)) this.emit({ type: 'changed', task })
     return task
@@ -258,6 +323,7 @@ export class Scheduler {
   remove(id: string): void {
     const cur = this.get(id)
     this.db.sql.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id)
+    this.unqueue(id)
     this.changed()
     if (cur) this.emit({ type: 'deleted', task: cur })
   }
@@ -268,6 +334,8 @@ export class Scheduler {
 
   start(intervalMs = 20_000): void {
     void this.tick()
+    // Matches saved before a quit run now (their routines' bots and the pause state permitting).
+    if (this.waiting.size) setTimeout(() => this.drainAll(), 0)
     this.timer = setInterval(() => void this.tick(), intervalMs)
   }
 
@@ -286,6 +354,8 @@ export class Scheduler {
     const now = this.now()
     const lastTickAt = this.lastTickAt
     this.lastTickAt = now.getTime()
+    // Matches held back by the daily limit run once a new day allows it.
+    if (this.waiting.size) this.drainAll()
     const due = this.list().filter((t) => t.enabled && t.nextRun !== null && t.nextRun <= now.getTime() && !this.busy.has(t.id) && this.available(t.spaceId))
     const window = this.catchUpHours()
     // Goal wake-ups run beside routines; a failure there never affects them.
@@ -309,10 +379,11 @@ export class Scheduler {
   }
 
   /** Test: runs a routine now without touching its schedule. Returns the run id at once (null if it's already running). */
-  test(id: string): { runId: string; done: Promise<void> } | null {
+  /** A test run now. `dry`: a dry run (reads for real; anything that would change something is only listed). */
+  test(id: string, o: { dry?: boolean } = {}): { runId: string; done: Promise<void> } | null {
     const t = this.get(id)
     if (!t || this.busy.has(id) || !this.available(t.spaceId)) return null
-    return this.begin(t, true)
+    return this.begin(t, true, undefined, o.dry, t.schedule.type === 'when' ? { note: TRIGGER_TEST_NOTE, untrusted: [], count: 0 } : undefined)
   }
 
   /** `late` = when a missed run was due (it runs now, once, and says so). */
@@ -327,8 +398,121 @@ export class Scheduler {
     await this.begin(t, false, late).done
   }
 
+  /**
+   * New items from a read of mail, messages or the calendar: each "when …" routine that one of them matches runs once,
+   * with the matching items (up to TRIGGER_BATCH) handed to it as outside content. `me`: the user's own addresses
+   * (their own mail never sets a routine off). Returns the routines started.
+   */
+  onItems(items: TriggerItem[], me: string[] = []): string[] {
+    if (!items.length) return []
+    const started: string[] = []
+    for (const t of this.list()) {
+      if (!t.enabled || t.schedule.type !== 'when') continue
+      // Only what arrived after the routine was set up (a first read or a backfill of older mail sets nothing off).
+      // An item without a time counts as arriving now.
+      const armed = this.armedAt(t)
+      // A calendar event is new once: an edit or an RSVP gives it a new id and time (sources.ts calendarItems), but
+      // it isn't an arrival. It counts from when it was created (an invite not answered yet: from when it reached the
+      // user, since a guest added to an older event keeps its old creation time), and each event sets it off only once.
+      const seen = this.seenEvents(t.id)
+      const fresh = newestVersions(items.filter((x) => x.kind !== 'calendar' || !seen.has(eventKey(x))))
+        .filter((x) => ((x.kind === 'calendar' && !x.invited ? x.created : undefined) || x.at || Date.now()) >= armed)
+      const hit = pickItems(t.schedule, fresh, me)
+      if (!hit.items.length) continue
+      this.markSeen(t.id, hit.items)
+      // Busy, paused, its bot is away, or matches already waiting (the daily limit): kept for its next run, not dropped.
+      if (this.busy.has(t.id) || this.paused() || !this.available(t.spaceId) || this.waiting.has(t.id)) {
+        this.queue(t.id, hit.items, hit.more)
+        if (this.drain(t.id)) started.push(t.id)
+        continue
+      }
+      if (this.startEvent(t, hit.items, hit.more)) started.push(t.id)
+    }
+    return started
+  }
+
+  /** The calendar events that already set this routine off (newest kept). */
+  private seenEvents(id: string): Set<string> {
+    return new Set(this.db.getSetting<string[]>(`triggerSeen:${id}`) ?? [])
+  }
+
+  private markSeen(id: string, items: TriggerItem[]): void {
+    const keys = items.filter((x) => x.kind === 'calendar').map(eventKey)
+    if (!keys.length) return
+    const all = [...this.seenEvents(id)].filter((k) => !keys.includes(k))
+    this.db.setSetting(`triggerSeen:${id}`, [...all, ...keys].slice(-1000))
+  }
+
+  /**
+   * Matches that came in while a "when" routine was busy or paused, for its next run (newest kept). Saved too, so a
+   * quit or restart doesn't lose them (the items were read once and won't be handed over again).
+   */
+  private waitingMap?: Map<string, { items: TriggerItem[]; more: number }>
+  private get waiting(): Map<string, { items: TriggerItem[]; more: number }> {
+    if (!this.waitingMap) {
+      const saved = this.db.getSetting<Record<string, { items: TriggerItem[]; more: number }>>(QUEUE_KEY) ?? {}
+      this.waitingMap = new Map(Object.entries(saved).filter(([, w]) => Array.isArray(w?.items)))
+    }
+    return this.waitingMap
+  }
+  private saveWaiting(): void {
+    this.db.setSetting(QUEUE_KEY, Object.fromEntries(this.waiting))
+  }
+  private queue(id: string, items: TriggerItem[], more: number): void {
+    const cur = this.waiting.get(id) ?? { items: [], more: 0 }
+    const all = [...cur.items, ...items.filter((x) => !cur.items.some((y) => y.source === x.source && y.id === x.id))]
+    this.waiting.set(id, { items: all.slice(-TRIGGER_BATCH), more: cur.more + more + Math.max(0, all.length - TRIGGER_BATCH) })
+    this.saveWaiting()
+  }
+  private unqueue(id: string): void {
+    if (this.waiting.delete(id)) this.saveWaiting()
+  }
+
+  /** When a "when" routine was set up, switched to "when" or turned back on: older items never set it off. */
+  private armedAt(t: ScheduledTask): number {
+    return this.db.getSetting<number>(`triggerArmed:${t.id}`) ?? t.createdAt
+  }
+
+  private arm(id: string): void {
+    this.db.setSetting(`triggerArmed:${id}`, Date.now())
+  }
+
+  /** The routine already ran TRIGGER_DAILY_MAX times today (a mail loop can't run it all day). */
+  private capped(t: ScheduledTask): boolean {
+    const today = new Date(this.now()); today.setHours(0, 0, 0, 0)
+    return (this.db.sql.prepare('SELECT COUNT(*) AS n FROM routine_runs WHERE task_id = ? AND test = 0 AND started_at >= ?').get(t.id, today.getTime()) as { n: number }).n >= TRIGGER_DAILY_MAX
+  }
+
+  private startEvent(t: ScheduledTask, items: TriggerItem[], more: number): boolean {
+    if (this.capped(t)) {
+      // Kept for tomorrow's first chance (they were read once and are marked seen), not dropped.
+      this.queue(t.id, items, more)
+      this.db.sql.prepare('UPDATE scheduled_tasks SET last_status = ? WHERE id = ?').run(`skipped: ran ${TRIGGER_DAILY_MAX} times today already`, t.id)
+      return false
+    }
+    this.db.sql.prepare('UPDATE scheduled_tasks SET last_run = ? WHERE id = ?').run(Date.now(), t.id)
+    void this.begin(t, false, undefined, false, { note: triggerNote(items, more), untrusted: items.map((x) => `${x.title}\n${x.from ?? ''}\n${x.text}`), count: items.length + more })
+    return true
+  }
+
+  /** A "when" routine finished: matches that came in meanwhile run now (one run for all of them). */
+  private drain(id: string): boolean {
+    const w = this.waiting.get(id)
+    const t = this.get(id)
+    // A routine that's gone (or no longer "when"): its queue goes too.
+    if (w && (!t || t.schedule.type !== 'when')) { this.unqueue(id); return false }
+    if (!w || !t || !t.enabled || this.busy.has(id) || this.paused() || !this.available(t.spaceId) || this.capped(t)) return false
+    this.unqueue(id)
+    return this.startEvent(t, w.items, w.more)
+  }
+
+  /** Runs queued matches whose routine can run now (routines resumed, a bot came back). */
+  drainAll(): void {
+    for (const id of [...this.waiting.keys()]) this.drain(id)
+  }
+
   /** Records the run (synchronously, so callers can return at once), then runs it. */
-  private begin(t: ScheduledTask, test: boolean, late?: number): { runId: string; done: Promise<void> } {
+  private begin(t: ScheduledTask, test: boolean, late?: number, dry?: boolean, event?: RunInfo['event']): { runId: string; done: Promise<void> } {
     this.busy.add(t.id)
     const runId = randomUUID()
     this.db.sql.prepare('INSERT INTO routine_runs(id, task_id, started_at, status, thread_id, test) VALUES(?,?,?,?,?,?)')
@@ -338,7 +522,7 @@ export class Scheduler {
     const done = (async () => {
       let result: RunResult
       try {
-        result = await this.run(t, { id: runId, test, ...(late !== undefined ? { late } : {}) })
+        result = await this.run(t, { id: runId, test, ...(late !== undefined ? { late } : {}), ...(dry ? { dry: true } : {}), ...(event ? { event } : {}) })
       } catch (e) {
         result = `error: ${(e as Error).message}`
       }
@@ -351,6 +535,7 @@ export class Scheduler {
       this.db.sql.prepare('UPDATE scheduled_tasks SET last_status = ? WHERE id = ?').run(status, t.id)
       this.busy.delete(t.id)
       this.changed()
+      if (this.waiting.has(t.id)) setTimeout(() => this.drain(t.id), 0)
       if (out.status === 'failed') this.emit({ type: 'failed', task: this.get(t.id) ?? t, reason: out.reason ?? undefined, threadId })
     })()
     return { runId, done }

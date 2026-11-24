@@ -20,7 +20,7 @@ describe('phase 4: connectors + web search', () => {
     // The 64 GB target Mac: on a small Mac the local window (16-32K) is mostly taken by the prompt and tools,
     // and the run compacts every step, which isn't what this test is about.
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
-    await page.click('[data-testid="connect-apps"]')
+    await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
     await page.click('[data-testid="preset-custom"]')
     await page.fill('.conn-form input >> nth=0', 'Notes')
     await page.click('.conn-form .seg button:has-text("Local")')
@@ -39,12 +39,9 @@ describe('phase 4: connectors + web search', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'Look up the launch date in my notes and send it to sam@acme.test')
     await page.keyboard.press('Enter')
-    // Reading ran on its own; sending is consequential, so Auto asks.
-    const card = page.locator('[data-testid="approval-card"]')
-    await card.waitFor({ timeout: 20_000 })
-    expect(await card.innerText()).toContain('Notes')
-    await card.locator('[data-testid="approve-once"]').click()
+    // Reading and sending (what you asked for) both run on their own in Auto.
     await idle(page)
+    expect(await page.locator('[data-testid="approval-card"]').count()).toBe(0)
     const tools = llm.requests.at(-1)!.messages.filter((m: any) => m.role === 'tool').map((m: any) => String(m.content))
     expect(tools.some((t: string) => t.includes('Launch date is Dec 1') && t.includes('trust="untrusted"'))).toBe(true)
     expect(tools.at(-1)).toContain('Sent to sam@acme.test')

@@ -40,6 +40,14 @@ export function coreTools(results: ResultStore): ToolDef[] {
     }
   }
 
+  /** The tool belongs to the app the name gives: its group (or "[App]" description prefix, else its name) names it, or it names the group. */
+  const words = (s: string): string => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `
+  const sameApp = (app: string, t: { name: string; description: string; group?: string }): boolean => {
+    const g = t.group ?? t.description.match(/^\[([^\]]+)\]/)?.[1] ?? t.name.replace(/[_-]+/g, ' ')
+    const a = words(app).trim(), gw = words(g).trim()
+    return !!a && !!gw && (words(g).includes(` ${a} `) || words(app).includes(` ${gw} `))
+  }
+
   const connectApp: ToolDef<{ app: string; reason: string }> = {
     name: 'connect_app', label: 'Connect an app', group: 'Connectors', effect: 'read',
     available: (state) => !state.depth,
@@ -47,7 +55,8 @@ export function coreTools(results: ResultStore): ToolDef[] {
     parameters: { type: 'object', properties: { app: { type: 'string', minLength: 1 }, reason: { type: 'string', minLength: 1, maxLength: 500 } }, required: ['app', 'reason'], additionalProperties: false },
     async run({ app, reason }, ctx) {
       if (!ctx.offerConnect) throw new Error('Connectors are unavailable in this session.')
-      const ready = ctx.searchTools(app).filter((t) => t.connector)
+      // Only the app asked for: a connected Google Drive is not Google Calendar (both match "google").
+      const ready = ctx.searchTools(app).filter((t) => t.connector && sameApp(app, t))
       const tools = ready.length ? ready : await ctx.offerConnect(app, { reason })
       const added = ctx.loadTools(tools.map((t) => t.name))
       return { text: tools.length ? `${app} is connected. Use these tools now:\n${tools.map((t) => `- ${t.name}: ${t.description}`).join('\n')}` : `No connection to ${app} was established. Continue without it; the user can connect later from Connect apps.`, data: { connected: tools.length > 0, tools: tools.map((t) => t.name), loaded: added }, display: tools.length ? `${app} connected` : `${app} not connected` }

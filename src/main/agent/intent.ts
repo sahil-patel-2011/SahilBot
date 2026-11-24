@@ -1,7 +1,7 @@
 import { CAD_RE } from '../cad/cad-intent'
 import { isMedicalQuestion } from './medical-check'
 import { VIDEO_RE } from './video-intent'
-import { IMAGE_RE, classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
+import { IMAGE_RE, SAHILBOT_BOT, classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
 
 /**
  * Which on-demand tools a request needs, read from the request itself. Heavy tools (computer use, code,
@@ -12,6 +12,11 @@ import { IMAGE_RE, classifyTask as classifyRequest, type TaskCategory as RouteCa
 
 
 export { IMAGE_RE, VIDEO_RE }
+
+/** An email to write from the user's words ("Write a short email to my landlord about the leak"). */
+const COMPOSE_ONLY = /^(?:(?:please|pls|can you|could you|hey|help me|i need to|i want to|i'?d like to|let'?s)[,\s]+)*(?:(write|draft|compose)( me)? (a|an)\b[^.?!]{0,40}?\be-?mail\b|e-?mail (my|the|a|an) [^.?!]{0,60}[,.;]\s*(write|draft) it\b)/i
+/** Anything that needs the mailbox: reading, replying, forwarding, sending, finding an earlier email. */
+const MAILBOX = /\b(inbox|repl(y|ies)|forward|thread|unread|send (it|this|that|them)|and send|send to|e-?mails? (from|about) .{0,30}\b(earlier|last|yesterday)|my (e-?mails?|mail)|gmail|apple mail|attach)\b/i
 
 const GROUPS: Array<{ tools: string[]; when: { test(text: string): boolean } }> = [
   {
@@ -42,7 +47,10 @@ const GROUPS: Array<{ tools: string[]; when: { test(text: string): boolean } }> 
   },
   {
     tools: ['mail'],
-    when: /\b(e-?mails?|inbox|gmail|mail app|apple mail|unread|reply to|draft (a|an|the)? ?(reply|email)|newsletter|unsubscribe)\b/i
+    // Writing an email from what the user said ("Draft a two-line email to my landlord") needs no mailbox; reading,
+    // replying, forwarding or sending does.
+    when: { test: (t: string) => /\b(e-?mails?|inbox|gmail|mail app|apple mail|unread|reply to|draft (a|an|the)? ?(reply|email)|newsletter|unsubscribe)\b/i.test(t)
+      && !(COMPOSE_ONLY.test(t) && !MAILBOX.test(t)) }
   },
   // CAD (src/main/cad/cad-intent.ts owns the words): the design workflow, Onshape, and FreeCAD when installed.
   { tools: ['cad_design', 'onshape', 'freecad'], when: CAD_RE },
@@ -79,6 +87,8 @@ export function intentTools(text: string, known: Set<string>, extra: { codeProje
   for (const g of GROUPS) if (g.when.test(text)) for (const t of g.tools) out.add(t)
   // A chat about a code project (a project folder with a repo or package file) gets the coding tools.
   if (extra.codeProject) for (const t of GROUPS[0].tools) out.add(t)
+  // "Make me a bot … with its own icon": the icon is an emoji create_bot picks, not a picture to generate.
+  if (out.has('image') && SAHILBOT_BOT.test(text.toLowerCase()) && !IMAGE_RE.test(text.replace(/\b(icons?|emojis?|avatars?)\b/gi, ''))) out.delete('image')
   return [...out].filter((t) => known.has(t))
 }
 
@@ -125,6 +135,8 @@ export interface TaskContext {
   /** The chat's folder is a code project; the bot's role (instructions). */
   codeProject?: boolean
   role?: string
+  /** The user's other bots by name (a request handed to one of them is agent work). */
+  botNames?: string[]
   /** The decision the router already made for this request (loop.ts chooseModel): its kind is used as is. */
   route?: Pick<RouteClass, 'kind' | 'kindWhy'>
 }
@@ -153,7 +165,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     previousKind: ctx.previous,
     // Only the kind of the last request is known here: a follow-up keeps it (the category stands in for it).
     previousCategory: ctx.previousCategory ?? (ctx.previous === 'agent' ? 'agent-tools' : ctx.previous === 'chat' ? 'chat' : undefined),
-    codeProject: ctx.codeProject, role: ctx.role
+    codeProject: ctx.codeProject, role: ctx.role, botNames: ctx.botNames
   })
   return { kind: d.kind, why: d.kindWhy }
 }

@@ -299,7 +299,12 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
       g.noteObjs = []
       g.badges = []
       Notification.prototype.show = function (this: Electron.Notification) { g.notes.push({ title: this.title, body: this.body }); g.noteObjs.push(this) }
-      a.dock!.setBadge = (t: string) => { g.badges.push(t) }
+      // Linux needs a notification service to say it's supported; show() is recorded instead anyway.
+      Notification.isSupported = () => true
+      // No Dock off the Mac (a Linux test run): a stand-in, so the badge count is still checked.
+      const host = a as unknown as { dock?: Electron.Dock }
+      host.dock ??= {} as Electron.Dock
+      host.dock.setBadge = (t: string) => { g.badges.push(t) }
       for (const w of BrowserWindow.getAllWindows()) w.isFocused = () => true
     })
     const notes = (): Promise<Array<{ title: string; body: string }>> => app.evaluate(() => (globalThis as unknown as { notes: Array<{ title: string; body: string }> }).notes)
@@ -370,13 +375,13 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
     await row.waitFor({ timeout: 10_000 })
 
     llm.script.push({ content: 'Good morning! Nothing urgent today.' })
-    await row.locator('[data-testid="routine-menu"]').click()
+    // (No menu on the row any more: open the routine, and Test is there.)
+    await row.locator('.rt-main').click()
     await details.locator('[data-testid="routine-test"]').click()
     await idle(page)
     // The run's reply shows in the bot's chat.
     await expect.poll(chatText, { timeout: 15_000 }).toContain('Good morning! Nothing urgent today.')
     // Its run history says it worked, marked as a test.
-    await row.locator('.rt-main').click()
     const history = details.locator('[data-testid="routine-history"]')
     await expect.poll(() => history.innerText(), { timeout: 10_000 }).toMatch(/Succeeded\s*·\s*Test/)
     expect(await history.locator('.rt-run').count()).toBe(1)
@@ -392,11 +397,13 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
     expect((await page.evaluate(() => window.foreman.schedules.list())).find((t) => t.id === task.id)!.enabled).toBe(false)
     // Its creation was announced too, and nothing failed.
     const lines = await page.locator('.notice.sys-line').allInnerTexts()
-    expect(lines).toContain('Created routine · Morning check')
+    // (It also says when it runs: "Created routine · Morning check · Daily at 8:00 AM · next …".)
+    expect(lines.some((l) => l.startsWith('Created routine · Morning check'))).toBe(true)
     expect(lines.some((l) => l.startsWith('Routine failed'))).toBe(false)
 
     // Deleting asks first, then the row goes and the chat says so.
-    await row.locator('[data-testid="routine-menu"]').click()
+    // (Open the routine: Delete is in its view; asking the bot in chat works too.)
+    await row.locator('.rt-main').click()
     await details.locator('[data-testid="routine-delete"]').click()
     await details.locator('[data-testid="routine-delete-confirm"]').click()
     await expect.poll(() => details.locator('[data-testid="routine-row"]').count(), { timeout: 10_000 }).toBe(0)
@@ -422,7 +429,7 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
     expect(await sent.innerText()).toContain('Find the boiling point of water')
     // The receiver's chat: who it came from, the message, and its own answer.
     await page.locator('[data-testid="space-item"]', { hasText: 'Researcher' }).click()
-    const from = page.locator('.notice.sys-line', { hasText: 'From SahilBot' })
+    const from = page.locator('.notice.sys-line', { hasText: 'From New bot' })
     await from.waitFor({ timeout: 10_000 })
     expect(await from.innerText()).toContain('Find the boiling point of water')
     await page.locator('[data-testid="assistant-bubble"]', { hasText: 'Water boils at 100 °C' }).waitFor({ timeout: 10_000 })

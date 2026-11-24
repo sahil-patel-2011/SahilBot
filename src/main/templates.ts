@@ -24,6 +24,12 @@ export function scheduleProblems(s: unknown): string[] {
     }
     case 'every': return typeof x.minutes === 'number' && x.minutes >= 15 ? [] : ['every needs minutes >= 15']
     case 'cron': return typeof x.expr === 'string' && x.expr.trim().split(/\s+/).length === 5 ? [] : ['cron needs a 5-field expr']
+    case 'when': {
+      const out: string[] = []
+      if (!['email', 'chat', 'calendar', 'meetings', 'crm', 'docs', 'accounting', 'any'].includes(String(x.kind))) out.push('when needs kind email, chat, calendar or any')
+      for (const k of ['from', 'contains'] as const) if (x[k] !== undefined && (typeof x[k] !== 'string' || (x[k] as string).length > 200)) out.push(`when ${k} must be short text`)
+      return out
+    }
     // A one-off date would be in the past for most people adding the template.
     case 'once': return ['templates cannot use one-off schedules']
     default: return [`unknown schedule type ${String(x.type)}`]

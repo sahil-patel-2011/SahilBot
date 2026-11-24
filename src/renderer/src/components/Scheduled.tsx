@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Schedule, ScheduledTask, Space } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
-import { describeSchedule } from '../routines'
+import { describeSchedule, nextRunText } from '../routines'
 
 // Schedules in words live in ../routines (shared with the bot details panel).
 export { describeSchedule }
@@ -40,7 +40,7 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
     return () => window.removeEventListener('keydown', k)
   }, [onClose])
 
-  const schedule = (): Schedule => type === 'once' ? { type, at: new Date(at).toISOString() } : type === 'daily' ? { type, time } : type === 'weekly' ? { type, days, time } : type === 'every' ? { type, minutes } : { type, expr }
+  const schedule = (): Schedule => type === 'once' ? { type, at: new Date(at).toISOString() } : type === 'daily' ? { type, time } : type === 'weekly' ? { type, days, time } : type === 'every' ? { type, minutes } : { type: 'cron', expr }
 
   const create = async (): Promise<void> => {
     setErr('')
@@ -60,7 +60,7 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <h2 style={{ flex: 1 }}>Scheduled</h2>
           <button className="btn primary" onClick={() => setForm((f) => !f)} data-testid="schedule-new"><I.Plus size={14} /> New task</button>
-          <button className="icon-btn" onClick={onClose}><I.Close size={16} /></button>
+          <button className="icon-btn" onClick={onClose} title="Close" aria-label="Close"><I.Close size={16} /></button>
         </div>
         <div className="hint">Tasks run on their own at the times you set. With nobody watching, anything that would need your OK is skipped and reported instead. You can also just ask: "remind me every Monday at 9 to send the report".</div>
 
@@ -95,11 +95,11 @@ export function Scheduled({ spaces, onClose, onOpen }: { spaces: Space[]; onClos
               <div className="sched-text" onClick={() => t.threadId && onOpen(t)} role="button" tabIndex={t.threadId ? 0 : -1}
                 onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && t.threadId) { e.preventDefault(); onOpen(t) } }}>
                 <b>{t.title}</b>
-                <span className="hint">{running.has(t.id) ? 'Running…' : t.enabled ? describeSchedule(t.schedule) : 'Paused'} · {spaces.find((s) => s.id === t.spaceId)?.name ?? 'SahilBot'}{t.enabled && t.nextRun && !running.has(t.id) ? ` · next ${new Date(t.nextRun).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}{t.lastStatus && !running.has(t.id) ? ` · last: ${t.lastStatus}` : ''}</span>
+                <span className="hint">{running.has(t.id) ? 'Running…' : t.enabled ? describeSchedule(t.schedule) : 'Paused'} · {spaces.find((s) => s.id === t.spaceId)?.name ?? 'SahilBot'}{t.enabled && t.nextRun && !running.has(t.id) ? ` · next ${nextRunText(t.schedule, t.nextRun)}` : ''}{t.lastStatus && !running.has(t.id) ? ` · last: ${t.lastStatus}` : ''}</span>
               </div>
               <label className="switch" title={t.enabled ? 'Pause' : 'Resume'}><input type="checkbox" checked={t.enabled} onChange={(e) => { setErr(''); api.schedules.update(t.id, { enabled: e.target.checked }).catch(fail) }} /><span /></label>
-              <button className="icon-btn" title={running.has(t.id) ? 'Running…' : 'Test (run now)'} disabled={running.has(t.id)} onClick={() => { setErr(''); setRunning((r) => new Set(r).add(t.id)); api.schedules.runNow(t.id).catch(fail) }} data-testid="schedule-run"><I.Play size={15} /></button>
-              <button className="icon-btn" title="Delete" onClick={() => { if (confirm(`Delete "${t.title}"? This can't be undone.`)) api.schedules.remove(t.id).catch(fail) }}><I.Trash size={15} /></button>
+              <button className="icon-btn" title={running.has(t.id) ? 'Running…' : 'Test (run now)'} aria-label={running.has(t.id) ? 'Running' : 'Test (run now)'} disabled={running.has(t.id)} onClick={() => { setErr(''); setRunning((r) => new Set(r).add(t.id)); api.schedules.runNow(t.id).catch(fail) }} data-testid="schedule-run"><I.Play size={15} /></button>
+              <button className="icon-btn" title="Delete" aria-label="Delete" onClick={() => { if (confirm(`Delete "${t.title}"? This can't be undone.`)) api.schedules.remove(t.id).catch(fail) }}><I.Trash size={15} /></button>
             </div>
           ))}
         </div>

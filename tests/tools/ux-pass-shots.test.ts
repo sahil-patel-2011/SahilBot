@@ -81,6 +81,7 @@ test('intuitiveness-pass screenshots', async () => {
       await page.fill('[data-testid="onboarding-name"]', 'Sahil')
       await shoot(page, 'onboard-1-name')
       await page.click('[data-testid="onboarding-name-next"]')
+      await page.click('[data-testid="onboarding-about-next"]')
       await page.fill('[data-testid="onboarding-key"]', 'sk-ant-test-key')
       await page.keyboard.press('Enter')
       await page.locator('[data-testid="onboarding-connect-anthropic"] .conn.ok').waitFor({ timeout: 15_000 })

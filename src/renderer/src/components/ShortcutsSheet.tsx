@@ -2,8 +2,8 @@ import { useEffect } from 'react'
 
 /** Help → Keyboard Shortcuts (⌘/): every shortcut on one page, grouped by what you're doing. */
 const GROUPS: Array<{ title: string; rows: Array<[string, string]> }> = [
-  { title: 'Get around', rows: [['⌘N', 'New chat'], ['⌘1 – ⌘9', 'Open a bot (in sidebar order)'], ['⌘K', 'Search chats, bots and settings'], ['⌘F', 'Find in this chat'], ['⌘,', 'Settings'], ['⌘\\', 'Side panel: progress and files'], ['⌘/', 'This list']] },
-  { title: 'Write and talk', rows: [['Enter', 'Send'], ['⇧ Enter', 'New line'], ['⌘ Enter', 'While it works: send after it finishes'], ['⌘D', 'Dictate (tap, or hold and let go)'], ['⇧⌘V', 'Talk with your bot'], ['Esc', 'Stop the reply or the voice']] },
+  { title: 'Get around', rows: [['⌘N', 'New chat'], ['⌘1 – ⌘9', 'Open a bot (in sidebar order)'], ['⌥↑ / ⌥↓ or ⌃Tab', 'Previous / next bot'], ['⌘B', 'Hide or show the sidebar'], ['⌘K or ⇧⌘F', 'Search chats, bots and settings'], ['⌘F', 'Find in this chat'], ['⌘,', 'Settings'], ['⌘\\', 'Side panel: progress and files'], ['⇧⌘I', 'This bot\'s details: routines and library'], ['⌘/', 'This list']] },
+  { title: 'Write and talk', rows: [['⌘I', 'Go to the message box'], ['Enter', 'Send'], ['⇧ Enter', 'New line'], ['⌘ Enter', 'While it works: send after it finishes'], ['⌘D', 'Dictate (tap, or hold and let go)'], ['⇧⌘V', 'Talk with your bot'], ['Esc', 'Stop the reply or the voice']] },
   { title: 'Make and manage', rows: [['⇧⌘B', 'New bot'], ['⇧⌘P', 'New project'], ['⇧⌘S', 'Scheduled tasks'], ['⇧⌘E', 'Export this chat'], ['⇧⌘M', 'Max: the strongest answer for the next message']] },
 ]
 

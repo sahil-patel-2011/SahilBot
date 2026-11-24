@@ -3,7 +3,6 @@ import type { Space, Thread } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
-import { ConnectedIcons } from './ConnectedIcons'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { duplicateBot, importBot, shareBot } from './BotShare'
 import { Target, useGoalsNeedingYou } from './TasksView'
@@ -11,11 +10,13 @@ import { BrainIcon } from './BrainView'
 import { openUsageGlance } from './UsagePage'
 import { money, useSpend } from './SpendingLimit'
 import { countLabel } from '@shared/read-state'
-import { rowSubtitle } from '../lib/ux'
+import { personName, rowSubtitle } from '../lib/ux'
 import { useDevMode } from '../lib/dev-mode'
 import { UpdateButton } from './UpdateButton'
 import { sidebarStatusText } from './FunctionBots'
 import { useBotStatus } from '../lib/bot-status'
+import { deleteBotWithUndo } from '../lib/bot-delete'
+import { toast } from '../lib/toast'
 
 /** The profile menu's usage line: "Usage · $3.20 of $200 this month". */
 const spendLabel = (b: ReturnType<typeof useSpend>): string => !b ? 'Usage' : b.mode === 'amount' ? `Usage · ${money(b.spent)} of ${money(b.cap)} this month` : `Usage · ${money(b.spent)} this month`
@@ -38,7 +39,11 @@ export function Sidebar(p: {
   activeThreadId: string | null
   view: MainView
   userName: string
+  /** The user's profile (first and last name) for the initials and name at the bottom. */
+  profile?: { firstName: string; lastName: string }
   onOpenMain: () => void
+  /** SahilBot's own conversation: its widget is lit while it's open, and it never shows in Recents. */
+  mainThreadId?: string | null
   onOpenBot: (id: string) => void
   onOpenChat: (id: string) => void
   onNew: () => void
@@ -46,6 +51,8 @@ export function Sidebar(p: {
   /** The empty list's "Make a bot": a New bot that sets itself up with you in its chat. */
   onSetupBot?: () => void
   onSearch: () => void
+  /** Hides the sidebar (⌘B; Grok Bot's button at its top). */
+  onHide?: () => void
   onView: (v: MainView) => void
   onCustomize: (s: Space) => void
   onChanged: () => void
@@ -64,6 +71,7 @@ export function Sidebar(p: {
   needSpaces?: Set<string>
 }) {
   const dev = useDevMode()
+  const me = personName({ userName: p.userName, profile: p.profile })
   const botStatus = useBotStatus()
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -88,11 +96,12 @@ export function Sidebar(p: {
   const allPinned = (p.pinned ?? (main ? [main.id] : [])).filter((id) => p.spaces.some((s) => s.id === id))
   const pinnedIds = allPinned.filter((id) => !p.spaces.find((s) => s.id === id)!.hidden)
   const pinnedSpaces = pinnedIds.map((id) => p.spaces.find((s) => s.id === id)!).filter(Boolean)
-  const pinnedChats = p.chats.filter((t) => t.pinned)
+  const pinnedChats = p.chats.filter((t) => t.pinned && t.id !== p.mainThreadId)
   const bots = p.spaces.filter((s) => !s.hidden && s.kind !== 'project' && !pinnedIds.includes(s.id))
-  const projects = p.spaces.filter((s) => s.kind === 'project' && !s.hidden && !pinnedIds.includes(s.id))
   const hidden = p.spaces.filter((s) => s.hidden && !s.isMain)
-  const recents = p.chats.filter((t) => !t.pinned)
+  // Recents are your own chats and agent tasks with SahilBot, the ones you typed in. Never a bot's conversation
+  // (SahilBot's widget included), and never one a routine, a Memory draft, another bot or a connected app started.
+  const recents = p.chats.filter((t) => !t.pinned && t.id !== p.mainThreadId && t.byUser !== false && !t.title.startsWith('⏰'))
   const colorsOf = (g: Space): string[] => g.members.map((id) => p.spaces.find((s) => s.id === id)?.color).filter((c): c is string => !!c)
 
   /** Pin, or move onto `target`'s place (after it when dragging down, before it when dragging up). */
@@ -106,7 +115,7 @@ export function Sidebar(p: {
   const unpinSpace = (id: string): void => p.onPinned(allPinned.filter((x) => x !== id))
   const pinChat = (id: string, on: boolean): void => void api.threads.update(id, { pinned: on }).then(p.onChanged)
   const openSpace = (s: Space): void => (s.isMain ? p.onOpenMain() : p.onOpenBot(s.id))
-  const isActive = (s: Space): boolean => s.id === p.activeSpaceId && (!s.isMain || !p.activeThreadId) && p.view === 'home'
+  const isActive = (s: Space): boolean => s.id === p.activeSpaceId && (!s.isMain || (!!p.mainThreadId && p.activeThreadId === p.mainThreadId)) && p.view === 'home'
 
   const spaceMenu = (s: Space, e: React.MouseEvent): void => {
     e.preventDefault()
@@ -119,7 +128,7 @@ export function Sidebar(p: {
         'sep',
         {
           label: 'Delete', icon: <I.Trash size={15} />, danger: true,
-          run: () => { if (confirm(`Delete "${s.name}" and its conversation? This can't be undone.`)) void api.spaces.remove(s.id).then(p.onChanged) }
+          run: () => { if (confirm(`Delete "${s.name}" and its conversation? You can undo it for a few minutes.`)) void deleteBotWithUndo(s, p.onChanged).catch((e) => toast((e as Error).message, 'error')) }
         }
       ] : [
         pinnedIds.includes(s.id)
@@ -140,7 +149,7 @@ export function Sidebar(p: {
           { label: 'Hide from sidebar', icon: <I.Close size={15} />, run: () => void api.spaces.update(s.id, { hidden: true }).then(p.onChanged) },
           {
             label: 'Delete', icon: <I.Trash size={15} />, danger: true,
-            run: () => { if (confirm(`Delete "${s.name}" and its conversation? This can't be undone.`)) void api.spaces.remove(s.id).then(p.onChanged) }
+            run: () => { if (confirm(`Delete "${s.name}" and its conversation? You can undo it for a few minutes.`)) void deleteBotWithUndo(s, p.onChanged).catch((e) => toast((e as Error).message, 'error')) }
           }
         ] as MenuItem[])
       ]
@@ -169,15 +178,16 @@ export function Sidebar(p: {
     setMenu({
       x: e.type === 'contextmenu' ? e.clientX : r.left, y: e.type === 'contextmenu' ? e.clientY : r.top - 8,
       items: [
-        { label: 'Settings', icon: <I.Gear size={15} />, run: p.onSettings },
+        { label: 'Settings', icon: <I.Gear size={15} />, run: p.onSettings, testId: 'menu-settings' },
         // This month's spend at a glance ("$X used of $Y this month"); opens the compact usage card.
         { label: spendLabel(spend), icon: <I.Clock size={15} />, run: openUsageGlance },
         'sep',
-        { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects') },
-        { label: 'Artifacts', icon: <I.Layers size={15} />, run: () => p.onView('files') },
-        { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled },
+        { label: 'Memory', icon: <BrainIcon size={15} />, run: () => p.onView('brain'), testId: 'nav-brain' },
+        { label: 'Library', icon: <I.Layers size={15} />, run: () => p.onView('files'), testId: 'nav-artifacts' },
+        { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects'), testId: 'nav-projects' },
+        { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled, testId: 'nav-scheduled' },
         { label: 'Tasks', icon: <Target size={15} />, run: () => p.onView('tasks') },
-        { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect },
+        { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect, testId: 'connect-apps' },
         'sep',
         { label: 'Import bot…', icon: <I.Users size={15} />, run: () => void importBot() }
       ]
@@ -211,7 +221,7 @@ export function Sidebar(p: {
 
   const avatar = (s: Space, size: number): ReactNode => s.kind === 'project'
     ? <span className="proj-tile" style={{ background: s.color, width: Math.round(size * 0.8), height: Math.round(size * 0.8), borderRadius: Math.round(size * 0.26) }}><I.Folder size={Math.round(size * 0.36)} /></span>
-    : <SpaceAvatar color={s.color} shape={s.shape} size={size} group={s.kind === 'group' ? colorsOf(s) : undefined} />
+    : <SpaceAvatar color={s.color} shape={s.shape} icon={s.icon} size={size} group={s.kind === 'group' ? colorsOf(s) : undefined} />
 
   const testId = (s: Space): string => (s.isMain ? 'main-bot' : s.kind === 'project' ? 'project-item' : 'space-item')
   const needs = (s: Space): boolean => !!p.needSpaces?.has(s.id) && !isActive(s)
@@ -239,7 +249,7 @@ export function Sidebar(p: {
       ) : (
         <button className="pw-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.lastPreview ? `${s.name}: ${s.lastPreview.slice(0, 120)}` : s.name}>
           <span className="pw-avatar">
-            {avatar(s, 26)}
+            {avatar(s, pinnedSpaces.length === 1 ? 92 : 58)}
             {s.isMain && s.shape !== 'mascot' && <span className="pw-star"><Star /></span>}
             {(working(s) || needs(s) || (s.unread && !isActive(s))) && <span className="pw-status">{status(working(s), needs(s), !!s.unread && !isActive(s), botCount(s))}</span>}
           </span>
@@ -254,12 +264,12 @@ export function Sidebar(p: {
     <div key={s.id} className={`bot-row${isActive(s) ? ' active' : ''}`} onContextMenu={(e) => spaceMenu(s, e)} {...drag('space', s.id)}>
       {renaming === s.id ? (
         <div className="br-btn">
-          <span className="br-avatar">{avatar(s, 28)}</span>
+          <span className="br-avatar">{avatar(s, 40)}</span>
           {renameInput(s.id, s.name, (v) => api.spaces.update(s.id, { name: v }))}
         </div>
       ) : (
         <button className="br-btn" onClick={() => openSpace(s)} data-testid={testId(s)} title={s.lastPreview ? `${s.name}: ${s.lastPreview.replace(/\s+/g, ' ').slice(0, 160)}` : s.name}>
-          <span className="br-avatar">{avatar(s, 28)}</span>
+          <span className="br-avatar">{avatar(s, 40)}</span>
           <span className="br-text">
             <span className={`br-name${runName(working(s), needs(s))}`}>{s.name}</span>
             {(() => {
@@ -319,28 +329,26 @@ export function Sidebar(p: {
 
   return (
     <aside className={`sidebar sb2${dragging ? ' is-dragging' : ''}`} onDragOver={(e) => { if (dragging) e.preventDefault() }}>
+      {/* Grok Bot's shape, five things: search and new chat up top, your bots, Recents, Needs you (only when something
+          waits) and you. Library, Apps, Projects, Scheduled and Memory live in your profile menu. */}
       <div className="sb-top drag">
+        {p.onHide && <button className="sb-circle" onClick={p.onHide} title="Hide the sidebar (⌘B)" aria-label="Hide the sidebar (⌘B)" data-testid="sidebar-hide"><I.SidebarLeft size={16} /></button>}
         <button className="sb-circle" onClick={p.onSearch} title="Search bots, chats, commands and settings (⌘K)" aria-label="Search (⌘K)" data-testid="nav-search"><I.Search size={16} /></button>
+        <button className="sb-circle" onClick={p.onNew} title="New chat (⌘N)" aria-label="New chat (⌘N)" data-testid="new-chat"><I.Plus size={16} /></button>
       </div>
-      {/* Claude-style: one clear way to start, then the few places you go, then your bots and chats. */}
-      <nav className="sb-nav" aria-label="Main">
-        <button className="sb-nav-item sb-new" onClick={p.onNew} title="New chat (⌘N)" data-testid="new-chat"><span className="sb-nav-icon new"><I.Plus size={15} /></span><span>New chat</span><kbd>⌘N</kbd></button>
-        <button className={`sb-nav-item tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
-          title="Questions and approvals waiting for you, and your bots' goals" aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
-          <span className="sb-nav-icon"><I.Inbox size={16} /></span><span>Needs you</span>
-          {goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
-        </button>
-        <button className="sb-nav-item" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-vault', { detail: { path: null } }))} title="Notes your bots keep: people, projects and decisions (opens in Obsidian too)" data-testid="nav-vault"><span className="sb-nav-icon"><I.Vault size={16} /></span><span>Notes</span></button>
-        <button className={`sb-nav-item${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Documents, decks, sheets and images your bots made" data-testid="nav-artifacts"><span className="sb-nav-icon" data-testid="nav-files"><I.Layers size={16} /></span><span>Artifacts</span></button>
-        <button className={`sb-nav-item${p.view === 'brain' ? ' on' : ''}`} onClick={() => p.onView('brain')} title="What SahilBot knows from your connected accounts" data-testid="nav-brain"><span className="sb-nav-icon"><BrainIcon size={16} /></span><span>Brain</span></button>
-      </nav>
+      {/* Only when something waits for you (or you're on it). */}
+      {(goalsNeedYou > 0 || p.view === 'tasks') && (
+        <nav className="sb-nav" aria-label="Main">
+          <button className={`sb-nav-item tk-nav${p.view === 'tasks' ? ' on' : ''}`} onClick={() => p.onView('tasks')}
+            title="Questions and approvals waiting for you, and your bots' goals" aria-label={goalsNeedYou ? `Needs you: ${goalsNeedYou} waiting` : 'Needs you and tasks'} data-testid="nav-tasks">
+            <span className="sb-nav-icon"><I.Inbox size={16} /></span><span>Needs you</span>
+            {goalsNeedYou > 0 && <span className="tk-nav-count" aria-hidden="true" data-testid="nav-tasks-count">{goalsNeedYou > 9 ? '9+' : goalsNeedYou}</span>}
+          </button>
+        </nav>
+      )}
 
       <div className="side-scroll">
-        <div className="nav-label sb-bots-label">
-          <span>Bots</span>
-          <span className="nav-label-actions">{bots.length > 0 && <button className="nav-add" onClick={p.onNewBot} title="New bot" aria-label="New bot" data-testid="new-bot"><I.Plus size={14} /></button>}</span>
-        </div>
-        <div className={`pin-grid${over === 'pinned' ? ' drop' : ''}${dragging?.kind === 'space' || dragging?.kind === 'chat' ? ' dragging' : ''}${pinnedSpaces.length ? '' : ' empty'}`} data-testid="pinned-top"
+        <div className={`pin-grid${over === 'pinned' ? ' drop' : ''}${dragging?.kind === 'space' || dragging?.kind === 'chat' ? ' dragging' : ''}${pinnedSpaces.length ? '' : ' empty'}${pinnedSpaces.length === 1 ? ' one' : ''}`} data-testid="pinned-top"
           onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('pinned') } }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(null) }}
           onDrop={(e) => {
@@ -353,6 +361,7 @@ export function Sidebar(p: {
           {!pinnedSpaces.length && dragging && <div className="pin-drop-hint">Drop here to pin</div>}
         </div>
 
+
         <div className={`sb-lists${over === 'list' ? ' drop' : ''}`} onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver('list') } }} onDrop={dropOnList}>
           <div className="bot-list">
             {bots.map(botRow)}
@@ -360,31 +369,16 @@ export function Sidebar(p: {
               <button className="bot-row ghost" onClick={p.onNewBot} data-testid="sidebar-make-bot">
                 <span className="br-btn">
                   <span className="br-avatar ghost-avatar"><I.Plus size={18} /></span>
-                  <span className="br-text"><span className="br-name">New bot</span></span>
+                  <span className="br-text"><span className="br-name">Add a bot</span></span>
                 </span>
               </button>
             )}
           </div>
 
-          {section('projects', 'Projects', (
-            <>
-              {projects.map((s) => smallRow(s, 'project-item'))}
-            </>
-          ), (
-            <>
-              <button className="nav-add" onClick={() => p.onView('projects')} title="All projects" aria-label="All projects" data-testid="nav-projects"><I.Folder size={14} /></button>
-              <button className="nav-add" onClick={p.onNewProject} title="New project: a folder with its own instructions and chats" aria-label="New project" data-testid="new-project"><I.Plus size={14} /></button>
-            </>
-          ))}
-
-          {section('recents', 'Recents', (
+          {(pinnedChats.length > 0 || recents.length > 0) && section('recents', 'Recents', (
             <>
               {pinnedChats.map(chatRow)}
               {recents.map(chatRow)}
-            </>
-          ), (
-            <>
-              <button className="nav-add" onClick={p.onScheduled} title="Scheduled: routines and reminders" aria-label="Scheduled routines" data-testid="nav-scheduled"><I.Clock size={14} /></button>
             </>
           ))}
 
@@ -402,11 +396,10 @@ export function Sidebar(p: {
 
       <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
-        <button className="sb-me" onClick={p.onSettings} onContextMenu={meMenu} aria-label="Settings" title={`Settings (⌘,)${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}\nRight-click for scheduled, usage and more`} data-testid="profile"><I.Gear size={17} /></button>
-        <button className="sb-connect" onClick={p.onConnect} data-testid="connect-apps">
-          <ConnectedIcons max={3} />
-          <I.Plug size={16} className="sb-plug" />
-          <span>Connect apps</span>
+        {/* You: initials and your name (like Grok Bot). Click for Settings; right-click for scheduled, usage and more. */}
+        <button className={`sb-me${p.view === 'brain' || p.view === 'files' || p.view === 'projects' ? ' on' : ''}`} onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, Memory, Library, Apps, Projects and Scheduled${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
+          <span className="sb-me-avatar" aria-hidden="true">{me.initials || <I.Gear size={16} />}</span>
+          {me.full ? <span className="sb-me-name">{me.full}</span> : <span className="sb-me-name muted">Settings</span>}
         </button>
       </div>
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}

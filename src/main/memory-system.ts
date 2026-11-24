@@ -3,7 +3,8 @@ import type { Db } from './db'
 import { digest } from './agent/runtime/store'
 import type { Embedder } from './knowledge/embeddings'
 import { rankBm25, termFreq, tokenize, rrf } from './knowledge/rank'
-import { fuzzyScore, type MemoryStore } from './memory'
+import { fuzzyScore, relevance, type MemoryStore } from './memory'
+import { NOT_OWN_WORDS, expansionTerms } from './recall-expand'
 
 type Row = Record<string, unknown>
 export interface RecallHit { id: string; kind: 'memory' | 'chat' | 'file' | 'vault'; text: string; score: number; at: number; source: { threadId?: string; messageId?: string; memoryId?: string; path?: string }; quoted: boolean }
@@ -51,7 +52,8 @@ export class MemorySystem {
     pool.push(...(o.extra ?? []))
     if (!query.trim() || !pool.length) return []
     const docs = pool.map((h, id) => { const ts = tokenize(h.text); return { id, tf: termFreq(ts), length: ts.length } })
-    const lexical = rankBm25(query, docs).map((x) => x.id)
+    // The request's words plus the other words for its concepts ("my boss" also looks for manager, supervisor).
+    const lexical = rankBm25([query, ...expansionTerms(query, { singleWords: true })].join(' '), docs).map((x) => x.id)
     let semantic: number[] = []
     const embedder = o.embedder
     if (embedder) {
@@ -79,7 +81,7 @@ export class MemorySystem {
     }
     const fused = rrf([lexical, semantic].filter((x) => x.length))
     const seen = new Set<string>()
-    return fused.map((r) => ({ ...pool[r.id], score: r.score + 0.01 * fuzzyScore(query, pool[r.id].text) }))
+    return fused.map((r) => ({ ...pool[r.id], score: r.score + 0.01 * relevance(query, pool[r.id].text) }))
       .sort((a, b) => b.score - a.score).filter((h) => { const key = digest(h.text); if (seen.has(key)) return false; seen.add(key); return true }).slice(0, Math.max(1, Math.min(30, o.limit ?? 10)))
   }
 
@@ -149,4 +151,22 @@ function cosine(a: Float32Array, b: Float32Array): number {
   if (!a || a.length !== b.length) return 0
   let d = 0, aa = 0, bb = 0; for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; aa += a[i] ** 2; bb += b[i] ** 2 }
   return aa && bb ? d / Math.sqrt(aa * bb) : 0
+}
+
+/**
+ * The user's own messages from earlier in this chat that a compaction summarized away, best match for `query`
+ * first (keyword search with other words for the same concepts, recall-expand.ts): a detail given at message 5
+ * of 40 ("my landlord is Mike, mike@…") reaches a later request verbatim instead of only through the summary.
+ * Skips what isn't the user's own words (recall-expand.ts NOT_OWN_WORDS: relayed, app, MCP, scheduled, helper…)
+ * and anything already carried word for word (`skip`: the messages the compaction's task brief quotes).
+ */
+export function earlierSaid(messages: Array<{ id: string; role: string; content: string; meta?: Record<string, unknown> }>, query: string, o: { limit?: number; skip?: Set<string> } = {}): string[] {
+  if (!query.trim()) return []
+  const own = messages.filter((m) => m.role === 'user' && m.content && !NOT_OWN_WORDS.some((k) => m.meta?.[k]) && !o.skip?.has(m.id))
+    .map((m) => ({ m, text: m.content.replace(/^<context[^>]*>[\s\S]*?<\/context>\n\n/, '').replace(/\s+/g, ' ').trim() }))
+    .filter((x) => x.text.length >= 8)
+  if (!own.length) return []
+  const docs = own.map((x, id) => { const ts = tokenize(x.text); return { id, tf: termFreq(ts), length: ts.length } })
+  const ranked = rankBm25([query, ...expansionTerms(query, { singleWords: true })].join(' '), docs)
+  return ranked.map((r) => own[r.id]).filter((x) => relevance(query, x.text) >= 0.3).slice(0, o.limit ?? 4).map((x) => x.text.slice(0, 600))
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { approvalView } from '../../src/renderer/src/lib/approval-view'
+import { approvalView, offersAlways } from '../../src/renderer/src/lib/approval-view'
 import { filesFromSteps, nameFromJob, rowSubtitle } from '../../src/renderer/src/lib/ux'
 
 const args = (o: unknown): string => JSON.stringify(o, null, 2)
@@ -15,7 +15,8 @@ describe('approval cards say what will happen, with a preview', () => {
   })
   test('a command: the command in a box, and the one-line reason', () => {
     const v = approvalView({ tool: 'run_command', summary: 'Run in Terminal: npm ci · installs the project\'s packages from its lockfile', args: args({ command: 'npm ci', cwd: '/Users/me/app' }) })
-    expect(v.title[0]).toBe('Run a command in Terminal')
+    expect(v.title[0]).toBe('Run a command that installs the project\'s packages from its lockfile')
+    expect(approvalView({ tool: 'run_command', summary: 'Run in Terminal: ls', args: args({ command: 'ls' }) }).title[0]).toBe('Run a command in Terminal')
     expect(v.preview).toEqual({ kind: 'command', command: 'npm ci', cwd: '/Users/me/app', why: 'installs the project\'s packages from its lockfile', background: false })
   })
   test('a browser click: "Click Submit on example.com"', () => {
@@ -61,5 +62,31 @@ describe('plain sidebar rows and quick paths', () => {
       step('5', 'file_write', { status: 'ok', path: '/w/site.html' }),
       step('6', 'web_search', { status: 'ok' })
     ])).toEqual([{ key: '3', path: '/w/deck.pptx' }, { key: '4', path: '/w/a.md' }])
+  })
+
+  test('a code edit or patch and a file copied with file_manage get a file card; code reads and folder copies do not', () => {
+    const step = (id: string, name: string, meta: Record<string, unknown>) => ({ call: { id, name }, result: { meta } })
+    expect(filesFromSteps([
+      step('1', 'code', { status: 'ok', path: '/w/app.py', display: 'patched 1 file (+12 −0)' }),
+      step('2', 'code', { status: 'ok', path: '/w/lib.py', display: 'lib.py' }),
+      step('3', 'code', { status: 'ok', path: '/w/util.py', display: 'edited util.py (+1 −1)' }),
+      step('4', 'file_manage', { status: 'ok', path: '/w/Desktop/report.pdf', display: 'copied report.pdf' }),
+      step('5', 'file_manage', { status: 'ok', path: '/w/Archive/photos', display: 'copied photos' }),
+      step('6', 'file_manage', { status: 'ok', display: 'trashed old.txt' })
+    ])).toEqual([{ key: '1', path: '/w/app.py' }, { key: '3', path: '/w/util.py' }, { key: '4', path: '/w/Desktop/report.pdf' }])
+  })
+
+  test('office results get a file card; a doc_export file only when no document card shows it', () => {
+    const step = (id: string, name: string, meta: Record<string, unknown>) => ({ call: { id, name }, result: { meta } })
+    const steps = [step('1', 'office', { status: 'ok', path: '/w/merged.pdf' }), step('2', 'doc_export', { status: 'ok', path: '/w/Report.docx' })]
+    expect(filesFromSteps(steps)).toEqual([{ key: '1', path: '/w/merged.pdf' }])
+    expect(filesFromSteps(steps, { exports: true })).toEqual([{ key: '1', path: '/w/merged.pdf' }, { key: '2', path: '/w/Report.docx' }])
+  })
+})
+
+describe('"Always allow" only where it is honoured', () => {
+  test('money, steered steps and credentials ask every time, so the card does not offer it', () => {
+    for (const r of ['Spends money: payment or checkout', 'Uses details taken from a web page or email', 'Asks first: it deletes taxes.pdf, which you didn\'t name', 'Hard stop: typing the saved login "bank" (password) into evil.example', 'Hard stop: recording what you click and type in the browser for up to 10 minutes']) expect(offersAlways(r), r).toBe(false)
+    for (const r of [undefined, '', 'Opens an address taken from a web page or email', 'Hard stop: "rm old.txt" deletes files or rewrites history']) expect(offersAlways(r), String(r)).toBe(true)
   })
 })

@@ -5,10 +5,9 @@ import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { LearningLog } from './LearningLog'
 import { ImportMemoryDialog } from './ImportMemoryDialog'
-import { VaultSettings } from './VaultView'
 import { Toggle } from './Toggle'
-import { BrainSettings } from './BrainSettings'
-import { ClampText, Disclosure, InfoTip, SetTabs } from './ui'
+import '../styles-vault.css'
+import { ClampText, InfoTip, SetTabs } from './ui'
 
 // Settings → Memory: one switch ("Remember things automatically": bots save what you tell them and SahilBot
 // fills in what they missed while you're away), then what's remembered as a plain list: search, category
@@ -77,9 +76,7 @@ export function MemoryPage({ spaces, tab, onTab }: { spaces: Space[]; tab: strin
   }
   const tabs = [
     { id: 'memories', label: 'Memories' },
-    { id: 'learned', label: <>Learned{waiting > 0 && <span className="set-tab-badge" title="Waiting for your OK">{waiting}</span>}</> },
-    { id: 'vault', label: 'Notes' },
-    { id: 'brain', label: 'Brain' }
+    { id: 'learned', label: <>Learned{waiting > 0 && <span className="set-tab-badge" title="Waiting for your OK">{waiting}</span>}</> }
   ]
   const cur = tabs.some((t) => t.id === tab) ? tab : 'memories'
   return (
@@ -97,76 +94,14 @@ export function MemoryPage({ spaces, tab, onTab }: { spaces: Space[]; tab: strin
             </div>
             <div className="set-row-ctl"><Toggle on={auto} onChange={(v) => void setLearning({ enabled: v })} label="Remember things automatically" testId="memory-auto" /></div>
           </div>
-          <ShareAcrossBots />
+          {/* One memory for every bot (like Grok Bot): nothing to share or split. */}
         </div>
       </section>
-      <SetTabs value={cur} tabs={tabs} onChange={onTab} label="Memory"
-        extra={<button type="button" className="link-btn" data-setting="people-places" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-vault', { detail: { path: null, tab: 'people' } }))} data-testid="memory-people">People &amp; Places <I.External size={12} /></button>} />
+      <SetTabs value={cur} tabs={tabs} onChange={onTab} label="Memory" />
       {cur === 'memories' && <MemoryList spaces={spaces} />}
       {cur === 'learned' && <div data-setting="learned"><LearningLog spaces={spaces} /></div>}
-      {cur === 'vault' && <div data-setting="knowledge-vault"><VaultSettings /></div>}
-      {cur === 'brain' && <div data-setting="brain-settings"><BrainSettings /></div>}
-      <MemoryAdvanced learn={learn} setLearning={setLearning} />
-    </>
-  )
-}
 
-/** Memory → Advanced: memory itself on or off, cloud learning and its daily cap, and when learning last ran. */
-function MemoryAdvanced({ learn, setLearning }: { learn: LearningStatus | null; setLearning: (p: { cloudAllowed?: boolean; dailyUsd?: number }) => Promise<void> }) {
-  const [enabled, setEnabled] = useState<boolean | null>(null)
-  const [cap, setCap] = useState('')
-  useEffect(() => { void api.memory.getEnabled().then(setEnabled).catch(() => undefined) }, [])
-  useEffect(() => { if (learn && cap === '') setCap(learn.settings.dailyUsd.toFixed(2)) }, [learn, cap])
-  const toggle = async (on: boolean): Promise<void> => {
-    setEnabled(on)
-    try {
-      await api.memory.setEnabled(on)
-      toast(on ? 'Memory is on' : 'Memory is off. Bots won\'t use or save memories.', 'ok')
-    } catch (e) { setEnabled(!on); toast(clean(e), 'error') }
-  }
-  const saveCap = (): void => {
-    const n = Number(cap.replace(/[^0-9.]/g, ''))
-    if (!Number.isFinite(n) || n < 0) { setCap(learn?.settings.dailyUsd.toFixed(2) ?? '0.25'); return }
-    const v = Math.min(5, Math.round(n * 100) / 100)
-    setCap(v.toFixed(2))
-    if (v !== learn?.settings.dailyUsd) void setLearning({ dailyUsd: v })
-  }
-  const st = learn
-  const line = !st ? 'Loading…'
-    : st.running ? `Learning now${st.job ? `: ${st.job.toLowerCase()}` : ''}…`
-    : !st.enabled ? 'Background learning is off.'
-    : st.blocked ? st.blocked
-    : `${st.lastRunAt ? `Last ran ${new Date(st.lastRunAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}${st.lastSummary ? `: ${st.lastSummary}` : ''}.` : 'Runs the first time you\'re away for 2 minutes.'}${st.model ? ` ${st.cloud ? 'Cloud' : 'Local'} model: ${st.model}${st.cloud ? ` · $${st.spentTodayUsd.toFixed(2)} of $${st.settings.dailyUsd.toFixed(2)} today` : ''}.` : ''}`
-  return (
-    <Disclosure title="Advanced" sub="Memory off, cloud learning" testId="memory-advanced">
-      <section className="set-section">
-        <div className="set-card">
-          <div className="set-row" data-setting="memory-enabled">
-            <div className="set-row-text">
-              <div className="set-row-title">Use memory</div>
-              <ClampText>{enabled === false ? 'Off: bots don\'t read or save memories. What\'s saved is kept until you delete it.' : 'Off stops bots from reading or saving memories at all.'}</ClampText>
-            </div>
-            <div className="set-row-ctl"><Toggle on={enabled !== false} onChange={(v) => void toggle(v)} label="Use memory" testId="memory-enabled" /></div>
-          </div>
-          <div className="set-row" data-setting="learning-cloud">
-            <div className="set-row-text">
-              <div className="set-row-title">Use cloud models for learning<InfoTip>Only when no local model is available. The ChatGPT plan is used first when it's connected; otherwise the cheapest capable model. Stops at the daily cap, counts toward your monthly limit, and is skipped when the monthly limit is None.</InfoTip></div>
-              <ClampText>{line}</ClampText>
-            </div>
-            <div className="set-row-ctl">
-              {st?.settings.cloudAllowed && (
-                <label className="ll-cap" title="Daily cap for learning">
-                  <span>$</span>
-                  <input inputMode="decimal" value={cap} onChange={(e) => setCap(e.target.value)} onBlur={saveCap} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} aria-label="Daily cap in dollars" data-testid="learning-cap" />
-                  <span>/day</span>
-                </label>
-              )}
-              <Toggle on={!!st?.settings.cloudAllowed} onChange={(v) => void setLearning({ cloudAllowed: v })} label="Use cloud models for learning" testId="learning-cloud" />
-            </div>
-          </div>
-        </div>
-      </section>
-    </Disclosure>
+    </>
   )
 }
 
@@ -343,18 +278,3 @@ export function MemoryList({ spaces }: { spaces: Space[] }) {
   )
 }
 
-/** "Bots share what they learn": every bot, chat and agent can read what the others learned (never their rules). */
-function ShareAcrossBots() {
-  const [on, setOn] = useState<boolean | null>(null)
-  useEffect(() => { void api.settings.get().then((x) => setOn(x.memorySharing !== false)) }, [])
-  if (on === null) return null
-  return (
-    <div className="set-row" data-setting="memory-sharing" data-testid="memory-sharing-row">
-      <div className="set-row-text">
-        <div className="set-row-title">Bots share what they learn</div>
-        <ClampText>{on ? 'Any bot, chat or helper can read what your other bots learned and did (labeled with the bot). Each bot\'s own rules stay its own.' : 'Off: each bot only sees shared memories and its own.'}</ClampText>
-      </div>
-      <div className="set-row-ctl"><Toggle on={on} onChange={(v) => { setOn(v); void api.settings.set({ memorySharing: v }) }} label="Bots share what they learn" testId="memory-sharing" /></div>
-    </div>
-  )
-}

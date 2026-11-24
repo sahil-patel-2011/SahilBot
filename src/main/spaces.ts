@@ -98,3 +98,22 @@ export function migratePermissionLevels(db: import('./db').Db, s: Pick<import('@
   db.setSetting(KEY, 1)
   return changed
 }
+
+/**
+ * Nov 2026: no permission levels or file switches for users. Once, chats, bots and the app default saved as Ask become
+ * Auto (which now does nearly everything itself; agent/permissions.ts), and "files anywhere" is back on. Developer
+ * mode can still pick Ask for a chat. Returns how many rows changed.
+ */
+export function migrateToAuto(db: import('./db').Db, s: Pick<import('@shared/types').Settings, 'defaultMode' | 'botModes' | 'advanced'>, save: (patch: Partial<import('@shared/types').Settings>) => void): number {
+  const KEY = 'permissionLevelsV4'
+  if (db.getSetting<number>(KEY)) return 0
+  let changed = Number(db.sql.prepare(`UPDATE threads SET permission_mode = 'auto' WHERE permission_mode IN ('ask', 'autonomous')`).run().changes ?? 0)
+  const patch: Partial<import('@shared/types').Settings> = {}
+  if (s.defaultMode === 'ask') patch.defaultMode = 'auto'
+  const bots = Object.entries(s.botModes ?? {})
+  if (bots.some(([, m]) => m === 'ask')) patch.botModes = Object.fromEntries(bots.map(([k, m]) => [k, m === 'ask' ? 'auto' : m]))
+  if (s.advanced?.filesAnywhere === false) patch.advanced = { ...s.advanced, filesAnywhere: true }
+  if (Object.keys(patch).length) { save(patch); changed++ }
+  db.setSetting(KEY, 1)
+  return changed
+}

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { buildSnapshot, byRef, describeChange, elementAt, formatSnapshot, guardAction, isSecure, redactClipboard, relocate, type RawSnapshot, type UiState } from '../../src/main/computer/ax'
 import { clipToDisplays, describeDisplays, displayAt, displayByNumber, fitImage, imageLimits, makeFrame, toImage, toScreen, type DisplayInfo } from '../../src/main/computer/geometry'
 import { parseCombo, riskyCombo } from '../../src/main/computer/keys'
-import { MATCH_JS } from '../../src/main/computer/scripts'
+import { ACTIVATE, MATCH_JS, STATE, WINDOWS } from '../../src/main/computer/scripts'
 import { waitForSettle } from '../../src/main/computer/settle'
 import { clickFlags, computerTool, typingChunks } from '../../src/main/agent/tools/computer'
 
@@ -265,5 +265,81 @@ describe('the computer tool', () => {
   test('the schema keeps Claude-compatible shape', () => {
     expect((tool.parameters as { properties: Record<string, unknown> }).properties.action).toBeTruthy()
     expect(tool.description).toMatch(/click_ref/)
+  })
+})
+
+describe('the Accessibility card', () => {
+  type Wait = { question: string; o?: { permission?: string; options?: string[] } }
+  const setup = (o: { grantAfter?: number; answer?: string } = {}) => {
+    let on = false
+    const prompts: boolean[] = []
+    const waits: Wait[] = []
+    const osa: string[] = []
+    const tool = computerTool({
+      enterMini: () => undefined, capture: async () => ({ dataUrl: '', width: 1, height: 1 }),
+      trusted: (prompt) => { prompts.push(prompt); return on },
+      // The JXA scripts: ACTIVATE says the app is in front; everything else reads as empty.
+      osa: async (fn) => { osa.push(fn.slice(0, 40)); return fn === ACTIVATE ? { front: 'Calculator' } : fn === STATE ? { app: 'Calculator', window: 'Calculator', windows: 1, sheets: 0 } : fn === WINDOWS ? [] : { app: 'Calculator', pid: 1, windows: [], nodes: [] } }
+    })
+    const ctx = {
+      threadId: 't', signal: new AbortController().signal, state: {},
+      waitForUser: async (question: string, done: () => Promise<boolean>, opts?: Wait['o']) => {
+        waits.push({ question, o: opts })
+        if (o.answer) return o.answer
+        // The user flips the switch a moment after the card shows: the card's own check sees it.
+        setTimeout(() => { on = true }, o.grantAfter ?? 5)
+        for (let i = 0; i < 50; i++) { if (await done()) return 'done'; await new Promise((r) => setTimeout(r, 5)) }
+        return 'timeout'
+      }
+    }
+    return { tool, ctx: ctx as never, prompts, waits, osa, grant: () => { on = true } }
+  }
+
+  test('a step that needs it shows the card by itself and carries on once it is on', async () => {
+    const t = setup()
+    const out = await t.tool.run({ action: 'ui', app: 'Calculator' }, t.ctx)
+    expect(t.waits).toHaveLength(1)
+    expect(t.waits[0].o?.permission).toBe('accessibility')
+    expect(t.waits[0].question).toMatch(/carries on by itself/)
+    // macOS's own prompt was asked for once (it adds SahilBot to the list), then only checks without prompting.
+    expect(t.prompts.filter(Boolean)).toHaveLength(1)
+    expect(out.text).toMatch(/Act on elements by ref/)
+  })
+
+  test('several steps at once share one card', async () => {
+    const t = setup({ grantAfter: 20 })
+    await Promise.all([t.tool.run({ action: 'ui' }, t.ctx), t.tool.run({ action: 'windows' }, t.ctx)])
+    expect(t.waits).toHaveLength(1)
+  })
+
+  test('"Not now": one stable line, no retry instruction', async () => {
+    const t = setup({ answer: 'Not now' })
+    const err = await t.tool.run({ action: 'click', x: 1, y: 1 }, t.ctx).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(/^Accessibility permission is off/)
+    expect(err?.message).toMatch(/don't retry/)
+    expect(err?.message).not.toMatch(/try again/)
+  })
+
+  test('nobody there (a schedule): no wait, the step says so', async () => {
+    const t = setup({ answer: 'unavailable' })
+    await expect(t.tool.run({ action: 'ui' }, t.ctx)).rejects.toThrow(/Nobody is here to turn it on/)
+  })
+
+  test('already on: no card, no prompt', async () => {
+    const t = setup()
+    t.grant()
+    await t.tool.run({ action: 'ui' }, t.ctx)
+    expect(t.waits).toHaveLength(0)
+    expect(t.prompts.some(Boolean)).toBe(false)
+  })
+
+  test('opening or switching to an app needs no Accessibility', async () => {
+    const t = setup({ answer: 'Not now' })
+    const out = await t.tool.run({ action: 'activate_app', app: 'Calculator' }, t.ctx)
+    expect(out.text).toMatch(/^Brought up Calculator\./)
+    expect(t.waits).toHaveLength(0)
+    expect(t.prompts.some(Boolean)).toBe(false)
+    // No window-state reads (they need Accessibility) when it's off: just the activate.
+    expect(t.osa).toHaveLength(1)
   })
 })

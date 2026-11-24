@@ -123,7 +123,7 @@ describe('bots, group chats, reactions, attachments and documents', () => {
       { toolCalls: [{ name: 'file_read', arguments: `{"path":${p('memo.docx')}}` }] },
       { content: 'All done.' }
     )
-    await send(page, 'Review my notes and make a deck, a sheet, a memo and a PDF')
+    await send(page, 'Update notes.md to say it was reviewed, then make a deck, a sheet, a memo and a PDF')
     await idle(page)
     expect(readFileSync(join(folder, 'notes.md'), 'utf8')).toContain('Reviewed by Foreman')
     for (const f of ['deck.pptx', 'numbers.xlsx', 'memo.docx', 'memo.pdf']) expect(existsSync(join(folder, f))).toBe(true)

@@ -9,7 +9,7 @@ import { classifyTask, type TaskCategory } from './llm/task-classifier'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
-import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, SendInput, Settings, Space, UsageRow } from '@shared/types'
+import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, PermissionState, SendInput, Settings, Space, UsageRow } from '@shared/types'
 import type { GoalPatch, MemoryItem, VoiceBarOptions, VoiceSession, VoiceStyle } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 // Cloud first, local opt-in (shared/local-mode.ts); attached folders are counted and indexed (knowledge/folder-scan.ts).
@@ -22,12 +22,12 @@ import { DEFAULT_TRANSCRIBE_MODEL, speechUsd, transcribe as openaiTranscribe, tr
 import { OpenAISttEngine } from './voice/stt'
 import { hookSpend } from './apis/spend'
 import { INTRO, autoMemoryOn, setAutoMemory } from './agent/prompt'
-import { finishSetupTool, SETUP_GREETING, SETUP_PROMPT, updateBotTool } from './agent/tools/bots'
+import { createBotTool, finishSetupTool, manageBotTool, resetBotPrompts, SETUP_GREETING, SETUP_PROMPT, updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
 import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff, speedOptions } from './llm/fast-mode'
 import { isAuto } from './llm/router'
-import { NotificationPermission, automationStatus, fileProbe, permissionsStatus, settingsUrl } from './permissions-center'
+import { NotificationPermission, automationStatus, fileProbe, permissionsStatus, requestAutomation, settingsUrl } from './permissions-center'
 import { collectText, isLocal, spendHooks, streamChat, usageDetails } from './llm/client'
 import { ConnectorIcons, Connectors, PRESETS } from './connectors'
 import { OAUTH_CLIENTS_FILE, readBuiltinClients } from './oauth-clients'
@@ -37,6 +37,7 @@ import { getCheckin, overviewTool, setCheckin } from './checkin'
 import { aggregateUsage, providerOf, usageDashboard, usageDetailCsv, usageGlance, usageRows, usageScope, windowStart } from './usage'
 import { VoiceService } from './voice/service'
 import { Scheduler } from './scheduler'
+import { dateTimeIn, describeSchedule, nextLabel, tzLabel } from '@shared/when'
 import { buildMenu, setupApp, windowState } from './shell'
 import { scheduleTool } from './agent/tools/schedule'
 import { ResultStore } from './agent/context'
@@ -113,7 +114,8 @@ import { cadDesignTool } from './cad/design-tool'
 import { macKeyStore, Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { requestedModel } from './agent/choices'
-import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels } from './spaces'
+import { reminderMessage, routineAside, routineDelivery } from './triggers'
+import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels, migrateToAuto } from './spaces'
 import { ATTENDED_GRACE_MS, Learner, QuestionQueue, QuestionStore, createQuestionHost, notifyDevices as notifyQuestionDevices, toNeedsYou } from './agent/questions'
 import { DigestRunner } from './goals/digest'
 import { BrowserManager } from './browser/manager'
@@ -151,6 +153,9 @@ import { knowledgeTools, resolveScope } from './agent/tools/knowledge'
 import { vaultTool } from './agent/tools/vault'
 import { apiRequestTool } from './agent/tools/api-request'
 import { chatHistoryTool } from './agent/tools/chat-history'
+import { taskOf, undoTask, undoTool } from './agent/tools/undo'
+import { changesOf, setUndoRoot, undoSummary } from './agent/undo-journal'
+import { taskUserText } from './agent/tools/freshness'
 import { manualTool } from './agent/tools/manual'
 import { VaultService } from './vault/service'
 import { workingMemoryPage } from './vault/working-memory'
@@ -182,6 +187,7 @@ import { phoneNote } from './phone/notes'
 import type { ToolContext } from './agent/types'
 import { embeddingProvider } from './knowledge/embeddings'
 import { grokSpeech } from './voice/grok'
+import { GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN, grokVoiceInstructions, taskOutcome } from './voice/grok-realtime'
 import { connectedVoice, nativeVoiceSite, voicePreference } from '@shared/voice-provider'
 import { OPENAI_URL, XAI_URL } from './llm/providers'
 import { fromWav } from './voice/audio'
@@ -192,6 +198,11 @@ import { addAdapter, broadcast, registerHandler } from './rpc'
 import { electronAdapter } from './rpc-electron'
 import { setupRemoteServer } from './remote-server'
 import { placementBlock, placementOf, setupWorkerFleet, setupWorkerHost } from './workers'
+import { botTrash } from './bot-trash'
+
+// Linux test runs only: Playwright launches Electron with --password-store=basic (plain text, which the
+// secret store refuses), so a test on a machine with a keyring can switch back to it before the app is ready.
+if (process.platform === 'linux' && process.env.SAHILBOT_TEST_PASSWORD_STORE) app.commandLine.appendSwitch('password-store', process.env.SAHILBOT_TEST_PASSWORD_STORE)
 
 // SAHILBOT_TIMING=1: launch phases in the log (src/main/timing.ts).
 mark('main module loaded')
@@ -215,6 +226,8 @@ if (HIDDEN) app.whenReady().then(() => app.dock?.hide()).catch(() => undefined)
 // Otherwise the data folder keeps its original name (Foreman) so chats, memory and keys carry over.
 if (process.env.FOREMAN_DATA_DIR) app.setPath('userData', process.env.FOREMAN_DATA_DIR)
 else app.setPath('userData', join(app.getPath('appData'), 'Foreman'))
+// What a task changed in your files, kept so it can be undone (agent/undo-journal.ts).
+setUndoRoot(join(app.getPath('userData'), 'undo'))
 
 registerScheme()
 // sahilbot:// links (Shortcuts, Raycast, Alfred): caught from launch on, handled once the window exists.
@@ -419,7 +432,7 @@ app.whenReady().then(() => {
   const cursorOverlay = createOverlay({
     hidden: HIDDEN,
     rendererUrl: process.env.ELECTRON_RENDERER_URL,
-    onStop: () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini(); cursorOverlay.overlay.hide() }
+    onStop: () => { const id = mini?.threadId; if (id) void chat.stop(id, { byUser: true }); exitMini(); cursorOverlay.overlay.hide() }
   })
   app.on('before-quit', () => cursorOverlay.windows()?.dispose())
   const captureScreen = async (file: string, opts?: { rect?: Electron.Rectangle; width?: number; height?: number }): Promise<{ dataUrl: string; width: number; height: number }> => {
@@ -460,7 +473,7 @@ app.whenReady().then(() => {
     toWin('mini', { on: true, threadId })
     cursorOverlay.overlay.warm()
     // A way out that works whatever app is in front.
-    globalShortcut.register('Control+Option+Escape', () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini() })
+    globalShortcut.register('Control+Option+Escape', () => { const id = mini?.threadId; if (id) void chat.stop(id, { byUser: true }); exitMini() })
   }
   // The Quick Ask bar (created on first use); it follows the same chat events as the main window.
   let quick: BrowserWindow | null = null
@@ -769,20 +782,22 @@ app.whenReady().then(() => {
     ...coreTools(results),
     apiRequestTool(vault),
     chatHistoryTool(db),
+    undoTool(db, { lastDeleted: (threadId) => lastDeletedBot(threadId), restore: (id) => { restoreBot(id); emit({ threadId: '', type: 'spaces' }) } }),
     // The app's own manual (docs/*.md), searchable: the agent looks things up instead of guessing.
     manualTool(docsDir),
-    ...fileTools(() => settings.get().workspaceDir, docsDir),
+    // A file of the user's is replaced only when their own words in this task asked to change it (tools/freshness.ts).
+    ...fileTools(() => settings.get().workspaceDir, docsDir, { userText: (id) => taskUserText(db.listMessages(id)) }),
     // Office: review_document (core; every new document gets checked) and the office tool (find_tools("office"/"excel"/"pdf")):
     // spreadsheets read/edited in place, PDF forms, merge/split, batch file jobs, receipts, meeting notes.
     reviewDocumentTool({ getWorkspace: () => settings.get().workspaceDir }),
-    officeTool({ getWorkspace: () => settings.get().workspaceDir, markdownToPdf: async (md, title) => (await import('./docs/create')).renderPdf(md, { title }),
+    officeTool({ getWorkspace: () => settings.get().workspaceDir, userText: (id) => taskUserText(db.listMessages(id)), markdownToPdf: async (md, title) => (await import('./docs/create')).renderPdf(md, { title }),
       // Receipts without a text layer: Claude vision when an Anthropic key is saved and cloud is on.
       visionReceipt: (file, signal) => readReceipt({ access: apiAccess(settings), workspace: () => settings.get().workspaceDir }, file, signal) }),
     ...pageTools(pagesDir),
     ...webTools(() => ({ ...settings.get().search, braveKey: secrets.get('braveKey') })),
     memoryTool(memory, db, skills, rules, () => worldRef.current),
     // Built in and always available (connector tools are found with find_tools).
-    isServer() ? workerBrowserTool() : { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since), sites }), core: true },
+    isServer() ? workerBrowserTool() : { ...browserTool(browser, vault, { gate: purchases, email: (min, site) => recentEmail(min, site), sms: (since) => recentTexts(since), sites, userText: (id) => taskUserText(db.listMessages(id)) }), core: true },
     sitesTool(sites),
     { ...cursorTool(() => secrets.get('cursorKey'), () => settings.get().workspaceDir, () => !!settings.get().cursorLocalAgent), core: true },
     { ...macAppsTool(), core: true },
@@ -792,10 +807,10 @@ app.whenReady().then(() => {
     appTool(() => settings.get().workspaceDir),
     appHelpTool(),
     // Terminal commands, and background jobs (dev servers, watchers) with the jobs tool to manage them.
-    shellTool({ rootsOf: (threadId) => db.getState(threadId).roots ?? [], workspace: () => settings.get().workspaceDir }),
+    shellTool({ rootsOf: (threadId) => db.getState(threadId).roots ?? [], workspace: () => settings.get().workspaceDir, userText: (id) => taskUserText(db.listMessages(id)) }),
     jobsTool(),
     // Coding: search, symbols, exact edits, patches, tests/type checks/lint with parsed failures; git with a secret scan.
-    codeTool({ getWorkspace: () => settings.get().workspaceDir }),
+    codeTool({ getWorkspace: () => settings.get().workspaceDir, userText: (id) => taskUserText(db.listMessages(id)) }),
     gitTool(),
     researchTool({ ncbiKey: () => secrets.get('ncbiKey') }),
     // Maps and travel: Google Maps with the user's key, else OpenStreetMap; every result links to Google Maps.
@@ -852,7 +867,25 @@ app.whenReady().then(() => {
         return collectText(streamChat({ baseUrl: ep.baseUrl, apiKey: ep.apiKey, model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], sampling: samplingFor(model, settings.get().sampling), maxTokens: 2000, effort: 'medium', signal }))
       }
     }),
-    updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
+    updateBotTool(db, spaces, () => emit({ threadId: '', type: 'spaces' }), (id) => resetBotPrompt(id)),
+    // "Make me a … bot" and "delete the … bot" by asking, from any chat.
+    createBotTool({
+      create: (name, color, shape, icon) => { const r = templateDeps.createBot(name, color, shape as BotShape); if (icon) db.updateSpace(r.spaceId, { icon }); return r },
+      setPrompt: (spaceId, text) => spaces.setPrompt(spaceId, text),
+      setLabel: (spaceId, label) => db.updateSpace(spaceId, { label }),
+      greet: (threadId, text) => { const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done' }); emit({ threadId, type: 'message', message: m }); emit({ threadId, type: 'thread', thread: db.markUnread(threadId) }) },
+      // The chat that asked gets a card for the new bot (icon, name, job, Open).
+      card: (threadId, bot) => { const m = db.insertMessage({ threadId, role: 'assistant', content: `Made ${bot.name} ${bot.icon}`, kind: 'notice', status: 'done', meta: { botCard: bot } }); emit({ threadId, type: 'message', message: m }) }
+    }, db, () => emit({ threadId: '', type: 'spaces' })),
+    manageBotTool({
+      // Deleting by asking is undoable: "Deleted X · Undo" in the chat that asked, and "undo" brings it back.
+      remove: (id, threadId) => removeBot(id, threadId),
+      restore: (id) => restoreBot(id),
+      getPrompt: (id) => spaces.getPrompt(id),
+      setPrompt: (id, text) => spaces.setPrompt(id, text),
+      resetPrompt: (id) => resetBotPrompt(id),
+      pin: (id, on) => { const cur = settings.get().pinnedBots ?? []; settings.set({ pinnedBots: on ? [...new Set([...cur, id])] : cur.filter((x) => x !== id) } as never) }
+    }, db, () => emit({ threadId: '', type: 'spaces' })),
     finishSetupTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
     // FRC robot software: logs, vendordeps, project scan, scouting (found with find_tools).
     frcCodeTool({ workspace: () => settings.get().workspaceDir, tbaKey: () => secrets.get('tbaKey') ?? undefined }),
@@ -1015,6 +1048,7 @@ app.whenReady().then(() => {
   // The card shows for a while when you're looking at the bot's chat; otherwise it goes to Needs you at once.
   const questionHost = createQuestionHost({ db, settings, queue: questions, learner, grace: (threadId) => (mainFocused() && viewingThread === threadId ? ATTENDED_GRACE_MS : 0) })
   const chat = new Agent({
+    vaultWaiting: () => !!vault.auth?.waiting(),
     privacy: {
       active: privacyActive,
       detect: (text, signal) => piiTracer.detect(text, signal),
@@ -1088,7 +1122,7 @@ app.whenReady().then(() => {
   if (warmupAllowed()) setTimeout(() => warmup.soon(), 4000)
   // Paid requests made during a run are recorded against that run's bot.
 
-  if (db.listSpaces().length === 0) db.createSpace('SahilBot', '#1F1F1F', { isMain: true, shape: 'mascot' })
+  if (db.listSpaces().length === 0) db.createSpace('New bot', '#1F1F1F', { isMain: true, shape: 'mascot' })
   const attachments = new Attachments(() => win, () => settings.get().workspaceDir, docsDir)
   attachments.registerProtocol()
   // Pages run only in their own session (the side-panel view, their window, PDF/thumbnail renderers).
@@ -1109,7 +1143,7 @@ app.whenReady().then(() => {
   applyTheme(settings.get().theme)
 
   /** Calls that change what's unread refresh the Dock badge. */
-  const BADGE_IPC = new Set(['threads:update', 'threads:markRead', 'threads:remove', 'spaces:markUnread', 'spaces:update', 'spaces:remove'])
+  const BADGE_IPC = new Set(['threads:update', 'threads:markRead', 'threads:remove', 'spaces:markUnread', 'spaces:update', 'spaces:remove', 'spaces:restore'])
   const handle = <A extends unknown[], R>(ch: string, fn: (...args: A) => R | Promise<R>): void => {
     if (BADGE_IPC.has(ch)) registerHandler(ch, async (_ctx, ...args) => { try { return await fn(...(args as A)) } finally { refreshBadge() } })
     else registerHandler(ch, (_ctx, ...args) => fn(...(args as A)))
@@ -1444,7 +1478,7 @@ app.whenReady().then(() => {
     emit({ threadId: '', type: 'spaces' })
     return { space, threadId: thread.id }
   })
-  handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'label' | 'notify' | 'effort'>>) => {
+  handle('spaces:update', (id: string, patch: Partial<Pick<Space, 'name' | 'color' | 'shape' | 'pinned' | 'hidden' | 'members' | 'model' | 'label' | 'notify' | 'effort' | 'icon'>>) => {
     // A bot's model and thinking are never set per bot: it chooses by itself for each request (agent/choices.ts).
     const { model: _m, effort: _e, ...rest } = patch
     const s = db.updateSpace(id, rest)
@@ -1452,24 +1486,19 @@ app.whenReady().then(() => {
     if (patch.name && db.getSetting<boolean>(`setup:${id}`)) db.setSetting(`setup:${id}`, false)
     // Keep a bot's one conversation titled after it.
     if (patch.name && s.kind === 'bot' && !s.isMain) for (const t of db.listThreads(id)) db.updateThread(t.id, { title: s.name })
+    if (patch.name) resetBotPrompt(id)
     return s
   })
   handle('spaces:markUnread', (id: string) => {
     const t = db.listThreads(id)[0]
     if (t) emit({ threadId: t.id, type: 'thread', thread: db.markUnread(t.id) })
   })
-  handle('spaces:remove', (id: string) => {
-    if (db.getSpace(id)?.isMain) throw new Error("The main bot can't be deleted.")
-    if (!isServer() && placementOf(db, id)) throw new Error('Move this bot back to this Mac before deleting its local profile.')
-    for (const t of db.listThreads(id)) chat.stop(t.id)
-    // Background jobs belong to the bot's chats: they stop with it.
-    void jobs.stopThreads(db.listThreads(id).map((t) => t.id))
-    db.deleteSpace(id)
-    for (const g of db.listSpaces().filter((x) => x.kind === 'group' && x.members.includes(id))) db.updateSpace(g.id, { members: g.members.filter((m) => m !== id) })
-  })
+  handle('spaces:remove', (id: string) => removeBot(id))
+  handle('spaces:restore', (id: string) => { restoreBot(String(id ?? '')); emit({ threadId: '', type: 'spaces' }) })
   handle('spaces:getPrompt', (id: string) => spaces.getPrompt(id))
   handle('spaces:setPrompt', (id: string, text: string) => {
     spaces.setPrompt(id, text)
+    resetBotPrompt(id)
     // Instructions written by the user: a New bot being set up counts as set up.
     if (db.getSetting<boolean>(`setup:${id}`)) db.setSetting(`setup:${id}`, false)
   })
@@ -1522,6 +1551,21 @@ app.whenReady().then(() => {
     db.deleteThread(id)
   })
   handle('threads:messages', (id: string) => db.listMessages(id))
+  // Undo a task's file changes (agent/undo-journal.ts): the Undo button under an answer. A system line says what changed back.
+  handle('undo:status', (threadId: string, messageId: string) => {
+    const key = taskOf(db, threadId, messageId)
+    const c = key ? changesOf(threadId, key) : undefined
+    return c && !c.undone ? { files: c.files.length } : null
+  })
+  handle('undo:run', (threadId: string, messageId: string) => {
+    const key = taskOf(db, threadId, messageId)
+    if (!key) return 'Nothing to undo.'
+    const r = undoTask(db, threadId, key)
+    const text = undoSummary(r)
+    const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', meta: { undoNotice: true } })
+    emit({ threadId, type: 'message', message: m })
+    return text
+  })
   handle('threads:react', (messageId: string, emoji: string | null) => {
     const m = db.react(messageId, 'user', emoji)
     emit({ threadId: m.threadId, type: 'message', message: m })
@@ -1864,27 +1908,53 @@ app.whenReady().then(() => {
       if (alertHit.fired && !priceAlert.repeat && !info.test) scheduler.update(task.id, { enabled: false })
       return { status: 'done', threadId }
     }
-    // The bot is busy (you're working with it, or another routine is running): the routine waits its turn instead of
-    // being skipped, then runs as itself (unattended, with a routine's permissions), never mixed into your live run.
-    // It stops waiting if you pause routines or this one, delete it, or after two hours.
-    const until = Date.now() + (info.test ? 60_000 : 2 * 3600_000)
-    while ((chat.isRunning(threadId) || scheduledRuns.has(threadId)) && Date.now() < until) {
-      await new Promise((r) => setTimeout(r, 5000))
-      const cur = scheduler.get(task.id)
-      if (!info.test && (!cur || !cur.enabled || scheduler.paused())) return { status: 'skipped: paused or removed while it waited for the chat', threadId }
+    // A plain reminder ("remind me in 3 minutes to stretch") needs no work, just the nudge: it is posted as it is, on
+    // time, with no model call, whether or not the chat is busy (Grok Bot head-to-head SCA-01, SCB-01, SCB-02). It is an
+    // aside, like a side answer: never part of a live run's prompt (a run mid-tool keeps its tool result in place).
+    const delivery = routineDelivery(task, { busy: chat.isRunning(threadId) || scheduledRuns.has(threadId), dry: info.dry, todos: db.getState(threadId).todos })
+    if (delivery === 'remind') {
+      const r = reminderMessage(task)
+      const m = db.insertMessage({ threadId, role: 'assistant', content: r.content, kind: 'normal', status: 'done', meta: r.meta })
+      emit({ threadId, type: 'message', message: m })
+      if (space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) showNote(new Notification({ title: space.isMain ? 'SahilBot' : space.name, body: r.content }), threadId)
+      return { status: 'done', threadId }
     }
-    if (chat.isRunning(threadId) || scheduledRuns.has(threadId)) return { status: 'skipped: the chat stayed busy for two hours', threadId }
+    // The bot is busy (you're working with it, or another routine is running): the routine runs on time beside it, in
+    // a hidden chat of its own (unattended, with a routine's permissions), never mixed into your live run, and its
+    // answer is posted into the bot's chat as an aside when it's done (SCB-02: routines post on time).
+    const host = threadId
+    let runIn = threadId
+    if (delivery === 'beside') {
+      const parent = db.getThread(host)!
+      const side = db.createThread(space.id, parent.permissionMode, parent.model ?? null, host)
+      db.updateThread(side.id, { title: `⏰ ${task.title}` })
+      const st = db.getState(side.id), ps = db.getState(host)
+      st.roots = ps.roots
+      st.folder = ps.folder
+      st.routineHost = host
+      db.setState(side.id, st)
+      runIn = side.id
+    }
     const startedAt = Date.now()
-    scheduledRuns.add(threadId)
+    scheduledRuns.add(runIn)
     let status: Awaited<Awaited<ReturnType<typeof chat.send>>['done']>
     try {
       // A missed run catching up: the bot knows it's late (time-sensitive steps may need adjusting).
       const late = info.late !== undefined ? { note: `[This routine was due at ${new Date(info.late).toLocaleString()} but SahilBot was closed or the Mac was asleep, so it is running late now. Adjust anything time-sensitive.]` } : {}
-      const { done } = await chat.send({ threadId, text: `⏰ ${task.title}\n\n${task.prompt}`, ...late, meta: { scheduled: task.id, ...(info.late !== undefined ? { late: info.late } : {}) } }, { unattended: true })
+      // A "when …" routine: the items that set it off are outside content (fenced in the note, and the run is tainted:
+      // anything it would send or post asks first).
+      const note = [late.note, info.event?.note].filter(Boolean).join('\n\n')
+      const { done } = await chat.send({ threadId: runIn, text: `⏰ ${info.dry ? '(Dry run) ' : ''}${task.title}\n\n${task.prompt}`, ...(note ? { note } : {}), meta: { scheduled: task.id, ...(info.late !== undefined ? { late: info.late } : {}), ...(info.dry ? { dryRun: true } : {}), ...(info.event ? { triggerUntrusted: info.event.untrusted.map((t) => t.slice(0, 4000)) } : {}) } }, { unattended: true })
       status = await done
-    } finally { scheduledRuns.delete(threadId) }
-    const after = db.listMessages(threadId).filter((m) => m.createdAt >= startedAt)
-    const last = [...after].reverse().find((m) => m.role === 'assistant' && m.content && m.kind === 'normal')
+    } finally { scheduledRuns.delete(runIn) }
+    const after = db.listMessages(runIn).filter((m) => m.createdAt >= startedAt)
+    const last = [...after].reverse().find((m) => m.role === 'assistant' && m.content && m.kind === 'normal' && !m.meta?.superseded && !m.meta?.provisional)
+    // Ran beside a busy chat: its answer goes into the bot's chat once, as an aside (the live run's prompt is untouched).
+    if (runIn !== host && last) {
+      const r = routineAside(task, runIn, last, after)
+      const m = db.insertMessage({ threadId: host, role: 'assistant', content: r.content, kind: 'normal', status: 'done', meta: r.meta })
+      emit({ threadId: host, type: 'message', message: m })
+    }
     // The routine's own notification (the generic "done" one is skipped for routine runs). Click opens the chat.
     if (space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) {
       const body = status === 'error' ? 'The routine hit a problem. Click to see what happened.' : (last?.content ?? 'Done').replace(/\s+/g, ' ').trim().slice(0, 140)
@@ -1903,7 +1973,8 @@ app.whenReady().then(() => {
     }
     if (status === 'finished') return { status: 'done', threadId }
     // Why it failed: the run's own error line, when it left one.
-    const why = [...after].reverse().find((m) => m.kind === 'notice' || m.kind === 'error' || m.status === 'error')?.content.replace(/^(Run failed|Something went wrong):\s*/i, '')
+    const failed = [...after].reverse().find((m) => m.kind === 'notice' || m.kind === 'error' || m.status === 'error')
+    const why = (typeof failed?.meta?.detail === 'string' ? failed.meta.detail : failed?.content)?.replace(/^(Run failed|Something went wrong):\s*/i, '')
     return { status: status === 'error' ? `error: ${why || 'Something went wrong'}` : status, threadId }
   }, () => toWin('schedules:changed'))
   // System lines in the bot's chat when its routines change or a run fails.
@@ -1914,21 +1985,26 @@ app.whenReady().then(() => {
     const threadId = own && db.getThread(own) ? own : db.listThreads(space.id)[0]?.id
     if (!threadId) return
     const verb = { created: 'Created', paused: 'Paused', resumed: 'Resumed', deleted: 'Deleted', changed: 'Changed', failed: 'Routine failed', late: 'Ran late', missed: 'Missed' }[ev.type]
-    const when = (ms: number): string => new Date(ms).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    // Times on the routine's own clock when it is tied to a place ("7:30 AM ET"), else the Mac's.
+    const tz = 'tz' in ev.task.schedule ? ev.task.schedule.tz : undefined
+    const when = (ms: number): string => `${dateTimeIn(ms, tz)}${tz ? ` ${tzLabel(tz)}` : ''}`
+    // A new or changed routine says when it runs ("Created routine · Atlanta weather · Weekdays at 7:30 AM ET · next Wed, Nov 25 at 7:30 AM ET").
+    const next = ev.task.enabled ? nextLabel(ev.task.schedule, ev.task.nextRun) : ''
     const text = ev.type === 'failed' ? `Routine failed · ${ev.task.title}${ev.reason ? `: ${ev.reason}` : ''}`
       : ev.type === 'late' ? `Ran late · ${ev.task.title}: was due at ${when(ev.dueAt ?? Date.now())}`
         : ev.type === 'missed' ? `Missed routine · ${ev.task.title}: was due at ${when(ev.dueAt ?? Date.now())} while SahilBot was closed${ev.task.enabled && ev.task.nextRun ? `. Next run ${when(ev.task.nextRun)}` : ''}`
-          : `${verb} routine · ${ev.task.title}`
+          : ev.type === 'created' || ev.type === 'changed' || ev.type === 'resumed' ? `${verb} routine · ${ev.task.title} · ${describeSchedule(ev.task.schedule)}${next && ev.task.schedule.type !== 'once' ? ` · next ${next}` : ''}`
+            : `${verb} routine · ${ev.task.title}`
     const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', meta: { routineNotice: ev.type, routine: ev.task.id } })
     emit({ threadId, type: 'message', message: m })
   }
-  registry.register({ ...scheduleTool(scheduler, db), core: true })
+  registry.register({ ...scheduleTool(scheduler, db, () => brain.status().sources.map((x) => ({ kind: x.kind, name: x.name, on: x.on && x.state === 'on' })), () => !!brain.status().settings.paused), core: true })
   // Stock tools (found with find_tools "stock"): quotes, analysis, forecasts, compare, backtests, price alerts.
   registry.register(...stockTools(markets, { scheduler, db, liveQuotes }))
   // Missed runs (closed or asleep) catch up once within Settings → General → "Catch up on missed routines".
   scheduler.catchUpHours = () => settings.get().catchUpHours ?? 12
   scheduler.paused = () => !!settings.get().routinesPaused
-  scheduler.available = (id) => !placementBlock(db, id)
+  scheduler.available = (id) => !placementBlock(db, id) && db.trashedAt(id) === undefined
   scheduler.start()
   // Waking from sleep: check for due (missed) routines now rather than at the next tick, once the network is back.
   powerMonitor.on('resume', () => { setTimeout(() => void scheduler.tick().catch(() => undefined), 5000) })
@@ -1947,6 +2023,39 @@ app.whenReady().then(() => {
     if (location) throw new Error(location)
     scheduler.test(id)
   })
+  // A dry run (Grok Bot reviewers: "there's no dry run; test runs do real work"): it reads for real, and every step
+  // that would change something (send, write, post, buy, delete) is only listed, not done.
+  handle('schedules:dryRun', (id: string) => {
+    const routine = scheduler.get(id)
+    if (!routine) throw new Error('That routine no longer exists.')
+    const location = placementBlock(db, routine.spaceId)
+    if (location) throw new Error(location)
+    scheduler.test(id, { dry: true })
+  })
+
+  /**
+   * Deletes a bot (the sidebar menu, its profile, or asking) so it can be undone (bot-trash.ts): its chats and
+   * jobs stop, groups drop it and it leaves every list at once; Undo brings it all back for a few minutes.
+   * `threadId`: the chat that asked, which gets a "Deleted X · Undo" line.
+   */
+  const botBin = botTrash(db, {
+    stop: (threadIds) => {
+      for (const t of threadIds) chat.stop(t)
+      // Background jobs belong to the bot's chats: they stop with it.
+      void jobs.stopThreads(threadIds)
+    },
+    blocked: (id) => (!isServer() && placementOf(db, id) ? 'Move this bot back to this Mac before deleting its local profile.' : null),
+    emit: (m) => emit({ threadId: m.threadId, type: 'message', message: m })
+  })
+  function removeBot(id: string, threadId?: string): void { botBin.remove(id, threadId) }
+  function restoreBot(id: string): void { botBin.restore(id) }
+  function lastDeletedBot(threadId: string): { id: string; name: string; at: number } | undefined { return botBin.lastDeleted(threadId) }
+  /** A bot's name or instructions changed: its chats and groups rebuild their system prompt (agent/tools/bots.ts). */
+  function resetBotPrompt(id: string): void {
+    resetBotPrompts(db, id, { isRunning: (t) => chat.isRunning(t), whenIdle: (t) => chat.whenIdle(t, AbortSignal.timeout(3_600_000), 3_600_000) })
+  }
+  // Bots deleted before the app last quit: past their Undo time they go now, the rest when it ends.
+  botBin.resume()
 
   // ---------------------------------------------------------------- bot templates
   const templatesDir = join(appRoot(), 'packs', 'templates')
@@ -2141,6 +2250,7 @@ app.whenReady().then(() => {
   try { migrateBotAutonomy(db, settings.get()) } catch (e) { console.error('[autonomy]', (e as Error).message) }
   // Three permission levels (Ask / Auto / Bypass): 'autonomous' becomes Auto, and Auto chats lose a stale thinking level, once.
   try { migratePermissionLevels(db, settings.get(), (p) => settings.set(p)) } catch (e) { console.error('[levels]', (e as Error).message) }
+  try { migrateToAuto(db, settings.get(), (p) => settings.set(p)) } catch (e) { console.error('[auto]', (e as Error).message) }
   // Bots choose their own model and thinking (Auto for every request): stored overrides are cleared once.
   try { migrateBotModelEffort(db) } catch (e) { console.error('[bot-auto]', (e as Error).message) }
   // Each bot's Swarm setting became its Max setting (Off / Auto / Always, Max helpers).
@@ -2358,7 +2468,7 @@ app.whenReady().then(() => {
     onChange: () => { if (!vaultNotify) vaultNotify = setTimeout(() => { vaultNotify = null; toWin('notesVault:changed') }, 400) }
   })
   notesVaultRef.current = notesVault
-  registry.register(vaultTool({ vault: notesVault, db, secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()] }))
+  registry.register(vaultTool({ vault: notesVault, db, exportDir: () => join(homedir(), 'Downloads'), secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()] }))
 
   // ---------------------------------------------------------------- the context engine (src/main/context-engine, docs/context.md)
   // An entity graph of the user's world (people, places, organizations, events, dates, things…) built by
@@ -2475,6 +2585,7 @@ app.whenReady().then(() => {
     busy: () => chat.busy(),
     isRunning: (id) => chat.isRunning(id),
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+    sensitive: () => world.settings().sensitive,
     isAppThread: (id) => appThreadRef.current?.(id) ?? false,
     onBattery: () => { try { return powerMonitor.isOnBatteryPower() } catch { return false } },
     onChange: () => { if (!learningNotify) learningNotify = setTimeout(() => { learningNotify = null; toWin('learning:changed') }, 300) }
@@ -2532,6 +2643,9 @@ app.whenReady().then(() => {
     // Test runs can fix how long the Mac has been idle (otherwise it depends on whoever is at the keyboard).
     idleMs: () => { if (HIDDEN && process.env.FOREMAN_IDLE_MS) return Number(process.env.FOREMAN_IDLE_MS); try { return powerMonitor.getSystemIdleTime() * 1000 } catch { return 0 } },
     secretValues: () => [...vault.secretValues(), ...browser.hiddenValues()],
+    // "When an email from … arrives" routines: each read's new items (your own mail never sets one off).
+    onNew: (items) => { scheduler.onItems(items, [...(settings.get().me?.emails ?? [])]) },
+    wantsQuickReads: () => !scheduler.paused() && scheduler.list().some((t) => t.enabled && t.schedule.type === 'when'),
     // Draft it: a new chat with the main bot at its usual level (Auto by default), the user's click as the request.
     startRun: async (o) => {
       const main = db.listSpaces().find((x) => x.isMain)
@@ -2665,21 +2779,75 @@ app.whenReady().then(() => {
         })
       })
     }),
+    // Grok Voice 3.0, live: when the voice is Grok and an xAI key is saved, and spending is allowed. Test runs use it
+    // only against a stand-in server (SAHILBOT_GROK_LIVE_URL), never the real one.
+    live: () => {
+      const s = settings.get()
+      const keys = apiAccess(settings)
+      if (connectedVoice(voicePreference(s), { openai: !!keys.openai(), xai: !!keys.xai() }) !== 'xai' || spendingMode(s) === 'none') return null
+      if (HIDDEN && !process.env.SAHILBOT_GROK_LIVE_URL) return null
+      const creds = keys.xai()
+      if (!creds) return null
+      try { hookSpend.beforeUsd(XAI_URL, GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN * 5) } catch { return { skip: 'The spending limit is too close for a live Grok call.' } }
+      return { apiKey: creds.apiKey, baseUrl: process.env.SAHILBOT_GROK_LIVE_URL || creds.baseUrl, ...liveSession() }
+    },
+    liveCharged: (usd) => hookSpend.afterUsd(XAI_URL, GROK_VOICE_MODEL, usd),
+    // Each minute of a live call: the limit must still cover the next couple of minutes, or the call ends.
+    liveGuard: () => { hookSpend.beforeUsd(XAI_URL, GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN * 2) },
     emit: (e) => toWin('voice:event', e),
-    respond: (text, signal, onText) => new Promise<void>((resolve, reject) => {
+    // A live conversation's words (yours and Grok's replies) are kept in the chat: shown with the transcript and
+    // folded into the "Voice chat" line, but beside the bot's own work (aside: never in its prompt mid-run).
+    spoken: (who, text) => {
       const tid = voiceThread
-      if (!tid) return reject(new Error('No voice conversation'))
-      const off = (): void => { listeners.delete(l) }
-      const l = (e: ChatEvent): void => {
-        if (e.threadId !== tid) return
-        if (e.type === 'delta' && e.content) onText(e.content)
-        if (e.type === 'run' && e.status !== 'started') { off(); resolve() }
+      if (!tid || !db.getThread(tid) || !text.trim()) return
+      const m = db.insertMessage({ threadId: tid, role: who, kind: 'normal', status: 'done', content: text.trim(), meta: { voice: true, spoken: true, aside: true } })
+      emit({ threadId: tid, type: 'message', message: m })
+    },
+    respond: async (text, signal, onText, opts) => {
+      const tid = voiceThread
+      if (!tid) throw new Error('No voice conversation')
+      // The chat runs one job at a time: one that's ending (or a reply cut off a moment ago) gets a few seconds; a
+      // job you started earlier (typed, or before reconnecting) is left to finish there.
+      if (chat.handoffHost().isRunning(tid) && await chat.handoffHost().whenIdle(tid, signal, 4000) !== 'idle') {
+        if (signal.aborted) return
+        throw new Error('The bot is still busy with an earlier request in this chat. It will finish there; ask again once it has.')
       }
-      listeners.add(l)
-      signal.addEventListener('abort', () => { chat.stop(tid); off(); resolve() })
-      chat.send({ threadId: tid, text, voice: true, meta: { voice: true } }).catch((err: Error) => { off(); reject(err) })
-    })
+      const since = Date.now()
+      return new Promise<void | string>((resolve, reject) => {
+        const off = (): void => { listeners.delete(l) }
+        const l = (e: ChatEvent): void => {
+          if (e.threadId !== tid) return
+          if (e.type === 'delta' && e.content) onText(e.content)
+          // do_task: only a finished run's answer counts as done; a stopped or failed one says so (never a draft as the result).
+          if (e.type === 'run' && e.status !== 'started') { off(); resolve(opts?.task ? taskOutcome(e.status, finalReply(tid, since), e.error) : undefined) }
+        }
+        listeners.add(l)
+        // Hanging up ('hangup') stops waiting, not the bot: its run finishes in the chat and the answer lands there.
+        signal.addEventListener('abort', () => { if (signal.reason !== 'hangup') chat.stop(tid); off(); resolve() })
+        // The live voice's do_task is real work (files, apps, research): a normal run at full effort, not a spoken
+        // turn. Its brief is the voice model's words, kept apart from what you said (voiceBrief).
+        const send = opts?.task
+          ? chat.send({ threadId: tid, text, meta: { voice: true, voiceBrief: true } })
+          : chat.send({ threadId: tid, text, voice: true, meta: { voice: true } })
+        // Some messages end without a run of their own ("stop everything" stops the chats it means, in one line).
+        send.then((r) => r.done).then((status) => { off(); resolve(opts?.task ? taskOutcome(status, finalReply(tid, since)) : undefined) }, (err: Error) => { off(); reject(err) })
+      })
+    }
   }, { download: HIDDEN ? 'stub' : 'real' })
+  /** A live Grok call's instructions and voice: the bot, your name, and the voice bar's language and Grok voice. */
+  const liveSession = (): { instructions: string; voice?: string } => {
+    const s = settings.get()
+    const thread = voiceThread ? db.getThread(voiceThread) : undefined
+    const bot = thread ? db.getSpace(thread.spaceId) : undefined
+    const lang = s.voiceStyle?.language && s.voiceStyle.language !== 'auto' ? LANGUAGES.find((l) => l.id === s.voiceStyle?.language)?.label : undefined
+    return {
+      instructions: grokVoiceInstructions({ botName: bot?.name ?? 'SahilBot', userName: s.profile?.firstName || s.userName, role: bot && !bot.isMain ? bot.label ?? undefined : undefined, language: lang }),
+      voice: s.voiceStyle?.voices?.xai
+    }
+  }
+  /** The answer a run in the voice chat ended with (the one that stood, not drafts sent back), for Grok to tell. */
+  const finalReply = (tid: string, since: number): string | undefined =>
+    [...db.listMessages(tid)].reverse().find((m) => m.createdAt >= since && m.role === 'assistant' && m.kind === 'normal' && !!m.content.trim() && !m.toolCalls?.length && !m.meta?.superseded && !m.meta?.hidden && !m.meta?.aside)?.content
   // Speech recognition downloads itself in the background once set up (never in test runs: 'stub').
   voicePrepRef.current = (why) => void voice.prepare(why)
   if (settings.get().onboarded) setTimeout(() => voicePrepRef.current('auto'), HIDDEN ? 300 : 20_000).unref?.()
@@ -2698,7 +2866,7 @@ app.whenReady().then(() => {
     const keys = apiAccess(settings)
     const ready = { openai: !!keys.openai(), xai: !!keys.xai() }
     const provider = connectedVoice(voicePreference(settings.get()), ready) ?? null
-    return { ...voice.options(), providers: [{ id: 'openai', label: 'ChatGPT', ready: ready.openai }, { id: 'xai', label: 'Grok', ready: ready.xai }], provider }
+    return { ...voice.options(), providers: [{ id: 'xai', label: 'Grok', ready: ready.xai }, { id: 'openai', label: 'ChatGPT', ready: ready.openai }], provider }
   }
   handle('voice:options', () => voiceBarOptions())
   handle('voice:setStyle', (patch: { voice?: string; speed?: number; language?: string; provider?: 'openai' | 'xai' }) => {
@@ -2719,6 +2887,8 @@ app.whenReady().then(() => {
     }
     settings.set({ voiceStyle: next })
     voice.setStyle(next)
+    // A live Grok call takes the new language and Grok voice now too.
+    voice.updateLive(liveSession())
     return voiceBarOptions()
   })
   handle('voice:preview', (id: string) => voice.preview(String(id ?? '')))
@@ -2732,7 +2902,9 @@ app.whenReady().then(() => {
     voiceWork.prune(s.threadId)
     // The reply that was cut off lands first, so the folded line comes after the whole conversation.
     await chat.handoffHost().whenIdle(s.threadId, AbortSignal.timeout(6000), 5000).catch(() => undefined)
-    const said = db.listMessages(s.threadId).filter((m) => m.createdAt >= s.startedAt && m.role === 'user' && m.kind === 'normal' && !m.meta?.hidden && !isRelayed(m) && !!m.content.trim()).map((m) => m.content)
+    const mine = db.listMessages(s.threadId).filter((m) => m.createdAt >= s.startedAt && m.role === 'user' && m.kind === 'normal' && !m.meta?.hidden && !isRelayed(m) && !!m.content.trim())
+    // Your own words: a live call's transcript, not the briefs Grok wrote for the bot (unless nothing was transcribed).
+    const said = (mine.some((m) => !m.meta?.voiceBrief) ? mine.filter((m) => !m.meta?.voiceBrief) : mine).map((m) => m.content)
     if (!said.length) return
     const endedAt = Date.now()
     const title = voiceTitle(said)
@@ -2744,16 +2916,25 @@ app.whenReady().then(() => {
     try { if (learning.enabled()) void learning.extractMemories().catch(() => undefined) } catch { /* learning is off or busy: the next pass reads it */ }
   }
   handle('voice:start', async (threadId: string | null, spaceId: string) => {
-    await voice.startVoice()
+    // The chat first: the live voice is told whose it is (its bot's name) when it starts.
     const created = !threadId
     if (!threadId) {
       const t = db.createThread(spaceId, 'auto', null)
       db.updateThread(t.id, { title: `Voice chat · ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` })
       threadId = t.id
     }
+    const before = voiceThread
+    voiceThread = threadId
+    try {
+      await voice.startVoice()
+    } catch (e) {
+      // Couldn't start at all: nothing is left behind (no empty voice chat, the previous conversation as it was).
+      voiceThread = before
+      if (created && db.listMessages(threadId).length === 0) db.deleteThread(threadId)
+      throw e
+    }
     if (voiceSession && voiceSession.threadId !== threadId) void endVoiceSession()
     if (!voiceSession) voiceSession = { threadId, startedAt: Date.now(), created }
-    voiceThread = threadId
     return threadId
   })
   handle('voice:stop', () => { voice.stop(); voiceThread = null; void endVoiceSession() })
@@ -2762,8 +2943,8 @@ app.whenReady().then(() => {
   const voiceWork = new VoiceWork({
     announce: (text) => voice.announce(text),
     voiceThread: () => voiceThread,
-    lastReply: (threadId, since) => [...db.listMessages(threadId)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && !!m.content && !m.meta?.superseded && !m.meta?.hidden && m.createdAt >= since)?.content,
-    files: (threadId, since) => [...new Set(db.listMessages(threadId).filter((m) => m.role === 'tool' && m.createdAt >= since && (m.toolName === 'file_write' || m.toolName === 'create_document') && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && !/\.html?$/i.test(m.meta.path as string)).map((m) => m.meta!.path as string))],
+    lastReply: (threadId, since) => [...db.listMessages(threadId)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && !!m.content && !m.meta?.superseded && !m.meta?.provisional && !m.meta?.hidden && m.createdAt >= since)?.content,
+    files: (threadId, since) => [...new Set(db.listMessages(threadId).filter((m) => m.role === 'tool' && m.createdAt >= since && (m.toolName === 'file_write' || m.toolName === 'file_edit' || m.toolName === 'create_document') && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && !/\.html?$/i.test(m.meta.path as string)).map((m) => m.meta!.path as string))],
     record: (vt, line, context, result) => {
       if (!db.getThread(vt)) return
       // Done: the result itself, with its files, from that bot (a notice: kept out of the model's history, which
@@ -2936,7 +3117,11 @@ app.whenReady().then(() => {
   // The app's own window may use the microphone (voice); websites in the browser panel may not.
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc === win?.webContents))
   session.defaultSession.setPermissionCheckHandler((wc, perm) => perm === 'media' && wc === win?.webContents)
-  handle('chat:stop', (threadId: string) => chat.stop(threadId))
+  // The Stop button (and Escape): the chat says "Stopped." once the run ends.
+  handle('chat:stop', (threadId: string) => chat.stop(threadId, { byUser: true }))
+  // The stall note's Retry / Skip: only the step that hung.
+  handle('chat:skipStep', (threadId: string) => chat.skipStep(String(threadId ?? '')))
+  handle('chat:retryStep', (threadId: string) => chat.retryStep(String(threadId ?? '')))
   handle('chat:steer', async (threadId: string, text: string) => {
     const g = guardUserText(threadId, String(text).slice(0, 20_000))
     const r = await chat.steer(threadId, g.text)
@@ -3149,6 +3334,8 @@ app.whenReady().then(() => {
   const setRoutinesPaused = (paused: boolean): void => {
     settings.set({ routinesPaused: paused })
     alwaysOnChanged.current({ routinesPaused: paused })
+    // "When …" matches that came in while routines were paused run now.
+    if (!paused) scheduler.drainAll()
   }
   const awake = new KeepAwake(powerSaveBlocker)
   // Lid closed too (off by default; main/lid-awake.ts): while anything runs and 5 minutes after.
@@ -3269,11 +3456,14 @@ app.whenReady().then(() => {
   handle('update:history', () => updater.history())
   handle('update:upgradedFrom', () => upgradedFrom ?? null)
   // Settings → Privacy & Security: status (no prompts) and the exact System Settings pane; nothing is granted here.
+  // Mac apps: what asking macOS last told us (Apple events have no read-only status check).
+  let automationState: PermissionState = 'unknown'
   handle('permissions:status', () => permissionsStatus({
     accessibility: () => systemPreferences.isTrustedAccessibilityClient(false),
     media: (kind) => systemPreferences.getMediaAccessStatus(kind),
     notificationsSupported: () => Notification.isSupported(),
     notifications: () => notePermission.get(),
+    automation: () => automationState,
     open: fileProbe,
     home: homedir()
   }))
@@ -3300,7 +3490,12 @@ app.whenReady().then(() => {
         // The first notification is what makes macOS ask; once it's been refused, the pane is where it's changed.
         if (!Notification.isSupported()) return pane()
         return notePermission.request(new Notification({ title: 'SahilBot', body: 'Notifications are on: SahilBot will tell you when a task finishes or needs you.' }))
-      case 'automation': return pane()
+      case 'automation': {
+        // Ask macOS for real first: SahilBot only appears in the Automation list once it has asked.
+        const r = await requestAutomation()
+        if (r !== 'prompted') automationState = r
+        return r === 'denied' ? pane() : r
+      }
       case 'fullDisk': return pane()
       default: { const never: never = kind; throw new Error(`Unknown permission "${String(never)}".`) }
     }

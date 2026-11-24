@@ -69,12 +69,13 @@ describe('sign-in in the external browser, one click with a built-in client', ()
   test('Connect apps: the built-in-client app is one click at the top; the other sits under "Needs a one-time setup"', async () => {
     const { fake, app, page, log } = await start()
     try {
-      await page.click('[data-testid="connect-apps"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
       const section = page.locator('[data-testid="section-Other"]')
       await section.waitFor({ timeout: 10_000 })
       const ready = section.locator('[data-testid="section-ready"] [data-testid="preset-test-chatter"]')
       await ready.waitFor({ timeout: 10_000 })
-      expect(await ready.locator('[data-testid="badge-test-chatter"]').innerText()).toBe('One click')
+      // "One click" is the section's own heading, so its rows carry no badge; the exceptions do ("Needs setup").
+      expect(await ready.locator('[data-testid="badge-test-chatter"]').count()).toBe(0)
       const setupGroup = section.locator('[data-testid="section-setup"]')
       expect(await setupGroup.innerText()).toContain('Needs a one-time setup')
       expect(await setupGroup.locator('[data-testid="preset-test-legacy"] [data-testid="badge-test-legacy"]').innerText()).toBe('Needs setup')

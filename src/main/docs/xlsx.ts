@@ -342,12 +342,13 @@ export async function buildXlsx(sheets: SheetSpec[], o: WorkbookOptions = {}): P
     // Totals row
     if (s.totals && dataRows.length) {
       const label = typeof s.totals === 'string' ? s.totals : 'Total'
-      const fn: Record<string, number> = { sum: 109, average: 101, count: 103, min: 105, max: 104 }
+      // Plain functions (=SUM(E2:E13)): what a person clicking the Total cell expects to see.
+      const fn: Record<string, string> = { sum: 'SUM', average: 'AVERAGE', count: 'COUNT', min: 'MIN', max: 'MAX' }
       const vals = cols.map((c, k) => {
         const t = c.spec.total ?? (['number', 'integer', 'currency'].includes(c.type) ? 'sum' : 'none')
         if (k === 0 && t === 'none') return label
         if (t === 'none') return null
-        return { formula: `SUBTOTAL(${fn[t]},${c.letter}${first}:${c.letter}${last})` } as ExcelJSNs.CellFormulaValue
+        return { formula: `${fn[t]}(${c.letter}${first}:${c.letter}${last})` } as ExcelJSNs.CellFormulaValue
       })
       if (vals[0] === null) vals[0] = label
       const tr = ws.addRow(vals)

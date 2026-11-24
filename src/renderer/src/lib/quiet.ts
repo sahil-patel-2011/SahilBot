@@ -14,7 +14,9 @@ import { docsFromSteps } from '../components/doc/DocCard'
 function notable(s: Step, display: string): string | undefined {
   const action = String(args(s).action ?? '')
   if (/^(not started|budget unchanged|cancelled by|skipped|denied|no reply)/i.test(display)) return undefined
-  if (s.call.name === 'schedule') return ({ create: 'Created a routine', delete: 'Removed a routine', pause: 'Paused a routine', resume: 'Resumed a routine' } as Record<string, string>)[action]
+  // A routine's change has its own line in the chat ("Created routine · Stretch · Once · …", from the scheduler), so
+  // no second one here; a schedule call that failed still says so (quietActions).
+  if (s.call.name === 'schedule') return undefined
   if (s.call.name === 'goal') return ({ create: 'Started a goal', update: 'Updated a goal', pause: 'Paused a goal', resume: 'Resumed a goal', done: 'Completed a goal', cancel: 'Cancelled a goal' } as Record<string, string>)[action]
   if (s.call.name === 'follow_up') return 'Set a follow-up'
   if (s.call.name === 'message_bot') return /no reply|still working/i.test(display) ? undefined : 'Consulted another bot'
@@ -57,6 +59,12 @@ export function galleryFromSteps(steps: Step[]): Array<{ key: string; path: stri
 /** Whether a finished run left anything to show in the quiet chat. */
 export function hasQuietContent(steps: Step[], docs: boolean): boolean {
   return quietActions(steps).length > 0 || galleryFromSteps(steps).length > 0 || filesFromSteps(steps).length > 0 || pagesFromSteps(steps).length > 0 ||
+    stocksFromSteps(steps).length > 0 || videosFromSteps(steps).length > 0 || (docs && docsFromSteps(steps).length > 0)
+}
+
+/** What a run made that the chat shows as a card (files, pictures, pages, videos, documents), its steps aside. */
+export function hasMadeArtifacts(steps: Step[], docs: boolean): boolean {
+  return galleryFromSteps(steps).length > 0 || filesFromSteps(steps).length > 0 || pagesFromSteps(steps).length > 0 ||
     stocksFromSteps(steps).length > 0 || videosFromSteps(steps).length > 0 || (docs && docsFromSteps(steps).length > 0)
 }
 

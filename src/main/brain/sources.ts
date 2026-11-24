@@ -32,6 +32,10 @@ export interface RawItem {
   noun?: string
   /** Calendar: when the event starts. */
   start?: string
+  /** Calendar: when the event was created (`at` moves with every edit or RSVP). */
+  created?: number
+  /** Calendar: an invite the user hasn't answered yet. */
+  invited?: boolean
 }
 
 export interface ReadOptions { after: number; before?: number; limit: number; now: number; signal?: AbortSignal }
@@ -244,10 +248,12 @@ export function calendarItems(source: string, text: string): RawItem[] {
     const self = attendees.find((a) => a?.self === true)
     const people = attendees.filter((a) => a && a.self !== true && a.resource !== true && typeof a.email === 'string').map((a) => ({ name: String(a.displayName ?? a.name ?? ''), email: String(a.email).toLowerCase() })).slice(0, 30)
     const updated = timeOf(String(o.updated ?? o.created ?? '')) || timeOf(start)
+    const created = timeOf(String(o.created ?? ''))
     out.push({
-      source, id: `${o.id}:${updated}`, kind: 'calendar', at: updated, title: clip(title, 200), start,
+      source, id: `${o.id}:${updated}`, kind: 'calendar', at: updated, ...(created ? { created } : {}), title: clip(title, 200), start,
       text: clip([typeof o.description === 'string' ? o.description : '', typeof o.location === 'string' ? `Where: ${o.location}` : '', `When: ${start}`, people.length ? `With: ${people.map((p) => p.name || p.email).join(', ')}` : ''].filter(Boolean).join('\n')),
       people, declined: o.status === 'cancelled' || self?.responseStatus === 'declined',
+      ...(self && self.organizer !== true && self.responseStatus === 'needsAction' && o.status !== 'cancelled' ? { invited: true } : {}),
       ...(typeof o.htmlLink === 'string' && /^https:\/\//.test(o.htmlLink) ? { link: o.htmlLink } : {})
     })
   }
@@ -259,7 +265,7 @@ const gcal: SourceDef = {
   what: 'Events added or changed: title, time, place, who’s invited and the description. Declined and cancelled events are skipped.',
   availability: connectorAvailability('gcal', 'Google Calendar'),
   async read(io, o) {
-    const args = { timeMin: iso(o.now - 2 * DAY), timeMax: iso(o.now + 21 * DAY), maxResults: Math.min(50, o.limit), singleEvents: true, orderBy: 'startTime', updatedMin: iso(Math.max(o.after, o.now - 28 * DAY)) }
+    const args = { timeMin: iso(o.now - 2 * DAY), timeMax: iso(o.now + 120 * DAY), maxResults: Math.min(50, o.limit), singleEvents: true, orderBy: 'startTime', updatedMin: iso(Math.max(o.after, o.now - 28 * DAY)) }
     const tool = findTool(io, 'gcal', [/^list_events$/, /^search_events$/]) ?? 'list_events'
     return after(calendarItems('gcal', await call(io, 'gcal', tool, tool === 'search_events' ? { ...args, query: '' } : args, o.signal)), o)
   }

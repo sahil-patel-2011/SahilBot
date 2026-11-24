@@ -48,7 +48,7 @@ describe('agent platform', () => {
     await app.close()
   })
 
-  test('run_command: changes run in Auto, deleting asks first', async () => {
+  test('run_command: Auto makes and deletes files without asking (you asked for it)', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'sb-cmd-'))
     writeFileSync(join(ws, 'old.txt'), 'bye')
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
@@ -60,14 +60,10 @@ describe('agent platform', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'make a file and delete old.txt')
     await page.keyboard.press('Enter')
-    const card = page.locator('[data-testid="approval-card"]')
-    await card.waitFor({ timeout: 15_000 })
-    // The first command already ran without asking; the delete waits for approval.
-    expect(readFileSync(join(ws, 'made.txt'), 'utf8').trim()).toBe('hello')
-    expect(existsSync(join(ws, 'old.txt'))).toBe(true)
-    expect(await card.innerText()).toMatch(/rm old\.txt/)
-    await card.locator('[data-testid="approve-once"]').click()
     await expect.poll(() => existsSync(join(ws, 'old.txt')), { timeout: 15_000 }).toBe(false)
+    expect(readFileSync(join(ws, 'made.txt'), 'utf8').trim()).toBe('hello')
+    expect(await page.locator('[data-testid="approval-card"]').count()).toBe(0)
+    await expect.poll(() => llm.script.length, { timeout: 15_000 }).toBe(0)
     const out = llm.requests.at(-1)!.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content).join('\n')
     expect(out).toContain('exit code 0')
     await app.close()
@@ -152,7 +148,8 @@ describe('steering and queueing', () => {
   let llm: MockLlm
   beforeAll(async () => { llm = await startMockLlm() })
   afterAll(async () => { await llm.close() })
-  const lastUserOf = (req: Record<string, any>): string => String([...req.messages].reverse().find((m: any) => m.role === 'user')?.content ?? '')
+  // (The user's own words, not the app's hidden notes after them.)
+  const lastUserOf = (req: Record<string, any>): string => String([...req.messages].reverse().find((m: any) => m.role === 'user' && !String(m.content).startsWith('[From the app]'))?.content ?? '')
 
   test('Enter while it works steers the running agent; ⌘Enter queues for after', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
@@ -164,7 +161,7 @@ describe('steering and queueing', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'Paint the logo')
     await page.keyboard.press('Enter')
-    await page.locator('[data-testid="steer-hint"]').waitFor()
+    await page.locator('[data-testid="stop"]').waitFor()
     // Steer with Enter.
     await page.fill('[data-testid="composer-input"]', 'actually make it blue')
     await page.keyboard.press('Enter')
@@ -237,7 +234,9 @@ describe('plan, then execute', () => {
       (req) => toolOut(req).includes('Patients') && toolOut(req).includes('300 words')
         ? { toolCalls: [{ name: 'propose_plan', arguments: JSON.stringify({ goal: 'A 300-word patient newsletter about BPH.', steps: ['Check the latest guidance', 'Draft the newsletter', 'Proofread it'], risks: ['Medical claims need a doctor\'s review'] }) }] }
         : { content: 'answers did not arrive' },
-      (req) => toolOut(req).includes('approved the plan') ? { content: 'Plan approved; here is the newsletter draft.' } : { content: 'plan was not approved' }
+      (req) => toolOut(req).includes('approved the plan') ? { content: 'Plan approved; here is the newsletter draft.' } : { content: 'plan was not approved' },
+      // The plan's items are still open, so that reply goes back once (never shown beside the final one).
+      (req) => JSON.stringify(req.messages).includes('plan still has open items') ? { content: 'Plan approved; here is the newsletter draft, proofread.' } : { content: 'no plan nudge' }
     )
     await page.fill('[data-testid="composer-input"]', 'Plan first before writing our monthly newsletter')
     await page.keyboard.press('Enter')
@@ -269,7 +268,7 @@ describe('plan, then execute', () => {
     )
     await page.fill('[data-testid="composer-input"]', 'slow one')
     await page.keyboard.press('Enter')
-    await page.locator('[data-testid="steer-hint"]').waitFor()
+    await page.locator('[data-testid="stop"]').waitFor()
     await page.click('[data-testid="new-chat"]')
     await page.fill('[data-testid="composer-input"]', 'fast one')
     await page.keyboard.press('Enter')

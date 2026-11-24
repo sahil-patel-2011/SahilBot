@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify'
+import { stripDirectives } from '@shared/directives'
 import { marked, type Tokens } from 'marked'
 import { memo, useMemo } from 'react'
 import { highlight } from '../lib/highlight'
@@ -63,7 +64,7 @@ function onClick(e: React.MouseEvent<HTMLDivElement>): void {
 export const SANITIZE = { FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'], FORBID_ATTR: ['style', 'class', 'id'] }
 
 /** Our own classes and controls go in after sanitizing: code blocks, Copy buttons and task-list checkboxes. */
-export const render = (text: string): string => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, SANITIZE)
+export const render = (text: string): string => DOMPurify.sanitize(marked.parse(stripDirectives(text), { async: false }) as string, SANITIZE)
   .replace(new RegExp(`<span data-sb-${KEY}="copy"></span>`, 'g'), '<button type="button" data-copy="">Copy</button>')
   .replace(new RegExp(`<span data-sb-${KEY}="task(-x)?"></span>`, 'g'), (_, x?: string) => `<input type="checkbox" disabled=""${x ? ' checked=""' : ''}>`)
   .replace(new RegExp(`data-sb-${KEY}="(code|code-head|tk-(?:kw|str|com|num|fn|type))"`, 'g'), (_, c: string) => `class="${c}"`)

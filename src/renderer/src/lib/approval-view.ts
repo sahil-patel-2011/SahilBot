@@ -48,6 +48,15 @@ function whereOf(path: string): string {
 
 const MESSAGE_TOOL = /(^|_)(send|reply|post|forward|message|chat|dm|sms|email|mail|publish|tweet|comment)(_|$)|slack|gmail|outlook|teams|discord|telegram|whatsapp|imessage/i
 
+/**
+ * Whether the card offers "Always allow": not for money, steered steps or credentials, which ask every time whatever
+ * was allowed before (permissions.ts decide()), so the button would promise something that isn't kept.
+ */
+export function offersAlways(reason?: string): boolean {
+  const r = reason ?? ''
+  return !/^(Spends money|Uses details taken|Asks first:)/.test(r) && !/\b(saved login|saved ID|password field|secret scan flagged|recording what you click and type|one-time code)\b/i.test(r)
+}
+
 export function approvalView(req: Pick<PendingRequest, 'tool' | 'label' | 'summary' | 'args'>): ApprovalView {
   const tool = req.tool ?? ''
   const a = parse(req.args)
@@ -62,6 +71,10 @@ export function approvalView(req: Pick<PendingRequest, 'tool' | 'label' | 'summa
       title: [append ? 'Add to ' : 'Save ', base(path), ` ${whereOf(path)}`.trimEnd()],
       preview: { kind: 'file', name: base(path), where: whereOf(path), markdown: /\.(md|markdown|txt)$/i.test(path), append, ...ex }
     }
+  }
+  if (tool === 'file_edit' && str(a.path) && typeof a.new_string === 'string') {
+    const path = a.path as string
+    return { title: ['Edit ', base(path), ` ${whereOf(path)}`.trimEnd()], preview: { kind: 'file', name: base(path), where: whereOf(path), markdown: false, append: false, ...excerpt(a.new_string) } }
   }
   if (tool === 'create_document' && (str(a.path) || str(a.title))) {
     const target = str(a.path) ? base(a.path as string) : (a.title as string)
@@ -79,7 +92,9 @@ export function approvalView(req: Pick<PendingRequest, 'tool' | 'label' | 'summa
     const why = req.summary?.split(' · ').slice(1).join(' · ').trim()
     const background = !!a.background
     return {
-      title: [background ? 'Start a command in the background' : 'Run a command in Terminal', '', ''],
+      // One plain sentence from the tool's reason ("Run a command that switches to a new branch"); the command itself
+      // sits under Details.
+      title: [`${background ? 'Start a command in the background' : 'Run a command'}${why ? ` that ${why}` : ' in Terminal'}`, '', ''],
       preview: { kind: 'command', command: a.command as string, cwd: str(a.cwd), why: why || undefined, background }
     }
   }

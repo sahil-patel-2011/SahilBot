@@ -69,7 +69,9 @@ export function buildMenu(send: (a: MenuAction) => void): void {
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
-        ...(isPackaged() ? [] : [{ type: 'separator' as const }, { role: 'reload' as const }, { role: 'toggleDevTools' as const }])
+        { type: 'separator' },
+        { role: 'reload' as const },
+        ...(isPackaged() ? [] : [{ role: 'toggleDevTools' as const }])
       ]
     },
     { role: 'windowMenu' },

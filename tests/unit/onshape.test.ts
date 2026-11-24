@@ -255,9 +255,12 @@ describe('Onshape approvals', () => {
     expect(tool.group).toBe('CAD')
     expect(tool.untrusted).toBe(true)
   })
-  test('every CAD change asks, even in Auto; previews and reads run', () => {
+  test('every CAD change asks in Ask mode; Auto makes it unless outside content steered it; previews and reads run', () => {
     const base = { tool: 'onshape', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true }
-    expect(decide({ ...base, mode: 'auto', effect: 'write_external' }).verdict).toBe('ask')
+    expect(decide({ ...base, mode: 'auto', effect: 'write_external' }).verdict).toBe('allow')
+    expect(decide({ ...base, mode: 'auto', effect: 'write_external', tainted: true }).verdict).toBe('ask')
+    expect(decide({ ...base, mode: 'auto', effect: 'destructive' }).verdict).toBe('allow')
+    expect(decide({ ...base, mode: 'ask', effect: 'destructive' }).verdict).toBe('ask')
     expect(decide({ ...base, mode: 'ask', effect: 'write_external' }).verdict).toBe('ask')
     expect(decide({ ...base, mode: 'auto', effect: 'read' }).verdict).toBe('allow')
     expect(decide({ ...base, mode: 'auto', effect: 'write_local' }).verdict).toBe('allow')

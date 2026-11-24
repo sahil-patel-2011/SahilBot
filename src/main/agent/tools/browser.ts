@@ -1,7 +1,7 @@
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PurchaseInfo, ToolEffect } from '@shared/types'
-import { benignClickLabel, classifyPurchase, clean, isCheckoutUrl, labelHasPrice, purchaseWording, PURCHASES_NEED_YOU, redactCards, type PurchaseGate, type PurchaseSignals } from '../../browser/checkout'
+import { benignClickLabel, classifyPurchase, clean, isCheckoutUrl, labelHasPrice, PAGE_NAME, purchaseWording, PURCHASES_NEED_YOU, redactCards, type PurchaseGate, type PurchaseSignals } from '../../browser/checkout'
 import { safeUrl, type BrowserManager, type Expected, type OfferedDownload, type PageCommerce, type RefInfo } from '../../browser/manager'
 import { routineDownload } from '../../browser/download-policy'
 import { MAX_MS, MAX_STEPS, stepDetails, stepsToText, SECRET } from '../../browser/teach'
@@ -12,7 +12,7 @@ import type { SiteStore } from '../../sites/store'
 import { originMatches, type Vault } from '../../vault'
 import { fillProblem, standingRuleAllows } from '../../secure/guards'
 import { isSecurePage } from '../../secure/origin'
-import { CONSEQUENTIAL, looksLikePayment, looksLikeSecurity, OTP_STOP, PURCHASE_STOP } from '../permissions'
+import { browsingLabel, CONSEQUENTIAL, looksLikePayAction, looksLikePayment, looksLikeSecurity, OTP_STOP, PURCHASE_STOP } from '../permissions'
 import type { ToolContext, ToolDef, ToolOutput } from '../types'
 import { resolvePath } from './files'
 
@@ -76,6 +76,8 @@ export interface BrowserDeps {
   sms?: (sinceMs: number) => Promise<CodeMessage[]>
   /** Site playbooks: learns from each call, and adds what it knows when a known site opens. */
   sites?: SiteStore
+  /** What the user asked in this task: a site they named themselves is theirs to get through, not a bot wall. */
+  userText?: (threadId: string) => string
 }
 
 const DESTRUCTIVE = /\b(delete|remove|erase|destroy|discard|close account|deactivate|unsubscribe all|empty trash)\b/i
@@ -98,7 +100,14 @@ export function clickEffect(r: RefInfo | undefined): ToolEffect {
   if (DESTRUCTIVE.test(r.name)) return 'destructive'
   const heavy = weighty(r.name)
   const money = looksLikePayment(r.name) || purchaseWording(r.name) || labelHasPrice(r.name)
-  if (r.role === 'link') return r.navLink === true && !heavy ? 'read' : 'write_external'
+  // A real link to another page only opens it: "Check out the docs", or a product's title with its price (checkout.ts
+  // classifyPurchase: reading prices is research; a price link on a checkout page has the Purchase card).
+  if (r.role === 'link') {
+    if (r.navLink !== true) return 'write_external'
+    const label = browsingLabel(r.name)
+    // (A page's name, "Billing" or "Purchase history", only opens it: only a paying action is one.)
+    return looksLikePayAction(label) || ((CONSEQUENTIAL.test(label) || purchaseWording(label)) && !PAGE_NAME.test(label.trim())) ? 'write_external' : 'read'
+  }
   if (r.role === 'tab') return heavy ? 'write_external' : 'read'
   if (LOCAL_ROLES.has(r.role)) return money ? 'write_external' : 'write_local'
   if (BENIGN.test(r.name.trim()) && !money) return 'write_local'
@@ -114,6 +123,18 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
   const expectNow = (): Expected | undefined => { try { return b.expectation?.() } catch { return undefined } }
   /** Purchase steps the user declined (the submit after them doesn't run). */
   const declined = new WeakSet<ToolOutput>()
+  /**
+   * Sites (per chat) where SahilBot typed, filled, signed in or went to buy: a human check there is the user's to pass.
+   * Anywhere else it is a bot wall in plain research: move on to another source, no hand-over and no card.
+   */
+  const actedOn = new Set<string>()
+  const siteKey = (ctx: ToolContext | undefined, url: string): string => `${ctx?.threadId ?? ''}|${safeHost(url)}`
+  /** The user named this site in their request ("Open example.com/check"): a human check there is theirs to pass. */
+  const namedSite = (ctx: ToolContext | undefined, url: string): boolean => {
+    const host = safeHost(url).replace(/^www\./, '')
+    if (!host || !ctx?.threadId) return false
+    try { return (deps.userText?.(ctx.threadId) ?? '').toLowerCase().includes(host.toLowerCase()) } catch { return false }
+  }
 
   const effect = (a: Args): ToolEffect => {
     switch (a.action) {
@@ -184,6 +205,9 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     if (a.action === 'fill_secret') {
       // A standing rule the user set for this login's own site ("sign in here without asking").
       if (standingRule(a, url)) return null
+      // The bot signs in by itself with a saved login on that login's own secure site. Any other site (a look-alike
+      // page, a link from an email) still asks, and a saved ID's number always does.
+      if (ownSite(a, url)) return null
       return a.field === 'id_number' ? `typing the saved ID "${a.secret}" (document number) into ${safeHost(url)}` : `typing the saved login "${a.secret}" (${a.field ?? 'password'}) into ${safeHost(url)}`
     }
     if (a.action === 'fill_address') return `typing your saved address "${a.address}" into ${safeHost(url)}`
@@ -199,7 +223,9 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     if (a.action === 'fill_form' && (a.fields ?? []).some((f) => b.refInfo(f.ref)?.password)) return 'typing into a password field'
     if (a.action === 'dialog' && a.accept && (looksLikePayment(b.pendingDialog?.message) || DESTRUCTIVE.test(b.pendingDialog?.message ?? ''))) return `confirming "${b.pendingDialog?.message.slice(0, 80)}"`
     if (a.action === 'click' || (a.action === 'type' && a.submit) || a.action === 'enter') {
-      if (looksLikePayment(r?.name, url)) return 'payment or checkout'
+      // The label is judged, and the page only by its structured checkout address, never for plain navigation
+      // (github.com/actions/checkout, docs about billing).
+      if (clickEffect(r) !== 'read' && (looksLikePayAction(browsingLabel(r?.name ?? '')) || isCheckoutUrl(url))) return 'payment or checkout'
       if (DESTRUCTIVE.test(r?.name ?? '') && /\b(permanent|forever|account)\b/i.test(r?.name ?? '')) return 'permanent delete'
       // Making an API key or token the user asked for is ordinary work (the key goes to the user, who can save it
       // to the vault); every other change on a security or account page still asks.
@@ -212,6 +238,12 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
   const standingRule = (a: Args, url = b.pageUrl()): boolean => {
     const t = safeCall(() => vault.fillTarget(a.secret ?? '', a.field ?? 'password'), undefined)
     return !!t && standingRuleAllows(t, t.type, a.field ?? 'password', url)
+  }
+  const ownSite = (a: Args, url = b.pageUrl()): boolean => {
+    const field = a.field ?? 'password'
+    if (field !== 'username' && field !== 'password') return false
+    const t = safeCall(() => vault.fillTarget(a.secret ?? '', field), undefined)
+    return !!t && t.type === 'login' && isSecurePage(url) && t.origins.some((o) => originMatches(o, url, { subdomains: !!t.subdomains }))
   }
   /** True only while an approved Purchase card's step runs (card numbers are filled nowhere else). */
   let purchaseApproved = false
@@ -299,7 +331,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
 - wallet: nicknames of the user's saved cards and addresses
 - fill_payment {card}: put a saved card (nickname, or "Visa ending 4242") into the page's card fields; you never see it. The user approves it on a Purchase card.
 - fill_address {address, section?}: put a saved address into the shipping (default) or billing fields
-- upload {ref, paths}: attach files from the workspace or attached folders to a file field (asks first)
+- upload {ref, paths}: attach files from the workspace or attached folders to a file field
 - downloads {op: list|save, index?}: view offered files or save one. Auto can save small same-site HTTPS text, CSV, and raster image files into Downloads. Other downloads need approval.
 - wait {text?, url?, timeout?}: wait for text to appear, the address to change, or the page to settle
 - wait_for_signin: the page needs the user's own sign-in and there is no saved login for fill_secret. Opens the page for the user and waits (up to 10 minutes) until the sign-in form is gone, then carries on by itself: don't end your turn or ask the user to say when they're done.
@@ -311,7 +343,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
 - recording {op: start|stop|status, text?}: "Teach a task". start records what the USER does in the browser panel (text = what you asked them to show); stop returns their steps (secret values hidden). Use it when the user wants to show you a web workflow once so you can repeat it.
 Buying: go all the way to the final Place order / Pay button and click it. SahilBot then shows the user a Purchase card with the store, items and total, and only their click there lets it go through; nothing you write can approve it, and if they decline, stop. Never type card numbers yourself.
 Speed: navigate already returns a snapshot; act by ref; use fill_form for forms, find for an element, extract for data, get_text for long text. A known site's navigate adds "What I know about <site>": hints from past runs; check them against the page.
-CAPTCHAs and "are you human" checks are always the user's: ask them to take over in the browser panel.`,
+CAPTCHAs and "are you human" checks during a sign-in, form or purchase are the user's (the panel hands them over); in plain research the step returns a bot-wall note: use another source.`,
     parameters: {
       type: 'object',
       properties: {
@@ -367,6 +399,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
       const before = { url: b.pageUrl(), title: safeCall(() => b.pageTitle(), '') }
       const targets = targetsOf(input)
       const seen: { check?: string } = {}
+      if (ACTING.has(input.action) || (input.action === 'click' && ACTING_CLICK.test(targets.target?.name ?? '')) || purchaseStop(input)) actedOn.add(siteKey(ctx, before.url))
       try {
         let out = await runInner(input, ctx, seen)
         out = withSiteNote(input, out, before.url, ctx)
@@ -403,6 +436,10 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
       if (check) {
         seen.check = check
         const code = check === 'verification code'
+        // Plain research (nothing typed, filled or bought on this site): a bot wall, not the user's job.
+        if (!code && !actedOn.has(siteKey(ctx, b.pageUrl())) && !namedSite(ctx, b.pageUrl())) {
+          return { ...out, text: `${out.text}\n\n[This site shows a ${check}: a bot wall. Don't wait or ask the user; use another result from web_search or another reputable site, and say in one sentence which site blocked you.]`, display: `${out.display ?? ''} · ${check}: trying another source` }
+        }
         if (!code) b.showToUser()
         const tail = code
           ? `\n\n[This page asks for a verification code. If it's for the user's own sign-in, use fill_otp (source "authenticator" with the saved login, or "email" / "sms" for a code the site just sent). Never guess codes. If none of those works, open the panel and call ask_user with "Please enter the code in the browser panel, then press Done." and options ["Done", "Skip"].]`
@@ -779,17 +816,18 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
     switch (a.action) {
       case 'navigate': {
         const url = safeUrl(a.url!)
-        return { text: await b.navigate(url), display: `opened ${safeHost(url)}`, sources: [{ title: safeHost(url), url }], read: true }
+        const opened = await b.navigate(url)
+        return { text: opened, display: `opened ${safeHost(url)}`, sources: pageSource(b) ?? [{ title: safeHost(url), url }], read: true }
       }
       case 'snapshot':
-        return { text: await b.snapshot({ full: !!a.full }), display: `read ${safeHost(b.pageUrl())}` }
+        return { text: await b.snapshot({ full: !!a.full }), display: `read ${safeHost(b.pageUrl())}`, sources: pageSource(b), read: true }
       case 'find': {
         const q = (a.query ?? a.text ?? '').trim()
         if (!q) throw new Error('Say what to find, e.g. query "the search box".')
         return { text: await b.find(q, { prefer: safeCall(() => deps.sites?.locators(b.pageUrl()) ?? [], []) }), display: `found "${q.slice(0, 30)}"` }
       }
       case 'extract':
-        return { text: await b.extract({ kind: a.kind, ref: a.ref, max: a.max }), display: `read data on ${safeHost(b.pageUrl())}` }
+        return { text: await b.extract({ kind: a.kind, ref: a.ref, max: a.max }), display: `read data on ${safeHost(b.pageUrl())}`, sources: pageSource(b), read: true }
       case 'expand':
         return { text: b.expand(a.ref!, a.start), display: 'expanded a list' }
       case 'next_page':
@@ -852,7 +890,10 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         // 3. The user's approval: the approval card for this exact call, or their standing rule for this site.
         //    Text on a web page can't approve anything: only the user's click or their own rule does.
         const rule = standingRuleAllows(t, t.type, field, url)
-        let approved = !!ctx?.approved || rule
+        // Auto signs in by itself with a login on that login's own secure site (checked above and here); a saved ID,
+        // another site, Ask mode or a run that read outside content still needs the user.
+        const own = t.type === 'login' && (field === 'username' || field === 'password') && !!ctx?.autoRun && ownSite(a, url)
+        let approved = !!ctx?.approved || rule || own
         const attended = !!ctx && (deps.gate ? deps.gate.attended(ctx.threadId) : false)
         if (!approved && ctx && attended) {
           const answer = await ctx.askUser(`Type your saved ${what} for "${t.name}" into ${host}? SahilBot types it itself; the assistant never sees it.`, ['Allow once', "Don't allow"])
@@ -976,7 +1017,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
         return { text: `Screenshot of ${b.pageUrl()}`, images: [img], display: `screenshot of ${safeHost(b.pageUrl())}` }
       }
       case 'get_text':
-        return { text: await b.getText(), display: `read text of ${safeHost(b.pageUrl())}` }
+        return { text: await b.getText(), display: `read text of ${safeHost(b.pageUrl())}`, sources: pageSource(b), read: true }
       case 'tabs': {
         if (a.op === 'new') {
           const url = a.url ? safeUrl(a.url) : undefined
@@ -1052,6 +1093,11 @@ export function samePurchase(a: Pick<PageCommerce, 'url' | 'total' | 'target'>, 
 function safeCall<T>(fn: () => T, fallback: T): T {
   try { return fn() } catch { return fallback }
 }
+/** Steps that act on a site for the user (typing, filling, signing in): a human check after them is theirs to pass. */
+const ACTING = new Set(['type', 'fill_form', 'fill_secret', 'fill_payment', 'fill_address', 'fill_otp', 'wait_for_signin', 'upload', 'select'])
+/** A click that signs in, registers, books or buys. */
+const ACTING_CLICK = /\b(sign ?in|log ?in|sign ?up|register|check ?out|buy|pay|place order|add to (cart|bag|basket)|book|reserve|submit|continue to (payment|checkout))\b/i
+
 function safeHost(u: string): string {
   try { return new URL(u).host } catch { return u.slice(0, 40) }
 }
@@ -1060,4 +1106,14 @@ function safeHostname(u: string): string {
 }
 function safeOrigin(u: string): string {
   try { return new URL(u).origin } catch { return u }
+}
+
+/** The page the browser is on, as a source the answer can show under it (web pages only, with their title). */
+function pageSource(b: { pageUrl(): string; pageTitle?: () => string }): Array<{ title: string; url: string }> | undefined {
+  let url = ''
+  try { url = b.pageUrl() } catch { return undefined }
+  if (!/^https?:\/\//i.test(url)) return undefined
+  let title = ''
+  try { title = (b.pageTitle?.() ?? '').replace(/\s+/g, ' ').trim().slice(0, 120) } catch { /* no title */ }
+  return [{ title: title || safeHost(url), url }]
 }

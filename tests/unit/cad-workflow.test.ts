@@ -371,32 +371,38 @@ describe('building in Onshape (fake server)', () => {
     expect(u.text).toMatch(/Chosen: "B" \(recommended\)/)
   })
 
-  test('approvals: a new document is routine in Auto; the user\'s documents ask; deletes and code replacement always ask', async () => {
+  test('approvals: Auto builds, edits and deletes in Onshape itself; Ask asks for the user\'s documents and deletes; steered calls ask', async () => {
     const { design, onshape } = tools()
     const base = { mode: 'auto' as const, alwaysAllowed: false, hardStopsEnabled: true, tainted: false }
-    const verdict = (t: ToolDef, a: any, mode: 'auto' | 'autonomous' = 'auto'): string => {
+    const verdict = (t: ToolDef, a: any, mode: 'auto' | 'autonomous' | 'ask' = 'auto', extra: Record<string, unknown> = {}): string => {
       const effect = typeof t.effect === 'function' ? t.effect(a, { roots: [] }) : t.effect
-      return decide({ ...base, mode, tool: t.name, effect, hardStop: t.hardStop?.(a) ?? null, consequential: t.consequential?.(a, { threadId: 't' }) } as any).verdict
+      return decide({ ...base, mode, tool: t.name, effect, hardStop: t.hardStop?.(a) ?? null, consequential: t.consequential?.(a, { threadId: 't' }), ...extra } as any).verdict
     }
     expect(verdict(design, { action: 'build', plan: CUBE })).toBe('allow')
     expect(verdict(design, { action: 'plan', plan: CUBE })).toBe('allow')
     const userDoc = 'https://cad.onshape.com/documents/0123456789abcdef01234567/w/1123456789abcdef01234567/e/2123456789abcdef01234567'
-    expect(verdict(design, { action: 'build', plan: CUBE, url: userDoc })).toBe('ask')
+    expect(verdict(design, { action: 'build', plan: CUBE, url: userDoc })).toBe('allow')
+    expect(verdict(design, { action: 'build', plan: CUBE, url: userDoc }, 'ask')).toBe('ask')
+    expect(verdict(design, { action: 'build', plan: CUBE, url: userDoc }, 'auto', { tainted: true })).toBe('ask')
     expect(design.describe!({ action: 'build', plan: CUBE, url: userDoc })).toMatch(/into your Onshape document .*nothing is deleted/)
     expect(verdict(onshape, { action: 'create_document', name: 'New' })).toBe('allow')
-    expect(verdict(onshape, { action: 'update_feature', url: userDoc, feature_id: 'F1', feature: {} })).toBe('ask')
+    expect(verdict(onshape, { action: 'update_feature', url: userDoc, feature_id: 'F1', feature: {} })).toBe('allow')
+    expect(verdict(onshape, { action: 'update_feature', url: userDoc, feature_id: 'F1', feature: {} }, 'ask')).toBe('ask')
     expect(onshapeEffect({ action: 'delete_feature', url: userDoc })).toBe('destructive')
-    expect(verdict(onshape, { action: 'delete_feature', url: userDoc, feature_id: 'F1' }, 'autonomous')).toBe('ask')
+    expect(verdict(onshape, { action: 'delete_feature', url: userDoc, feature_id: 'F1' }, 'autonomous')).toBe('allow')
+    expect(verdict(onshape, { action: 'delete_feature', url: userDoc, feature_id: 'F1' }, 'ask')).toBe('ask')
+    expect(verdict(onshape, { action: 'delete_feature', url: userDoc, feature_id: 'F1' }, 'autonomous', { tainted: true })).toBe('ask')
     expect(onshape.hardStop!({ action: 'delete_feature', url: userDoc, feature_id: 'F1' })).toMatch(/Deletes a feature/)
     expect(onshapeEffect({ action: 'write_featurestudio', url: userDoc })).toBe('destructive')
     expect(onshapeEffect({ action: 'write_featurestudio', url: userDoc.replace(/\/e\/.*$/, '') })).toBe('write_external')
-    // A document this session created: changes inside it run in Auto (deleting still asks).
+    // A document this session created: changes inside it run in Auto (and so does deleting now).
     const r = await buildOnshape(client(), { name: 'Mine', features: [{ op: 'cube', id: 'c', side: 5 }] })
     const mine = `https://cad.onshape.com/documents/${r.ref.did}/w/${r.ref.wvmid}/e/${r.ref.eid}`
     expect(onshapeConsequential({ action: 'update_feature', url: mine })).toBe(false)
     expect(verdict(onshape, { action: 'update_feature', url: mine, feature_id: 'F1', feature: {} })).toBe('allow')
     expect(verdict(design, { action: 'build', plan: CUBE, url: mine })).toBe('allow')
-    expect(verdict(onshape, { action: 'delete_feature', url: mine, feature_id: 'F1' })).toBe('ask')
+    expect(verdict(onshape, { action: 'delete_feature', url: mine, feature_id: 'F1' })).toBe('allow')
+    expect(verdict(onshape, { action: 'delete_feature', url: mine, feature_id: 'F1' }, 'ask')).toBe('ask')
   })
 
   test('new onshape actions: create_document, create_element, feature_specs, update/delete_feature, insert/transform instances, write_featurestudio, interference, several views', async () => {

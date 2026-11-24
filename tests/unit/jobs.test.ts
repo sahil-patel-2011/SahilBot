@@ -1,5 +1,6 @@
+import { execSync } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
@@ -62,9 +63,9 @@ describe('JobManager', () => {
     const pid = m.get(j.id)!.pid!
     const s = await m.stop(j.id, 1000)
     expect(s!.status).toBe('stopped')
-    let alive = true
-    try { process.kill(-pid, 0) } catch { alive = false }
-    expect(alive).toBe(false)
+    // Killed children can linger as zombies where nothing reaps orphans (a container's PID 1): those are dead.
+    const live = execSync('ps -A -o pgid=,stat=').toString().split('\n').map((l) => l.trim().split(/\s+/)).filter(([g, st]) => Number(g) === pid && st && !st.startsWith('Z'))
+    expect(live).toHaveLength(0)
   })
 
   test('wait for exit reports success and failure; restart reruns under the same id', async () => {
@@ -157,6 +158,21 @@ describe('run_command background and the jobs tool', () => {
     expect(out.meta).toMatchObject({ job: { id: 'j1', url: 'http://localhost:5299' } })
     expect(m.get('j1')!.threadId).toBe('chat1')
   })
+  test('a server started in the foreground becomes a background job instead of blocking (Agent Arena)', async () => {
+    const m = mk()
+    const sh = shellTool({ jobs: m })
+    const t0 = Date.now()
+    const out = await sh.run({ command: 'sleep 0.2; echo "listening on http://127.0.0.1:5311"; sleep 30' }, ctx('chat1'))
+    expect(Date.now() - t0).toBeLessThan(15_000)
+    expect(out.text).toMatch(/kept running after "listening on http:\/\/127\.0\.0\.1:5311".*background job/)
+    expect(out.text).toMatch(/Background job j1/)
+    expect(m.get('j1')!.status).not.toBe('exited')
+    // Tests and builds that print such a line on the way are left alone.
+    writeFileSync(join(dir, 'run-tests.sh'), 'echo "listening on http://127.0.0.1:5312"\nsleep 2\necho "3 passed"\n')
+    const test = await sh.run({ command: `sh ${join(dir, 'run-tests.sh')}`, timeout: 20 }, ctx('chat1'))
+    expect(test.text).toMatch(/exit code 0/)
+    expect(test.text).toContain('3 passed')
+  }, 30_000)
   test('a job that fails right away says so', async () => {
     const m = mk()
     const out = await shellTool({ jobs: m }).run({ command: 'echo "boom" >&2; exit 2', background: true }, ctx('chat1'))
@@ -216,11 +232,14 @@ describe('end-of-run summary', () => {
     expect(summaryText(f, { autonomous: false })).toBe('Ran 3 commands, edited 4 files, started 1 job')
     // The line under the reply: plain words; tokens live in the hover card.
     const u = { input: 300, output: 60, usd: 0.0004, cloud: true, calls: 1, models: [] }
-    expect(statusLine(f, u)).toBe('Done · 8 actions · 4 files changed · 1 background job started · <$0.01')
+    // The finish line: how long, what it made or changed and where (report MCD-04), then jobs and the cost.
+    expect(statusLine(f, u)).toBe('Done in 1 s · Made a.ts in w +3 more · 1 background job started · <$0.01')
+    expect(statusLine(f, u, { simple: true })).not.toContain('$')
     expect(statusLine(f, u, { asked: 1 })).toContain('asked you once')
-    expect(statusLine({ ...f, actions: 1, files: 0, jobs: 0, commands: 0 }, u)).toBe('Done · 1 action · <$0.01')
-    expect(statusLine({ ...f, actions: 0, files: 0, jobs: 0, commands: 0 }, null)).toBe('')
-    expect(statusLine({ ...f, actions: 1, files: 0, jobs: 0, commands: 0 }, { ...u, cloud: false })).toBe('Done · 1 action · free (local)')
+    const none = { ...f, actions: 1, files: 0, jobs: 0, commands: 0, paths: [], made: [] }
+    expect(statusLine(none, u)).toMatch(/^Done in \d+ s · 1 action · <\$0\.01$/)
+    expect(statusLine({ ...none, actions: 0 }, null)).toBe('')
+    expect(statusLine(none, { ...u, cloud: false })).toMatch(/· 1 action · free \(local\)$/)
   })
   test('tokens and cost', () => {
     expect(fmtTokens(950)).toBe('950')

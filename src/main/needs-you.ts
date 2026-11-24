@@ -55,6 +55,7 @@ function argumentFreeLine(r: PendingRequest): string | undefined {
   if (tool === 'computer' && (a === 'type' || a === 'key')) return 'Wants to type on your Mac'
   if (tool === 'browser' && (a === 'type' || a === 'fill_form' || a === 'select')) return 'Wants to type in the browser'
   if (tool === 'file_write') return 'Wants to write a file'
+  if (tool === 'file_edit') return 'Wants to edit a file'
   return undefined
 }
 

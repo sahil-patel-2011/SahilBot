@@ -17,7 +17,7 @@ import { assemble, lookup, type Assembled } from './assemble'
 import { META_SOURCES } from './connectors-meta'
 import { forgetMirror, mirrorEntity } from './mirror'
 import { nameParts } from './resolve'
-import { CHILD_REL, cleanSnippet, screen } from './sensitive'
+import { CHILD_REL, askOnlyCategories, askedToRemember, asksToRemember, categoriesOf, cleanSnippet, screen } from './sensitive'
 import { GraphStore, TRUST_RANK, normKey } from './store'
 
 // The context engine, put together: settings and privacy controls, the extraction job the idle
@@ -165,6 +165,8 @@ interface ApplyCtx {
   activity?: boolean
   /** Every fact (metadata too) stays with this bot: what a bot's chat read from a connected app. */
   forceScope?: string
+  /** A chat's own facts: did the user ask to remember the one with this evidence (sensitive ones are kept only then)? */
+  asked?: (evidence?: string) => boolean
 }
 
 export class ContextEngine {
@@ -429,7 +431,7 @@ export class ContextEngine {
         if (m.createdAt <= since || m.role !== 'user' || m.meta?.hidden || !m.content.trim()) continue
         const own = origin === 'user' && !isRelayed(m)
         const fs = own ? extractFromUserText(m.content, { at: m.createdAt }) : extractQuoted(m.content, { at: m.createdAt })
-        n += this.apply(fs, { ...ctx, at: m.createdAt })
+        n += this.apply(fs, { ...ctx, at: m.createdAt, asked: () => asksToRemember(m.content) })
       }
     }
     if (s.sources.connectorsInChats) {
@@ -450,7 +452,8 @@ export class ContextEngine {
         const reply = await ask(ENTITY_SYSTEM, `<known>\n${this.knownNames(botId)}\n</known>\n\n<chat title="${t.title.replace(/"/g, "'").slice(0, 80)}">\n${excerpt}\n</chat>\n\n<outside>\n${outside || '(none)'}\n</outside>`, 1600)
         if (reply) {
           const fs = vetModelFacts(parseEntityReply(reply), { userText: userTextOf(msgs), outsideOnly: origin !== 'user', tainted, outside, secretValues: this.d.secretValues?.() ?? [], at: ctx.at })
-          n += this.apply(fs, ctx)
+          const said = msgs.filter((m) => m.role === 'user' && !m.meta?.hidden && !isRelayed(m)).map((m) => m.content)
+          n += this.apply(fs, { ...ctx, asked: (ev) => askedToRemember(ev, said) })
         }
       }
     }
@@ -510,6 +513,8 @@ export class ContextEngine {
       const key = f.kind === 'attr' ? normKey(f.key ?? 'note') : f.kind === 'rel' ? `rel:${f.rel}` : 'mention'
       const verdict = screen(text, s.sensitive, { secretValues: secrets, child: isChild && f.kind !== 'mention', key: f.kind === 'rel' ? (f.rel === 'family_of' ? 'relationship' : f.rel) : key })
       if (!verdict.ok) continue
+      // Health, money, ID, religion, politics, sexuality said in a chat: kept only when the user asked (like the memory tool).
+      if (c.source.kind === 'chat' && f.trust === 'user' && askOnlyCategories(text).length && !(c.asked?.(f.evidence) ?? false)) continue
       if (f.kind === 'attr') {
         const k = normKey(f.key ?? 'note')
         if (k === 'email') this.store.addAlias(sid, 'email', f.value ?? '', f.trust)
@@ -584,9 +589,10 @@ export class ContextEngine {
    * The memory tool's check (agent/tools/memory.ts): a memory follows the same rules as a People & Places
    * fact: secrets and identifiers never, and a sensitive category the user turned off not either.
    */
-  screenMemory(text: string): { ok: boolean; why?: string; label?: string } {
+  screenMemory(text: string): { ok: boolean; why?: string; label?: string; categories?: string[] } {
     const r = screen(text, this.settings().sensitive, { secretValues: this.d.secretValues?.() ?? [] })
-    if (r.ok) return { ok: true }
+    // Kept: which sensitive categories it touches (the memory tool saves those only when the user asked).
+    if (r.ok) { const categories = categoriesOf(text); return categories.length ? { ok: true, categories } : { ok: true } }
     const label = SENSITIVE_CATEGORIES.find((c) => c.id === r.why)?.label.toLowerCase()
     return { ok: false, why: r.why, ...(label ? { label } : {}) }
   }
@@ -635,6 +641,21 @@ export class ContextEngine {
     if (strong.length !== 1) return { candidates: r.cards.map((c) => c.entity.name) }
     const out = this.forget(strong[0].entity.id)
     return { removed: strong[0].entity.name, candidates: [], trashId: out.trashId }
+  }
+
+  /**
+   * "Forget my address": drops those facts (keys like 'address', relations like 'lives_in') from the user's
+   * own card, as the user (never learned back). Returns how many were removed.
+   */
+  forgetUserFacts(keys: string[], rels: string[] = []): number {
+    const r = this.store.entities({ type: 'person' }).find((e) => e.isUser)
+    if (!r) return 0
+    const want = new Set(keys.map(normKey))
+    let n = 0
+    for (const a of this.store.attributes(r.id)) if (want.has(a.key) && this.store.removeAttribute(a.id, true)) n++
+    for (const rel of this.store.relations(r.id)) if (rel.fromId === r.id && rels.includes(rel.rel) && this.store.removeRelation(rel.id, true)) n++
+    if (n) { this.dirty.add(r.id); this.afterEdit(r.id) }
+    return n
   }
 
   // ---------------------------------------------------------------- People & Places

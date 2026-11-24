@@ -20,16 +20,18 @@ describe('Your brain', () => {
       await page.evaluate(() => window.foreman.settings.set({ local: { enabled: true }, userName: 'Sam' } as never))
       await page.evaluate(() => window.foreman.brain.setSettings({ quietHours: { start: '00:00', end: '00:00' } }))
 
-      await page.click('[data-testid="nav-brain"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-brain"]')
       await page.locator('[data-testid="brain-view"]').waitFor()
       await expect.poll(() => page.locator('[data-testid="brain-source"][data-id="gmail"]').getAttribute('data-state')).toBe('on')
       expect(await page.locator('[data-testid="brain-source"][data-id="hubspot"]').getAttribute('data-state')).toBe('needs-sign-in')
       expect(await page.locator('[data-testid="brain-source"][data-id="texts"]').count()).toBe(1)
       expect(await page.locator('[data-testid="brain-stat-cadence"]').innerText()).toMatch(/~15 min/)
       expect(await page.locator('[data-testid="brain-empty-briefs"]').innerText()).toMatch(/No briefs yet/)
+      // Nothing to search or filter yet: no search box or filter tabs.
+      expect(await page.locator('[data-testid="brain-search"]').count()).toBe(0)
 
       // The first read waits for an OK on its estimate.
-      await page.click('[data-testid="nav-brain"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-brain"]')
       const estimate = page.locator('[data-testid="brain-estimate"]', { hasText: 'Gmail' })
       await expect.poll(() => estimate.count(), { timeout: 15_000 }).toBe(1)
       expect(await estimate.innerText()).toMatch(/Read the last 30 days of Gmail: about 2 emails/)
@@ -44,6 +46,7 @@ describe('Your brain', () => {
       const card = page.locator('[data-testid="brain-brief"]').filter({ has: page.locator('.brain-card-name', { hasText: /^Acme Retail$/ }) })
       await card.waitFor()
       expect(await card.innerText()).toMatch(/CLIENT/i)
+      expect(await page.locator('[data-testid="brain-search"]').count()).toBe(1)
       expect(await card.locator('[data-testid="brain-chip"]').first().innerText()).toMatch(/^Email · /)
       const status = await page.evaluate(() => window.foreman.brain.status())
       expect(status.stats.tools).toBe(2)
@@ -51,8 +54,10 @@ describe('Your brain', () => {
       expect(status.recent[0].jobs.some((j) => j.job === 'extract' && j.model === 'qwen3.8:27b')).toBe(true)
 
       // Agent mode: SahilBot reaches out.
+      // (Once the first read has settled: the page reflows as briefs land.)
+      await expect.poll(async () => (await page.evaluate(() => window.foreman.brain.status())).syncing, { timeout: 20_000 }).toBe(false)
       await page.click('[data-testid="brain-agent-on"]')
-      await expect.poll(async () => (await page.evaluate(() => window.foreman.brain.status())).settings.agentMode).toBe(true)
+      await expect.poll(async () => (await page.evaluate(() => window.foreman.brain.status())).settings.agentMode, { timeout: 10_000 }).toBe(true)
       await page.click('[data-testid="brain-refresh"]')
       await expect.poll(async () => (await page.evaluate(() => window.foreman.needsYou.list())).filter((x) => x.source === 'brain').length, { timeout: 20_000 }).toBeGreaterThan(0)
       await page.click('[data-testid="nav-tasks"]')

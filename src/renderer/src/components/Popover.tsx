@@ -28,7 +28,7 @@ export function Popover({ label, className, menuClass, children, title, testId }
   }, [open])
   return (
     <div className={`pick ${className ?? ''}`} ref={ref}>
-      <button onClick={() => setOpen((o) => !o)} title={title} data-testid={testId}>{label}</button>
+      <button onClick={() => setOpen((o) => !o)} title={title} aria-label={title} data-testid={testId}>{label}</button>
       {open && <div className={`menu ${menuClass ?? ''}`}>{children(() => setOpen(false))}</div>}
     </div>
   )

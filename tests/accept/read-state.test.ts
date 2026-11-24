@@ -40,8 +40,8 @@ describe('read state: unread dots, the running shimmer and the NEW divider', () 
       await idle(page)
       await expect.poll(async () => (await page.evaluate((id) => window.foreman.threads.list(id), space.id))[0].unread).toBe(false)
 
-      // Now you're in another chat (a plain one with SahilBot).
-      await page.click('[data-testid="main-bot"]')
+      // Now you're in another chat (a plain one: New chat, which is what Recents lists).
+      await page.click('[data-testid="new-chat"]')
       llm.script.push({ content: 'Hi! What can I do for you?' })
       await send(page, 'hello there')
       await idle(page)

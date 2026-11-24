@@ -4,7 +4,7 @@ import type { ChatEvent, PurchaseInfo } from '../../src/shared/types'
 // Regression tests for the purchase / one-time-code / vault security review (probes a–d and popup).
 vi.mock('electron', () => ({}))
 const { classifyPurchase, PurchaseGate, isCheckoutUrl, benignClickLabel, otpSiteKey } = await import('../../src/main/browser/checkout')
-const { decide, PURCHASE_STOP } = await import('../../src/main/agent/permissions')
+const { decide, PURCHASE_STOP, spendsMoney } = await import('../../src/main/agent/permissions')
 const { browserTool, clickEffect } = await import('../../src/main/agent/tools/browser')
 const { pickCode, codeCandidate, codeSnippet, brandOf, domainOf, senderDomain } = await import('../../src/main/otp')
 const { originMatches } = await import('../../src/main/vault')
@@ -103,7 +103,10 @@ describe('probe a: purchases that used to slip through', () => {
     expect(clickEffect(r('Docs', { tag: 'div', navLink: false }))).toBe('write_external')
     expect(clickEffect(r('Docs'))).toBe('write_external')
     // Never a read when the label speaks of paying, ordering or sending, or names a price.
-    for (const name of ['Buy now', 'Place order', 'Checkout', 'Send', 'Get it for $9.99', 'Jetzt kaufen']) expect(clickEffect(r(name, { tag: 'a', href: '/x', navLink: true }))).not.toBe('read')
+    for (const name of ['Buy now', 'Place order', 'Checkout', 'Send', 'Jetzt kaufen']) expect(clickEffect(r(name, { tag: 'a', href: '/x', navLink: true }))).not.toBe('read')
+    // A link to another page whose only weight is a price opens that page (classifyPurchase: research, not paying);
+    // on a checkout page the Purchase card still gates it.
+    expect(clickEffect(r('Get it for $9.99', { tag: 'a', href: '/x', navLink: true }))).toBe('read')
     expect(clickEffect({ backendNodeId: 1, role: 'tab', name: 'Pay $5' })).toBe('write_external')
     expect(navLinkOf('a', '/docs', 'https://x.test/home')).toBe(true)
     expect(navLinkOf('a', '#top', 'https://x.test/home')).toBe(false)
@@ -151,8 +154,13 @@ describe('probe a: purchases that used to slip through', () => {
     expect(tool.consequential!({ action: 'click', ref: 'e1' } as never, { threadId: 't' } as never)).toBe(true)
     expect(tool.consequential!({ action: 'type', ref: 'e2', text: 'x', submit: true } as never, { threadId: 't' } as never)).toBe(true)
     expect(tool.consequential!({ action: 'type', ref: 'e2', text: 'x' } as never, { threadId: 't' } as never)).toBe(false)
-    const v = decide({ mode: 'auto', effect: 'write_external', tool: 'browser', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true })
-    expect(v.verdict).toBe('ask')
+    // Auto clicks by itself; what stops a purchase is the browser's own Purchase card at the click (next tests).
+    // A click whose description shows money, a steered click and Ask mode still ask here.
+    const click = { mode: 'auto' as const, effect: 'write_external' as const, tool: 'browser', alwaysAllowed: false, hardStop: null, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential: true }
+    expect(decide(click).verdict).toBe('allow')
+    expect(decide({ ...click, spends: spendsMoney('browser', 'Click "Next $5" on shop.example', null) }).verdict).toBe('ask')
+    expect(decide({ ...click, tainted: true }).verdict).toBe('ask')
+    expect(decide({ ...click, mode: 'ask' }).verdict).toBe('ask')
   })
 
   test('unattended, helper and handoff runs never click or press Enter on a page with shopping signs', async () => {

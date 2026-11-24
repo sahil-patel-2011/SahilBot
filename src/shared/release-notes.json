@@ -1,10 +1,120 @@
 [
   {
+    "version": "26.11.24",
+    "date": "2026-11-24",
+    "title": "Answers you can trust, and fewer interruptions",
+    "highlights": [
+      "An answer shows up once and stays: it's checked before you see it, never posted and then pulled back or rewritten",
+      "Ask a question back and the bot stops there; say \"stop\" (or \"Stop Test 5 now\") and you get one \"Stopped.\"",
+      "Your files are safe: a file you made is never replaced unless you asked to change it; the new one is saved as \"name (2)\"",
+      "Auto asks less: ordinary work no longer brings up money or approval cards by mistake",
+      "Delete a bot by asking, with Undo; rename or change another bot the same way",
+      "Reminders arrive on time even while a bot is busy, on the clock of the place you named"
+    ],
+    "sections": [
+      {
+        "title": "Answers",
+        "items": [
+          "Work answers are double-checked before they appear, so you see one finished answer",
+          "\"Want me to email it to Sam?\" stays an offer: the bot doesn't do the extra step unasked",
+          "Links the bot never opened are taken out of the answer instead of the answer being redone",
+          "If the bot can't confirm something worked, it says so in one plain sentence; drafts you asked for are never flagged"
+        ]
+      },
+      {
+        "title": "Staying in control",
+        "items": [
+          "A stopped task waits for \"Continue.\" instead of taking over your next message",
+          "When a step hangs, the note says what's stuck and offers Retry or Skip",
+          "A CAPTCHA on a site you asked it to open is handed to you; one it meets while researching is skipped for another source"
+        ]
+      },
+      {
+        "title": "Files, bots and voice",
+        "items": [
+          "Commands in Terminal follow the same rule: no silent overwrite of your files, and Undo covers folders and spreadsheets",
+          "Live voice calls are saved in the bot's chat",
+          "The right Google app connects, and the Mac calendar includes repeating events"
+        ]
+      }
+    ]
+  },
+  {
+    "version": "26.11.23",
+    "date": "2026-11-23",
+    "title": "Remembers what you told it, and gets out of your way",
+    "highlights": [
+      "Grok Voice 3.0: talk with your bots live, interrupt any time, and they do the work while you talk",
+      "Undo what a task did to your files: one button on the answer, or just say \"undo that\"",
+      "Dry run any routine: it reads for real and lists what it would send or change, without doing it",
+      "Bots remember what you already told them: \"email my landlord\", \"the usual\", \"near my place\" just work, without repeating yourself",
+      "Before asking you something you already told it, a bot checks its memory and your other chats first",
+      "Talking to a bot is one ongoing conversation, like Grok Bot: no new chat in Recents each time",
+      "A bot's chat shows just the conversation: \"On it.\", then \"<name> is working…\", then the answer",
+      "Settings are the basics only: about 8 per page, no Advanced sections, no look or approval rules to manage",
+      "If a step takes over a minute, the bot tells you in plain words instead of sitting silently"
+    ],
+    "sections": [
+      {
+        "title": "Grok Voice 3.0",
+        "items": [
+          "With Grok as your voice and an xAI key saved, a voice conversation is live: Grok listens, answers in its own voice, and stops the moment you talk over it",
+          "For anything real (your memory, files, apps, email, the web, an action) it hands the request to the bot, which does it in its chat, and Grok tells you the result",
+          "About $0.08 a minute, counted against your monthly limit; if Grok can't connect, the standard voice takes over"
+        ]
+      },
+      {
+        "title": "Safer, clearer",
+        "items": [
+          "Undo puts back files a task changed and takes away files it made (kept in a holding folder, never deleted); a file you changed since is left alone",
+          "Dry run, next to Test on a routine: reads your email, calendar and pages for real, and only lists what it would send, write or post",
+          "Start a fresh conversation with any bot from its profile; it still remembers everything, and earlier conversations are under Past conversations",
+          "A bot's profile shows what it cost this month",
+          "Bot chats show system lines again (\"Paused routine\", undo, messages between bots); only status chatter is hidden"
+        ]
+      },
+      {
+        "title": "Memory",
+        "items": [
+          "Bots match what you said by meaning, not just the same words: \"my boss\" finds your manager, the weather knows your city, and a food question always brings in your allergies and diet",
+          "Bigger models see more of what you told them (up to about 4,000 tokens of memories on a 1M-token model), only what bears on the request",
+          "A long chat brings back a detail you gave early on, word for word, even after it was summarized",
+          "One memory vault for every bot, always remembering the most; there's no per-bot vault or \"how much to remember\" to set",
+          "Generic questions (\"what is an IP address?\") don't pull your personal details in"
+        ]
+      },
+      {
+        "title": "Simpler",
+        "items": [
+          "The home screen is a greeting and the message box, nothing else",
+          "The sidebar: search and new chat at the top, your bots with bigger icons and their last message, Recents only for chats you start; Library and Memory are in your profile menu",
+          "A bot's profile: its routines, Permissions (Ask or Auto) and Customize. Notifications are automatic; the morning check-in, vault and \"runs on <model>\" are gone (ask the bot in chat instead)",
+          "Routines are made, changed and removed by asking the bot; there's no New routine form",
+          "Setup no longer asks about voice or the microphone: your voice is Grok if you added a Grok key, otherwise ChatGPT",
+          "The message box is just the box: no folder chip until a chat works in a folder, no model picker (Auto picks), and the \"Enter / ⌘Enter\" tip only the first time",
+          "The chat header only shows the browser and side panel buttons when there's something in them, and a bot's chat ends on its answer"
+        ]
+      },
+      {
+        "title": "Smarter and steadier",
+        "items": [
+          "A quick math question while a bot works (\"18% of $1,740?\") is answered instantly; other side questions use a faster model",
+          "A double-check that finds and fixes a mistake keeps the fix, even when it takes longer than a minute and a half",
+          "A new script is the simplest one that works, tested once on a sample, with copy-paste steps to run it"
+        ]
+      }
+    ]
+  },
+  {
     "version": "26.11.22",
     "date": "2026-11-22",
     "title": "A simpler SahilBot: every button has one job",
     "highlights": [
+      "Ask a quick question while a bot works on something long and it answers right away; the long job keeps going",
+      "Notes are the bots' own memory, with no screen to manage: ask a bot to forget something or export your notes",
       "Permissions and setup stick: updates no longer make you grant permissions or go through setup again",
+      "Your main bot is a \"New bot\" you can rename just by asking, and pinned bots are big avatars at the top of the sidebar",
+      "Voice is one choice, Grok first, ChatGPT or Claude, and typed replies are never read aloud on their own",
       "New bot asks for just a name, an icon and a color: the bot works out its job with you in its first chat, starting from its name",
       "Settings has six clear sections, each with a one-line explanation, and no \"More settings\" menus",
       "The voice bar is calmer: a smooth wave that follows your voice, one line of status, and plain words with a \"Set up voice\" button when voice isn't ready",
@@ -17,14 +127,72 @@
       {
         "title": "Every button has one job",
         "items": [
-          "The sidebar says Notes (your bots' notes) instead of Vault, so Vault only means passwords",
+          "There is no Notes screen: notes are the bots' own memory, and Vault only means passwords",
           "Settings is the gear at the bottom of the sidebar; the second gear in the chat header is gone",
           "One \"New bot\" button when you have no bots yet, instead of two",
           "The chat menu no longer repeats \"About\": click the bot's name for its settings, routines and files",
           "\"Attach a folder's files\" (in +) and \"Choose folder\" (under the box) say what each one does",
           "Needs you is called Needs you everywhere, and Brain is called Brain everywhere",
           "An empty Brain shows one thing to do, Connect apps, instead of a disabled refresh button and zeros",
-          "The Help menu is now Keyboard Shortcuts, Connect Apps and Settings"
+          "The Help menu is now Keyboard Shortcuts, Connect Apps and Settings",
+          "Every page is the same width, and empty pages say one thing to do instead of showing empty tools",
+          "\"Waiting on you\" questions no longer pre-pick an answer you didn't choose",
+          "Settings → Connected keeps Cursor, MCP and Shortcuts links under \"For developers\"",
+          "When a bot can't confirm something worked, you see its plain explanation and a small \"Needs a check\" tag, not a technical report",
+          "Make a bot by asking (\"make me a Homework Helper bot\"): a new bot with its own chat, job, color and emoji icon, in seconds. Delete, hide, pin or rename one by asking too (deleting asks first)",
+          "Each bot can have its own emoji icon; its profile has Hide and Delete",
+          "The sidebar says Library and Memory, and Needs you shows only when something is waiting",
+          "\"Show work\" on the status line opens the plan, sources and files (it opens by itself the first time); every finished task shows a one-line finish line",
+          "Status says file names, not paths (\"Creating invoice.pdf in Downloads\"); picking anything in the sidebar closes Settings and highlights right away; sending jumps to the newest message",
+          "Opening an installed app (Calculator) no longer warns \"can't be undone\"; looking at running apps or checking a Python version doesn't ask; a reply that needs Accessibility comes with a button that opens it"
+        ]
+      },
+      {
+        "title": "Smarter at real work",
+        "items": [
+          "Make a routine without typing a request: Bot details → Routines → New routine (what, how often, when)",
+          "Change a routine by just asking (\"move it to 9:10 and add Saturdays\"): it's updated in place and keeps its history",
+          "A side answer shows the message it answers, so it's clear which question it's replying to",
+          "A bot that stalls (\"Want me to go ahead?\", \"On it!\" with nothing done) is told to just do what you asked, so you don't have to say \"go ahead\"",
+          "Routines say what is really happening: starting now, running, done (with when it ran) or paused; a one-time reminder runs within 20 seconds of its time",
+          "Bots change part of a file without rewriting it (a new edit tool), and a file can no longer be cut short by writing back only the part a bot saw",
+          "A server a bot starts (\"listening on…\") keeps running in the background instead of blocking the chat, so the bot can use it next",
+          "An API key a bot reads in a file (like .env) is hidden if it copies it into its reply",
+          "A project's own docs/ folder is readable and writable (it used to be mistaken for SahilBot's manual)",
+          "\"I'll add it now\" with nothing done is caught for everyday edits too (add, update, rename, save…), and asks that name a file to write go straight to work",
+          "Every task ends: if a bot is only double-checking an answer it already wrote, a new message ends that run with the answer and starts fresh, and a double-check never runs past 90 seconds",
+          "Answers never vanish while a bot double-checks them, and the checked answer replaces the draft in one bubble instead of appearing twice",
+          "A one-time reminder that fires while its chat is busy waits its turn instead of being dropped",
+          "A bot never replaces a file it hasn't opened: it reads it first, saves under a new name (like name-2.py), or asks",
+          "Internal markup from some models (\":codex-file-citation{…}\") never shows in the chat",
+          "On your ChatGPT or Grok plan, each chat (and each bot) keeps one ongoing conversation with the model instead of resending the whole chat: less of your plan used, and the model keeps its context and compacts it itself. Cloud models use their full context window (up to 1M) by default",
+          "The websites a bot used show under its answer, including pages it read in the built-in browser and answers written when a long task runs out of steps"
+        ]
+      },
+      {
+        "title": "You",
+        "items": [
+          "Settings → You: Send with ⌘↵ (↵ makes a new line) and Check spelling while typing",
+          "What bots learn from (sources, pause, recently removed) is in Settings → Memory → What it learns from",
+          "Setup asks your first name, then your last name and birthday (optional), ready for signing in with Google later. Settings → You has all three",
+          "Bottom left shows your initials and name, like Grok Bot; click it for Settings, right-click for scheduled, usage and more"
+        ]
+      },
+      {
+        "title": "Privacy & safety",
+        "items": [
+          "Mac apps: Allow now asks macOS for real (it's what puts SahilBot in the Automation list), with one button instead of two",
+          "Three tabs instead of five: Passwords, Backups and What it may see",
+          "Passwords has four tabs instead of eight: Logins (with API keys), Cards, IDs & notes, and Security (with history)"
+        ]
+      },
+      {
+        "title": "Bots and pins",
+        "items": [
+          "Notes are the bots' own memory: there is no Notes screen. Ask a bot to forget something and it removes it; ask for your notes and it exports them to your Downloads folder",
+          "The main bot starts as \"New bot\" (SahilBot is the app). Ask it in chat (\"call yourself Juno\") and it renames itself; nothing else can rename it",
+          "Pinned bots are big avatars at the top of the sidebar again, like Grok Bot: one pin is extra large, several sit in a row",
+          "The button for another bot says \"Add a bot\", so it never looks like a bot named \"New bot\""
         ]
       },
       {
@@ -40,6 +208,9 @@
       {
         "title": "Voice",
         "items": [
+          "One choice: Grok, ChatGPT or Claude (Claude opens its own voice mode). Grok comes first when its key is there",
+          "Typed replies are never read aloud on their own: the speaker on a message reads it, and voice conversations talk",
+          "Bottom right of the message box, like Grok Bot: dictate in a grey circle, a voice conversation in a solid one",
           "The wave moves smoothly with your voice and SahilBot's, and calms down when nobody is talking",
           "Transcript, voices, speed and language are behind one \"⋯\" button in the bar",
           "If voice isn't set up, the bar says what to do in one sentence, and the button opens the right setting",
@@ -49,9 +220,12 @@
       {
         "title": "Keyboard",
         "items": [
+          "⌘B hides or shows the sidebar, ⇧⌘F searches, ⌃Tab goes to the next bot, and View → Reload (⌘R) is always there",
+          "⇧⌘I opens the bot's details (routines, library), ⌥↑ / ⌥↓ go to the previous or next bot, ⌘I jumps to the message box",
           "⌘F: every match in the chat is highlighted; Enter and ⇧Enter step through them",
           "⌘1 to ⌘9 open your bots in the order the sidebar lists them",
-          "Help → Keyboard Shortcuts (⌘/) shows every shortcut on one page, including your Quick Ask key"
+          "Help → Keyboard Shortcuts (⌘/) shows every shortcut on one page, including your Quick Ask key",
+          "In the ⌘K menu, ⌘1 to ⌘9 pick a row instead of switching bots behind it"
         ]
       },
       {

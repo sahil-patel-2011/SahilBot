@@ -147,6 +147,7 @@ describe('no errors on a first run', () => {
       await page.locator('[data-testid="onboarding"]').waitFor()
       await page.fill('[data-testid="onboarding-name"]', 'JP')
       await page.click('[data-testid="onboarding-name-next"]')
+      await page.click('[data-testid="onboarding-about-next"]')
       await page.fill('[data-testid="onboarding-key"]', 'sk-ant-test-0000')
       await page.keyboard.press('Enter')
       const claude = page.locator('[data-testid="onboarding-connect-anthropic"]')
@@ -170,7 +171,7 @@ describe('no errors on a first run', () => {
       await settle(page)
 
       // 3. Connect an app: a custom connector with one-click OAuth to the local fake.
-      await page.click('[data-testid="connect-apps"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
       await page.click('[data-testid="preset-custom"]')
       await page.fill('.conn-form input >> nth=0', 'Tasks')
       await page.fill('[data-testid="conn-url"]', fake.url)
@@ -216,6 +217,7 @@ describe('no errors on a first run', () => {
       await page.locator('[data-testid="onboarding"]').waitFor()
       await page.fill('[data-testid="onboarding-name"]', 'JP')
       await page.click('[data-testid="onboarding-name-next"]')
+      await page.click('[data-testid="onboarding-about-next"]')
       await page.click('[data-testid="onboarding-chatgpt-plan"]')
       const status = page.locator('[data-testid="chatgpt-plan-status"]')
       await expect.poll(() => status.innerText(), { timeout: 10_000 }).toContain('Signed in to Codex with ChatGPT')

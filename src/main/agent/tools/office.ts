@@ -11,6 +11,8 @@ import { formatReview, reviewDocument } from '../../docs/review'
 import { buildXlsx, columnStats, editWorkbook, formatSheets, loadWorkbook, parseCsv, readSheets, sheetFromCsv, type CellEdit } from '../../docs/xlsx'
 import type { ToolContext, ToolDef } from '../types'
 import { backup, resolvePath } from './files'
+import { afterChange, beforeChange } from '../undo-journal'
+import { noteOwned, refreshOwned, writeTarget } from './freshness'
 
 // The office tool (found with find_tools("office" / "excel" / "pdf")): spreadsheets read, edited in
 // place (with a backup) and summarized; CSV to typed Excel; PDF forms listed and filled, PDFs merged,
@@ -116,6 +118,8 @@ export interface OfficeDeps {
    * null when no Anthropic key / cloud is off. Paid and budget-checked; at most 25 per call.
    */
   visionReceipt?: (file: string, signal: AbortSignal) => Promise<Omit<Receipt, 'file' | 'status'> | null>
+  /** The user's words for this task (a sheet of theirs they didn't ask to change is edited as a copy). */
+  userText?: (threadId: string) => string
 }
 
 export function officeTool(o: OfficeDeps): ToolDef<OfficeArgs> {
@@ -265,19 +269,31 @@ export function officeTool(o: OfficeDeps): ToolDef<OfficeArgs> {
           return { text: out.join('\n'), display: `summarized ${basename(full)}` }
         }
         case 'sheet_write': {
-          const full = fileIn(a.path, ctx, /\.(xlsx|xlsm)$/i)
+          const asked = fileIn(a.path, ctx, /\.(xlsx|xlsm)$/i)
+          // A sheet of the user's they didn't ask to change: the edit goes to "name (2).xlsx" (as file_edit does).
+          const chat = ctx.state.rootId ?? ctx.threadId
+          let said: string | undefined
+          try { said = chat ? o.userText?.(chat) : undefined } catch { said = undefined }
+          const t = a.out ? { path: asked } : writeTarget({ threadId: ctx.threadId, chat, roots: ctx.state.roots ?? [], userText: said }, asked)
+          const full = t.copyOf && !existsSync(t.path) ? asked : t.path
           const data = readFileSync(full)
           const lossy = await lossyParts(data)
           if (lossy.length && !a.out) throw new Error(`${basename(full)} has ${lossy.join(', ')}, which this editor would drop. Edit it with the app tool in Microsoft Excel (app_help {app: "Microsoft Excel"}), or pass "out" to write an edited copy without them.`)
           const wb = await loadWorkbook(data)
           const r = editWorkbook(wb, a.edits ?? [])
-          const target = a.out ? outPath(a.out, full, ctx, extname(full).toLowerCase()) : full
+          const target = a.out ? outPath(a.out, full, ctx, extname(full).toLowerCase()) : t.path
           if (target === full) backup(ctx.workspaceDir || o.getWorkspace(), full)
+          // In this task's undo journal, like file_edit (Undo puts the sheet back).
+          beforeChange(ctx.threadId, target)
           writeFileSync(target, Buffer.from(await wb.xlsx.writeBuffer()))
+          afterChange(ctx.threadId, target)
+          if (t.copyOf) noteOwned(chat, target)
+          else refreshOwned(chat, target)
+          const copied = t.copyOf ? `\n${basename(t.copyOf)} is the user's and they didn't ask to change it, so it was left as it was and the edit was saved to ${basename(target)} (${target}). Use ${basename(target)} from now on and tell the user in one short line.` : ''
           const lines = r.changed.slice(0, 60).map((c) => `${c.sheet}!${c.cell}: ${c.before || '(empty)'} → ${c.after || '(empty)'}`)
           const errs = r.errors.map((e) => `${e.sheet}!${e.cell} ${e.formula} gives ${e.problem}`)
           return {
-            text: `${target === full ? 'Updated' : 'Wrote'} ${target} (${r.changed.length} cell${r.changed.length === 1 ? '' : 's'}${target === full ? '; the original is backed up' : ''}).\n${lines.join('\n')}${r.changed.length > 60 ? `\n…and ${r.changed.length - 60} more` : ''}${errs.length ? `\nFORMULA ERRORS (fix them):\n${errs.join('\n')}` : ''}${r.unverified.length ? `\n${r.unverified.length} formula(s) use functions not checked here; Excel computes them on open.` : ''}`,
+            text: `${target === full ? 'Updated' : 'Wrote'} ${target} (${r.changed.length} cell${r.changed.length === 1 ? '' : 's'}${target === full ? '; the original is backed up' : ''}).${copied}\n${lines.join('\n')}${r.changed.length > 60 ? `\n…and ${r.changed.length - 60} more` : ''}${errs.length ? `\nFORMULA ERRORS (fix them):\n${errs.join('\n')}` : ''}${r.unverified.length ? `\n${r.unverified.length} formula(s) use functions not checked here; Excel computes them on open.` : ''}`,
             display: `edited ${basename(target)}`,
             path: target
           }

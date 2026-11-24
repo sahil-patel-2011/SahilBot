@@ -107,30 +107,40 @@ describe('an Autonomous bot: what runs, what asks', () => {
     expect(botVerdict({ effect: 'write_external', consequential: false, tool: 'gmail__create_draft', summary: 'Save a draft to Sam' })).toBe('allow')
     expect(botVerdict({ effect: 'destructive', tool: 'file_write', summary: 'Overwrite ~/SahilBot/notes.md (backup kept)' })).toBe('allow')
   })
-  test('a consequential outside action asks; "Always allow" lets a single send run', () => {
-    expect(botVerdict({ effect: 'write_external', consequential: true, tool: 'gmail__send_email', summary: 'Send email to sam@x.com' })).toBe('ask')
-    expect(botVerdict({ effect: 'write_external', consequential: true, tool: 'gmail__send_email', summary: 'Send email to sam@x.com', alwaysAllowed: true, args: { to: 'sam@x.com' } })).toBe('allow')
+  test('a single send runs in Auto; Ask asks unless "Always allow"; a send steered by outside content asks', () => {
+    const send = { effect: 'write_external' as const, consequential: true, tool: 'gmail__send_email', summary: 'Send email to sam@x.com', args: { to: 'sam@x.com' } }
+    expect(botVerdict(send)).toBe('allow')
+    expect(botVerdict({ ...send, tainted: true })).toBe('ask')
+    expect(botVerdict({ ...send, mode: 'ask' })).toBe('ask')
+    expect(botVerdict({ ...send, mode: 'ask', alwaysAllowed: true })).toBe('allow')
   })
-  test('hard stops still stop, even with "Always allow" or an Allow rule', () => {
+  test('hard stops still stop, even with "Always allow" or an Allow rule: money and credentials only', () => {
     const many = { to: Array.from({ length: MASS_SEND_MIN }, (_, i) => `p${i}@x.com`) }
     expect(recipientCount(many)).toBe(MASS_SEND_MIN)
     expect(recipientCount({ to: 'a@x.com, b@x.com', cc: ['c@x.com'], body: 'd@x.com' })).toBe(3)
-    // Mass sends.
-    expect(botVerdict({ effect: 'write_external', tool: 'gmail__send_email', summary: 'Send email', alwaysAllowed: true, args: many })).toBe('ask')
-    expect(botVerdict({ effect: 'write_external', tool: 'mailchimp__send_campaign', label: 'Mailchimp', summary: 'Send the newsletter campaign', rule: 'allow' })).toBe('ask')
     // Money moves.
     expect(botVerdict({ effect: 'write_external', tool: 'stripe__create_refund', summary: 'Refund $40 to Sam', alwaysAllowed: true })).toBe('ask')
     expect(botVerdict({ effect: 'write_external', tool: 'bank__transfer', summary: 'Transfer $200 to savings', rule: 'allow' })).toBe('ask')
+    expect(botVerdict({ effect: 'write_external', tool: 'alpaca__submit_order', summary: 'Alpaca: submit order {"symbol":"AAPL"}', rule: 'allow' })).toBe('ask')
     // Credentials.
     expect(botVerdict({ effect: 'write_external', tool: 'browser', consequential: false, summary: 'Type the verification code into the 2FA field' })).toBe('ask')
     expect(botVerdict({ effect: 'write_local', tool: 'vault_save', summary: 'Save a login' })).toBe('ask')
-    // Deleting the user's data.
-    expect(botVerdict({ effect: 'destructive', tool: 'notion__delete_page', alwaysAllowed: true, rule: 'allow' })).toBe('ask')
-    expect(botVerdict({ effect: 'write_external', tool: 'gmail__batch_modify', consequential: false, summary: 'Delete 40 emails' })).toBe('ask')
-    expect(botVerdict({ effect: 'destructive', tool: 'file_manage', hardStop: 'deleting notes.txt (it goes to the Trash)' })).toBe('ask')
-    // Public posts.
-    expect(botVerdict({ effect: 'write_external', tool: 'x__create_tweet', label: 'X', summary: 'Post a tweet', alwaysAllowed: true })).toBe('ask')
-    expect(botVerdict({ effect: 'write_external', tool: 'linkedin__share', label: 'LinkedIn', summary: 'Publish the post on LinkedIn', rule: 'allow' })).toBe('ask')
+  })
+  test('everything else runs in a bot as in any Auto chat: deletes (Trash), team-chat posts, mass sends and public posts', () => {
+    const many = { to: Array.from({ length: MASS_SEND_MIN }, (_, i) => `p${i}@x.com`) }
+    expect(botVerdict({ effect: 'write_external', tool: 'gmail__send_email', summary: 'Send email', args: many })).toBe('allow')
+    expect(botVerdict({ effect: 'write_external', tool: 'mailchimp__send_campaign', label: 'Mailchimp', summary: 'Send the newsletter campaign' })).toBe('allow')
+    expect(botVerdict({ effect: 'destructive', tool: 'file_manage', summary: 'Move old.txt to the Trash', hardStop: 'deleting old.txt (it goes to the Trash)' })).toBe('allow')
+    expect(botVerdict({ effect: 'destructive', tool: 'run_command', summary: 'Run in Terminal: rm old.txt', hardStop: '"rm old.txt" deletes files or rewrites history' })).toBe('allow')
+    expect(botVerdict({ effect: 'destructive', tool: 'mail', summary: 'Move 1 email(s) to Trash' })).toBe('allow')
+    expect(botVerdict({ effect: 'write_external', tool: 'gmail__batch_modify', consequential: false, summary: 'Delete 40 emails' })).toBe('allow')
+    expect(botVerdict({ effect: 'write_external', tool: 'slack__post_message', label: 'Slack', summary: 'Slack: post message {"channel":"#team","text":"Standup at 10"}' })).toBe('allow')
+    expect(botVerdict({ effect: 'write_external', tool: 'x__create_tweet', label: 'X', summary: 'Post a tweet' })).toBe('allow')
+    // A one-person email that mentions a tip, a reminder to pay rent: not money.
+    expect(botVerdict({ effect: 'write_external', tool: 'mail', summary: 'Send email to Mr. Lopez: "Quick tip: the total is $313.20"', args: { to: ['lopez@school.org'] } })).toBe('allow')
+    expect(botVerdict({ effect: 'write_external', tool: 'schedule', summary: 'Schedule "Pay rent" on the 1st' })).toBe('allow')
+    // A delete the bot itself asks for by chat (manage_bot): no card, it can be undone (soft delete).
+    expect(botVerdict({ effect: 'destructive', tool: 'manage_bot', summary: 'Delete the bot Homework Helper', hardStop: 'deleting the bot Homework Helper and its chat' })).toBe('allow')
   })
   test('purchases and one-time codes keep their own cards (no second, generic card)', () => {
     expect(botHardStop({ tool: 'browser', effect: 'write_external', args: {}, summary: 'Click "Place order"', hardStop: `${PURCHASE_STOP}Place order on shop.com` })).toBeNull()
@@ -179,10 +189,13 @@ describe('question defaults a deadline may use', () => {
 
 describe('unattended runs (routines, wake-ups)', () => {
   const v = (p: Partial<PermissionInput>) => decide({ ...base, unattended: true, ...p }).verdict
-  test('a chat that is not an always-on bot\'s stays cautious when nobody watches', () => {
-    expect(v({ effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('ask')
-    expect(v({ effect: 'destructive', tool: 'file_write' })).toBe('ask')
+  test('a chat that is not an always-on bot\'s works fully in Auto when nobody watches; Ask and taint still ask', () => {
+    expect(v({ effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('allow')
+    expect(v({ effect: 'destructive', tool: 'file_write' })).toBe('allow')
     expect(v({ effect: 'write_external', consequential: false })).toBe('allow')
+    expect(v({ effect: 'write_external', consequential: true, tool: 'gmail__send_email', tainted: true })).toBe('ask')
+    expect(v({ effect: 'write_external', consequential: true, tool: 'stripe__create_refund', spends: true })).toBe('ask')
+    expect(v({ mode: 'ask', effect: 'destructive', tool: 'file_write' })).toBe('ask')
   })
   test('an always-on bot at Auto keeps full Auto: project commands and backed-up overwrites run', () => {
     for (const mode of ['auto', 'autonomous'] as const) {
@@ -194,14 +207,16 @@ describe('unattended runs (routines, wake-ups)', () => {
     expect(v({ alwaysOn: true, mode: 'ask', effect: 'write_local' })).toBe('ask')
     expect(v({ alwaysOn: true, mode: 'ask', effect: 'write_external', consequential: 'project', tool: 'run_command' })).toBe('ask')
   })
-  test('hard stops, taint and the purchase / code gates are exactly as before', () => {
-    expect(v({ alwaysOn: true, effect: 'write_external', consequential: true, tool: 'gmail__send_email' })).toBe('ask')
-    expect(v({ alwaysOn: true, effect: 'destructive', tool: 'file_manage', hardStop: 'deleting notes.txt (it goes to the Trash)' })).toBe('ask')
+  test('the bot\'s hard stops, taint and the purchase / code gates are exactly as before', () => {
+    // A single send runs in Auto now, and so does a delete (it goes to the Trash); money still asks.
+    expect(v({ alwaysOn: true, effect: 'write_external', consequential: true, tool: 'gmail__send_email' })).toBe('allow')
+    expect(v({ alwaysOn: true, effect: 'write_external', consequential: true, tool: 'gmail__send_email', tainted: true })).toBe('ask')
+    expect(botVerdict({ unattended: true, alwaysOn: true, effect: 'destructive', tool: 'file_manage', hardStop: 'deleting notes.txt (it goes to the Trash)' })).toBe('allow')
     expect(v({ alwaysOn: true, effect: 'write_external', consequential: 'project', tool: 'run_command', tainted: true })).toBe('ask')
     expect(v({ alwaysOn: true, effect: 'read', tool: 'fetch_page', tainted: true })).toBe('ask')
     expect(v({ alwaysOn: true, effect: 'write_external', tool: 'browser', hardStop: `${PURCHASE_STOP}Place order` })).toBe('allow')
     expect(v({ alwaysOn: true, effect: 'write_external', tool: 'browser', hardStop: `${OTP_STOP}example.com` })).toBe('allow')
-    expect(botVerdict({ unattended: true, alwaysOn: true, effect: 'write_external', consequential: false, tool: 'x__create_tweet', label: 'X', summary: 'Post a tweet' })).toBe('ask')
+    expect(botVerdict({ unattended: true, alwaysOn: true, effect: 'write_external', consequential: false, tool: 'x__create_tweet', label: 'X', summary: 'Post a tweet' })).toBe('allow')
     expect(botVerdict({ unattended: true, alwaysOn: true, effect: 'write_external', tool: 'bank__transfer', summary: 'Transfer $50', alwaysAllowed: true })).toBe('ask')
   })
 })

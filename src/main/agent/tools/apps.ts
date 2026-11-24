@@ -410,33 +410,132 @@ function briefOf(a: CursorArgs | undefined): Partial<CursorBrief> | undefined {
 // ------------------------------------------------------------------ Apple Notes, Reminders, Calendar
 
 /** Runs a JavaScript for Automation snippet with JSON in and out (no string splicing into scripts). */
-async function jxa(fn: string, input: unknown, signal?: AbortSignal): Promise<unknown> {
+export const jxaLimits = { timeoutMs: 30_000, hintMs: 3000 }
+
+/**
+ * Runs a JavaScript for Automation snippet with JSON in and out (no string splicing into scripts). The first time,
+ * macOS asks "SahilBot wants to control Reminders" and the script waits behind that dialog: after a moment the
+ * working line says so, and a timeout says what to click instead of a raw osascript error.
+ */
+async function jxa(fn: string, input: unknown, signal?: AbortSignal, timeout = jxaLimits.timeoutMs, progress?: (text: string) => void, exec: typeof run = run): Promise<unknown> {
   const script = `function run(argv) { const input = JSON.parse(argv[0]); return JSON.stringify((${fn})(input)); }`
+  const app = /Application\('(\w+)'\)/.exec(fn)?.[1] ?? 'the app'
+  const hint = progress ? setTimeout(() => progress(`macOS may be asking to let SahilBot use ${app}. Look for its dialog and click OK`), jxaLimits.hintMs) : undefined
+  const start = Date.now()
   try {
-    const out = await run('osascript', ['-l', 'JavaScript', '-e', script, JSON.stringify(input)], { timeout: 30_000, signal })
+    const out = await exec('osascript', ['-l', 'JavaScript', '-e', script, JSON.stringify(input)], { timeout, signal })
     return JSON.parse(out || 'null')
   } catch (e) {
     const m = (e as Error).message
     if (/-1743|not allowed|Not authorized/i.test(m)) throw new Error('macOS blocked access. The user can allow SahilBot in System Settings → Privacy & Security → Automation, then try again.')
+    if (!signal?.aborted && Date.now() - start >= timeout - 500) throw new Error(`macOS is waiting for the user to allow SahilBot to control ${app} (its dialog may be behind other windows). They can allow it in that dialog or in System Settings → Privacy & Security → Automation, then try again.`)
     throw e
+  } finally {
+    if (hint) clearTimeout(hint)
   }
 }
+
+/** For tests: jxa with a stand-in for osascript. */
+export const jxaForTest = (fn: string, input: unknown, o: { signal?: AbortSignal; progress?: (t: string) => void; exec: typeof run }): Promise<unknown> => jxa(fn, input, o.signal, undefined, o.progress, o.exec)
 
 type MacArgs = {
   action: 'notes_search' | 'notes_create' | 'reminders_list' | 'reminders_add' | 'calendar_events' | 'calendar_add'
   query?: string; title?: string; body?: string; list?: string; due?: string; days?: number; start?: string; end?: string; calendar?: string
+  from?: string; to?: string
 }
 
-export function macAppsTool(): ToolDef<MacArgs> {
+/** One calendar event as the scripts return it (others: it has invitees or an organizer, so other people wrote parts of it). */
+export interface MacEvent { cal: string; title: string; start: string; end: string; where: string; allDay?: boolean; others?: boolean }
+
+/**
+ * The window calendar_events reads: from the start of today (so an event in progress, or today's all-day event,
+ * is included) for `days` days, or the exact from/to the model gives ("tomorrow" = from and to of that day).
+ */
+export function calendarRange(a: { days?: number; from?: string; to?: string }, now = new Date()): { from: Date; to: Date } {
+  const parse = (s?: string): Date | undefined => {
+    if (!s) return undefined
+    // A bare date ("2026-11-25") is that day on the user's clock, not midnight UTC.
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(s.trim()) ? new Date(`${s.trim()}T00:00`) : new Date(s)
+    return Number.isNaN(d.getTime()) ? undefined : d
+  }
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const from = parse(a.from) ?? today
+  let to = parse(a.to)
+  // A bare end date means through the end of that day.
+  if (to && a.to && /^\d{4}-\d{2}-\d{2}$/.test(a.to.trim())) to = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1)
+  if (!to || to <= from) to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + (a.days ?? (a.from ? 1 : 7)), from.getHours(), from.getMinutes())
+  return { from, to }
+}
+
+// EventKit (through the JavaScript-ObjC bridge) expands repeating events into each occurrence and finds events that
+// started before the window but are still on; Calendar.app's scripting does neither (only a series' first event
+// matches a date filter). EventKit needs Calendar access: asked once (the dialog waits up to a minute), and when
+// it's refused or unavailable the scripting path still answers.
+const CALENDAR_EVENTS = `(i) => {
+  const from = new Date(i.from), to = new Date(i.to), out = []
+  try {
+    ObjC.import('EventKit')
+    const status = () => Number($.EKEventStore.authorizationStatusForEntityType(0))
+    if (status() === 0) {
+      const asker = $.EKEventStore.alloc.init
+      let done = false
+      const cb = () => { done = true }
+      // The completion block may never be called through the bridge: the status itself says when the user answered.
+      try {
+        if (asker.respondsToSelector('requestFullAccessToEventsWithCompletion:')) asker.requestFullAccessToEventsWithCompletion(cb)
+        else asker.requestAccessToEntityTypeCompletion(0, cb)
+      } catch (err) { done = true }
+      const until = Date.now() + 60000
+      while (!done && status() === 0 && Date.now() < until) $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.25))
+    }
+    if (status() === 3) {
+      const store = $.EKEventStore.alloc.init
+      const pred = store.predicateForEventsWithStartDateEndDateCalendars($.NSDate.dateWithTimeIntervalSince1970(from.getTime() / 1000), $.NSDate.dateWithTimeIntervalSince1970(to.getTime() / 1000), null)
+      const evs = store.eventsMatchingPredicate(pred)
+      for (let k = 0; k < Number(evs.count); k++) {
+        const e = evs.objectAtIndex(k)
+        out.push({ cal: ObjC.unwrap(e.calendar.title) || '', title: ObjC.unwrap(e.title) || '(no title)', start: new Date(Number(e.startDate.timeIntervalSince1970) * 1000).toISOString(), end: new Date(Number(e.endDate.timeIntervalSince1970) * 1000).toISOString(), where: ObjC.unwrap(e.location) || '', allDay: !!e.isAllDay, others: !!e.hasAttendees })
+      }
+      return { via: 'eventkit', events: out.sort((a, b) => a.start < b.start ? -1 : 1).slice(0, 80) }
+    }
+  } catch (err) { /* no EventKit here: Calendar's own scripting below */ }
+  const C = Application('Calendar')
+  for (const c of C.calendars()) {
+    for (const e of c.events.whose({ _and: [{ endDate: { _greaterThan: from } }, { startDate: { _lessThan: to } }] })()) {
+      let others = false
+      try { others = e.attendees().length > 0 } catch (err) { others = false }
+      out.push({ cal: c.name(), title: e.summary(), start: e.startDate().toISOString(), end: e.endDate().toISOString(), where: e.location() || '', allDay: !!e.alldayEvent(), others })
+    }
+  }
+  return { via: 'calendar', events: out.sort((a, b) => a.start < b.start ? -1 : 1).slice(0, 80) }
+}`
+
+/** The events as the model reads them, on the user's clock. */
+export function formatEvents(events: MacEvent[], range: { from: Date; to: Date }, via: string): string {
+  // Scripting matches only a repeating series' first event: say so whenever it was the way in, events or not.
+  const caveat = via === 'calendar' ? '\n(Read through Calendar scripting, which can miss repeating events: say so if the user relies on this list; allowing SahilBot full Calendar access in System Settings → Privacy & Security → Calendars fixes that.)' : ''
+  if (!events.length) return `No events from ${range.from.toLocaleString()} to ${range.to.toLocaleString()} in the Mac's Calendar app. A Google Calendar, if connected, is read with its own tools.${caveat}`
+  const day = (d: Date): string => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  return events.map((e) => {
+    const s = new Date(e.start), en = new Date(e.end)
+    const when = e.allDay ? `${day(s)} (all day)` : `${day(s)} ${s.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} – ${en.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+    return `- ${when}: ${e.title}${e.where ? ` @ ${e.where}` : ''} [${e.cal}]${e.others ? ' (invite)' : ''}`
+  }).join('\n') + caveat
+}
+
+type Jxa = (fn: string, input: unknown, signal?: AbortSignal, timeout?: number, progress?: (text: string) => void) => Promise<unknown>
+
+export function macAppsTool(o: { jxa?: Jxa } = {}): ToolDef<MacArgs> {
+  const script = o.jxa ?? jxa
   return {
     name: 'mac_apps',
     label: 'Mac apps',
     group: 'Apple Notes, Reminders, Calendar',
-    // Notes and invites can contain text written by other people.
-    untrusted: true,
+    // Notes and invites can contain text written by other people: those results are outside content (each
+    // result says so). The user's own reminders and events aren't, so reading them doesn't make a later send ask.
     effect: (a) => (/_(search|list|events)$/.test(a.action) ? 'read' : 'write_local'),
     describe: (a) => (a.action === 'notes_create' ? `Create a note "${a.title}"` : a.action === 'reminders_add' ? `Add reminder "${a.title}"${a.due ? ` due ${a.due}` : ''}` : a.action === 'calendar_add' ? `Add "${a.title}" to your calendar at ${a.start}` : a.action.replace('_', ' ')),
-    description: 'The Mac\'s own Notes, Reminders and Calendar apps (no setup; macOS asks once). notes_search(query): find notes. notes_create(title, body). reminders_list(list?): open reminders. reminders_add(title, due? ISO date-time, list?). calendar_events(days? default 7): upcoming events. calendar_add(title, start, end? ISO date-times, calendar?): add an event to the user\'s own calendar (no invitees).',
+    description: 'The Mac\'s Notes, Reminders and Calendar (macOS asks once). notes_search(query). notes_create(title, body). reminders_list(list?). reminders_add(title, due?, list?). calendar_events(from?, to?, days?): a bare date is its whole day; else days from today (default 7). calendar_add(title, start, end?, calendar?): on the user\'s own calendar (no invitees). Times ISO 8601.',
     parameters: {
       type: 'object',
       properties: {
@@ -444,7 +543,8 @@ export function macAppsTool(): ToolDef<MacArgs> {
         query: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, list: { type: 'string' },
         due: { type: 'string', description: 'ISO 8601, e.g. 2026-11-14T09:00' },
         days: { type: 'integer', minimum: 1, maximum: 60 },
-        start: { type: 'string', description: 'ISO 8601' }, end: { type: 'string', description: 'ISO 8601' }, calendar: { type: 'string' }
+        from: { type: 'string' }, to: { type: 'string' },
+        start: { type: 'string' }, end: { type: 'string' }, calendar: { type: 'string' }
       },
       required: ['action'],
       additionalProperties: false,
@@ -459,37 +559,39 @@ export function macAppsTool(): ToolDef<MacArgs> {
       const sig = ctx.signal
       switch (a.action) {
         case 'notes_search': {
-          const r = (await jxa(`(i) => { const N = Application('Notes'); const q = i.query.toLowerCase();
+          const r = (await script(`(i) => { const N = Application('Notes'); const q = i.query.toLowerCase();
             return N.notes().filter((n) => (n.name() + ' ' + n.plaintext()).toLowerCase().includes(q)).slice(0, 10)
-              .map((n) => ({ title: n.name(), modified: n.modificationDate().toISOString(), text: n.plaintext().slice(0, 600) })) }`, { query: a.query }, sig)) as Array<{ title: string; modified: string; text: string }>
-          return { text: r.length ? r.map((n) => `## ${n.title} (${n.modified.slice(0, 10)})\n${n.text}`).join('\n\n') : 'No notes match.', display: `${r.length} notes`}
+              .map((n) => ({ title: n.name(), modified: n.modificationDate().toISOString(), text: n.plaintext().slice(0, 600) })) }`, { query: a.query }, sig, undefined, ctx.progress)) as Array<{ title: string; modified: string; text: string }>
+          return { text: r.length ? r.map((n) => `## ${n.title} (${n.modified.slice(0, 10)})\n${n.text}`).join('\n\n') : 'No notes match.', display: `${r.length} notes`, untrusted: r.length > 0 }
         }
         case 'notes_create': {
-          await jxa(`(i) => { const N = Application('Notes'); const n = N.Note({ name: i.title, body: i.body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\\n/g,'<br>') }); N.defaultAccount().defaultFolder().notes.push(n); return true }`, { title: a.title, body: a.body }, sig)
+          await script(`(i) => { const N = Application('Notes'); const n = N.Note({ name: i.title, body: i.body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\\n/g,'<br>') }); N.defaultAccount().defaultFolder().notes.push(n); return true }`, { title: a.title, body: a.body }, sig, undefined, ctx.progress)
           return { text: `Created the note "${a.title}" in Notes.`, display: `created note "${a.title}"` }
         }
         case 'reminders_list': {
-          const r = (await jxa(`(i) => { const R = Application('Reminders'); const lists = i.list ? R.lists.whose({ name: i.list })() : R.lists();
-            const out = []; for (const l of lists) for (const x of l.reminders.whose({ completed: false })()) { out.push({ list: l.name(), title: x.name(), due: x.dueDate() ? x.dueDate().toISOString() : null }); if (out.length >= 50) return out } return out }`, { list: a.list ?? null }, sig)) as Array<{ list: string; title: string; due: string | null }>
+          const r = (await script(`(i) => { const R = Application('Reminders'); const lists = i.list ? R.lists.whose({ name: i.list })() : R.lists();
+            const out = []; for (const l of lists) for (const x of l.reminders.whose({ completed: false })()) { out.push({ list: l.name(), title: x.name(), due: x.dueDate() ? x.dueDate().toISOString() : null }); if (out.length >= 50) return out } return out }`, { list: a.list ?? null }, sig, undefined, ctx.progress)) as Array<{ list: string; title: string; due: string | null }>
           return { text: r.length ? r.map((x) => `- ${x.title}${x.due ? ` (due ${x.due.slice(0, 16).replace('T', ' ')})` : ''} [${x.list}]`).join('\n') : 'No open reminders.', display: `${r.length} reminders` }
         }
         case 'reminders_add': {
-          await jxa(`(i) => { const R = Application('Reminders'); const l = i.list ? R.lists.whose({ name: i.list })()[0] || R.defaultList() : R.defaultList();
-            const props = { name: i.title }; if (i.due) props.dueDate = new Date(i.due); if (i.body) props.body = i.body; l.reminders.push(R.Reminder(props)); return true }`, { title: a.title, due: a.due ?? null, list: a.list ?? null, body: a.body ?? null }, sig)
+          await script(`(i) => { const R = Application('Reminders'); const l = i.list ? R.lists.whose({ name: i.list })()[0] || R.defaultList() : R.defaultList();
+            const props = { name: i.title }; if (i.due) props.dueDate = new Date(i.due); if (i.body) props.body = i.body; l.reminders.push(R.Reminder(props)); return true }`, { title: a.title, due: a.due ?? null, list: a.list ?? null, body: a.body ?? null }, sig, undefined, ctx.progress)
           return { text: `Added the reminder "${a.title}"${a.due ? ` due ${a.due}` : ''}.`, display: `added reminder "${a.title}"` }
         }
         case 'calendar_events': {
-          const r = (await jxa(`(i) => { const C = Application('Calendar'); const from = new Date(); const to = new Date(Date.now() + i.days * 864e5); const out = [];
-            for (const c of C.calendars()) { for (const e of c.events.whose({ _and: [{ startDate: { _greaterThan: from } }, { startDate: { _lessThan: to } }] })()) out.push({ cal: c.name(), title: e.summary(), start: e.startDate().toISOString(), end: e.endDate().toISOString(), where: e.location() || '' }) }
-            return out.sort((a, b) => a.start < b.start ? -1 : 1).slice(0, 60) }`, { days: a.days ?? 7 }, sig)) as Array<{ cal: string; title: string; start: string; end: string; where: string }>
-          return { text: r.length ? r.map((e) => `- ${new Date(e.start).toLocaleString()} – ${new Date(e.end).toLocaleTimeString()}: ${e.title}${e.where ? ` @ ${e.where}` : ''} [${e.cal}]`).join('\n') : 'No events in that range.', display: `${r.length} events`}
+          const range = calendarRange(a)
+          // A minute and a half: the first read can wait on macOS's Calendar access dialog.
+          const r = (await script(CALENDAR_EVENTS, { from: range.from.toISOString(), to: range.to.toISOString() }, sig, 90_000, ctx.progress)) as { via: string; events: MacEvent[] } | MacEvent[]
+          const events = Array.isArray(r) ? r : r?.events ?? []
+          // Only invites carry other people's words (their titles, places and notes).
+          return { text: formatEvents(events, range, Array.isArray(r) ? 'calendar' : r?.via ?? 'calendar'), display: `${events.length} events`, ...(events.some((e) => e.others) ? { untrusted: true } : {}) }
         }
         case 'calendar_add': {
           const start = new Date(a.start!)
           if (Number.isNaN(start.getTime())) throw new Error('start must be an ISO date-time, e.g. 2026-11-14T09:00')
           const end = a.end ? new Date(a.end) : new Date(start.getTime() + 3600_000)
-          await jxa(`(i) => { const C = Application('Calendar'); const c = i.calendar ? C.calendars.whose({ name: i.calendar })()[0] : C.calendars().find((x) => { try { return x.writable() } catch (e) { return false } }) || C.calendars()[0];
-            c.events.push(C.Event({ summary: i.title, startDate: new Date(i.start), endDate: new Date(i.end) })); return true }`, { title: a.title, start: start.toISOString(), end: end.toISOString(), calendar: a.calendar ?? null }, sig)
+          await script(`(i) => { const C = Application('Calendar'); const c = i.calendar ? C.calendars.whose({ name: i.calendar })()[0] : C.calendars().find((x) => { try { return x.writable() } catch (e) { return false } }) || C.calendars()[0];
+            c.events.push(C.Event({ summary: i.title, startDate: new Date(i.start), endDate: new Date(i.end) })); return true }`, { title: a.title, start: start.toISOString(), end: end.toISOString(), calendar: a.calendar ?? null }, sig, undefined, ctx.progress)
           return { text: `Added "${a.title}" on ${start.toLocaleString()}.`, display: `added "${a.title}"` }
         }
       }

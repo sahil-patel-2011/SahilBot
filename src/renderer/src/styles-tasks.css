@@ -1,6 +1,5 @@
 /* Tasks board (TasksView) and the Goals block in bot details. Tokens only: works in light and dark. */
 
-.tk-page { padding-left: max(28px, calc((100% - 1240px) / 2)); padding-right: max(28px, calc((100% - 1240px) / 2)); }
 
 .tk-filter { display: flex; gap: 4px; flex-wrap: wrap; padding: 3px; border-radius: 999px; background: var(--hover); }
 .tk-filter button {

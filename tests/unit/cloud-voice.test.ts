@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, vi } from 'vitest'
-import { connectedVoice, nativeVoiceSite, voicePreference } from '@shared/voice-provider'
+import { connectedVoice, nativeVoiceSite, voiceChoice, voicePreference } from '@shared/voice-provider'
 import { toWav } from '../../src/main/voice/audio'
 import { grokSpeech } from '../../src/main/voice/grok'
 import { VoiceService } from '../../src/main/voice/service'
@@ -45,4 +45,15 @@ test('cloud-only hands-free speech sends one recording, responds in the current 
     expect(before.mock.calls.map(([name]) => name)).toEqual(['grok-stt', 'grok-tts'])
     expect(after.mock.calls).toEqual(before.mock.calls)
   } finally { service.dispose() }
+})
+
+test('voice is one choice, Grok first: Auto uses Grok when its key is there; Claude opens its own voice mode', () => {
+  expect(connectedVoice('auto', { openai: true, xai: true })).toBe('xai')
+  expect(connectedVoice('auto', { openai: true, xai: false })).toBe('openai')
+  expect(voiceChoice('auto', { openai: true, xai: true })).toBe('xai')
+  expect(voiceChoice('auto', { openai: false, xai: false })).toBe('xai')
+  expect(voiceChoice('auto', { openai: true, xai: false })).toBe('openai')
+  expect(voiceChoice('claude-app', { openai: true, xai: true })).toBe('claude-app')
+  expect(nativeVoiceSite('claude-app')).toBe('https://claude.ai/new')
+  expect(connectedVoice('claude-app', { openai: true, xai: true })).toBeUndefined()
 })

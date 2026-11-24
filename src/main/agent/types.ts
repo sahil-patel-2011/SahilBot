@@ -55,7 +55,7 @@ export interface ToolContext {
   /** Load tools by name into the thread's tool set (find_tools). */
   loadTools(names: string[]): string[]
   /** Search across tools not currently loaded. */
-  searchTools(query: string): Array<{ name: string; description: string; loaded: boolean; connector?: boolean }>
+  searchTools(query: string): Array<{ name: string; description: string; loaded: boolean; connector?: boolean; group?: string }>
   readResult(id: string): string | undefined
   /** Offers a one-click connect card for an app that isn't connected; resolves to the app's tools once connected (empty if not). `fullName`: only an app the query names in full. */
   offerConnect?(query: string, o?: { fullName?: boolean; reason?: string }): Promise<Array<{ name: string; description: string; loaded: boolean }>>
@@ -94,15 +94,18 @@ export interface ToolContext {
    * Live progress from a long-running call (a test run's latest output line, what a Cursor agent is
    * doing right now). Optional: tools must work without it. Shown on the tool's chip while it runs.
    */
-  progress?(text: string): void
+  progress?(text: string, o?: { waitingOnYou?: boolean }): void
   /**
    * Waits for the user to do something on their side (sign in, pass a check) without them having to say so:
    * shows the question card and also polls `done`; when `done` turns true the card closes by itself and this
-   * resolves 'done'. Resolves the user's own answer if they answer first, or 'timeout'.
+   * resolves 'done'. Resolves the user's own answer if they answer first, or 'timeout'. `permission`: the card is a
+   * Mac permission card with the one-tap button that opens that switch (nobody there: 'unavailable' at once).
    */
-  waitForUser?(question: string, done: () => Promise<boolean>, o?: { everyMs?: number; timeoutMs?: number; options?: string[] }): Promise<string>
+  waitForUser?(question: string, done: () => Promise<boolean>, o?: { everyMs?: number; timeoutMs?: number; options?: string[]; permission?: import('@shared/types').PermissionKind }): Promise<string>
   /** The user approved this exact call (an approval card), so commands it runs aren't sandboxed. */
   approved?: boolean
+  /** Auto let this call run without a card (not Ask mode): a saved login may sign in on its own site (never another one). */
+  autoRun?: boolean
   /** Run terminal commands under the write sandbox (advanced.sandboxCommands; default on). */
   sandbox?: boolean
 }
@@ -136,6 +139,11 @@ export interface ToolDef<A = any> {
    */
   consequential?: (args: A, call: { threadId: string; unattended?: boolean; state?: ThreadState }) => boolean | 'project'
   /**
+   * Its effects happen later, in a run of their own that is checked when it acts (a routine): setting it up never
+   * spends money or deletes anything, so the words in its summary ("Pay rent", "Delete old files") never ask.
+   */
+  deferred?: boolean
+  /**
    * Returns a reason when this call falls on the hard-stop list. `call` (when the loop has it): the chat's
    * attached folders and working folder, so a path outside them can ask first.
    */
@@ -164,6 +172,8 @@ export interface ThreadState {
   /** Tools the user allowed "always" in this thread. */
   alwaysAllow: string[]
   todos: TodoItem[]
+  /** The user stopped the task this plan belongs to: it waits, and drives a run again only when they say to go on. */
+  planPaused?: boolean
   /** The system prompt frozen for this thread so the server's KV cache prefix stays valid. */
   systemSnapshot?: string
   /** Group chats: one frozen system prompt per member bot. */
@@ -179,6 +189,8 @@ export interface ThreadState {
   folder?: string
   /** A voice conversation: spoken-style prompt and a 16k window. */
   voice?: boolean
+  /** A routine running beside a busy bot chat: the bot's chat it posts into (it keeps that bot's hard stops and Needs you). */
+  routineHost?: string
   /** This chat's bot is still being set up (a "New bot"): finish_setup is offered. */
   botSetup?: boolean
   /** Messages up to and including `boundaryId` are represented by `summary`. */
@@ -270,6 +282,8 @@ export interface PermissionInput {
   hardStopsEnabled: boolean
   /** Arguments contain values that came from fetched content rather than from the user. */
   tainted: boolean
+  /** Why outside content may have steered it (steeredRisk: "deletes taxes.pdf, which you didn't name"), for the card. */
+  steerReason?: string
   /** Arguments contain a vault secret's plain text. */
   leaksSecret: boolean
   /**
@@ -278,6 +292,10 @@ export interface PermissionInput {
    * its folder, git fetch/pull): Auto runs it (attended); Ask treats it as consequential.
    */
   consequential?: boolean | 'project'
+  /** It spends money (a payment, refund, charge, transfer, subscription or paid credits): Auto asks (spendsMoney()). */
+  spends?: boolean
+  /** A long-term memory save that reads like an instruction after reading outside content (memoryRisk): Auto asks. */
+  planted?: boolean
   /** A run with nobody watching (routine, goal wake-up, helper): Auto works cautiously (decide()). */
   unattended?: boolean
   /**

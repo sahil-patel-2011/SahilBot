@@ -77,7 +77,8 @@ export function FunctionBots({ templates, adding, onAdd, onConnect }: {
 /** Sidebar: a short word under the bot's name while it's doing something (nothing when Idle). */
 export function sidebarStatusText(s: BotStatus | undefined, unread: boolean): string | null {
   const st = withUnread(s, unread).state
-  return st === 'context' ? `${STATE_LABELS.context}…` : st === 'working' ? `${STATE_LABELS.working}…` : null
+  // One plain word while it works (no "Pulling context…"): the details are in the bot's chat when you want them.
+  return st === 'context' || st === 'working' ? `${STATE_LABELS.working}…` : null
 }
 
 /** The bot card's line: a status dot, the state, and the model its last reply ran on. */
@@ -88,7 +89,7 @@ export function BotStatusLine({ space }: { space: Space }) {
     <div className={`bot-status st-${s.state}`} data-testid={`bot-status-${space.id}`} data-state={s.state}>
       <span className="bs-dot" aria-hidden="true" />
       <span className="bs-state">{STATE_LABELS[s.state]}{s.state === 'working' || s.state === 'context' ? '…' : ''}</span>
-      {s.runsOn && <span className="bs-model" data-testid="bot-runs-on" title={s.model ? `Last reply: ${s.model}. Auto still picks the best model for each request.` : undefined}>· runs on {s.runsOn}</span>}
+      {/* No "runs on <model>": the bot picks the best model for each request itself. */}
     </div>
   )
 }

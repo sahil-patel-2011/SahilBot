@@ -6,7 +6,7 @@ const none = { recent: [], apps: [], made: [], projects: [] }
 describe('Home starter tiles', () => {
   test('a new user sees the generic set, and the deck tile has no fixed slide count', () => {
     const t = homeIdeas(none)
-    expect(t.map((x) => x.label)).toEqual(['Plan a trip', 'Use my Mac', 'Build an app', 'Make a deck', 'Morning brief', 'Watch a page', 'Make a video'])
+    expect(t.map((x) => x.label)).toEqual(['Plan a trip', 'Use my Mac', 'Morning brief', 'Make a deck', 'Build an app', 'Watch a page', 'Make a video'])
     expect(t.find((x) => x.label === 'Make a deck')!.text).not.toMatch(/\d+-slide/)
     expect(t.every((x) => !x.personal)).toBe(true)
   })

@@ -39,7 +39,7 @@ const verdicts = (command: string, ws = P) => {
   const consequential = t.consequential!({ command }, { threadId: 't', state: emptyState() })
   const hardStop = t.hardStop!({ command })
   const at = (mode: PermissionMode) => decide({ mode, effect, tool: 'run_command', alwaysAllowed: false, hardStop, hardStopsEnabled: true, tainted: false, leaksSecret: false, consequential }).verdict
-  return { effect, auto: at('auto'), autonomous: at('autonomous'), hardStop }
+  return { effect, ask: at('ask'), auto: at('auto'), autonomous: at('autonomous'), hardStop }
 }
 
 describe('HIGH 1: write_local is an allowlist; unknown, network, runners and inline code ask', () => {
@@ -56,11 +56,13 @@ describe('HIGH 1: write_local is an allowlist; unknown, network, runners and inl
     'nohup node server.js >/dev/null 2>&1 &', 'npm run dev &', 'setsid node x.js', 'screen -dmS x node x.js', 'tmux new -d node x.js', 'eval "$X"',
     'find . -exec curl {} \\;', 'awk \'BEGIN{system("curl x")}\' f', 'npm run nope', 'pnpm evil-bin', 'yarn evil-bin', 'npm install --script-shell=./evil.sh', 'python3 /opt/elsewhere/x.py'
   ]
-  test.each(asks)('asks in Auto and Autonomous: %s', (c) => {
+  // Still classified as acting outside (or destructive): Ask asks, and a web page or email steering it asks in every
+  // level (the taint tests below). Auto (Nov 2026) lets the user's own requests through.
+  test.each(asks)('acts outside: Ask asks, Auto runs it for you: %s', (c) => {
     const v = verdicts(c)
     expect(['write_external', 'destructive']).toContain(v.effect)
-    expect(v.auto).toBe('ask')
-    expect(v.autonomous).toBe('ask')
+    expect(v.ask).toBe('ask')
+    expect(v.auto).toBe('allow')
   })
   const local = ['make', 'cmake --build build', 'cargo build', 'cargo test', 'go test ./...', 'tsc --noEmit', 'eslint src', 'prettier --write .', 'vitest run', 'pytest -q', 'mocha',
     'npm test', 'npm run build', 'pnpm run build', 'pnpm build', 'yarn test', 'python3 build.py', 'python3 -m pytest', 'node build.py', './node_modules/.bin/vitest run',
@@ -102,7 +104,9 @@ describe('HIGH 2 + MEDIUM 3: project commands', () => {
     expect(isProjectCommand('npm ci', P, [P], { state: state() })).toBe(true)
     for (const c of [`npm ci && cp evil.plist ${homedir()}/Library/LaunchAgents/x.plist`, `git pull && cp a ${homedir()}/.zshrc`, 'npm install && npm test', 'npm install --script-shell=./evil.sh', 'cd $HOME && git pull', 'git pull evil main', 'cd - && npm ci', 'cd ~root && npm ci']) {
       expect(isProjectCommand(c, P, [P], { state: state() }), c).toBe(false)
-      expect(verdicts(c).autonomous, c).toBe('ask')
+      // Not a project step, so Ask asks. Auto runs your own request; the sandbox still refuses login items and
+      // shell startup files (sandboxProfile below).
+      expect(verdicts(c).ask, c).toBe('ask')
     }
   })
   test('a modified, untracked or chat-written lockfile / .npmrc makes installs ask', () => {

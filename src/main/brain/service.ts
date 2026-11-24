@@ -33,6 +33,10 @@ import { BrainStore, type StoredPrompt } from './store'
 const STATE_KEY = 'brain:state'
 const DAY = 86_400_000
 const TICK_MS = 60_000
+/** Quick reads for event routines: how often, how many items, and the backlog past which they wait for a sync. */
+const QUICK_READ_MS = 5 * 60_000
+const QUICK_READ_ITEMS = 20
+const QUICK_BACKLOG_MAX = 500
 
 type Chat = (req: ChatRequest) => AsyncIterable<StreamPart>
 
@@ -85,6 +89,10 @@ export interface BrainDeps {
   notify?: (p: BrainPrompt) => void
   openLink?: (link: string) => void
   onChange?: () => void
+  /** Items read for the first time (kept or filtered): "when an email arrives" routines look at them. */
+  onNew?: (items: RawItem[]) => void
+  /** Some routine waits for new items: between syncs, a quick read (no model, nothing spent) every few minutes. */
+  wantsQuickReads?: () => boolean
   now?: () => number
 }
 
@@ -131,6 +139,9 @@ export class BrainService {
       if (cur && !this.sourceOn(def, before) && this.sourceOn(def, next)) { cur.head = Math.max(cur.head, this.now()); cur.gaps = []; moved = true }
     }
     if (moved) this.patch({ cursors: st.cursors })
+    // Agent mode just turned on: what's already known (open requests with deadlines) can reach the user now, not
+    // only after the next sync. Mid-sync, that sync surfaces them when it ends.
+    if (!before.agentMode && next.agentMode && !next.paused && !this.current) { try { this.surfacePrompts(next, this.now()) } catch { /* the next sync tries again */ } }
     this.changed()
     return next
   }
@@ -271,14 +282,35 @@ export class BrainService {
     if (this.stopped || this.current) return null
     this.resurface()
     const cad = this.cadenceNow()
-    if (!due(cad, this.state().lastSyncAt, this.now())) return null
+    if (!due(cad, this.state().lastSyncAt, this.now())) { await this.quickRead(cad); return null }
     return this.sync('schedule')
+  }
+
+  private lastQuickAt = 0
+  /** Refresh was pressed during a sync: one more runs when it ends. */
+  private again = false
+  /**
+   * Between syncs, while a "when an email arrives" routine is waiting: read new items only (no model call, so it runs
+   * even when today's brain budget is used). They're extracted on the next sync. Not while the brain is paused, the Mac
+   * sleeps or the battery is low.
+   */
+  private async quickRead(cad: { paused?: string }): Promise<void> {
+    const now = this.now()
+    if (this.current || this.stopped || now - this.lastQuickAt < QUICK_READ_MS || !this.d.wantsQuickReads?.()) return
+    const s = this.settings()
+    if (s.paused || (cad.paused && !/budget|monthly/.test(cad.paused))) return
+    this.lastQuickAt = now
+    const ctrl = new AbortController()
+    this.current = { ctrl, job: 'Checking for new mail', usd: 0 }
+    try { await this.readSources(s, now, ctrl.signal, Math.min(QUICK_READ_ITEMS, Math.max(0, QUICK_BACKLOG_MAX - this.store.pendingCount()))) } catch { /* the next sync reads it */ } finally { this.current = null }
   }
 
   /** "Refresh now". */
   async refresh(): Promise<BrainStatus> {
     if (this.settings().paused) throw new Error('The brain is paused. Turn it back on to refresh.')
+    // Already syncing: another one starts right after (what you asked for may have come in after it read).
     if (!this.current) void this.sync('manual').catch(() => undefined)
+    else this.again = true
     return this.status()
   }
 
@@ -316,6 +348,7 @@ export class BrainService {
     } finally {
       this.current = null
     }
+    if (this.again && !this.stopped) { this.again = false; setTimeout(() => void this.sync('manual').catch(() => undefined), 0) }
     const usd = [...jobs.values()].reduce((a, j) => a + j.usd, 0)
     const parts = [
       out.kept ? `read ${out.kept} new ${out.kept === 1 ? 'item' : 'items'}` : '',
@@ -340,12 +373,12 @@ export class BrainService {
     if (this.current?.ctrl.signal.aborted) throw new Halt(this.asleep ? 'Paused: the Mac went to sleep.' : 'Stopped.')
   }
 
-  private async readSources(s: BrainSettings, now: number, signal: AbortSignal): Promise<{ read: number; kept: number; dropped: number }> {
+  private async readSources(s: BrainSettings, now: number, signal: AbortSignal, cap?: number): Promise<{ read: number; kept: number; dropped: number }> {
     const io = this.d.io()
     const st = this.state()
     let read = 0, kept = 0, dropped = 0
     // A backlog waiting for extraction (budget ran out) is read first: no new reading until it shrinks.
-    let left = Math.max(0, s.maxItemsPerSync - this.store.pendingCount())
+    let left = cap ?? Math.max(0, s.maxItemsPerSync - this.store.pendingCount())
     for (const def of this.activeSources(s)) {
       if (left <= 0) break
       this.check()
@@ -374,7 +407,9 @@ export class BrainService {
         }
         cur.gaps = cur.gaps.slice(0, 5)
         if (!cur.gaps.length && st.backfill[def.id]?.state === 'running') st.backfill[def.id] = { ...st.backfill[def.id], state: 'done' }
-        const r = this.take(items)
+        // Only mail newer than when SahilBot started reading this source can set off a routine (never a backfill).
+        const since = cur.since
+        const r = this.take(items, (x) => !x.at || x.at >= since)
         read += r.read; kept += r.kept; dropped += r.dropped
         delete st.errors[def.id]
       } catch (e) {
@@ -388,11 +423,13 @@ export class BrainService {
   }
 
   /** New items into the store: kept ones wait for extraction, filtered ones are remembered (never read again). */
-  private take(items: RawItem[]): { read: number; kept: number; dropped: number } {
+  private take(items: RawItem[], triggerable: (x: RawItem) => boolean = () => true): { read: number; kept: number; dropped: number } {
     const fresh = items.filter((x, i) => x.id && !this.store.hasItem(x.source, x.id) && items.findIndex((y) => y.source === x.source && y.id === x.id) === i)
     const f = prefilter(fresh, (h) => this.store.hasHash(h))
     for (const x of f.kept) this.store.addItem(x, f.hashes.get(x)!, 'pending', { raw: JSON.stringify(x) })
     for (const { item, reason } of f.dropped) this.store.addItem(item, f.hashes.get(item)!, 'dropped', { reason })
+    const live = fresh.filter(triggerable)
+    if (live.length) try { this.d.onNew?.(live) } catch { /* a routine trigger never fails the read */ }
     return { read: fresh.length, kept: f.kept.length, dropped: f.dropped.length }
   }
 

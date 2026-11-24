@@ -2,7 +2,8 @@ import type { ToolEffect } from '@shared/types'
 import { clip } from '../../code/proc'
 import { isLive, jobLine, jobs as defaultJobs, type JobManager, type WaitFor } from '../../jobs/manager'
 import type { ToolContext, ToolDef } from '../types'
-import { commandEffect, systemReason } from './shell'
+import { ownedHere } from './freshness'
+import { commandEffect, commandReadsOutside, systemReason } from './shell'
 
 // The jobs tool: background jobs this chat started with run_command background: true.
 // list / output / wait only look (read); stop changes things on this Mac (write_local); restart runs the
@@ -47,8 +48,8 @@ export function jobsTool(o: { jobs?: JobManager } = {}): ToolDef<Args> {
     label: 'Jobs',
     core: false,
     group: 'Coding',
-    // Output is whatever the program printed (it may echo web content): treated as untrusted.
-    untrusted: true,
+    // Output is whatever the program printed: untrusted when the job's command reaches outside this Mac or reads a
+    // download (commandReadsOutside, per call below); a dev server's own log is the user's data.
     effect: (a, c) => effect(a, c?.roots ?? []),
     consequential: () => true,
     hardStop: (a) => {
@@ -100,14 +101,14 @@ export function jobsTool(o: { jobs?: JobManager } = {}): ToolDef<Args> {
       if (a.action === 'output') {
         const out = jobs.output(j.id, { tail: a.tail, grep: a.grep })
         const body = clip(out.lines.join('\n'), 20_000, 'characters')
-        return { text: `${jobLine(jobs.get(j.id) ?? j)}\n${a.grep ? `${out.lines.length} matching line(s) of the last ${out.kept}` : `Last ${out.lines.length} of ${out.total} lines`}:\n${body || '(no output)'}`, display: `${j.id} · ${out.lines.length} lines` }
+        return { untrusted: commandReadsOutside(j.command, { cwd: j.cwd, ours: (p) => ownedHere(ctx.state?.rootId ?? ctx.threadId, p) }), text: `${jobLine(jobs.get(j.id) ?? j)}\n${a.grep ? `${out.lines.length} matching line(s) of the last ${out.kept}` : `Last ${out.lines.length} of ${out.total} lines`}:\n${body || '(no output)'}`, display: `${j.id} · ${out.lines.length} lines` }
       }
       if (a.action === 'wait') {
         const w: WaitFor = { text: a.text, regex: a.regex, port: a.port, exit: a.exit ?? (!a.text && !a.regex && !a.port), timeout: a.timeout }
         const r = await jobs.wait(j.id, w, ctx.signal)
         const tail = jobs.output(j.id, { tail: 20 }).lines.join('\n')
         const said = r.reason === 'matched' ? `matched after ${(r.ms / 1000).toFixed(1)}s: ${r.line ?? ''}` : r.reason === 'port' ? `port ${a.port} is accepting connections` : r.reason === 'exited' ? `the job ended: ${r.job.status}${r.job.exitCode !== null ? ` (exit ${r.job.exitCode})` : ''}` : r.reason === 'timeout' ? `not yet after ${a.timeout ?? 60}s` : 'stopped waiting'
-        return { text: `${r.ok ? 'Done' : 'Not done'}: ${said}\n${jobLine(r.job)}\nLast output:\n${clip(tail, 6000) || '(none)'}`, display: `${j.id} · ${r.reason}` }
+        return { untrusted: commandReadsOutside(j.command, { cwd: j.cwd, ours: (p) => ownedHere(ctx.state?.rootId ?? ctx.threadId, p) }), text: `${r.ok ? 'Done' : 'Not done'}: ${said}\n${jobLine(r.job)}\nLast output:\n${clip(tail, 6000) || '(none)'}`, display: `${j.id} · ${r.reason}` }
       }
       if (a.action === 'stop') {
         const s = await jobs.stop(j.id)
@@ -117,7 +118,7 @@ export function jobsTool(o: { jobs?: JobManager } = {}): ToolDef<Args> {
       if (!r) throw new Error(`No job ${j.id}.`)
       const w = await jobs.wait(j.id, { regex: 'https?://(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::)', timeout: 6 }, ctx.signal)
       const tail = jobs.output(j.id, { tail: 20 }).lines.join('\n')
-      return { text: `Restarted ${j.id}.\n${jobLine(w.job)}\nOutput so far:\n${clip(tail, 6000) || '(none yet)'}`, display: `restarted ${j.id}`, meta: { job: { id: j.id, url: w.job.urls[0] ?? null, status: w.job.status } } }
+      return { untrusted: commandReadsOutside(j.command, { cwd: j.cwd, ours: (p) => ownedHere(ctx.state?.rootId ?? ctx.threadId, p) }), text: `Restarted ${j.id}.\n${jobLine(w.job)}\nOutput so far:\n${clip(tail, 6000) || '(none yet)'}`, display: `restarted ${j.id}`, meta: { job: { id: j.id, url: w.job.urls[0] ?? null, status: w.job.status } } }
     }
   }
 }

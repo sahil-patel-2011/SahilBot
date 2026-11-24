@@ -7,13 +7,18 @@ export type VoiceEvent =
   | { type: 'state'; state: 'idle' | 'listening' | 'hearing' | 'thinking' | 'speaking' }
   | { type: 'partial'; text: string }
   | { type: 'transcript'; text: string }
-  | { type: 'reply'; text: string }
+  /** Reply text: a streamed piece, or (whole) one complete spoken reply that replaces the caption. */
+  | { type: 'reply'; text: string; whole?: boolean }
   /** Something said on its own, between turns (a bot finished work started in this conversation). */
   | { type: 'announce'; text: string }
   | { type: 'audio'; audio: Float32Array; rate: number }
   | { type: 'stop-audio' }
   | { type: 'metric'; name: 'first_audio_ms' | 'stt_ms'; ms: number }
   | { type: 'error'; message: string }
+  /** A passing note (fell back to the standard voice, a request the server turned down): shown briefly, never an error. */
+  | { type: 'notice'; message: string }
+  /** A live call ended (by itself or hung up): stop the microphone and end the conversation. */
+  | { type: 'ended' }
 
 export interface PipelineDeps {
   vad: Vad

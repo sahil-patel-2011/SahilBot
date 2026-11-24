@@ -145,4 +145,162 @@ describe('voice conversations in the chat', () => {
     // The transcript itself is folded away.
     expect(html).not.toContain('data-testid="user-bubble"')
   })
+
+  it('a live call\'s words fold with the call (even after a typed message); the brief Grok wrote is a small line, not yours', () => {
+    const s0 = T0 + 70_000_000
+    const typed = msg({ role: 'user', content: 'Typed during the call', createdAt: s0 + 1000 })
+    const typedReply = msg({ content: 'Got it.', createdAt: s0 + 2000 })
+    const spokenUser = msg({ role: 'user', content: 'and what about friday', createdAt: s0 + 3000, meta: { voice: true, spoken: true, aside: true } })
+    const spokenReply = msg({ content: 'Friday is clear.', createdAt: s0 + 4000, meta: { voice: true, spoken: true, aside: true } })
+    expect(tv.foldVoice([typed, typedReply, spokenReply], new Set(), { since: s0, transcript: false }).map((m) => m.id)).toEqual([typed.id, typedReply.id])
+    expect(tv.foldVoice([typed, spokenUser, spokenReply], new Set(), { since: s0, transcript: true })).toHaveLength(3)
+    const brief = msg({ role: 'user', content: 'Email Priya the meeting notes', createdAt: s0 + 5000, meta: { voice: true, voiceBrief: true } })
+    const html = renderToString(createElement(tv.ThreadView, { messages: [spokenUser, brief, msg({ content: 'Sent.', createdAt: s0 + 6000 })], running: false, pending: [], actions }))
+    expect(html).toContain('data-testid="voice-brief"')
+    expect(html.replace(/<!-- -->/g, '')).toContain('Asked the bot: Email Priya the meeting notes')
+    // Your own words are the one bubble from you.
+    expect(html.match(/data-testid="user-bubble"/g)).toHaveLength(1)
+    expect(html).toContain('and what about friday')
+  })
+})
+
+// Grok Bot head-to-head (RLB-01, ALD-04): check first, post once. An answer the app checks before accepting it is
+// not on screen while the run works, then shows once it is final; nothing that was posted is pulled back.
+describe('answers are posted once', () => {
+  const ask = (): Message => msg({ role: 'user', content: 'Plan the Savannah trip' })
+  for (const botName of [undefined, 'Trip Planner']) {
+    it(`a held answer shows only once it stands${botName ? ' (bot chat)' : ''}`, () => {
+      const q = ask()
+      const draft = msg({ content: 'Day 1: River Street walk.', meta: { provisional: true } })
+      const render = (ms: Message[], running: boolean): string => renderToString(createElement(tv.ThreadView, { messages: ms, running, pending: [], actions, botName }))
+      // Written, not yet accepted: out of sight, the working line up.
+      let html = render([q, draft], true)
+      expect(html).not.toContain('River Street')
+      expect(html).toContain('data-testid="status-line"')
+      // Streaming out of sight: still the working line.
+      html = render([q, { ...draft, status: 'streaming' }], true)
+      expect(html).not.toContain('River Street')
+      expect(html).toContain('data-testid="status-line"')
+      // Final: shown, even while the run finishes up.
+      html = render([q, { ...draft, meta: {} }], true)
+      expect(html).toContain('River Street')
+    })
+  }
+
+  it('a bot chat keeps an answer it already showed on screen while it is checked, until the checked one is written', () => {
+    const q = ask()
+    const draft = msg({ content: 'Day 1: River Street walk.', meta: { superseded: true, checking: true } })
+    const html = renderToString(createElement(tv.ThreadView, { messages: [q, draft, msg({ role: 'user', content: '[From the app] check', meta: { hidden: true } })], running: true, pending: [], actions, botName: 'Trip Planner' }))
+    expect(html).toContain('River Street')
+    expect(html).not.toContain('Double-checking')
+  })
+})
+
+describe('post once', () => {
+  // Report ALD-04 / RLB-01: an answer still subject to the app's checks (provisional) is never shown, streaming or
+  // done; the working line stays up instead. Once it stands (provisional cleared) it shows, once.
+  it('a provisional reply is not shown while the run works; its tool calls are; once settled it shows', () => {
+    const ask = msg({ role: 'user', content: 'Plan a 3-day trip to Savannah' })
+    const writing = msg({ content: 'Day 1: River Street…', status: 'streaming', meta: { provisional: true } })
+    const call = { id: 'p1', name: 'web_search', arguments: '{"query":"savannah hotels"}' }
+    const working = msg({ content: 'Checking a few hotels first.', toolCalls: [call], meta: { provisional: true } })
+    expect(tv.blocks([ask, working]).filter((b) => b.kind === 'activity')).toHaveLength(1)
+    const done = { ...writing, status: 'done' as const, meta: {} }
+    expect(tv.blocks([ask, done]).filter((b) => b.kind === 'text')).toHaveLength(1)
+    // While it is written out of sight, the chat shows the working line, not the half-written answer.
+    const render = (ms: Message[], running: boolean): string => renderToString(createElement(tv.ThreadView, { messages: ms, running, pending: [], actions }))
+    expect(render([ask, writing], true)).not.toContain('River Street')
+    // A stopped or failed one shows at once (it is not coming back).
+    expect(render([ask, { ...writing, status: 'stopped' }], true)).toContain('River Street')
+    expect(render([ask, { ...writing, status: 'error' }], true)).toContain('River Street')
+  })
+
+  // RLB-01: after the run (or a crash mid-run) nothing it wrote stays hidden for good.
+  it('a provisional reply left after the run ends is shown', () => {
+    const ask = msg({ role: 'user', content: 'Plan a 3-day trip to Savannah' })
+    const left = msg({ content: 'Day 1: River Street walk.', meta: { provisional: true } })
+    expect(renderToString(createElement(tv.ThreadView, { messages: [ask, left], running: false, pending: [], actions }))).toContain('River Street')
+    expect(renderToString(createElement(tv.ThreadView, { messages: [ask, left], running: true, pending: [], actions }))).not.toContain('River Street')
+  })
+})
+
+describe('routine runs in the chat', () => {
+  it('a routine\'s instructions show as a small "Routine" line, never as your own editable bubble', () => {
+    const ms = [
+      msg({ role: 'user', content: 'Hi' }),
+      msg({ content: 'Hello!' }),
+      msg({ role: 'user', content: '⏰ Atlanta weather\n\nSend me the Atlanta weather', meta: { scheduled: 'r1' } }),
+      msg({ content: 'Sunny, 61°F.' })
+    ]
+    const bs = tv.blocks(ms)
+    expect(bs.map((b) => b.kind)).toEqual(['user', 'text', 'notice', 'text'])
+    expect((bs[2] as { m: Message }).m.content).toBe('⏰ Routine · Atlanta weather')
+    expect(bs.filter((b) => b.kind === 'user').map((b) => (b as { m: Message }).m.content)).toEqual(['Hi'])
+  })
+})
+
+describe('a reply that froze halfway', () => {
+  it('still gets the stall note with Retry and Skip under the half-written text', () => {
+    const ask = msg({ role: 'user', content: 'Write a haiku' })
+    const writing = msg({ content: 'Autumn moonlight', status: 'streaming' })
+    const live = renderToString(createElement(tv.ThreadView, { messages: [ask, writing], running: true, pending: [], actions }))
+    expect(live).not.toContain('stall-retry')
+    const work = { text: 'Still on it: waiting for M to answer is taking longer than usual (1 min). Retry it, skip it, or keep waiting.', tool: 'watchdog', step: 'Waiting for M to answer', stuck: true }
+    const html = renderToString(createElement(tv.ThreadView, { messages: [ask, writing], running: true, pending: [], actions, work }))
+    expect(html).toContain('Autumn moonlight')
+    expect(html).toContain('data-testid="stall-retry"')
+    expect(html).toContain('data-testid="stall-skip"')
+    // A step that may have changed something: Skip only.
+    const once = renderToString(createElement(tv.ThreadView, { messages: [ask, writing], running: true, pending: [], actions, work: { ...work, retryable: false } }))
+    expect(once).not.toContain('stall-retry')
+    expect(once).toContain('stall-skip')
+  })
+  it('a step waiting on a macOS dialog says what to do', () => {
+    expect(tv.stallText({ who: 'SahilBot', stall: { text: 'Still on it: macOS may be asking to let SahilBot open your Downloads folder. Look for its dialog and click OK.', tool: 'watchdog', step: 'Reading a file', stuck: true, waitingOnYou: true } }))
+      .toBe('macOS may be asking to let SahilBot open your Downloads folder. Look for its dialog and click OK')
+    expect(tv.workLabel({ progress: 'macOS may be asking to let SahilBot open your Downloads folder. Look for its dialog and click OK', progressTool: 'run_command', progressWaiting: true, doing: 'Running a command' }))
+      .toMatch(/^macOS may be asking/)
+  })
+})
+
+// Round 3 (RLB-01/03, MCC-02, MCD-01/03): the double-check's own step words stay in Show work; a typed stop is one
+// line with no "Steered" tag and keeps the Show work chip; steering keeps the plan step as the working line.
+describe('stops, steers and the double-check', () => {
+  const render = (ms: Message[], running: boolean, o: { dev?: boolean; botName?: string } = {}): string => {
+    const view = createElement(tv.ThreadView, { messages: ms, running, pending: [], actions, botName: o.botName })
+    return renderToString(o.dev ? createElement(DevMode.Provider, { value: true }, view) : view)
+  }
+  it('a double-check step\'s words are not in the quiet chat, only in Developer mode', () => {
+    const ask = msg({ role: 'user', content: 'Total the invoice' })
+    const call = { id: 'k1', name: 'file_read', arguments: '{"path":"/w/invoice.md"}' }
+    const step = msg({ content: 'Let me re-read the invoice to confirm the totals.', toolCalls: [call], meta: { checkStep: true } })
+    const result = msg({ role: 'tool', toolCallId: 'k1', toolName: 'file_read', content: '<tool_output>ok</tool_output>', meta: { status: 'ok' } })
+    for (const botName of [undefined, 'Tutor']) expect(render([ask, step, result], true, { botName })).not.toContain('re-read the invoice')
+    expect(render([ask, step, result], true, { dev: true })).toContain('re-read the invoice')
+  })
+  it('a typed stop shows no "Steered while working" tag, and the Show work chip stays', () => {
+    const call = { id: 's1', name: 'web_search', arguments: '{"query":"printers"}' }
+    const ms = [
+      msg({ role: 'user', content: 'Test 5: research printers' }),
+      msg({ content: '', toolCalls: [call] }),
+      msg({ role: 'tool', toolCallId: 's1', toolName: 'web_search', content: '<tool_output>results</tool_output>', meta: { status: 'ok' } }),
+      msg({ role: 'user', content: 'Stop Test 5 now', meta: { steer: true, stopRequest: true } }),
+      msg({ content: 'Stopped.', meta: { stopped: true } })
+    ]
+    const html = render(ms, false)
+    expect(html).not.toContain('data-testid="steered"')
+    expect(html).toContain('data-testid="show-work"')
+    // Ordinary steering still says so.
+    expect(render([ms[0], msg({ role: 'user', content: 'make it 4 printers', meta: { steer: true } })], true)).toContain('data-testid="steered"')
+  })
+  it('after a steer the working line still names the plan step', () => {
+    const todo = { id: 't1', name: 'todo', arguments: JSON.stringify({ items: [{ text: 'Compare the printers', status: 'in_progress' }, { text: 'Write it up', status: 'pending' }] }) }
+    const ms = [
+      msg({ role: 'user', content: 'Research printers' }),
+      msg({ content: '', toolCalls: [todo] }),
+      msg({ role: 'tool', toolCallId: 't1', toolName: 'todo', content: '<tool_output>ok</tool_output>', meta: { status: 'ok' } }),
+      msg({ role: 'user', content: 'make it 4 printers', meta: { steer: true } })
+    ]
+    expect(render(ms, true, { botName: 'Tutor' })).toContain('Compare the printers')
+  })
 })

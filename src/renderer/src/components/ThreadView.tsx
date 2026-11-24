@@ -1,4 +1,7 @@
 import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { repliedSince, workingText } from '../lib/bot-working'
+import { awaitingFinal, heldDrafts } from '../lib/held-drafts'
+import { openPermission, PERMISSION_BUTTON, permissionAsked } from '../lib/permission-ask'
 import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
 import { filesFromMessages } from '../lib/ux'
 import { firstUnread } from '@shared/read-state'
@@ -7,7 +10,8 @@ import { ChatVaultOffers } from './VaultOffer'
 import { toast } from '../lib/toast'
 import { legibleOn } from '../brand'
 import * as I from '../icons'
-import { describe, duration, stepStatus, summarize, type Step } from '../lib/steps'
+import { describe, duration, runningStep, stepStatus, summarize, type Step } from '../lib/steps'
+import { plainProgress, plainStep } from '@shared/step-words'
 import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
 import { PageCard, pagesFromSteps } from './PageCard'
@@ -21,7 +25,7 @@ import { askBotOf, councilOf, groupMembers, heavyOf, isCardNotice, maxOf, maxTea
 import { MaxCard } from './MaxCard'
 import { useDevMode } from '../lib/dev-mode'
 import { THINKING_LABEL } from '../lib/picker'
-import { elapsed, galleryFromSteps, hasQuietContent, internalNotice, quietActions, turnStart } from '../lib/quiet'
+import { elapsed, galleryFromSteps, hasMadeArtifacts, hasQuietContent, internalNotice, quietActions, turnStart } from '../lib/quiet'
 
 type Block =
   | { kind: 'user'; m: Message }
@@ -46,6 +50,8 @@ export interface ThreadActions {
   onOpenFile: (path: string) => void
   /** Docs: opens a live document in the Document tab. */
   onOpenDoc?: (id: string) => void
+  /** The bot as it is now (a "Made X" card follows a rename; null once it is deleted). */
+  liveBot?: (spaceId: string) => { name: string; icon?: string | null } | null | undefined
 }
 
 /**
@@ -62,7 +68,8 @@ export function foldVoice(messages: Message[], open: Set<string>, live?: { since
   let voiceTurn = false
   return messages.filter((m) => {
     if (m.role === 'user' && !m.meta?.hidden) voiceTurn = !!m.meta?.voice
-    if (!voiceTurn || m.kind === 'notice' || m.kind === 'error' || m.status === 'error' || (m.role === 'tool' && m.meta?.status === 'error')) return true
+    // A live call's words (yours and its spoken replies) fold even right after a typed message.
+    if ((!voiceTurn && !m.meta?.spoken) || m.kind === 'notice' || m.kind === 'error' || m.status === 'error' || (m.role === 'tool' && m.meta?.status === 'error')) return true
     const s = sessions.find((x) => m.createdAt >= x.startedAt && m.createdAt <= x.endedAt)
     if (s) return open.has(s.id)
     return !(hideLive && m.createdAt >= live!.since)
@@ -120,8 +127,11 @@ export function blocks(messages: Message[]): Block[] {
   let act: Extract<Block, { kind: 'activity' }> | null = null
   // One plan card per request: it appears where the agent first wrote its plan and shows the latest version.
   let plan: Extract<Block, { kind: 'plan' }> | null = null
+  const { held, waiting } = heldDrafts(messages)
   for (const m of messages) {
     if (m.role === 'tool') continue
+    // The checked answer is still being written: the answer being checked stays in its place until it's done.
+    if (waiting.has(m.id)) continue
     if (m.kind === 'compacted') { out.push({ kind: 'compacted', m }); continue }
     // Heavy mode's card rides on a notice (kept out of the model's history), updated live.
     const hv = m.kind === 'notice' ? heavyOf(m) : undefined
@@ -130,15 +140,18 @@ export function blocks(messages: Message[]): Block[] {
     if (m.role === 'user') {
       if (m.meta?.hidden) continue
       act = null
+      // A routine's run starts with its instructions: a small "⏰ Routine · title" line, never your own (editable) bubble.
+      if (m.meta?.scheduled) { plan = null; out.push({ kind: 'notice', m: { ...m, content: `⏰ Routine · ${m.content.split('\n')[0].replace(/^⏰\s*/, '').trim()}` } }); continue }
       // Steering mid-run continues the same request: keep its plan card.
       if (!m.meta?.steer) plan = null
       out.push({ kind: 'user', m })
       continue
     }
     // A draft the app sent back for fixing (e.g. it cited links nobody retrieved) is replaced by the next answer.
-    if (m.meta?.superseded) continue
+    if (m.meta?.superseded && !held.has(m.id)) continue
     // A Max hybrid's phase-1 brief is shown inside the Max card (the judged answer follows it).
     if (m.meta?.maxBrief && !m.toolCalls?.length) continue
+    // (A reply the app may still send back, provisional, is kept out of sight while the run works: see bs below.)
     const hasText = !!(m.content || m.status === 'error' || m.status === 'stopped' || (m.reasoning && !m.toolCalls?.length))
     if (hasText) { act = null; out.push({ kind: 'text', m }) }
     if (m.toolCalls?.length) {
@@ -328,7 +341,7 @@ function IdeaCard({ id, idea, why, outside, threadId, busy }: { id: string; idea
       {why && <div className="idea-why">{why}</div>}
       {outside && <div className="idea-why">This task read outside content (a web page, an email or a file), so check the idea before you send it.</div>}
       <div className="idea-actions">
-        {!outside && <button className="btn primary" disabled={sent || sending || busy} title={busy ? 'When this task finishes' : undefined} onClick={doIt} data-testid="idea-do">{sent ? 'Sent' : sending ? 'Sending…' : 'Do it'}</button>}
+        {!outside && <button className="btn primary" disabled={sent || sending || busy} title={busy ? 'When this task finishes' : undefined} aria-label={busy ? 'When this task finishes' : undefined} onClick={doIt} data-testid="idea-do">{sent ? 'Sent' : sending ? 'Sending…' : 'Do it'}</button>}
         <button className={`btn${outside ? ' primary' : ''}`} disabled={sent} onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:compose', { detail: idea }))} title="Put it in the message box to read or change it first" data-testid="idea-edit">{outside ? 'Put in message box' : 'Edit first'}</button>
       </div>
     </div>
@@ -411,14 +424,103 @@ function StatusLine({ drafting, since, progress, doing }: { drafting: string | n
     const t = setInterval(() => setNow(Date.now()), 500)
     return () => clearInterval(t)
   }, [])
+  // The first real task ever: the work panel opens by itself once, so people learn it's there.
+  useEffect(() => {
+    if (!doing) return
+    try { if (localStorage.getItem('sb.workShown')) return; localStorage.setItem('sb.workShown', '1') } catch { return }
+    window.dispatchEvent(new CustomEvent('sahilbot:show-work'))
+  }, [!!doing])
   const label = progress ? progress.replace(/\s+/g, ' ').slice(0, 120) : drafting ? (PREPARING[drafting] ?? `Preparing ${drafting.replace(/__/g, ' · ').replace(/_/g, ' ')}`) : doing ?? 'Thinking'
   return (
     <div className="status-line" data-testid="status-line">
       <span className="activity-dots live"><i /><i /><i /><i /></span>
       <span className="activity-title shimmer" role="status" aria-live="polite">{label}…</span>
       <span className="activity-meta" data-testid="turn-timer" aria-live="off" title="Time since you sent your message">{elapsed(now - since)}</span>
+      {/* The plan, sources and files it's working with, one click away (it used to be an unlabeled icon). */}
+      <button type="button" className="show-work" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>
     </div>
   )
+}
+
+/** A tool's live progress line, or the stall watchdog's note (tool 'watchdog'), as App keeps it per chat. */
+export interface WorkProgress { text: string; tool: string; step?: string; stuck?: boolean; retryable?: boolean; waitingOnYou?: boolean }
+
+const lower = (s: string): string => (/^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s)
+
+/**
+ * The working line once the stall watchdog spoke: what it's working on and what is stuck ("Still working on find
+ * hotels: reading a page is taking longer than usual"), or that it waits on your vault unlock. null: not stalled.
+ */
+export function stallText(o: { who: string; label?: string | null; stall?: WorkProgress | null }): string | null {
+  const st = o.stall
+  if (!st || st.tool !== 'watchdog' || !st.text.startsWith('Still on it:')) return null
+  if (/unlock your vault/i.test(st.text)) return `${o.who} is waiting for you to unlock your vault (Touch ID or your password)`
+  // Something only you can answer (macOS asking to open your Downloads folder): what to do, not "slow".
+  if (st.waitingOnYou) return st.text.replace(/^Still on it:\s*/, '').replace(/\.$/, '')
+  const step = st.step ? lower(st.step) : 'this step'
+  return o.label && o.label !== st.step ? `Still working on ${lower(o.label)}: ${step} is taking longer than usual` : `Still on it: ${step} is taking longer than usual`
+}
+
+/**
+ * Working, Grok Bot's way (every chat outside Developer mode): the bot says it's on it (its own opening line when it
+ * wrote one; a plain "On it." in the working line if nothing came after a moment), then one quiet line, an icon and what it's doing
+ * ("Planning the Savannah trip"). No timer and no "Thinking…". A step that hangs says what is stuck, with Retry and
+ * Skip for that step alone; "Show work" opens the plan, sources and files.
+ */
+function BotWorking({ name, ack, label, stall, threadId, work }: { name?: string; ack: boolean; label?: string | null; stall?: WorkProgress | null; threadId?: string; work?: boolean }) {
+  // A quick answer needs no "On it.": it shows only when nothing has come after a moment.
+  const [late, setLate] = useState(false)
+  useEffect(() => {
+    if (!ack) return
+    const t = setTimeout(() => setLate(true), 1200)
+    return () => clearTimeout(t)
+  }, [ack])
+  const who = name ?? 'SahilBot'
+  const slow = stallText({ who, label, stall })
+  const text = workingText({ slow, label, ack, late, name })
+  const step = (action: 'retry' | 'skip'): void => {
+    if (!threadId) return
+    void (action === 'retry' ? api.chat.retryStep(threadId) : api.chat.skipStep(threadId)).catch((e: Error) => toast(e.message, 'error'))
+  }
+  return (
+    <>
+      <div className="status-line bot-working" data-testid="status-line">
+        <span className="work-orb" aria-hidden="true" />
+        <span className="activity-title" role="status" aria-live="polite" data-testid="bot-working">{text}</span>
+        {slow && stall?.stuck && (
+          <span className="stall-actions">
+            {stall.retryable !== false && <button type="button" className="chip-btn" onClick={() => step('retry')} data-testid="stall-retry">Retry</button>}
+            <button type="button" className="chip-btn" onClick={() => step('skip')} data-testid="stall-skip">Skip</button>
+          </span>
+        )}
+        {work && <button type="button" className="show-work" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>}
+      </div>
+    </>
+  )
+}
+
+/**
+ * What the working line says, steadiest first: the step of the bot's own plan it's on ("Find family hotels under
+ * 150 dollars"), then a plain progress note from a tool ("Generating the image"), then the step running now in plain
+ * words ("Reading a page"), then the one being prepared. Never raw command output, a path, an id or a tool name:
+ * those stay in Show work. Nothing: the default.
+ */
+export function workLabel(o: { progress?: string | null; progressTool?: string | null; progressWaiting?: boolean; drafting?: string | null; plan?: string | null; doing?: string | null }): string | null {
+  // A tool waiting on you (macOS's folder dialog) says so first, whatever the tool.
+  if (o.progress && o.progressWaiting && !o.progress.startsWith('Still on it:')) return o.progress.replace(/\s+/g, ' ').slice(0, 160)
+  if (o.plan) return o.plan.replace(/\s+/g, ' ').slice(0, 80)
+  if (o.progress && !o.progress.startsWith('Still on it:') && plainProgress(o.progress, o.progressTool ?? undefined)) return o.progress.replace(/\s+/g, ' ').slice(0, 120)
+  if (o.doing) return o.doing
+  if (o.drafting) return PREPARING[o.drafting] ?? null
+  return null
+}
+
+/** The working line's words for the step running now: plain ("Running a command"), never its command or path. */
+export function doingPlain(step: Step | undefined): string | null {
+  if (!step) return null
+  let a: Record<string, unknown> = {}
+  try { a = JSON.parse(step.call.arguments) as Record<string, unknown> } catch { a = {} }
+  return plainStep(step.call.name, a)
 }
 
 /**
@@ -449,8 +551,13 @@ export function windowLimit(limit: number, total: number, dividerAt: number): nu
   return dividerAt < 0 ? limit : Math.max(limit, total - dividerAt + DIVIDER_CONTEXT)
 }
 
-export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, ready = true, unreadAfter = null, onAtBottom, voiceLive }: {
+export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, work, ready = true, unreadAfter = null, onAtBottom, voiceLive, botName }: {
   messages: Message[]
+  /**
+   * A bot's chat (Grok Bot's way): only the conversation. While it works you see an "On it." from the bot and
+   * "<name> is working…"; steps, plans, team boards, "Double-checking" and the timer stay out of sight.
+   */
+  botName?: string
   /** A voice conversation in progress (in this chat): its turns show only with its transcript on. */
   voiceLive?: { since: number; transcript: boolean; threadId?: string } | null
   /** Live Team of Experts boards by agents call id. */
@@ -462,6 +569,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   since?: number
   /** Live progress from a long-running tool (tests, builds, a Cursor agent). */
   progress?: string | null
+  /** The same with its source (which tool, or the stall watchdog's note with what is stuck). */
+  work?: WorkProgress | null
   /** The chat's messages are all in (not just live events that beat the fetch): the NEW divider is placed then. */
   ready?: boolean
   /** Bots and agent chats: your read mark when you opened the chat (null: no NEW divider here). */
@@ -496,11 +605,22 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   // show; Developer mode shows everything.
   // A question waiting on its card (below) shows there only: the same words don't appear twice.
   const asking = pending.some((p) => p.kind === 'question' || p.kind === 'questions')
+  const quietBot = !!botName && !dev
   const bs = useMemo(() => all.filter((b) => {
     if (b.kind === 'qa' && !b.answer && asking) return false
+    // A bot's chat still shows the cards of what a run made (the invoice, the picture, the page), never its steps.
+    if (quietBot && b.kind === 'activity' && hasMadeArtifacts(b.steps, hasDocs)) return true
     if (b.kind === 'notice' && internalNotice(b.m)) return dev
+    // A bot's chat: the conversation only (what it did is one click away in Show work, not in the chat).
+    if (quietBot && (b.kind === 'activity' || b.kind === 'plan' || b.kind === 'team' || b.kind === 'heavy' || b.kind === 'compacted')) return false
+    // One answer, posted once (Grok Bot's way), in every chat: an answer the app checks before accepting it stays out
+    // of sight, with the working line up, until it is final. Nothing posted is pulled back (heldDrafts).
+    if (running && !dev && b.kind === 'text' && awaitingFinal(b.m)) return false
+    // ...and no status notes ("The bot is continuing with…"). System lines Grok Bot shows too stay: "Paused routine ·
+    // …", "Undid …", messages between bots, and cards that need you.
+    if (quietBot && b.kind === 'notice' && !isCardNotice(b.m) && (typeof b.m.meta?.publicText === 'string' || Array.isArray(b.m.meta?.collaboration))) return false
     return dev || quietVisible(b, hasDocs)
-  }), [all, dev, hasDocs, asking])
+  }), [all, dev, hasDocs, asking, quietBot, running])
   const dividerAt = divider.current ? dividerBlock(bs, divider.current, divider.current.after) : -1
   // Long chats mount their latest WINDOW blocks; an older first unread grows the window to include it.
   const limit = windowLimit(win.threadId === threadId ? win.limit : WINDOW, bs.length, dividerAt)
@@ -515,13 +635,20 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
     onReact: (id, emoji) => live.current.onReact(id, emoji),
     onReply: (text) => live.current.onReply(text),
     onOpenFile: (path) => live.current.onOpenFile(path),
-    onOpenDoc: (id) => live.current.onOpenDoc?.(id)
+    onOpenDoc: (id) => live.current.onOpenDoc?.(id),
+    liveBot: (id) => (live.current.liveBot ? live.current.liveBot(id) : undefined)
   }), [])
 
   useLayoutEffect(() => {
     const el = scroller.current
     if (el && atBottom) el.scrollTop = el.scrollHeight
   }, [messages, pending, atBottom])
+  // You just sent something: the chat jumps to it, even if you had scrolled up to read.
+  const lastSent = [...messages].reverse().find((m) => m.role === 'user' && !m.meta?.hidden)?.id
+  const seenSent = useRef(lastSent)
+  useLayoutEffect(() => {
+    if (lastSent && lastSent !== seenSent.current) { seenSent.current = lastSent; setAtBottom(true); const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }
+  }, [lastSent])
 
   useEffect(() => {
     const el = scroller.current
@@ -564,24 +691,38 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const lastActivity = lastOf('activity')
   const lastPlan = lastOf('plan')
   // The pinned plan is this run's: a plan from before your latest message belongs to an earlier task.
-  const lastUser = (() => { for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind === 'user') return i; return -1 })()
+  // (A side question asked mid-task, or steering, belongs to no run of its own: it never starts "this run".)
+  const isTurn = (b: Block): boolean => b.kind === 'user' && !b.m.meta?.aside && !b.m.meta?.steer
+  const lastUser = (() => { for (let i = bs.length - 1; i >= 0; i--) if (isTurn(bs[i])) return i; return -1 })()
   const runPlan = lastPlan && bs.indexOf(lastPlan) > lastUser ? lastPlan : undefined
   const tail = bs[bs.length - 1]
   const last = messages[messages.length - 1]
-  const waiting = running && !pending.length && tail?.kind !== 'activity' && (!last || last.role !== 'assistant' || (last.status === 'streaming' && !last.content && !last.reasoning && !last.toolCalls))
+  const waiting = running && !pending.length && tail?.kind !== 'activity' && (!last || last.role !== 'assistant' || (last.status === 'streaming' && ((!last.content && !last.reasoning && !last.toolCalls) || !!last.meta?.provisional)))
   // Quiet chat: one status line the whole time SahilBot works, except while a reply is being written.
   const allTail = all[all.length - 1]
   // The status names the step that is running now: once it has its result, it's "Thinking" again, never a stale label.
-  const tailStep = running && allTail?.kind === 'activity' ? allTail.steps[allTail.steps.length - 1] : undefined
-  const liveStep = tailStep && !tailStep.result ? tailStep : undefined
+  const liveStep = runningStep(allTail?.kind === 'activity' ? allTail.steps : undefined, running)
+  // The bot's own plan step for the working line, even where the plan card itself is hidden (outside Developer mode).
+  const allUser = (() => { for (let i = all.length - 1; i >= 0; i--) if (isTurn(all[i])) return i; return -1 })()
+  const livePlan = (() => { for (let i = all.length - 1; i > allUser; i--) { const b = all[i]; if (b.kind === 'plan') return b } return undefined })()
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
-  const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writing)
+  // The working line stays up while an answer is written out of sight (checked before it's posted, heldDrafts).
+  const writingVisible = writing && !(last?.meta?.superseded || awaitingFinal(last!) || heldDrafts(messages).waiting.has(last!.id))
+  // A reply that froze halfway still gets the stall note with Retry / Skip under it.
+  const stalled = work?.tool === 'watchdog' && !!work.text?.startsWith('Still on it:')
+  const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : (!writingVisible || stalled))
   const started = turnStart(messages, since)
   const approvalWaiting = pending.some((p) => p.kind === 'approval')
   let tailText: Block | undefined
   for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind !== 'notice' && bs[i].kind !== 'compacted') { tailText = bs[i]; break }
   const lastText = tailText?.kind === 'text'
-  const lastUserId = (lastOf('user') as Extract<Block, { kind: 'user' }> | undefined)?.m.id
+  const lastUserId = (() => { for (let i = bs.length - 1; i >= 0; i--) { const b = bs[i]; if (b.kind === 'user' && !b.m.meta?.aside) return b.m.id } return undefined })()
+  // This task did something (steps, a plan): "Show work" opens it in the side panel.
+  const ranSteps = all.slice(allUser + 1).some((b) => b.kind === 'activity' || b.kind === 'plan')
+  // The run failed outright (its notice says why in one line), or it was stopped: Retry is right under it.
+  const tailBlock = bs[bs.length - 1]
+  const failedTail = tailBlock?.kind === 'notice' && !!tailBlock.m.meta?.runFailed
+  const retryable = failedTail || (lastText && tailText?.kind === 'text' && (tailText.m.status === 'error' || tailText.m.status === 'stopped' || !!tailText.m.meta?.stopped))
 
   return (
     <VoiceFold.Provider value={fold}>
@@ -597,7 +738,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
           // Near the top with more above: bring in the next batch.
           if (first > 0 && el.scrollTop < 240 && keepFromBottom.current === null) showEarlier()
         }}>
-        <div className="thread">
+        <div className={`thread${quietBot ? ' quiet-bot' : ''}`}>
           {first > 0 && (
             <button className="show-earlier" onClick={showEarlier} data-testid="show-earlier">
               <I.Chevron size={13} style={{ transform: 'rotate(180deg)' }} />Show earlier messages
@@ -624,17 +765,28 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
                 waitingApproval={approvalWaiting && b === lastActivity}
                 planLive={running && b === lastPlan}
                 members={b.kind === 'team' ? teams?.[b.id] : undefined}
+                botNow={b.kind === 'notice' && b.m.meta?.botCard ? botNow(actions, (b.m.meta.botCard as { spaceId: string }).spaceId) : undefined}
                 editable={!running && b.kind === 'user' && b.m.id === lastUserId}
-                dev={dev} retry={!running && !pending.length && b === tailText && b.kind === 'text'} />
+                dev={dev} quietBot={quietBot} retry={!running && !pending.length && b === tailText && b.kind === 'text'} />
               </Fragment>
             )
           })}
           {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} thumb={p.tool === 'browser' ? lastBrowserShot(messages) : undefined} />))}
-          {showStatus && <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={liveStep && !dev ? describe(liveStep)[2] : null} />}
-          {running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
-          {!running && lastText && !pending.length && (dev || (tailText?.kind === 'text' && (tailText.m.status === 'error' || tailText.m.status === 'stopped'))) && (
+          {showStatus && (dev
+            ? <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={null} />
+            : <BotWorking name={botName} ack={!repliedSince(messages)} stall={work ?? null} threadId={threadId} work={ranSteps}
+                label={workLabel({ progress, progressTool: work?.tool, progressWaiting: !!work?.waitingOnYou, drafting, plan: livePlan ? (livePlan.items.find((x) => x.status === 'in_progress')?.text ?? livePlan.title ?? null) : null, doing: doingPlain(liveStep) })} />)}
+          {!quietBot && running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
+          {!running && !pending.length && (retryable || (lastText && dev)) && (
             <div className="after-actions">
               <button className="chip-btn" onClick={stable.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>
+              {!dev && ranSteps && <button className="chip-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>}
+            </div>
+          )}
+          {/* A finished task: what it did is one click away (the plan, sources and files), never in the chat itself. */}
+          {!running && !pending.length && !dev && ranSteps && !retryable && (
+            <div className="after-actions">
+              <button className="chip-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>
             </div>
           )}
           {/* A template bot's starter tasks, under its first message until you ask something: a tap fills the chat box. */}
@@ -660,6 +812,10 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   )
 }
 
+const botNow = (actions: ThreadActions, spaceId: string): string | undefined => {
+  const bot = actions.liveBot?.(spaceId)
+  return bot === undefined ? undefined : bot === null ? '' : `${bot.icon ?? ''} ${bot.name}`
+}
 const atOf = (x: Block): number => (x.kind === 'activity' ? x.steps[0].at : x.kind === 'qa' || x.kind === 'plan' || x.kind === 'team' || x.kind === 'heavy' || x.kind === 'idea' ? x.at : x.m.createdAt)
 const blockKey = (b: Block): string => (b.kind === 'activity' ? `a-${b.id}` : b.kind === 'qa' ? `q-${b.id}` : b.kind === 'plan' ? `p-${b.id}` : b.kind === 'team' ? `t-${b.id}` : b.kind === 'heavy' ? `h-${b.id}` : b.kind === 'idea' ? `i-${b.id}` : b.m.id)
 
@@ -674,9 +830,13 @@ type BlockProps = {
   waitingApproval: boolean
   planLive: boolean
   members?: TeamMember[]
+  /** A "Made X" card: the bot's name and icon now ('' once deleted), so the card re-renders when they change. */
+  botNow?: string
   editable: boolean
   /** Developer mode: every step, thinking, the model and its cost. */
   dev: boolean
+  /** A bot's chat (not Developer mode): a run shows only the cards of what it made. */
+  quietBot?: boolean
   /** The last reply, finished: Retry is in its hover tools. */
   retry: boolean
 }
@@ -687,20 +847,21 @@ function quietVisible(b: Block, docs: boolean): boolean {
     case 'plan': case 'compacted': return false
     case 'notice': return !internalNotice(b.m)
     case 'activity': return hasQuietContent(b.steps, docs)
-    case 'text': return !!(b.m.content || b.m.status === 'error' || b.m.status === 'stopped')
+    // (The double-check's own step words, "Let me re-read the invoice.", stay in Show work: never ahead of the answer.)
+    case 'text': return !(b.m.meta?.checkStep && b.m.status !== 'error') && !!(b.m.content || b.m.status === 'error' || b.m.status === 'stopped')
     case 'user': case 'qa': case 'team': case 'heavy': case 'idea': return true
     default: { const never: never = b; return never }
   }
 }
 
 /** A finished run in the quiet chat: what it made and the actions that matter, never its steps. */
-function QuietActivity({ steps, actions, hasDocs }: { steps: Step[]; actions: ThreadActions; hasDocs: boolean }) {
-  const done = quietActions(steps)
+function QuietActivity({ steps, actions, hasDocs, artifactsOnly }: { steps: Step[]; actions: ThreadActions; hasDocs: boolean; artifactsOnly?: boolean }) {
+  const done = artifactsOnly ? [] : quietActions(steps)
   return (
     <>
       {done.map((a) => <div key={a.key} className={`quiet-action${a.failed ? ' failed' : ''}`} data-testid="quiet-action">{a.failed ? <span aria-hidden>!</span> : <I.Check size={12} />}{a.text}</div>)}
       <Gallery items={galleryFromSteps(steps)} onOpen={actions.onOpenFile} />
-      <MadeFiles files={filesFromSteps(steps).filter((f) => !galleryFromSteps(steps).some((g) => g.path === f.path))} onOpen={actions.onOpenFile} />
+      <MadeFiles files={filesFromSteps(steps, { exports: !hasDocs }).filter((f) => !galleryFromSteps(steps).some((g) => g.path === f.path))} onOpen={actions.onOpenFile} />
       {pagesFromSteps(steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
       {stocksFromSteps(steps).map((x) => <StockCard key={x.key} data={x.data} />)}
       {videosFromSteps(steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
@@ -757,7 +918,7 @@ export function sameBlock(a: Block, b: Block): boolean {
   }
 }
 
-const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, running, live, waitingApproval, planLive, members, editable, dev, retry }: BlockProps) {
+const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, running, live, waitingApproval, planLive, members, editable, dev, quietBot, retry }: BlockProps) {
   return (
     <div className={`block b-${b.kind}${cont ? ' cont' : ''}`}>
       {time && <div className="stamp">{time}</div>}
@@ -775,11 +936,11 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
       ) : b.kind === 'idea' ? (
         <IdeaCard id={b.id} idea={b.idea} why={b.why} outside={b.outside} threadId={b.threadId} busy={running} />
       ) : b.kind === 'activity' && !dev ? (
-        <QuietActivity steps={b.steps} actions={actions} hasDocs={hasDocs} />
+        <QuietActivity steps={b.steps} actions={actions} hasDocs={hasDocs} artifactsOnly={quietBot} />
       ) : b.kind === 'activity' ? (
         <>
           <Activity steps={b.steps} live={live} waitingApproval={waitingApproval} onOpenFile={actions.onOpenFile} />
-          {!live && <MadeFiles files={filesFromSteps(b.steps)} onOpen={actions.onOpenFile} />}
+          {!live && <MadeFiles files={filesFromSteps(b.steps, { exports: !hasDocs })} onOpen={actions.onOpenFile} />}
           {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
           {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
           {videosFromSteps(b.steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
@@ -805,8 +966,8 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
     </div>
   )
 }, (a, b) => a.time === b.time && a.cont === b.cont && a.actions === b.actions && a.hasDocs === b.hasDocs && a.running === b.running &&
-  a.live === b.live && a.waitingApproval === b.waitingApproval && a.planLive === b.planLive && a.members === b.members &&
-  a.editable === b.editable && a.dev === b.dev && a.retry === b.retry && sameBlock(a.b, b.b))
+  a.live === b.live && a.waitingApproval === b.waitingApproval && a.planLive === b.planLive && a.members === b.members && a.botNow === b.botNow &&
+  a.editable === b.editable && a.dev === b.dev && a.quietBot === b.quietBot && a.retry === b.retry && sameBlock(a.b, b.b))
 
 /**
  * The next step for an error, as a button: open the right Settings page for keys, limits and models, or
@@ -937,6 +1098,25 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
         <button className="link-btn" onClick={() => void api.chat.resume(m.threadId).catch((e) => toast((e as Error).message, 'error'))} data-testid="resume-run">Continue</button>
       </div>
     )
+    // A bot deleted by asking: "Deleted Study Buddy · Undo" (it comes back with its chat and routines).
+    const botUndo = m.meta?.botUndo as { spaceId: string; name: string } | undefined
+    if (botUndo) return (
+      <div className="notice sys-line" role="status" data-testid="bot-deleted">
+        {m.content}{m.meta?.expired && !m.meta?.undone ? null : ' · '}
+        {m.meta?.undone ? <span>Undone</span> : m.meta?.expired ? null
+          : <button className="link-btn" onClick={() => void api.spaces.restore(botUndo.spaceId).catch((e) => toast((e as Error).message, 'error'))} data-testid="bot-undo">Undo</button>}
+      </div>
+    )
+    // A bot made by asking: its icon, name and job, and a button into its chat.
+    const botCard = m.meta?.botCard as { spaceId: string; name: string; icon: string; job: string } | undefined
+    const liveBot = botCard && actions.liveBot ? actions.liveBot(botCard.spaceId) : undefined
+    if (botCard) return (
+      <div className="notice sys-line" role="status" data-testid="bot-card">
+        <span aria-hidden>{liveBot?.icon || botCard.icon}</span> {liveBot?.name ?? botCard.name}{botCard.job ? ` · ${botCard.job}` : ''}{' · '}
+        {liveBot === null ? <span>Deleted</span>
+          : <button className="link-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:open-bot', { detail: botCard.spaceId }))} data-testid="bot-card-open">Open</button>}
+      </div>
+    )
     // Planner ⇄ Executor computer use: its live timeline card rides on a notice (CuaCard.tsx).
     if (cuaOf(m)) return <CuaCard m={m} />
     if (Array.isArray(m.meta?.collaboration)) return <CollaborationCard steps={m.meta.collaboration as CollaborationStep[]} interrupted={m.status === 'stopped'} />
@@ -946,6 +1126,8 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
   const reactions = (m.meta?.reactions ?? {}) as { user?: string; bot?: string }
 
   if (b.kind === 'user') {
+    // What the live voice asked the bot to do: its own words, never shown as yours (your words are the transcript).
+    if (m.meta?.voiceBrief) return <div className="notice sys-line" role="status" data-testid="voice-brief">Asked the bot: {m.content}</div>
     const files = (m.meta?.files ?? []) as Array<{ name: string; path: string }>
     const folders = (m.meta?.folders ?? []) as string[]
     if (editing !== null) {
@@ -979,7 +1161,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
             )}
             {m.content}
           </div>
-          {!!m.meta?.steer && <div className="steered-tag" data-testid="steered"><I.Reply size={11} style={{ transform: 'scaleX(-1)' }} />Steered while working</div>}
+          {!!m.meta?.steer && !m.meta?.stopRequest && <div className="steered-tag" data-testid="steered"><I.Reply size={11} style={{ transform: 'scaleX(-1)' }} />Steered while working</div>}
           {Array.isArray(m.meta?.vaultOffers) && <ChatVaultOffers m={m} />}
           {reactions.bot && <span className="reaction left" title="SahilBot reacted" data-testid="bot-reaction">{reactions.bot}</span>}
         </div>
@@ -999,6 +1181,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
     <div className="row ai">
       <div className="bubble-wrap ai-col">
         {speaker && !cont && <div className={`speaker${spStyle ? ' spk-c' : ''}`} style={spStyle}>{speaker}</div>}
+        {typeof m.meta?.replyText === 'string' && <div className="reply-to" data-testid="reply-to" title="Answers this message"><span aria-hidden>↪</span>{m.meta.replyText as string}</div>}
         <div className={`bubble ai${error ? ' err' : ''}`} data-testid="assistant-bubble" data-status={m.status}>
           {dev && m.reasoning && (
             <details className="reasoning" open={streaming && !m.content}>
@@ -1015,6 +1198,8 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
           })()}
         </div>
         {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && <SourceChips sources={m.meta!.sources as Array<{ title: string; url: string }>} />}
+        {/* A routine that ran beside a busy chat: the files it made in its own side chat. */}
+        {Array.isArray(m.meta?.madeFiles) && <MadeFiles files={m.meta!.madeFiles as Array<{ key: string; path: string }>} onOpen={actions.onOpenFile} />}
         {reactions.user && (
           <button className="reaction" onClick={() => actions.onReact(m.id, null)} title="Remove reaction" data-testid="user-reaction">{reactions.user}</button>
         )}
@@ -1028,9 +1213,11 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
       {/* Beside the bubble (so stacked replies stay close): react, copy, read aloud, more; shown on hover. */}
       {m.content && !streaming && (
         <div className="ai-foot">
-          <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} />
+          <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} latest={!!retry} />
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
-          {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title="Some acceptance checks remain unresolved">Needs checking</span>}
+          {dev && !!m.meta?.superseded && !!m.meta?.checking && <span className="result-checking">Double-checking…</span>}
+          {(() => { const kind = m.status !== 'streaming' ? permissionAsked(m.content) : undefined; return kind ? <button type="button" className="perm-ask" onClick={() => void openPermission(api.permissions, kind)} data-testid="perm-ask">{PERMISSION_BUTTON[kind]}</button> : null })()}
+          {(m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title={dev ? ((m.meta?.verification as { issues?: string[] }).issues ?? []).join('\n') : 'SahilBot couldn\'t confirm this worked. Check the result before relying on it.'}>Needs a check</span>}
         </div>
       )}
     </div>
@@ -1072,7 +1259,7 @@ function CollaborationCard({ steps, interrupted }: { steps: CollaborationStep[];
 }
 
 /** Hover bar: react, reply, more (copy). Matches the bot-chat style. */
-function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actions: ThreadActions; side: 'left' | 'right'; onEdit?: () => void; onRetry?: () => void }) {
+function MessageTools({ m, actions, side, onEdit, onRetry, latest }: { m: Message; actions: ThreadActions; side: 'left' | 'right'; onEdit?: () => void; onRetry?: () => void; latest?: boolean }) {
   const dev = useDevMode()
   const [picker, setPicker] = useState<'quick' | 'more' | null>(null)
   const [copied, setCopied] = useState(false)
@@ -1087,21 +1274,31 @@ function MessageTools({ m, actions, side, onEdit, onRetry }: { m: Message; actio
     return () => document.removeEventListener('mousedown', close)
   }, [picker, menu])
   const canReact = m.role === 'assistant'
+  // The latest answer: if its task changed files, one click puts them back (Grok Bot can't take back what's done).
+  const [undoable, setUndoable] = useState(0)
+  useEffect(() => {
+    if (!latest || m.role !== 'assistant') { setUndoable(0); return }
+    let alive = true
+    void api.undo?.status(m.threadId, m.id).then((s) => { if (alive) setUndoable(s?.files ?? 0) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [latest, m.id, m.threadId, m.role])
+  const undo = (): void => { void api.undo.run(m.threadId, m.id).then((text) => { setUndoable(0); toast(text, 'ok') }).catch((e) => toast((e as Error).message, 'error')) }
   return (
     <div className={`msg-actions${picker || menu ? ' pinned' : ''}`} ref={ref}>
-      {canReact && <button className="icon-btn" title="React" onClick={() => setPicker(picker ? null : 'quick')} data-testid="react-btn"><I.Smile size={17} /></button>}
-      {onEdit && <button className="icon-btn" title="Edit and resend" onClick={onEdit} data-testid="edit-last"><I.Edit size={16} /></button>}
-      <button className="icon-btn" title="Reply" onClick={() => actions.onReply(m.content)}><I.Reply size={17} /></button>
-      {canReact && m.content && <button className="icon-btn" title={copied ? 'Copied' : 'Copy'} onClick={() => { void navigator.clipboard.writeText(m.content); setCopied(true); setTimeout(() => setCopied(false), 900) }} data-testid="copy-msg">{copied ? <I.Check size={15} /> : <I.Copy size={15} />}</button>}
-      {canReact && m.content && <button className="icon-btn" title="Read aloud (Esc stops)" onClick={() => void api.voice.speak(m.content)} data-testid="read-aloud"><I.Speaker size={16} /></button>}
-      {onRetry && <button className="icon-btn" title="Retry" onClick={onRetry} data-testid="retry"><I.Reply size={15} style={{ transform: 'scaleX(-1)' }} /></button>}
-      <button className="icon-btn" title="More" onClick={() => setMenu((x) => !x)}><span className="more">···</span></button>
+      {canReact && <button className="icon-btn" title="React" aria-label="React" onClick={() => setPicker(picker ? null : 'quick')} data-testid="react-btn"><I.Smile size={17} /></button>}
+      {onEdit && <button className="icon-btn" title="Edit and resend" aria-label="Edit and resend" onClick={onEdit} data-testid="edit-last"><I.Edit size={16} /></button>}
+      <button className="icon-btn" title="Reply" aria-label="Reply" onClick={() => actions.onReply(m.content)}><I.Reply size={17} /></button>
+      {canReact && m.content && <button className="icon-btn" title={copied ? 'Copied' : 'Copy'} aria-label={copied ? 'Copied' : 'Copy'} onClick={() => { void navigator.clipboard.writeText(m.content); setCopied(true); setTimeout(() => setCopied(false), 900) }} data-testid="copy-msg">{copied ? <I.Check size={15} /> : <I.Copy size={15} />}</button>}
+      {canReact && m.content && <button className="icon-btn" title="Read aloud (Esc stops)" aria-label="Read aloud (Esc stops)" onClick={() => void api.voice.speak(m.content)} data-testid="read-aloud"><I.Speaker size={16} /></button>}
+      {undoable > 0 && <button className="icon-btn" title={`Undo the file changes (${undoable} file${undoable === 1 ? '' : 's'})`} aria-label="Undo the file changes" onClick={undo} data-testid="undo-changes"><I.Undo size={16} /></button>}
+      {onRetry && <button className="icon-btn" title="Retry" aria-label="Retry" onClick={onRetry} data-testid="retry"><I.Reply size={15} style={{ transform: 'scaleX(-1)' }} /></button>}
+      <button className="icon-btn" title="More" aria-label="More" onClick={() => setMenu((x) => !x)}><span className="more">···</span></button>
       {picker && (
         <div className={`emoji-bar ${side}`}>
           {(picker === 'quick' ? QUICK : MORE).map((e) => (
             <button key={e} onClick={() => { actions.onReact(m.id, e); setPicker(null) }} data-testid="emoji">{e}</button>
           ))}
-          {picker === 'quick' && <button className="emoji-more" title="More" onClick={() => setPicker('more')}><I.SmilePlus size={20} /></button>}
+          {picker === 'quick' && <button className="emoji-more" title="More" aria-label="More" onClick={() => setPicker('more')}><I.SmilePlus size={20} /></button>}
         </div>
       )}
       {menu && (

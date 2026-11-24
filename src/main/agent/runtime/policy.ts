@@ -54,6 +54,8 @@ export function recoveryPlan(tool: string, error: string, effect: string): { kin
  * not "uncertain". Timeouts, dropped connections and server errors stay uncertain (it may have happened).
  */
 export function definiteFailure(error: string): boolean {
+  // The app's own guards refused before touching anything (a file it hasn't opened, a shortened view, text not found).
+  if (/\bnothing (was|has been) (written|changed|sent|saved)\b|\balready exists\b|\bold_string (was not found|appears \d+ times)\b|\bis a folder\b/i.test(error)) return true
   if (/timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|EPIPE|deadline exceeded|fetch failed|\b5\d\d\b|unavailable|gateway|network|aborted|partial|of \d+ (items|messages|rows)/i.test(error)) return false
   // Refused before anything was sent: bad input, no permission, a read-only target.
   return /^(invalid|validation)|\b(must be|must use|use YYYY|is required|required (field|parameter|argument|property)|missing (required )?(field|parameter|argument|property)|EACCES|EPERM|permission denied|operation not permitted|read-only file system|400 bad request|422 unprocessable|401 unauthori[sz]ed|403 forbidden)\b/i.test(error.trim())

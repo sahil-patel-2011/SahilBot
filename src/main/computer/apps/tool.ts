@@ -27,7 +27,12 @@ export interface AppToolDeps {
   running?: (a: AppAdapter) => Promise<boolean>
   /** Whether computer use already has the chat's OK (default: the computer tool's grant). */
   granted?: (threadId: string) => boolean
+  /** Accessibility or its one-tap card (default: the computer tool's). */
+  needAccessibility?: (ctx: ToolContext) => Promise<boolean>
 }
+
+/** osascript's "needs Accessibility" errors. */
+const AX_ERROR = /-1719|-25211|assistive access|not allowed assistive/i
 
 type AppToolArgs = { app?: string; action?: string; args?: Args } & Record<string, unknown>
 
@@ -147,11 +152,22 @@ export function appTool(getWorkspace: () => string, deps: AppToolDeps = {}): Too
       if (!(await installed(adapter))) throw new Error(`${adapter.name} isn't installed on this Mac.`)
       if (r.action.needsRunning && !(await running(adapter))) return { text: `${adapter.name} isn't open, so there's nothing to read yet. Open it (computer open_app {app:"${adapter.name}"}, or an open action) and try again.`, display: `${adapter.name} not open` }
       ctx.progress?.(`${adapter.name}: ${r.action.describe(args).slice(0, 80)}`)
-      try {
+      const attempt = async (): Promise<ToolOutput> => {
         const out = await r.action.run(args, envFor(adapter, ctx))
         return { text: out.text, display: out.display ?? `${adapter.name} ${r.id}`, path: out.path }
+      }
+      try {
+        return await attempt()
       } catch (e) {
         if ((e as Error).name === 'AbortError') throw e
+        // Accessibility off: the same one-tap card as computer use, then the step runs again by itself.
+        const needAx = deps.needAccessibility ?? computerControl()?.needAccessibility
+        if (needAx && AX_ERROR.test((e as Error).message) && await needAx(ctx)) {
+          try { return await attempt() } catch (e2) {
+            if ((e2 as Error).name === 'AbortError') throw e2
+            throw new Error(explainError(adapter.name, (e2 as Error).message))
+          }
+        }
         throw new Error(explainError(adapter.name, (e as Error).message))
       }
     }

@@ -271,7 +271,7 @@ describe('retrieval', () => {
     expect(vaultBudget(200_000, 'normal').tokens).toBe(Math.round(big.tokens / 2))
   })
 
-  test('relevant notes, linked notes pulled in, within budget; another bot\'s area is never shown', () => {
+  test('relevant notes, linked notes pulled in, within budget; one vault: every bot reads every area', () => {
     const { vault, writer, coder } = setup()
     const s = vault.store
     s.ensure()
@@ -285,7 +285,7 @@ describe('retrieval', () => {
     const picked = retrieve(s, { query: 'draft the Q4 board memo', sections: vault.sectionsFor(writer.id), window: 200_000 })
     expect(picked[0].note.title).toBe('Q4 board memo')
     expect(picked.find((r) => r.note.title === 'Dana Lee')?.via).toBe('Q4 board memo')
-    expect(picked.some((r) => r.note.section === 'Bots/Coder')).toBe(false)
+    expect(picked.some((r) => r.note.section === 'Bots/Coder')).toBe(true)
     // A small window holds a few short lines; a 1M window holds many full ones.
     const est = (ls: string[]) => ls.reduce((n, l) => n + Math.ceil(l.length / 3.6), 0)
     const q = 'kidney stone imaging fact'
@@ -294,24 +294,24 @@ describe('retrieval', () => {
     expect(est(small.lines)).toBeLessThanOrEqual(vaultBudget(16_384).tokens)
     expect(small.lines.length).toBeLessThan(huge.lines.length)
     expect(huge.lines.length).toBeGreaterThanOrEqual(30)
-    // Per bot: off means nothing; Normal means less.
+    // One vault that always remembers the most: old per-bot levels and switches change nothing.
     vault.setBot(writer.id, { level: 'normal' })
-    expect(vault.context({ spaceId: writer.id, query: q, window: 1_000_000 })!.lines.length).toBeLessThan(huge.lines.length)
+    expect(vault.context({ spaceId: writer.id, query: q, window: 1_000_000 })!.lines.length).toBe(huge.lines.length)
     vault.setBot(writer.id, { enabled: false })
-    expect(vault.context({ spaceId: writer.id, query: q, window: 1_000_000 })).toBeNull()
+    expect(vault.context({ spaceId: writer.id, query: q, window: 1_000_000 })).not.toBeNull()
     expect(noteLine(s.read('Shared/People/Dana Lee.md')!, 500)).toMatch(/^- \[\[Dana Lee\]\] \(person · updated \d{4}-\d{2}-\d{2}\): The CFO\. \| Notes: \[\d{4}-\d{2}-\d{2}\] Reviews every investor deck\./)
     expect(vaultLines([], vaultBudget(16_384))).toEqual([])
   })
 })
 
 describe('the vault tool', () => {
-  test('search, read, write, link; tainted writes are quoted in the bot\'s own area; secrets refused; every write undoable', async () => {
+  test('search, read, write, link; one shared vault; tainted writes are quoted in the bot\'s own area; secrets refused; every write undoable', async () => {
     const { db, vault, writer, coder } = setup()
     const tool = vaultTool({ vault, db, secretValues: () => ['hunter2-vault-secret'] })
     const t = db.createThread(writer.id, 'auto', null)
     const ctx = (extra: Record<string, unknown> = {}) => ({ threadId: t.id, state: {}, ...extra }) as never
     const w = await tool.run({ action: 'write', title: 'Launch checklist', type: 'howto', summary: 'Steps for a product launch.', points: ['Email the beta list first.', 'Then post on [[Product Hunt]].'] }, ctx())
-    expect(w.text).toMatch(/^Created Bots\/Writer\/Playbooks\/Launch checklist\.md/)
+    expect(w.text).toMatch(/^Created Shared\/Playbooks\/Launch checklist\.md/)
     await tool.run({ action: 'write', title: 'Launch checklist', points: ['Email the beta list first.', 'Monitor signups for 48 hours.'] }, ctx())
     const read = await tool.run({ action: 'read', note: 'launch checklist' }, ctx())
     expect(read.text.match(/Email the beta list first/g)).toHaveLength(1)
@@ -323,9 +323,9 @@ describe('the vault tool', () => {
     // Shared facts about the user.
     await tool.run({ action: 'write', title: 'Coffee order', type: 'preference', points: ['Oat flat white.'], shared: true }, ctx())
     expect(vault.list().find((n) => n.title === 'Coffee order')!.section).toBe(SHARED)
-    // Another bot can't read Writer's notes.
+    // One vault: another bot reads it too.
     const tc = db.createThread(coder.id, 'auto', null)
-    await expect(tool.run({ action: 'read', note: 'Launch checklist' }, { threadId: tc.id, state: {} } as never)).rejects.toThrow(/No note/)
+    expect((await tool.run({ action: 'read', note: 'Launch checklist' }, { threadId: tc.id, state: {} } as never)).text).toContain('Email the beta list first')
     // After reading outside content: quoted, own area only, shared notes untouched.
     const q = await tool.run({ action: 'write', title: 'Competitor pricing', points: ['Acme charges $49.'], source: 'https://acme.example/pricing' }, ctx({ tainted: true }))
     expect(q.text).toMatch(/quoted material/)
@@ -336,16 +336,16 @@ describe('the vault tool', () => {
     await expect(tool.run({ action: 'write', title: 'Login', points: ['Password: hunter2-vault-secret'] }, ctx())).rejects.toThrow(/never stores secrets/)
     // Replace keeps the old version; Undo brings it back.
     await tool.run({ action: 'write', note: 'Launch checklist', mode: 'replace', content: '# Launch checklist\n\nRewritten.' }, ctx())
-    const path = 'Bots/Writer/Playbooks/Launch checklist.md'
+    const path = 'Shared/Playbooks/Launch checklist.md'
     expect(vault.read(path)!.body).toContain('Rewritten.')
     const changes = vault.changes()
     expect(changes[0]).toMatchObject({ actor: 'bot:Writer', op: 'update', canUndo: true })
     vault.undo(changes[0].id)
     expect(vault.read(path)!.body).toContain('Monitor signups for 48 hours.')
     expect(readdirSync(join(vault.store.root, '.history')).length).toBeGreaterThan(0)
-    // Off for this bot: the tool says so.
+    // One vault: an old per-bot "off" changes nothing; the vault's own switch (Settings → Memory) still does.
     vault.setBot(writer.id, { enabled: false })
-    await expect(tool.run({ action: 'search', query: 'x' }, ctx())).rejects.toThrow(/off for this bot/)
+    await expect(tool.run({ action: 'search', query: 'x' }, ctx())).resolves.toBeTruthy()
   })
 })
 

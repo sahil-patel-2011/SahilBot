@@ -1,5 +1,6 @@
 import { lstatSync } from 'node:fs'
 import { basename, isAbsolute } from 'node:path'
+import { straight } from '../harness-features'
 import type { ResearchClaim } from './research'
 import type { RuntimeStore } from './store'
 
@@ -31,8 +32,10 @@ export function completionReport(store: RuntimeStore, runId: string, o: { requir
   if (checks.length && Math.max(...checks.map((c) => c.at)) < lastMutation) issues.push('The work changed after its last verification; check it again.')
   // An uncertain write blocks completion until the agent has looked at the state since (a read that ran after
   // it in this run). It stays uncertain, so repeating the same write is still refused.
-  for (const a of store.uncertain(store.get(runId)?.threadId ?? '')) {
-    const checkedSince = a.runId === runId && actions.some((x) => x.status === 'done' && x.effect === 'read' && x.at >= a.at && x.id !== a.id && x.tool !== 'agent_control' && sameThing(a.tool, x.tool))
+  // Only this run's: one left from an earlier task in the chat's one conversation stays in the brief (and still refuses
+  // a blind repeat) but never fails an unrelated later task.
+  for (const a of store.uncertain(store.get(runId)?.threadId ?? '').filter((x) => x.runId === runId)) {
+    const checkedSince = actions.some((x) => x.status === 'done' && x.effect === 'read' && x.at >= a.at && x.id !== a.id && x.tool !== 'agent_control' && sameThing(a.tool, x.tool))
     if (!checkedSince) issues.push(`${a.tool}: uncertain outcome (${a.id}). Check its current state with a read of the same service before finishing, or reconcile it with agent_control.`)
   }
   for (const c of o.claims ?? []) if (c.consequential && ['unsupported', 'disputed', 'stale'].includes(c.status)) issues.push(`Research claim is ${c.status}: ${c.text}`)
@@ -40,3 +43,24 @@ export function completionReport(store: RuntimeStore, runId: string, o: { requir
   const passed = [...latest.values()].filter((c) => c.passed).length
   return { status: issues.length ? 'blocked' : passed > 0 ? 'verified' : 'unverified', issues: [...new Set(issues)], checks: latest.size, passed }
 }
+
+/** The reply already tells the user it couldn't confirm the result ("I couldn't verify…", "not one I verified on screen"). */
+export function admitsUnverified(text: string): boolean {
+  // A negation counts only when it is about doing or checking the work ("I couldn't open the file", "didn't confirm"),
+  // said of itself or the work (I, we, it, that…, or a sentence that starts with it), never a passing "can't" or
+  // "didn't" elsewhere in a reply that claims success ("I didn't need to run it twice", "you can't wait to see it").
+  const SUBJ = String.raw`(?:^|[.!?:;]\s*|\b(?:i'm|i|we|it|that|this|they)\s+(?:(?:was|were|am|is|are)\s+)?)`
+  // "Couldn't" is about not managing to; "didn't" is often just what it chose not to do ("I didn't make any changes to
+  // the totals"), so with it only verbs of checking or finishing the work count.
+  const CANT = String.raw`(?:couldn'?t|could not|can'?t|cannot|wasn'?t able to|was not able to|unable to|haven'?t been able to|have not been able to)`
+  const DIDNT = String.raw`(?:didn'?t|did not|haven'?t|have not)`
+  const DO = String.raw`(?:verify|confirm|check|test|finish|complete|reach|access|open|load|save|send|connect|sign|log|install|fix|reproduce)`
+  // ("I can't get you the PDF too", "It can't do both" are not about the work failing: only "get … to work/load".)
+  const TRY = String.raw`(?:${DO.slice(3, -1)}|get\s+(?:\w+\s+){0,3}to\s+(?:work|load|open|run|start|go)|run|see|find|read|click|start)`
+  const said = (neg: string, verbs: string): RegExp => new RegExp(String.raw`${SUBJ}${neg}\s+(?!(?:need|want|have|wait|plan|mean|bother)\s+to\b)(?:\w+\s+)?${verbs}\w*\b`, 'im')
+  return said(CANT, TRY).test(straight(text)) || said(DIDNT, DO).test(straight(text))
+    || /\b(not (yet )?(one i )?(verified|confirmed|checked)|unverified|unconfirmed|blocked (me|it|the)|was blocked|not the expected result|didn'?t (get|see|show) the expected result|(not|n'?t) (sure|certain) (it|this|that|the \w+) (worked|went (through|out)|(was |is |got )?(saved|sent|right|correct|done))|to finish (the|this) (test|task))\b/i.test(straight(text))
+}
+
+/** One plain sentence for a reply that sounds sure while the app's checks found something unresolved (no ids, no tool names). */
+export const UNVERIFIED_NOTE = "I couldn't confirm this worked, so check the result before relying on it."

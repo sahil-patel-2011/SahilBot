@@ -20,7 +20,7 @@ test.skipIf(!process.env.UI_SHOTS)('ui screenshots', async () => {
   const page = await app.firstWindow()
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setBounds({ x: 0, y: 0, width: 1400, height: 880 }); w.show(); w.focus() })
   await page.waitForSelector('[data-testid="composer-input"]', { timeout: 60000 })
-  await page.evaluate(() => window.foreman.settings.set({ userName: 'Jitesh' } as never))
+  await page.evaluate(() => window.foreman.settings.set({ profile: { firstName: 'Sahil', lastName: 'Patel' } } as never))
   await page.waitForTimeout(2500); snap('01-home')
   // A chat: the reply asks a question with options (the duplicated "what to focus on?" from the user's screenshot).
   llm.script.push({ toolCalls: [{ name: 'ask_user', arguments: JSON.stringify({ question: 'What do you want me to focus on?', options: ['Research', 'Documents', 'Code', 'Planning'] }) }] }, { content: 'I can research, draft and edit documents, build presentations and spreadsheets, work on code and CAD, and help with everyday planning. Pick an option or type your own, and I\'ll tailor my help to it.' })
@@ -54,7 +54,7 @@ test.skipIf(!process.env.UI_SHOTS)('ui screenshots', async () => {
     await page.waitForTimeout(1500); snap(`10-settings-${id}`)
   }
   await page.keyboard.press('Escape'); await page.waitForTimeout(600)
-  await page.click('[data-testid="connect-apps"]').catch(() => undefined); await page.waitForTimeout(2000); snap('20-connect-apps')
+  await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]').catch(() => undefined); await page.waitForTimeout(2000); snap('20-connect-apps')
   await page.keyboard.press('Escape'); await page.waitForTimeout(600)
   await page.click('[data-testid="nav-vault"]').catch(() => undefined); await page.waitForTimeout(2000); snap('21-vault')
   await Promise.race([app.close(), new Promise((r) => setTimeout(r, 5000))])

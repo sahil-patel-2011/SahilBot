@@ -21,7 +21,7 @@ beforeAll(async () => { llm = await startMockLlm() })
 afterAll(async () => { await llm.close() })
 beforeEach(() => { llm.script.length = 0; llm.requests.length = 0 })
 const call = (name: string, args: Record<string, unknown>) => ({ name, arguments: JSON.stringify(args) })
-function harness(tools: ToolDef[] = [], approval = 'deny') {
+function harness(tools: ToolDef[] = [], approval = 'deny', mode: 'ask' | 'auto' = 'auto') {
   const db = new Db(':memory:'), registry = new ToolRegistry(), workspaceDir = mkdtempSync(join(tmpdir(), 'runtime-integration-'))
   const results = new ResultStore(workspaceDir), model = { id: 'fixture', label: 'Fixture', provider: 'ollama', providerName: 'Local', enabled: true, installed: true, fits: true, tier: 2, maxFittingWindow: 65536, requiredGB: 1 } as ModelInfo
   const settings = { contextWindow: 32768, taskModels: { voice: '', background: '' }, sampling: {}, thinking: 'medium', advanced: { hardStopsEnabled: true }, workspaceDir, userName: 'Sam', defaultModel: model.id, hiddenModels: [], shownModels: [], cloud: { enabled: false, hybrid: false, advisorModel: '', maxConsultsPerRequest: 0 }, customRules: [] } as unknown as Settings
@@ -32,7 +32,7 @@ function harness(tools: ToolDef[] = [], approval = 'deny') {
     spaces: { getPrompt: () => '' } as never, memory: new MemoryStore(db), secretValues: () => [], fitWindow: (_m, w) => w, counter: () => ({ count: async (t: string) => estimate(t) }),
     emit: (e) => { if (e.type === 'pending') queueMicrotask(() => agent.respond(e.threadId, e.request.id, e.request.kind === 'plan' ? 'approve' : approval)) }
   })
-  const space = db.createSpace('Test', '#000'), thread = db.createThread(space.id, 'auto', model.id)
+  const space = db.createSpace('Test', '#000'), thread = db.createThread(space.id, mode, model.id)
   const run = async (text: string) => (await agent.send({ threadId: thread.id, text })).done
   const final = () => db.listMessages(thread.id).filter((m) => m.role === 'assistant' && m.kind === 'normal' && !m.meta?.superseded).at(-1)!
   return { db, agent, registry, thread, run, final, workspaceDir }
@@ -41,7 +41,8 @@ const tool = (name: string, effect: ToolDef['effect'], run: ToolDef['run']): Too
 
 test('nested workflows honor denial and never add orphan tool messages to provider history', async () => {
   let writes = 0
-  const h = harness([tool('send_fixture', 'write_external', async () => { writes++; return { text: 'sent' } })])
+  // An Ask chat, so the nested send asks (and the user declines).
+  const h = harness([tool('send_fixture', 'write_external', async () => { writes++; return { text: 'sent' } })], 'deny', 'ask')
   llm.script.push({ toolCalls: [call('workflow', { nodes: [{ id: 'send', op: 'call', tool: 'send_fixture', args: {} }] })], delay: 0 }, { content: 'The send was declined.', delay: 0 })
   await h.run('Run this workflow to send the fixture report')
   expect(writes).toBe(0)
@@ -72,10 +73,62 @@ test('the final completion gate runs configured checks and exposes failure despi
   let checks = 0
   const h = harness([tool('check_fixture', 'read', async () => { checks++; return { text: 'fixture still failing', data: { passed: false } } })])
   llm.script.push({ toolCalls: [call('agent_control', { action: 'configure', checks: [{ criterion: 'fixture works', tool: 'check_fixture', args: {}, pointer: '/passed', equals: true }] })], delay: 0 }, ...Array.from({ length: 4 }, () => ({ content: 'Everything passed.', delay: 0 })))
-  expect(await h.run('Implement the fixture and verify the result')).toBe('error')
+  // (An interactive chat ends 'finished' with the plain note and the Needs-checking badge; only a routine fails.)
+  expect(await h.run('Implement the fixture and verify the result')).toBe('finished')
   expect(checks).toBe(1)
   expect(h.final().meta?.verification).toMatchObject({ status: 'blocked' })
-  expect(h.final().content).toContain('Verification is incomplete')
+  // The user reads one plain sentence, not the checks' ids and tool names (those stay in meta.verification).
+  expect(h.final().content).toContain("I couldn't confirm this worked")
+  expect(h.final().content).not.toMatch(/Verification is incomplete|agent_control|fixture works: /)
+})
+
+test('a reply that already says it couldn\'t confirm the result is shown as written, with no technical prefix', async () => {
+  const { admitsUnverified } = await import('../../src/main/agent/runtime/verification')
+  expect(admitsUnverified('Calculator is open, but macOS blocked me from clicking its buttons. 245 × 18 = 4,410 is the expected result, not one I verified on screen.')).toBe(true)
+  expect(admitsUnverified("I couldn't open the file.")).toBe(true)
+  expect(admitsUnverified('Everything passed.')).toBe(false)
+  expect(admitsUnverified('Done: the invoice is sent.')).toBe(false)
+  // A passing negation in a reply that claims success is not an admission.
+  expect(admitsUnverified("Done: the invoice is sent. You can't reply to it from the app, but it went out.")).toBe(false)
+  expect(admitsUnverified("Fixed it. The old code didn't handle empty lists.")).toBe(false)
+  expect(admitsUnverified("I didn't confirm the total on screen.")).toBe(true)
+  expect(admitsUnverified('I was unable to reach the server.')).toBe(true)  // Only about doing the work, said of itself: not a pass-through "didn't need to", "you can't wait".
+  expect(admitsUnverified("I didn't need to run it twice, it's sent.")).toBe(false)
+  expect(admitsUnverified("You can't wait to see it: the deck is in Downloads.")).toBe(false)
+  expect(admitsUnverified('The expected result is in cell B4.')).toBe(false)
+  expect(admitsUnverified("I’m unable to verify the total.")).toBe(true)
+  expect(admitsUnverified("Couldn't verify the hotel link.")).toBe(true)
+  expect(admitsUnverified("I haven't been able to confirm the booking.")).toBe(true)
+  // HTB-03 (round 2): a confident reply with a passing "didn't make" or "not sure you wanted…" is no admission.
+  expect(admitsUnverified("Sent the invoice. I didn't make any changes to the totals.")).toBe(false)
+  expect(admitsUnverified('Saved it. Not sure you wanted PDF.')).toBe(false)
+  expect(admitsUnverified("I didn't do anything else.")).toBe(false)
+  expect(admitsUnverified("I'm not sure it worked.")).toBe(true)
+  expect(admitsUnverified("I couldn't find the report.")).toBe(true)
+  expect(admitsUnverified("I couldn't get the page to load.")).toBe(true)
+  expect(admitsUnverified("I didn't check the totals.")).toBe(true)
+  // A passing "can't" about something else is not an admission (round 3).
+  expect(admitsUnverified("Sent the invoice. I can't get you the PDF too.")).toBe(false)
+  expect(admitsUnverified('Booked the 7pm table. It can\'t do both nights.')).toBe(false)
+  expect(admitsUnverified("I couldn't get it to work.")).toBe(true)
+})
+
+// HTB-01/03 (round 3): a bot keeps one conversation, so an uncertain write from an earlier task must not fail every
+// later task's completion check (it still refuses a blind repeat of that write).
+test('an uncertain write from an earlier run does not block a later run in the same chat', async () => {
+  const { RuntimeStore } = await import('../../src/main/agent/runtime/store')
+  const { completionReport } = await import('../../src/main/agent/runtime/verification')
+  const db = new Db(':memory:')
+  const store = new RuntimeStore(db)
+  const space = db.createSpace('Test', '#000'), thread = db.createThread(space.id, 'auto', 'm')
+  const a = store.start(thread.id, 'opener-a')
+  const sent = store.begin(a, 'c1', 'gmail__send', { to: 'sam' }, 'write_external')
+  store.fail(sent.record.id, 'timed out', true)
+  expect(completionReport(store, a.id).status).toBe('blocked')
+  const b = store.start(thread.id, 'opener-b')
+  expect(completionReport(store, b.id).status).not.toBe('blocked')
+  // The same write is still never repeated blind.
+  expect(store.begin(b, 'c2', 'gmail__send', { to: 'sam' }, 'write_external').blocked).toMatch(/uncertain outcome/)
 })
 
 test('recorded-tool replay cannot execute a live write', async () => {

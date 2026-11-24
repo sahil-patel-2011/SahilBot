@@ -158,7 +158,7 @@ describe('working folder: relative paths, writes outside ask, commands run there
     const wf = dir('sb-wf-')
     const other = dir('sb-other-')
     writeFileSync(join(wf, 'notes.md'), 'in the folder')
-    const [read, write, manage] = fileTools(() => ws, ws)
+    const [read, write, , manage] = fileTools(() => ws, ws)
     const state = { roots: [wf], folder: wf, loaded: [], alwaysAllow: [], todos: [] }
     const ctx = { state } as never
     expect((await read.run({ path: 'notes.md' }, ctx)).text).toBe('in the folder')

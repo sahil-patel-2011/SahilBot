@@ -14,3 +14,4 @@ playwright-report/
 resources/oauth-clients.json
 .bench/
 scripts/.local/
+eval-results/

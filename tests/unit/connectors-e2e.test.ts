@@ -339,7 +339,7 @@ describe('connected app in a chat', () => {
     for (let i = 0; i < 500 && !req; i++) { req = agent.pending(thread.id)[0] as never; if (!req) await new Promise((r) => setTimeout(r, 10)) }
     expect(req, 'an approval request').toBeTruthy()
     expect(JSON.stringify(req)).toMatch(/refund/i)
-    expect(JSON.stringify(req)).toMatch(/Hard stop/i)
+    expect(JSON.stringify(req)).toMatch(/Spends money/i)
     expect(s.log.calls.map((c) => c.name)).toEqual(['list_customers'])
     agent.respond(thread.id, req!.id, 'allow')
     await done

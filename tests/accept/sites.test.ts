@@ -217,7 +217,8 @@ describe('site playbooks and smarter browsing', () => {
     // The download offer is shown before the test approves saving the HTTP fixture.
     expect(outs[10]).toContain('The page offered a download: "catalog.csv"')
     expect(outs[11]).toContain('catalog.csv')
-    expect(approvals.some((item) => item.kind === 'approval' && item.text.includes('catalog.csv'))).toBe(true)
+    // Saving it runs in Auto (no card).
+    expect(approvals.some((item) => item.kind === 'approval' && item.text.includes('catalog.csv'))).toBe(false)
     expect(outs[12]).toContain('Saved to')
     expect(readFileSync(join(workspace, 'Downloads', 'catalog.csv'), 'utf8')).toBe('item,price\nMug 1,11.00\n')
     // The run's playbook learned the export tip.

@@ -66,6 +66,16 @@ export function freePath(dir: string, name: string, ext: string): string {
   return join(dir, `${name}-${Date.now()}.${ext}`)
 }
 
+/** A free path for a name the user chose: "<name>.<ext>", then "<name> (2).<ext>"… (never an existing file). */
+export function freeNamed(dir: string, name: string, ext: string): string {
+  mkdirSync(dir, { recursive: true })
+  for (let i = 1; i < 1000; i++) {
+    const p = join(dir, `${name}${i === 1 ? '' : ` (${i})`}${ext ? `.${ext}` : ''}`)
+    if (!existsSync(p)) return p
+  }
+  return join(dir, `${name} (${Date.now()})${ext ? `.${ext}` : ''}`)
+}
+
 /** The document as Markdown other tools render well (sheets: a table of computed values). */
 export function exportMarkdown(d: DocSnapshot): string {
   if (d.type === 'sheet') {
@@ -149,7 +159,7 @@ ${body}
  * Writes the document to `dir` in `format` and returns the file's path. Images come only through
  * `readImage` (default: the folder `dir` is in, i.e. the workspace for <workspace>/exports).
  */
-export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: string, o: { name?: string; create?: CreateDocumentFn; readImage?: ReadImageFn; warnings?: (w: string[]) => void } = {}): Promise<string> {
+export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: string, o: { name?: string; exactName?: boolean; create?: CreateDocumentFn; readImage?: ReadImageFn; warnings?: (w: string[]) => void } = {}): Promise<string> {
   const deck = d.type !== 'sheet' && d.content.kind === 'slides'
   const allowed = d.type === 'sheet' ? SHEET_FORMATS : deck ? DECK_FORMATS : DOC_FORMATS
   if (!allowed.includes(format)) throw new Error(`A ${d.type === 'sheet' ? 'sheet' : 'document'} exports to ${allowed.join(', ')}; not ${format}.`)
@@ -162,9 +172,12 @@ export async function exportDoc(d: DocSnapshot, format: DocExportFormat, dir: st
     return r
   }
   const readImage = o.readImage ?? folderImageReader([dirname(resolve(dir))])
-  const name = slug(o.name?.replace(/\.[a-z0-9]{2,5}$/i, '') || d.title)
+  // A name the user gave with a place ("~/Desktop/Q3 Report.pdf") is kept as written; else a tidy slug.
+  const given = o.name?.replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[\\/:\0]/g, '-').trim()
+  const name = o.exactName && given ? given.slice(0, 120) : slug(given || d.title)
   const ext = format === 'pptx_pictures' ? 'pptx' : format === 'png' ? '' : format
-  const path = format === 'png' ? freePath(dir, `${name}-slides`, '') : freePath(dir, format === 'pptx_pictures' ? `${name}-pictures` : name, ext)
+  const free = o.exactName ? freeNamed : freePath
+  const path = format === 'png' ? free(dir, `${name}-slides`, '') : free(dir, format === 'pptx_pictures' ? `${name}-pictures` : name, ext)
   const deckIn = { title: d.title, blocks: d.content.blocks, style: d.content.style }
   if (deck && format === 'pdf') { mkdirSync(dir, { recursive: true }); await deckPdf(path, deckIn, readImage); return done(path, format) }
   const dashboard = d.type !== 'sheet' && d.content.kind === 'dashboard'

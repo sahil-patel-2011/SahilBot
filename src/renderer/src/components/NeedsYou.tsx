@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { BotAutonomySettings, NeedsYouItem, QueueQuestion, Space } from '@shared/types'
+import type { BotAutonomySettings, NeedsYouItem, Space } from '@shared/types'
 import { api } from '../api'
 import { SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { folderName, plainApproval } from '../lib/plain-approval'
+import { plain, recommended } from '../lib/answers'
 
 // The "Needs you" inbox: every bot's pending questions and approvals in one place, with one-tap answers.
 // Questions a bot posted while it kept working (main: agent/questions) and cards open in running chats
@@ -14,8 +15,6 @@ import { folderName, plainApproval } from '../lib/plain-approval'
 
 const BOT_AUTONOMY_DEFAULTS: BotAutonomySettings = { alwaysAsk: [], deadlineHours: 4, digest: { enabled: true, time: '18:00' } }
 
-const plain = (o: string): string => o.replace(/\s*\((recommended|default|suggested)\)\s*/gi, ' ').replace(/\s+/g, ' ').trim()
-const recommended = (q: QueueQuestion): string | undefined => q.default?.trim() || q.options?.find((o) => /recommended/i.test(o)) || q.options?.[0]
 
 function deadlineLine(x: NeedsYouItem): string {
   if (x.kind === 'approval') return 'Waits for your OK'
@@ -50,7 +49,7 @@ export function NeedsYouInbox(p: { spaces: Space[]; onOpenChat: (threadId: strin
   if (!open.length && !review.length) return null
   return (
     <section className="tk-col needs ny-inbox" aria-label="Needs you" data-testid="needs-you-inbox">
-      <header className="tk-col-head"><i aria-hidden="true" /><span>Needs you</span><b>{open.length}</b></header>
+      <header className="tk-col-head"><i aria-hidden="true" /><span>Waiting on you</span><b>{open.length}</b></header>
       {open.map((x) => <NeedsYouCard key={x.id} item={x} bot={byId.get(x.botId)} onOpen={() => p.onOpenChat(x.threadId, x.botId)} onDone={reload} />)}
       {review.length > 0 && (
         <>
@@ -65,7 +64,7 @@ export function NeedsYouInbox(p: { spaces: Space[]; onOpenChat: (threadId: strin
 function Head({ item, bot, chip }: { item: NeedsYouItem; bot?: Space; chip: string }) {
   return (
     <div className="tk-card-top">
-      {bot ? <SpaceAvatar color={bot.color} shape={bot.shape} size={26} /> : <span className="tk-noavatar" />}
+      {bot ? <SpaceAvatar color={bot.color} shape={bot.shape} icon={bot.icon} size={26} /> : <span className="tk-noavatar" />}
       <span className="tk-bot">{bot?.name ?? item.botName}</span>
       <span className="tk-chip needs">{chip}</span>
     </div>

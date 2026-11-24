@@ -2,8 +2,8 @@
 // web UI at 390×844 (Phone access, headless Chromium). Mock model, test site, hidden window; no paid calls.
 //   npm run build && SHOTS_DIR=<dir> SAHILBOT_HIDDEN=1 npx vitest run --config vitest.tools.config.mts tests/tools/ui-audit-shots.test.ts --silent=false
 // Optional: ONLY=<comma list of shot-name prefixes>. Failed steps are listed at the end and leave a zz-fail-*.png.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chromium, type Locator, type Page } from 'playwright'
 import { test } from 'vitest'
@@ -12,6 +12,7 @@ import { launch, tempProfile } from '../accept/app'
 import { refFor, startMockLlm, type MockLlm, type ScriptedReply } from '../fixtures/mock-llm'
 import { startTestSite, STORE } from '../fixtures/test-site'
 import { seedUsage } from '../fixtures/usage-seed'
+import { chromiumPath } from '../fixtures/chromium-path'
 
 const out = process.env.SHOTS_DIR ?? join(tmpdir(), 'ui-audit-shots')
 mkdirSync(out, { recursive: true })
@@ -130,19 +131,6 @@ const openBot = async (page: Page, name: string): Promise<void> => {
 const snapOf = (req: any, title: string): string => String([...req.messages].reverse().find((m: any) => m.role === 'tool' && String(m.content).includes(`Page: "${title}`))?.content ?? '')
 const lastTool = (req: any): string => String([...req.messages].reverse().find((m: any) => m.role === 'tool')?.content ?? '')
 
-function chromiumPath(): string | undefined {
-  if (process.env.PLAYWRIGHT_CHROMIUM_PATH) return process.env.PLAYWRIGHT_CHROMIUM_PATH
-  if (existsSync(chromium.executablePath())) return undefined
-  const cache = join(homedir(), 'Library/Caches/ms-playwright')
-  if (!existsSync(cache)) return undefined
-  for (const d of readdirSync(cache).filter((x) => x.startsWith('chromium_headless_shell-')).sort().reverse()) {
-    for (const sub of readdirSync(join(cache, d))) {
-      const exe = join(cache, d, sub, 'chrome-headless-shell')
-      if (existsSync(exe)) return exe
-    }
-  }
-  return undefined
-}
 
 test('UI audit screenshots', async () => {
   const llm = await startMockLlm()
@@ -156,6 +144,7 @@ test('UI audit screenshots', async () => {
       await shoot(page, 'onboard-1-name')
       await page.fill('[data-testid="onboarding-name"]', 'Sahil')
       await page.click('[data-testid="onboarding-name-next"]')
+      await page.click('[data-testid="onboarding-about-next"]')
       await page.locator('[data-testid="onboarding-cloud"]').waitFor()
       await wait(page, 600)
       await shoot(page, 'onboard-2-connect')

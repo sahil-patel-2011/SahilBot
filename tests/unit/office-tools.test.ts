@@ -241,9 +241,35 @@ describe('office tool', () => {
     expect(readdirSync(join(ws, '.foreman', 'backups')).some((f) => f.endsWith('budget.xlsx'))).toBe(true)
     const r = await office.run({ action: 'sheet_read', path: 'budget.xlsx', range: 'A4:B5' }, ctxFor(ws))
     expect(r.text).toContain('A4="Gym" | B4="50"')
-    expect(r.text).toContain('B5="1500" (=SUBTOTAL(109,B2:B4))')
+    expect(r.text).toContain('B5="1500" (=SUM(B2:B4))')
     const sum = await office.run({ action: 'sheet_summarize', path: 'budget.xlsx' }, ctxFor(ws))
     expect(sum.text).toMatch(/B "Cost" \[currency\]: 3 values.*sum 1500/)
+  })
+
+  test('sheet_write on a sheet of the user\'s they didn\'t ask to change edits "Budget (2).xlsx"; asked, it edits in place', async () => {
+    const ws = tmp()
+    const create = fileTools(() => ws, ws).find((t) => t.name === 'create_document')!
+    // Made outside any chat (the user's own file).
+    await create.run({ path: 'Budget.xlsx', sheets: [{ name: 'Budget', rows: [['Item', 'Cost'], ['Rent', 1000]] }] }, ctxFor(ws))
+    const before = readFileSync(join(ws, 'Budget.xlsx'))
+    let said = 'Make me a summary of my spending'
+    const office = officeTool({ getWorkspace: () => ws, userText: () => said })
+    const ctx = { ...(ctxFor(ws) as object), threadId: 't-sheet-copy' } as never
+    const w = await office.run({ action: 'sheet_write', path: 'Budget.xlsx', edits: [{ cell: 'Budget!B2', value: 1200 }] }, ctx)
+    expect(readFileSync(join(ws, 'Budget.xlsx')).equals(before)).toBe(true)
+    expect(w.path).toBe(join(ws, 'Budget (2).xlsx'))
+    expect(w.text).toMatch(/Budget\.xlsx is the user's.*Budget \(2\)\.xlsx/)
+    // A second edit lands on the same copy.
+    await office.run({ action: 'sheet_write', path: 'Budget.xlsx', edits: [{ cell: 'Budget!A3', value: 'Food' }] }, ctx)
+    const copy = await office.run({ action: 'sheet_read', path: 'Budget (2).xlsx' }, ctx)
+    expect(copy.text).toContain('1200')
+    expect(copy.text).toContain('Food')
+    expect(existsSync(join(ws, 'Budget (3).xlsx'))).toBe(false)
+    said = 'Update Budget.xlsx: rent is now 1300'
+    const ctx2 = { ...(ctxFor(ws) as object), threadId: 't-sheet-asked' } as never
+    const asked = await office.run({ action: 'sheet_write', path: 'Budget.xlsx', edits: [{ cell: 'Budget!B2', value: 1300 }] }, ctx2)
+    expect(asked.path).toBe(join(ws, 'Budget.xlsx'))
+    expect(readFileSync(join(ws, 'Budget.xlsx')).equals(before)).toBe(false)
   })
 
   test('csv_to_xlsx, pdf_fill to a new file, batch preview then apply, receipts and meeting notes', async () => {
