@@ -13,6 +13,7 @@ import '../styles-privacy.css'
 // Lazy: Connect Apps is its own chunk; only a card for an app that still needs its setup (or a key) uses it.
 import { ApiKeyPanel, AppSetup, GoogleSetup, Lazy } from '../lazy'
 import { folderName } from '../lib/plain-approval'
+import { openPermission, PERMISSION_BUTTON, type AskedPermission } from '../lib/permission-ask'
 
 const EFFECT_TEXT: Record<string, string> = {
   read: 'Reads only',
@@ -180,6 +181,30 @@ function QuestionCard({ req, onRespond }: { req: PendingRequest; onRespond: (id:
             onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); (e.target as HTMLInputElement).blur() } if (e.key === 'Enter') { e.preventDefault(); send(own) } }} data-testid="question-own-input" />
           {own.trim() && <button className="btn primary small" disabled={sending} onClick={() => send(own)} data-testid="question-own-send">Send</button>}
         </label>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A Mac permission the task needs (Accessibility for clicking in other apps): shown by itself, whatever the reply
+ * says. One tap opens the switch; the card closes and the task carries on by itself once it's on.
+ */
+function PermissionCard({ req, onRespond }: { req: PendingRequest; onRespond: (id: string, answer: string) => void | Promise<unknown> }) {
+  const kind = req.permission!
+  const [opened, setOpened] = useState(false)
+  const open = (): void => {
+    setOpened(true)
+    void openPermission(api.permissions, kind as AskedPermission)
+  }
+  return (
+    <div className="pending permission-card" data-testid="permission-card" data-permission={kind}>
+      <div className="pending-title"><I.Shield size={15} /> {kind === 'accessibility' ? 'Allow SahilBot to use your Mac' : 'Allow SahilBot on this Mac'}</div>
+      {req.question && <div className="hint">{req.question}</div>}
+      {opened && <div className="hint" data-testid="permission-card-waiting">Turn on SahilBot in System Settings. This task continues by itself once it's on.</div>}
+      <div className="pending-actions">
+        <button className="btn primary" onClick={open} data-testid="permission-card-open">{PERMISSION_BUTTON[kind as AskedPermission] ?? 'Open System Settings'}</button>
+        <button className="btn" onClick={() => void onRespond(req.id, 'Not now')} data-testid="permission-card-skip">Not now</button>
       </div>
     </div>
   )
@@ -427,6 +452,7 @@ export function PendingCard({ req, onRespond, thumb }: { req: PendingRequest; on
   if (req.kind === 'connect' && req.preset) return <ConnectCard req={req} onRespond={onRespond} />
   if (req.kind === 'questions' && req.questions) return <QuestionsCard req={req} onRespond={onRespond} />
   if (req.kind === 'plan' && req.plan) return <PlanApprovalCard req={req} onRespond={onRespond} />
+  if (req.kind === 'question' && req.permission) return <PermissionCard req={req} onRespond={onRespond} />
   if (req.kind === 'question') return <QuestionCard req={req} onRespond={onRespond} />
   if (req.kind === 'privacy' && req.privacy) return <PrivacyCard req={req} onRespond={onRespond} />
   return <ApprovalCard req={req} onRespond={onRespond} thumb={thumb} />

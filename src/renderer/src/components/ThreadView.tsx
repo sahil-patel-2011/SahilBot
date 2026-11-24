@@ -1,7 +1,7 @@
 import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { repliedSince } from '../lib/bot-working'
 import { awaitingFinal, heldDrafts } from '../lib/held-drafts'
-import { PERMISSION_BUTTON, permissionAsked } from '../lib/permission-ask'
+import { openPermission, PERMISSION_BUTTON, permissionAsked } from '../lib/permission-ask'
 import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
 import { filesFromMessages } from '../lib/ux'
 import { firstUnread } from '@shared/read-state'
@@ -1193,7 +1193,7 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
           <MessageTools m={m} actions={actions} side="right" onRetry={retry && !dev ? actions.onRetry : undefined} latest={!!retry} />
           {dev && (m.meta?.verification as { status?: string } | undefined)?.status === 'verified' && <span className="result-verified" title="The recorded acceptance checks passed"><I.Check size={12} /> Checked</span>}
           {dev && !!m.meta?.superseded && !!m.meta?.checking && <span className="result-checking">Double-checking…</span>}
-          {(() => { const kind = m.status !== 'streaming' ? permissionAsked(m.content) : undefined; return kind ? <button type="button" className="perm-ask" onClick={() => void api.permissions.request(kind).catch(() => api.permissions.open(kind))} data-testid="perm-ask">{PERMISSION_BUTTON[kind]}</button> : null })()}
+          {(() => { const kind = m.status !== 'streaming' ? permissionAsked(m.content) : undefined; return kind ? <button type="button" className="perm-ask" onClick={() => void openPermission(api.permissions, kind)} data-testid="perm-ask">{PERMISSION_BUTTON[kind]}</button> : null })()}
           {(m.meta?.verification as { status?: string } | undefined)?.status === 'blocked' && <span className="result-needs-check" title={dev ? ((m.meta?.verification as { issues?: string[] }).issues ?? []).join('\n') : 'SahilBot couldn\'t confirm this worked. Check the result before relying on it.'}>Needs a check</span>}
         </div>
       )}

@@ -82,6 +82,8 @@ export interface ComputerDeps {
   capture(file: string, opts?: { rect?: Rect; width?: number; height?: number }): Promise<{ dataUrl: string; width: number; height: number }>
   /** Accessibility permission (macOS shows its prompt when asked). */
   trusted(prompt: boolean): boolean
+  /** How often (ms) the Accessibility card checks for the switch, and how long it waits (tests shorten both). */
+  axPoll?: { everyMs?: number; timeoutMs?: number }
   /** Displays in global points (Electron's screen); optional so older callers still work. */
   displays?(): DisplayInfo[]
   /** SahilBot's own processes and windows: never clicked, typed into or driven by computer use. */
@@ -110,12 +112,18 @@ export const computerControl = (): ComputerControl | undefined => current
 const READ = new Set<Action>(['screenshot', 'zoom', 'ui', 'apps', 'windows', 'wait', 'wait_for', 'clipboard_read'])
 /** Acting actions that can't change a setting by themselves (no System Settings hard stop). */
 const NAVIGATE = new Set<Action>(['open_app', 'activate_app', 'focus_window', 'move', 'scroll', 'copy', 'select_all', 'clipboard_write'])
+/** Opening an app or bringing it to the front: works without Accessibility. */
+const OPENS = new Set<Action>(['open_app', 'activate_app'])
 /** How long computer use stays idle before the cursor is put away. */
 const IDLE_MS = 20_000
 /** Apps SahilBot never quits (itself, and parts of macOS). */
 const NO_QUIT = /^(sahilbot|electron|finder|dock|systemuiserver|windowserver|loginwindow|controlcenter|notificationcenter)$/i
 /** Menu items that always ask, even mid-task. */
 const RISKY_MENU = /^(quit|force quit|log out|shut down|restart|sleep|lock screen|empty trash|erase|delete (all|account|permanently)|secure empty trash|close all)/i
+/** The Accessibility card in the chat (the app adds the one-tap button that opens the switch). */
+export const AX_CARD = 'To click, type and read other apps for you, SahilBot needs Accessibility. Tap the button, turn on SahilBot in the list, and this task carries on by itself.'
+/** What the model is told when Accessibility stays off: one stable line, so it explains instead of retrying or guessing. */
+export const AX_OFF = 'Accessibility permission is off, so SahilBot can\'t click, type or read other apps yet.'
 const MOD_FLAGS: Record<string, number> = { cmd: 0x100000, command: 0x100000, shift: 0x20000, option: 0x80000, alt: 0x80000, opt: 0x80000, ctrl: 0x40000, control: 0x40000 }
 
 function sh(cmd: string, args: string[], timeout = 15_000): Promise<string> {
@@ -601,7 +609,7 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
       const secs = (r.waitedMs / 1000).toFixed(1)
       return { text: r.stable ? `The screen settled after ${secs}s. Now: ${r.state.app}${r.state.window ? ` › "${r.state.window}"` : ''}.` : `Still changing after ${secs}s (loading or animating): look with ui or a screenshot before acting.`, display: r.stable ? `settled in ${secs}s` : 'still changing' }
     }
-    needAx()
+    await needAx(ctx)
     const want = a.query.toLowerCase()
     const seen = (snap: AxSnapshot): AxElement | undefined => snap.elements.find((e) => `${e.label} ${e.value ?? ''}`.toLowerCase().includes(want))
     let last: AxElement | undefined
@@ -620,8 +628,33 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
     return { text: a.gone ? `"${a.query}" is still showing after ${limit / 1000}s.` : `"${a.query}" didn't appear within ${limit / 1000}s${app ? ` in ${app}` : ''}. Take a screenshot: it may be drawn without Accessibility text, worded differently, or in another window.`, display: 'not seen yet' }
   }
 
-  const needAx = (): void => {
-    if (!d.trusted(true)) throw new Error('SahilBot needs Accessibility permission to read and use other apps. macOS just showed the prompt: the user should turn SahilBot on in System Settings → Privacy & Security → Accessibility, then you can try again.')
+  /** Per chat: the Accessibility card that is up (several calls at once share it). */
+  const axWaits = new Map<string, Promise<string>>()
+  /**
+   * Accessibility, or the one-tap card: macOS's own prompt adds SahilBot to the Accessibility list, the chat shows
+   * the card (whatever the model says), and the step waits for the switch and carries on by itself once it's on.
+   * Off (skipped, timed out, nobody there): one stable line, so the model explains instead of retrying or guessing.
+   */
+  async function needAx(ctx: ToolContext): Promise<void> {
+    if (d.trusted(false)) return
+    if (d.trusted(true)) return
+    const tid = ctx.threadId
+    let answer = 'unavailable'
+    if (ctx.waitForUser) {
+      let wait = axWaits.get(tid)
+      if (!wait) {
+        wait = ctx.waitForUser(AX_CARD, async () => d.trusted(false), { permission: 'accessibility', options: ['Not now'], everyMs: d.axPoll?.everyMs ?? 1000, timeoutMs: d.axPoll?.timeoutMs ?? 5 * 60_000 })
+          .finally(() => axWaits.delete(tid))
+        axWaits.set(tid, wait)
+      }
+      answer = await wait
+    }
+    alive(ctx)
+    if (d.trusted(false)) return
+    const why = answer === 'unavailable' ? 'Nobody is here to turn it on: leave the clicking part for the user and say so in your report.'
+      : answer === 'timeout' ? 'It wasn\'t turned on in time. Tell the user in one sentence that the Accessibility card in the chat turns it on; don\'t retry or guess.'
+        : 'The user didn\'t turn it on now. Tell them in one sentence that the Accessibility button in the chat turns it on; don\'t retry, don\'t guess and don\'t try another way to click.'
+    throw new Error(`${AX_OFF} ${why}`)
   }
 
   const describe = (a: Args): string => {
@@ -738,7 +771,8 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
       const a: Args = input.action === 'paste_text' ? { ...input, action: input.ref ? 'type_ref' : 'type', method: 'paste' } : input
       const acting = !READ.has(a.action) && a.action !== 'clipboard_write'
       if (acting) {
-        needAx()
+        // Opening or switching to an app is `open -a` and a plain activate: no Accessibility needed.
+        if (!OPENS.has(a.action)) await needAx(ctx)
         granted.set(tid, Date.now())
         d.enterMini(ctx.state.rootId ?? tid)
       }
@@ -767,7 +801,7 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
         return waitFor(a, ctx)
 
       case 'ui': {
-        needAx()
+        await needAx(ctx)
         let pid: number | undefined
         let windowIndex: number | undefined
         let app = a.app
@@ -793,7 +827,7 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
       }
 
       case 'windows': {
-        needAx()
+        await needAx(ctx)
         const list = await windowsList(tid, a.app)
         const ds = displays()
         const where = (r?: Rect): string => { if (!r || ds.length < 2) return ''; const disp = displayAt(ds, center(r).x, center(r).y); return disp ? ` on display ${ordered(ds).indexOf(disp) + 1}` : ' (off screen)' }
@@ -1033,11 +1067,19 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
       }
 
       case 'open_app': case 'activate_app': {
-        const v = await verified(ctx, async () => {
+        const launch = async (): Promise<{ front?: string; error?: string; timeout?: boolean }> => {
           if (a.action === 'open_app') await sh('open', ['-a', a.app!])
           const r = await jxa<{ front?: string; error?: string; timeout?: boolean }>(ACTIVATE, { app: a.app }, 15_000)
           if (r?.error) throw new Error(`Couldn't ${a.action === 'open_app' ? 'open' : 'bring up'} ${a.app}: ${r.error}`)
-        }, { timeoutMs: 1500 })
+          return r ?? {}
+        }
+        // No Accessibility: the app still opens; there's just no window state to read afterwards.
+        if (!d.trusted(false)) {
+          const r = await launch()
+          const late = !!r.front && r.front.toLowerCase() !== a.app!.toLowerCase()
+          return { text: `${a.action === 'open_app' ? 'Opened' : 'Brought up'} ${a.app}.${late ? ` ${r.front} is in front instead: ${a.app} may still be starting.` : ''}`, display: `${a.action === 'open_app' ? 'opened' : 'switched to'} ${a.app}` }
+        }
+        const v = await verified(ctx, async () => { await launch() }, { timeoutMs: 1500 })
         const front = v.after.app
         const ok = !front || front.toLowerCase() === a.app!.toLowerCase()
         return { text: `${a.action === 'open_app' ? 'Opened' : 'Brought up'} ${a.app}. ${v.text}${ok ? '' : ` ${front} is in front instead: ${a.app} may still be starting or showing a dialog; check with ui or apps.`}`, display: `${a.action === 'open_app' ? 'opened' : 'switched to'} ${a.app}` }

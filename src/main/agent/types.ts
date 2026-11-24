@@ -98,9 +98,10 @@ export interface ToolContext {
   /**
    * Waits for the user to do something on their side (sign in, pass a check) without them having to say so:
    * shows the question card and also polls `done`; when `done` turns true the card closes by itself and this
-   * resolves 'done'. Resolves the user's own answer if they answer first, or 'timeout'.
+   * resolves 'done'. Resolves the user's own answer if they answer first, or 'timeout'. `permission`: the card is a
+   * Mac permission card with the one-tap button that opens that switch (nobody there: 'unavailable' at once).
    */
-  waitForUser?(question: string, done: () => Promise<boolean>, o?: { everyMs?: number; timeoutMs?: number; options?: string[] }): Promise<string>
+  waitForUser?(question: string, done: () => Promise<boolean>, o?: { everyMs?: number; timeoutMs?: number; options?: string[]; permission?: import('@shared/types').PermissionKind }): Promise<string>
   /** The user approved this exact call (an approval card), so commands it runs aren't sandboxed. */
   approved?: boolean
   /** Auto let this call run without a card (not Ask mode): a saved login may sign in on its own site (never another one). */
