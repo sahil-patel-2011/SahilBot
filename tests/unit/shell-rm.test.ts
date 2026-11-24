@@ -113,3 +113,40 @@ test('run_command never replaces a file of the user\'s (>, cp, mv, sed -i); new 
     expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toContain('fixed')
   } finally { rmSync(ws, { recursive: true, force: true }) }
 })
+
+test('$HOME and ${HOME} paths count like ~ (writes and cd), and "| xargs rm" is a delete', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'sb-over-'))
+  const dl = join(homedir(), 'Downloads', 'rename_photos.py')
+  expect(overwriteTargets(`cat > "$HOME/Downloads/rename_photos.py" <<'EOF'\nprint(1)\nEOF`, cwd)).toEqual([dl])
+  expect(overwriteTargets('cp new.py "${HOME}/Downloads/rename_photos.py"', cwd)).toEqual([dl])
+  expect(overwriteTargets('cp new.py ${HOME}/Downloads/rename_photos.py', cwd)).toEqual([dl])
+  expect(overwriteTargets(`cd "$HOME/Downloads" && cat > rename_photos.py <<EOF\nx\nEOF`, cwd)).toEqual([dl])
+  expect(permanentDeletes('cd "$HOME/Desktop" && rm notes.txt', cwd)).toEqual(['notes.txt'])
+  // Piped deletes: the find's folder (unless it picks only build output), or "the files piped" from anything else.
+  expect(permanentDeletes("find ~/Pictures -name '*.jpg' | xargs rm", cwd)).toEqual(['~/Pictures'])
+  expect(permanentDeletes('find . -name "*.txt" -print0 | xargs -0 rm -f', join(homedir(), 'Documents'))).toEqual(['.'])
+  expect(permanentDeletes('ls | xargs rm', cwd)).toEqual(['the files piped to xargs rm'])
+  expect(permanentDeletes("find . -name '*.pyc' | xargs rm", cwd)).toEqual([])
+  expect(permanentDeletes(`find ${tmpdir()}/sb-x -name '*.jpg' | xargs rm`, cwd)).toEqual([])
+  expect(permanentDeletes('ls | xargs echo && find . -name "*.jpg" | xargs ls -l', cwd)).toEqual([])
+})
+
+test('run_command refuses writing over the user\'s file through $HOME, and a piped rm of their files', async () => {
+  const ws = mkdtempSync(join(homedir(), '.sb-clobber-home-'))
+  try {
+    writeFileSync(join(ws, 'x.py'), 'mine\n')
+    const tool = shellTool({ workspace: () => ws, userText: () => 'Write a script x.py that prints hi.' })
+    const ctx = ctxFor('t-home', ws)
+    await new Promise((r) => setTimeout(r, 300))
+    beginRun('t-home', 'task-home')
+    const rel = ws.slice(homedir().length + 1)
+    for (const command of [`cat > "$HOME/${rel}/x.py" <<EOF\nprint('hi')\nEOF`, `cp x.py "\${HOME}/${rel}/x.py"`, `cd "$HOME/${rel}" && cat > x.py <<EOF\nhi\nEOF`]) {
+      await expect(tool.run({ command }, ctx)).rejects.toThrow(/Nothing was run: this would replace x\.py/)
+    }
+    await expect(tool.run({ command: `find "$HOME/${rel}" -name '*.py' | xargs rm` }, ctx)).rejects.toThrow(/Nothing was run.*for good/)
+    expect(readFileSync(join(ws, 'x.py'), 'utf8')).toBe('mine\n')
+    // A new name through $HOME is fine.
+    await tool.run({ command: `echo hi > "$HOME/${rel}/new.py"` }, ctx)
+    expect(readFileSync(join(ws, 'new.py'), 'utf8')).toBe('hi\n')
+  } finally { rmSync(ws, { recursive: true, force: true }) }
+})

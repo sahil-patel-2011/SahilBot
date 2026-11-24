@@ -298,8 +298,8 @@ function madeSince(full: string, cwd: string, since: number | undefined): boolea
 
 /** A path an rm may take away: build output, caches, temp folders, or something this chat made (`ours`). */
 function disposable(arg: string, cwd: string, ours?: (full: string) => boolean, since?: number): boolean {
-  if (/[$`]/.test(arg)) return false
-  const expanded = arg === '~' ? HOME : arg.startsWith('~/') ? join(HOME, arg.slice(2)) : arg
+  const expanded = expandHome(arg)
+  if (/[$`]/.test(expanded)) return false
   if (/^~/.test(expanded)) return false
   const full = resolve(cwd, expanded)
   const parts = full.split(sep).filter(Boolean)
@@ -326,15 +326,29 @@ export function permanentDeletes(cmd: string, cwd: string, ours?: (full: string)
   const out: string[] = []
   for (const inner of substitutions(cmd)) out.push(...permanentDeletes(inner, cwd, ours, depth + 1, since))
   let here = cwd
-  for (const seg of splitCommand(cmd)) {
-    const argv = normalize(words(seg.text).argv).argv
+  const segs = splitCommand(cmd)
+  for (const seg of segs) {
+    const raw = words(seg.text).argv
+    const argv = normalize(raw).argv
     const name = progName(argv[0] ?? '')
     const args = argv.slice(1)
-    if (name === 'cd') { const to = args[0]; if (to && !/[$`]/.test(to)) here = resolve(here, to === '~' ? HOME : to.replace(/^~\//, `${HOME}/`)); continue }
+    if (name === 'cd') { const to = args[0] && expandHome(args[0]); if (to && !/[$`]/.test(to)) here = resolve(here, to); continue }
     if (/^(sh|bash|zsh|dash|ksh)$/.test(name)) {
       const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a))
       if (c >= 0 && args[c + 1]) out.push(...permanentDeletes(args[c + 1], here, ours, depth + 1, since))
       continue
+    }
+    // "… | xargs rm" (or parallel rm): the files come down the pipe. From a find, its folders are what goes (unless
+    // it picks only build output); from anything else nobody can tell, so it counts as the user's files.
+    const piped = raw.slice(0, raw.length - argv.length).some((a) => progName(a) === 'xargs') || name === 'parallel'
+    if (piped && /^(rm|unlink|shred|srm)$/.test(name === 'parallel' ? progName(args.find((a) => !a.startsWith('-')) ?? '') : name)) {
+      const prev = segs[segs.indexOf(seg) - 1]
+      const fargs = prev?.sep === '|' ? normalize(words(prev.text).argv).argv : []
+      if (progName(fargs[0] ?? '') === 'find') {
+        const f = findRoots(fargs.slice(1))
+        for (const r of f.roots) if (!f.onlyJunk && !disposable(r, here, ours, since)) out.push(r)
+      } else out.push('the files piped to xargs rm')
+      if (name === 'parallel') continue
     }
     if (name === 'rm' || name === 'unlink' || name === 'shred' || name === 'srm') {
       let opts = true
@@ -348,15 +362,20 @@ export function permanentDeletes(cmd: string, cwd: string, ours?: (full: string)
     if (name === 'find') {
       const deleting = args.includes('-delete') || args.some((a, i) => (a === '-exec' || a === '-execdir' || a === '-ok') && /^(rm|unlink|shred|srm)$/.test(progName(args[i + 1] ?? '')))
       if (!deleting) continue
-      const roots: string[] = []
-      for (const a of args) { if (/^[-(!]/.test(a)) break; roots.push(a) }
-      // find's name filter can make it build output only ("find . -name '*.pyc' -delete").
-      const pattern = args[args.findIndex((a) => a === '-name' || a === '-iname') + 1]
-      const onlyJunk = !!pattern && args.some((a) => a === '-name' || a === '-iname') && (DISPOSABLE_FILE.test(pattern.replace(/^\*/, 'x')) || DISPOSABLE_DIRS.has(pattern))
-      for (const r of roots.length ? roots : ['.']) if (!onlyJunk && !disposable(r, here, ours, since)) out.push(r)
+      const f = findRoots(args)
+      for (const r of f.roots) if (!f.onlyJunk && !disposable(r, here, ours, since)) out.push(r)
     }
   }
   return [...new Set(out)]
+}
+
+/** A find's starting folders, and whether its name filter picks only build output ("find . -name '*.pyc'"). */
+function findRoots(args: string[]): { roots: string[]; onlyJunk: boolean } {
+  const roots: string[] = []
+  for (const a of args) { if (/^[-(!]/.test(a)) break; roots.push(a) }
+  const pattern = args[args.findIndex((a) => a === '-name' || a === '-iname') + 1]
+  const onlyJunk = !!pattern && args.some((a) => a === '-name' || a === '-iname') && (DISPOSABLE_FILE.test(pattern.replace(/^\*/, 'x')) || DISPOSABLE_DIRS.has(pattern))
+  return { roots: roots.length ? roots : ['.'], onlyJunk }
 }
 
 // ---------- replacing files ----------
@@ -375,7 +394,11 @@ function withoutHeredocs(cmd: string): string {
   return out.join('\n')
 }
 
-const expandHome = (p: string): string => (p === '~' ? HOME : p.startsWith('~/') ? join(HOME, p.slice(2)) : p)
+/** `~`, `$HOME` and `${HOME}` at the start of a path (quotes are already gone) as the home folder. */
+const expandHome = (p: string): string => {
+  const q = p.replace(/^\$\{?HOME\}?(?=\/|$)/, '~')
+  return q === '~' ? HOME : q.startsWith('~/') ? join(HOME, q.slice(2)) : q
+}
 
 /**
  * Every file a command would write over (it may not exist yet): `>`, `>|` and `&>` targets (not `>>`), the
@@ -390,8 +413,9 @@ export function overwriteTargets(cmd: string, cwd: string, depth = 0): string[] 
   for (const inner of substitutions(text)) out.push(...overwriteTargets(inner, cwd, depth + 1))
   let here = cwd
   const add = (p: string | undefined): void => {
-    if (!p || /[$`*?[]/.test(p) || /^\/dev\//.test(p) || p === '-') return
-    out.push(resolve(here, expandHome(p)))
+    const q = p && expandHome(p)
+    if (!q || /[$`*?[]/.test(q) || /^\/dev\//.test(q) || q === '-') return
+    out.push(resolve(here, q))
   }
   for (const seg of splitCommand(text)) {
     const w = words(seg.text)
@@ -399,7 +423,7 @@ export function overwriteTargets(cmd: string, cwd: string, depth = 0): string[] 
     const argv = normalize(w.argv).argv
     const name = progName(argv[0] ?? '')
     const args = argv.slice(1)
-    if (name === 'cd') { const to = args[0]; if (to && !/[$`]/.test(to)) here = resolve(here, expandHome(to)); continue }
+    if (name === 'cd') { const to = args[0] && expandHome(args[0]); if (to && !/[$`]/.test(to)) here = resolve(here, to); continue }
     if (/^(sh|bash|zsh|dash|ksh)$/.test(name)) {
       const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a))
       if (c >= 0 && args[c + 1]) out.push(...overwriteTargets(args[c + 1], here, depth + 1))
