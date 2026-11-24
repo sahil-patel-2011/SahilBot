@@ -305,14 +305,15 @@ describe('one reply per question in a chat', () => {
     expect(h.visible(t.id).filter((m) => !m.toolCalls?.length).map((m) => m.content)).toEqual(['It\'s 72°F and sunny in Atlanta.'])
   })
 
-  test('a chat reply already on screen gets no second answer from a nudge', async () => {
+  test('a chat reply that opens with "I can\'t" is held, so the nudge replaces it: one answer on screen', async () => {
     process.env.FOREMAN_NO_VERIFY = '1'
     const h = harness()
     llm.script.push({ content: 'I can\'t access your calendar from here.', delay: 0 }, { content: 'You have nothing on Friday.', delay: 0 })
     const t = h.thread()
     expect(await h.run(t, 'Hey, what do you think about my week?')).toBe('finished')
-    expect(llm.requests).toHaveLength(1)
-    expect(h.visible(t.id).map((m) => m.content)).toEqual(['I can\'t access your calendar from here.'])
+    expect(llm.requests).toHaveLength(2)
+    expect(h.visible(t.id).map((m) => m.content)).toEqual(['You have nothing on Friday.'])
+    expect([...h.shown(t.id)].map((id) => h.db.getMessage(id)!.content)).toEqual(['You have nothing on Friday.'])
   })
 })
 
@@ -334,7 +335,7 @@ describe('a side sum during the double-check', () => {
     delete process.env.FOREMAN_NO_VERIFY
     try {
       const h = harness([save])
-      llm.script.push({ toolCalls: [call('save_note', { v: 'invoice' })], delay: 0 }, { content: 'Saved the invoice to your notes.', delay: 0 }, { content: 'Checked: the invoice note is saved. '.repeat(30), delay: 20 })
+      llm.script.push({ toolCalls: [call('save_note', { v: 'invoice' })], delay: 0 }, { content: 'Saved the invoice to your notes.', delay: 0 }, { content: 'Looks right to me. '.repeat(30), delay: 20 })
       const t = h.thread()
       const done = (await h.agent.send({ threadId: t.id, text: 'Save an invoice note for Jane in my notes file' })).done
       for (let i = 0; i < 300 && llm.requests.length < 3; i++) await new Promise((r) => setTimeout(r, 10))
@@ -361,13 +362,13 @@ describe('a stopped or finished task closes its plan', () => {
     await new Promise((r) => setTimeout(r, 60))
     h.agent.stop(t.id, { byUser: true })
     expect(await done).toBe('stopped')
-    // Kept for a "continue"; any other request closes it.
+    // Kept for a "continue"; any other request leaves it waiting (it never drives that request).
     expect(h.db.getState(t.id).planPaused).toBe(true)
     expect(h.db.getState(t.id).todos).toHaveLength(3)
     llm.requests.length = 0
     llm.script.push({ content: 'Canberra.', delay: 0 })
     expect(await h.run(t, 'What is the capital of Australia?')).toBe('finished')
-    expect(h.db.getState(t.id).todos).toEqual([])
+    expect(h.db.getState(t.id).planPaused).toBe(true)
     expect(llm.requests).toHaveLength(1)
     expect(h.db.getState(t.id).lastKind).toBe('chat')
     expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /plan still has open items/.test(m.content))).toBe(false)

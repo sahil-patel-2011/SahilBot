@@ -578,10 +578,6 @@ export const modelSwitchNote = (from: string, to: string): string =>
 
 /** Tools that only keep the run's own books: a call to them is no change for the user to double-check. */
 const BOOKKEEPING = new Set(['todo', 'memory', 'ask_user', 'agent_control', 'checkpoint', 'notify', 'consult', 'find_tools', 'project_memory'])
-/** "Continue", "keep going", "pick up where you left off": the stopped task's plan goes on. */
-const RESUME = /^(?:(?:ok(?:ay)?|yes|please|now)[,!.\s]+)*(continue|go on|keep going|resume|carry on|go ahead|finish (it|that|the task|up)|pick (it )?up where you left off)\b/i
-/** A test runner in a command: a passing run checks the code it covers. */
-const TEST_RUNNER = /\b(pytest|python3? -m (pytest|unittest)|npm (run )?test|npx (vitest|jest)|vitest|jest|go test|cargo test|swift test)\b/
 /** Reads that look at the work itself (a file, a folder, a command's output, the page, the screen). */
 const LOOKS_AT_WORK = new Set(['file_read', 'list_files', 'search_files', 'run_command', 'browser', 'computer', 'screenshot', 'read_document', 'review_document', 'doc_read', 'read_document_image', 'git'])
 /** Tools that can do anything (a command, the browser, the Mac, a team): a "done" claim after one of them is taken as backed. */
@@ -3115,12 +3111,6 @@ export class Agent {
     const group = run.group ? db.getSpace(thread.spaceId) : undefined
     const speaker = group ? space : undefined
     const state = db.getState(thread.id)
-    if (state.planPaused && !run.helper) {
-      const asked = [...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)?.content.trim() ?? ''
-      if (!(RESUME.test(asked) && asked.split(/\s+/).length <= 10)) state.todos = []
-      state.planPaused = undefined
-      db.setState(thread.id, state)
-    }
     // Files anywhere (Settings → Permissions, on by default): the home folder is one of this chat's folders.
     const home = homedir()
     const anywhere = s.advanced.filesAnywhere !== false
@@ -4242,11 +4232,8 @@ export class Agent {
     }
     // A finished task closes its plan: a later quick question in the bot's one conversation is a chat, not a return to
     // the old task (kept when the run ended on a question to the user or at the step budget). A stopped one's plan
-    // waits for "continue"; any other next request closes it (loop start).
-    if (!run.helper && state.todos.length) {
-      if (status === 'stopped') state.planPaused = true
-      else if (status === 'finished' && !endedAsking && !hitBudgetWrap) state.todos = []
-    }
+    // waits for "Continue." (below).
+    if (!run.helper && state.todos.length && !state.planPaused && status === 'finished' && !endedAsking && !hitBudgetWrap) state.todos = []
     // A follow-up ("yes, do it") runs the way this request ended up running.
     if (!run.helper) { state.lastKind = chatRun ? 'chat' : 'agent'; state.lastEffort = effortPick === 'auto' ? effortNow() : undefined }
     // Stopped by the user with its plan still open: the plan waits for "Continue." instead of taking over the next message.
@@ -5049,7 +5036,6 @@ export class Agent {
     if (tool.name === 'run_command') {
       const cmd = String(args.command ?? '')
       if (/^\s*open\s+(?!-a\b)/.test(cmd) && !/[;&|]/.test(cmd)) ctx.track.unchecked = wasUnchecked
-      else if ((out.data as { exitCode?: number } | undefined)?.exitCode === 0 && (TEST_RUNNER.test(cmd) || [...(ctx.track.written ?? [])].some((f) => cmd.includes(f)))) ctx.track.unchecked = false
     }
     // create_document renders and reviews the file it made (the result carries the review): a clean review is the
     // check, so the answer after it needs no second pass (write → check once → done).

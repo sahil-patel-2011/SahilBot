@@ -232,7 +232,10 @@ test('Retry on a hung step that may have changed something is not run again, and
   const slow = { ...hanging('slow_write', true), effect: 'write' as const }
   slow.run = hanging('slow_write', true).run.bind(slow)
   const { db, agent, events, thread } = setup([slow as never])
-  llm.script.push({ toolCalls: [{ name: 'slow_write', arguments: '{"q":"x"}' }], delay: 0 }, { content: 'Checked it.', delay: 0 })
+  // The write may or may not have gone through: the run only finishes on a reply that says so plainly (the
+  // completion check asks twice for it).
+  const unsure = { content: 'I couldn\'t confirm whether the write went through, so check it before relying on it.', delay: 0 }
+  llm.script.push({ toolCalls: [{ name: 'slow_write', arguments: '{"q":"x"}' }], delay: 0 }, unsure, unsure, unsure)
   const t = thread()
   const { done } = await agent.send({ threadId: t.id, text: 'Write it' })
   await until(() => events.some((e) => e.type === 'tool_progress' && e.callId === 'watchdog' && !!e.text))
