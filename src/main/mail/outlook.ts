@@ -110,7 +110,7 @@ export interface Loopback {
 }
 
 /**
- * A one-shot listener on 127.0.0.1 (a free port) for the browser's return. Only a request carrying `state`
+ * A one-shot listener on 127.0.0.1 (a free port, and the same port on ::1 when IPv6 is there) for the browser's return. Only a request carrying `state`
  * counts: a wrong one is refused (400) and the listener keeps waiting. It gives up after `timeoutMs`.
  */
 export function startLoopback(state: string, o: { timeoutMs?: number } = {}): Promise<Loopback> {
@@ -123,14 +123,16 @@ export function startLoopback(state: string, o: { timeoutMs?: number } = {}): Pr
       if (done) return
       done = true
       clearTimeout(timer)
-      setTimeout(() => server.close(), 50)
+      setTimeout(() => { server.close(); v6?.close() }, 50)
       if (e) settle!.fail(e); else settle!.ok(c!)
     }
     const page = (res: import('node:http').ServerResponse, status: number, html: string): void => {
       res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' })
       res.end(html)
     }
-    const server = createServer((req, res) => {
+    // The redirect says localhost: a browser may try ::1 first, so the same port answers there too (when it can).
+    let v6: import('node:http').Server | undefined
+    const handler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void => {
       const u = new URL(req.url ?? '/', 'http://localhost')
       if (req.method !== 'GET' || u.pathname !== '/') { res.writeHead(404); res.end(); return }
       if (done) { page(res, 410, callbackPage(false, { app: 'Outlook', hint: 'This sign-in already finished. Go back to SahilBot.' })); return }
@@ -149,11 +151,17 @@ export function startLoopback(state: string, o: { timeoutMs?: number } = {}): Pr
       if (!c) { page(res, 400, callbackPage(false, { app: 'Outlook' })); return }
       page(res, 200, callbackPage(true, { app: 'Outlook' }))
       finish(null, c)
-    })
+    }
+    const server = createServer(handler)
     const timer = setTimeout(() => finish(new OutlookError('Sign-in to Outlook didn\'t finish in the browser within 5 minutes. Press "Sign in with Microsoft" to try again.', 0, 'timeout')), o.timeoutMs ?? SIGN_IN_TIMEOUT)
     server.on('error', (e) => { clearTimeout(timer); rejectStart(e) })
     server.listen(0, '127.0.0.1', () => {
       const port = (server.address() as AddressInfo).port
+      try {
+        v6 = createServer(handler)
+        v6.on('error', () => { v6 = undefined })
+        v6.listen(port, '::1')
+      } catch { v6 = undefined }
       resolveStart({ redirectUri: `http://localhost:${port}`, code, close: () => finish(new OutlookError('Sign-in was cancelled.', 0, 'cancelled')) })
     })
   })

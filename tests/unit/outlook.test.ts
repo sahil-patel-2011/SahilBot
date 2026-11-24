@@ -460,3 +460,13 @@ describe('the catalog and built-in client', () => {
     expect(graphTime('2026-11-25T09:00:00+01:00', 'Europe/London')).toEqual({ dateTime: '2026-11-25T08:00:00', timeZone: 'UTC' })
   })
 })
+
+test('the sign-in listener answers on ::1 too when IPv6 is there (the redirect says localhost)', async () => {
+  const { startLoopback } = await import('../../src/main/mail/outlook')
+  const lb = await startLoopback('st-v6', { timeoutMs: 5000 })
+  const port = new URL(lb.redirectUri).port
+  const v6 = await fetch(`http://[::1]:${port}/?state=st-v6&code=c6`).then((r) => r.status).catch(() => -1)
+  if (v6 === -1) { lb.close(); return } // no IPv6 on this machine
+  expect(v6).toBe(200)
+  expect(await lb.code).toBe('c6')
+})
