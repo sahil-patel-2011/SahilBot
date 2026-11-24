@@ -1,7 +1,7 @@
 {
   "name": "sahilbot",
   "productName": "SahilBot",
-  "version": "26.11.23",
+  "version": "26.11.24",
   "description": "SahilBot: a private, local-first AI assistant for your Mac",
   "main": "out/main/index.js",
   "private": true,

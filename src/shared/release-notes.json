@@ -1,5 +1,45 @@
 [
   {
+    "version": "26.11.24",
+    "date": "2026-11-24",
+    "title": "Answers you can trust, and fewer interruptions",
+    "highlights": [
+      "An answer shows up once and stays: it's checked before you see it, never posted and then pulled back or rewritten",
+      "Ask a question back and the bot stops there; say \"stop\" (or \"Stop Test 5 now\") and you get one \"Stopped.\"",
+      "Your files are safe: a file you made is never replaced unless you asked to change it; the new one is saved as \"name (2)\"",
+      "Auto asks less: ordinary work no longer brings up money or approval cards by mistake",
+      "Delete a bot by asking, with Undo; rename or change another bot the same way",
+      "Reminders arrive on time even while a bot is busy, on the clock of the place you named"
+    ],
+    "sections": [
+      {
+        "title": "Answers",
+        "items": [
+          "Work answers are double-checked before they appear, so you see one finished answer",
+          "\"Want me to email it to Sam?\" stays an offer: the bot doesn't do the extra step unasked",
+          "Links the bot never opened are taken out of the answer instead of the answer being redone",
+          "If the bot can't confirm something worked, it says so in one plain sentence; drafts you asked for are never flagged"
+        ]
+      },
+      {
+        "title": "Staying in control",
+        "items": [
+          "A stopped task waits for \"Continue.\" instead of taking over your next message",
+          "When a step hangs, the note says what's stuck and offers Retry or Skip",
+          "A CAPTCHA on a site you asked it to open is handed to you; one it meets while researching is skipped for another source"
+        ]
+      },
+      {
+        "title": "Files, bots and voice",
+        "items": [
+          "Commands in Terminal follow the same rule: no silent overwrite of your files, and Undo covers folders and spreadsheets",
+          "Live voice calls are saved in the bot's chat",
+          "The right Google app connects, and the Mac calendar includes repeating events"
+        ]
+      }
+    ]
+  },
+  {
     "version": "26.11.23",
     "date": "2026-11-23",
     "title": "Remembers what you told it, and gets out of your way",
