@@ -43,3 +43,15 @@ test('after a restart, a file the chat made and nobody changed is still rebuilt 
   expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toBe('print("v2")\n')
   expect(existsSync(join(ws, 'rename_photos (2).py'))).toBe(false)
 })
+
+// Review round 3: after a restart, rebuilding a document is local work (kept aside or backed up), never a
+// "destructive" step that a taint check could turn into a card.
+test('create_document on an existing file is write_local, before and after a restart', async () => {
+  const ws = mkdtempSync(join(tmpdir(), 'sb-restart-'))
+  const root = mkdtempSync(join(tmpdir(), 'sb-undo-'))
+  writeFileSync(join(ws, 'Budget.md'), '# Budget\n')
+  for (const run of ['task-1', 'task-2']) {
+    const t = await app(ws, root, run)
+    expect((t.create_document.effect as (a: unknown, c: unknown) => string)({ path: 'Budget.md', markdown: '# B' }, { roots: [] })).toBe('write_local')
+  }
+})

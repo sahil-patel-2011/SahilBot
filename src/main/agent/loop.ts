@@ -385,13 +385,27 @@ export function activityTexts(pins?: Record<string, string>): string[] {
   return out
 }
 
+/** Setup steps around a test run that change nothing the run made: making a sample folder and files, looking. */
+const TEST_SETUP = /^(cd|pushd|popd|mkdir|touch|cp|ls|cat|head|tail|wc|echo|printf|pwd|true|sleep)\b/
 /**
- * A command that ran code in the user's folders (a script, a test runner) and exited 0, with nothing else in it (no
- * redirect into a file, no second command): after a code edit, that run is the check of the edit.
+ * A command that ran code in the user's folders (a script, a test runner) and exited 0: after a code edit, that run is
+ * the check of the edit. Setup around it counts too (`cd dir &&`, `mkdir -p sample && touch sample/a.jpg &&`, several
+ * runs joined by `&&` or `;`), as do `2>&1`, `>/dev/null`, a trailing `| head`/`| tail` and `~/` or `$HOME/` paths.
+ * Writing into a file (`> out.csv`), any other pipe, a substitution or nothing but setup is not the check.
  */
 export function testedOwnCode(command: string, exitCode: unknown, allowed: string[] = []): boolean {
-  if (exitCode !== 0 || !command.trim() || /[>|;&`$]/.test(command)) return false
-  return /\(a script in your folders\)|\(a local build, test or file tool\)|runs python -m (pytest|unittest)\b|runs the project's "[^"]*test[^"]*" script/.test(classifyCommand(command, allowed.length ? { allowed } : {}).why)
+  if (exitCode !== 0 || !command.trim()) return false
+  const home = homedir()
+  const cmd = command
+    .replace(/\s*\d?>&\d\b/g, '').replace(/\s*[\d&]?>\s*\/dev\/null\b/g, '')
+    .replace(/\s*\|\s*(head|tail)(\s+-n)?(\s+-?\d+)?\s*$/, '')
+    .replace(/(^|[\s'"=])(~|\$HOME|\$\{HOME\})(?=\/)/g, `$1${home}`)
+  if (/[>|`$&]/.test(cmd.replace(/&&/g, ''))) return false
+  const parts = cmd.split(/&&|;/).map((p) => p.trim()).filter(Boolean)
+  // The runs, with the `cd`s before them (so relative paths resolve where they ran); other setup steps drop out.
+  const kept = parts.filter((p) => /^(cd|pushd)\b/.test(p) || !TEST_SETUP.test(p))
+  if (!kept.some((p) => !/^(cd|pushd)\b/.test(p))) return false
+  return /\(a script in your folders\)|\(a local build, test or file tool\)|runs python -m (pytest|unittest)\b|runs the project's "[^"]*test[^"]*" script/.test(classifyCommand(kept.join(' && '), allowed.length ? { allowed } : {}).why)
 }
 
 /** "Continue.", "keep going", "yes": the user says to go on with the task in progress (or answers its question). */
@@ -402,11 +416,25 @@ export function continuesPlan(m?: Pick<Message, 'content' | 'meta'>): boolean {
 }
 
 /**
+ * Picks up a task the user stopped: "Continue.", "ok, keep going", "finish it", "pick up where you left off", an
+ * answer to its question, or a bare "yes"/"ok" when the last reply offered to go on (`offered`). Not "Okay, what is
+ * the capital of Australia?" or "Sure, write me a haiku": those are new requests.
+ */
+export function resumesPlan(m?: Pick<Message, 'content' | 'meta'>, offered = false): boolean {
+  if (!m) return false
+  if (m.meta?.questionAnswer || m.meta?.approvalFor) return true
+  const t = (m.content ?? '').trim()
+  if (!t || t.split(/\s+/).length > 8) return false
+  if (/^(?:(?:ok(?:ay)?|yes|yeah|yep|sure|please|alright)[,!.\s]+)*(?:continue|go on|keep going|resume|carry on|finish(?: it| up| the (?:task|rest|job))?|pick (?:it |this )?(?:back )?up(?: where you left off)?)(?:[,\s]+(?:please|now|then|where you left off))?[.!\s]*$/i.test(t)) return true
+  return offered && /^(?:yes|yeah|yep|ok(?:ay)?|sure|do it|go ahead|proceed)(?:[,\s]+please)?[.!\s]*$/i.test(t)
+}
+
+/**
  * The plan drives this run: it has open items, and it isn't the plan of a task the user stopped (planPaused), unless
  * this message picks that task up again. A new, unrelated question after "Stop" is answered as itself.
  */
 export function planLive(state: Pick<ThreadState, 'todos' | 'planPaused'>, opener?: Pick<Message, 'content' | 'meta'>): boolean {
-  return state.todos.some((t) => t.status !== 'done') && (!state.planPaused || continuesPlan(opener))
+  return state.todos.some((t) => t.status !== 'done') && (!state.planPaused || resumesPlan(opener))
 }
 
 /** A task run (not a chat): hard enough, a task mode on, or a plan in progress. */
@@ -578,6 +606,8 @@ export const modelSwitchNote = (from: string, to: string): string =>
 
 /** Tools that only keep the run's own books: a call to them is no change for the user to double-check. */
 const BOOKKEEPING = new Set(['todo', 'memory', 'ask_user', 'agent_control', 'checkpoint', 'notify', 'consult', 'find_tools', 'project_memory'])
+/** Tools whose result is the confirmation of what they saved (schedule's time and zone, the bot card). */
+const SELF_CONFIRMING = new Set(['schedule', 'create_bot', 'manage_bot', 'update_bot'])
 /** Reads that look at the work itself (a file, a folder, a command's output, the page, the screen). */
 const LOOKS_AT_WORK = new Set(['file_read', 'list_files', 'search_files', 'run_command', 'browser', 'computer', 'screenshot', 'read_document', 'review_document', 'doc_read', 'read_document_image', 'git'])
 /** Tools that can do anything (a command, the browser, the Mac, a team): a "done" claim after one of them is taken as backed. */
@@ -3119,7 +3149,10 @@ export class Agent {
     // Bot swarms: this bot's Swarm setting lists the swarm tool (never for helpers); a Swarm request loads it.
     applySwarmState(state, s, space, !!run.helper, () => db.listMessages(thread.id), (names) => registry.load(state, names))
     // The plan of a task the user stopped: "Continue." picks it up again; anything else leaves it waiting.
-    const resumed = !!state.planPaused && continuesPlan([...db.listMessages(thread.id)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside))
+    const recent = [...db.listMessages(thread.id)].reverse()
+    const lastAsk = recent.findIndex((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
+    const offered = /\?\s*$/.test(recent.slice(lastAsk + 1).find((m) => m.role === 'assistant' && m.kind === 'normal' && !m.meta?.hidden && m.content)?.content ?? '')
+    const resumed = !!state.planPaused && lastAsk >= 0 && resumesPlan(recent[lastAsk], offered)
     if (resumed) delete state.planPaused
     let requestedChoice = requestedModel({ thread: db.getThread(thread.id), space: group ?? space, speaker, settings: s })
     const chosen = await this.chooseModel(requestedChoice, thread, state, this.warmFor(thread, run, state, speaker))
@@ -4236,8 +4269,9 @@ export class Agent {
     if (!run.helper && state.todos.length && !state.planPaused && status === 'finished' && !endedAsking && !hitBudgetWrap) state.todos = []
     // A follow-up ("yes, do it") runs the way this request ended up running.
     if (!run.helper) { state.lastKind = chatRun ? 'chat' : 'agent'; state.lastEffort = effortPick === 'auto' ? effortNow() : undefined }
-    // Stopped by the user with its plan still open: the plan waits for "Continue." instead of taking over the next message.
-    if (status === 'stopped' && run.userStopped && !run.helper && state.todos.some((t) => t.status !== 'done')) state.planPaused = true
+    // Stopped by the user (or ended on an error) with its plan still open: the plan waits for "Continue." instead of
+    // taking over the next message.
+    if (((status === 'stopped' && run.userStopped) || status === 'error') && !run.helper && state.todos.some((t) => t.status !== 'done')) state.planPaused = true
     db.setState(thread.id, state)
     return status
   }
@@ -5040,6 +5074,9 @@ export class Agent {
     // create_document renders and reviews the file it made (the result carries the review): a clean review is the
     // check, so the answer after it needs no second pass (write → check once → done).
     if (tool.name === 'create_document' && reviewedClean(out.text)) ctx.track.unchecked = false
+    // A reminder, routine or bot saved: the tool's result is what was saved (the time and its zone, the bot), so it
+    // needs no second look.
+    if (SELF_CONFIRMING.has(tool.name)) ctx.track.unchecked = wasUnchecked
     // Ran the code it wrote (the script itself, a dry run, its tests) and it exited cleanly: that run is the check.
     if (ctx.track.codeEdited && ((tool.name === 'run_command' && testedOwnCode(String((args as { command?: unknown }).command ?? ''), (out.data as { exitCode?: unknown } | undefined)?.exitCode, [s.workspaceDir, ...(state.roots ?? [])].filter(Boolean)))
       || (tool.name === 'code' && out.verification?.passed && /^tests\b/.test(out.verification.criterion)))) ctx.track.unchecked = false

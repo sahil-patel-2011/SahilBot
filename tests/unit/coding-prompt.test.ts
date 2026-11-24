@@ -97,6 +97,31 @@ describe('round 2: one-call documents, chat coding guidance, this-chat instructi
     }
     expect(chat).toContain('the dry run, then --apply')
     expect(full).toContain('The steps show both commands: the dry run first, then the same with --apply.')
+    // Review round 3: the same essentials in the chat prompt, run steps that work from a fresh Terminal, no sample left behind.
+    for (const p of [chat, full]) {
+      expect(p).toContain('no low-level system bindings')
+      expect(p).toContain("skip a file it can't handle with a note")
+      expect(p).toContain("the script's full path")
+    }
+    expect(full).toContain('and delete the sample')
+    expect(full).toContain('save yours as "name (2).py" and say so in one line')
+  })
+
+  test('a plan only for 3 or more steps: a one-file job just gets done (PCA-03, PCA-04, ALC-07)', () => {
+    expect(full).toContain('A job of 3 or more distinct steps: write your plan with todo')
+    expect(full).toContain('A one-step or one-file job (a reminder, an invoice, one script): no plan; do it, check once, answer.')
+    expect(compact).toContain('a one-file job needs none')
+    expect(full).not.toContain('Write your own plan with todo before acting')
+  })
+
+  test('the chat prompt does not say the app asks before anything risky (Auto mode asks only when it must)', () => {
+    expect(chat).not.toContain('asks the user before anything risky')
+    expect(chat).toContain('The app asks the user itself when it must (money, a login off its own site')
+  })
+
+  test('a human check during plain research means another source; the hand-over is for sign-in or a purchase', () => {
+    expect(full).toContain('During a sign-in or a purchase, CAPTCHAs')
+    expect(full).toContain('In plain research, use another source.')
   })
 
   test('"from now on…" is this chat, never a save_rule trigger (IWB-01)', () => {

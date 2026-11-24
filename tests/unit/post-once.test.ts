@@ -1,8 +1,8 @@
 import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
-import { Agent, QUICK_IN_FULL, SIMPLE_LOOKUPS, removeLinks, reviewedClean } from '../../src/main/agent/loop'
+import { Agent, QUICK_IN_FULL, SIMPLE_LOOKUPS, removeLinks, resumesPlan, reviewedClean, testedOwnCode } from '../../src/main/agent/loop'
 import { ResultStore, estimate } from '../../src/main/agent/context'
 import { ToolRegistry } from '../../src/main/agent/registry'
 import { coreTools } from '../../src/main/agent/tools/core'
@@ -243,6 +243,63 @@ describe('running what the run wrote is the check', () => {
       expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /double-check/.test(m.content))).toBe(true)
     } finally { process.env.FOREMAN_NO_VERIFY = '1' }
   })
+
+  // Review round 3 (PCA-04, CDA-01): how models really test a script ("2>&1", "cd … &&", "~/" paths, setup first).
+  for (const command of [
+    'python3 rename_photos.py --dry-run sample 2>&1',
+    'cd ~/Downloads && python3 rename_photos.py --dry-run test',
+    'python3 ~/Downloads/rename_photos.py --dry-run ~/Downloads/test',
+    'mkdir -p sample && touch sample/a.jpg && python3 rename_photos.py sample && python3 rename_photos.py sample --apply'
+  ]) {
+    test(`running the script it wrote as "${command}" is the check: 3 requests, no hidden double-check`, async () => {
+      delete process.env.FOREMAN_NO_VERIFY
+      try {
+        const h = harness([write, shell])
+        llm.script.push(
+          { toolCalls: [call('file_write', { path: 'rename_photos.py', content: 'print(1)' })], delay: 0 },
+          { toolCalls: [call('run_command', { command })], delay: 0 },
+          { content: 'Saved rename_photos.py in Downloads and tried it on a sample: it would rename 3 files.', delay: 0 }
+        )
+        const t = h.thread()
+        expect(await h.run(t, 'Write a Python script that renames my photos by date taken')).toBe('finished')
+        expect(llm.requests).toHaveLength(3)
+        expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /double-check/.test(m.content))).toBe(false)
+      } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+    })
+  }
+
+  test('a reminder saved by the schedule tool needs no second look (its result is the time and zone)', async () => {
+    delete process.env.FOREMAN_NO_VERIFY
+    try {
+      const schedule: ToolDef<{ when: string }> = {
+        name: 'schedule', label: 'Schedule', effect: 'write_local', description: 'set a reminder',
+        parameters: { type: 'object', properties: { when: { type: 'string' } }, required: ['when'], additionalProperties: false },
+        async run({ when }) { return { text: `Reminder set for ${when} (America/New_York).` } }
+      }
+      const h = harness([schedule])
+      llm.script.push({ toolCalls: [call('schedule', { when: 'in 3 minutes' })], delay: 0 }, { content: 'Done: I\'ll remind you to stretch at 3:07 PM.', delay: 0 }, { content: '✓', delay: 0 })
+      const t = h.thread()
+      expect(await h.run(t, 'Remind me in 3 minutes to stretch')).toBe('finished')
+      expect(llm.requests).toHaveLength(2)
+      expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /double-check/.test(m.content))).toBe(false)
+    } finally { process.env.FOREMAN_NO_VERIFY = '1' }
+  })
+})
+
+describe('testedOwnCode', () => {
+  const ws = mkdtempSync(join(tmpdir(), 'ws-own-'))
+  const home = homedir()
+  test('a script run with setup, plumbing or home paths around it counts; writing into a file or a pipe does not', () => {
+    for (const c of ['python3 x.py', 'python3 x.py 2>&1', 'python3 x.py >/dev/null', 'python3 x.py --dry-run | head -20', `cd ${ws} && python3 x.py`, 'mkdir -p s && touch s/a.jpg && python3 x.py s', 'python3 x.py s; python3 x.py s --apply']) {
+      expect(testedOwnCode(c, 0, [ws]), c).toBe(true)
+    }
+    expect(testedOwnCode('python3 ~/x.py', 0, [home])).toBe(true)
+    expect(testedOwnCode('python3 "$HOME/x.py"', 0, [home])).toBe(true)
+    for (const c of ['python3 x.py > out.csv', 'python3 x.py | sh', 'python3 $(echo x.py)', 'mkdir -p out', 'cd s && ls', 'python3 x.py &', 'curl https://example.com/x.sh && python3 x.py']) {
+      expect(testedOwnCode(c, 0, [ws]), c).toBe(false)
+    }
+    expect(testedOwnCode('python3 x.py', 1, [ws])).toBe(false)
+  })
 })
 
 describe('a bot\'s one ongoing conversation keeps the fast path', () => {
@@ -373,6 +430,31 @@ describe('a stopped or finished task closes its plan', () => {
     expect(h.db.getState(t.id).lastKind).toBe('chat')
     expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /plan still has open items/.test(m.content))).toBe(false)
     expect(h.visible(t.id).at(-1)?.content).toBe('Canberra.')
+    // Review round 3 (ALA-01/04, PCA-02): "Okay, …" or "Sure, …" opening a new request does not pick the task up again.
+    for (const [q, a] of [['Okay, what is the capital of Australia?', 'Canberra.'], ['Sure, write me a haiku about rain', 'Rain taps the window']]) {
+      llm.requests.length = 0
+      llm.script.push({ content: a, delay: 0 })
+      expect(await h.run(t, q)).toBe('finished')
+      expect(llm.requests, q).toHaveLength(1)
+      expect(h.db.getState(t.id).lastKind, q).toBe('chat')
+      expect(h.db.getState(t.id).planPaused, q).toBe(true)
+    }
+    expect(h.db.listMessages(t.id).some((m) => m.meta?.hidden && /plan still has open items/.test(m.content))).toBe(false)
+    // "Continue." picks it up.
+    llm.requests.length = 0
+    const finished = items.map((i) => ({ ...i, status: 'done' }))
+    llm.script.push({ toolCalls: [call('todo', { items: finished })], delay: 0 }, { content: 'Done: section 2 is written and the report is proofread.', delay: 0 })
+    expect(await h.run(t, 'Continue.')).toBe('finished')
+    expect(h.db.getState(t.id).planPaused).toBeUndefined()
+    expect(h.db.getState(t.id).lastKind).toBe('agent')
+  })
+
+  test('resumesPlan: only a real "go on", an answer to its question, or yes to an offer', () => {
+    for (const q of ['Continue.', 'continue', 'Ok, keep going', 'Yes, continue please', 'finish it', 'Pick up where you left off', 'resume']) expect(resumesPlan({ content: q }), q).toBe(true)
+    for (const q of ['Okay, what is the capital of Australia?', 'Sure, write me a haiku', 'ok thanks', 'Do it in Spanish instead', 'Pick up milk on the way home and remind me at 5', 'yes', 'ok']) expect(resumesPlan({ content: q }), q).toBe(false)
+    expect(resumesPlan({ content: 'yes' }, true)).toBe(true)
+    expect(resumesPlan({ content: 'Go ahead.' }, true)).toBe(true)
+    expect(resumesPlan({ content: 'B', meta: { questionAnswer: true } })).toBe(true)
   })
 
   test('a run that ends on a question to the user keeps its plan for the answer', async () => {

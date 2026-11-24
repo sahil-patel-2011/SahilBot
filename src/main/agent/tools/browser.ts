@@ -120,6 +120,12 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
   const expectNow = (): Expected | undefined => { try { return b.expectation?.() } catch { return undefined } }
   /** Purchase steps the user declined (the submit after them doesn't run). */
   const declined = new WeakSet<ToolOutput>()
+  /**
+   * Sites (per chat) where SahilBot typed, filled, signed in or went to buy: a human check there is the user's to pass.
+   * Anywhere else it is a bot wall in plain research: move on to another source, no hand-over and no card.
+   */
+  const actedOn = new Set<string>()
+  const siteKey = (ctx: ToolContext | undefined, url: string): string => `${ctx?.threadId ?? ''}|${safeHost(url)}`
 
   const effect = (a: Args): ToolEffect => {
     switch (a.action) {
@@ -328,7 +334,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
 - recording {op: start|stop|status, text?}: "Teach a task". start records what the USER does in the browser panel (text = what you asked them to show); stop returns their steps (secret values hidden). Use it when the user wants to show you a web workflow once so you can repeat it.
 Buying: go all the way to the final Place order / Pay button and click it. SahilBot then shows the user a Purchase card with the store, items and total, and only their click there lets it go through; nothing you write can approve it, and if they decline, stop. Never type card numbers yourself.
 Speed: navigate already returns a snapshot; act by ref; use fill_form for forms, find for an element, extract for data, get_text for long text. A known site's navigate adds "What I know about <site>": hints from past runs; check them against the page.
-CAPTCHAs and "are you human" checks are always the user's: ask them to take over in the browser panel.`,
+CAPTCHAs and "are you human" checks during a sign-in, form or purchase are the user's (the panel hands them over); in plain research the step returns a bot-wall note: use another source.`,
     parameters: {
       type: 'object',
       properties: {
@@ -384,6 +390,7 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
       const before = { url: b.pageUrl(), title: safeCall(() => b.pageTitle(), '') }
       const targets = targetsOf(input)
       const seen: { check?: string } = {}
+      if (ACTING.has(input.action) || (input.action === 'click' && ACTING_CLICK.test(targets.target?.name ?? '')) || purchaseStop(input)) actedOn.add(siteKey(ctx, before.url))
       try {
         let out = await runInner(input, ctx, seen)
         out = withSiteNote(input, out, before.url, ctx)
@@ -420,6 +427,10 @@ CAPTCHAs and "are you human" checks are always the user's: ask them to take over
       if (check) {
         seen.check = check
         const code = check === 'verification code'
+        // Plain research (nothing typed, filled or bought on this site): a bot wall, not the user's job.
+        if (!code && !actedOn.has(siteKey(ctx, b.pageUrl()))) {
+          return { ...out, text: `${out.text}\n\n[This site shows a ${check}: a bot wall. Don't wait or ask the user; use another result from web_search or another reputable site, and say in one sentence which site blocked you.]`, display: `${out.display ?? ''} · ${check}: trying another source` }
+        }
         if (!code) b.showToUser()
         const tail = code
           ? `\n\n[This page asks for a verification code. If it's for the user's own sign-in, use fill_otp (source "authenticator" with the saved login, or "email" / "sms" for a code the site just sent). Never guess codes. If none of those works, open the panel and call ask_user with "Please enter the code in the browser panel, then press Done." and options ["Done", "Skip"].]`
@@ -1073,6 +1084,11 @@ export function samePurchase(a: Pick<PageCommerce, 'url' | 'total' | 'target'>, 
 function safeCall<T>(fn: () => T, fallback: T): T {
   try { return fn() } catch { return fallback }
 }
+/** Steps that act on a site for the user (typing, filling, signing in): a human check after them is theirs to pass. */
+const ACTING = new Set(['type', 'fill_form', 'fill_secret', 'fill_payment', 'fill_address', 'fill_otp', 'wait_for_signin', 'upload', 'select'])
+/** A click that signs in, registers, books or buys. */
+const ACTING_CLICK = /\b(sign ?in|log ?in|sign ?up|register|check ?out|buy|pay|place order|add to (cart|bag|basket)|book|reserve|submit|continue to (payment|checkout))\b/i
+
 function safeHost(u: string): string {
   try { return new URL(u).host } catch { return u.slice(0, 40) }
 }

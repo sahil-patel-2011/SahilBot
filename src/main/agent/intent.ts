@@ -14,7 +14,7 @@ import { IMAGE_RE, SAHILBOT_BOT, classifyTask as classifyRequest, type TaskCateg
 export { IMAGE_RE, VIDEO_RE }
 
 /** An email to write from the user's words ("Write a short email to my landlord about the leak"). */
-const COMPOSE_ONLY = /^(?:(?:please|pls|can you|could you|hey)[,\s]+)*(write|draft|compose)( me)? (a|an)\b[^.?!]{0,40}?\be-?mail\b/i
+const COMPOSE_ONLY = /^(?:(?:please|pls|can you|could you|hey|help me|i need to|i want to|i'?d like to|let'?s)[,\s]+)*(?:(write|draft|compose)( me)? (a|an)\b[^.?!]{0,40}?\be-?mail\b|e-?mail (my|the|a|an) [^.?!]{0,60}[,.;]\s*(write|draft) it\b)/i
 /** Anything that needs the mailbox: reading, replying, forwarding, sending, finding an earlier email. */
 const MAILBOX = /\b(inbox|repl(y|ies)|forward|thread|unread|send (it|this|that|them)|and send|send to|e-?mails? (from|about) .{0,30}\b(earlier|last|yesterday)|my (e-?mails?|mail)|gmail|apple mail|attach)\b/i
 
