@@ -3827,7 +3827,7 @@ export class Agent {
           if (this.feat.continueNudge && asksToContinue && notDone && !unasked && !autonomyNudged && !run.unattended && (!chatRun || stalledAtStart) && step < HARD_CAP) {
             autonomyNudged = true
             budget = Math.max(budget, step + 6)
-            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself before anything risky (sending, buying, deleting). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
+            db.insertMessage({ threadId: thread.id, role: 'user', kind: 'normal', status: 'done', meta: { hidden: true, ...mine }, content: '[From the app] Don\'t stop to ask permission for the next step of this task: do it now. The app asks the user itself when it must (money, a login off its own site, anything a web page or email steered). Only stop to ask if it truly needs a decision that is the user\'s to make.' })
             bounce()
             continue
           }
@@ -4455,6 +4455,8 @@ export class Agent {
       // A handoff from a run that read untrusted content: every outside action in this run asks, and so
       // does every terminal command (whatever its effect: a "local" command can still do anything).
       tainted: (!!run.forceTaint && (effect === 'write_external' || effect === 'destructive' || ALWAYS_TAINT_CHECKED.has(tool.name))) || checkTaint(tool.name, effect, args, ctx.untrusted, ctx.userText, ctx.private) || !!steered,
+      // The card says what was steered ("deletes taxes.pdf, which you didn't name"); a file a page asked for is refused.
+      steerReason: steered ?? undefined,
       leaksSecret: containsSecret(args, this.d.secretValues()),
       consequential: tool.consequential ? tool.consequential(args, { threadId: thread.id, unattended: run.unattended && !alwaysOn, state }) : true,
       // Nobody watches an unattended run: Auto works cautiously there (decide()), except in an always-on

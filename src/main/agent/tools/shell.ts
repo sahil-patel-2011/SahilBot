@@ -743,6 +743,24 @@ export function classify(cmd: string, ctx: ClassifyContext = {}): { effect: Tool
   return classifyIn(cmd, ctx, 0)
 }
 
+/** A web address in a command whose host isn't this Mac (localhost, 127.0.0.1, [::1], *.local). */
+const OUTSIDE_URL = /\bhttps?:\/\/(?!(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1?\]|[\w-]+\.local)([:/'"\s]|$))[^\s'"]+/i
+/** Downloaded files: the Downloads folder and Mail's attachment folder. */
+const DOWNLOADED = /(^|[\s'"=:(])(~|\$HOME|\/Users\/[^/\s]+)?\/?(Downloads|Library\/Containers\/com\.apple\.mail\/Data\/Library\/Mail Downloads)(\/|\s|['"]|$)/
+/**
+ * Whether a command's output can carry outside content (a web page, a download, an install's output): it reaches the
+ * network (curl, wget, git pull, gh…), downloads and runs a package, names a web address off this Mac, or reads a
+ * downloaded file. That output counts as untrusted for taint; everything else a command prints (ls, cat of the user's
+ * notes, a test run, a dev server's "Local: http://localhost:5173/") is the user's own data.
+ */
+export function commandReadsOutside(cmd: string): boolean {
+  const v = classify(cmd)
+  if (v.why === NETWORK.why && !/^\s*open\s+['"]?https?:\/\/(localhost|127\.0\.0\.1|\[::1\])\b[^;&|\n]*$/i.test(cmd)) return true
+  return v.why === RUNNER.why || NET_PROGRAM.test(cmd) || OUTSIDE_URL.test(cmd) || DOWNLOADED.test(cmd)
+}
+/** A network program anywhere in a command (after `&&`, in a substitution…). */
+const NET_PROGRAM = /(^|[\s;&|(`])(curl|wget|http|https|httpie|lynx|links|w3m|aria2c|gh|ssh|scp|sftp|rsync|ftp|nc|ncat|netcat|socat|telnet|whois)(\s|$)|\bgit\s+(fetch|pull|clone)\b/
+
 function classifyIn(cmd: string, ctx: ClassifyContext, depth: number): Verdict {
   const text = cmd.trim()
   if (!text) return READ
@@ -1057,7 +1075,8 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
     name: 'run_command',
     label: 'Terminal',
     core: true,
-    untrusted: true,
+    // Output is untrusted only when the command reached outside this Mac or read a download (commandReadsOutside,
+    // set per call in run()): a listing, the user's notes or a test run are their own data.
     effect: (a, c) => effectOf(a, c.roots, c.folder).effect,
     // Installs, pushes and network commands are never routine: Auto asks. Setting up the project from its
     // own lockfile (or git fetch / pull) is a project command: Auto runs it (never unattended).
@@ -1126,7 +1145,8 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       // Defense in depth: unless the user approved this exact call, writes outside your folders are refused
       // by a macOS sandbox (code/proc.ts). Reads and the network are unaffected.
       const sandbox: SandboxSpec | undefined = ctx.sandbox !== false && !ctx.approved ? { writable: writableFor(ctx.workspaceDir, roots, cwd) } : undefined
-      if (a.background) return startJob(jobs, a, cwd, ctx, sandbox)
+      const outside = commandReadsOutside(a.command)
+      if (a.background) return { ...(await startJob(jobs, a, cwd, ctx, sandbox)), untrusted: outside }
       const limit = Math.min(a.timeout ?? 120, 1800) * 1000
       // Its own process group, so Stop and timeouts reach everything it started.
       const tick = throttle<string>((l) => ctx.progress?.(l), 700)
@@ -1147,12 +1167,12 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
       tick.flush()
       if (readyLine && out.stopped && ready.signal.aborted && !ctx.signal?.aborted) {
         const job = await startJob(jobs, { ...a, background: true }, cwd, ctx, sandbox)
-        return { ...job, text: `${a.command} kept running after "${readyLine.slice(0, 120)}" (a server or watcher), so it was restarted as a background job instead of blocking. Use the job's URL below: it may differ from the line above.\n${job.text}` }
+        return { ...job, untrusted: outside, text: `${a.command} kept running after "${readyLine.slice(0, 120)}" (a server or watcher), so it was restarted as a background job instead of blocking. Use the job's URL below: it may differ from the line above.\n${job.text}` }
       }
       const clean = stripAnsi(out.output).trimEnd()
       const status = out.timedOut ? `stopped after ${limit / 1000}s` : out.stopped ? 'stopped' : `exit code ${out.code}`
       const hint = out.timedOut ? '\n(It was still running. If it is a server or watcher, start it with background: true instead.)' : ''
-      return { text: `$ ${a.command}\n(in ${cwd}; ${status})\n${clean || '(no output)'}${hint}`, data: { exitCode: out.code, timedOut: out.timedOut, stopped: out.stopped, stdout: out.stdout, stderr: out.stderr, cwd }, display: `${a.command.slice(0, 60)} · ${status}` }
+      return { untrusted: outside, text: `$ ${a.command}\n(in ${cwd}; ${status})\n${clean || '(no output)'}${hint}`, data: { exitCode: out.code, timedOut: out.timedOut, stopped: out.stopped, stdout: out.stdout, stderr: out.stderr, cwd }, display: `${a.command.slice(0, 60)} · ${status}` }
     }
   }
 }

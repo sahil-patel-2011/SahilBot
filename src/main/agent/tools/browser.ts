@@ -12,7 +12,7 @@ import type { SiteStore } from '../../sites/store'
 import { originMatches, type Vault } from '../../vault'
 import { fillProblem, standingRuleAllows } from '../../secure/guards'
 import { isSecurePage } from '../../secure/origin'
-import { CONSEQUENTIAL, looksLikePayment, looksLikeSecurity, OTP_STOP, PURCHASE_STOP } from '../permissions'
+import { browsingLabel, CONSEQUENTIAL, looksLikePayment, looksLikeSecurity, OTP_STOP, PURCHASE_STOP } from '../permissions'
 import type { ToolContext, ToolDef, ToolOutput } from '../types'
 import { resolvePath } from './files'
 
@@ -98,7 +98,13 @@ export function clickEffect(r: RefInfo | undefined): ToolEffect {
   if (DESTRUCTIVE.test(r.name)) return 'destructive'
   const heavy = weighty(r.name)
   const money = looksLikePayment(r.name) || purchaseWording(r.name) || labelHasPrice(r.name)
-  if (r.role === 'link') return r.navLink === true && !heavy ? 'read' : 'write_external'
+  // A real link to another page only opens it: "Check out the docs", or a product's title with its price (checkout.ts
+  // classifyPurchase: reading prices is research; a price link on a checkout page has the Purchase card).
+  if (r.role === 'link') {
+    if (r.navLink !== true) return 'write_external'
+    const label = browsingLabel(r.name)
+    return looksLikePayment(label) || CONSEQUENTIAL.test(label) || purchaseWording(label) ? 'write_external' : 'read'
+  }
   if (r.role === 'tab') return heavy ? 'write_external' : 'read'
   if (LOCAL_ROLES.has(r.role)) return money ? 'write_external' : 'write_local'
   if (BENIGN.test(r.name.trim()) && !money) return 'write_local'
@@ -202,7 +208,9 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     if (a.action === 'fill_form' && (a.fields ?? []).some((f) => b.refInfo(f.ref)?.password)) return 'typing into a password field'
     if (a.action === 'dialog' && a.accept && (looksLikePayment(b.pendingDialog?.message) || DESTRUCTIVE.test(b.pendingDialog?.message ?? ''))) return `confirming "${b.pendingDialog?.message.slice(0, 80)}"`
     if (a.action === 'click' || (a.action === 'type' && a.submit) || a.action === 'enter') {
-      if (looksLikePayment(r?.name, url)) return 'payment or checkout'
+      // The label is judged, and the page only by its structured checkout address, never for plain navigation
+      // (github.com/actions/checkout, docs about billing).
+      if (clickEffect(r) !== 'read' && (looksLikePayment(browsingLabel(r?.name ?? '')) || isCheckoutUrl(url))) return 'payment or checkout'
       if (DESTRUCTIVE.test(r?.name ?? '') && /\b(permanent|forever|account)\b/i.test(r?.name ?? '')) return 'permanent delete'
       // Making an API key or token the user asked for is ordinary work (the key goes to the user, who can save it
       // to the vault); every other change on a security or account page still asks.
