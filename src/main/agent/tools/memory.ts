@@ -1,5 +1,6 @@
 import type { Db } from '../../db'
 import { MEMORY_KINDS, SECRETISH, isBotKind, isUntrusted, normalizeKind, type Memory, type MemoryKind, type MemoryStore } from '../../memory'
+import { hasSecret } from '../../learning/extract'
 import type { SkillStore } from '../../skills'
 import type { RuleStore } from '../../rules'
 import type { ToolDef } from '../types'
@@ -97,7 +98,7 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
 
       if (a.action === 'save_rule') {
         if (!rules) throw new Error('Rules are not available.')
-        if (SECRETISH.test(a.rule!)) throw new Error('Rules never hold secrets.')
+        if (SECRETISH.test(a.rule!) || hasSecret(`${a.name ?? ''}\n${a.rule}`)) throw new Error('Rules never hold secrets.')
         const scope = a.applies === 'this_project' && projectId ? `project:${projectId}` : a.applies === 'this_bot' && space && !space.isMain ? `bot:${space.id}` : 'everywhere'
         const r = rules.save({ name: a.name!, text: a.rule!, scope, category: 'Learned', source: 'learned' })
         return { text: `Saved rule "${r.name}" (${scope === 'everywhere' ? 'all chats' : scope.startsWith('bot') ? 'this bot' : 'this project'}). It applies from the next new chat.${from}`, display: `saved rule "${r.name}"` }
@@ -112,7 +113,8 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
           skills.used(sk.name)
           return { text: `# ${sk.name}\n${sk.description}\n\n${sk.body}`, display: `read skill "${sk.name}"` }
         }
-        if (SECRET_VALUE.test(a.steps!)) throw new Error('Skills never hold passwords, keys or tokens. Refer to saved logins by name instead.')
+        // The same check as memories (an API key copied from .env, a token, a card number), on every field.
+        if (SECRET_VALUE.test(a.steps!) || hasSecret([a.name, a.description, a.steps].join('\n'))) throw new Error('Skills never hold passwords, keys or tokens. Refer to saved logins by name instead.')
         const existing = skills.get(a.name!)
         // Skills the user wrote are theirs: save an improvement under a new name.
         if (existing?.source === 'you') throw new Error(`"${existing.name}" was written by the user; save an improved version under a new name instead.`)

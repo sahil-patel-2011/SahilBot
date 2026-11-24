@@ -1155,7 +1155,7 @@ export const EFFECT_MAPS: Record<string, EffectRule[]> = {
 }
 
 /** Money moves are always a hard stop, whatever the app (create_refund, create_payout, transfer_funds). */
-const MONEY = /(^|[_\-.])(refund|payout|pay|charge|capture|transfer|purchase|buy|checkout)([_\-.]|$)|[a-z](Refund|Payout|Charge|Capture|Transfer|Purchase|Buy)([A-Z]|$)/
+const MONEY = /(^|[_\-.])(refund|payout|pay|charge|capture|transfer|purchase|buy|checkout|order|orders|trade|sell|withdraw|withdrawal|swap|stake|deposit|rent|bet|wager|top_?up|venmo|zelle|cashapp|hire)([_\-.]|$)|[a-z](Refund|Payout|Charge|Capture|Transfer|Purchase|Buy|Order|Trade|Sell|Withdraw|Swap|Stake|Deposit|Rent|Bet|TopUp)([A-Z]|$)|(^|[_\-.])send_crypto([_\-.]|$)/
 /** Publishing or sending to other people asks even in Auto mode. */
 const OUTWARD = /(^|[_\-.])(send|post|publish|tweet|reply|forward|invite|share|broadcast|deploy|merge)([_\-.]|$)|[a-z](Send|Post|Publish|Reply|Forward|Invite|Share|Deploy|Merge)([A-Z]|$)|^(send|post|publish|reply|forward|invite|share|deploy|merge)[A-Z]/
 
