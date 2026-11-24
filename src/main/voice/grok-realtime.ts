@@ -340,7 +340,7 @@ export class GrokRealtime {
         this.cancelNext = false
         // Talking over Grok: the server's own voice detection may already have cancelled or cut the reply, so our
         // cancel or truncate is turned down. Expected, not news.
-        if (!/cancel|no active response|truncat|already/i.test(err.message ?? '')) this.o.emit({ type: 'notice', message: `Grok voice: ${err.message ?? 'something went wrong'}` })
+        if (!/cancel|no active response|truncat/i.test(err.message ?? '')) this.o.emit({ type: 'notice', message: `Grok voice: ${err.message ?? 'something went wrong'}` })
         this.flush()
         return
       }
