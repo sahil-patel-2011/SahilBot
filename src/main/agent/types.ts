@@ -187,6 +187,8 @@ export interface ThreadState {
   folder?: string
   /** A voice conversation: spoken-style prompt and a 16k window. */
   voice?: boolean
+  /** A routine running beside a busy bot chat: the bot's chat it posts into (it keeps that bot's hard stops and Needs you). */
+  routineHost?: string
   /** This chat's bot is still being set up (a "New bot"): finish_setup is offered. */
   botSetup?: boolean
   /** Messages up to and including `boundaryId` are represented by `summary`. */

@@ -1177,6 +1177,8 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
           })()}
         </div>
         {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && <SourceChips sources={m.meta!.sources as Array<{ title: string; url: string }>} />}
+        {/* A routine that ran beside a busy chat: the files it made in its own side chat. */}
+        {Array.isArray(m.meta?.madeFiles) && <MadeFiles files={m.meta!.madeFiles as Array<{ key: string; path: string }>} onOpen={actions.onOpenFile} />}
         {reactions.user && (
           <button className="reaction" onClick={() => actions.onReact(m.id, null)} title="Remove reaction" data-testid="user-reaction">{reactions.user}</button>
         )}

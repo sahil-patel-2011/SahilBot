@@ -114,7 +114,7 @@ import { cadDesignTool } from './cad/design-tool'
 import { macKeyStore, Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { requestedModel } from './agent/choices'
-import { reminderMessage, routineDelivery } from './triggers'
+import { reminderMessage, routineAside, routineDelivery } from './triggers'
 import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels, migrateToAuto } from './spaces'
 import { ATTENDED_GRACE_MS, Learner, QuestionQueue, QuestionStore, createQuestionHost, notifyDevices as notifyQuestionDevices, toNeedsYou } from './agent/questions'
 import { DigestRunner } from './goals/digest'
@@ -1928,6 +1928,7 @@ app.whenReady().then(() => {
       const st = db.getState(side.id), ps = db.getState(host)
       st.roots = ps.roots
       st.folder = ps.folder
+      st.routineHost = host
       db.setState(side.id, st)
       runIn = side.id
     }
@@ -1947,7 +1948,8 @@ app.whenReady().then(() => {
     const last = [...after].reverse().find((m) => m.role === 'assistant' && m.content && m.kind === 'normal' && !m.meta?.superseded)
     // Ran beside a busy chat: its answer goes into the bot's chat once, as an aside (the live run's prompt is untouched).
     if (runIn !== host && last) {
-      const m = db.insertMessage({ threadId: host, role: 'assistant', content: last.content, kind: 'normal', status: 'done', meta: { scheduled: task.id, aside: true, routineRun: runIn } })
+      const r = routineAside(task, runIn, last, after)
+      const m = db.insertMessage({ threadId: host, role: 'assistant', content: r.content, kind: 'normal', status: 'done', meta: r.meta })
       emit({ threadId: host, type: 'message', message: m })
     }
     // The routine's own notification (the generic "done" one is skipped for routine runs). Click opens the chat.

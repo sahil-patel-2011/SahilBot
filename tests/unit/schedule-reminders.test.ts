@@ -9,11 +9,12 @@ import { activeMessages, estimate, ResultStore, toWire } from '../../src/main/ag
 import { dayLine } from '../../src/main/agent/prompt'
 import { ToolRegistry } from '../../src/main/agent/registry'
 import { coreTools } from '../../src/main/agent/tools/core'
-import { placeZone, resolveWhen, scheduleTool } from '../../src/main/agent/tools/schedule'
+import { keepRest, placeZone, resolveWhen, scheduleTool } from '../../src/main/agent/tools/schedule'
+import { classifyTask } from '../../src/main/agent/intent'
 import { emptyState } from '../../src/main/agent/types'
 import { Db } from '../../src/main/db'
 import { Scheduler } from '../../src/main/scheduler'
-import { isPlainReminder, reminderMessage, reminderText, routineDelivery } from '../../src/main/triggers'
+import { isPlainReminder, reminderMessage, reminderText, routineAside, routineDelivery } from '../../src/main/triggers'
 import { nextRunText } from '../../src/renderer/src/routines'
 import { startMockLlm, type MockLlm } from '../fixtures/mock-llm'
 
@@ -124,6 +125,99 @@ describe('plain reminders', () => {
     expect(wire[2]).toMatchObject({ tool_call_id: 'c1', content: 'sent' })
     expect(JSON.stringify(wire)).not.toContain('[Not run')
     expect(JSON.stringify(wire)).not.toContain('Reminder')
+  })
+})
+
+describe('a routine that ran beside a busy chat', () => {
+  test('its answer keeps its sources, stock card and the files it made', () => {
+    const after = [
+      { id: 't1', role: 'tool', toolName: 'create_document', meta: { status: 'ok', path: '/u/report.pdf' } },
+      { id: 't2', role: 'tool', toolName: 'web_search', meta: { status: 'ok' } },
+      { id: 't3', role: 'tool', toolName: 'file_write', meta: { status: 'error', path: '/u/x.txt' } }
+    ]
+    const r = routineAside({ id: 'w1', title: '⏰ Weekly report' }, 'side1', { content: 'Here is the report.', meta: { sources: [{ title: 'A', url: 'https://a' }], provisional: true } }, after)
+    expect(r.content).toBe('Here is the report.')
+    expect(r.meta).toEqual({ sources: [{ title: 'A', url: 'https://a' }], madeFiles: [{ key: 't1', path: '/u/report.pdf' }], scheduled: 'w1', routineTitle: 'Weekly report', aside: true, routineRun: 'side1' })
+  })
+
+  test('the bot sees it in later turns, never in the run it was posted beside', () => {
+    let n = 0
+    const msg = (p: Partial<Message>): Message => ({ id: `m${++n}`, threadId: 't', role: 'assistant', content: '', kind: 'normal', status: 'done', createdAt: n, ...p })
+    const r = routineAside({ id: 'w1', title: 'Atlanta weather' }, 'side1', { content: 'Atlanta: 54°F, light rain.' }, [])
+    const rem = reminderMessage({ id: 'r1', title: 'Stretch', prompt: '⏰ Reminder: Stretch' })
+    const ms = [
+      msg({ role: 'user', content: 'Email Bob the report' }),
+      msg({ toolCalls: [{ id: 'c1', name: 'send_email', arguments: '{}' }] }),
+      msg({ content: r.content, meta: r.meta }),
+      msg({ role: 'tool', toolCallId: 'c1', toolName: 'send_email', content: 'sent' }),
+      msg({ content: 'Sent.' }),
+      msg({ content: rem.content, meta: rem.meta })
+    ]
+    // While that run is still the latest: untouched.
+    expect(JSON.stringify(toWire(activeMessages(ms, emptyState())))).not.toContain('Atlanta')
+    // A later message: both are in the history, the routine's note after that batch's tool result.
+    ms.push(msg({ role: 'user', content: 'What did the weather say this morning?' }))
+    const wire = toWire(activeMessages(ms, emptyState()))
+    expect(wire.map((w) => w.role)).toEqual(['user', 'assistant', 'tool', 'user', 'assistant', 'user', 'user'])
+    expect(wire[2]).toMatchObject({ tool_call_id: 'c1', content: 'sent' })
+    expect(wire[3].content).toBe('[Earlier, routine "Atlanta weather" posted this (its own run\'s answer): Atlanta: 54°F, light rain.]')
+    expect(wire[5].content).toBe('[Earlier, a reminder was posted: ⏰ Reminder: Stretch]')
+    expect(JSON.stringify(wire)).not.toContain('[Not run')
+  })
+})
+
+describe('asking about routines is agent work (one reply, no find_tools detour)', () => {
+  test.each(["What's scheduled?", 'Cancel it', 'what routines do I have', 'snooze it 10 minutes', 'Move it to 7', 'Delete the weather routine', 'Pause the stretch reminder', 'What reminders do I have?'])('%s', (text) => {
+    expect(classifyTask(text).kind).toBe('agent')
+    expect(classifyTask(text, { previous: 'agent' }).kind).toBe('agent')
+  })
+  test('plain questions stay chat', () => {
+    expect(classifyTask('What does schedule mean?').kind).toBe('chat')
+    expect(classifyTask('What is the capital of France?').kind).toBe('chat')
+  })
+})
+
+describe('listing and changing routines', () => {
+  test('a one-off that went off reads as done, not paused; another bot\'s routines come last, with its name', async () => {
+    const { db, s, tool, ctx } = setup()
+    const other = db.createSpace('Scout', '#111')
+    s.create({ title: 'Scout digest', prompt: 'Summarize', schedule: { type: 'daily', time: '08:00' }, spaceId: other.id })
+    await tool.run({ action: 'create', title: 'Stretch', remind: 'Stretch', when: { type: 'once', in_minutes: 3 } } as never, ctx)
+    await tool.run({ action: 'create', title: 'Water', remind: 'Water', when: { type: 'daily', time: '10:00' } } as never, ctx)
+    const stretch = s.list().find((t) => t.title === 'Stretch')!
+    // It goes off (3 minutes later).
+    ;(s as unknown as { now: () => Date }).now = () => new Date(stretch.nextRun! + 1000)
+    await s.fire(stretch)
+    s.update(s.list().find((t) => t.title === 'Water')!.id, { enabled: false })
+    const lines = (await tool.run({ action: 'list' } as never, ctx)).text.split('\n')
+    expect(lines).toHaveLength(3)
+    expect(lines.at(-1)).toMatch(/Scout digest \(Scout's\): Every day at 8:00 AM/)
+    const st = lines.find((l) => l.includes('Stretch'))!
+    expect(st).toMatch(/already went off/)
+    expect(st).not.toMatch(/paused/)
+    expect(lines.find((l) => l.includes('Water'))).toMatch(/\(paused\)/)
+  })
+
+  test('"move it to 7" keeps the days and the zone, whatever the model leaves out', async () => {
+    const { s, tool, ctx } = setup()
+    const weekdays = ['mon', 'tue', 'wed', 'thu', 'fri']
+    await tool.run({ action: 'create', title: 'Atlanta weather', prompt: 'Send me the Atlanta weather', when: { type: 'weekly', days: weekdays, time: '07:30', tz: 'America/New_York' } } as never, ctx)
+    const id = s.list()[0].id
+    const moved = (await tool.run({ action: 'update', id, when: { type: 'weekly', time: '07:00' } } as never, ctx)).text
+    expect(moved).toMatch(/Weekdays at 7:00 AM ET/)
+    expect(s.get(id)!.schedule).toEqual({ type: 'weekly', days: weekdays, time: '07:00', tz: 'America/New_York' })
+    // Sent as a daily: still weekdays.
+    await tool.run({ action: 'update', id, when: { type: 'daily', time: '06:45' } } as never, ctx)
+    expect(s.get(id)!.schedule).toEqual({ type: 'weekly', days: weekdays, time: '06:45', tz: 'America/New_York' })
+    // "Make it every day" (a daily at the same time): every day.
+    await tool.run({ action: 'update', id, when: { type: 'daily', time: '06:45' } } as never, ctx)
+    expect(s.get(id)!.schedule).toEqual({ type: 'daily', time: '06:45', tz: 'America/New_York' })
+    // A weekly with no days to keep, or no time: a clear error, never a crash.
+    expect(() => keepRest({ type: 'weekly', time: '07:00' } as never, { type: 'once', at: '2026-12-01T09:00' })).toThrow(/needs when.days/)
+    await expect(tool.run({ action: 'create', title: 'X', prompt: 'x', when: { type: 'weekly', time: '07:00' } } as never, ctx)).rejects.toThrow(/needs when.days/)
+    expect(() => s.create({ title: 'X', prompt: 'x', schedule: { type: 'weekly', time: '07:00' } as never, spaceId: '' })).toThrow(/weekly schedule needs days/)
+    expect(() => s.update(id, { schedule: { type: 'weekly', days: [], time: '07:00' } })).toThrow(/weekly schedule needs days/)
+    expect(keepRest({ type: 'weekly', time: '09:00' } as never, { type: 'daily', time: '08:00' })).toEqual({ type: 'weekly', time: '09:00', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] })
   })
 })
 

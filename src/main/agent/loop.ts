@@ -2481,6 +2481,12 @@ export class Agent {
     })
   }
 
+  /** Where a queued question or approval resumes: the bot's chat, also for a routine that ran beside it. */
+  private queueThread(thread: Thread): string {
+    const host = this.d.db.getState(thread.id).routineHost
+    return host && this.d.db.getThread(host) ? host : thread.id
+  }
+
   /** Always-on bots' question queue for this run, or null (helpers, intros, groups, ask_bot, app runs ask the usual way). */
   private queueCfg(thread: Thread, run: Run): BotQuestionConfig | null {
     if (!this.d.questions || run.helper || run.intro || run.group || run.askVia || run.fromApp) return null
@@ -2589,7 +2595,7 @@ export class Agent {
 
   /** An approval that went to Needs you: the tool result tells the bot to carry on without it. */
   private queueApproval(thread: Thread, run: Run, cfg: BotQuestionConfig, tool: ToolDef, call: ToolCall, summary: string | undefined, reason: string | undefined, ctx: ExecCtx, baseMeta: Record<string, unknown>): Outcome {
-    const item = this.d.questions!.postApproval({ botId: cfg.botId, threadId: thread.id, runKey: this.queueKey(run), tool: tool.name, label: tool.label, summary, reason, args: call.arguments, tainted: !!run.forceTaint || ctx.track.sawUntrusted })
+    const item = this.d.questions!.postApproval({ botId: cfg.botId, threadId: this.queueThread(thread), runKey: this.queueKey(run), tool: tool.name, label: tool.label, summary, reason, args: call.arguments, tainted: !!run.forceTaint || ctx.track.sawUntrusted })
     return { call, status: 'denied', content: queuedApprovalText(item), meta: { ...baseMeta, status: 'denied', display: 'Waiting for your OK (Needs you)' } }
   }
 
@@ -2620,7 +2626,7 @@ export class Agent {
         return { text: [...saved, `User answered:\n${lines.join('\n')}`].join('\n'), display: many ? `${rest.length} questions` : rest[0].question }
       }
     }
-    const { item, merged } = host.postQuestions({ botId: cfg.botId, threadId: thread.id, runKey: this.queueKey(run), questions: rest, deadlineMs: cfg.deadlineMs, tainted })
+    const { item, merged } = host.postQuestions({ botId: cfg.botId, threadId: this.queueThread(thread), runKey: this.queueKey(run), questions: rest, deadlineMs: cfg.deadlineMs, tainted })
     return { text: queuedQuestionText(item, { merged, learned }), display: merged ? 'added to your question card' : 'posted to Needs you' }
   }
 
