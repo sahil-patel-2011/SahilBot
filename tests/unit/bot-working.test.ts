@@ -7,6 +7,8 @@ test('"On it." shows until the bot replies after your latest message', () => {
   expect(repliedSince([m('user', 'Make a homework plan')])).toBe(false)
   expect(repliedSince([m('user', 'Make a homework plan'), m('assistant', '')])).toBe(false)
   expect(repliedSince([m('user', 'Make a homework plan'), m('assistant', 'Here it is', { superseded: true })])).toBe(false)
+  // A reply still written out of sight (provisional) hasn't been said yet.
+  expect(repliedSince([m('user', 'Make a homework plan'), m('assistant', 'Here it is', { provisional: true })])).toBe(false)
   expect(repliedSince([m('user', 'Make a homework plan'), m('assistant', 'Working on the first part now.')])).toBe(true)
   expect(repliedSince([m('user', 'a'), m('assistant', 'b'), m('user', 'c')])).toBe(false)
   expect(repliedSince([m('user', 'a'), m('user', '[reminder]', { hidden: true })])).toBe(false)

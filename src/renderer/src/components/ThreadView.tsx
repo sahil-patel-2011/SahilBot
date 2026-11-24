@@ -145,7 +145,8 @@ export function blocks(messages: Message[]): Block[] {
     if (m.meta?.superseded && !held.has(m.id)) continue
     // A Max hybrid's phase-1 brief is shown inside the Max card (the judged answer follows it).
     if (m.meta?.maxBrief && !m.toolCalls?.length) continue
-    const hasText = !!(m.content || m.status === 'error' || m.status === 'stopped' || (m.reasoning && !m.toolCalls?.length))
+    // A reply the app may still send back (provisional) stays out of sight until it stands: never shown, then pulled.
+    const hasText = !m.meta?.provisional && !!(m.content || m.status === 'error' || m.status === 'stopped' || (m.reasoning && !m.toolCalls?.length))
     if (hasText) { act = null; out.push({ kind: 'text', m }) }
     if (m.toolCalls?.length) {
       for (const call of m.toolCalls) {
@@ -640,7 +641,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const runPlan = lastPlan && bs.indexOf(lastPlan) > lastUser ? lastPlan : undefined
   const tail = bs[bs.length - 1]
   const last = messages[messages.length - 1]
-  const waiting = running && !pending.length && tail?.kind !== 'activity' && (!last || last.role !== 'assistant' || (last.status === 'streaming' && !last.content && !last.reasoning && !last.toolCalls))
+  const waiting = running && !pending.length && tail?.kind !== 'activity' && (!last || last.role !== 'assistant' || (last.status === 'streaming' && ((!last.content && !last.reasoning && !last.toolCalls) || !!last.meta?.provisional)))
   // Quiet chat: one status line the whole time SahilBot works, except while a reply is being written.
   const allTail = all[all.length - 1]
   // The status names the step that is running now: once it has its result, it's "Thinking" again, never a stale label.
@@ -650,7 +651,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const livePlan = (() => { for (let i = all.length - 1; i > allUser; i--) { const b = all[i]; if (b.kind === 'plan') return b } return undefined })()
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
   // A bot's chat keeps "<name> is working…" up while a checked answer is written out of sight (heldDrafts).
-  const writingVisible = writing && !(quietBot && (last?.meta?.superseded || heldDrafts(messages).waiting.has(last!.id)))
+  // (So does every chat while a reply is written out of sight: provisional.)
+  const writingVisible = writing && !last?.meta?.provisional && !(quietBot && (last?.meta?.superseded || heldDrafts(messages).waiting.has(last!.id)))
   const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writingVisible)
   const started = turnStart(messages, since)
   const approvalWaiting = pending.some((p) => p.kind === 'approval')

@@ -8,7 +8,8 @@ export function heldDrafts(messages: Message[]): { held: Set<string>; waiting: S
   const held = new Set<string>(), waiting = new Set<string>()
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
-    if (m.role !== 'assistant' || !m.meta?.superseded || !m.meta?.checking || !m.content) continue
+    // (A draft written out of sight, provisional, was never on screen: nothing to hold.)
+    if (m.role !== 'assistant' || !m.meta?.superseded || !m.meta?.checking || !m.content || m.meta?.provisional) continue
     let replacement: Message | undefined, later = false
     for (const x of messages.slice(i + 1)) {
       if (x.role === 'user' && !x.meta?.hidden && !x.meta?.aside) break

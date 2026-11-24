@@ -146,3 +146,23 @@ describe('voice conversations in the chat', () => {
     expect(html).not.toContain('data-testid="user-bubble"')
   })
 })
+
+describe('post once', () => {
+  // Report ALD-04 / RLB-01: an answer still subject to the app's checks (provisional) is never shown, streaming or
+  // done; the working line stays up instead. Once it stands (provisional cleared) it shows, once.
+  it('a provisional reply is not shown; its tool calls are; once settled it shows', () => {
+    const ask = msg({ role: 'user', content: 'Plan a 3-day trip to Savannah' })
+    const writing = msg({ content: 'Day 1: River Street…', status: 'streaming', meta: { provisional: true } })
+    expect(tv.blocks([ask, writing]).filter((b) => b.kind === 'text')).toHaveLength(0)
+    const call = { id: 'p1', name: 'web_search', arguments: '{"query":"savannah hotels"}' }
+    const working = msg({ content: 'Checking a few hotels first.', toolCalls: [call], meta: { provisional: true } })
+    const bs = tv.blocks([ask, working])
+    expect(bs.filter((b) => b.kind === 'text')).toHaveLength(0)
+    expect(bs.filter((b) => b.kind === 'activity')).toHaveLength(1)
+    const done = { ...writing, status: 'done' as const, meta: {} }
+    expect(tv.blocks([ask, done]).filter((b) => b.kind === 'text')).toHaveLength(1)
+    // While it is written out of sight, the chat shows the working line, not the half-written answer.
+    const html = renderToString(createElement(tv.ThreadView, { messages: [ask, writing], running: true, pending: [], actions }))
+    expect(html).not.toContain('River Street')
+  })
+})
