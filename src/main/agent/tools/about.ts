@@ -3,6 +3,8 @@ import { ENTITY_TYPES } from '@shared/context-engine'
 import type { Db } from '../../db'
 import type { ContextEngine } from '../../context-engine/service'
 import type { ToolDef } from '../types'
+import { ASK_ONLY_LABEL, askOnlyCategories, asksToRemember } from '../../context-engine/sensitive'
+import { lastUserText } from './memory'
 
 // about: the user's world as SahilBot knows it (src/main/context-engine): people, places, organizations,
 // projects, events, dates, things, preferences, routines and goals, each fact with where it came from
@@ -27,7 +29,7 @@ export function aboutTool(deps: { engine: ContextEngine; db: Db }): ToolDef<Args
     description: 'What you know about the people, places and things in the user\'s life (people, places, organizations, projects, events, dates, possessions, preferences, routines, goals), each fact with its source and date. ' +
       'The most relevant cards are already in the <context> block. lookup: full cards for a name or topic ("Priya", "Lisbon", "restaurants in Lisbon"). ' +
       'remember: save one fact the user just told you (name, key such as birthday, likes, relationship, role, email, when, where; value); correct=true when they are correcting a wrong fact. ' +
-      'forget: everything about someone or something, only when the user asks (they can undo it in Vault → People & Places). Never save passwords, account or ID numbers, or health, money, religion, politics or sexuality details unless the user turned that on.',
+      'forget: everything about someone or something, only when the user asks (they can undo it in Vault → People & Places). Never save passwords, account or ID numbers, or health, money, religion, politics or sexuality details unless the user asked you to remember them.',
     parameters: {
       type: 'object',
       properties: {
@@ -53,6 +55,11 @@ export function aboutTool(deps: { engine: ContextEngine; db: Db }): ToolDef<Args
       }
       if (a.action === 'remember') {
         if (!a.name?.trim() || !a.key?.trim() || !a.value?.trim()) throw new Error('remember needs name, key and value.')
+        // Health, money, ID, religion, politics, sexuality: kept only when the user asked to remember it (like memory and the idle learner).
+        const sensitive = askOnlyCategories(`${a.key} ${a.value}`)
+        if (sensitive.length && !asksToRemember(lastUserText(deps.db, ctx.threadId))) {
+          return { text: `A sensitive detail (${sensitive.map((c) => ASK_ONLY_LABEL[c]).join(', ')}): not saved automatically. Nothing was saved; don't mention it unless the user asks you to remember it.`, display: 'not saved (sensitive)' }
+        }
         const text = deps.engine.remember({ name: a.name, type: a.type, key: a.key, value: a.value, spaceId: botId, tainted, threadId: ctx.threadId, correct: a.correct })
         return { text: `${text} Mention it briefly in your reply.`, display: `remembered ${a.name.slice(0, 30)}` }
       }

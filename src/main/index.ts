@@ -187,7 +187,7 @@ import { phoneNote } from './phone/notes'
 import type { ToolContext } from './agent/types'
 import { embeddingProvider } from './knowledge/embeddings'
 import { grokSpeech } from './voice/grok'
-import { GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN, grokVoiceInstructions } from './voice/grok-realtime'
+import { GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN, grokVoiceInstructions, taskOutcome } from './voice/grok-realtime'
 import { connectedVoice, nativeVoiceSite, voicePreference } from '@shared/voice-provider'
 import { OPENAI_URL, XAI_URL } from './llm/providers'
 import { fromWav } from './voice/audio'
@@ -2789,14 +2789,7 @@ app.whenReady().then(() => {
       const creds = keys.xai()
       if (!creds) return null
       try { hookSpend.beforeUsd(XAI_URL, GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN * 5) } catch { return { skip: 'The spending limit is too close for a live Grok call.' } }
-      const thread = voiceThread ? db.getThread(voiceThread) : undefined
-      const bot = thread ? db.getSpace(thread.spaceId) : undefined
-      return {
-        apiKey: creds.apiKey,
-        baseUrl: process.env.SAHILBOT_GROK_LIVE_URL || creds.baseUrl,
-        instructions: grokVoiceInstructions({ botName: bot?.name ?? 'SahilBot', userName: s.profile?.firstName || s.userName, role: bot && !bot.isMain ? bot.label ?? undefined : undefined }),
-        voice: s.voiceStyle?.voices?.xai
-      }
+      return { apiKey: creds.apiKey, baseUrl: process.env.SAHILBOT_GROK_LIVE_URL || creds.baseUrl, ...liveSession() }
     },
     liveCharged: (usd) => hookSpend.afterUsd(XAI_URL, GROK_VOICE_MODEL, usd),
     // Each minute of a live call: the limit must still cover the next couple of minutes, or the call ends.
@@ -2825,7 +2818,8 @@ app.whenReady().then(() => {
         const l = (e: ChatEvent): void => {
           if (e.threadId !== tid) return
           if (e.type === 'delta' && e.content) onText(e.content)
-          if (e.type === 'run' && e.status !== 'started') { off(); resolve(opts?.task ? finalReply(tid, since) : undefined) }
+          // do_task: only a finished run's answer counts as done; a stopped or failed one says so (never a draft as the result).
+          if (e.type === 'run' && e.status !== 'started') { off(); resolve(opts?.task ? taskOutcome(e.status, finalReply(tid, since), e.error) : undefined) }
         }
         listeners.add(l)
         // Hanging up ('hangup') stops waiting, not the bot: its run finishes in the chat and the answer lands there.
@@ -2836,10 +2830,21 @@ app.whenReady().then(() => {
           ? chat.send({ threadId: tid, text, meta: { voice: true, voiceBrief: true } })
           : chat.send({ threadId: tid, text, voice: true, meta: { voice: true } })
         // Some messages end without a run of their own ("stop everything" stops the chats it means, in one line).
-        send.then((r) => r.done).then(() => { off(); resolve(opts?.task ? finalReply(tid, since) : undefined) }, (err: Error) => { off(); reject(err) })
+        send.then((r) => r.done).then((status) => { off(); resolve(opts?.task ? taskOutcome(status, finalReply(tid, since)) : undefined) }, (err: Error) => { off(); reject(err) })
       })
     }
   }, { download: HIDDEN ? 'stub' : 'real' })
+  /** A live Grok call's instructions and voice: the bot, your name, and the voice bar's language and Grok voice. */
+  const liveSession = (): { instructions: string; voice?: string } => {
+    const s = settings.get()
+    const thread = voiceThread ? db.getThread(voiceThread) : undefined
+    const bot = thread ? db.getSpace(thread.spaceId) : undefined
+    const lang = s.voiceStyle?.language && s.voiceStyle.language !== 'auto' ? LANGUAGES.find((l) => l.id === s.voiceStyle?.language)?.label : undefined
+    return {
+      instructions: grokVoiceInstructions({ botName: bot?.name ?? 'SahilBot', userName: s.profile?.firstName || s.userName, role: bot && !bot.isMain ? bot.label ?? undefined : undefined, language: lang }),
+      voice: s.voiceStyle?.voices?.xai
+    }
+  }
   /** The answer a run in the voice chat ended with (the one that stood, not drafts sent back), for Grok to tell. */
   const finalReply = (tid: string, since: number): string | undefined =>
     [...db.listMessages(tid)].reverse().find((m) => m.createdAt >= since && m.role === 'assistant' && m.kind === 'normal' && !!m.content.trim() && !m.toolCalls?.length && !m.meta?.superseded && !m.meta?.hidden && !m.meta?.aside)?.content
@@ -2882,6 +2887,8 @@ app.whenReady().then(() => {
     }
     settings.set({ voiceStyle: next })
     voice.setStyle(next)
+    // A live Grok call takes the new language and Grok voice now too.
+    voice.updateLive(liveSession())
     return voiceBarOptions()
   })
   handle('voice:preview', (id: string) => voice.preview(String(id ?? '')))

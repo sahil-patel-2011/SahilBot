@@ -103,8 +103,13 @@ describe('round 2: one-call documents, chat coding guidance, this-chat instructi
     for (const p of [chat, full]) {
       expect(p).not.toMatch(/\("always…", "never…", "from now on…"\), save/)
       expect(p).toContain('"From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation')
-      expect(p).toContain('"Want this in every chat?"')
+      expect(p).not.toContain('Want this in every chat?')
+      expect(p).toContain("(unsure: this conversation only; don't ask)")
     }
+  })
+
+  test('the compact prompt also keeps health, money and other sensitive details out of automatic saves (MPB-03)', () => {
+    expect(compact).toContain('no health, money, ID, religion, politics or sexuality details unless asked')
   })
 })
 

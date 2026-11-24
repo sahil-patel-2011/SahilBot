@@ -181,6 +181,11 @@ export class VoiceService {
     if (keep) { keep.setTts(t); this.pipe = keep }
   }
 
+  /** A live Grok call in progress takes the voice bar's new voice or language now (no-op without one). */
+  updateLive(o: { voice?: string; instructions?: string }): void {
+    this.live?.update(o)
+  }
+
   /** The voice bar's choices (Settings.voiceStyle); they apply to the conversation in progress too. */
   setStyle(s: VoiceStyle): void {
     this.style = s
@@ -432,6 +437,12 @@ export class VoiceService {
         emit: (e) => {
           if (e.type === 'transcript') this.hooks.spoken?.('user', e.text)
           else if (e.type === 'reply') this.hooks.spoken?.('assistant', e.text)
+          else if (e.type === 'ended') {
+            // An earlier call replaced by a new one: its end is nobody's news.
+            if (this.live !== live) return
+            this.live = null
+            if (this.active === 'voice') this.active = 'off'
+          }
           this.hooks.emit(e)
         },
         charge: (usd) => this.hooks.liveCharged?.(usd),
@@ -481,7 +492,11 @@ export class VoiceService {
 
   /** In a voice conversation: say this in the next pause (a bot's work finished or needs you). */
   announce(text: string): boolean {
-    if (this.active === 'voice' && this.live) { this.live.announce(text); return true }
+    if (this.active === 'voice' && this.live) {
+      if (this.live.isClosed) return false
+      this.live.announce(text)
+      return true
+    }
     if (this.active !== 'voice' || !this.pipe) return false
     this.pipe.announce(text)
     return true

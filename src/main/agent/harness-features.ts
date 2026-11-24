@@ -82,15 +82,15 @@ export const straight = (t: string): string => (t ?? '').replace(/[\u2018\u2019\
 const LOOKS = ['read', 'fetch', 'browser', 'search', 'run_tests', 'run_command', 'code', 'review', 'agent_control', 'screenshot', 'computer', 'list', 'file_info', 'open_file', 'snapshot', 'get', 'grep', 'glob']
 /** Tool-name stems that do what a claimed verb says ("published" ↔ publish_post, "it's live" ↔ deploy). */
 const CLAIM_STEMS: Record<string, string[]> = {
-  saved: ['save', 'write', 'create', 'note', 'edit', 'export', 'memory'], sent: ['send', 'email', 'mail', 'message', 'reply', 'post'], emailed: ['email', 'send', 'mail'],
+  saved: ['save', 'write', 'create', 'note', 'edit', 'export', 'memory', 'about'], sent: ['send', 'email', 'mail', 'message', 'reply', 'post'], emailed: ['email', 'send', 'mail'],
   published: ['publish', 'post', 'deploy', 'release'], posted: ['post', 'publish', 'send'], deployed: ['deploy', 'publish', 'release'],
   uploaded: ['upload', 'put', 'save'], booked: ['book', 'reserve'], scheduled: ['schedule', 'create_event', 'calendar'], rescheduled: ['schedule', 'update', 'calendar', 'event'],
-  deleted: ['delete', 'remove', 'trash', 'file_manage', 'manage_bot', 'schedule'], removed: ['remove', 'delete', 'trash', 'file_manage', 'manage_bot', 'schedule'], filed: ['file', 'create', 'submit'],
+  deleted: ['delete', 'remove', 'trash', 'file_manage', 'manage_bot', 'schedule', 'memory', 'about'], removed: ['remove', 'delete', 'trash', 'file_manage', 'manage_bot', 'schedule', 'memory', 'about'], filed: ['file', 'create', 'submit'],
   submitted: ['submit', 'send', 'post'], shared: ['share', 'send'], moved: ['move', 'rename', 'file_manage', 'schedule', 'update_bot', 'manage_bot'], renamed: ['rename', 'move', 'file_manage', 'update_bot', 'manage_bot'],
   installed: ['install'], ordered: ['order', 'buy', 'purchase'], paid: ['pay', 'purchase'], replied: ['reply', 'send'],
   messaged: ['message', 'send'], texted: ['text', 'send', 'message'], live: ['publish', 'deploy', 'post', 'launch', 'release'],
   created: ['create', 'write', 'save', 'make', 'new', 'add', 'export', 'schedule', 'file_manage'], wrote: ['write', 'save', 'create', 'edit'], written: ['write', 'save', 'create', 'edit'],
-  added: ['add', 'create', 'write', 'edit', 'update', 'insert', 'append', 'schedule', 'memory'], updated: ['update', 'edit', 'write', 'set', 'patch', 'modify', 'save', 'schedule', 'manage_bot'],
+  added: ['add', 'create', 'write', 'edit', 'update', 'insert', 'append', 'schedule', 'memory'], updated: ['update', 'edit', 'write', 'set', 'patch', 'modify', 'save', 'schedule', 'manage_bot', 'memory', 'about'],
   fixed: ['edit', 'write', 'patch', 'fix', 'apply', 'update', 'schedule'], cancelled: ['cancel', 'delete', 'remove', 'update', 'schedule'], canceled: ['cancel', 'delete', 'remove', 'update', 'schedule'],
   downloaded: ['download', 'fetch', 'save', 'export'], copied: ['copy', 'write', 'save', 'duplicate', 'file_manage'],
   completed: ['complete', 'submit', 'update', 'todo'],

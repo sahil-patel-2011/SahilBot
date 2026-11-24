@@ -566,7 +566,12 @@ describe('tools', () => {
     await run({ action: 'remember', name: 'Priya Patel', key: 'likes', value: 'jazz' }, { tainted: true })
     const jazz = h.engine.card(card.id)!.attributes.find((a) => a.value === 'jazz')!
     expect(jazz).toMatchObject({ trust: 'quoted', scope: h.main.id })
-    // Health is kept by default; with the category off it's refused.
+    // Health is kept only when the user asked to remember it; with the category off it's refused even then.
+    expect((await run({ action: 'remember', name: 'Priya Patel', key: 'note', value: 'diagnosed with asthma' })).text).toMatch(/not saved automatically/)
+    expect(h.engine.card(card.id)!.attributes.some((a) => /asthma/.test(a.value))).toBe(false)
+    h.msg(t, 'user', 'I have ADHD, I never remember birthdays')
+    expect((await run({ action: 'remember', name: 'me', key: 'condition', value: 'ADHD' })).text).toMatch(/not saved automatically/)
+    h.msg(t, 'user', 'Remember that Priya was diagnosed with asthma')
     expect((await run({ action: 'remember', name: 'Priya Patel', key: 'note', value: 'diagnosed with asthma' })).text).toMatch(/Saved for Priya Patel/)
     await expect(run({ action: 'remember', name: 'Priya Patel', key: 'note', value: 'her password is hunter22!' })).rejects.toThrow()
     h.engine.setSettings({ sensitive: { health: false } })

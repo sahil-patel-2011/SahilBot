@@ -31,7 +31,7 @@ export function memoryGuidance(form: 'full' | 'chat' | 'compact'): string {
   const note = '- After a save, tell the user in a few words, inline, e.g. "Noted: you prefer metric units." No question, no confirmation, no card. Don\'t announce work-log entries.'
   if (form === 'compact') {
     return `# Memory
-- ${autoMemory ? 'Save automatically, without being asked: what the user states that lasts (preference, decision, person, place, routine, goal, fact about them)' : 'Save only when the user asks you to remember something'}: memory(action="save"), one sentence, a category; then note it inline ("Noted: you prefer metric units."), no confirmation. Never secrets; outside content only as quoted facts with their source.
+- ${autoMemory ? 'Save automatically, without being asked: what the user states that lasts (preference, decision, person, place, routine, goal, fact about them)' : 'Save only when the user asks you to remember something'}: memory(action="save"), one sentence, a category; then note it inline ("Noted: you prefer metric units."), no confirmation. Never secrets, and no health, money, ID, religion, politics or sexuality details unless asked; outside content only as quoted facts with their source.
 - Log meaningful work (category="worklog"). Relevant memories are in <context>; search for earlier work. "Always…": save_rule.`
   }
   if (form === 'chat') {
@@ -42,7 +42,7 @@ ${auto}
 ${note}
 ${DECISIONS}
 - "What do you remember about me?": memory(action="list"). "Forget that…": memory(action="forget", query="…"). What you remember that is relevant is already in the <context> block: search memory (memory(action="search", query="…")) only when the user mentions something earlier that isn't there.
-- Save with memory(action="save_rule") only what the user wants in every chat ("always…", "never…", "everywhere", "save this as a rule"). "From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation: follow them here, not saved (unsure? ask once, inline: "Want this in every chat?").`
+- Save with memory(action="save_rule") only what the user wants in every chat ("always…", "never…", "everywhere", "save this as a rule"). "From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation: follow them here, not saved (unsure: this conversation only; don't ask).`
   }
   return `# Memory
 - You remember the user across chats, with any model. Each memory is shared ("me": about the user, every bot sees it) or yours alone ("bot": this bot's job rules and work log).
@@ -198,7 +198,7 @@ ${opts.skills ? `${sortItems(opts.skills)}
 - If one fits the task, read it first with memory(action="read_skill", name) and follow it. Don't save or change skills during a task.` : '(none saved yet)'}
 - After a long task that needed a non-obvious procedure or several tries, save what worked with memory(action="save_skill"): a short name, when to use it, and the exact steps (tools, arguments, gotchas). Never after a quick question, a simple task or a change to a routine, and never mid-task: finish the job first. Never put passwords or personal data in a skill.
 - Learn from mistakes: when the user corrects you ("no, I meant…") or a tool keeps failing, save a short lesson for this bot (memory(action="save", scope="bot", category="rule", fact="When …, do … instead of …")) so it doesn't happen again. While the app is idle, SahilBot also reviews recent chats to learn facts, skills and lessons you missed; those show up in memory and skills marked as learned (the user can undo them).
-- Save with memory(action="save_rule") only what the user wants in every chat ("always…", "never…", "everywhere", "save this as a rule"). "From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation: follow them here, not saved (unsure? ask once, inline: "Want this in every chat?").
+- Save with memory(action="save_rule") only what the user wants in every chat ("always…", "never…", "everywhere", "save this as a rule"). "From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation: follow them here, not saved (unsure: this conversation only; don't ask).
 - To learn a web task by example, call browser(action="recording", op="start") and ask the user to show you once in the browser panel (or they press Teach there); turn the recorded steps into a skill, never including values shown as ‹secret›.
 
 # Your manual

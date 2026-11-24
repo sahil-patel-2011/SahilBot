@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test, vi } from 'vitest'
-import { GrokRealtime, toPcm16Base64, type RealtimeSocket } from '../../src/main/voice/grok-realtime'
+import { GrokRealtime, grokVoiceInstructions, taskOutcome, toPcm16Base64, type RealtimeSocket } from '../../src/main/voice/grok-realtime'
 import type { VoiceEvent } from '../../src/main/voice/pipeline'
 import { VoiceService } from '../../src/main/voice/service'
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => tmpdir() } }))
@@ -200,5 +200,68 @@ test('a spending limit too close for a live call says so once, then the standard
     // No voice is set up in this test, so the standard chain then fails: the notice came first, with the reason.
     await s.startVoice().catch(() => undefined)
     expect(events.filter((e) => e.type === 'notice').map((e) => e.message)).toEqual(['The spending limit is too close for a live Grok call. Using the standard voice.'])
+  } finally { s.dispose() }
+})
+
+test('do_task tells Grok a stopped or failed run as not done, never its draft', () => {
+  expect(taskOutcome('stopped', 'I\'m drafting the email to Priya now')).toBe('The run was stopped before it finished. Don\'t say it was done.')
+  expect(taskOutcome('error', 'Something went wrong', 'Gmail is not connected')).toMatch(/^The bot didn't finish: Gmail is not connected/)
+  expect(taskOutcome('error', undefined)).toMatch(/it hit an error/)
+  expect(taskOutcome('finished', 'I emailed Priya the notes.')).toBe('I emailed Priya the notes.')
+  expect(taskOutcome('finished', '  ')).toBe('The bot finished but wrote no reply.')
+})
+
+test('a call that ends by itself lets go: an ended event, the service drops it, and announce says it did not speak', async () => {
+  stubWs()
+  vi.stubGlobal('fetch', okToken)
+  const { s, events } = service({ live: () => ({ apiKey: 'k', baseUrl: 'https://api.x.ai/v1', instructions: 'x' }) })
+  try {
+    await s.startVoice()
+    expect(s.announce('Your report is ready.')).toBe(true)
+    // The server hangs up (or the idle timer or the spending limit ends it).
+    wsNow?.onclose?.({})
+    expect(events.map((e) => e.type)).toContain('ended')
+    expect(events.find((e) => e.type === 'error')?.message).toBe('Grok voice disconnected.')
+    expect(s.announce('Your report is ready.')).toBe(false)
+  } finally { s.dispose() }
+})
+
+test('the idle hang-up ends the call with one ended event', async () => {
+  let now = 1_000
+  const sock = fakeSocket()
+  const events: VoiceEvent[] = []
+  const live = new GrokRealtime({ apiKey: 'k', instructions: 'x', emit: (e) => events.push(e), doTask: async () => '', socket: sock.make, fetch: okToken, now: () => now, idleMs: 60_000 })
+  await live.start()
+  now += 61_000
+  live.minute()
+  expect(live.isClosed).toBe(true)
+  expect(events.filter((e) => e.type === 'ended')).toHaveLength(1)
+  live.close()
+  expect(events.filter((e) => e.type === 'ended')).toHaveLength(1)
+})
+
+test('talking over Grok: the server turning down our cancel or truncate is not shown as a notice', async () => {
+  const { sock, events } = await setup(async () => 'Done.')
+  sock.ws.serve({ type: 'response.created' })
+  sock.ws.serve({ type: 'input_audio_buffer.speech_started' })
+  sock.ws.serve({ type: 'error', error: { message: 'Cancellation failed: no active response found' } })
+  sock.ws.serve({ type: 'error', error: { message: 'Audio content of 900ms is already shorter than 1200ms; cannot truncate' } })
+  expect(events.some((e) => e.type === 'notice')).toBe(false)
+  sock.ws.serve({ type: 'error', error: { message: 'Invalid voice' } })
+  expect(events.filter((e) => e.type === 'notice').map((e) => (e as { message: string }).message)).toEqual(['Grok voice: Invalid voice'])
+})
+
+test('the voice bar language and Grok voice reach a live call: in the instructions, and mid-call by session.update', async () => {
+  expect(grokVoiceInstructions({ botName: 'Ava', language: 'Spanish' })).toContain('Speak Spanish unless the user switches.')
+  stubWs()
+  vi.stubGlobal('fetch', okToken)
+  const { s } = service({ live: () => ({ apiKey: 'k', baseUrl: 'https://api.x.ai/v1', instructions: 'x', voice: 'eve' }) })
+  try {
+    await s.startVoice()
+    const sent = (wsNow as unknown as { sent: Array<Record<string, unknown>> }).sent
+    s.updateLive({ instructions: 'x', voice: 'eve' })
+    expect(sent.filter((m) => m.type === 'session.update')).toHaveLength(1)
+    s.updateLive({ instructions: 'x\nSpeak French unless the user switches.', voice: 'rex' })
+    expect(sent.filter((m) => m.type === 'session.update').at(-1)).toEqual({ type: 'session.update', session: { instructions: 'x\nSpeak French unless the user switches.', voice: 'rex' } })
   } finally { s.dispose() }
 })

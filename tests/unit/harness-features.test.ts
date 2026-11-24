@@ -156,6 +156,17 @@ test('a schedule or bot change backs "moved", "updated", "deleted"', async () =>
   expect(claimBacked('I\'ve emailed the invoice to Sam.', ['schedule'])).toBe(false)
 })
 
+// "Forget my address": a memory or about call backs "removed" / "deleted" (no false nudge, no unverified note).
+test('a memory or about call backs "removed", "deleted", "updated"', async () => {
+  const { claimBacked } = await import('../../src/main/agent/harness-features')
+  expect(claimBacked('I\'ve removed your address (42 Oak St) from memory.', ['memory'])).toBe(true)
+  expect(claimBacked('Removed your address from memory.', ['memory'])).toBe(true)
+  expect(claimBacked('Your address has been removed.', ['memory'])).toBe(true)
+  expect(claimBacked('I\'ve deleted everything about Mike.', ['about'])).toBe(true)
+  expect(claimBacked('I\'ve saved that Mike prefers mornings.', ['about'])).toBe(true)
+  expect(claimBacked('I\'ve emailed it.', ['memory'])).toBe(false)
+})
+
 // HTA-01: a general tool backs "I've emailed it" only when it did something outward.
 test('claimsOutward names the claims that need an outward action', async () => {
   const { claimsOutward } = await import('../../src/main/agent/harness-features')

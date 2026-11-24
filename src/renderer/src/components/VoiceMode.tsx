@@ -72,6 +72,9 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
       else if (e.type === 'audio') speaker.current?.play(e.audio, e.rate)
       else if (e.type === 'stop-audio') speaker.current?.stop()
       else if (e.type === 'error') setError(e.message)
+      // The live call ended by itself (quiet minutes, the spending limit, disconnected): let go of the microphone
+      // and end it in main too. Reconnect starts a new one.
+      else if (e.type === 'ended') { mic.current?.stop(); mic.current = null; setState('idle'); void api.voice.stop() }
       else if (e.type === 'notice') {
         setNotice(e.message)
         if (noticeTimer.current) clearTimeout(noticeTimer.current)
