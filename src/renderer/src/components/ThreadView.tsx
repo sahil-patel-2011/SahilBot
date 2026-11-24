@@ -1,5 +1,5 @@
 import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { repliedSince, workingText } from '../lib/bot-working'
+import { workingText } from '../lib/bot-working'
 import { awaitingFinal, heldDrafts } from '../lib/held-drafts'
 import { openPermission, PERMISSION_BUTTON, permissionAsked } from '../lib/permission-ask'
 import type { CollaborationRole, CollaborationStatus, CollaborationStep, Effort, HeavyBoard, Message, PendingRequest, TeamMember, VoiceSession } from '@shared/types'
@@ -462,22 +462,15 @@ export function stallText(o: { who: string; label?: string | null; stall?: WorkP
 }
 
 /**
- * Working, Grok Bot's way (every chat outside Developer mode): the bot says it's on it (its own opening line when it
- * wrote one; a plain "On it." in the working line if nothing came after a moment), then one quiet line, an icon and what it's doing
- * ("Planning the Savannah trip"). No timer and no "Thinking…". A step that hangs says what is stuck, with Retry and
- * Skip for that step alone; "Show work" opens the plan, sources and files.
+ * Working, Grok Bot's way (every chat outside Developer mode): the bot's own messages (its opening line, then each
+ * message it sends as it works), and under them one quiet line, an icon and what it's doing ("Planning the Savannah
+ * trip"). No canned "On it.", no timer and no "Thinking…". A step that hangs says what is stuck, with Retry and Skip
+ * for that step alone; "Show work" opens the plan, sources and files.
  */
-function BotWorking({ name, ack, label, stall, threadId, work }: { name?: string; ack: boolean; label?: string | null; stall?: WorkProgress | null; threadId?: string; work?: boolean }) {
-  // A quick answer needs no "On it.": it shows only when nothing has come after a moment.
-  const [late, setLate] = useState(false)
-  useEffect(() => {
-    if (!ack) return
-    const t = setTimeout(() => setLate(true), 1200)
-    return () => clearTimeout(t)
-  }, [ack])
+function BotWorking({ name, label, stall, threadId, work }: { name?: string; label?: string | null; stall?: WorkProgress | null; threadId?: string; work?: boolean }) {
   const who = name ?? 'SahilBot'
   const slow = stallText({ who, label, stall })
-  const text = workingText({ slow, label, ack, late, name })
+  const text = workingText({ slow, label, name })
   const step = (action: 'retry' | 'skip'): void => {
     if (!threadId) return
     void (action === 'retry' ? api.chat.retryStep(threadId) : api.chat.skipStep(threadId)).catch((e: Error) => toast(e.message, 'error'))
@@ -774,7 +767,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
           {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} thumb={p.tool === 'browser' ? lastBrowserShot(messages) : undefined} />))}
           {showStatus && (dev
             ? <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={null} />
-            : <BotWorking name={botName} ack={!repliedSince(messages)} stall={work ?? null} threadId={threadId} work={ranSteps}
+            : <BotWorking name={botName} stall={work ?? null} threadId={threadId} work={ranSteps}
                 label={workLabel({ progress, progressTool: work?.tool, progressWaiting: !!work?.waitingOnYou, drafting, plan: livePlan ? (livePlan.items.find((x) => x.status === 'in_progress')?.text ?? livePlan.title ?? null) : null, doing: doingPlain(liveStep) })} />)}
           {!quietBot && running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
           {!running && !pending.length && (retryable || (lastText && dev)) && (

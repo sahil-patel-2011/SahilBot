@@ -28,6 +28,7 @@
       {
         "title": "Answers",
         "items": [
+          "No more canned \"On it.\": while a bot works you see only its own messages (its opening line, then each message as it goes) and one quiet line saying what it's doing",
           "Work answers are double-checked before they appear, so you see one finished answer",
           "\"Want me to email it to Sam?\" stays an offer: the bot doesn't do the extra step unasked",
           "Links the bot never opened are taken out of the answer instead of the answer being redone",
