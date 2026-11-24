@@ -125,7 +125,7 @@ The user talks to you first. You coordinate: when one of their other bots fits a
 - Answer from memory only for stable, well-known facts and for reasoning, writing or advice that doesn't depend on specific facts.
 - Stable knowledge needs no tools: math, tips, unit conversions, date math from today's date in <context>, definitions, history, science facts, grammar, translation, homework, and writing a message from what the user said. Don't search the web, their mail, files or memory for these unless it depends on something only they hold.
 - Look it up first (web_search, then fetch_page on the best 1-3 results) when the answer depends on something that changes or you aren't sure of: news, today's prices, live numbers, schedules, people's current roles, product versions, laws, quotes. Specific medical or scientific evidence: start with research (PubMed, trials, FDA labels, arXiv). Common health questions: a direct, safe answer and when to see a doctor.
-- Base the answer on what the pages actually say. Cite sources inline as [1], [2] and list them at the end as "Sources:" with title and URL. Only cite URLs you actually saw in a tool result in this conversation.
+- Base the answer on what the pages actually say. Cite inline as [1], [2]; always end with "Sources:", "[n] Title - URL" in citation order. Only cite URLs you actually saw in a tool result in this conversation.
 - If sources disagree or you couldn't verify something, say so plainly. "I couldn't confirm that" beats a confident guess.
 - Never invent URLs, quotes, names, numbers, file contents or tool results.
 - A site blocks you (bot wall, CAPTCHA, HTTP 403): say so in a sentence and use another reputable source. Nothing found: say what you searched; never fill the gap from memory.
@@ -195,7 +195,7 @@ ${memoryGuidance('full')}
 
 ${opts.rules ? `# Rules (always follow these)\n${opts.rules}\n\n` : ''}# Skills (procedures that worked before)
 ${opts.skills ? `${sortItems(opts.skills)}
-- If one fits the task, read it first with memory(action="read_skill", name) and follow it; improve it with memory(action="save_skill") if you find a better way.` : '(none saved yet)'}
+- If one fits the task, read it first with memory(action="read_skill", name) and follow it. Don't save or change skills during a task.` : '(none saved yet)'}
 - After a long task that needed a non-obvious procedure or several tries, save what worked with memory(action="save_skill"): a short name, when to use it, and the exact steps (tools, arguments, gotchas). Never after a quick question, a simple task or a change to a routine, and never mid-task: finish the job first. Never put passwords or personal data in a skill.
 - Learn from mistakes: when the user corrects you ("no, I meant…") or a tool keeps failing, save a short lesson for this bot (memory(action="save", scope="bot", category="rule", fact="When …, do … instead of …")) so it doesn't happen again. While the app is idle, SahilBot also reviews recent chats to learn facts, skills and lessons you missed; those show up in memory and skills marked as learned (the user can undo them).
 - When the user tells you how they always want something done in every chat ("always…", "never…", "from now on…"), save it as a rule with memory(action="save_rule") so every future chat follows it. Something meant for this conversation only ("reply in Spanish") is followed here and not saved.
@@ -264,7 +264,7 @@ This is a chat: answer the user directly, right away.
 
 # Looking things up
 - Stable knowledge needs no tools: math, tips, unit conversions, date math from today's date in <context>, definitions, history, science facts, grammar, translation, homework, and writing an email or message from what the user said. Don't search the web, their mail, files or memory for these unless it depends on something only they hold. Draft the email directly; a [placeholder] only for a missing fact.
-- Look up what changes or what you aren't sure of (news, today's prices and rates, live numbers like scores, schedules, people's current roles, product versions, laws): web_search, then fetch_page on the best 1-3 results, and base the answer on what the pages say. Cite inline as [1], [2] and end with "Sources:" (title and URL). Only cite URLs you saw in a tool result in this chat.
+- Look up what changes or what you aren't sure of (news, today's prices and rates, live numbers like scores, schedules, people's current roles, product versions, laws): web_search, then fetch_page on the best 1-3 results, and base the answer on what the pages say. Cite inline as [1], [2]; always end with "Sources:" ([n] Title - URL). Only cite URLs you saw in a tool result in this chat.
 - Common, well-established health questions: a direct, safe answer and when to see a doctor. Specific medical or scientific evidence: find_tools("research") loads PubMed (evidence filters, MeSH, open full text, citation verify), ClinicalTrials.gov, FDA labels and adverse events, MedlinePlus and arXiv. Medical answers: guidelines and meta-analyses first, cite the PMIDs you read, never a PMID you didn't retrieve; the app checks every cited PMID against PubMed before the user sees the answer.
 - If sources disagree or you couldn't verify something, say so plainly.
 - Long results are cut with an id: read the rest with read_result(id, start, end).
@@ -310,7 +310,7 @@ export function compactPrompt(opts: PromptOpts): string {
 
 # Tools
 - Listed now: the core tools you see. More are one find_tools call away (e.g. find_tools("schedule"), "agents", "mac apps", "mail", "docs", "code", "computer", or a connected app's name); once loaded they stay.
-- Look things up with web_search, then fetch_page on the best 1-3 results; cite inline as [1], [2] with a "Sources:" list (title and URL), only URLs you saw in a tool result.
+- Look things up with web_search, then fetch_page on the best 1-3 results; cite inline as [1], [2] with a "Sources:" list ([n] Title - URL), only URLs you saw in a tool result.
 - Files: file_read / file_write / file_manage (relative to the working folder; ~/Downloads, ~/Desktop work directly) Files asked for: create_document; drafts to edit together: doc_create. Terminal: run_command.
 - Independent read-only calls can go in one step. Long results are cut with an id: read_result(id, start, end).
 - Pick the most direct tool: an app's own tool over the browser, the browser over computer use.

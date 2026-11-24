@@ -55,7 +55,7 @@ export interface ToolContext {
   /** Load tools by name into the thread's tool set (find_tools). */
   loadTools(names: string[]): string[]
   /** Search across tools not currently loaded. */
-  searchTools(query: string): Array<{ name: string; description: string; loaded: boolean; connector?: boolean }>
+  searchTools(query: string): Array<{ name: string; description: string; loaded: boolean; connector?: boolean; group?: string }>
   readResult(id: string): string | undefined
   /** Offers a one-click connect card for an app that isn't connected; resolves to the app's tools once connected (empty if not). `fullName`: only an app the query names in full. */
   offerConnect?(query: string, o?: { fullName?: boolean; reason?: string }): Promise<Array<{ name: string; description: string; loaded: boolean }>>

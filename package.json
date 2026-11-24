@@ -90,7 +90,9 @@
         "NSScreenCaptureUsageDescription": "SahilBot looks at your screen only while you have it use your computer for a task.",
         "NSDownloadsFolderUsageDescription": "SahilBot opens files here when you ask it to.",
         "NSDesktopFolderUsageDescription": "SahilBot opens files here when you ask it to.",
-        "NSDocumentsFolderUsageDescription": "SahilBot opens files here when you ask it to."
+        "NSDocumentsFolderUsageDescription": "SahilBot opens files here when you ask it to.",
+        "NSCalendarsUsageDescription": "SahilBot reads your calendar when you ask about your schedule, including repeating events.",
+        "NSCalendarsFullAccessUsageDescription": "SahilBot reads your calendar when you ask about your schedule, including repeating events."
       },
       "icon": "build/icon.icns",
       "hardenedRuntime": true,

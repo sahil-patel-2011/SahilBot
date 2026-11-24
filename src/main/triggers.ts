@@ -25,6 +25,8 @@ export interface TriggerItem {
   declined?: boolean
   /** Calendar: when the event was created (an edit changes `at`, not this). */
   created?: number
+  /** Calendar: an invite the user hasn't answered yet (it reached them at `at`, whenever the event was created). */
+  invited?: boolean
 }
 
 /** At most this many matching items go into one run; the rest are counted. */

@@ -103,6 +103,8 @@ export interface ComputerControl {
   isGranted(threadId: string): boolean
   /** The run is over: shows "done" on the cursor and hides it. */
   finish(): void
+  /** Accessibility, or the one-tap card that waits for the switch: false when it was on already, true once turned on (throws the AX_OFF line when it stays off). */
+  needAccessibility?(ctx: ToolContext): Promise<boolean>
 }
 
 let current: ComputerControl | undefined
@@ -630,6 +632,8 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
 
   /** Per chat: the Accessibility card that is up (several calls at once share it). */
   const axWaits = new Map<string, Promise<string>>()
+  /** Per chat: the card was declined or timed out (in which run, when). */
+  const axDeclined = new Map<string, { runId?: string; at: number }>()
   /**
    * Accessibility, or the one-tap card: macOS's own prompt adds SahilBot to the Accessibility list, the chat shows
    * the card (whatever the model says), and the step waits for the switch and carries on by itself once it's on.
@@ -637,8 +641,12 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
    */
   async function needAx(ctx: ToolContext): Promise<void> {
     if (d.trusted(false)) return
-    if (d.trusted(true)) return
     const tid = ctx.threadId
+    // Declined or timed out in this run (or a few minutes ago): no second macOS prompt and no second card on
+    // every later step; the user's next message asks again.
+    const no = axDeclined.get(tid)
+    if (no && (ctx.runId ? no.runId === ctx.runId : Date.now() - no.at < 3 * 60_000)) throw new Error(`${AX_OFF} The user didn't turn it on now. Tell them in one sentence that the Accessibility button in the chat turns it on; don't retry, don't guess and don't try another way to click.`)
+    if (d.trusted(true)) return
     let answer = 'unavailable'
     if (ctx.waitForUser) {
       let wait = axWaits.get(tid)
@@ -650,7 +658,8 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
       answer = await wait
     }
     alive(ctx)
-    if (d.trusted(false)) return
+    if (d.trusted(false)) { axDeclined.delete(tid); return }
+    if (answer !== 'unavailable') axDeclined.set(tid, { runId: ctx.runId, at: Date.now() })
     const why = answer === 'unavailable' ? 'Nobody is here to turn it on: leave the clicking part for the user and say so in your report.'
       : answer === 'timeout' ? 'It wasn\'t turned on in time. Tell the user in one sentence that the Accessibility card in the chat turns it on; don\'t retry or guess.'
         : 'The user didn\'t turn it on now. Tell them in one sentence that the Accessibility button in the chat turns it on; don\'t retry, don\'t guess and don\'t try another way to click.'
@@ -1136,7 +1145,7 @@ Every action reports what changed afterwards (app, window, dialog, focus, values
     if (o.selectAll) await pressKey(ctx, { char: 'a', using: ['command down'] }, 'cmd+a')
   }
 
-  const control: ComputerControl = { run: (args, ctx) => def.run(args as Args, ctx), isGranted: isGranted0, finish }
+  const control: ComputerControl = { run: (args, ctx) => def.run(args as Args, ctx), isGranted: isGranted0, finish, needAccessibility: async (ctx) => { if (d.trusted(false)) return false; await needAx(ctx); return true } }
   current = control
   return Object.assign(def, { control })
 }

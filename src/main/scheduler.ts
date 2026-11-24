@@ -399,10 +399,11 @@ export class Scheduler {
       // An item without a time counts as arriving now.
       const armed = this.armedAt(t)
       // A calendar event is new once: an edit or an RSVP gives it a new id and time (sources.ts calendarItems), but
-      // it isn't an arrival. It counts from when it was created, and each event sets a routine off only once.
+      // it isn't an arrival. It counts from when it was created (an invite not answered yet: from when it reached the
+      // user, since a guest added to an older event keeps its old creation time), and each event sets it off only once.
       const seen = this.seenEvents(t.id)
       const fresh = items.filter((x) => x.kind !== 'calendar' || !seen.has(eventKey(x)))
-        .filter((x) => ((x.kind === 'calendar' ? x.created : undefined) || x.at || Date.now()) >= armed)
+        .filter((x) => ((x.kind === 'calendar' && !x.invited ? x.created : undefined) || x.at || Date.now()) >= armed)
       const hit = pickItems(t.schedule, fresh, me)
       if (!hit.items.length) continue
       this.markSeen(t.id, hit.items)
