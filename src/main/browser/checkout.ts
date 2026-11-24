@@ -182,6 +182,9 @@ export function isFinanceUrl(url?: string): boolean {
   try { const u = new URL(url ?? ''); return FINANCE_URL.test(u.hostname) || FINANCE_URL.test(u.pathname) } catch { return false }
 }
 
+/** A link named after the page it opens ("Purchase history", "Payment methods", "Billing settings"). */
+export const PAGE_NAME = /\b(history|methods?|settings|details|info|information|overview|options|polic(y|ies)|preferences|summary|records?|receipts?|invoices?|statements?)$/i
+
 /** Purchase or payment wording in any supported language. */
 export function purchaseWording(label?: string): boolean {
   const l = clean(label ?? '', 120)
@@ -226,6 +229,8 @@ export function classifyPurchase(s: PurchaseSignals): { purchase: boolean; reaso
   const price = labelHasPrice(label)
   // "Add to cart", "Apply coupon"…: not a purchase, unless it names an amount on a checkout page.
   if (label && NOT_PURCHASE.test(label) && !strong && !(price && context)) return no
+  // A real link named after the page it opens ("Purchase history", "Payment methods"), away from any checkout.
+  if (strong && s.role === 'link' && s.navLink === true && !context && !finance && PAGE_NAME.test(label.trim())) return no
   // Links get no exemption: "Buy now" is a purchase whether it's a <button> or an <a>.
   if (strong) return yes(`"${label.slice(0, 60)}" places an order or pays`)
   // A real link to another page whose title mentions a price ("Pricing | Plans from $59/mo" in search results)

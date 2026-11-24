@@ -1,7 +1,7 @@
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PurchaseInfo, ToolEffect } from '@shared/types'
-import { benignClickLabel, classifyPurchase, clean, isCheckoutUrl, labelHasPrice, purchaseWording, PURCHASES_NEED_YOU, redactCards, type PurchaseGate, type PurchaseSignals } from '../../browser/checkout'
+import { benignClickLabel, classifyPurchase, clean, isCheckoutUrl, labelHasPrice, PAGE_NAME, purchaseWording, PURCHASES_NEED_YOU, redactCards, type PurchaseGate, type PurchaseSignals } from '../../browser/checkout'
 import { safeUrl, type BrowserManager, type Expected, type OfferedDownload, type PageCommerce, type RefInfo } from '../../browser/manager'
 import { routineDownload } from '../../browser/download-policy'
 import { MAX_MS, MAX_STEPS, stepDetails, stepsToText, SECRET } from '../../browser/teach'
@@ -12,7 +12,7 @@ import type { SiteStore } from '../../sites/store'
 import { originMatches, type Vault } from '../../vault'
 import { fillProblem, standingRuleAllows } from '../../secure/guards'
 import { isSecurePage } from '../../secure/origin'
-import { browsingLabel, CONSEQUENTIAL, looksLikePayment, looksLikeSecurity, OTP_STOP, PURCHASE_STOP } from '../permissions'
+import { browsingLabel, CONSEQUENTIAL, looksLikePayAction, looksLikePayment, looksLikeSecurity, OTP_STOP, PURCHASE_STOP } from '../permissions'
 import type { ToolContext, ToolDef, ToolOutput } from '../types'
 import { resolvePath } from './files'
 
@@ -103,7 +103,8 @@ export function clickEffect(r: RefInfo | undefined): ToolEffect {
   if (r.role === 'link') {
     if (r.navLink !== true) return 'write_external'
     const label = browsingLabel(r.name)
-    return looksLikePayment(label) || CONSEQUENTIAL.test(label) || purchaseWording(label) ? 'write_external' : 'read'
+    // (A page's name, "Billing" or "Purchase history", only opens it: only a paying action is one.)
+    return looksLikePayAction(label) || ((CONSEQUENTIAL.test(label) || purchaseWording(label)) && !PAGE_NAME.test(label.trim())) ? 'write_external' : 'read'
   }
   if (r.role === 'tab') return heavy ? 'write_external' : 'read'
   if (LOCAL_ROLES.has(r.role)) return money ? 'write_external' : 'write_local'
@@ -210,7 +211,7 @@ export function browserTool(b: BrowserManager, vault: Vault, deps: BrowserDeps =
     if (a.action === 'click' || (a.action === 'type' && a.submit) || a.action === 'enter') {
       // The label is judged, and the page only by its structured checkout address, never for plain navigation
       // (github.com/actions/checkout, docs about billing).
-      if (clickEffect(r) !== 'read' && (looksLikePayment(browsingLabel(r?.name ?? '')) || isCheckoutUrl(url))) return 'payment or checkout'
+      if (clickEffect(r) !== 'read' && (looksLikePayAction(browsingLabel(r?.name ?? '')) || isCheckoutUrl(url))) return 'payment or checkout'
       if (DESTRUCTIVE.test(r?.name ?? '') && /\b(permanent|forever|account)\b/i.test(r?.name ?? '')) return 'permanent delete'
       // Making an API key or token the user asked for is ordinary work (the key goes to the user, who can save it
       // to the vault); every other change on a security or account page still asks.

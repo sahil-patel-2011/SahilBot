@@ -56,7 +56,7 @@ const NO_SPEND_TOOLS = new Set(['run_command', 'git', 'code', 'jobs', 'file_read
   'names', 'knowledge_search', 'knowledge_status', 'chat_history', 'maps', 'price_alert', 'stock_quote', 'stock_analyze', 'stock_compare',
   'stock_forecast', 'stock_backtest', 'swarm', 'batch', 'agents', 'consult', 'research', 'manual', 'about', 'find_tools', 'ask_user', 'image',
   'speech', 'transcribe', 'web_search', 'fetch_page', 'read_result', 'phi_scan', 'frc_code', 'frc_mech', 'freecad', 'onshape', 'cursor',
-  'connect_app', 'max'])
+  'connect_app', 'max', 'start_work', 'do_task', 'notes', 'search_memory', 'search_brain', 'get_chat', 'list_bots', 'open_commitments', 'cad_design'])
 
 /**
  * Does this step spend money? From the tool's name (create_refund, submit_order, venmo_send) for every tool; for a
@@ -201,14 +201,22 @@ export function looksLikePayment(...texts: Array<string | undefined>): boolean {
   return texts.some((t) => !!t && PAYMENT.test(t))
 }
 
+/**
+ * A label that does the paying ("Pay now", "Place order", "Checkout"), for links and buttons: a page's name
+ * ("Billing", "Payment methods", "Purchase history") only opens that page.
+ */
+const PAY_ACTION = /\b(pay( now)?|buy( now)?|checkout|check out|place (your |an )?order|order now|subscribe( now)?|confirm (purchase|payment|order)|complete (purchase|payment|order)|transfer funds|wire|send money|credit card|card number|cvv)\b/i
+export const looksLikePayAction = (t?: string): boolean => !!t && PAY_ACTION.test(t)
+
 export function looksLikeSecurity(url?: string, ...texts: Array<string | undefined>): boolean {
   return (!!url && SECURITY_URL.test(url)) || texts.some((t) => !!t && SECURITY.test(t))
 }
 
 // ---------- taint: did these arguments come from fetched content? ----------
 
-// A phone number never starts inside a number or at a date ("2026-11-25T08:30", "2026-11-25 12:00").
-const ENTITY = /(https?:\/\/[^\s"'<>)]+|[\w.+-]+@[\w-]+\.[\w.-]+|(?<![\d+])(?!\d{4}-\d{2}-\d{2}(?:\b|T))\+?\d[\d\s().-]{7,}\d|\b\d{6,}\b)/g
+// A phone number never starts inside a number or at a date ("2026-11-25T08:30", "2026-11-25 12:00"), nor inside one
+// ("2026-11-20 10.11.12": not at "11-20 10.11.12").
+const ENTITY = /(https?:\/\/[^\s"'<>)]+|[\w.+-]+@[\w-]+\.[\w.-]+|(?<![\d+-])(?!\d{4}-\d{2}-\d{2}(?:\b|T))\+?\d[\d\s().-]{7,}\d|\b\d{6,}\b)/g
 /** A web address on this Mac (a dev server's "Local: http://localhost:5173/"): nobody outside chose it. */
 const LOCAL_URL = /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1?\]|[\w-]+\.local)([:/?#]|$)/i
 /** Fields that hold what a message or post says, not who or where it goes. */
@@ -217,6 +225,16 @@ const BODY_KEY = /^(body|text|content|message|html|subject|title|description|not
 const DEST_KEY = /^(channel|channel_?id|chat_?id|conversation_?id|webhook(_?url)?|phone|phones|number|numbers)$/i
 /** Tools whose "text" is typed into a screen or page (anything, a recipient included): never a plain body. */
 const UI_TOOLS = new Set(['browser', 'mac', 'mac_apps', 'computer', 'ask_on_mac'])
+/** What a saved item in the user's own app holds (an event's notes, a page's blocks, a sheet's rows, a task). */
+const APP_BODY_KEY = /^(body|text|content|message|html|subject|title|description|notes|summary|caption|children|properties|values|rows|blocks|location|plain_text)$/i
+/** An app's tool that reaches other people or the public (its name after "app__"). */
+const OUTWARD_APP = /(send|post|message|reply|comment|tweet|publish|share|mail|forward|invite|sms|chat|webhook|issue|gist|release|pull_?request|review)/i
+/** The user asked for something to go out (sent, posted, replied, shared). */
+const asksOut = (user: string): boolean => SEND_WORDS.test(user) || POST_ASK.test(user) || REPLY_ASK.test(user) || /\b(tell|let \w+ know|ping|dm)\b/i.test(user)
+/** A date-time's tail that reads like a phone number ("11-20 10.11.12" of "2026-11-20 10.11.12.jpg"). */
+const DATE_TAIL = /^\d{1,2}-\d{2}[ T_]\d{2}[.:-]\d{2}([.:-]\d{2})?$/
+/** A phone-shaped match that isn't a phone number: under ten digits with separators, or a date-time's tail. */
+const notAPhone = (e: string): boolean => !/[@/]/.test(e) && !/^\+?\d+$/.test(e) && (e.replace(/\D/g, '').length < 10 || DATE_TAIL.test(e))
 
 function ngrams(text: string, n: number): Set<string> {
   const w = text.toLowerCase().split(/\s+/).filter(Boolean)
@@ -279,7 +297,7 @@ function namedByUser(addr: string, corpus: string, user: string, userWords: Set<
  * Ids that pick a shown item (archive message #104190) don't count, and neither does a recipient the user named
  * ("reply to Sarah") or the sender of a message the user asked to reply to.
  */
-export function isTainted(args: unknown, untrusted: string[], userText: string, o: { bodies?: { tool: string; priv?: string[] } } = {}): boolean {
+export function isTainted(args: unknown, untrusted: string[], userText: string, o: { bodies?: { tool: string; priv?: string[] }; loose?: boolean } = {}): boolean {
   if (!untrusted.length) return false
   const corpus = untrusted.join('\n').toLowerCase()
   const user = userText.toLowerCase()
@@ -287,15 +305,25 @@ export function isTainted(args: unknown, untrusted: string[], userText: string, 
   const entries = keyed(args)
   // A send's content (`bodies`, for checkTaint): what research found (links, phone numbers, quotes) is what the user
   // asked to send. Who and where it goes is checked word for word first (and steeredRisk guards recipients nobody
-  // gave); then a body only counts when a link in it carries private data out (urlTainted).
-  const bodies = o.bodies && !UI_TOOLS.has(o.bodies.tool) && entries.some(([k]) => RECIPIENT_KEY.test(k) || DEST_KEY.test(k)) ? o.bodies : undefined
-  const isBody = (key: string): boolean => !!bodies && BODY_KEY.test(key)
+  // gave); then a body only counts when a link in it carries private data out (urlTainted). That holds only when the
+  // user asked for something to go out, to places they named: a channel only the page named ("#general") is the
+  // page's choice, and then its body is checked word for word. Research saved into the user's own app (an event, a
+  // Notion page, a sheet row, a task: nobody else gets it) is a body too.
+  const tool = o.bodies?.tool ?? ''
+  const routed = entries.some(([k]) => RECIPIENT_KEY.test(k) || DEST_KEY.test(k))
+  const sendOk = routed && asksOut(user) && entries.filter(([k]) => DEST_KEY.test(k)).every(([, v]) => {
+    const d = v.toLowerCase().trim().replace(/^[#@]/, '')
+    return d.length < 2 || user.includes(d) || !corpus.includes(d)
+  })
+  const ownApp = !routed && tool.includes('__') && !PUBLIC_POST_TOOL.test(tool) && !OUTWARD_APP.test(tool.split('__').slice(1).join('__'))
+  const bodies = o.bodies && !UI_TOOLS.has(tool) && (sendOk || ownApp) ? o.bodies : undefined
+  const isBody = (key: string): boolean => !!bodies && (ownApp ? APP_BODY_KEY : BODY_KEY).test(key)
   for (const [key, s] of entries) {
     if (isBody(key)) continue
     if (!HANDLE_KEY.test(key)) {
       for (const m of s.matchAll(ENTITY)) {
         const e = m[0].toLowerCase().trim()
-        if (!corpus.includes(e) || user.includes(e) || LOCAL_URL.test(e)) continue
+        if (!corpus.includes(e) || user.includes(e) || LOCAL_URL.test(e) || notAPhone(e) || (o.loose && !e.includes('@'))) continue
         if (RECIPIENT_KEY.test(key) && /^[^/]+@/.test(e) && namedByUser(e, corpus, user, userWords ??= wordSet(user))) continue
         return true
       }
@@ -415,7 +443,14 @@ const SENDS_DATA = /\b(curl|wget)\b[^|;&\n]*(\s-[a-zA-Z]*[dFT]\b|\s--(data|data-
 
 /** A web address in a command built from a substitution ("?d=$(base64 < ~/.ssh/id_rsa)", backticks, $VAR): it sends data. */
 const URL_SUBST = /\b(curl|wget|http|https|lynx|open)\b[^|;&\n]*https?:\/\/[^\s'"]*(\$\(|`|\$\{?[A-Za-z_])/i
-const sendsData = (cmd: string): boolean => SENDS_DATA.test(cmd) || URL_SUBST.test(cmd)
+/**
+ * Code that can send anything anywhere: inline Python, Node, Ruby… (-c, -e, a script on stdin), git push and gh
+ * gist / API writes. What it sends can't be read off the command, so its hosts count as where data goes.
+ */
+const CODE_SEND = /(^|[\s;&|(])(python3?|node|ruby|perl|php|deno|bun|osascript|swift)\s+(-c|-e|--eval|-p|-(?=\s|$))|\bgit\b[^|;&\n]*\bpush\b|\bgh\s+(gist\s+create|api\b[^|;&\n]*-X\s*(POST|PUT|PATCH))/i
+const sendsData = (cmd: string): boolean => SENDS_DATA.test(cmd) || URL_SUBST.test(cmd) || CODE_SEND.test(cmd)
+/** Only inline code or a push sends (no upload flag or substituted URL): its hosts count when outside content named them. */
+const codeSendOnly = (cmd: string): boolean => !SENDS_DATA.test(cmd) && !URL_SUBST.test(cmd) && CODE_SEND.test(cmd)
 
 /** The user named this site: its address, or its name ("acme" for careers.acme.com). */
 function hostNamed(host: string, user: string, userWords: Set<string>): boolean {
@@ -457,12 +492,18 @@ export const ALWAYS_TAINT_CHECKED = new Set(['run_command', 'mac'])
  * to a host the page or email named (and the user didn't) counts too, even with no copied string.
  */
 export function checkTaint(tool: string, effect: string, args: unknown, untrusted: string[], userText: string, priv: string[] = []): boolean {
+  // `open https://…` in Terminal only opens the page, as the browser's navigate does: judged the same way (urlTainted).
+  const opens = tool === 'run_command' ? OPEN_URL.exec(String((args as { command?: unknown } | null)?.command ?? '')) : null
+  if (opens) return urlTainted(opens[1], untrusted, userText, priv)
   if (effect === 'write_external' || effect === 'destructive' || ALWAYS_TAINT_CHECKED.has(tool)) {
     return isTainted(args, untrusted, userText, { bodies: { tool, priv } }) || (tool === 'run_command' && (commandHostTainted(args, untrusted, userText) || commandUrlTainted(args, untrusted, userText, priv))) || (effect === 'read' && urlTaintedRead(tool, args, untrusted, userText, priv))
   }
   if (effect !== 'read') return false
   return urlTaintedRead(tool, args, untrusted, userText, priv)
 }
+
+/** A plain `open <url>` (no chaining, no substitution). */
+const OPEN_URL = /^\s*open\s+(?:-a\s+(?:"[^"]*"|'[^']*'|[\w.-]+)\s+)?['"]?(https?:\/\/[^\s'"`$;&|<>()]+)['"]?\s*$/i
 
 function urlTaintedRead(tool: string, args: unknown, untrusted: string[], userText: string, priv: string[]): boolean {
   const url = URL_READS[tool]?.(args)
@@ -485,7 +526,7 @@ const ME_ASK = /\b(email|e-mail|mail|send|forward|text|message)\b[^.\n]{0,40}\b(
  * is fine to remove.)
  */
 function deleteTargets(tool: string, a: Record<string, unknown>): string[] {
-  if (tool !== 'file_manage' || !/^(delete|trash|remove)$/i.test(String(a.action ?? ''))) return []
+  if (tool !== 'file_manage' || !/^(delete|trash|remove)$/i.test(String(a.op ?? a.action ?? ''))) return []
   return keyed(a).filter(([k]) => /^(path|paths|file|files|source|sources|from)$/i.test(k)).map(([, v]) => v)
 }
 
@@ -507,6 +548,11 @@ export interface SteerCheck {
   /** The user's own data this chat read (files, listings, notes, the screen): not outside content. */
   private?: string[]
   userText: string
+  /**
+   * The outside content was read in an earlier turn of this chat, not this run: a target then counts only when that
+   * content names it (its address, its name or its site's name), not just because the user didn't type it.
+   */
+  earlier?: boolean
 }
 
 /**
@@ -539,6 +585,12 @@ export function steeredRisk(c: SteerCheck): string | null {
   }
   if (c.effect !== 'write_external' && c.effect !== 'destructive') return null
   const userWords = wordSet(user)
+  // Earlier outside content: the target has to be one it names (an address's name or site in its words, a file name).
+  const mentions = (t: string): boolean => {
+    const w = (flatCorpus ??= flat(corpus))
+    return t.toLowerCase().split(/[^a-z0-9]+/).some((p) => p.length >= 4 && !NOT_A_NAME.has(p) && !/^(gmail|icloud|outlook|yahoo|hotmail|proton|protonmail)$/.test(p) && w.includes(` ${p} `))
+  }
+  const named = (t: string): boolean => !c.earlier || mentions(t)
 
   // "Email me": one of the user's own Mail accounts (mail accounts lists them as "- iCloud (me@icloud.com, …)").
   const toMe = ME_ASK.test(user)
@@ -546,7 +598,7 @@ export function steeredRisk(c: SteerCheck): string | null {
   for (const [key, s] of keyed(a)) {
     if (!RECIPIENT_KEY.test(key) && !PHONE_KEY.test(key)) continue
     for (const addr of s.toLowerCase().match(EMAIL) ?? []) {
-      if (user.includes(addr) || ownData(addr) || namedByUser(addr, corpus, user, userWords) || ownAccount(addr)) continue
+      if (user.includes(addr) || ownData(addr) || namedByUser(addr, corpus, user, userWords) || ownAccount(addr) || !named(addr)) continue
       return `sends to ${addr}, an address you didn't give`
     }
     // A number however it's written ("+14155550123" for "(415) 555-0123"): the last ten digits are compared.
@@ -558,17 +610,29 @@ export function steeredRisk(c: SteerCheck): string | null {
       return `sends to ${ph.trim()}, a number you didn't give`
     }
   }
+  // A channel, chat or webhook that only the outside content named ("post … in the #general channel"), when the user
+  // never asked for anything to go out.
+  if (!asksOut(user)) {
+    for (const [key, s] of keyed(a)) {
+      if (!DEST_KEY.test(key) || PHONE_KEY.test(key)) continue
+      const d = s.toLowerCase().trim().replace(/^[#@]/, '')
+      if (d.length < 3 || user.includes(d) || ownData(d) || !corpus.includes(d)) continue
+      return `posts to ${s.trim()}, a place you didn't name`
+    }
+  }
 
   for (const t of deleteTargets(c.tool, a)) {
     const name = nameOf(t)
-    if (!name || user.includes(name) || ownData(name) || (name.includes('.') && user.includes(name.replace(/\.[^.]+$/, '')) && name.replace(/\.[^.]+$/, '').length >= 3)) continue
+    if (!name || user.includes(name) || ownData(name) || (name.includes('.') && user.includes(name.replace(/\.[^.]+$/, '')) && name.replace(/\.[^.]+$/, '').length >= 3) || (c.earlier && !corpus.includes(name))) continue
     return `deletes ${name}, which you didn't name`
   }
 
   const host = c.tool === 'browser' && a.action === 'upload'
     ? (/ to ([a-z0-9.-]+\.[a-z]{2,})\s*$/i.exec(c.hardStop ?? '')?.[1] ?? / on ([a-z0-9.-]+\.[a-z]{2,})\s*$/i.exec(c.summary ?? '')?.[1])
-    : c.tool === 'run_command' && typeof a.command === 'string' && sendsData(a.command) ? commandHosts(a.command).find((h) => !hostNamed(h, user, userWords)) : undefined
-  if (host && !hostNamed(host, user, userWords)) return `sends your file or data to ${host}, a site you didn't name`
+    : c.tool === 'run_command' && typeof a.command === 'string' && sendsData(a.command)
+      ? commandHosts(a.command).find((h) => !hostNamed(h, user, userWords) && ((!codeSendOnly(a.command as string) && !c.earlier) || mentions(h)))
+      : undefined
+  if (host && !hostNamed(host, user, userWords) && (c.tool !== 'browser' || named(host))) return `sends your file or data to ${host}, a site you didn't name`
 
   if (c.tool === 'browser' && (a.action === 'type' || a.action === 'fill_form') && priv) {
     const page = / on ([a-z0-9.-]+\.[a-z]{2,})\s*$/i.exec(c.summary ?? '')?.[1]
@@ -582,7 +646,7 @@ export function steeredRisk(c: SteerCheck): string | null {
 
 /** Fields that name a phone number a text goes to. */
 const PHONE_KEY = /^(phone|phones|number|numbers|phone_?number|recipient_?phone|sms_?to)$/i
-const PHONE = /(?<![\d+])(?!\d{4}-\d{2}-\d{2}(?:\b|T))\+?\d[\d\s().-]{7,}\d/g
+const PHONE = /(?<![\d+-])(?!\d{4}-\d{2}-\d{2}(?:\b|T))\+?\d[\d\s().-]{7,}\d/g
 const tenDigits = (s: string): string | null => { const d = s.replace(/\D/g, ''); return d.length >= 10 ? d.slice(-10) : null }
 const phonesIn = (t: string): Set<string> => new Set((t.match(PHONE) ?? []).map(tenDigits).filter((x): x is string => !!x))
 
@@ -627,15 +691,19 @@ const WORKLOG = /^\s*(worklog|work[ _-]?log|log)\s*$/i
  * so a rule saved after reading a page or email always asks). Work-log entries never ask. Ordinary saves of what
  * the user said ("always reply in metric", with nothing outside read) stay frictionless in Auto.
  */
-export function memoryRisk(args: unknown, untrusted: string[], userText: string, sawUntrusted: boolean): string | null {
+export function memoryRisk(args: unknown, untrusted: string[], userText: string, sawUntrusted: boolean, earlier = false): string | null {
   const a = (args ?? {}) as Record<string, unknown>
   if (a.action !== 'save' && a.action !== 'save_skill' && a.action !== 'save_rule') return null
   if (a.action === 'save' && typeof a.category === 'string' && WORKLOG.test(a.category)) return null
   const fields = a.action === 'save' ? { fact: a.fact } : a.action === 'save_rule' ? { name: a.name, rule: a.rule } : { name: a.name, description: a.description, steps: a.steps }
   const text = Object.values(fields).filter((x) => typeof x === 'string').join('\n')
   const what = a.action === 'save' ? 'a memory every future chat sees' : a.action === 'save_rule' ? 'a standing rule every chat will follow' : 'a skill future chats can follow'
-  if (isTainted(fields, untrusted, userText)) return `saving ${what}, with details taken from a web page or email`
-  if (sawUntrusted && looksInstructionLike(text) && !dictated(text, userText)) return `saving ${what} after reading a web page or email (it reads like an instruction)`
+  // A plain fact from research ("Savannah hotel pick: Marshall House, (912) 644-7896") may keep its numbers and links:
+  // only an address or a long run copied from the page counts then. Text that reads like an instruction is checked fully.
+  const instruction = looksInstructionLike(text)
+  if (isTainted(fields, untrusted, userText, { loose: !instruction })) return `saving ${what}, with details taken from a web page or email`
+  // (Outside content read in an earlier turn of the chat: only a rule that sends things somewhere asks.)
+  if (sawUntrusted && instruction && !dictated(text, userText) && (!earlier || steersOutward(text, userText))) return `saving ${what} after reading a web page or email (it reads like an instruction)`
   return null
 }
 
@@ -679,8 +747,8 @@ function steersOutward(text: string, userText: string): boolean {
  * send me the Atlanta weather") or bot ("explain steps, never give answers") saves without a card. Memory saves go
  * through memoryRisk.
  */
-export function plantRisk(tool: string, args: unknown, untrusted: string[], userText: string, sawUntrusted: boolean): string | null {
-  if (tool === 'memory') return memoryRisk(args, untrusted, userText, sawUntrusted)
+export function plantRisk(tool: string, args: unknown, untrusted: string[], userText: string, sawUntrusted: boolean, earlier = false): string | null {
+  if (tool === 'memory') return memoryRisk(args, untrusted, userText, sawUntrusted, earlier)
   const a = (args ?? {}) as Record<string, unknown>
   let text: string
   let what: string
@@ -983,8 +1051,12 @@ export function botHardStop(a: { tool: string; effect: ToolEffect; args: unknown
   // (A local step stops only when it carries an actual code or password: "your verification code is 123456".)
   const summary = String(a.summary ?? '')
   const title = local ? '' : a.tool === 'browser' ? summary.replace(/^(Type|Choose) "[^"]*"/i, '$1') : summary.split('{')[0]
-  const head = [a.tool.replace(/[_-]+/g, ' '), local ? '' : a.label, title].filter(Boolean).join(' \n')
-  const creds = CREDENTIAL_WORDS.test(head) || (local && CREDENTIAL_VALUE.test(summary)) || isCredentialStop(declared) || (!local && CREDENTIAL_WORDS.test(declared)) || /(^|[_\W])(vault|secrets?|passwords?)([_\W]|$)/i.test(a.tool)
+  // A saved login filled on its own site ('Type the saved password for "github" into textbox "Password"') or a click
+  // on "Forgot password?" names a password, but runs in Auto: the browser's own stops judge those (fill_secret off
+  // its site, a password field). What the bot types itself is still judged by its words.
+  const browserOwn = a.tool === 'browser' && /^(fill_secret|click|navigate|scroll|tabs)$/.test(String((a.args as { action?: unknown } | null)?.action ?? ''))
+  const head = browserOwn ? '' : [a.tool.replace(/[_-]+/g, ' '), local ? '' : a.label, title].filter(Boolean).join(' \n')
+  const creds = (!!head && CREDENTIAL_WORDS.test(head)) || (local && CREDENTIAL_VALUE.test(summary)) || isCredentialStop(declared) || (!local && CREDENTIAL_WORDS.test(declared)) || /(^|[_\W])(vault|secrets?|passwords?)([_\W]|$)/i.test(a.tool)
   // A send to trusted people only (decide() allowed it, agent/trusted.ts capped its size and rate): a message
   // can't buy, so only "always ask" and credentials stop it.
   if (a.trusted) return creds ? { kind: 'credentials', reason: 'Uses a password, code or other credential' } : null

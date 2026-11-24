@@ -173,7 +173,13 @@ const MADE_FILE_TOOLS = new Set(['file_write', 'file_edit', 'create_document'])
  * A routine's answer that ran beside the busy chat, as posted into it: the text with its sources, stock card and the
  * files it made (they were made in the hidden side chat, so the card can't come from this chat's own steps).
  */
-export function routineAside(t: { id: string; title: string }, runIn: string, last: { content: string; meta?: Record<string, unknown> }, after: Array<{ role: string; toolName?: string; meta?: Record<string, unknown>; id: string }>): { content: string; meta: Record<string, unknown> } {
+export function routineAside(t: { id: string; title: string }, runIn: string, last: { content: string; meta?: Record<string, unknown> }, after: Array<{ role: string; toolName?: string; meta?: Record<string, unknown>; id: string; content?: string }>): { content: string; meta: Record<string, unknown> } {
+  // What set the run off (an email, a message) and the outside content it read stay outside content in the bot's
+  // chat: a later run there reads them as such (loop.ts), so an address or link the answer quotes can't steer a send.
+  const outside = [
+    ...after.flatMap((m) => (m.role === 'user' && Array.isArray(m.meta?.triggerUntrusted) ? (m.meta!.triggerUntrusted as unknown[]).filter((x): x is string => typeof x === 'string') : [])),
+    ...after.filter((m) => m.role === 'tool' && m.meta?.untrusted && typeof m.content === 'string').map((m) => m.content as string)
+  ].map((x) => x.slice(0, 4000)).slice(-10)
   const files = new Map<string, { key: string; path: string }>()
   for (const m of after) {
     const path = m.meta?.path
@@ -182,7 +188,7 @@ export function routineAside(t: { id: string; title: string }, runIn: string, la
     files.set(path, { key: m.id, path })
   }
   const keep = Object.fromEntries((['sources', 'stock'] as const).filter((k) => last.meta?.[k] !== undefined).map((k) => [k, last.meta![k]]))
-  return { content: last.content, meta: { ...keep, ...(files.size ? { madeFiles: [...files.values()] } : {}), scheduled: t.id, routineTitle: t.title.replace(/^⏰\s*/, ''), aside: true, routineRun: runIn } }
+  return { content: last.content, meta: { ...keep, ...(files.size ? { madeFiles: [...files.values()] } : {}), scheduled: t.id, routineTitle: t.title.replace(/^⏰\s*/, ''), aside: true, routineRun: runIn, ...(outside.length ? { routineUntrusted: outside } : {}) } }
 }
 
 /** What to say for a plain reminder: the thing to do, from its instructions ("to stretch" → "Stretch"). */
