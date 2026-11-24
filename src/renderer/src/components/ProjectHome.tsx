@@ -67,7 +67,7 @@ function ProjectKnowledge({ project }: { project: Space }) {
       {open && (
         <form className="kb-block" style={{ marginTop: 8 }} onSubmit={(e) => { e.preventDefault(); run() }}>
           <input className="set-input" autoFocus placeholder={`Search ${project.name}…`} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { setOpen(false); setHits(null) } }} />
-          <button className="btn" type="submit"><I.Search size={13} /></button>
+          <button className="btn" type="submit" title="Search" aria-label="Search"><I.Search size={13} /></button>
         </form>
       )}
       {err && <div className="hint">{err}</div>}

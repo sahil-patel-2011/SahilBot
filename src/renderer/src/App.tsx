@@ -18,7 +18,7 @@ import { RightPanel, type PanelTab } from './components/RightPanel'
 import { JobsChip, RunSummary } from './components/JobsPanel'
 import { Sidebar, type MainView } from './components/Sidebar'
 import { ThreadView, type WorkProgress } from './components/ThreadView'
-import { queueWords } from './lib/queue-words'
+import { queueWords, stopWords } from './lib/queue-words'
 import { ProjectHome } from './components/ProjectHome'
 import * as I from './icons'
 import { Popover } from './components/Popover'
@@ -55,8 +55,11 @@ export function App() {
   const [spaceId, setSpaceId] = useState<string | null>(null)
   /** The bot just clicked in the sidebar, highlighted while its chat loads. */
   const [navTo, setNavTo] = useState<string | null>(null)
-  useEffect(() => { setNavTo(null) }, [spaceId])
   const [thread, setThread] = useState<Thread | null>(null)
+  useEffect(() => { setNavTo(null) }, [spaceId, thread?.id])
+  /** Each navigation's number: a bot still loading when you went elsewhere never opens over where you went. */
+  const navSeq = useRef(0)
+  const navAway = (): void => { navSeq.current++; setNavTo(null) }
   const [messages, setMessages] = useState<Message[]>([])
   /** The open chat once its messages are fetched, with your read mark from when you opened it (the NEW divider). */
   const [opened, setOpened] = useState<{ id: string; readAt: number } | null>(null)
@@ -95,8 +98,8 @@ export function App() {
     return () => { window.removeEventListener('sahilbot:open-settings', open); window.removeEventListener('sahilbot:open-connect', connect) }
   }, [])
   const [showConnect, setShowConnect] = useState(false)
-  /** Going somewhere from anywhere (the menu bar, ⌘K, a link): Settings closes first, so the page you picked shows. */
-  const leave = (): void => { setShowSettings(false); setSettingsPage(undefined) }
+  /** Going somewhere from anywhere (the menu bar, ⌘K, a link): Settings and the other overlays close first, so the page you picked shows. */
+  const leave = (): void => { setShowSettings(false); setSettingsPage(undefined); setShowConnect(false); setShowScheduled(false) }
   // ...and whatever moved you (a toast's "Open chat", a file's chat, a notification), a new page or chat closes it too.
   const navKey = `${view}|${thread?.id ?? ''}|${spaceId ?? ''}`
   const lastNav = useRef(navKey)
@@ -160,6 +163,8 @@ export function App() {
   }, [])
   // Messages typed while SahilBot is working wait here and go out when the run ends.
   const [queue, setQueue] = useState<Record<string, Outgoing[]>>({})
+  /** Chats whose queued messages wait for you after a Stop (a stop ends the work; it never starts the next item). */
+  const [heldQueue, setHeldQueue] = useState<Set<string>>(new Set())
   const [renamingTitle, setRenamingTitle] = useState(false)
   const [teams, setTeams] = useState<Record<string, import('@shared/types').TeamMember[]>>({})
   const [teamOn, setTeamOn] = useState(false)
@@ -300,7 +305,7 @@ export function App() {
       return
     }
     if (e.type === 'drafting') { setDrafting((d) => ({ ...d, [e.threadId]: e.tool })); return }
-    if (e.type === 'tool_progress') { setToolProgress((p) => ({ ...p, [e.threadId]: e.text ? { text: e.text, tool: e.tool, step: e.step, stuck: e.stuck } : null })); return }
+    if (e.type === 'tool_progress') { setToolProgress((p) => ({ ...p, [e.threadId]: e.text ? { text: e.text, tool: e.tool, step: e.step, stuck: e.stuck, ...(e.retryable === false ? { retryable: false } : {}), ...(e.waitingOnYou ? { waitingOnYou: true } : {}) } : null })); return }
     // Anything else from a chat after a stall note (a reply streaming again, a new step): the note goes.
     if ('threadId' in e && e.type !== 'thread') setToolProgress((p) => (p[e.threadId]?.tool === 'watchdog' ? { ...p, [e.threadId]: null } : p))
     // A tool finished or the run ended: its progress line goes.
@@ -311,6 +316,8 @@ export function App() {
       else {
         setDrafting((d) => ({ ...d, [e.threadId]: null }))
         setSteering((s) => ({ ...s, [e.threadId]: 0 }))
+        // Stopped (the button, Esc, typed words): what was queued stays as chips until you send it, never by itself.
+        if (e.status === 'stopped' && e.byUser) setHeldQueue((h) => (h.has(e.threadId) ? h : new Set(h).add(e.threadId)))
         // A problem in a chat you're not looking at says where, with a way there (that chat has Retry).
         const elsewhere = e.threadId !== threadRef.current
         if (e.status === 'error' && e.error) toast(e.error, 'error', elsewhere ? { action: { label: 'Open chat', run: () => openAnyChatRef.current(e.threadId) } } : {})
@@ -338,7 +345,7 @@ export function App() {
       // Read the finished reply aloud when that's switched on.
       if (e.status === 'finished' && live.current.speak && !live.current.voiceOn && e.threadId === threadRef.current) {
         void api.threads.messages(e.threadId).then((ms) => {
-          const last = [...ms].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded)
+          const last = [...ms].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && m.content && !m.meta?.superseded && !m.meta?.provisional)
           if (last) void api.voice.speak(last.content)
         })
       }
@@ -585,13 +592,14 @@ export function App() {
 
   // Picking anything in the sidebar leaves Settings (it used to stay over the page you picked).
   /** New chat (+, ⌘N): a fresh conversation on the home screen; it shows in Recents once you send. */
-  const newChat = (): void => { setShowSettings(false); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
+  const newChat = (): void => { navAway(); setShowSettings(false); setSpaceId(main?.id ?? null); setThread(null); setView('home') }
   /**
    * SahilBot's widget: its one ongoing conversation, like any bot's (Grok Bot's way). Never a new Recents entry;
    * Recents hold only the chats you start with New chat.
    */
   const openMain = async (): Promise<void> => {
     if (!main) return newChat()
+    navAway()
     setShowSettings(false)
     const saved = settings?.mainThreadId
     let t = saved ? (await api.threads.list(main.id)).find((x) => x.id === saved) : undefined
@@ -628,6 +636,7 @@ export function App() {
   spaceIdRef.current = spaceId
   pinnedRef.current = settings?.pinnedBots ?? undefined
   const openChat = async (id: string): Promise<void> => {
+    navAway()
     setShowSettings(false)
     const t = chats.find((x) => x.id === id) ?? (await api.threads.list(main?.id)).find((x) => x.id === id)
     if (!t) return
@@ -660,28 +669,36 @@ export function App() {
     setShowSettings(false)
     // Highlighted at once (its chat loads after), so the sidebar never lags a click behind. The bot itself is
     // selected only once its chat is ready, so nothing typed in between is lost when the message box switches chats.
+    const seq = ++navSeq.current
     setNavTo(id)
     setView('home')
-    const sp = await api.spaces.list()
-    const s = sp.find((x) => x.id === id)
-    if (s?.isMain) return openMain()
-    if (s?.hidden) await api.spaces.update(id, { hidden: false })
-    // Projects open on their home (folder, instructions, chats).
-    if (s?.kind === 'project') {
+    // You went somewhere else while it loaded (New chat, another bot, Settings): this one stays closed.
+    const stale = (): boolean => seq !== navSeq.current
+    try {
+      const sp = await api.spaces.list()
+      if (stale()) return
+      const s = sp.find((x) => x.id === id)
+      if (s?.isMain) return openMain()
+      if (s?.hidden) await api.spaces.update(id, { hidden: false })
+      // Projects open on their home (folder, instructions, chats).
+      if (s?.kind === 'project') {
+        if (stale()) return
+        setSpaceId(id)
+        setThread(null)
+        void refreshSpaces()
+        return
+      }
+      let ts = await api.threads.list(id)
+      if (!ts.length) {
+        const t = await api.threads.create(id)
+        ts = [await api.threads.update(t.id, { title: s?.name ?? 'Chat' })]
+      }
+      if (stale()) return
       setSpaceId(id)
-      setThread(null)
+      // Chats other apps opened with this bot ("From Cursor") aren't the user's own conversation.
+      setThread(ts.find((t) => !/^From .+/.test(t.title)) ?? ts[0])
       void refreshSpaces()
-      return
-    }
-    let ts = await api.threads.list(id)
-    if (!ts.length) {
-      const t = await api.threads.create(id)
-      ts = [await api.threads.update(t.id, { title: s?.name ?? 'Chat' })]
-    }
-    setSpaceId(id)
-    // Chats other apps opened with this bot ("From Cursor") aren't the user's own conversation.
-    setThread(ts.find((t) => !/^From .+/.test(t.title)) ?? ts[0])
-    void refreshSpaces()
+    } catch (e) { if (!stale()) { setNavTo(null); toast((e as Error).message, 'error') } }
   }
 
   openBotRef.current = openBot
@@ -713,7 +730,7 @@ export function App() {
   // Send the next queued message as soon as the thread is free.
   useEffect(() => {
     for (const [tid, items] of Object.entries(queue)) {
-      if (!items.length || running.has(tid) || sendingRef.current.has(tid)) continue
+      if (!items.length || running.has(tid) || sendingRef.current.has(tid) || heldQueue.has(tid)) continue
       const first = items[0]
       sendingRef.current.add(tid)
       setQueue((q) => ({ ...q, [tid]: (q[tid] ?? []).filter((x) => x !== first) }))
@@ -723,7 +740,8 @@ export function App() {
         toast(e.message, 'error')
       })
     }
-  }, [queue, running])
+  }, [queue, running, heldQueue])
+  const releaseQueue = (tid: string): void => setHeldQueue((h) => { if (!h.has(tid)) return h; const n = new Set(h); n.delete(tid); return n })
 
   // The mini window follows the chat it was opened for, even when another chat is open here.
   const miniOther = mini.on && mini.threadId && mini.threadId !== thread?.id ? mini.threadId : null
@@ -839,6 +857,10 @@ export function App() {
   /** Sends what you typed; false when it didn't go through (the box gets the text back). */
   const send = async (o: Outgoing): Promise<boolean> => {
     // A bot asked a question: what you type is the answer (but never unedited text from a link).
+    // A typed stop stops, even under an open question or plan card (never that card's answer).
+    if (thread && running.has(thread.id) && !o.fromLink && !o.queue && stopWords(o.text, thread.title)) {
+      try { await api.chat.steer(thread.id, o.text); return true } catch (e) { toast((e as Error).message, 'error'); return false }
+    }
     if (question && thread && o.fromLink) { toast('Text from a link can\'t answer this. Edit it, or answer the card above.', 'error'); return false }
     if (question && thread) {
       // Typing answers the card: one answer for every question, or approval / changes for a plan.
@@ -851,7 +873,7 @@ export function App() {
       // ⌘Enter (or attachments): wait until it's done. Enter: steer the agent now.
       // Link text waits too: a steer can't carry its "from a link" mark.
       // Words queue it too: "when you're done, also…", "after that, …" waits for this task to finish.
-      if (o.queue || o.fromLink || o.attachments.length || o.images.length || queueWords(o.text)) { setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] })); return true }
+      if (o.queue || o.fromLink || o.attachments.length || o.images.length || queueWords(o.text)) { releaseQueue(thread.id); setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] })); return true }
       try { await api.chat.steer(thread.id, o.text); return true } catch (e) { toast((e as Error).message, 'error'); return false }
     }
     let t = thread
@@ -889,6 +911,7 @@ export function App() {
   }
   /** Any chat, in any bot or project (e.g. the one a file came from). */
   const openAnyChat = async (id: string): Promise<void> => {
+    navAway()
     for (const sp of spaces) {
       const t = (await api.threads.list(sp.id)).find((x) => x.id === id)
       if (t) { leave(); setSpaceId(sp.id); setThread(t); setView('home'); return }
@@ -1010,16 +1033,16 @@ export function App() {
         onSetupBot={() => void startSetup(false)}
         onSearch={() => setPalette(true)}
         view={view}
-        onView={(v) => { setShowSettings(false); setView(v); setThread(null) }}
+        onView={(v) => { navAway(); setShowSettings(false); setView(v); setThread(null) }}
         modelLabel={dev ? `${autoLabel(settings.defaultModel) ?? models?.models.find((m) => m.id === settings.defaultModel)?.label ?? settings.defaultModel} · ${({ auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max' } as Record<string, string>)[settings.thinking]}` : undefined}
         onCustomize={(s) => setEditor({ space: s, mode: s.kind })}
         onChanged={() => void refreshSpaces().then((sp) => {
           if (thread && !sp.some((s) => s.id === thread.spaceId)) openMain()
           else if (thread) void api.threads.list(thread.spaceId).then((ts) => { if (!ts.some((t) => t.id === thread.id)) openMain() })
         })}
-        onSettings={() => setShowSettings(true)}
-        onConnect={() => setShowConnect(true)}
-        onScheduled={() => setShowScheduled(true)}
+        onSettings={() => { navAway(); setShowSettings(true) }}
+        onConnect={() => { leave(); setShowConnect(true) }}
+        onScheduled={() => { leave(); setShowScheduled(true) }}
         onNewProject={() => setEditor({ space: null, mode: 'project' })}
         runningThreads={running}
         runningSpaces={new Set(Object.values(runSpaces))}
@@ -1148,10 +1171,12 @@ export function App() {
                   {(queue[thread.id] ?? []).map((q, i) => (
                     <span key={i} className="queued-item"><I.Clock size={12} />{q.text.slice(0, 60) || 'Attachment'}<button onClick={() => setQueue((x) => ({ ...x, [thread.id]: x[thread.id].filter((_, j) => j !== i) }))}>×</button></span>
                   ))}
-                  <span className="hint">Sends when {botChatName ?? 'SahilBot'} finishes</span>
+                  {heldQueue.has(thread.id)
+                    ? <button type="button" className="chip-btn" onClick={() => releaseQueue(thread.id)} data-testid="queued-send">{isRunning ? 'Send when done' : 'Send now'}</button>
+                    : <span className="hint">Sends when {botChatName ?? 'SahilBot'} finishes</span>}
                 </div>
               )}
-              {/* The finish line: what was made, where, how long. A bot's chat (Grok Bot's way) shows it only when the task made something. */}
+              {/* The finish line: what was made, where, how long. A bot's chat (Grok Bot's way) shows it when the task made something or did real work. */}
               {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} onlyMade={!dev && !!botChatName} />}
               {chatInput}
             </div>

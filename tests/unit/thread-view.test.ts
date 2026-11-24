@@ -221,3 +221,27 @@ describe('routine runs in the chat', () => {
     expect(bs.filter((b) => b.kind === 'user').map((b) => (b as { m: Message }).m.content)).toEqual(['Hi'])
   })
 })
+
+describe('a reply that froze halfway', () => {
+  it('still gets the stall note with Retry and Skip under the half-written text', () => {
+    const ask = msg({ role: 'user', content: 'Write a haiku' })
+    const writing = msg({ content: 'Autumn moonlight', status: 'streaming' })
+    const live = renderToString(createElement(tv.ThreadView, { messages: [ask, writing], running: true, pending: [], actions }))
+    expect(live).not.toContain('stall-retry')
+    const work = { text: 'Still on it: waiting for M to answer is taking longer than usual (1 min). Retry it, skip it, or keep waiting.', tool: 'watchdog', step: 'Waiting for M to answer', stuck: true }
+    const html = renderToString(createElement(tv.ThreadView, { messages: [ask, writing], running: true, pending: [], actions, work }))
+    expect(html).toContain('Autumn moonlight')
+    expect(html).toContain('data-testid="stall-retry"')
+    expect(html).toContain('data-testid="stall-skip"')
+    // A step that may have changed something: Skip only.
+    const once = renderToString(createElement(tv.ThreadView, { messages: [ask, writing], running: true, pending: [], actions, work: { ...work, retryable: false } }))
+    expect(once).not.toContain('stall-retry')
+    expect(once).toContain('stall-skip')
+  })
+  it('a step waiting on a macOS dialog says what to do', () => {
+    expect(tv.stallText({ who: 'SahilBot', stall: { text: 'Still on it: macOS may be asking to let SahilBot open your Downloads folder. Look for its dialog and click OK.', tool: 'watchdog', step: 'Reading a file', stuck: true, waitingOnYou: true } }))
+      .toBe('macOS may be asking to let SahilBot open your Downloads folder. Look for its dialog and click OK')
+    expect(tv.workLabel({ progress: 'macOS may be asking to let SahilBot open your Downloads folder. Look for its dialog and click OK', progressTool: 'run_command', progressWaiting: true, doing: 'Running a command' }))
+      .toMatch(/^macOS may be asking/)
+  })
+})

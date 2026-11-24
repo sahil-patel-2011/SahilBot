@@ -1945,7 +1945,7 @@ app.whenReady().then(() => {
       status = await done
     } finally { scheduledRuns.delete(runIn) }
     const after = db.listMessages(runIn).filter((m) => m.createdAt >= startedAt)
-    const last = [...after].reverse().find((m) => m.role === 'assistant' && m.content && m.kind === 'normal' && !m.meta?.superseded)
+    const last = [...after].reverse().find((m) => m.role === 'assistant' && m.content && m.kind === 'normal' && !m.meta?.superseded && !m.meta?.provisional)
     // Ran beside a busy chat: its answer goes into the bot's chat once, as an aside (the live run's prompt is untouched).
     if (runIn !== host && last) {
       const r = routineAside(task, runIn, last, after)
@@ -1970,7 +1970,8 @@ app.whenReady().then(() => {
     }
     if (status === 'finished') return { status: 'done', threadId }
     // Why it failed: the run's own error line, when it left one.
-    const why = [...after].reverse().find((m) => m.kind === 'notice' || m.kind === 'error' || m.status === 'error')?.content.replace(/^(Run failed|Something went wrong):\s*/i, '')
+    const failed = [...after].reverse().find((m) => m.kind === 'notice' || m.kind === 'error' || m.status === 'error')
+    const why = (typeof failed?.meta?.detail === 'string' ? failed.meta.detail : failed?.content)?.replace(/^(Run failed|Something went wrong):\s*/i, '')
     return { status: status === 'error' ? `error: ${why || 'Something went wrong'}` : status, threadId }
   }, () => toWin('schedules:changed'))
   // System lines in the bot's chat when its routines change or a run fails.
@@ -2899,7 +2900,7 @@ app.whenReady().then(() => {
   const voiceWork = new VoiceWork({
     announce: (text) => voice.announce(text),
     voiceThread: () => voiceThread,
-    lastReply: (threadId, since) => [...db.listMessages(threadId)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && !!m.content && !m.meta?.superseded && !m.meta?.hidden && m.createdAt >= since)?.content,
+    lastReply: (threadId, since) => [...db.listMessages(threadId)].reverse().find((m) => m.role === 'assistant' && m.kind === 'normal' && !!m.content && !m.meta?.superseded && !m.meta?.provisional && !m.meta?.hidden && m.createdAt >= since)?.content,
     files: (threadId, since) => [...new Set(db.listMessages(threadId).filter((m) => m.role === 'tool' && m.createdAt >= since && (m.toolName === 'file_write' || m.toolName === 'file_edit' || m.toolName === 'create_document') && m.meta?.status === 'ok' && typeof m.meta?.path === 'string' && !/\.html?$/i.test(m.meta.path as string)).map((m) => m.meta!.path as string))],
     record: (vt, line, context, result) => {
       if (!db.getThread(vt)) return

@@ -297,7 +297,7 @@ interface Run {
   steps?: RunStep[]
 }
 
-type RunStep = { label: string; ctrl: AbortController; callId?: string; at: number; action?: 'retry' | 'skip' }
+type RunStep = { label: string; ctrl: AbortController; callId?: string; at: number; action?: 'retry' | 'skip'; retryable?: boolean; waitsOnYou?: string }
 
 /**
  * Messages that look like the user's but aren't their words: another bot's handoff, a Teach recording
@@ -441,9 +441,9 @@ export function stopShown(messages: Message[]): boolean {
 export const STALL_PREFIX = 'Still on it:'
 
 /** The stall note: what is stuck and for how long, and what you can do ("Still on it: reading a page is taking…"). */
-export function stallNote(step: string | undefined, mins: number): string {
+export function stallNote(step: string | undefined, mins: number, retryable = true): string {
   const what = step ? step.charAt(0).toLowerCase() + step.slice(1) : 'this step'
-  return `${STALL_PREFIX} ${what} is taking longer than usual (${mins} min). Retry it, skip it, or keep waiting.`
+  return `${STALL_PREFIX} ${what} is taking longer than usual (${mins} min). ${retryable ? 'Retry it, skip it' : 'Skip it'}, or keep waiting.`
 }
 
 /** A run that failed outright, in one plain sentence (the raw error is kept beside it, out of sight). */
@@ -462,10 +462,12 @@ const stepWords = (name: string, args: Record<string, unknown>): string => { con
 
 /** What the model gets back for a step the user skipped because it hung. */
 export const SKIPPED_STEP = 'Skipped: this step hung and the user chose to skip it (nothing more came back from it). Do not run it again. If it could have changed something (a send, a write), check whether it went through before doing anything like it. Carry on without it, and say in your reply what was skipped.'
+/** Retry pressed on a step that may already have changed something: it is not run again blindly. */
+export const RETRY_NOT_RUN = 'Not run again: this step hung and the user asked to retry it, but it may already have changed something (a send, a write), so it was not repeated blindly. Check whether it went through; if it did not, you may do it once more. Say in your reply what happened.'
 
 /** A step the user skipped (or asked to retry) from the stall note. */
 class StepStopped extends Error {
-  constructor(readonly action: 'retry' | 'skip') { super(action === 'skip' ? 'Skipped by the user' : 'Retried by the user'); this.name = 'StepStopped' }
+  constructor(readonly action: 'retry' | 'skip', readonly retryAsked = false) { super(action === 'skip' ? 'Skipped by the user' : 'Retried by the user'); this.name = 'StepStopped' }
 }
 
 /** The questions of an ask_user call (one, or a batch). */
@@ -858,7 +860,9 @@ export class Agent {
     const reply = !t.ids.length ? 'Nothing was running.'
       : t.ids.includes(threadId) ? (names.length ? `Stopped. Also stopped ${list(names)}.` : 'Stopped.')
         : `Stopped ${list(names)}.`
-    const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: reply, kind: 'normal', status: 'done', meta: { stopped: true } })
+    // Only a stop of this chat's own task marks it stopped; a note about other chats ("Stopped Trip plan.", "Nothing was
+    // running.") leaves this chat's last task, its finish line and its Retry alone.
+    const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: reply, kind: 'normal', status: 'done', meta: t.ids.includes(threadId) ? { stopped: true } : { stopNote: true } })
     this.d.emit({ threadId, type: 'message', message: m })
   }
 
@@ -955,8 +959,8 @@ export class Agent {
   }
 
   /** A step starts (a tool, or the model writing): the stall note names it, and Retry / Skip can end it alone. */
-  private beginStep(run: Run, label: string, callId?: string): RunStep {
-    const step: RunStep = { label, ctrl: new AbortController(), callId, at: Date.now() }
+  private beginStep(run: Run, label: string, callId?: string, retryable = true): RunStep {
+    const step: RunStep = { label, ctrl: new AbortController(), callId, at: Date.now(), retryable }
     run.steps = [...(run.steps ?? []), step]
     run.current = step
     return step
@@ -974,18 +978,22 @@ export class Agent {
    */
   private async watchStep<T>(run: Run, label: string, callId: string, repeatable: boolean, setSignal: (signal: AbortSignal) => void, go: () => Promise<T>): Promise<T> {
     for (let attempt = 0; ; attempt++) {
-      const step = this.beginStep(run, label, callId)
+      const step = this.beginStep(run, label, callId, repeatable)
       setSignal(AbortSignal.any([run.ctrl.signal, step.ctrl.signal]))
       try {
         return await new Promise<T>((resolve, reject) => {
           const onAbort = (): void => reject(new StepStopped(step.action ?? 'skip'))
+          // Stop (the button or typed words) ends the run at once, even under a tool that ignores its signal.
+          const onStop = (): void => reject(new Error('Stopped'))
           step.ctrl.signal.addEventListener('abort', onAbort, { once: true })
-          go().then(resolve, reject).finally(() => step.ctrl.signal.removeEventListener('abort', onAbort))
+          run.ctrl.signal.addEventListener('abort', onStop, { once: true })
+          if (run.ctrl.signal.aborted) onStop()
+          go().then(resolve, reject).finally(() => { step.ctrl.signal.removeEventListener('abort', onAbort); run.ctrl.signal.removeEventListener('abort', onStop) })
         })
       } catch (e) {
         if (run.ctrl.signal.aborted || !step.ctrl.signal.aborted) throw e
         if (step.action === 'retry' && repeatable && attempt < 2) continue
-        throw new StepStopped('skip')
+        throw new StepStopped('skip', step.action === 'retry')
       } finally {
         this.endStepTrack(run, step)
         setSignal(run.ctrl.signal)
@@ -1268,10 +1276,7 @@ export class Agent {
     }))
       .catch((e) => {
         // One plain sentence and a Retry; the raw error stays in the message for Show work and Developer mode.
-        try {
-          const m = this.d.db.insertMessage({ threadId: thread.id, role: 'assistant', content: runFailedText(e), kind: 'notice', status: 'done', meta: { runFailed: true, detail: String((e as Error)?.message ?? e).slice(0, 2000) } })
-          this.d.emit({ threadId: thread.id, type: 'message', message: m })
-        } catch { /* the chat is gone */ }
+        try { this.failedNotice(thread.id, e) } catch { /* the chat is gone */ }
         return 'error' as const
       })
       .then((status) => { this.runtime.finish(record.id, status); return status })
@@ -1334,7 +1339,7 @@ export class Agent {
       status = run.ctrl.signal.aborted ? 'stopped' : 'error'
       if (status === 'error') {
         error = (e as Error).message
-        if (!(e as { shown?: boolean }).shown) this.notice(thread.id, `Something went wrong: ${error}`)
+        if (!(e as { shown?: boolean }).shown) this.failedNotice(thread.id, e)
       }
     }
     this.finishCollaboration(run, status)
@@ -1360,7 +1365,7 @@ export class Agent {
     if (status === 'finished') void this.autoTitle(thread.id)
     const t = this.d.db.updateThread(thread.id, { unread: true }, true)
     this.d.emit({ threadId: thread.id, type: 'thread', thread: t })
-    this.d.emit({ threadId: thread.id, type: 'run', status, error, spaceId: thread.spaceId, title: this.d.db.getThread(thread.id)?.title ?? thread.title })
+    this.d.emit({ threadId: thread.id, type: 'run', status, error, spaceId: thread.spaceId, title: this.d.db.getThread(thread.id)?.title ?? thread.title, ...(status === 'stopped' && run.userStopped ? { byUser: true } : {}) })
     // Sent while it was only double-checking: a fresh run, now that this one has ended.
     const next = run.afterRun?.splice(0) ?? []
     if (next.length) setTimeout(() => void this.send({ threadId: thread.id, text: next.join('\n\n') }).catch(() => undefined), 0)
@@ -1629,7 +1634,8 @@ export class Agent {
       const mins = Math.max(1, Math.round((now - last) / 60_000))
       // Says what is stuck ("reading a page is taking longer than usual"), and Retry / Skip end only that step.
       const step = run.current
-      this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: stallNote(step?.label, mins), ...(step ? { step: step.label, stuck: true } : {}) })
+      if (step?.waitsOnYou) { this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: `${STALL_PREFIX} ${step.waitsOnYou}.`, step: step.label, stuck: true, waitingOnYou: true }); return }
+      this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: stallNote(step?.label, mins, step?.retryable !== false), ...(step ? { step: step.label, stuck: true, ...(step.retryable === false ? { retryable: false } : {}) } : {}) })
     }, Math.max(250, Math.min(5_000, Math.floor(after / 4))))
     t.unref?.()
     return t
@@ -2491,6 +2497,12 @@ export class Agent {
     return chosen.action === 'local' ? 'local' : 'go'
   }
 
+  /** A run that failed: one plain sentence with Retry under it; the raw error stays beside it (Show work, routines). */
+  private failedNotice(threadId: string, e: unknown): void {
+    const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: runFailedText(e), kind: 'notice', status: 'done', meta: { runFailed: true, detail: String((e as Error)?.message ?? e).slice(0, 2000) } })
+    this.d.emit({ threadId, type: 'message', message: m })
+  }
+
   private notice(threadId: string, text: string, o: { internal?: boolean; publicText?: string } = {}): void {
     const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'notice', status: 'done', ...(o.internal || o.publicText ? { meta: { internal: o.internal, publicText: o.publicText } } : {}) })
     this.d.emit({ threadId, type: 'message', message: m })
@@ -3168,7 +3180,13 @@ export class Agent {
     let summarizedBy: string | undefined
     const makeCm = (): ContextManager => {
       const counter = this.d.counter?.(ep.baseUrl, model) ?? new ServerTokenCounter(ep.baseUrl, model)
-      return new ContextManager(counter, (text, maxTokens) => this.summarizeWith(model, isLocal(this.d.endpoints.for(model).baseUrl) ? text : this.privacyMask(thread.id, text), maxTokens, run.ctrl.signal, { manual: !!routed?.manual, variant: routed?.variant, picked: (label) => { summarizedBy = label } }), results, {
+      return new ContextManager(counter, async (text, maxTokens) => {
+        // Tidying up is a step too: the stall note names it, and Retry / Skip skip it (the history is kept as it is).
+        const st = this.beginStep(run, 'Tidying up the conversation so far')
+        try { return await this.summarizeWith(model, isLocal(this.d.endpoints.for(model).baseUrl) ? text : this.privacyMask(thread.id, text), maxTokens, AbortSignal.any([run.ctrl.signal, st.ctrl.signal]), { manual: !!routed?.manual, variant: routed?.variant, picked: (label) => { summarizedBy = label } }) }
+        catch (e) { if (st.ctrl.signal.aborted && !run.ctrl.signal.aborted) return ''; throw e }
+        finally { this.endStepTrack(run, st) }
+      }, results, {
         // Before a client compaction moves the boundary: everything leaving the prompt is saved for good, and the
         // saved core rides in the task brief (agent/task-memory.ts).
         beforeBoundary: (o) => {
@@ -3707,9 +3725,20 @@ export class Agent {
           stepsDone++
         } catch (e) {
           if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') throw e
+          // The step is asked again (Retry, another model): its failed reply goes out of sight, never an error bubble
+          // above the real answer. It stays only when the run gives up (the throws below).
+          const hideFailed = (): void => {
+            const fm = (e as { failedMessage?: Message }).failedMessage
+            if (!fm) return
+            const meta: Record<string, unknown> = { ...fm.meta, superseded: true }
+            delete meta.provisional
+            fm.meta = meta as Message['meta']
+            db.updateMessage(fm)
+            this.d.emit({ threadId: thread.id, type: 'message', message: fm })
+          }
           // The user pressed Retry or Skip while the model sat silent: ask another model, else this one again (once).
           if ((e as { stalled?: boolean }).stalled) {
-            if (switchModel(`${modelName()} stopped answering`, true, e as Error) || stallRetries++ < 1) { step--; continue }
+            if (switchModel(`${modelName()} stopped answering`, true, e as Error) || stallRetries++ < 1) { hideFailed(); step--; continue }
             throw e
           }
           // One request ran past its limits (llm/request-guard.ts: idle or wall clock, too many server searches): the
@@ -3718,8 +3747,8 @@ export class Agent {
           if ((e as { requestCap?: string }).requestCap && (e as { requestCap?: string }).requestCap !== 'idle') throw e
           // Remembered (llm/model-health.ts): out of credit, rate limited, gone… later requests skip it for a while.
           modelHealth.mark(this.d.endpoints.last?.models.find((m) => m.id === model) ?? { id: model, provider: ep.provider }, e)
-          // The failed reply stays visible as an error bubble (it's left out of the history); redo this step.
-          if (switchModel(`${modelName()} failed (${(e as Error).message.replace(/\s+/g, ' ').slice(0, 140)})`, true, e as Error)) { step--; continue }
+          // Another model redoes this step; the failed reply goes out of sight (it's left out of the history too).
+          if (switchModel(`${modelName()} failed (${(e as Error).message.replace(/\s+/g, ' ').slice(0, 140)})`, true, e as Error)) { hideFailed(); step--; continue }
           throw e
         }
         // Claude's server web search / fetch read outside content in this step (its text is already in the
@@ -4149,7 +4178,7 @@ export class Agent {
         status = 'stopped'
       } else {
         status = 'error'
-        if (!(e as { shown?: boolean }).shown) this.notice(thread.id, `Something went wrong: ${(e as Error).message}`)
+        if (!(e as { shown?: boolean }).shown) this.failedNotice(thread.id, e)
       }
     }
     // The run is over (finished, stopped or failed): nothing this run wrote stays out of sight (a stopped half-answer
@@ -4359,6 +4388,8 @@ export class Agent {
         // The bubble already shows it; the run's catch shouldn't post it a second time.
         ;(e as Error & { shown?: boolean }).shown = true
       }
+      // The loop hides this reply when it asks again (Retry, another model).
+      if (e && typeof e === 'object') (e as { failedMessage?: Message }).failedMessage = m
       this.d.db.updateMessage(m)
       this.d.emit({ threadId, type: 'message', message: m })
       throw e
@@ -4859,7 +4890,12 @@ export class Agent {
         // The team strategy is the agents tool's run (same report format, caps and approvals).
         team: async (tasks) => { const t = this.d.registry.get('agents'); if (!t) throw new Error('Helper agents are not available here.'); return t.run({ tasks }, toolCtx) }
       }),
-      progress: (text) => this.d.emit({ threadId: thread.id, type: 'tool_progress', callId: call.id, tool: tool.name, text: text.slice(0, 300) }),
+      progress: (text, o) => {
+        // Something only you can answer (macOS's folder dialog): the stall note says so instead of "slow".
+        const st = run.steps?.find((x) => x.callId === call.id)
+        if (st) st.waitsOnYou = o?.waitingOnYou ? text.slice(0, 300) : undefined
+        this.d.emit({ threadId: thread.id, type: 'tool_progress', callId: call.id, tool: tool.name, text: text.slice(0, 300), ...(o?.waitingOnYou ? { waitingOnYou: true } : {}) })
+      },
       outputBudget: tool.name === 'agents' || tool.name === 'swarm' || tool.name === 'max' ? teamShare(ctx.window) : tool.name === 'read_result' && !isLocal(this.d.endpoints.for(this.lastModel.get(thread.id) ?? thread.model ?? s.defaultModel).baseUrl) ? resultLimit(ctx.window) : undefined,
       model: this.lastModel.get(thread.id),
       speakerId: run.group ? run.speaker?.id : undefined,
@@ -4939,7 +4975,7 @@ export class Agent {
       if (effect !== 'read' && definiteFailure(msg)) (ctx.track.failedWrites ??= new Set()).add(tool.name)
       if (run.ctrl.signal.aborted) throw e
       // Skipped from the stall note: the model hears it was skipped, with no recovery plan to try it again.
-      if (e instanceof StepStopped) return { call, status: 'error', content: SKIPPED_STEP, errorFor: { tool: tool.name, message: msg }, meta: { ...baseMeta, status: 'error', actionId: preparedAction.record.id, display: 'skipped (it hung)' } }
+      if (e instanceof StepStopped) return { call, status: 'error', content: e.retryAsked ? RETRY_NOT_RUN : SKIPPED_STEP, errorFor: { tool: tool.name, message: msg }, meta: { ...baseMeta, status: 'error', actionId: preparedAction.record.id, display: 'skipped (it hung)' } }
       const recovery = recoveryPlan(tool.name, msg, effect)
       const mayRecover = this.runtime.recoverAttempt(record.id, digest({ tool: tool.name, kind: recovery.kind }))
       if (recovery.kind === 'connect' && mayRecover && tool.connector && toolCtx.offerConnect && !run.unattended && !run.helper) {

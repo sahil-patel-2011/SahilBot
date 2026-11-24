@@ -8,6 +8,7 @@ import { homeGuarded, runProcess, stripAnsi, throttle, toolEnv, type SandboxSpec
 import { jobLine, jobs as defaultJobs, type JobManager, type WaitFor } from '../../jobs/manager'
 import type { ThreadState, ToolContext, ToolDef } from '../types'
 import { ownedHere } from './freshness'
+import { askFolderAccess, commandFolders } from './folder-access'
 import { inForbidden, isSecretName } from '../../knowledge/ignore'
 
 // Run a terminal command. What it can do decides who must approve it:
@@ -1129,6 +1130,8 @@ export function shellTool(deps: ShellDeps = {}): ToolDef<Args> {
     async run(a, ctx) {
       if (systemReason(a.command)) throw new Error('System-level commands (sudo, launchctl, defaults write, disk tools, shutdown, security settings) are not run by SahilBot. Ask the user to run it themselves in Terminal.')
       const cwd = cwdFor(a.cwd, ctx)
+      // Downloads, Desktop, Documents: macOS's one-time folder dialog is waited for, with a hint (folder-access.ts).
+      await askFolderAccess(commandFolders(a.command, cwd), ctx)
       // rm can't be undone: the user's files are deleted with file_manage delete (to the Trash, and Undo brings them
       // back). Build output, temp files and files this chat made can go with rm; an approved command runs as written.
       if (!ctx.approved) {

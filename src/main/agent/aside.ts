@@ -3,7 +3,9 @@
  * answered right away in the chat while the long job keeps running, instead of waiting for it to finish.
  * Anything that changes the job ("make it 4 printers", "also add prices", "stop") is steering, not an aside.
  */
-const CHANGES = /\b(instead|change|switch|also|add|remove|drop|include|exclude|only|make (it|them|that|this)|use|don'?t|do not|stop|cancel|wait|actually|rather|redo|again|focus|skip|replace|what about|how about|and also)\b/i
+const CHANGES = /\b(instead|change|switch|also|add|remove|drop|include|exclude|only|make (it|them|that|this)|use|don'?t|do not|stop|cancel|wait|actually|rather|redo|again|focus|skip|replace|what about|how about|and also|save|put|send|email|name (?:it|them|this|that|the)|rename|move|export|attach|share|post|write|translate|convert it)\b/i
+/** A request to the bot, even phrased as a question ("Can you save it as a PDF?", "Could you put it on my Desktop?"): steering, so the task hears it. */
+const REQUEST = /^(?:(?:hey|ok|so|and|also)[, ]+)?(?:can|could|would|will) you\b(?! (?:tell me|remind me) (?:what|how|when|who))|^(?:please|pls)\b|^is it possible\b|^(?:why not|should (?:it|you|we|i))\b/i
 const QUESTION = /\?\s*$|^(what|what's|whats|who|who's|when|where|why|how|how's|is|are|was|were|can|could|does|do|did|which|define|convert|calculate)\b/i
 const MATH = /^[\d\s+\-*/×÷^().,%=x]+\??$/i
 
@@ -12,7 +14,7 @@ export function isAside(text: string): boolean {
   if (!t || t.length > 220 || t.includes('\n')) return false
   // Plain arithmetic, with or without a "?" ("18% of $1,740"): answered at once beside the job.
   if (quickMath(t) !== undefined) return true
-  if (CHANGES.test(t)) return false
+  if (CHANGES.test(t) || REQUEST.test(t)) return false
   if (MATH.test(t) && /\d/.test(t) && /[+\-*/×÷^%x]/i.test(t)) return true
   return QUESTION.test(t)
 }

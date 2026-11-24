@@ -3,9 +3,9 @@ import { beforeAll, describe, expect, test } from 'vitest'
 import { isGenericStop, isNamedStop, isStopAll, isStopRequest, namesMatch, stopTarget } from '../../src/main/agent/stop-intent'
 import { isAside, quickMath } from '../../src/main/agent/aside'
 import { plainProgress, plainStep } from '../../src/shared/step-words'
-import { folderName, madeText, runFacts, statusLine, took } from '../../src/renderer/src/lib/run-summary'
+import { folderName, madeText, runFacts, showsFinishLine, statusLine, took } from '../../src/renderer/src/lib/run-summary'
 import { fname } from '../../src/renderer/src/lib/steps'
-import { queueWords } from '../../src/renderer/src/lib/queue-words'
+import { queueWords, stopWords } from '../../src/renderer/src/lib/queue-words'
 import type { Message } from '../../src/shared/types'
 
 type TV = typeof import('../../src/renderer/src/components/ThreadView')
@@ -134,6 +134,27 @@ describe('the finish line', () => {
     expect(statusLine(f, null)).toBe('')
     expect(statusLine({ ...f, paths: ['/w/a.md'], made: ['/w/a.md'], ms: 5000 }, null)).toBe('Stopped after 5 s · Made a.md in w')
   })
+  test('"Stop everything" typed in an idle chat leaves its last task alone', () => {
+    const done = [
+      msg({ role: 'user', content: 'make the invoice', createdAt: 0 }),
+      tool('file_write', { path: '/Users/sahil/Downloads/invoice.pdf' }, 1000, { path: '/Users/sahil/Downloads/invoice.pdf' }),
+      msg({ role: 'assistant', content: 'Made it.', createdAt: 48_000 })
+    ]
+    expect(statusLine(runFacts(done)!, null, { simple: true })).toBe('Done in 48 s · Made invoice.pdf in Downloads')
+    const ms = [...done,
+      msg({ role: 'user', content: 'Stop everything', createdAt: 1_800_000, meta: { stopRequest: true } }),
+      msg({ role: 'assistant', content: 'Stopped Trip plan.', createdAt: 1_800_100, meta: { stopNote: true } })]
+    // Its own turn: no "Stopped after 30 min" on the invoice, and nothing to finish-line under the note.
+    expect(runFacts(ms)).toBeNull()
+  })
+  test('a bot chat gets the finish line for real work, not only when a file was made', () => {
+    const f = { commands: 0, files: 0, jobs: 0, actions: 14, since: 0, until: 0, paths: [], made: [], ms: 180_000 }
+    expect(showsFinishLine(f, { simple: true, onlyMade: true })).toBe(true)
+    expect(statusLine(f, null, { simple: true })).toBe('Done in 3 min · 14 actions')
+    expect(showsFinishLine({ ...f, actions: 1 }, { simple: true, onlyMade: true })).toBe(false)
+    expect(showsFinishLine({ ...f, actions: 1, paths: ['/w/a.md'] }, { simple: true, onlyMade: true })).toBe(true)
+    expect(showsFinishLine({ ...f, actions: 0 }, { simple: true })).toBe(false)
+  })
 })
 
 describe('queue by words', () => {
@@ -142,5 +163,11 @@ describe('queue by words', () => {
       expect(queueWords(t), t).toBe(true)
     for (const t of ['make it 4 printers', 'what\'s done so far?', 'stop'])
       expect(queueWords(t), t).toBe(false)
+  })
+  test('a typed stop under an open question card stops; other text answers the card', () => {
+    for (const t of ['Stop Test 5 now', 'stop', 'Stop everything', 'cancel the trip plan', 'stop the invoice'])
+      expect(stopWords(t, 'Invoice for Acme'), t).toBe(true)
+    for (const t of ['stop using commas', 'Make it shorter', 'cancel the 3pm meeting', 'stop the music'])
+      expect(stopWords(t, 'Invoice for Acme'), t).toBe(false)
   })
 })

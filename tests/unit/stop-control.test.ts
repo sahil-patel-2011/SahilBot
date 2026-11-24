@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest'
-import { Agent, SKIPPED_STEP, STALL_PREFIX, runFailedText, stallNote, stopShown } from '../../src/main/agent/loop'
+import { Agent, RETRY_NOT_RUN, SKIPPED_STEP, STALL_PREFIX, runFailedText, stallNote, stopShown } from '../../src/main/agent/loop'
 import { ResultStore, estimate } from '../../src/main/agent/context'
 import { ToolRegistry } from '../../src/main/agent/registry'
 import { coreTools } from '../../src/main/agent/tools/core'
@@ -42,7 +42,7 @@ function hanging(name = 'slow_read', ignoreSignal = false): ToolDef<{ q: string 
   return t as never
 }
 
-function setup(tools: ToolDef[] = []) {
+function setup(tools: ToolDef[] = [], o: { endpointFor?: () => unknown } = {}) {
   const db = new Db(':memory:')
   const results = new ResultStore(mkdtempSync(join(tmpdir(), 'res-')))
   const registry = new ToolRegistry()
@@ -54,7 +54,7 @@ function setup(tools: ToolDef[] = []) {
   const agent = new Agent({
     db, results, registry, docsDir: tmpdir(), vaultWaiting: () => vault,
     settings: { get: () => settings, keyFor: () => undefined, apiKey: () => undefined } as never,
-    endpoints: { last, for: () => ({ provider: 'custom', baseUrl: llm.url }), usable: () => [model], list: async () => last, advisor: () => undefined } as never,
+    endpoints: { last, for: o.endpointFor ?? (() => ({ provider: 'custom', baseUrl: llm.url })), usable: () => [model], list: async () => last, advisor: () => undefined } as never,
     spaces: { getPrompt: () => '' } as never, memory: { block: () => '' } as never,
     emit: (e) => events.push(e), secretValues: () => [], fitWindow: (_m, w) => w, counter: () => ({ count: async (t: string) => estimate(t) })
   })
@@ -114,6 +114,10 @@ test('"Stop everything" typed in an idle chat stops every running chat and answe
   expect(await rb.done).toBe('stopped')
   expect(llm.requests.length).toBe(asked)
   expect(assistantTexts(db, idle.id)).toEqual(['Stopped Invoice and Photo renamer.'])
+  // A note about other chats: this chat's own last task is not marked stopped (no Retry, no "Stopped after…").
+  const note = db.listMessages(idle.id).find((m) => m.role === 'assistant')!
+  expect(note.meta?.stopped).toBeUndefined()
+  expect(note.meta?.stopNote).toBe(true)
   // Each stopped chat says so too, once.
   expect(assistantTexts(db, ta.id).filter((c) => c === 'Stopped.')).toHaveLength(1)
   expect(assistantTexts(db, tb.id).filter((c) => c === 'Stopped.')).toHaveLength(1)
@@ -204,6 +208,40 @@ test('a silent model: the note names it, and Retry asks again', async () => {
   expect(agent.retryStep(t.id)).toBe(true)
   expect(await done).toBe('finished')
   expect(assistantTexts(db, t.id).at(-1)).toBe('Here it is.')
+  // The frozen half answer goes out of sight: no error bubble above the real answer.
+  expect(db.listMessages(t.id).filter((m) => m.role === 'assistant' && m.status === 'error' && !m.meta?.superseded && !m.meta?.provisional)).toEqual([])
+})
+
+test('Stop ends the run at once even under a tool that ignores its signal', async () => {
+  const slow = hanging('slow_read', true)
+  const { db, agent, events, thread } = setup([slow])
+  llm.script.push({ toolCalls: [{ name: 'slow_read', arguments: '{"q":"x"}' }], delay: 0 })
+  const t = thread()
+  const { done } = await agent.send({ threadId: t.id, text: 'Read it' })
+  await until(() => slow.calls === 1)
+  const t0 = Date.now()
+  await agent.steer(t.id, 'stop')
+  expect(await done).toBe('stopped')
+  expect(Date.now() - t0).toBeLessThan(1000)
+  expect(assistantTexts(db, t.id).filter((c) => c === 'Stopped.')).toHaveLength(1)
+  // The chat hears it was you (its queued messages then wait for you instead of starting new work).
+  expect(events.some((e) => e.type === 'run' && e.status === 'stopped' && e.byUser)).toBe(true)
+})
+
+test('Retry on a hung step that may have changed something is not run again, and the model hears why', async () => {
+  const slow = { ...hanging('slow_write', true), effect: 'write' as const }
+  slow.run = hanging('slow_write', true).run.bind(slow)
+  const { db, agent, events, thread } = setup([slow as never])
+  llm.script.push({ toolCalls: [{ name: 'slow_write', arguments: '{"q":"x"}' }], delay: 0 }, { content: 'Checked it.', delay: 0 })
+  const t = thread()
+  const { done } = await agent.send({ threadId: t.id, text: 'Write it' })
+  await until(() => events.some((e) => e.type === 'tool_progress' && e.callId === 'watchdog' && !!e.text))
+  const note = events.find((e) => e.type === 'tool_progress' && e.callId === 'watchdog' && !!e.text) as Extract<ChatEvent, { type: 'tool_progress' }>
+  expect(note.retryable).toBe(false)
+  expect(note.text).toMatch(/Skip it, or keep waiting/)
+  expect(agent.retryStep(t.id)).toBe(true)
+  expect(await done).toBe('finished')
+  expect(db.listMessages(t.id).find((m) => m.role === 'tool')?.content).toContain(RETRY_NOT_RUN.slice(0, 40))
 })
 
 test('waiting on the vault unlock is not "slow": the note says it waits on you, once', async () => {
@@ -221,6 +259,36 @@ test('waiting on the vault unlock is not "slow": the note says it waits on you, 
   expect(notes).toHaveLength(1)
   expect(notes[0].text).toMatch(/unlock your vault/)
   expect(notes[0].waitingOnYou).toBe(true)
+})
+
+test('a step waiting on a macOS dialog: the stall note says what to do, not "slow"', async () => {
+  const slow = hanging('slow_read', true)
+  const inner = slow.run
+  slow.run = async (a: { q: string }, ctx: { signal: AbortSignal; progress?: (t: string, o?: { waitingOnYou?: boolean }) => void }) => { ctx.progress?.('macOS may be asking to let SahilBot open your Downloads folder. Look for its dialog and click OK', { waitingOnYou: true }); return inner(a, ctx as never) }
+  const { agent, events, thread } = setup([slow])
+  llm.script.push({ toolCalls: [{ name: 'slow_read', arguments: '{"q":"x"}' }], delay: 0 })
+  const t = thread()
+  const { done } = await agent.send({ threadId: t.id, text: 'Read my Downloads' })
+  await until(() => events.some((e) => e.type === 'tool_progress' && e.callId === 'watchdog' && !!e.text))
+  const note = events.find((e) => e.type === 'tool_progress' && e.callId === 'watchdog' && !!e.text) as Extract<ChatEvent, { type: 'tool_progress' }>
+  expect(note.text).toBe(`${STALL_PREFIX} macOS may be asking to let SahilBot open your Downloads folder. Look for its dialog and click OK.`)
+  expect(note.waitingOnYou).toBe(true)
+  expect(note.stuck).toBe(true)
+  agent.stop(t.id, { byUser: true })
+  await done
+})
+
+test('a run that fails inside the loop posts one plain sentence with Retry, never a raw "Something went wrong"', async () => {
+  let calls = 0
+  const { db, agent, thread } = setup([], { endpointFor: () => { if (++calls > 1) throw new Error('Auto (cloud) has no model to use: no key'); return { provider: 'custom', baseUrl: llm.url } } })
+  const t = thread()
+  const { done } = await agent.send({ threadId: t.id, text: 'Plan the trip' })
+  expect(await done).toBe('error')
+  const notes = db.listMessages(t.id).filter((m) => m.kind === 'notice')
+  expect(notes.length).toBeGreaterThan(0)
+  for (const n of notes) expect(n.content).not.toMatch(/^Something went wrong/)
+  expect(notes.at(-1)?.meta?.runFailed).toBe(true)
+  expect(String(notes.at(-1)?.meta?.detail)).toMatch(/no model to use/)
 })
 
 test('the stall note and a failed run are plain sentences', () => {

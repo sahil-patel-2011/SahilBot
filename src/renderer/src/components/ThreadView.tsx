@@ -440,7 +440,7 @@ function StatusLine({ drafting, since, progress, doing }: { drafting: string | n
 }
 
 /** A tool's live progress line, or the stall watchdog's note (tool 'watchdog'), as App keeps it per chat. */
-export interface WorkProgress { text: string; tool: string; step?: string; stuck?: boolean }
+export interface WorkProgress { text: string; tool: string; step?: string; stuck?: boolean; retryable?: boolean; waitingOnYou?: boolean }
 
 const lower = (s: string): string => (/^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s)
 
@@ -452,6 +452,8 @@ export function stallText(o: { who: string; label?: string | null; stall?: WorkP
   const st = o.stall
   if (!st || st.tool !== 'watchdog' || !st.text.startsWith('Still on it:')) return null
   if (/unlock your vault/i.test(st.text)) return `${o.who} is waiting for you to unlock your vault (Touch ID or your password)`
+  // Something only you can answer (macOS asking to open your Downloads folder): what to do, not "slow".
+  if (st.waitingOnYou) return st.text.replace(/^Still on it:\s*/, '').replace(/\.$/, '')
   const step = st.step ? lower(st.step) : 'this step'
   return o.label && o.label !== st.step ? `Still working on ${lower(o.label)}: ${step} is taking longer than usual` : `Still on it: ${step} is taking longer than usual`
 }
@@ -484,7 +486,7 @@ function BotWorking({ name, ack, label, stall, threadId, work }: { name?: string
         <span className="activity-title" role="status" aria-live="polite" data-testid="bot-working">{text}</span>
         {slow && stall?.stuck && (
           <span className="stall-actions">
-            <button type="button" className="chip-btn" onClick={() => step('retry')} data-testid="stall-retry">Retry</button>
+            {stall.retryable !== false && <button type="button" className="chip-btn" onClick={() => step('retry')} data-testid="stall-retry">Retry</button>}
             <button type="button" className="chip-btn" onClick={() => step('skip')} data-testid="stall-skip">Skip</button>
           </span>
         )}
@@ -500,7 +502,9 @@ function BotWorking({ name, ack, label, stall, threadId, work }: { name?: string
  * words ("Reading a page"), then the one being prepared. Never raw command output, a path, an id or a tool name:
  * those stay in Show work. Nothing: the default.
  */
-export function workLabel(o: { progress?: string | null; progressTool?: string | null; drafting?: string | null; plan?: string | null; doing?: string | null }): string | null {
+export function workLabel(o: { progress?: string | null; progressTool?: string | null; progressWaiting?: boolean; drafting?: string | null; plan?: string | null; doing?: string | null }): string | null {
+  // A tool waiting on you (macOS's folder dialog) says so first, whatever the tool.
+  if (o.progress && o.progressWaiting && !o.progress.startsWith('Still on it:')) return o.progress.replace(/\s+/g, ' ').slice(0, 160)
   if (o.plan) return o.plan.replace(/\s+/g, ' ').slice(0, 80)
   if (o.progress && !o.progress.startsWith('Still on it:') && plainProgress(o.progress, o.progressTool ?? undefined)) return o.progress.replace(/\s+/g, ' ').slice(0, 120)
   if (o.doing) return o.doing
@@ -700,7 +704,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
   // The working line stays up while an answer is written out of sight (checked before it's posted, heldDrafts).
   const writingVisible = writing && !(last?.meta?.superseded || awaitingFinal(last!) || heldDrafts(messages).waiting.has(last!.id))
-  const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : !writingVisible)
+  // A reply that froze halfway still gets the stall note with Retry / Skip under it.
+  const stalled = work?.tool === 'watchdog' && !!work.text?.startsWith('Still on it:')
+  const showStatus = running && !pending.length && (dev ? (waiting || !!drafting || !!progress) : (!writingVisible || stalled))
   const started = turnStart(messages, since)
   const approvalWaiting = pending.some((p) => p.kind === 'approval')
   let tailText: Block | undefined
@@ -764,7 +770,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
           {showStatus && (dev
             ? <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={null} />
             : <BotWorking name={botName} ack={!repliedSince(messages)} stall={work ?? null} threadId={threadId} work={ranSteps}
-                label={workLabel({ progress, progressTool: work?.tool, drafting, plan: livePlan ? (livePlan.items.find((x) => x.status === 'in_progress')?.text ?? livePlan.title ?? null) : null, doing: doingPlain(liveStep) })} />)}
+                label={workLabel({ progress, progressTool: work?.tool, progressWaiting: !!work?.waitingOnYou, drafting, plan: livePlan ? (livePlan.items.find((x) => x.status === 'in_progress')?.text ?? livePlan.title ?? null) : null, doing: doingPlain(liveStep) })} />)}
           {!quietBot && running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
           {!running && !pending.length && (retryable || (lastText && dev)) && (
             <div className="after-actions">

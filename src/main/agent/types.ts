@@ -94,7 +94,7 @@ export interface ToolContext {
    * Live progress from a long-running call (a test run's latest output line, what a Cursor agent is
    * doing right now). Optional: tools must work without it. Shown on the tool's chip while it runs.
    */
-  progress?(text: string): void
+  progress?(text: string, o?: { waitingOnYou?: boolean }): void
   /**
    * Waits for the user to do something on their side (sign in, pass a check) without them having to say so:
    * shows the question card and also polls `done`; when `done` turns true the card closes by itself and this
