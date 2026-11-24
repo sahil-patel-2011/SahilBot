@@ -1911,7 +1911,7 @@ app.whenReady().then(() => {
     // A plain reminder ("remind me in 3 minutes to stretch") needs no work, just the nudge: it is posted as it is, on
     // time, with no model call, whether or not the chat is busy (Grok Bot head-to-head SCA-01, SCB-01, SCB-02). It is an
     // aside, like a side answer: never part of a live run's prompt (a run mid-tool keeps its tool result in place).
-    const delivery = routineDelivery(task, { busy: chat.isRunning(threadId) || scheduledRuns.has(threadId), dry: info.dry })
+    const delivery = routineDelivery(task, { busy: chat.isRunning(threadId) || scheduledRuns.has(threadId), dry: info.dry, todos: db.getState(threadId).todos })
     if (delivery === 'remind') {
       const r = reminderMessage(task)
       const m = db.insertMessage({ threadId, role: 'assistant', content: r.content, kind: 'normal', status: 'done', meta: r.meta })

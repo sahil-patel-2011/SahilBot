@@ -629,7 +629,7 @@ export function activeMessages(messages: Message[], state: ThreadState): Message
   // Side answers (agent/aside.ts) are a separate exchange beside a running job: never part of the job's prompt. A
   // reminder or a routine's answer posted beside it joins the history once a later message started a new turn (the bot
   // can say what this morning's routine found), never the live run's prompt.
-  const opener = [...messages].reverse().find((m) => m.role === 'user' && m.kind === 'normal' && !m.meta?.aside)?.createdAt ?? -Infinity
+  const opener = [...messages].reverse().find((m) => m.role === 'user' && m.kind === 'normal' && !m.meta?.aside && !m.meta?.hidden)?.createdAt ?? -Infinity
   let ms = messages.filter((m) => m.kind === 'normal' && (!m.meta?.aside || (posted(m) && m.createdAt < opener)) && m.status !== 'error' && !(m.status === 'streaming' && !m.content && !m.toolCalls))
   if (state.compaction) {
     const i = ms.findIndex((m) => m.id === state.compaction!.boundaryId)

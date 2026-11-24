@@ -151,11 +151,12 @@ export function isPlainReminder(t: { schedule: { type: string }; title: string; 
 /**
  * How a due routine reaches its chat. 'remind': a plain reminder, posted as it is (no model call), busy or not.
  * 'beside': the chat is busy, so the work runs on time in a hidden chat of its own and its answer is posted after.
- * 'here': the chat is free, so it runs in the chat itself.
+ * 'here': the chat is free, so it runs in the chat itself. A chat whose last task paused on a question with its plan
+ * still open counts as busy: the routine runs beside it and leaves that plan for the user's "Yes, do it".
  */
-export function routineDelivery(t: { schedule: { type: string }; title: string; prompt: string }, o: { busy: boolean; dry?: boolean }): 'remind' | 'beside' | 'here' {
+export function routineDelivery(t: { schedule: { type: string }; title: string; prompt: string }, o: { busy: boolean; dry?: boolean; todos?: { status: string }[] }): 'remind' | 'beside' | 'here' {
   if (isPlainReminder(t) && !o.dry) return 'remind'
-  return o.busy ? 'beside' : 'here'
+  return o.busy || (o.todos ?? []).some((x) => x.status !== 'done') ? 'beside' : 'here'
 }
 
 /**

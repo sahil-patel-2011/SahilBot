@@ -59,7 +59,8 @@ describe('plain reminders', () => {
     const { s, tool, ctx } = setup()
     await tool.run({ action: 'create', title: 'Check the oven', remind: 'Check the oven', when: { type: 'once', in_minutes: 10 } } as never, ctx)
     await tool.run({ action: 'create', title: 'Pills', remind: 'Take your pills', when: { type: 'daily', time: '09:00' } } as never, ctx)
-    const [a, b] = s.list()
+    const a = s.list().find((t) => t.title === 'Check the oven')!
+    const b = s.list().find((t) => t.title === 'Pills')!
     expect(a.prompt).toBe('⏰ Reminder: Check the oven')
     expect(isPlainReminder(a)).toBe(true)
     expect(reminderText(a)).toBe('Check the oven')
@@ -107,6 +108,9 @@ describe('plain reminders', () => {
     expect(routineDelivery(r, { busy: false, dry: true })).toBe('here')
     expect(routineDelivery(work, { busy: false })).toBe('here')
     expect(routineDelivery(work, { busy: true })).toBe('beside')
+    // A chat whose task paused on a question with its plan open: the routine runs beside it and leaves that plan.
+    expect(routineDelivery(work, { busy: false, todos: [{ status: 'done' }, { status: 'pending' }] })).toBe('beside')
+    expect(routineDelivery(work, { busy: false, todos: [{ status: 'done' }] })).toBe('here')
     expect(reminderMessage(r)).toEqual({ content: '⏰ Reminder: Stretch', meta: { scheduled: 'r1', reminder: true, aside: true } })
   })
 
@@ -125,6 +129,22 @@ describe('plain reminders', () => {
     expect(wire[2]).toMatchObject({ tool_call_id: 'c1', content: 'sent' })
     expect(JSON.stringify(wire)).not.toContain('[Not run')
     expect(JSON.stringify(wire)).not.toContain('Reminder')
+  })
+
+  test('a hidden nudge from the app is not a new turn: the reminder stays out until the user writes again', () => {
+    let n = 0
+    const msg = (p: Partial<Message>): Message => ({ id: `m${++n}`, threadId: 't', role: 'assistant', content: '', kind: 'normal', status: 'done', createdAt: n, ...p })
+    const r = reminderMessage({ id: 'r1', title: 'Stretch', prompt: '⏰ Reminder: Stretch' })
+    const ms = [
+      msg({ role: 'user', content: 'Make the invoice' }),
+      msg({ toolCalls: [{ id: 'c1', name: 'file_write', arguments: '{}' }] }),
+      msg({ role: 'tool', toolCallId: 'c1', toolName: 'file_write', content: 'saved' }),
+      msg({ content: r.content, meta: r.meta }),
+      msg({ role: 'user', content: '[From the app] Check your work.', meta: { hidden: true } })
+    ]
+    expect(JSON.stringify(toWire(activeMessages(ms, emptyState())))).not.toContain('Stretch')
+    ms.push(msg({ role: 'user', content: 'Thanks. What next?' }))
+    expect(JSON.stringify(toWire(activeMessages(ms, emptyState())))).toContain('Stretch')
   })
 })
 
