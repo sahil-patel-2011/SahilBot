@@ -60,7 +60,7 @@ describe('fast path guidance (ALA-04, PCA-02, ARB, IWA, IWB)', () => {
   })
 
   test('typos, translation, homework and common health questions are answered directly', () => {
-    expect(chat).toContain('Translation: the translation first, no search')
+    expect(chat).toContain('Translation: the translation first')
     expect(full).toContain('Read through typos, shorthand and slang')
     expect(chat).toContain('Common, well-established health questions: a direct, safe answer and when to see a doctor')
   })

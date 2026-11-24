@@ -220,7 +220,7 @@ describe('self-review', () => {
     llm.script.push({ toolCalls: [call('save_note', { v: 'z' })], delay: 0 }, { content: 'Saved z to your notes.', delay: 0 }, { content: 'Let me look at that again more carefully before I answer you here', delay: 400 }, { content: '2 + 2 = 4.', delay: 0 })
     const t = h.thread()
     const done = h.run(t, 'Save a note that says z in my notes file')
-    for (let i = 0; i < 100 && !h.events.some((e) => e.type === 'drafting'); i++) await new Promise((r) => setTimeout(r, 20))
+    for (let i = 0; i < 100 && !h.events.some((e) => e.type === 'drafting' && (e as { tool?: string }).tool === 'verify'); i++) await new Promise((r) => setTimeout(r, 20))
     // While it checks, the answer it wrote is still the one on screen (held, marked checking).
     const draft = h.db.listMessages(t.id).find((m) => m.content === 'Saved z to your notes.')!
     expect(draft.meta).toMatchObject({ superseded: true, checking: true })
