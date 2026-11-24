@@ -6,6 +6,7 @@
     "highlights": [
       "Outlook: connect your Outlook.com or Microsoft 365 account to read, draft and send mail and manage your calendar",
       "A roomier sidebar like Grok Bot: bigger bots, pin or unpin with one click, and an orange dot when a bot is waiting for you",
+      "Bots sound like themselves again: no scripted phrases, just the model's own natural replies, and they keep working longer on big tasks",
       "An answer shows up once and stays: it's checked before you see it, never posted and then pulled back or rewritten",
       "Ask a question back and the bot stops there; say \"stop\" (or \"Stop Test 5 now\") and you get one \"Stopped.\"",
       "Your files are safe: a file you made is never replaced unless you asked to change it; the new one is saved as \"name (2)\"",
@@ -22,7 +23,9 @@
           "An orange dot and \"Waiting for you\" show which bot needs you; unread stays a blue dot",
           "Connect apps is a button next to your name again; the menu by your name is shorter (Memory is in ⌘K)",
           "While an update downloads you see how much is done: \"42% · 90 of 215 MB\"",
-          "The morning check-in is gone: ask any bot for a daily summary instead"
+          "The morning check-in is gone: ask any bot for a daily summary instead",
+          "Opening a bot clears its blue dot, even when it has older conversations",
+          "The chat header shows the bot's name once (no more \"New bot · New bot\"), and dozens of small labels across the app read cleaner"
         ]
       },
       {
@@ -32,7 +35,10 @@
           "Work answers are double-checked before they appear, so you see one finished answer",
           "\"Want me to email it to Sam?\" stays an offer: the bot doesn't do the extra step unasked",
           "Links the bot never opened are taken out of the answer instead of the answer being redone",
-          "If the bot can't confirm something worked, it says so in one plain sentence; drafts you asked for are never flagged"
+          "If the bot can't confirm something worked, it says so in one plain sentence; drafts you asked for are never flagged",
+          "Replies are the model's own words: SahilBot no longer adds writing rules or tacks a sentence onto the end (an unconfirmed result gets a small \"Needs a check\" tag instead)",
+          "While a bot works, its own small face moves gently next to what it's doing; \"Show work\" is gone from under messages",
+          "Bigger jobs get more room: a task can run longer on its own while it keeps making progress"
         ]
       },
       {

@@ -274,7 +274,7 @@ it('opening a bot clears its dot, older conversations included', async () => {
   await new Promise((r) => setTimeout(r, 5)) // replies come after the chats were opened
   for (const t of [old, cur]) db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Here is your plan.', kind: 'normal', status: 'done' })
   db.insertMessage({ threadId: mainChat.id, role: 'assistant', content: 'Hi!', kind: 'normal', status: 'done' })
-  const botRow = (): { unread: boolean } => db.listSpaces().find((s) => s.id === bot.id)!
+  const botRow = (): { unread?: boolean } => db.listSpaces().find((s) => s.id === bot.id)!
   expect(botRow().unread).toBe(true)
   db.markRead(cur.id)
   // Only the open conversation read: the older one still lit the dot (the bug).
