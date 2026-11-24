@@ -1182,8 +1182,8 @@ export function App() {
                     : <span className="hint">Sends when {botChatName ?? 'SahilBot'} finishes</span>}
                 </div>
               )}
-              {/* The finish line: what was made, where, how long. A bot's chat (Grok Bot's way) shows it when the task made something or did real work. */}
-              {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} onlyMade={!dev && !!botChatName} />}
+              {/* The finish line, tokens and cost: Developer mode only. A normal chat ends on the answer itself. */}
+              {!isRunning && dev && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} onlyMade={!dev && !!botChatName} />}
               {chatInput}
             </div>
           </>

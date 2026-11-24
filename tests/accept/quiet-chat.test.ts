@@ -101,8 +101,9 @@ describe('quiet chat', () => {
     expect(await page.locator('[data-testid="plan-card"]').count()).toBe(0)
     expect(await page.locator('details.reasoning').count()).toBe(0)
     expect(await page.locator('[data-testid="routed"]').count()).toBe(0)
-    // One plain finish line after real work, for everyone (Grok Bot head-to-head: "a finish line on every task").
-    expect(await page.locator('[data-testid="run-summary"]').count()).toBe(1)
+    // No finish line, token count or cost under the answer (Developer mode only): the chat ends on the answer.
+    expect(await page.locator('[data-testid="run-summary"]').count()).toBe(0)
+    expect(await page.locator('[data-testid="sources"]').count()).toBe(0)
     // What it made stays: the file card.
     expect(await page.locator('[data-testid="made-file"]').count()).toBe(1)
     await shot(page, '2-done')

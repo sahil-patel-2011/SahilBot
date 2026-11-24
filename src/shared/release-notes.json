@@ -38,7 +38,8 @@
           "If the bot can't confirm something worked, it says so in one plain sentence; drafts you asked for are never flagged",
           "Replies are the model's own words: SahilBot no longer adds writing rules or tacks a sentence onto the end (an unconfirmed result gets a small \"Needs a check\" tag instead)",
           "While a bot works, its own small face moves gently next to what it's doing; \"Show work\" is gone from under messages",
-          "Bigger jobs get more room: a task can run longer on its own while it keeps making progress"
+          "Bigger jobs get more room: a task can run longer on its own while it keeps making progress",
+          "A reply ends on the answer: no row of sites, no \"Done in … · N actions\" line and no token or cost popup under it (Developer mode still shows them)"
         ]
       },
       {

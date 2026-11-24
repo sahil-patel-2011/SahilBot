@@ -1185,7 +1185,8 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
             return fix && <button className="chip-btn err-fix" onClick={fix.run} data-testid="error-fix">{fix.label}</button>
           })()}
         </div>
-        {Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && <SourceChips sources={m.meta!.sources as Array<{ title: string; url: string }>} />}
+        {/* The sites a reply read: Developer mode only (the reply's own [1] links still open them). */}
+        {dev && Array.isArray(m.meta?.sources) && (m.meta!.sources as Array<{ title: string; url: string }>).length > 0 && <SourceChips sources={m.meta!.sources as Array<{ title: string; url: string }>} />}
         {/* A routine that ran beside a busy chat: the files it made in its own side chat. */}
         {Array.isArray(m.meta?.madeFiles) && <MadeFiles files={m.meta!.madeFiles as Array<{ key: string; path: string }>} onOpen={actions.onOpenFile} />}
         {reactions.user && (
