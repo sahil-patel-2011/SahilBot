@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, realpathSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
@@ -11,7 +11,7 @@ import { beginRun } from '../../src/main/agent/undo-journal'
 // output, caches, temp files and files the chat made itself can still go with rm. No approval card either way.
 
 test('which deletes are for good: the user\'s files, not build output, temp files or the chat\'s own', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'sb-rm-'))
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'sb-rm-')))
   expect(permanentDeletes('rm ~/Documents/a.txt', cwd)).toEqual(['~/Documents/a.txt'])
   expect(permanentDeletes('rm -rf ~/Documents/old', cwd)).toEqual(['~/Documents/old'])
   expect(permanentDeletes('cd ~/Desktop && rm -f notes.txt report.pdf', cwd)).toEqual(['notes.txt', 'report.pdf'])
@@ -68,7 +68,7 @@ test('rm of a test folder a command made during this task is fine; one with a fi
 })
 
 test('which files a command writes over: >, >|, &>, cp/mv/tee/sed -i/curl -o; not >>, cp -n, /dev/null or heredoc text', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'sb-over-'))
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'sb-over-')))
   mkdirSync(join(cwd, 'dir'))
   const at = (p: string) => join(cwd, p)
   expect(overwriteTargets('echo hi > existing.py', cwd)).toEqual([at('existing.py')])
@@ -109,13 +109,13 @@ test('run_command never replaces a file of the user\'s (>, cp, mv, sed -i); new 
     expect(readFileSync(join(ws, 'mine.py'), 'utf8')).toBe('v2\n')
     // The user asked to change that file.
     said = 'Fix the date bug in rename_photos.py'
-    await tool.run({ command: "sed -i 's/user/fixed/' rename_photos.py" }, ctx)
+    await tool.run({ command: "printf 'print(\"fixed\")\\n' > rename_photos.py" }, ctx)
     expect(readFileSync(join(ws, 'rename_photos.py'), 'utf8')).toContain('fixed')
   } finally { rmSync(ws, { recursive: true, force: true }) }
 })
 
 test('$HOME and ${HOME} paths count like ~ (writes and cd), and "| xargs rm" is a delete', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'sb-over-'))
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'sb-over-')))
   const dl = join(homedir(), 'Downloads', 'rename_photos.py')
   expect(overwriteTargets(`cat > "$HOME/Downloads/rename_photos.py" <<'EOF'\nprint(1)\nEOF`, cwd)).toEqual([dl])
   expect(overwriteTargets('cp new.py "${HOME}/Downloads/rename_photos.py"', cwd)).toEqual([dl])
