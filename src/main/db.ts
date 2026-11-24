@@ -532,6 +532,16 @@ export class Db {
   }
 
   /**
+   * You opened this bot: every conversation of its own (an older one from Start fresh, one another app started) is
+   * read now, so its sidebar dot clears. Not for SahilBot itself or a project, whose chats each show their own dot.
+   */
+  markSpaceRead(spaceId: string): void {
+    const s = this.getSpace(spaceId)
+    if (!s || s.isMain || s.kind === 'project') return
+    this.sql.prepare('UPDATE threads SET unread = 0, last_read_at = MAX(COALESCE(last_read_at, created_at), ?) WHERE space_id = ? AND parent_id IS NULL').run(Date.now(), spaceId)
+  }
+
+  /**
    * "Mark as Unread": the flag, and the read mark moved back to just before the bot's latest reply, so the
    * chat opens on a NEW divider there (like other chat apps).
    */

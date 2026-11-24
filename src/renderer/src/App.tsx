@@ -698,7 +698,8 @@ export function App() {
       setSpaceId(id)
       // Chats other apps opened with this bot ("From Cursor") aren't the user's own conversation.
       setThread(ts.find((t) => !/^From .+/.test(t.title)) ?? ts[0])
-      void refreshSpaces()
+      // Opening the bot is reading it: its blue dot clears (older conversations included).
+      void api.spaces.markRead(id).catch(() => undefined).finally(() => void refreshSpaces())
     } catch (e) { if (!stale()) { setNavTo(null); toast((e as Error).message, 'error') } }
   }
 
@@ -781,7 +782,8 @@ export function App() {
   const latestReplyRef = useRef(0)
   latestReplyRef.current = latestReply
   useEffect(() => {
-    if (!thread || !ready || !attention || !atBottomRef.current) return
+    // Open and in front of you is read (Grok Bot's way): no need to scroll to the bottom first.
+    if (!thread || !ready || !attention) return
     const id = thread.id
     const readAt = Math.max(readTo.current[id] ?? 0, thread.lastReadAt ?? 0)
     if ((!thread.unread && latestReply <= readAt) || marking.current.has(id)) return
