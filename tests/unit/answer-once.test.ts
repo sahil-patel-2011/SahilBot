@@ -121,7 +121,9 @@ test('a "done" claim nothing backs is nudged once, then said plainly instead of 
   // which nobody watches, ends as an error.
   expect(r.status).toBe('finished')
   expect(r.answers).toHaveLength(1)
-  expect(r.answers[0].content).toContain(UNVERIFIED_NOTE)
+  // The reply keeps its own words; the "Needs a check" badge flags it.
+  expect(r.answers[0].content).not.toContain(UNVERIFIED_NOTE)
+  expect(r.answers[0].meta?.unbackedClaim).toBe(true)
 }, 60_000)
 
 test('a claim the run backs is left alone', async () => {

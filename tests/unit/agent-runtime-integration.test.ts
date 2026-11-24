@@ -77,8 +77,8 @@ test('the final completion gate runs configured checks and exposes failure despi
   expect(await h.run('Implement the fixture and verify the result')).toBe('finished')
   expect(checks).toBe(1)
   expect(h.final().meta?.verification).toMatchObject({ status: 'blocked' })
-  // The user reads one plain sentence, not the checks' ids and tool names (those stay in meta.verification).
-  expect(h.final().content).toContain("I couldn't confirm this worked")
+  // The reply keeps its own words (the "Needs a check" badge flags it); the checks' ids stay in meta.verification.
+  expect(h.final().content).not.toContain("I couldn't confirm this worked")
   expect(h.final().content).not.toMatch(/Verification is incomplete|agent_control|fixture works: /)
 })
 

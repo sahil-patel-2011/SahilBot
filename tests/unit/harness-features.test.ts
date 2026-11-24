@@ -138,10 +138,10 @@ test('a question for the user ends the run; a closing "anything else?" does not 
     expect(asksUserNow(t), t).toBe(false)
 })
 
-test('the prompts ask for one plain sentence about what could not be checked, never "all checks passed"', async () => {
+test('the prompts ask to say plainly what failed or could not be checked, and never claim what no tool did', async () => {
   const { chatPrompt, harnessPrompt } = await import('../../src/main/agent/prompt')
   const base = { userName: 'Sam', workspaceDir: '/w', spacePrompt: '', spaceName: 'Main' }
-  expect(harnessPrompt(base)).toMatch(/anything you couldn't check, plainly; never "all checks passed"/)
+  expect(harnessPrompt(base)).toMatch(/If something failed or you couldn't check it, say so plainly/)
   expect(chatPrompt(base)).toMatch(/Never say you did something \(saved, sent, booked\) unless a tool in this chat did it/)
 })
 

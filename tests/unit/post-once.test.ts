@@ -477,7 +477,9 @@ describe('false-claim check on chat replies', () => {
     expect(nudged(h, t.id)).toBe(true)
     const shown = h.visible(t.id)
     expect(shown).toHaveLength(1)
-    expect(shown[0].content).toMatch(NOTE)
+    // Its words stay its own; the "Needs a check" badge flags it (nothing is tacked onto the reply).
+    expect(shown[0].content).not.toMatch(NOTE)
+    expect(shown[0].meta?.unbackedClaim).toBe(true)
   })
 })
 

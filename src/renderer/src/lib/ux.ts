@@ -77,3 +77,13 @@ export function personName(p: { userName: string; profile?: { firstName: string;
   const words = last ? [first, last] : first.split(/\s+/).slice(0, 2)
   return { full, initials: words.map(letter).join('') }
 }
+
+/**
+ * A chat title worth showing next to its bot's name: not empty, not the bot's own name again ("New bot · New bot"),
+ * and not a placeholder ("New chat", "Untitled").
+ */
+export function distinctTitle(title: string | undefined | null, botName: string | undefined | null): boolean {
+  const norm = (x: string | undefined | null): string => String(x ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+  const t = norm(title)
+  return !!t && t !== norm(botName) && !/^(new chat|untitled|new conversation|chat)$/.test(t)
+}
