@@ -13,7 +13,7 @@ afterAll(async () => { await llm.close() })
 test('Connect apps: Resend is a paste-your-key tile; Google is one panel with three ways', async () => {
   const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_QUIET: '1' })
   try {
-    await page.click('[data-testid="connect-apps"]')
+    await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
     await page.fill('[data-testid="conn-search"]', 'Resend')
     const tile = page.locator('[data-testid="preset-resend"]')
     await tile.waitFor()

@@ -49,7 +49,7 @@ describe('in-chat connect card', () => {
     // SAHILBOT_TEST_OAUTH_FETCH: the sign-in page (on loopback only) is loaded headlessly instead of in the user's browser.
     const { app, page } = await launch(tempProfile(), llm.url, { SAHILBOT_TEST_OAUTH_FETCH: '1' })
     try {
-      await page.click('[data-testid="connect-apps"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
       await page.click('[data-testid="preset-custom"]')
       await page.fill('.conn-form input >> nth=0', 'Tasks')
       await page.fill('[data-testid="conn-url"]', fake.url)

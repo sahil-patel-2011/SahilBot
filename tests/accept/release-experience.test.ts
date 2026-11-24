@@ -49,7 +49,7 @@ test('attachments have readable two-line rows and Cursor is not connected by an 
     expect(layout.every((r) => r.left >= 0 && r.right <= 900 && r.copyWidth > 200 && r.height > 50)).toBe(true)
     mkdirSync('/tmp/sahilbot-ux-shots', { recursive: true })
     await page.screenshot({ path: '/tmp/sahilbot-ux-shots/4-attachments.png' })
-    await page.keyboard.press('Escape'); await page.click('[data-testid="connect-apps"]')
+    await page.keyboard.press('Escape'); await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
     await page.fill('[data-testid="conn-search"]', 'Cursor')
     const cursor = page.locator('[data-testid="preset-cursor-app"]')
     await cursor.waitFor()

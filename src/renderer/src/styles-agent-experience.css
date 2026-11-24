@@ -31,6 +31,9 @@
 .thread.quiet-bot .result-checking { display: none; }
 .status-line.bot-working { gap: 12px; padding: 6px 2px; }
 .status-line.bot-working .activity-title { font-weight: 400; color: var(--text-2, #6b7280); }
+/* A stalled step: Retry / Skip for that step alone, beside the line that says what is stuck. */
+.status-line .stall-actions { display: inline-flex; gap: 6px; flex-shrink: 0; }
+.status-line .stall-actions .chip-btn { padding: 2px 10px; font-size: 12px; }
 /* Grok Bot's working icon: a dark disc with a light mark turning slowly (no dots, no timer). */
 .work-orb { position: relative; flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--text, #111); animation: work-orb-turn 2.4s linear infinite; }
 .work-orb::after { content: ''; position: absolute; top: 5px; left: 50%; width: 3px; height: 7px; margin-left: -1.5px; border-radius: 2px; background: var(--bg, #fff); }

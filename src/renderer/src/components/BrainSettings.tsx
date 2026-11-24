@@ -22,11 +22,19 @@ export function modelName(id?: string): string {
 }
 const short = modelName
 
+/** The last status seen: Memory opens on it at once, and refreshes behind it. */
+let lastBrain: BrainStatus | null = null
+
 export function useBrainStatus(): [BrainStatus | null, () => void, boolean] {
-  const [st, setSt] = useState<BrainStatus | null>(null)
-  // A failed load says so (with Try again) instead of "Loading…" forever.
+  const [st, setSt] = useState<BrainStatus | null>(lastBrain)
+  // A failed load says so (with Try again) instead of "Loading…" forever, and so does one with no answer in 5 s.
   const [failed, setFailed] = useState(false)
-  const load = (): void => { setFailed(false); void api.brain?.status().then((x) => { setSt(x); setFailed(false) }).catch(() => setFailed(true)) }
+  const load = (): void => {
+    setFailed(false)
+    let answered = false
+    const slow = setTimeout(() => { if (!answered && !lastBrain) setFailed(true) }, 5000)
+    void api.brain?.status().then((x) => { answered = true; lastBrain = x; setSt(x); setFailed(false) }).catch(() => { answered = true; setFailed(true) }).finally(() => clearTimeout(slow))
+  }
   useEffect(() => {
     load()
     const off = api.brain?.onChanged(load)

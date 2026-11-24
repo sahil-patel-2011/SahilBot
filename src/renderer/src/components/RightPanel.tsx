@@ -63,7 +63,7 @@ export function RightPanel({ tab, onTab, hidden, messages, file, onOpenFile, bro
           {showJobs && <button className={tab === 'jobs' ? 'on' : ''} onClick={() => onTab('jobs')} data-testid="tab-jobs"><TerminalIcon size={14} />Jobs{jobsRunning > 0 && <span className="tab-count" aria-label={`${jobsRunning} running`}>{jobsRunning}</span>}</button>}
         </div>
         <span style={{ flex: 1 }} />
-        <button className="icon-btn nodrag" onClick={onClose} title="Close panel (⌘\\)"><I.Close size={15} /></button>
+        <button className="icon-btn nodrag" onClick={onClose} title="Close panel (⌘\\)" aria-label="Close panel"><I.Close size={15} /></button>
       </div>
       {tab === 'browser' && <BrowserPane hidden={hidden} threadId={threadId} />}
       {tab === 'progress' && <ProgressPane messages={messages} onOpenFile={onOpenFile} browserState={browserState} onBrowser={() => onTab('browser')} running={!!running} progress={progress} />}
@@ -318,14 +318,14 @@ function BrowserPane({ hidden, threadId }: { hidden: boolean; threadId?: string 
         </div>
       )}
       <div className="bbar">
-        <button className="icon-btn" disabled={!s?.canGoBack} onClick={() => void api.browser.back()} title="Back"><I.Chevron size={16} style={{ transform: 'rotate(90deg)' }} /></button>
-        <button className="icon-btn" disabled={!s?.canGoForward} onClick={() => void api.browser.forward()} title="Forward"><I.Chevron size={16} style={{ transform: 'rotate(-90deg)' }} /></button>
-        <button className="icon-btn" onClick={() => void api.browser.reload()} title="Reload">↻</button>
+        <button className="icon-btn" disabled={!s?.canGoBack} onClick={() => void api.browser.back()} title="Back" aria-label="Back"><I.Chevron size={16} style={{ transform: 'rotate(90deg)' }} /></button>
+        <button className="icon-btn" disabled={!s?.canGoForward} onClick={() => void api.browser.forward()} title="Forward" aria-label="Forward"><I.Chevron size={16} style={{ transform: 'rotate(-90deg)' }} /></button>
+        <button className="icon-btn" onClick={() => void api.browser.reload()} title="Reload" aria-label="Reload">↻</button>
         <form onSubmit={(e) => { e.preventDefault(); setEditing(false); if (url.trim()) void api.browser.navigate(url.trim()) }} style={{ flex: 1 }}>
           <input className="burl" value={url} placeholder="Search or enter address" onFocus={() => setEditing(true)} onBlur={() => setEditing(false)}
             onChange={(e) => setUrl(e.target.value)} data-testid="browser-url" />
         </form>
-        <button className="icon-btn" onClick={() => void api.browser.newTab()} title="New tab"><I.Plus size={16} /></button>
+        <button className="icon-btn" onClick={() => void api.browser.newTab()} title="New tab" aria-label="New tab"><I.Plus size={16} /></button>
         {!s?.teach && (
           <button className="teach-btn" disabled={!!s?.controlling} onClick={() => void api.browser.teachStart()}
             title="Teach a task: do it once here while SahilBot records, and your bot learns to repeat it" data-testid="teach-start">

@@ -11,6 +11,7 @@ import { toast } from '../lib/toast'
 import { legibleOn } from '../brand'
 import * as I from '../icons'
 import { describe, duration, runningStep, stepStatus, summarize, type Step } from '../lib/steps'
+import { plainProgress, plainStep } from '@shared/step-words'
 import { Markdown } from './Markdown'
 import { PendingCard } from './Agent'
 import { PageCard, pagesFromSteps } from './PageCard'
@@ -435,12 +436,30 @@ function StatusLine({ drafting, since, progress, doing }: { drafting: string | n
   )
 }
 
+/** A tool's live progress line, or the stall watchdog's note (tool 'watchdog'), as App keeps it per chat. */
+export interface WorkProgress { text: string; tool: string; step?: string; stuck?: boolean }
+
+const lower = (s: string): string => (/^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s)
+
+/**
+ * The working line once the stall watchdog spoke: what it's working on and what is stuck ("Still working on find
+ * hotels: reading a page is taking longer than usual"), or that it waits on your vault unlock. null: not stalled.
+ */
+export function stallText(o: { who: string; label?: string | null; stall?: WorkProgress | null }): string | null {
+  const st = o.stall
+  if (!st || st.tool !== 'watchdog' || !st.text.startsWith('Still on it:')) return null
+  if (/unlock your vault/i.test(st.text)) return `${o.who} is waiting for you to unlock your vault (Touch ID or your password)`
+  const step = st.step ? lower(st.step) : 'this step'
+  return o.label && o.label !== st.step ? `Still working on ${lower(o.label)}: ${step} is taking longer than usual` : `Still on it: ${step} is taking longer than usual`
+}
+
 /**
  * Working, Grok Bot's way (every chat outside Developer mode): the bot says it's on it (its own opening line when it
  * wrote one; a plain "On it." if nothing came after a moment), then one quiet line, an icon and what it's doing
- * ("Planning the Savannah trip"). No timer and no "Thinking…".
+ * ("Planning the Savannah trip"). No timer and no "Thinking…". A step that hangs says what is stuck, with Retry and
+ * Skip for that step alone; "Show work" opens the plan, sources and files.
  */
-function BotWorking({ name, ack, slow, label }: { name?: string; ack: boolean; slow?: boolean; label?: string | null }) {
+function BotWorking({ name, ack, label, stall, threadId, work }: { name?: string; ack: boolean; label?: string | null; stall?: WorkProgress | null; threadId?: string; work?: boolean }) {
   // A quick answer needs no "On it.": it shows only when nothing has come after a moment.
   const [late, setLate] = useState(false)
   useEffect(() => {
@@ -449,28 +468,50 @@ function BotWorking({ name, ack, slow, label }: { name?: string; ack: boolean; s
     return () => clearTimeout(t)
   }, [ack])
   const who = name ?? 'SahilBot'
-  const text = slow ? `${who} is still working. This is taking longer than usual; press Stop if you'd rather not wait` : label || (name ? `${name} is working` : 'Working on it')
+  const slow = stallText({ who, label, stall })
+  const text = slow ?? (label || (name ? `${name} is working` : 'Working on it'))
+  const step = (action: 'retry' | 'skip'): void => {
+    if (!threadId) return
+    void (action === 'retry' ? api.chat.retryStep(threadId) : api.chat.skipStep(threadId)).catch((e: Error) => toast(e.message, 'error'))
+  }
   return (
     <>
       {ack && late && <div className="row ai bot-ack" data-testid="bot-ack"><div className="bubble-wrap ai-col"><div className="bubble ai">On it.</div></div></div>}
       <div className="status-line bot-working" data-testid="status-line">
         <span className="work-orb" aria-hidden="true" />
         <span className="activity-title" role="status" aria-live="polite" data-testid="bot-working">{text}</span>
+        {slow && stall?.stuck && (
+          <span className="stall-actions">
+            <button type="button" className="chip-btn" onClick={() => step('retry')} data-testid="stall-retry">Retry</button>
+            <button type="button" className="chip-btn" onClick={() => step('skip')} data-testid="stall-skip">Skip</button>
+          </span>
+        )}
+        {work && <button type="button" className="show-work" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>}
       </div>
     </>
   )
 }
 
 /**
- * What the working line says, steadiest first: a note from the app, the step of the bot's own plan it's on ("Find
- * family hotels under $150"), then the tool step running now, then the one being prepared. Nothing: the default.
+ * What the working line says, steadiest first: the step of the bot's own plan it's on ("Find family hotels under
+ * 150 dollars"), then a plain progress note from a tool ("Generating the image"), then the step running now in plain
+ * words ("Reading a page"), then the one being prepared. Never raw command output, a path, an id or a tool name:
+ * those stay in Show work. Nothing: the default.
  */
-export function workLabel(o: { progress?: string | null; drafting?: string | null; plan?: string | null; doing?: string | null }): string | null {
-  if (o.progress && !o.progress.startsWith('Still on it:')) return o.progress.replace(/\s+/g, ' ').slice(0, 120)
+export function workLabel(o: { progress?: string | null; progressTool?: string | null; drafting?: string | null; plan?: string | null; doing?: string | null }): string | null {
   if (o.plan) return o.plan.replace(/\s+/g, ' ').slice(0, 80)
+  if (o.progress && !o.progress.startsWith('Still on it:') && plainProgress(o.progress, o.progressTool ?? undefined)) return o.progress.replace(/\s+/g, ' ').slice(0, 120)
   if (o.doing) return o.doing
   if (o.drafting) return PREPARING[o.drafting] ?? null
   return null
+}
+
+/** The working line's words for the step running now: plain ("Running a command"), never its command or path. */
+export function doingPlain(step: Step | undefined): string | null {
+  if (!step) return null
+  let a: Record<string, unknown> = {}
+  try { a = JSON.parse(step.call.arguments) as Record<string, unknown> } catch { a = {} }
+  return plainStep(step.call.name, a)
 }
 
 /**
@@ -501,7 +542,7 @@ export function windowLimit(limit: number, total: number, dividerAt: number): nu
   return dividerAt < 0 ? limit : Math.max(limit, total - dividerAt + DIVIDER_CONTEXT)
 }
 
-export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, ready = true, unreadAfter = null, onAtBottom, voiceLive, botName }: {
+export function ThreadView({ messages, running, pending, actions, drafting, since, teams, progress, work, ready = true, unreadAfter = null, onAtBottom, voiceLive, botName }: {
   messages: Message[]
   /**
    * A bot's chat (Grok Bot's way): only the conversation. While it works you see an "On it." from the bot and
@@ -519,6 +560,8 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   since?: number
   /** Live progress from a long-running tool (tests, builds, a Cursor agent). */
   progress?: string | null
+  /** The same with its source (which tool, or the stall watchdog's note with what is stuck). */
+  work?: WorkProgress | null
   /** The chat's messages are all in (not just live events that beat the fetch): the NEW divider is placed then. */
   ready?: boolean
   /** Bots and agent chats: your read mark when you opened the chat (null: no NEW divider here). */
@@ -636,7 +679,9 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   const lastActivity = lastOf('activity')
   const lastPlan = lastOf('plan')
   // The pinned plan is this run's: a plan from before your latest message belongs to an earlier task.
-  const lastUser = (() => { for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind === 'user') return i; return -1 })()
+  // (A side question asked mid-task belongs to no run of its own: it never starts "this run".)
+  const isTurn = (b: Block): boolean => b.kind === 'user' && !b.m.meta?.aside
+  const lastUser = (() => { for (let i = bs.length - 1; i >= 0; i--) if (isTurn(bs[i])) return i; return -1 })()
   const runPlan = lastPlan && bs.indexOf(lastPlan) > lastUser ? lastPlan : undefined
   const tail = bs[bs.length - 1]
   const last = messages[messages.length - 1]
@@ -646,7 +691,7 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   // The status names the step that is running now: once it has its result, it's "Thinking" again, never a stale label.
   const liveStep = runningStep(allTail?.kind === 'activity' ? allTail.steps : undefined, running)
   // The bot's own plan step for the working line, even where the plan card itself is hidden (outside Developer mode).
-  const allUser = (() => { for (let i = all.length - 1; i >= 0; i--) if (all[i].kind === 'user') return i; return -1 })()
+  const allUser = (() => { for (let i = all.length - 1; i >= 0; i--) if (isTurn(all[i])) return i; return -1 })()
   const livePlan = (() => { for (let i = all.length - 1; i > allUser; i--) { const b = all[i]; if (b.kind === 'plan') return b } return undefined })()
   const writing = !!last && last.role === 'assistant' && last.status === 'streaming' && !!last.content
   // A bot's chat keeps "<name> is working…" up while a checked answer is written out of sight (heldDrafts).
@@ -657,7 +702,13 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
   let tailText: Block | undefined
   for (let i = bs.length - 1; i >= 0; i--) if (bs[i].kind !== 'notice' && bs[i].kind !== 'compacted') { tailText = bs[i]; break }
   const lastText = tailText?.kind === 'text'
-  const lastUserId = (lastOf('user') as Extract<Block, { kind: 'user' }> | undefined)?.m.id
+  const lastUserId = lastUser >= 0 ? (bs[lastUser] as Extract<Block, { kind: 'user' }>).m.id : undefined
+  // This task did something (steps, a plan): "Show work" opens it in the side panel.
+  const ranSteps = all.slice(allUser + 1).some((b) => b.kind === 'activity' || b.kind === 'plan')
+  // The run failed outright (its notice says why in one line), or it was stopped: Retry is right under it.
+  const tailBlock = bs[bs.length - 1]
+  const failedTail = tailBlock?.kind === 'notice' && !!tailBlock.m.meta?.runFailed
+  const retryable = failedTail || (lastText && tailText?.kind === 'text' && (tailText.m.status === 'error' || tailText.m.status === 'stopped' || !!tailText.m.meta?.stopped))
 
   return (
     <VoiceFold.Provider value={fold}>
@@ -708,12 +759,19 @@ export function ThreadView({ messages, running, pending, actions, drafting, sinc
           {pending.map((p) => (p.spend ? <SpendCard key={p.id} req={p} onRespond={stable.onRespond} /> : <PendingCard key={p.id} req={p} onRespond={stable.onRespond} thumb={p.tool === 'browser' ? lastBrowserShot(messages) : undefined} />))}
           {showStatus && (dev
             ? <StatusLine drafting={drafting ?? null} since={started} progress={progress} doing={null} />
-            : <BotWorking name={botName} ack={!repliedSince(messages)} slow={!!progress?.startsWith('Still on it:')}
-                label={workLabel({ progress, drafting, plan: livePlan ? (livePlan.items.find((x) => x.status === 'in_progress')?.text ?? livePlan.title ?? null) : null, doing: liveStep ? describe(liveStep)[2] : null })} />)}
+            : <BotWorking name={botName} ack={!repliedSince(messages)} stall={work ?? null} threadId={threadId} work={ranSteps}
+                label={workLabel({ progress, progressTool: work?.tool, drafting, plan: livePlan ? (livePlan.items.find((x) => x.status === 'in_progress')?.text ?? livePlan.title ?? null) : null, doing: doingPlain(liveStep) })} />)}
           {!quietBot && running && runPlan?.kind === 'plan' && runPlan.items.some((t) => t.status !== 'done') && <LivePlan items={runPlan.items} title={runPlan.title} />}
-          {!running && lastText && !pending.length && (dev || (tailText?.kind === 'text' && (tailText.m.status === 'error' || tailText.m.status === 'stopped'))) && (
+          {!running && !pending.length && (retryable || (lastText && dev)) && (
             <div className="after-actions">
               <button className="chip-btn" onClick={stable.onRetry} data-testid="retry"><I.Reply size={13} style={{ transform: 'scaleX(-1)' }} /> Retry</button>
+              {!dev && ranSteps && <button className="chip-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>}
+            </div>
+          )}
+          {/* A finished task: what it did is one click away (the plan, sources and files), never in the chat itself. */}
+          {!running && !pending.length && !dev && ranSteps && !retryable && (
+            <div className="after-actions">
+              <button className="chip-btn" onClick={() => window.dispatchEvent(new CustomEvent('sahilbot:show-work'))} data-testid="show-work">Show work</button>
             </div>
           )}
           {/* A template bot's starter tasks, under its first message until you ask something: a tap fills the chat box. */}

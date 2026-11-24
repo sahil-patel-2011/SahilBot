@@ -17,7 +17,8 @@ import { BrainView } from './components/BrainView'
 import { RightPanel, type PanelTab } from './components/RightPanel'
 import { JobsChip, RunSummary } from './components/JobsPanel'
 import { Sidebar, type MainView } from './components/Sidebar'
-import { ThreadView } from './components/ThreadView'
+import { ThreadView, type WorkProgress } from './components/ThreadView'
+import { queueWords } from './lib/queue-words'
 import { ProjectHome } from './components/ProjectHome'
 import * as I from './icons'
 import { Popover } from './components/Popover'
@@ -94,6 +95,12 @@ export function App() {
     return () => { window.removeEventListener('sahilbot:open-settings', open); window.removeEventListener('sahilbot:open-connect', connect) }
   }, [])
   const [showConnect, setShowConnect] = useState(false)
+  /** Going somewhere from anywhere (the menu bar, ⌘K, a link): Settings closes first, so the page you picked shows. */
+  const leave = (): void => { setShowSettings(false); setSettingsPage(undefined) }
+  // ...and whatever moved you (a toast's "Open chat", a file's chat, a notification), a new page or chat closes it too.
+  const navKey = `${view}|${thread?.id ?? ''}|${spaceId ?? ''}`
+  const lastNav = useRef(navKey)
+  useEffect(() => { if (lastNav.current !== navKey) { lastNav.current = navKey; leave() } }, [navKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const [editor, setEditor] = useState<Editor>(null)
   const [palette, setPalette] = useState(false)
   const [shortcuts, setShortcuts] = useState(false)
@@ -129,7 +136,8 @@ export function App() {
     window.addEventListener('sahilbot:settings-changed', fn)
     return () => window.removeEventListener('sahilbot:settings-changed', fn)
   }, [])
-  const [toolProgress, setToolProgress] = useState<Record<string, string | null>>({})
+  /** A tool's live progress line, or the stall watchdog's note (tool 'watchdog': what is stuck, with Retry / Skip). */
+  const [toolProgress, setToolProgress] = useState<Record<string, WorkProgress | null>>({})
   const [runSince, setRunSince] = useState<Record<string, number>>({})
   // Bots with an open question or approval waiting in Needs you (the bot kept working): their sidebar row shows
   // the accent "needs you" dot like a card open in a running chat does.
@@ -270,7 +278,9 @@ export function App() {
     if (e.type !== 'delta') flushDeltas()
     if (e.type === 'spaces') { void refreshSpaces(); return }
     if (e.type === 'drafting') { setDrafting((d) => ({ ...d, [e.threadId]: e.tool })); return }
-    if (e.type === 'tool_progress') { setToolProgress((p) => ({ ...p, [e.threadId]: e.text })); return }
+    if (e.type === 'tool_progress') { setToolProgress((p) => ({ ...p, [e.threadId]: e.text ? { text: e.text, tool: e.tool, step: e.step, stuck: e.stuck } : null })); return }
+    // Anything else from a chat after a stall note (a reply streaming again, a new step): the note goes.
+    if ('threadId' in e && e.type !== 'thread') setToolProgress((p) => (p[e.threadId]?.tool === 'watchdog' ? { ...p, [e.threadId]: null } : p))
     // A tool finished or the run ended: its progress line goes.
     if ((e.type === 'message' && e.message.role === 'tool') || (e.type === 'run' && e.status !== 'started')) setToolProgress((p) => (p[e.threadId] ? { ...p, [e.threadId]: null } : p))
     if (e.type === 'run') {
@@ -361,17 +371,17 @@ export function App() {
 
   // Menu bar commands.
   useEffect(() => api.onMenu((a) => {
-    if (a === 'new-chat') { setSpaceId(null); setThread(null) }
-    else if (a === 'new-bot') setEditor({ space: null, mode: 'bot' })
-    else if (a === 'new-project') setEditor({ space: null, mode: 'project' })
+    if (a === 'new-chat') { leave(); setSpaceId(null); setThread(null); setView('home') }
+    else if (a === 'new-bot') { leave(); setEditor({ space: null, mode: 'bot' }) }
+    else if (a === 'new-project') { leave(); setEditor({ space: null, mode: 'project' }) }
     else if (a === 'settings') setShowSettings(true)
-    else if (a === 'scheduled') setShowScheduled(true)
-    else if (a === 'connect') setShowConnect(true)
+    else if (a === 'scheduled') { leave(); setShowScheduled(true) }
+    else if (a === 'connect') { leave(); setShowConnect(true) }
     else if (a === 'toggle-panel') setPanel((p) => (p && p !== 'details' ? null : 'progress'))
     else if (a === 'search') setPalette(true)
     else if (a === 'shortcuts') setShortcuts(true)
-    else if (a === 'needs-you') { setThread(null); setView('tasks') }
-    else if (a === 'brain') { setThread(null); setView('brain') }
+    else if (a === 'needs-you') { leave(); setThread(null); setView('tasks') }
+    else if (a === 'brain') { leave(); setThread(null); setView('brain') }
     else if (a === 'export' && threadRef.current) void api.chat.exportThread(threadRef.current).then((p) => p && toast(`Saved to ${p.split('/').pop()}`, 'ok'))
   }), [])
 
@@ -652,6 +662,8 @@ export function App() {
   openBotRef.current = openBot
   const onPalette = (a: PaletteAction): void => {
     setPalette(false)
+    // Anything but a Settings page is somewhere else: Settings closes first (report SUB-07).
+    if (a.kind !== 'settings' && a.kind !== 'usage' && a.kind !== 'setting' && a.kind !== 'shortcuts' && a.kind !== 'dictate' && a.kind !== 'max') leave()
     if (a.kind === 'new-chat') openMain()
     else if (a.kind === 'new-bot') setEditor({ space: null, mode: 'bot' })
     else if (a.kind === 'new-group') setEditor({ space: null, mode: 'group' })
@@ -812,7 +824,8 @@ export function App() {
     if (thread && running.has(thread.id)) {
       // ⌘Enter (or attachments): wait until it's done. Enter: steer the agent now.
       // Link text waits too: a steer can't carry its "from a link" mark.
-      if (o.queue || o.fromLink || o.attachments.length || o.images.length) { setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] })); return true }
+      // Words queue it too: "when you're done, also…", "after that, …" waits for this task to finish.
+      if (o.queue || o.fromLink || o.attachments.length || o.images.length || queueWords(o.text)) { setQueue((q) => ({ ...q, [thread.id]: [...(q[thread.id] ?? []), o] })); return true }
       try { await api.chat.steer(thread.id, o.text); return true } catch (e) { toast((e as Error).message, 'error'); return false }
     }
     let t = thread
@@ -852,7 +865,7 @@ export function App() {
   const openAnyChat = async (id: string): Promise<void> => {
     for (const sp of spaces) {
       const t = (await api.threads.list(sp.id)).find((x) => x.id === id)
-      if (t) { setSpaceId(sp.id); setThread(t); setView('home'); return }
+      if (t) { leave(); setSpaceId(sp.id); setThread(t); setView('home'); return }
     }
   }
   openAnyChatRef.current = (id) => void openAnyChat(id)
@@ -1062,8 +1075,8 @@ export function App() {
               {!!browser?.tabs.length && <span className={`globe-dot${browser.controlling ? ' live' : ''}`} />}
             </button>
             )}
-            {(thread || isBot) && (dev || (panel && panel !== 'details') || plan.length > 0 || (prog?.actions ?? 0) > 0) && (
-            <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Side panel: progress, files and documents (⌘\)" aria-label="Side panel" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
+            {(thread || isBot) && (dev || (panel && panel !== 'details') || plan.length > 0 || (prog?.actions ?? 0) > 0 || messages.some((m) => m.role === 'tool')) && (
+            <button className={`icon-btn${panel && panel !== 'details' ? ' on' : ''}`} title="Show work: the plan, steps, files and sources (⌘\)" aria-label="Show work" onClick={() => setPanel((p) => (p && p !== 'details' ? null : 'progress'))} data-testid="toggle-panel"><I.Panel size={17} /></button>
             )}
             {isServerRuntime && <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={() => setShowSettings(true)} data-testid="header-settings"><I.Gear size={17} /></button>}
           </div>
@@ -1093,7 +1106,7 @@ export function App() {
               botName={botChatName}
               ready={ready} onAtBottom={onAtBottom}
               unreadAfter={opened?.id === thread.id && dividerKind({ space: spaces.find((s) => s.id === thread.spaceId), thread, messages }) ? opened.readAt : null}
-              drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id] ?? null}
+              drafting={drafting[thread.id] ?? null} since={runSince[thread.id]} progress={toolProgress[thread.id]?.text ?? null} work={toolProgress[thread.id] ?? null}
               actions={{
                 onRetry: () => void api.chat.retry(thread.id).catch((e: Error) => toast(e.message, 'error')),
                 onEditLast: (text) => void api.chat.editLast(thread.id, text).catch((e: Error) => toast(e.message, 'error')),
@@ -1109,11 +1122,11 @@ export function App() {
                   {(queue[thread.id] ?? []).map((q, i) => (
                     <span key={i} className="queued-item"><I.Clock size={12} />{q.text.slice(0, 60) || 'Attachment'}<button onClick={() => setQueue((x) => ({ ...x, [thread.id]: x[thread.id].filter((_, j) => j !== i) }))}>×</button></span>
                   ))}
-                  <span className="hint">Sends when SahilBot finishes</span>
+                  <span className="hint">Sends when {botChatName ?? 'SahilBot'} finishes</span>
                 </div>
               )}
-              {/* A bot's chat ends on its answer (Grok Bot's way); new chats keep the finish line. */}
-              {!isRunning && (dev || !botChatName) && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} />}
+              {/* The finish line: what was made, where, how long. A bot's chat (Grok Bot's way) shows it only when the task made something. */}
+              {!isRunning && <RunSummary threadId={thread.id} messages={messages} mode={mode} simple={!dev} onlyMade={!dev && !!botChatName} />}
               {chatInput}
             </div>
           </>

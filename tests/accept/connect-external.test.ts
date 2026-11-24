@@ -69,7 +69,7 @@ describe('sign-in in the external browser, one click with a built-in client', ()
   test('Connect apps: the built-in-client app is one click at the top; the other sits under "Needs a one-time setup"', async () => {
     const { fake, app, page, log } = await start()
     try {
-      await page.click('[data-testid="connect-apps"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
       const section = page.locator('[data-testid="section-Other"]')
       await section.waitFor({ timeout: 10_000 })
       const ready = section.locator('[data-testid="section-ready"] [data-testid="preset-test-chatter"]')

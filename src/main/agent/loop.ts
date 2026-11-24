@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { isStopRequest } from './stop-intent'
+import { isGenericStop, isStopAll, isStopRequest, namesMatch, stopTarget } from './stop-intent'
+import { plainStep } from '@shared/step-words'
 import { asideSystem, isAside, quickMath } from './aside'
 import { beginRun } from './undo-journal'
 import { projectInstructions } from './project-instructions'
@@ -123,6 +124,8 @@ export const PER_PLAN_ITEM = 10
 export const REMIND_EVERY = 10
 
 export interface AgentDeps {
+  /** A vault unlock (Touch ID or the password dialog) is open: the stall watchdog says it waits on you, not "slow". */
+  vaultWaiting?: () => boolean
   /** Harness features (all on unless set; the harness benchmark's profiles switch some off). */
   harness?: Partial<HarnessFeatures>
   /** Privacy Gate (src/main/privacy): whether it checks cloud requests right now, and PII-Tracer on this Mac. */
@@ -277,7 +280,20 @@ interface Run {
   askVia?: { threadId: string; run: Run; label: string }
   /** This run's id for the question queue: its questions join one card. */
   queueKey?: string
+  /** The user stopped it (the Stop button, or typed "stop"): the chat says "Stopped." once when it ends. */
+  userStopped?: boolean
+  /** That "Stopped." is already in the chat (a typed stop answers at once). */
+  stopConfirmed?: boolean
+  /**
+   * The step working right now (a tool, or the model writing), in plain words, with its own stop: the stall
+   * note names it, and Retry / Skip on that note end only this step (skipStep, retryStep).
+   */
+  current?: RunStep
+  /** Every step working right now (tools can run side by side); `current` is the newest. */
+  steps?: RunStep[]
 }
+
+type RunStep = { label: string; ctrl: AbortController; callId?: string; at: number; action?: 'retry' | 'skip' }
 
 /**
  * Messages that look like the user's but aren't their words: another bot's handoff, a Teach recording
@@ -380,8 +396,49 @@ export const RESEARCH_FIRST = 'Research first: spend a few steps looking for the
 /** What the model gets back for a step a dry run skipped. */
 export const dryRunNote = (summary: string): string => `DRY RUN: this was not done (nothing was changed). It would have: ${summary}. Carry on as if it had worked, and end with a short list of everything you would have done, so the user can check it before the real run.`
 
+/**
+ * The chat already shows that this run stopped: a reply cut off mid-stream ("Stopped" under it) or a "Stopped."
+ * line, since the message that started the run.
+ */
+export function stopShown(messages: Message[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'assistant' && m.kind === 'normal' && (m.status === 'stopped' || m.meta?.stopped)) return true
+    if (m.role === 'user' && !m.meta?.hidden && !m.meta?.steer && !m.meta?.aside) return false
+  }
+  return false
+}
+
 /** How the stall watchdog's note starts (the chat shows it as a plain status, and a bot's chat as "still working"). */
 export const STALL_PREFIX = 'Still on it:'
+
+/** The stall note: what is stuck and for how long, and what you can do ("Still on it: reading a page is taking…"). */
+export function stallNote(step: string | undefined, mins: number): string {
+  const what = step ? step.charAt(0).toLowerCase() + step.slice(1) : 'this step'
+  return `${STALL_PREFIX} ${what} is taking longer than usual (${mins} min). Retry it, skip it, or keep waiting.`
+}
+
+/** A run that failed outright, in one plain sentence (the raw error is kept beside it, out of sight). */
+export function runFailedText(e: unknown): string {
+  const kind = failureKind(e)
+  if (kind === 'auth') return 'Couldn\'t finish: the AI service refused its key. Check it in Settings → AI, then press Retry.'
+  if (kind === 'quota') return 'Couldn\'t finish: the AI service is out of credit. Add credit or pick another model, then press Retry.'
+  if (kind === 'budget') return 'Couldn\'t finish: this would go over your spending limit (Settings → AI & spending).'
+  if (kind === 'context') return 'Couldn\'t finish: this chat got too long for the model. Start a new chat, or ask for a smaller piece.'
+  if (kind === 'other') return 'Couldn\'t finish this task. Press Retry to try again.'
+  return `Couldn't finish: the AI service is ${KIND_WORDS[kind]} right now. Press Retry to try again.`
+}
+
+/** A tool step in plain words for the stall note ("Reading a page"); "This step" when there are none. */
+const stepWords = (name: string, args: Record<string, unknown>): string => { const w = plainStep(name, args); return w === 'Working on it' ? 'This step' : w }
+
+/** What the model gets back for a step the user skipped because it hung. */
+export const SKIPPED_STEP = 'Skipped: this step hung and the user chose to skip it (nothing more came back from it). Do not run it again. If it could have changed something (a send, a write), check whether it went through before doing anything like it. Carry on without it, and say in your reply what was skipped.'
+
+/** A step the user skipped (or asked to retry) from the stall note. */
+class StepStopped extends Error {
+  constructor(readonly action: 'retry' | 'skip') { super(action === 'skip' ? 'Skipped by the user' : 'Retried by the user'); this.name = 'StepStopped' }
+}
 
 /** The questions of an ask_user call (one, or a batch). */
 export function askedQuestions(args: Record<string, unknown>): string[] {
@@ -685,13 +742,12 @@ export class Agent {
       await this.send({ threadId, text, ...(meta ? { meta } : {}) })
       return 'sent'
     }
-    // You typed only "stop" (or "cancel", "never mind"…): it really stops, like the Stop button, and helpers,
-    // commands and pending requests stop with it. Not a hint the bot may read and carry on past.
-    if (!meta && isStopRequest(text)) {
-      const m = this.d.db.insertMessage({ threadId, role: 'user', content: text, kind: 'normal', status: 'done', meta: { steer: true, stopRequest: true } })
-      this.d.emit({ threadId, type: 'message', message: m })
-      this.stop(threadId)
-      return 'steered'
+    // You typed "stop" (or "cancel", "never mind", "Stop Test 5 now", "stop everything"…): it really stops, like the
+    // Stop button, and helpers, commands and pending requests stop with it, with one "Stopped." at once. Not a hint
+    // the bot may read and carry on past.
+    if (!meta) {
+      const targets = this.stopTargets(threadId, text)
+      if (targets) { this.stopByWords(threadId, text, targets); return 'steered' }
     }
     // It already answered and is only double-checking that answer: the answer stands, the run ends, and this
     // message starts a fresh run (it never becomes a steer into a finished task).
@@ -703,7 +759,8 @@ export class Agent {
     }
     // A quick side question ("what's 9 squared?", "how's it going?"): answered right away beside the job,
     // which keeps running. Only in a plain chat run the user is watching; never when a question card is open.
-    if (!meta && isAside(text) && !run.group && !run.helper && !run.unattended && !run.pending.size && this.lastModel.get(threadId)) {
+    // (Plain arithmetic needs no model: it's answered even before the first model step.)
+    if (!meta && isAside(text) && !run.group && !run.helper && !run.unattended && !run.pending.size && (this.lastModel.get(threadId) || quickMath(text))) {
       const m = this.d.db.insertMessage({ threadId, role: 'user', content: text, kind: 'normal', status: 'done', meta: { aside: true } })
       this.d.emit({ threadId, type: 'message', message: m })
       void this.aside(threadId, run, m)
@@ -715,6 +772,50 @@ export class Agent {
     run.steers = [...(run.steers ?? []), { text, meta }]
     this.d.emit({ threadId, type: 'steer', pending: run.steers.length })
     return 'steered'
+  }
+
+  /**
+   * The chats a stop typed in this chat means: every running chat for "stop everything", this one for a bare "stop"
+   * or a stop of the task at hand ("Stop Test 5 now", "cancel the trip plan"), or the running chat it names (typed
+   * anywhere). null: not a stop (steering like "stop using commas", or a request like "cancel the 3pm meeting").
+   */
+  private stopTargets(threadId: string, text: string): { ids: string[]; all: boolean } | null {
+    const top = [...this.runs].filter(([, r]) => !r.helper).map(([id]) => id)
+    if (isStopAll(text)) return { ids: top, all: true }
+    const here = this.runs.has(threadId)
+    if (here && isStopRequest(text)) return { ids: [threadId], all: false }
+    const target = stopTarget(text)
+    if (!target) return null
+    const named = top.filter((id) => namesMatch(target, this.runNames(id)))
+    if (named.length) return { ids: named, all: false }
+    return here && isGenericStop(target) ? { ids: [threadId], all: false } : null
+  }
+
+  /** What a running chat is called: its title and its task's first words. */
+  private runNames(threadId: string): string[] {
+    const run = this.runs.get(threadId)
+    const opener = run?.record ? this.d.db.listMessages(threadId).find((m) => m.id === run.record!.openerId) : undefined
+    return [this.d.db.getThread(threadId)?.title ?? '', (opener?.content ?? '').slice(0, 80)]
+  }
+
+  /** A typed stop: the chats it means stop at once, and the chat says so in one line ("Stopped."). No model call. */
+  private stopByWords(threadId: string, text: string, t: { ids: string[]; all: boolean }): void {
+    const here = this.runs.has(threadId)
+    const u = this.d.db.insertMessage({ threadId, role: 'user', content: text, kind: 'normal', status: 'done', meta: { ...(here ? { steer: true } : {}), stopRequest: true } })
+    this.d.emit({ threadId, type: 'message', message: u })
+    const others = t.ids.filter((id) => id !== threadId)
+    const names = others.map((id) => (this.d.db.getThread(id)?.title || 'a chat').replace(/^⏰ /, '').slice(0, 60))
+    for (const id of t.ids) {
+      const r = this.runs.get(id)
+      if (r && id === threadId) r.stopConfirmed = true
+      this.stop(id, { byUser: true })
+    }
+    const list = (xs: string[]): string => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
+    const reply = !t.ids.length ? 'Nothing was running.'
+      : t.ids.includes(threadId) ? (names.length ? `Stopped. Also stopped ${list(names)}.` : 'Stopped.')
+        : `Stopped ${list(names)}.`
+    const m = this.d.db.insertMessage({ threadId, role: 'assistant', content: reply, kind: 'normal', status: 'done', meta: { stopped: true } })
+    this.d.emit({ threadId, type: 'message', message: m })
   }
 
   /**
@@ -732,8 +833,10 @@ export class Agent {
     const model = this.quickModel(this.lastModel.get(threadId)!)
     const all = this.d.db.listMessages(threadId)
     const job = [...all].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside && m.id !== asked.id)?.content ?? ''
-    const step = [...all].reverse().find((m) => m.role === 'assistant' && m.toolCalls?.length)?.toolCalls?.at(-1)?.name
-    const reply = await this.teammate(model, asideSystem({ who: whoIs(this.d.settings.get()), job, ...(step ? { step: `using ${step.replace(/_/g, ' ')}` } : {}) }), asked.content, run, 'low', 400).catch(() => undefined)
+    // What it's doing now, in plain words ("searching the web"), never a tool name the reply could repeat.
+    const now = run.current?.label ?? (() => { const c = [...all].reverse().find((m) => m.role === 'assistant' && m.toolCalls?.length)?.toolCalls?.at(-1); if (!c) return undefined; let a: Record<string, unknown> = {}; try { a = JSON.parse(c.arguments) as Record<string, unknown> } catch { a = {} } return plainStep(c.name, a) })()
+    const step = now && now !== 'Working on it' ? now.charAt(0).toLowerCase() + now.slice(1) : undefined
+    const reply = await this.teammate(model, asideSystem({ who: whoIs(this.d.settings.get()), job, ...(step ? { step } : {}) }), asked.content, run, 'low', 400).catch(() => undefined)
     // A side answer posts even if the run finished meanwhile (the question is already in the chat). When the side call
     // failed, the question goes to the run that is going now (never a finished one): it's answered there.
     if (!reply) {
@@ -766,7 +869,7 @@ export class Agent {
     for (const { text, meta } of texts) {
       const m = this.d.db.insertMessage({
         threadId, role: 'user', content: text, kind: 'normal', status: 'done',
-        meta: { steer: true, note: `[The user sent this while you were working. Take it into account from your next step on: change the plan if needed, don't redo work that is already done, and keep going.]${typeof meta?.answerNote === 'string' ? `\n${meta.answerNote}` : ''}`, ...(meta ?? {}) }
+        meta: { steer: true, note: `[The user sent this while you were working. Take it into account from your next step on: change the plan if needed, don't redo work that is already done, and keep going. If it asks you to stop, stop now and reply in one line.]${typeof meta?.answerNote === 'string' ? `\n${meta.answerNote}` : ''}`, ...(meta ?? {}) }
       })
       this.d.emit({ threadId, type: 'message', message: m })
       out.push(m)
@@ -776,11 +879,74 @@ export class Agent {
     return out
   }
 
-  stop(threadId: string): void {
+  /** Stops a chat's run. byUser: the user stopped it (the Stop button, typed words), so the chat says "Stopped." once. */
+  stop(threadId: string, o: { byUser?: boolean } = {}): void {
     const run = this.runs.get(threadId)
     if (!run) return
+    if (o.byUser) run.userStopped = true
     run.ctrl.abort()
     for (const id of [...run.pending.keys()]) this.respond(threadId, id, 'deny')
+  }
+
+  /** The stall note's Skip: only the step that hung stops; the task carries on without it. */
+  skipStep(threadId: string): boolean {
+    return this.endStep(threadId, 'skip')
+  }
+
+  /** The stall note's Retry: the step that hung stops and runs again once (a model reply is asked for again). */
+  retryStep(threadId: string): boolean {
+    return this.endStep(threadId, 'retry')
+  }
+
+  private endStep(threadId: string, action: 'retry' | 'skip'): boolean {
+    const run = this.runs.get(threadId)
+    const step = run?.current
+    if (!run || !step || run.ctrl.signal.aborted || step.ctrl.signal.aborted) return false
+    step.action = action
+    step.ctrl.abort(new StepStopped(action))
+    // The note goes, and the watchdog's minute starts over.
+    this.lastEvent.set(threadId, Date.now())
+    this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: '' })
+    return true
+  }
+
+  /** A step starts (a tool, or the model writing): the stall note names it, and Retry / Skip can end it alone. */
+  private beginStep(run: Run, label: string, callId?: string): RunStep {
+    const step: RunStep = { label, ctrl: new AbortController(), callId, at: Date.now() }
+    run.steps = [...(run.steps ?? []), step]
+    run.current = step
+    return step
+  }
+
+  private endStepTrack(run: Run, step: RunStep): void {
+    run.steps = (run.steps ?? []).filter((x) => x !== step)
+    run.current = run.steps[run.steps.length - 1]
+  }
+
+  /**
+   * Runs one tool step so that Skip and Retry on the stall note end only it: the step's own stop is raced against the
+   * tool (one that ignores its signal is let go), Retry runs it again (at most twice), Skip throws StepStopped('skip').
+   * A step that may change something runs again only when it is safe to repeat (`repeatable`); otherwise Retry skips.
+   */
+  private async watchStep<T>(run: Run, label: string, callId: string, repeatable: boolean, setSignal: (signal: AbortSignal) => void, go: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      const step = this.beginStep(run, label, callId)
+      setSignal(AbortSignal.any([run.ctrl.signal, step.ctrl.signal]))
+      try {
+        return await new Promise<T>((resolve, reject) => {
+          const onAbort = (): void => reject(new StepStopped(step.action ?? 'skip'))
+          step.ctrl.signal.addEventListener('abort', onAbort, { once: true })
+          go().then(resolve, reject).finally(() => step.ctrl.signal.removeEventListener('abort', onAbort))
+        })
+      } catch (e) {
+        if (run.ctrl.signal.aborted || !step.ctrl.signal.aborted) throw e
+        if (step.action === 'retry' && repeatable && attempt < 2) continue
+        throw new StepStopped('skip')
+      } finally {
+        this.endStepTrack(run, step)
+        setSignal(run.ctrl.signal)
+      }
+    }
   }
 
   /** Resolves once the message is stored and the run has started; `done` resolves when the run ends. */
@@ -790,6 +956,12 @@ export class Agent {
     const location = placementBlock(this.d.db, thread.spaceId)
     if (location) throw new Error(location)
     if (this.runs.has(thread.id)) throw new Error('SahilBot is still working in this thread. Stop it first or wait.')
+    // "Stop everything" or "Stop Test 5 now" typed in a chat that isn't working: the chats it means stop, and it says
+    // so here in one line (never a model call that could carry on with the work).
+    if (!opts.unattended && !input.voice && !isRelayed({ meta: input.meta }) && !input.meta?.hidden && !input.attachments?.length) {
+      const targets = this.stopTargets(thread.id, input.text)
+      if (targets) { this.stopByWords(thread.id, input.text, targets); return { done: Promise.resolve('finished' as const) } }
+    }
     const current = this.d.db.getState(thread.id)
     if (!!current.voice !== !!input.voice) {
       current.voice = !!input.voice
@@ -982,7 +1154,8 @@ export class Agent {
   retry(threadId: string): void {
     const thread = this.d.db.getThread(threadId)
     if (!thread || this.runs.has(threadId)) throw new Error('SahilBot is still working in this thread.')
-    const lastUser = [...this.d.db.listMessages(threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside)
+    // After a typed stop, Retry asks for the task again (never the "stop").
+    const lastUser = [...this.d.db.listMessages(threadId)].reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.aside && !m.meta?.stopRequest)
     if (!lastUser) throw new Error('Nothing to retry yet.')
     // Regenerating Auto's answer: it didn't suit the user (a verdict on its model for that kind of task).
     const ms = this.d.db.listMessages(threadId)
@@ -1049,7 +1222,14 @@ export class Agent {
         return await this.speakers(thread, run, space, userText)
       } finally { release() }
     }))
-      .catch((e) => { this.notice(thread.id, `Run failed: ${(e as Error).message}`); return 'error' as const })
+      .catch((e) => {
+        // One plain sentence and a Retry; the raw error stays in the message for Show work and Developer mode.
+        try {
+          const m = this.d.db.insertMessage({ threadId: thread.id, role: 'assistant', content: runFailedText(e), kind: 'notice', status: 'done', meta: { runFailed: true, detail: String((e as Error)?.message ?? e).slice(0, 2000) } })
+          this.d.emit({ threadId: thread.id, type: 'message', message: m })
+        } catch { /* the chat is gone */ }
+        return 'error' as const
+      })
       .then((status) => { this.runtime.finish(record.id, status); return status })
       .finally(() => {
         clearInterval(watchdog)
@@ -1120,6 +1300,17 @@ export class Agent {
     finishSwarms(thread.id, finalAnswer, status)
     // The Max card: the answer is its result (credits), and its session closes.
     finishMax(thread.id, finalAnswer, status)
+    // You stopped it (the Stop button): the chat says so once, even when it was stopped in the middle of a step
+    // that shows nothing in the quiet chat. A reply cut off mid-stream already says "Stopped" under it.
+    if (status === 'stopped' && run.userStopped && !run.stopConfirmed && !run.endWithDraft && !run.helper) {
+      try {
+        if (this.d.db.getThread(thread.id) && !stopShown(this.d.db.listMessages(thread.id))) {
+          const m = this.d.db.insertMessage({ threadId: thread.id, role: 'assistant', content: 'Stopped.', kind: 'normal', status: 'done', meta: { stopped: true } })
+          this.d.emit({ threadId: thread.id, type: 'message', message: m })
+        }
+      } catch { /* the chat was deleted as it stopped */ }
+      run.stopConfirmed = true
+    }
     // Unregister before announcing the end, so a message sent the instant the UI unlocks is accepted.
     this.runs.delete(thread.id)
     if (status === 'finished') void this.autoTitle(thread.id)
@@ -1372,6 +1563,7 @@ export class Agent {
   private stallWatchdog(threadId: string, run: Run): ReturnType<typeof setInterval> {
     const after = Number(process.env.FOREMAN_STALL_MS) || 60_000
     let told = 0
+    let vaultTold = false
     const t = setInterval(() => {
       if (this.runs.get(threadId) !== run || run.ctrl.signal.aborted) return
       // Waiting on you is not a stall (the card says what it needs).
@@ -1381,8 +1573,19 @@ export class Agent {
       // Quiet for a minute, and not already said in the last minute: say it (once a minute while it lasts).
       if (now - last < after || now - told < after) return
       told = now
+      // Your vault unlock (Touch ID or the password) is what it waits for: it says so, once, instead of "slow".
+      let vault = false
+      try { vault = !!this.d.vaultWaiting?.() } catch { vault = false }
+      if (vault) {
+        if (vaultTold) return
+        vaultTold = true
+        this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: `${STALL_PREFIX} waiting for you to unlock your vault (Touch ID or your password).`, waitingOnYou: true })
+        return
+      }
       const mins = Math.max(1, Math.round((now - last) / 60_000))
-      this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: `${STALL_PREFIX} this step is taking longer than usual (${mins} min). You can keep waiting, or press Stop.` })
+      // Says what is stuck ("reading a page is taking longer than usual"), and Retry / Skip end only that step.
+      const step = run.current
+      this.d.emit({ threadId, type: 'tool_progress', callId: 'watchdog', tool: 'watchdog', text: stallNote(step?.label, mins), ...(step ? { step: step.label, stuck: true } : {}) })
     }, Math.max(250, Math.min(5_000, Math.floor(after / 4))))
     t.unref?.()
     return t
@@ -2983,6 +3186,8 @@ export class Agent {
     }
     /** Model steps that completed in this run (a fallback after the first one keeps the provider when it can). */
     let stepsDone = 0
+    /** Model replies asked for again after Retry / Skip on a silent model (once with the same model). */
+    let stallRetries = 0
     const modelName = (): string => this.d.endpoints.last?.models.find((m) => m.id === model)?.label ?? model
     let invalidStreak = 0
     /** Steps in a row where every tool call failed, and whether Auto already stepped up a model for it. */
@@ -3386,9 +3591,15 @@ export class Agent {
           stepsDone++
         } catch (e) {
           if (run.ctrl.signal.aborted || (e as Error).name === 'AbortError') throw e
+          // The user pressed Retry or Skip while the model sat silent: ask another model, else this one again (once).
+          if ((e as { stalled?: boolean }).stalled) {
+            if (switchModel(`${modelName()} stopped answering`, true, e as Error) || stallRetries++ < 1) { step--; continue }
+            throw e
+          }
           // One request ran past its limits (llm/request-guard.ts: idle or wall clock, too many server searches): the
           // model isn't at fault and another would run the same request as long, so the run stops with the reason.
-          if ((e as { requestCap?: string }).requestCap) throw e
+          // An idle stop (nothing streamed for minutes) is the provider's fault, though: another model takes over below.
+          if ((e as { requestCap?: string }).requestCap && (e as { requestCap?: string }).requestCap !== 'idle') throw e
           // Remembered (llm/model-health.ts): out of credit, rate limited, gone… later requests skip it for a while.
           modelHealth.mark(this.d.endpoints.last?.models.find((m) => m.id === model) ?? { id: model, provider: ep.provider }, e)
           // The failed reply stays visible as an error bubble (it's left out of the history); redo this step.
@@ -3848,6 +4059,9 @@ export class Agent {
       headDone = true
       return head
     }
+    // The model writing is a step too: the stall note names it, and Retry / Skip ask again (another model if one fits).
+    const who = this.d.endpoints.last?.models.find((x) => x.id === model)?.label ?? 'the AI'
+    const step = this.beginStep(run, `Waiting for ${who} to answer`)
     try {
       for await (const part of streamChat({
         baseUrl: ep.baseUrl,
@@ -3862,7 +4076,7 @@ export class Agent {
         sampling: { ...samplingFor(model, s.sampling), ...(run.sampling ?? {}) },
         maxTokens: OUTPUT_RESERVE,
         contextWindow: window,
-        signal: run.ctrl.signal,
+        signal: AbortSignal.any([run.ctrl.signal, step.ctrl.signal]),
         // Voice answers right away; otherwise thinking adapts to the problem around the chosen level.
         effort: effort ?? (this.d.db.getState(threadId).voice ? 'low' : resolveEffort(s.thinking, { category: routed?.category, difficulty: routed?.tier })),
         // Local models stay loaded between messages.
@@ -3930,7 +4144,9 @@ export class Agent {
         m.toolCalls = undefined
         m.meta = { ...m.meta, droppedToolCall: true }
       }
-    } catch (e) {
+    } catch (err) {
+      // Retry / Skip on the stall note: the model stopped answering, which the loop treats like a dropped connection.
+      const e = !run.ctrl.signal.aborted && step.ctrl.signal.aborted ? Object.assign(new Error(`${who} stopped answering.`), { stalled: true }) : err
       m.status = run.ctrl.signal.aborted ? 'stopped' : 'error'
       if (m.status === 'error') {
         const reason = failureKind(e)
@@ -3945,6 +4161,8 @@ export class Agent {
       this.d.db.updateMessage(m)
       this.d.emit({ threadId, type: 'message', message: m })
       throw e
+    } finally {
+      this.endStepTrack(run, step)
     }
     this.d.db.updateMessage(m)
     this.d.emit({ threadId, type: 'message', message: m })
@@ -4482,7 +4700,7 @@ export class Agent {
           return tool.run(args, toolCtx)
         }
       }
-      out = preparedAction.replay ?? await invoke()
+      out = preparedAction.replay ?? await this.watchStep(run, stepWords(tool.name, args), call.id, effect === 'read' || !!tool.idempotent, (signal) => { toolCtx.signal = signal }, invoke)
       // A send that ran without asking because its recipients are trusted counts toward the bot's hourly limit.
       if (decision.trusted && decision.verdict === 'allow' && !preparedAction.replay) this.d.trustedSends?.record(run.speaker?.id ?? thread.spaceId)
       if (tool.outputSchema) validateOutput(tool.outputSchema, out.data)
@@ -4505,6 +4723,8 @@ export class Agent {
       // Only a plain failure counts against a later "I've done it"; an uncertain one (a timeout) may have gone through.
       if (effect !== 'read' && definiteFailure(msg)) (ctx.track.failedWrites ??= new Set()).add(tool.name)
       if (run.ctrl.signal.aborted) throw e
+      // Skipped from the stall note: the model hears it was skipped, with no recovery plan to try it again.
+      if (e instanceof StepStopped) return { call, status: 'error', content: SKIPPED_STEP, errorFor: { tool: tool.name, message: msg }, meta: { ...baseMeta, status: 'error', actionId: preparedAction.record.id, display: 'skipped (it hung)' } }
       const recovery = recoveryPlan(tool.name, msg, effect)
       const mayRecover = this.runtime.recoverAttempt(record.id, digest({ tool: tool.name, kind: recovery.kind }))
       if (recovery.kind === 'connect' && mayRecover && tool.connector && toolCtx.offerConnect && !run.unattended && !run.helper) {

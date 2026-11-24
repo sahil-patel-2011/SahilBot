@@ -11,6 +11,7 @@ import { streamXai } from './xai-client'
 import { updateXaiCatalog, xaiMaxTokens } from './xai-models'
 import { currentFastTier, fastFactor, fastSupport } from './fast-mode'
 import { httpError, retryInfo, withRetries } from './retry'
+import { idleGuarded } from './idle-guard'
 import { timer } from './timing'
 import { toolTurnSampling, withToolPrimer } from './local-tools'
 // ChatGPT plan (via Codex): chatgpt-plan/… models run through the user's own Codex (llm/codex).
@@ -472,11 +473,11 @@ async function* route(req: ChatRequest, stats: ServerStats): AsyncGenerator<Stre
     return
   }
   if (await isOllama(req.baseUrl)) {
-    yield* withRetries(() => streamOllama(req, stats), req.signal)
+    yield* withRetries(() => idleGuarded(req, (r) => streamOllama(r, stats), { local: true }), req.signal)
     return
   }
   if (isLocal(req.baseUrl)) {
-    yield* withRetries(() => streamOpenAI(req, stats), req.signal)
+    yield* withRetries(() => idleGuarded(req, (r) => streamOpenAI(r, stats), { local: true }), req.signal)
     return
   }
   // Paid endpoint: each attempt is priced and checked against the monthly cap before anything is sent.
@@ -524,7 +525,8 @@ async function* paidAttempt(original: ChatRequest): AsyncGenerator<StreamPart> {
   let rejected = false
   const detail: UsageDetail = fast ? { tier: fast } : {}
   try {
-    for await (let part of claude ? streamAnthropic(req) : xai ? streamXai(req) : responses ? streamResponses(req) : streamOpenAI(req)) {
+    // Claude and OpenAI Responses have their own request guard (request-guard.ts); the others get the idle guard.
+    for await (let part of claude ? streamAnthropic(req) : xai ? idleGuarded(req, streamXai, { local: false }) : responses ? streamResponses(req) : idleGuarded(req, streamOpenAI, { local: false })) {
       if (part.type === 'usage') {
         // The tier that really ran (a fast request can be downgraded to standard, at standard price).
         const ran = part.serviceTier ?? fast ?? 'standard'

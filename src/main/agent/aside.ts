@@ -9,7 +9,10 @@ const MATH = /^[\d\s+\-*/×÷^().,%=x]+\??$/i
 
 export function isAside(text: string): boolean {
   const t = text.trim()
-  if (!t || t.length > 220 || t.includes('\n') || CHANGES.test(t)) return false
+  if (!t || t.length > 220 || t.includes('\n')) return false
+  // Plain arithmetic, with or without a "?" ("18% of $1,740"): answered at once beside the job.
+  if (quickMath(t) !== undefined) return true
+  if (CHANGES.test(t)) return false
   if (MATH.test(t) && /\d/.test(t) && /[+\-*/×÷^%x]/i.test(t)) return true
   return QUESTION.test(t)
 }
