@@ -10,6 +10,7 @@ import type { ToolContext, ToolDef } from '../types'
 import { inForbidden, isSecretName } from '../../knowledge/ignore'
 import { homeGuarded } from '../../code/proc'
 import { heicToJpeg } from '../../attach-process'
+import { withFolderAccess } from './folder-access'
 
 const MAX_READ_BYTES = 2_000_000
 const MAX_IMAGE_BYTES = 8_000_000
@@ -598,7 +599,8 @@ Optional "accent" color like "#2563EB" (too-light accents are darkened for text 
     }
   }
 
-  return [fileRead, fileWrite, fileEdit, fileManage, createDoc]
+  // Downloads, Desktop, Documents: macOS's folder dialog is waited for without freezing the app (folder-access.ts).
+  return [fileRead, fileWrite, fileEdit, fileManage, createDoc].map((t) => withFolderAccess(t as ToolDef))
 }
 
 function safe<T>(fn: () => T): T | undefined {

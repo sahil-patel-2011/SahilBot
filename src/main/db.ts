@@ -181,7 +181,7 @@ const READ_AT = (t: string): string => `COALESCE(${t}.last_read_at, ${t}.created
 export const UNREAD_SQL = (t: string): string => `(CASE WHEN ${t}.updated_at > ${READ_AT(t)} THEN (
     SELECT COUNT(*) FROM (SELECT 1 FROM messages m WHERE m.thread_id = ${t}.id AND m.created_at > ${READ_AT(t)}
       AND m.role = 'assistant' AND m.kind = 'normal' AND m.content != ''
-      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0
+      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.provisional'), 0) = 0
       AND json_extract(m.data, '$.meta.routineNotice') IS NULL
       LIMIT ${UNREAD_CAP})) ELSE 0 END)`
 
@@ -530,7 +530,7 @@ export class Db {
    */
   markUnread(id: string): Thread {
     const last = this.sql.prepare(`SELECT MAX(m.created_at) AS at FROM messages m WHERE m.thread_id = ? AND m.role = 'assistant' AND m.kind = 'normal' AND m.content != ''
-      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND json_extract(m.data, '$.meta.routineNotice') IS NULL`).get(id) as { at: number | null } | undefined
+      AND IFNULL(json_extract(m.data, '$.meta.hidden'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.superseded'), 0) = 0 AND IFNULL(json_extract(m.data, '$.meta.provisional'), 0) = 0 AND json_extract(m.data, '$.meta.routineNotice') IS NULL`).get(id) as { at: number | null } | undefined
     const r = this.sql.prepare('UPDATE threads SET unread = 1, last_read_at = CASE WHEN ? IS NULL THEN last_read_at ELSE MIN(COALESCE(last_read_at, created_at), ? - 1) END WHERE id = ?')
       .run(last?.at ?? null, last?.at ?? null, id)
     if (!r.changes) throw new Error(`No thread ${id}`)

@@ -223,7 +223,7 @@ export function FilesView({ onOpenFile, onOpenChat }: { onOpenFile: (path: strin
   const [files, setFiles] = useState<RecentFile[] | null>(null)
   const [q, setQ] = useState('')
   const [kind, setKind] = useState('all')
-  useEffect(() => { void (api.files.artifacts ? api.files.artifacts(500) : api.files.recent(200)).then(setFiles) }, [])
+  useEffect(() => { void (api.files.artifacts ? api.files.artifacts(500) : api.files.recent(200)).then(setFiles).catch(() => setFiles([])) }, [])
   const counts = new Map<string, number>()
   for (const f of files ?? []) counts.set(artifactKind(f.name), (counts.get(artifactKind(f.name)) ?? 0) + 1)
   const chips = [{ id: 'all', label: 'All', n: files?.length ?? 0 }, ...ARTIFACT_KINDS.map((k) => ({ id: k.id as string, label: k.label as string, n: counts.get(k.id) ?? 0 })), { id: 'other', label: 'Other', n: counts.get('other') ?? 0 }].filter((c) => c.id === 'all' || c.n > 0)

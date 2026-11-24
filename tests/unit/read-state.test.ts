@@ -95,11 +95,16 @@ describe('read state in the database', () => {
     at(db, t.id, { content: 'hidden', meta: { hidden: true }, createdAt: base + 6 })
     at(db, t.id, { content: 'Routine notice', meta: { routineNotice: 'started' }, createdAt: base + 7 })
     at(db, t.id, { content: 'Second finding', createdAt: base + 8 })
+    // A reply still held back for checking (provisional) is out of sight: not unread until it's shown.
+    const held = at(db, t.id, { content: 'Checking this one', meta: { provisional: true }, createdAt: base + 9 })
     const got = db.getThread(t.id)!
     expect(got.unreadCount).toBe(unreadCount(db.listMessages(t.id), t.lastReadAt!))
     expect(got).toMatchObject({ unread: true, unreadCount: 2 })
     // The bot's sidebar row: the sum over its chats.
     expect(db.listSpaces().find((s) => s.id === bot.id)).toMatchObject({ unread: true, unreadCount: 2 })
+    db.updateMessage({ ...held, meta: {} })
+    expect(db.getThread(t.id)).toMatchObject({ unreadCount: 3 })
+    expect(countsAsUnread(msg({ content: 'x', meta: { provisional: true } }))).toBe(false)
   })
 
   it('markRead moves forward only, up to what you saw, and is idempotent', () => {

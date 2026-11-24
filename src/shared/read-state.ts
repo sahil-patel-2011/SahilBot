@@ -16,7 +16,7 @@ export const UNREAD_CAP = 99
 export function countsAsUnread(m: Pick<Message, 'role' | 'kind' | 'content' | 'meta'>): boolean {
   if (m.role !== 'assistant' || m.kind !== 'normal' || !m.content) return false
   const meta = m.meta
-  return !meta || (!meta.hidden && !meta.superseded && !meta.routineNotice)
+  return !meta || (!meta.hidden && !meta.superseded && !meta.provisional && !meta.routineNotice)
 }
 
 /** How many replies are newer than `after` (capped at UNREAD_CAP). */

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import type { ChatEvent, JobEvent, JobInfo, Message, PermissionMode, RunUsage } from '@shared/types'
 import { api } from '../api'
 import * as I from '../icons'
-import { fmtTokens, fmtUsd, plural, runFacts, statusLine, usageText } from '../lib/run-summary'
+import { fmtTokens, fmtUsd, plural, runFacts, showsFinishLine, statusLine, usageText } from '../lib/run-summary'
 
 // Background jobs (dev servers, watchers, long builds) a chat started with run_command background: true:
 // the Jobs tab, the header chip, and the end-of-run summary line (actions, tokens, cost).
@@ -261,7 +261,7 @@ export function RunSummary({ threadId, messages, mode, simple, onlyMade }: { thr
     return () => { alive = false }
   }, [threadId, since, count])
   // Everyone sees the finish line after real work; a quick chat answer needs none.
-  if (!facts || (simple && facts.actions === 0) || (onlyMade && !facts.paths?.length)) return null
+  if (!facts || !showsFinishLine(facts, { simple, onlyMade })) return null
   const a = asks.get(threadId)
   const asked = a && a.since >= since - 10_000 ? a.n : undefined
   const line = statusLine(facts, usage, { asked, simple })

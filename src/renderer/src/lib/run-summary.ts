@@ -25,7 +25,11 @@ export function runFacts(messages: Message[]): RunFacts | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     // (A side question asked mid-task, or a typed "stop", is part of the task, not a new one.)
-    if (m.role === 'user' && !m.meta?.hidden && !m.meta?.steer && !m.meta?.aside && !m.meta?.stopRequest) { start = i; break }
+    if (m.role === 'user' && !m.meta?.hidden && !m.meta?.steer && !m.meta?.aside) {
+      // "Stop everything" typed in an idle chat is a turn of its own (its reply is a note), not part of the last task.
+      if (m.meta?.stopRequest) return null
+      start = i; break
+    }
   }
   if (start < 0) return null
   const run = messages.slice(start + 1)
@@ -119,6 +123,15 @@ export function summaryText(f: RunFacts, o: { autonomous: boolean; asked?: numbe
  * A stopped task never says "Done": it says "Stopped" (and nothing at all when the chat already said so and it made
  * nothing).
  */
+/**
+ * Whether a finished task gets its one finish line. A quick chat answer needs none; a bot's chat (Grok Bot's way)
+ * shows it when the task made something or did real work (3+ actions), never for a one-step reply.
+ */
+export function showsFinishLine(f: RunFacts | null, o: { simple?: boolean; onlyMade?: boolean } = {}): boolean {
+  if (!f || (o.simple && f.actions === 0)) return false
+  return !(o.onlyMade && !f.paths?.length && f.actions < 3)
+}
+
 export function statusLine(f: RunFacts, u: RunUsage | null, o: { asked?: number; simple?: boolean } = {}): string {
   const made = madeText(f)
   if (f.stopped) return made ? `Stopped after ${took(f.ms ?? 0)} · ${made}` : ''

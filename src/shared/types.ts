@@ -890,7 +890,7 @@ export interface PurchaseInfo {
 export type ChatEvent =
   | { threadId: string; type: 'message'; message: Message }
   | { threadId: string; type: 'delta'; messageId: string; content?: string; reasoning?: string }
-  | { threadId: string; type: 'run'; status: 'started' | 'finished' | 'stopped' | 'error'; error?: string; spaceId?: string; title?: string }
+  | { threadId: string; type: 'run'; status: 'started' | 'finished' | 'stopped' | 'error'; error?: string; spaceId?: string; title?: string; byUser?: boolean }
   | { threadId: string; type: 'thread'; thread: Thread }
   | { threadId: string; type: 'pending'; request: PendingRequest }
   | { threadId: string; type: 'resolved'; id: string }
@@ -909,7 +909,7 @@ export type ChatEvent =
    * A tool's progress line, or the stall watchdog's note (callId 'watchdog'): `step` names what is stuck and `stuck`
    * offers Retry / Skip for it (chat.retryStep / chat.skipStep); `waitingOnYou`: it waits on your vault unlock.
    */
-  | { threadId: string; type: 'tool_progress'; callId: string; tool: string; text: string; step?: string; stuck?: boolean; waitingOnYou?: boolean }
+  | { threadId: string; type: 'tool_progress'; callId: string; tool: string; text: string; step?: string; stuck?: boolean; waitingOnYou?: boolean; retryable?: boolean }
 
 export interface Attachment {
   path: string
