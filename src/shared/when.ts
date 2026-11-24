@@ -10,3 +10,20 @@ export const WHEN_KIND_WORD: Record<When['kind'], string> = {
 export function describeWhen(w: When): string {
   return `When ${WHEN_KIND_WORD[w.kind] ?? 'something new'}${w.from ? ` from ${w.from}` : ''}${w.contains ? ` mentioning ${w.contains}` : ''} arrives`
 }
+
+/** "ET", "PT", "GMT+1"…: a short name for a schedule's time zone (the generic one, so it's right all year). */
+export function tzLabel(tz: string | undefined): string {
+  if (!tz) return ''
+  try {
+    const generic = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortGeneric' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value ?? ''
+    // "ET", "PT", "CT", "MT": the short generic name, where there is one.
+    if (generic && generic.length <= 4 && !/^GMT/.test(generic)) return generic
+    return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value ?? tz
+  } catch { return tz }
+}
+
+/** A schedule's description with its place's time zone, when it has one ("every day at 7:30 ET"). */
+export function withTz(text: string, s: Schedule): string {
+  const tz = 'tz' in s ? s.tz : undefined
+  return tz ? `${text} ${tzLabel(tz)}` : text
+}

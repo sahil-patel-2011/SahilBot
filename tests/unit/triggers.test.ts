@@ -210,3 +210,16 @@ test('event routines can be shared in a bot file and used in templates', async (
   const file = { format: 'sahilbot.bot', version: 1, name: 'Books', instructions: 'Keep the books.', skills: [], routines: [{ title: 'File invoices', prompt: 'File it', schedule: { type: 'when', kind: 'email', contains: 'invoice' } }] }
   expect(botFileProblems(file).filter((p) => /routine/.test(p))).toEqual([])
 })
+
+test('a plain one-time reminder is just a nudge (sent on time even while the chat is busy); work is not', async () => {
+  const { isPlainReminder, reminderText } = await import('../../src/main/triggers')
+  const once = { type: 'once' }
+  expect(isPlainReminder({ schedule: once, title: 'Stretch', prompt: 'Remind the user to stretch.' })).toBe(true)
+  expect(reminderText({ title: 'Stretch', prompt: 'Remind the user to stretch.' })).toBe('Stretch')
+  expect(isPlainReminder({ schedule: once, title: 'Reminder: call mom', prompt: 'Remind me to call mom' })).toBe(true)
+  expect(reminderText({ title: 'Reminder: call mom', prompt: 'Remind me to call mom' })).toBe('Call mom')
+  // Work for the bot waits its turn; a repeating routine is never a plain reminder.
+  expect(isPlainReminder({ schedule: once, title: 'Report', prompt: 'Remind me and send Bob the weekly report' })).toBe(false)
+  expect(isPlainReminder({ schedule: once, title: 'Inbox', prompt: 'Check my inbox for invoices' })).toBe(false)
+  expect(isPlainReminder({ schedule: { type: 'daily' }, title: 'Stretch', prompt: 'Remind me to stretch' })).toBe(false)
+})

@@ -1,6 +1,6 @@
 import type { Schedule } from '@shared/types'
 import type { Db } from '../../db'
-import { describeSchedule, type Scheduler } from '../../scheduler'
+import { describeSchedule, validTz, type Scheduler } from '../../scheduler'
 import type { ToolDef } from '../types'
 
 type Args = { action: 'create' | 'list' | 'update' | 'delete' | 'pause' | 'resume'; title?: string; prompt?: string; when?: Schedule; id?: string }
@@ -24,6 +24,7 @@ export function scheduleTool(scheduler: Scheduler, db: Db, sources?: SourceKinds
 - create {title, prompt, when}: prompt is the instruction you will receive when it runs, written so it stands alone ("Check my inbox for invoices and summarize them").
   when is one of: {type:"once", at:"2026-11-12T09:00"} (local time), {type:"daily", time:"09:00"}, {type:"weekly", days:["mon","thu"], time:"08:30"}, {type:"every", minutes:60}, {type:"cron", expr:"0 9 * * 1-5"},
   or an event: {type:"when", kind:"email"|"chat"|"calendar"|"any", from?:"vendor.com", contains?:"invoice, receipt"} runs it each time something new arrives that matches (from = sender name or address part; contains = any of these words in the subject or body). The item is handed to you as outside content when it runs.
+  Times are the user's clock unless they tie it to a place: "every weekday at 7:30 send me the Atlanta weather" is 7:30 in Atlanta, so add tz:"America/New_York" (the IANA zone of that place). Moving it later keeps that zone.
 - update {id, and any of title, prompt, when}: change a routine in place ("move it to 9:10 and add Saturdays"); its history is kept.
 - list, delete {id}, pause {id}, resume {id}.
 Scheduled runs can't ask for approval: actions that would need it are skipped and reported.`,
@@ -41,7 +42,8 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
             kind: { type: 'string', enum: ['email', 'chat', 'calendar', 'meetings', 'crm', 'docs', 'accounting', 'any'] },
             from: { type: 'string', maxLength: 200 }, contains: { type: 'string', maxLength: 200 },
             at: { type: 'string' }, time: { type: 'string', pattern: '^\\d{1,2}:\\d{2}$' },
-            days: { type: 'array', items: { type: 'string' } }, minutes: { type: 'integer', minimum: 1 }, expr: { type: 'string' }
+            days: { type: 'array', items: { type: 'string' } }, minutes: { type: 'integer', minimum: 1 }, expr: { type: 'string' },
+            tz: { type: 'string', description: 'IANA time zone of the place the user named ("Atlanta weather at 7:30" → "America/New_York"); omit for the Mac\'s own clock' }
           },
           required: ['type']
         }
@@ -57,7 +59,7 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
       const thread = db.getThread(ctx.threadId)
       if (a.action === 'create') {
         // SahilBot's routines run in the chat that made them; other bots have one conversation anyway.
-        const when = a.when!.type === 'when' ? cleanWhen(a.when!) : a.when!
+        const when = a.when!.type === 'when' ? cleanWhen(a.when!) : withZone(a.when!, undefined)
         // An event routine needs a source SahilBot reads (Gmail for email…); without one it would never run.
         let reads = ''
         if (when.type === 'when' && sources) {
@@ -77,7 +79,10 @@ Scheduled runs can't ask for approval: actions that would need it are skipped an
       }
       if (a.action === 'update') {
         if (a.title === undefined && a.prompt === undefined && !a.when) throw new Error('update needs at least one of title, prompt or when.')
-        const t = scheduler.update(a.id!, { ...(a.title !== undefined ? { title: a.title } : {}), ...(a.prompt !== undefined ? { prompt: a.prompt } : {}), ...(a.when ? { schedule: a.when.type === 'when' ? cleanWhen(a.when) : a.when } : {}) })
+        // Moving a routine keeps the place's time zone it was set in ("move it to 7" stays Eastern).
+        const prevTz = (() => { const c = scheduler.get(a.id!)?.schedule; return c && 'tz' in c ? c.tz : undefined })()
+        const when = a.when ? (a.when.type === 'when' ? cleanWhen(a.when) : withZone(a.when, prevTz)) : undefined
+        const t = scheduler.update(a.id!, { ...(a.title !== undefined ? { title: a.title } : {}), ...(a.prompt !== undefined ? { prompt: a.prompt } : {}), ...(when ? { schedule: when } : {}) })
         return { text: `Updated "${t.title}" (${describeSchedule(t.schedule)}).${t.nextRun ? ` Next run: ${new Date(t.nextRun).toLocaleString(undefined, { timeZoneName: 'short' })}.` : ''}`, display: `"${t.title}" ${describeSchedule(t.schedule)}` }
       }
       if (a.action === 'delete') {
@@ -99,4 +104,12 @@ function cleanWhen(w: Extract<Schedule, { type: 'when' }>): Schedule {
   const t = (x: unknown): string | undefined => (typeof x === 'string' && x.trim() ? x.trim().slice(0, 200) : undefined)
   const from = t(w.from), contains = t(w.contains)
   return { type: 'when', kind, ...(from ? { from } : {}), ...(contains ? { contains } : {}) }
+}
+
+/** A time schedule with a valid place time zone (kept from before when a move doesn't name one); 'every' has none. */
+function withZone(w: Schedule, prev: string | undefined): Schedule {
+  if (w.type === 'every' || w.type === 'when') return w
+  const tz = 'tz' in w && w.tz !== undefined ? w.tz : prev
+  const { tz: _drop, ...rest } = w as Schedule & { tz?: string }
+  return validTz(tz) ? ({ ...rest, tz } as Schedule) : (rest as Schedule)
 }

@@ -1207,11 +1207,13 @@ export type VoiceUiEvent =
   | { type: 'download'; kind: string; progress: number; done?: boolean; error?: string; /** Started on its own (not a click): a toast says when it's ready. */ auto?: boolean; model?: string; label?: string }
 
 export type Schedule =
-  | { type: 'once'; at: string }
+  /** tz (IANA, e.g. "America/New_York"): the clock the times are in, when the user named a place ("Atlanta weather at
+   * 7:30" is 7:30 Eastern); absent = the Mac's own time zone. */
+  | { type: 'once'; at: string; tz?: string }
   | { type: 'every'; minutes: number }
-  | { type: 'daily'; time: string }
-  | { type: 'weekly'; days: string[]; time: string }
-  | { type: 'cron'; expr: string }
+  | { type: 'daily'; time: string; tz?: string }
+  | { type: 'weekly'; days: string[]; time: string; tz?: string }
+  | { type: 'cron'; expr: string; tz?: string }
   /** Runs when something new arrives (an email, a message, a calendar event) that matches; see main/triggers.ts. */
   | { type: 'when'; kind: 'email' | 'chat' | 'calendar' | 'meetings' | 'crm' | 'docs' | 'accounting' | 'any'; from?: string; contains?: string }
 

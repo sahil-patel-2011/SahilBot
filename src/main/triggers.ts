@@ -110,3 +110,24 @@ export function pickItems(w: When, items: TriggerItem[], me: string[] = []): { i
   const hit = items.filter((x) => matchesTrigger(w, x, me)).sort((a, b) => a.at - b.at)
   return { items: hit.slice(-TRIGGER_BATCH), more: Math.max(0, hit.length - TRIGGER_BATCH) }
 }
+
+/**
+ * A one-time routine that is only a nudge to the user ("Remind me to stretch"), not work for the bot: it can be
+ * delivered as a message on time, even while the chat is busy.
+ */
+export function isPlainReminder(t: { schedule: { type: string }; title: string; prompt: string }): boolean {
+  if (t.schedule.type !== 'once') return false
+  const p = t.prompt.trim()
+  if (p.length > 240) return false
+  const nudge = /^(⏰\s*)?(reminder\b|remind (me|the user|them|him|her)\b|tell (me|the user) to\b|nudge)/i
+  // Work words mean the bot has something to do ("remind me … and send the report", "check…").
+  const work = /\b(send|email|post|draft|write|make|create|book|order|buy|check|look up|search|find|summari[sz]e|research|update|delete|move|run|schedule)\b/i
+  return (nudge.test(p) || nudge.test(t.title)) && !work.test(p.replace(nudge, ''))
+}
+
+/** What to say for a plain reminder: the thing to do, from its instructions ("to stretch" → "Stretch"). */
+export function reminderText(t: { title: string; prompt: string }): string {
+  const p = t.prompt.trim().replace(/^(⏰\s*)?(reminder:?\s*|remind (me|the user|them|him|her)\s*(to\s+|that\s+|about\s+)?|tell (me|the user) to\s+|nudge (me|the user)\s*(to\s+)?)/i, '').replace(/[.!]+$/, '')
+  const s = p || t.title.replace(/^(⏰\s*)?(reminder:?\s*)/i, '')
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}

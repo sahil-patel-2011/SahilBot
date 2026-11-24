@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { RoutineRun, Schedule, ScheduledTask } from '@shared/types'
 import type { Db } from './db'
+import { withTz } from '@shared/when'
 import { describeWhen, pickItems, triggerNote, TRIGGER_BATCH, TRIGGER_DAILY_MAX, TRIGGER_TEST_NOTE, type TriggerItem } from './triggers'
 
 // Scheduled tasks: once / daily / weekly / every N minutes / cron. Due tasks run as normal agent
@@ -47,8 +48,35 @@ function atTime(base: Date, time: string): Date {
   return d
 }
 
+/** A usable IANA time zone name. */
+export function validTz(tz: unknown): tz is string {
+  if (typeof tz !== 'string' || !tz) return false
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true } catch { return false }
+}
+
+/** The wall-clock time in `tz` at instant `d`, as a Date whose local fields read that time. */
+function wallIn(d: Date, tz: string): Date {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    .formatToParts(d).map((x) => [x.type, x.value]))
+  return new Date(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second), d.getMilliseconds())
+}
+
+/** The instant whose wall-clock time in `tz` is `wall`'s local fields (inverse of wallIn). */
+function fromWall(wall: Date, tz: string): Date {
+  let t = wall.getTime()
+  for (let i = 0; i < 3; i++) t += wall.getTime() - wallIn(new Date(t), tz).getTime()
+  return new Date(t)
+}
+
 /** Next run strictly after `from`, or null when a one-off has passed. */
 export function nextRun(s: Schedule, from: Date): Date | null {
+  // A place's own clock: work it out on that clock, then turn it back into a real moment.
+  // (A one-off with its own offset, "…Z" or "…-05:00", is already a real moment.)
+  if ('tz' in s && validTz(s.tz) && !(s.type === 'once' && /(z|[+-]\d\d:?\d\d)$/i.test(s.at))) {
+    const { tz, ...rest } = s
+    const at = nextRun(rest as Schedule, wallIn(from, tz))
+    return at && fromWall(at, tz)
+  }
   switch (s.type) {
     case 'once': {
       const at = new Date(s.at)
@@ -79,6 +107,10 @@ export function nextRun(s: Schedule, from: Date): Date | null {
 }
 
 export function describeSchedule(s: Schedule): string {
+  return withTz(describeBase(s), s)
+}
+
+function describeBase(s: Schedule): string {
   switch (s.type) {
     case 'once': return `once on ${new Date(s.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
     case 'every': return s.minutes % 60 === 0 ? `every ${s.minutes / 60} hour${s.minutes === 60 ? '' : 's'}` : `every ${s.minutes} minutes`

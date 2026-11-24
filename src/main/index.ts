@@ -113,6 +113,7 @@ import { cadDesignTool } from './cad/design-tool'
 import { macKeyStore, Secrets } from './secrets'
 import { SettingsStore, type SettingsPatch } from './settings'
 import { requestedModel } from './agent/choices'
+import { isPlainReminder, reminderText } from './triggers'
 import { SpaceFiles, botAutonomyConfig, botLevel, isAlwaysOnBot, migrateBotAutonomy, migrateBotMax, migrateBotModelEffort, migratePermissionLevels, migrateToAuto } from './spaces'
 import { ATTENDED_GRACE_MS, Learner, QuestionQueue, QuestionStore, createQuestionHost, notifyDevices as notifyQuestionDevices, toNeedsYou } from './agent/questions'
 import { DigestRunner } from './goals/digest'
@@ -1895,6 +1896,15 @@ app.whenReady().then(() => {
     // The bot is busy (you're working with it, or another routine is running): the routine waits its turn instead of
     // being skipped, then runs as itself (unattended, with a routine's permissions), never mixed into your live run.
     // It stops waiting if you pause routines or this one, delete it, or after two hours.
+    // A plain one-time reminder ("remind me in 3 minutes to stretch") is delivered on time even while the chat is busy:
+    // it needs no work, just the nudge (Grok Bot head-to-head SCB-02). Anything with real work waits its turn below.
+    if ((chat.isRunning(threadId) || scheduledRuns.has(threadId)) && isPlainReminder(task)) {
+      const text = `⏰ Reminder: ${reminderText(task)}`
+      const m = db.insertMessage({ threadId, role: 'assistant', content: text, kind: 'normal', status: 'done', meta: { scheduled: task.id, reminder: true } })
+      emit({ threadId, type: 'message', message: m })
+      if (space.notify !== false && !QUIET && Notification.isSupported() && !(mainFocused() && viewingThread === threadId)) showNote(new Notification({ title: space.isMain ? 'SahilBot' : space.name, body: text }), threadId)
+      return { status: 'done', threadId }
+    }
     const until = Date.now() + (info.test ? 60_000 : 2 * 3600_000)
     while ((chat.isRunning(threadId) || scheduledRuns.has(threadId)) && Date.now() < until) {
       await new Promise((r) => setTimeout(r, 5000))

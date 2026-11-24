@@ -1,7 +1,7 @@
 // Routines (scheduled tasks) in words, for the bot details panel and the Scheduled screen.
 // Pure helpers: no DOM, no api, so they can be unit tested.
 import type { LibraryItem, Schedule, ScheduledTask } from '@shared/types'
-import { describeWhen } from '@shared/when'
+import { describeWhen, withTz } from '@shared/when'
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -60,6 +60,10 @@ function cronDays(f: string): number[] | null {
 
 /** A schedule the way a person would say it: "Weekdays at 8:00 AM", "Every 2 hours", "Once · Thu, Nov 12 at 9:00 AM". */
 export function describeSchedule(s: Schedule): string {
+  return withTz(describeBase(s), s)
+}
+
+function describeBase(s: Schedule): string {
   switch (s.type) {
     case 'when':
       return describeWhen(s)
