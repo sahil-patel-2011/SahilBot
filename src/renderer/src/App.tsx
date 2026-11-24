@@ -100,7 +100,14 @@ export function App() {
   // ...and whatever moved you (a toast's "Open chat", a file's chat, a notification), a new page or chat closes it too.
   const navKey = `${view}|${thread?.id ?? ''}|${spaceId ?? ''}`
   const lastNav = useRef(navKey)
-  useEffect(() => { if (lastNav.current !== navKey) { lastNav.current = navKey; leave() } }, [navKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  // (Not the app picking its first bot as it starts: Settings opened with ⌘, while it loads stays open.)
+  const booted = useRef(false)
+  useEffect(() => {
+    if (lastNav.current === navKey) return
+    lastNav.current = navKey
+    if (!booted.current) { booted.current = !!spaceId; if (booted.current) return }
+    leave()
+  }, [navKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const [editor, setEditor] = useState<Editor>(null)
   const [palette, setPalette] = useState(false)
   const [shortcuts, setShortcuts] = useState(false)

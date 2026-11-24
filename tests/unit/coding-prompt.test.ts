@@ -18,7 +18,7 @@ describe('coding guidance (CDA-01, CDA-02, CDA-05, CDA-06)', () => {
     expect(full).toContain('a dry run by default (--apply does it)')
     expect(full).toContain('never overwrite (add -2, -3 on a name clash)')
     expect(full).toContain('safe to run twice')
-    expect(full).toMatch(/Test the small sample with a name clash, a re-run, a file with no date or metadata and a file that doesn't match/)
+    expect(full).toMatch(/Test a clash, a re-run and a file with no metadata on the sample/)
   })
 
   test('a package missing here: say so, test the rest, give the install line, no install loops', () => {

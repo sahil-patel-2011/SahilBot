@@ -29,11 +29,11 @@ export const SMALL_WINDOW = 32768
 /** The most of the input budget (window minus the reply's room) the system prompt and tools may take. */
 export const FIXED_SHARE = 0.4
 /**
- * Above SMALL_WINDOW: the full agent set may take up to half the input budget. On a 64K local window that
- * keeps every tool (documents, plans, team, schedule…) and still leaves ~30K for the conversation, which
+ * Above SMALL_WINDOW: the full agent set may take up to 55% of the input budget. On a 64K local window that
+ * keeps every tool (documents, plans, team, schedule…) and still leaves ~27K for the conversation, which
  * compaction now keeps intact (notes and brief survive); a slimmer set there cost more than it saved.
  */
-export const FIXED_SHARE_LARGE = 0.5
+export const FIXED_SHARE_LARGE = 0.55
 
 /** A chat thread (the older 'quick' mode counts as one). */
 export const chatMode = (state: Pick<ThreadState, 'toolMode'>): boolean => state.toolMode === 'chat' || state.toolMode === 'quick'

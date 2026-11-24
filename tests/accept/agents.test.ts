@@ -148,7 +148,8 @@ describe('steering and queueing', () => {
   let llm: MockLlm
   beforeAll(async () => { llm = await startMockLlm() })
   afterAll(async () => { await llm.close() })
-  const lastUserOf = (req: Record<string, any>): string => String([...req.messages].reverse().find((m: any) => m.role === 'user')?.content ?? '')
+  // (The user's own words, not the app's hidden notes after them.)
+  const lastUserOf = (req: Record<string, any>): string => String([...req.messages].reverse().find((m: any) => m.role === 'user' && !String(m.content).startsWith('[From the app]'))?.content ?? '')
 
   test('Enter while it works steers the running agent; ⌘Enter queues for after', async () => {
     const { app, page } = await launch(tempProfile(), llm.url, { FOREMAN_RAM_GB: '64' })
@@ -233,7 +234,9 @@ describe('plan, then execute', () => {
       (req) => toolOut(req).includes('Patients') && toolOut(req).includes('300 words')
         ? { toolCalls: [{ name: 'propose_plan', arguments: JSON.stringify({ goal: 'A 300-word patient newsletter about BPH.', steps: ['Check the latest guidance', 'Draft the newsletter', 'Proofread it'], risks: ['Medical claims need a doctor\'s review'] }) }] }
         : { content: 'answers did not arrive' },
-      (req) => toolOut(req).includes('approved the plan') ? { content: 'Plan approved; here is the newsletter draft.' } : { content: 'plan was not approved' }
+      (req) => toolOut(req).includes('approved the plan') ? { content: 'Plan approved; here is the newsletter draft.' } : { content: 'plan was not approved' },
+      // The plan's items are still open, so that reply goes back once (never shown beside the final one).
+      (req) => JSON.stringify(req.messages).includes('plan still has open items') ? { content: 'Plan approved; here is the newsletter draft, proofread.' } : { content: 'no plan nudge' }
     )
     await page.fill('[data-testid="composer-input"]', 'Plan first before writing our monthly newsletter')
     await page.keyboard.press('Enter')

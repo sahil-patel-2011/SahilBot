@@ -397,7 +397,8 @@ describe('verify: teach, pages, notifications, routines, handoffs', () => {
     expect((await page.evaluate(() => window.foreman.schedules.list())).find((t) => t.id === task.id)!.enabled).toBe(false)
     // Its creation was announced too, and nothing failed.
     const lines = await page.locator('.notice.sys-line').allInnerTexts()
-    expect(lines).toContain('Created routine · Morning check')
+    // (It also says when it runs: "Created routine · Morning check · Daily at 8:00 AM · next …".)
+    expect(lines.some((l) => l.startsWith('Created routine · Morning check'))).toBe(true)
     expect(lines.some((l) => l.startsWith('Routine failed'))).toBe(false)
 
     // Deleting asks first, then the row goes and the chat says so.
