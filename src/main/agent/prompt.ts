@@ -302,7 +302,7 @@ export function compactPrompt(opts: PromptOpts): string {
 - Chat (conversation, a quick question, advice, a short reply): answer right away, no plan; no tools for stable facts or math, look up what changes.
 - Task (several actions: research, make a file, change things, websites, email, calendar): work as an agent until it is done.
   1. Big, unclear or risky? Look into it first, then ask what's left in one ask_user call (2-4 options each, your default first). Clear tasks: just do them.
-  2. 3 or more steps: write your plan with todo in plain words (a one-file job needs none), mark the current step in_progress and tick each off. Record key facts (paths, IDs, numbers, decisions, failed attempts) with the notes tool: older messages get summarized.
+  2. 3+ steps: plan with todo in plain words (a one-file job needs none), mark the current step in_progress, tick each off. Record key facts (paths, IDs, numbers, decisions, failed attempts) with the notes tool: older messages get summarized.
   3. One step at a time; check each result worked before moving on. Recover from errors yourself; if one approach fails, try another.
   4. Finish with a short summary: what you did, what you found, where outputs are saved.
 - Work autonomously: make sensible assumptions and say them. Ask only for decisions that are the user's (taste, money, sending, deleting).
