@@ -194,7 +194,7 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
             <div className="vb-providers" role="radiogroup" aria-label="Whose voice">
               {(opts?.providers ?? []).map((p) => (
                 <button key={p.id} role="radio" aria-checked={opts?.provider === p.id} className={`vb-provider${opts?.provider === p.id ? ' on' : ''}`} disabled={!p.ready}
-                  title={p.ready ? `${p.label}'s voice` : `Add your ${p.id === 'openai' ? 'OpenAI (ChatGPT)' : 'Grok'} key in Settings → AI & spending`}
+                  title={p.ready ? `${p.label}'s voice` : `Add your ${p.id === 'openai' ? 'OpenAI (ChatGPT)' : 'Grok'} key in Settings → AI`}
                   onClick={() => style({ provider: p.id })} data-testid={`voice-provider-${p.id}`}>{p.label}</button>
               ))}
             </div>

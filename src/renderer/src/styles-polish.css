@@ -168,9 +168,6 @@ textarea.set-input { min-height: 0; }
 .set-row-text { flex: 1 1 240px; }
 .set-row-ctl { max-width: 100%; margin-left: auto; }
 .set-nav-item { transition: background .12s ease-out; }
-.set-find { border: 1px solid transparent; transition: border-color .14s ease-out, background .14s ease-out; }
-.set-find:focus-within { border-color: var(--field-focus); background: var(--bg); box-shadow: var(--focus-ring); }
-.set-tile svg { width: 14px; height: 14px; }
 /* passwords */
 .vault-row-icon {
   width: 32px; height: 32px; border-radius: 9px; flex: none; display: grid; place-items: center;

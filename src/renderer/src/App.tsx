@@ -708,7 +708,7 @@ export function App() {
   const onPalette = (a: PaletteAction): void => {
     setPalette(false)
     // Anything but a Settings page is somewhere else: Settings closes first (report SUB-07).
-    if (a.kind !== 'settings' && a.kind !== 'usage' && a.kind !== 'setting' && a.kind !== 'shortcuts' && a.kind !== 'dictate' && a.kind !== 'max') leave()
+    if (a.kind !== 'settings' && a.kind !== 'usage' && a.kind !== 'setting' && a.kind !== 'shortcuts' && a.kind !== 'dictate' && a.kind !== 'max' && a.kind !== 'dev-mode') leave()
     if (a.kind === 'new-chat') openMain()
     else if (a.kind === 'new-bot') setEditor({ space: null, mode: 'bot' })
     else if (a.kind === 'new-group') setEditor({ space: null, mode: 'group' })
@@ -726,6 +726,7 @@ export function App() {
     else if (a.kind === 'chat') void openAnyChat(a.id)
     else if (a.kind === 'usage') { setSettingsPage('usage'); setShowSettings(true) }
     else if (a.kind === 'setting') { setSettingsPage(`#${a.anchor}`); setShowSettings(true) }
+    else if (a.kind === 'dev-mode') void api.settings.set({ advanced: { ...settings?.advanced, devMode: a.on } } as Parameters<typeof api.settings.set>[0]).then((n) => { setSettings(n); toast(a.on ? 'Developer mode is on' : 'Developer mode is off', 'ok') })
     else void openBot(a.id)
   }
 
