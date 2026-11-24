@@ -15,7 +15,7 @@ import { calendarItems } from '../../src/main/brain/sources'
 import { appTool } from '../../src/main/computer/apps/tool'
 import { WINDOWS } from '../../src/main/computer/scripts'
 import { ContextEngine } from '../../src/main/context-engine/service'
-import { askOnlyCategories, categoriesOf } from '../../src/main/context-engine/sensitive'
+import { askOnlyCategories, asksToRemember, categoriesOf } from '../../src/main/context-engine/sensitive'
 import { Db } from '../../src/main/db'
 import { vetCandidate, type MemoryCandidate } from '../../src/main/learning/extract'
 import { MemoryStore } from '../../src/main/memory'
@@ -51,6 +51,23 @@ test('the idle learner keeps health, money, ID, faith, politics and sexuality on
   expect(vet(cand('User is allergic to peanuts.', 'remember I am allergic to peanuts'), 'remember I am allergic to peanuts', { optins: off }).ok).toBe(false)
   // Everyday facts are untouched.
   expect(vet(cand('User lives in Austin.', 'I live in Austin', 'location'), 'I live in Austin').ok).toBe(true)
+})
+
+// "I can never remember…", "do you remember…": not a request to keep anything.
+test('"remember" counts as a request only when the user asks to keep something', () => {
+  expect(vet(cand('User has ADHD.', 'I have ADHD'), 'I have ADHD so I never remember deadlines, set me a reminder for Friday').ok).toBe(false)
+  expect(vet(cand('User has ADHD.', 'I have ADHD'), "I have ADHD, I don't remember things well").ok).toBe(false)
+  expect(vet(cand('User sees a therapist.', 'my therapist'), 'Do you remember my therapist?').ok).toBe(false)
+  expect(vet(cand('User has ADHD.', 'I have ADHD'), 'I can never remember stuff. Please remember that I have ADHD').ok).toBe(true)
+  expect(vet(cand('User is allergic to peanuts.', 'remember I am allergic to peanuts'), 'remember I am allergic to peanuts').ok).toBe(true)
+  expect(asksToRemember('Remember: my blood type is O+')).toBe(true)
+  expect(asksToRemember("Don't forget I'm on Zoloft")).toBe(true)
+  expect(asksToRemember('remember to take my pills at 9')).toBe(false)
+  expect(asksToRemember('I remember when we went to Lisbon')).toBe(false)
+  // Medicines and recovery are health even without a dose.
+  expect(askOnlyCategories('User is on Zoloft.')).toContain('health')
+  expect(askOnlyCategories('User takes Lexapro daily.')).toContain('health')
+  expect(askOnlyCategories('User is in recovery from alcoholism.')).toContain('health')
 })
 
 test('salary in everyday words is money', () => {

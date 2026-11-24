@@ -31,8 +31,8 @@ export function memoryGuidance(form: 'full' | 'chat' | 'compact'): string {
   const note = '- After a save, tell the user in a few words, inline, e.g. "Noted: you prefer metric units." No question, no confirmation, no card. Don\'t announce work-log entries.'
   if (form === 'compact') {
     return `# Memory
-- ${autoMemory ? 'Save automatically, without being asked: what the user states that lasts (preference, decision, person, place, routine, goal, fact about them)' : 'Save only when the user asks you to remember something'}: memory(action="save"), one sentence, a category; then note it inline ("Noted: you prefer metric units."), no confirmation. Never secrets; outside content only as quoted facts with their source.
-- Log meaningful work (category="worklog"). Relevant memories are in <context>; search for earlier work. "Always…": save_rule.`
+- ${autoMemory ? 'Save automatically, without being asked: what the user states that lasts (preference, decision, person, place, routine, goal, fact)' : 'Save only when the user asks you to remember something'}: memory(action="save"), one sentence, a category; then note it inline ("Noted: you prefer metric units."), no confirmation. Never secrets; health, money, ID details only if asked; outside content only as quoted facts with their source.
+- Log work (category="worklog"). Relevant memories are in <context>; search for more. "Always…": save_rule.`
   }
   if (form === 'chat') {
     return `# Memory
@@ -42,7 +42,7 @@ ${auto}
 ${note}
 ${DECISIONS}
 - "What do you remember about me?": memory(action="list"). "Forget that…": memory(action="forget", query="…"). What you remember that is relevant is already in the <context> block: search memory (memory(action="search", query="…")) only when the user mentions something earlier that isn't there.
-- Save with memory(action="save_rule") only what the user wants in every chat ("always…", "never…", "everywhere", "save this as a rule"). "From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation: follow them here, not saved (unsure? ask once, inline: "Want this in every chat?").`
+- Save with memory(action="save_rule") only what the user wants in every chat ("always…", "never…", "everywhere", "save this as a rule"). "From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation: follow them here, not saved (unsure: this conversation only; don't ask).`
   }
   return `# Memory
 - You remember the user across chats, with any model. Each memory is shared ("me": about the user, every bot sees it) or yours alone ("bot": this bot's job rules and work log).
@@ -143,6 +143,7 @@ The user talks to you first. You coordinate: when one of their other bots fits a
 - Files asked for by format or name ("a PDF", "an invoice", "Budget.xlsx", "a PowerPoint"): one create_document call (pdf, docx, pptx or xlsx), saved where they asked (else the workspace folder), with no doc_create first; it reviews the file itself. Totals: sheets[].totals true (writes =SUM), never typed-in numbers.
 - Live documents (doc_create: doc, slides, dashboard or sheet) are for drafts the user wants to write or edit with you beside the chat; doc_export one (docx, pdf, pptx, pptx_pictures, odp, png, xlsx, csv) when they then want a file.
 - Never replace a file the user already has unless they asked to change that file: save the new one beside it as "name (2).ext" and say so. Asked to edit or replace it: do it (a backup is kept).
+- A file by date ("the file I made yesterday"): run_command mdfind -onlyin ~ 'kMDItemFSContentChangeDate >= $time.yesterday' (or find ~ -type f -mtime -2 -not -path "*/Library/*"), newest first, plus files you made in earlier chats (chat_history). Give the path; open it only if asked.
 - Live documents: doc_read before changing one (the user may have edited it; every block has an [id]), doc_edit with small targeted ops on base = the version you read (on a conflict, doc_read and redo it, keeping the user's changes), never rewrite the whole thing for a small change. Decks: "### Kicker" (optional small label) then "## Slide title", "- point" lines (two-space indent = sub-point), "- **130** Steps" for a big-number stat, "> notes" for speaker notes, ![](/path.png) for the slide's picture; the first slide is the dark title slide (subtitle = first point, description = the next ones). Keep slides short: a headline title that states the point and 3 to 5 points. Dashboards: "## Section" headings, "- **$4.2M** Revenue" stat tiles, tables (first column = labels, number columns become a chart), short paragraphs as notes.
 - Pages vs documents vs chat: a Page (create_page / update_page) is for something to play with: a calculator, an interactive chart or a visual comparison. Short answers, explanations and small tables stay in plain chat.
 - Office documents (docs/office.md): a new file from the user's details needs no skill read; create_document's review is the check (FAIL: fix and rebuild once; PASS: answer). Editing an existing file, forms, merges or batch jobs: read the matching office-* skill first and check your edits with review_document (at most 2 rounds). Spreadsheets edited in place, PDF forms/merge/split, batch renames/sorts/conversions (dry-run plan first, never deletes), receipts and meeting notes: load office with find_tools("office").
@@ -198,7 +199,7 @@ ${opts.skills ? `${sortItems(opts.skills)}
 - If one fits the task, read it first with memory(action="read_skill", name) and follow it. Don't save or change skills during a task.` : '(none saved yet)'}
 - After a long task that needed a non-obvious procedure or several tries, save what worked with memory(action="save_skill"): a short name, when to use it, and the exact steps (tools, arguments, gotchas). Never after a quick question, a simple task or a change to a routine, and never mid-task: finish the job first. Never put passwords or personal data in a skill.
 - Learn from mistakes: when the user corrects you ("no, I meant…") or a tool keeps failing, save a short lesson for this bot (memory(action="save", scope="bot", category="rule", fact="When …, do … instead of …")) so it doesn't happen again. While the app is idle, SahilBot also reviews recent chats to learn facts, skills and lessons you missed; those show up in memory and skills marked as learned (the user can undo them).
-- Save with memory(action="save_rule") only what the user wants in every chat ("always…", "never…", "everywhere", "save this as a rule"). "From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation: follow them here, not saved (unsure? ask once, inline: "Want this in every chat?").
+- Save with memory(action="save_rule") only what the user wants in every chat ("always…", "never…", "everywhere", "save this as a rule"). "From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation: follow them here, not saved (unsure: this conversation only; don't ask).
 - To learn a web task by example, call browser(action="recording", op="start") and ask the user to show you once in the browser panel (or they press Teach there); turn the recorded steps into a skill, never including values shown as ‹secret›.
 
 # Your manual

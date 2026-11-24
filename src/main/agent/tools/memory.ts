@@ -5,7 +5,7 @@ import type { SkillStore } from '../../skills'
 import type { RuleStore } from '../../rules'
 import type { ToolDef } from '../types'
 import { autoMemoryOn } from '../prompt'
-import { ASKED_TO_REMEMBER, ASK_ONLY_LABEL, askOnlyCategories } from '../../context-engine/sensitive'
+import { ASKED_TO_REMEMBER, ASK_ONLY_LABEL, askOnlyCategories, asksToRemember } from '../../context-engine/sensitive'
 
 type Args = {
   action: 'save' | 'list' | 'search' | 'forget' | 'read_skill' | 'save_skill' | 'save_rule' | 'about'
@@ -155,7 +155,7 @@ export function memoryTool(memory: MemoryStore, db: Db, skills?: SkillStore, rul
         // settings allow. A bot keeps one ongoing chat, so its prompt can predate "Remember things automatically"
         // being switched off: the setting is checked here, on every save.
         const own = normalizeKind(a.category) !== 'worklog' && !(a.scope === 'bot' && normalizeKind(a.category) === 'rule')
-        const asked = ASKED_TO_REMEMBER.test(lastUserText(db, ctx.threadId))
+        const asked = asksToRemember(lastUserText(db, ctx.threadId))
         if (own && !asked && !autoMemoryOn()) {
           return { text: 'Remember things automatically is off (Settings → Memory): save only when the user asks you to remember something. Nothing was saved; don\'t mention it.', display: 'not saved (automatic memory is off)' }
         }

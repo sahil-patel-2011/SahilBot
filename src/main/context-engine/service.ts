@@ -17,7 +17,7 @@ import { assemble, lookup, type Assembled } from './assemble'
 import { META_SOURCES } from './connectors-meta'
 import { forgetMirror, mirrorEntity } from './mirror'
 import { nameParts } from './resolve'
-import { ASKED_TO_REMEMBER, CHILD_REL, askOnlyCategories, askedToRemember, categoriesOf, cleanSnippet, screen } from './sensitive'
+import { CHILD_REL, askOnlyCategories, askedToRemember, asksToRemember, categoriesOf, cleanSnippet, screen } from './sensitive'
 import { GraphStore, TRUST_RANK, normKey } from './store'
 
 // The context engine, put together: settings and privacy controls, the extraction job the idle
@@ -431,7 +431,7 @@ export class ContextEngine {
         if (m.createdAt <= since || m.role !== 'user' || m.meta?.hidden || !m.content.trim()) continue
         const own = origin === 'user' && !isRelayed(m)
         const fs = own ? extractFromUserText(m.content, { at: m.createdAt }) : extractQuoted(m.content, { at: m.createdAt })
-        n += this.apply(fs, { ...ctx, at: m.createdAt, asked: () => ASKED_TO_REMEMBER.test(m.content) })
+        n += this.apply(fs, { ...ctx, at: m.createdAt, asked: () => asksToRemember(m.content) })
       }
     }
     if (s.sources.connectorsInChats) {

@@ -646,7 +646,6 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
     // every later step; the user's next message asks again.
     const no = axDeclined.get(tid)
     if (no && (ctx.runId ? no.runId === ctx.runId : Date.now() - no.at < 3 * 60_000)) throw new Error(`${AX_OFF} The user didn't turn it on now. Tell them in one sentence that the Accessibility button in the chat turns it on; don't retry, don't guess and don't try another way to click.`)
-    if (d.trusted(true)) return
     let answer = 'unavailable'
     if (ctx.waitForUser) {
       let wait = axWaits.get(tid)
@@ -654,6 +653,10 @@ export function computerTool(d: ComputerDeps): ToolDef<Args> & { control: Comput
         wait = ctx.waitForUser(AX_CARD, async () => d.trusted(false), { permission: 'accessibility', options: ['Not now'], everyMs: d.axPoll?.everyMs ?? 1000, timeoutMs: d.axPoll?.timeoutMs ?? 5 * 60_000 })
           .finally(() => axWaits.delete(tid))
         axWaits.set(tid, wait)
+        // The card first, then macOS's own prompt (it adds SahilBot to the list), once. Nobody watching (a routine,
+        // a helper: 'unavailable' at once): no macOS dialog for nobody to see.
+        const quick = await Promise.race([wait, new Promise<string>((r) => setTimeout(() => r('pending'), 0))])
+        if (quick !== 'unavailable') d.trusted(true)
       }
       answer = await wait
     }

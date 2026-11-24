@@ -65,6 +65,8 @@ test('the Accessibility card shows by itself and the step carries on once the sw
   const card = cards(events)[0]
   expect(card).toMatchObject({ kind: 'question', permission: 'accessibility' })
   expect(card.question).toMatch(/carries on by itself/)
+  // macOS's own prompt comes just after the card (it adds SahilBot to the list), once.
+  await new Promise((r) => setTimeout(r, 20))
   expect(mac.prompts).toBe(1)
   // The user flips the switch in System Settings; nobody types anything in the chat.
   mac.on = true
@@ -75,7 +77,7 @@ test('the Accessibility card shows by itself and the step carries on once the sw
 }, 20_000)
 
 test('nobody there (a schedule): no card and no wait, the step says why', async () => {
-  const { agent, events, t } = setup()
+  const { mac, agent, events, t } = setup()
   let seen = ''
   llm.script.push(
     { toolCalls: [{ name: 'computer', arguments: '{"action":"ui","app":"Calculator"}' }] },
@@ -87,4 +89,6 @@ test('nobody there (a schedule): no card and no wait, the step says why', async 
   expect(cards(events)).toHaveLength(0)
   expect(seen).toMatch(/Accessibility permission is off/)
   expect(seen).toMatch(/Nobody is here/)
+  // Nobody to see macOS's own dialog either.
+  expect(mac.prompts).toBe(0)
 }, 20_000)

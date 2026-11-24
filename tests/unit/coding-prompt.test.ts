@@ -103,8 +103,18 @@ describe('round 2: one-call documents, chat coding guidance, this-chat instructi
     for (const p of [chat, full]) {
       expect(p).not.toMatch(/\("always…", "never…", "from now on…"\), save/)
       expect(p).toContain('"From now on…", "only…", "reply in Spanish", "keep it short" are for this conversation')
-      expect(p).toContain('"Want this in every chat?"')
+      expect(p).not.toContain('Want this in every chat?')
+      expect(p).toContain("(unsure: this conversation only; don't ask)")
     }
+  })
+
+  test('"the file I made yesterday": the work prompt says how to find a file by date', () => {
+    expect(full).toContain("mdfind -onlyin ~ 'kMDItemFSContentChangeDate >= $time.yesterday'")
+    expect(full).toContain('chat_history')
+  })
+
+  test('the compact prompt also keeps health, money and other sensitive details out of automatic saves (MPB-03)', () => {
+    expect(compact).toContain('health, money, ID details only if asked')
   })
 })
 

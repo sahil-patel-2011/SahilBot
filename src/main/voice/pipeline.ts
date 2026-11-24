@@ -17,6 +17,8 @@ export type VoiceEvent =
   | { type: 'error'; message: string }
   /** A passing note (fell back to the standard voice, a request the server turned down): shown briefly, never an error. */
   | { type: 'notice'; message: string }
+  /** A live call ended (by itself or hung up): stop the microphone and end the conversation. */
+  | { type: 'ended' }
 
 export interface PipelineDeps {
   vad: Vad

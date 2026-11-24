@@ -94,7 +94,7 @@ test('a live conversation: token, session, audio both ways, barge-in, work throu
   live.close()
   expect(charged).toHaveLength(1)
   expect(charged[0]).toBeCloseTo(1.5 * GROK_VOICE_USD_PER_MIN, 5)
-  expect(events.at(-1)).toEqual({ type: 'state', state: 'idle' })
+  expect(events.slice(-2)).toEqual([{ type: 'state', state: 'idle' }, { type: 'ended' }])
 })
 
 test('a rejected key fails to start with a plain reason (the standard voice then takes over)', async () => {

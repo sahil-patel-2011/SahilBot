@@ -4,7 +4,8 @@ import { Connectors } from '../../src/main/connectors'
 import { calendarRange, formatEvents, macAppsTool, type MacEvent } from '../../src/main/agent/tools/apps'
 import type { ToolContext } from '../../src/main/agent/types'
 import { Db } from '../../src/main/db'
-import { Scheduler, eventKey } from '../../src/main/scheduler'
+import { Scheduler, eventKey, newestVersions } from '../../src/main/scheduler'
+import { TRIGGER_DAILY_MAX } from '../../src/main/triggers'
 
 // Connecting the right app, reading the Mac calendar right, and "when a meeting is added" routines that run once
 // per meeting.
@@ -99,4 +100,39 @@ test('matches waiting for a busy routine survive a restart', async () => {
   release()
   // Ran: the saved queue is cleared.
   expect(Object.keys(db.getSetting<Record<string, unknown>>('triggerQueue') ?? {})).toEqual([])
+})
+
+test('calendar matches over the daily limit wait for the next day instead of being lost', async () => {
+  const db = new Db(':memory:')
+  const space = db.createSpace('Assistant', '#000')
+  const notes: string[] = []
+  let now = new Date()
+  const s = new Scheduler(db, async (_t, info) => { notes.push(info.event?.note ?? ''); return 'done' }, () => undefined, () => now)
+  const t = s.create({ title: 'Prep meetings', prompt: 'Make a prep note', schedule: { type: 'when', kind: 'calendar' }, spaceId: space.id })
+  const at = new Date(t.createdAt + 60_000).toISOString()
+  const ev = (i: number) => calendarItems('gcal', JSON.stringify({ items: [{ id: `evt${i}`, summary: `Meeting ${i}`, start: { dateTime: '2026-12-01T15:00:00Z' }, created: at, updated: at }] }))
+  for (let i = 0; i < TRIGGER_DAILY_MAX + 1; i++) { s.onItems(ev(i)); await expect.poll(() => s.isRunning(t.id)).toBe(false) }
+  expect(notes).toHaveLength(TRIGGER_DAILY_MAX)
+  expect(s.get(t.id)!.lastStatus).toMatch(/ran 20 times today/)
+  // The 21st meeting is marked seen (never handed over twice) but kept: the next day's first check runs it.
+  now = new Date(Date.now() + 86_400_000)
+  await s.tick()
+  await expect.poll(() => notes.length).toBe(TRIGGER_DAILY_MAX + 1)
+  expect(notes.at(-1)).toContain(`Meeting ${TRIGGER_DAILY_MAX}`)
+})
+
+test('two versions of one calendar event in one read go into a run once (the newest)', async () => {
+  const db = new Db(':memory:')
+  const space = db.createSpace('Assistant', '#000')
+  const notes: Array<{ note: string; count: number }> = []
+  const s = new Scheduler(db, async (_t, info) => { notes.push({ note: info.event?.note ?? '', count: info.event?.count ?? 0 }); return 'done' }, () => undefined)
+  const t = s.create({ title: 'Prep meetings', prompt: 'Make a prep note', schedule: { type: 'when', kind: 'calendar' }, spaceId: space.id })
+  const created = new Date(t.createdAt + 60_000).toISOString()
+  const v1 = calendarItems('gcal', JSON.stringify({ items: [{ id: 'evt1', summary: 'Design review', start: { dateTime: '2026-12-01T15:00:00Z' }, created, updated: created }] }))
+  const v2 = calendarItems('gcal', JSON.stringify({ items: [{ id: 'evt1', summary: 'Design review (moved)', start: { dateTime: '2026-12-01T16:00:00Z' }, created, updated: new Date(t.createdAt + 120_000).toISOString() }] }))
+  expect(newestVersions([...v1, ...v2]).map((x) => x.title)).toEqual([v2[0].title])
+  expect(s.onItems([...v1, ...v2])).toEqual([t.id])
+  await expect.poll(() => notes.length).toBe(1)
+  expect(notes[0].count).toBe(1)
+  expect(notes[0].note).toContain('moved')
 })

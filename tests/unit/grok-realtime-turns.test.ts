@@ -104,7 +104,8 @@ test('charged every minute as it goes, and the call ends when the spending limit
   expect(charged).toHaveLength(2)
   expect(charged[1]).toBeCloseTo(0.5 * GROK_VOICE_USD_PER_MIN, 5)
   expect(events.some((e) => e.type === 'error' && /spending limit/.test(e.message))).toBe(true)
-  expect(events.at(-1)).toEqual({ type: 'state', state: 'idle' })
+  // Idle, then "ended": the app lets go of the microphone.
+  expect(events.slice(-2)).toEqual([{ type: 'state', state: 'idle' }, { type: 'ended' }])
 })
 
 test('a long silence hangs up; talking keeps it open', async () => {

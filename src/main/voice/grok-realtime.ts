@@ -66,6 +66,16 @@ export const DO_TASK_TOOL = {
   parameters: { type: 'object', properties: { request: { type: 'string', description: 'What the user wants, in full' } }, required: ['request'] }
 }
 
+/**
+ * What do_task tells Grok: the bot's answer only when its run finished; a stopped or failed run says so, so Grok
+ * never tells a draft as if it were done.
+ */
+export function taskOutcome(status: 'finished' | 'stopped' | 'error' | undefined, reply: string | undefined, error?: string): string {
+  if (status === 'error') return `The bot didn't finish: ${(error ?? '').trim() || 'it hit an error'}. Nothing more was done; tell the user.`
+  if (status === 'stopped') return 'The run was stopped before it finished. Don\'t say it was done.'
+  return reply?.trim() || 'The bot finished but wrote no reply.'
+}
+
 /** The instructions Grok gets: who it is, how to talk, and when to hand work to the bot. */
 export function grokVoiceInstructions(o: { botName: string; userName?: string; language?: string; role?: string }): string {
   return [
@@ -103,6 +113,18 @@ export class GrokRealtime {
   private cancelNext = false
 
   constructor(private o: GrokRealtimeOptions) {}
+
+  /** The call ended (hung up, idle, spending limit, disconnected): nothing more will be heard or said. */
+  get isClosed(): boolean { return this.closed }
+
+  /** The voice bar changed mid-call (voice, or the language in the instructions): applied to the session now. */
+  update(o: { voice?: string; instructions?: string }): void {
+    if (this.closed) return
+    const session: Record<string, unknown> = {}
+    if (o.instructions && o.instructions !== this.o.instructions) { this.o = { ...this.o, instructions: o.instructions }; session.instructions = o.instructions }
+    if (o.voice && o.voice !== this.o.voice) { this.o = { ...this.o, voice: o.voice }; session.voice = o.voice }
+    if (Object.keys(session).length) this.send({ type: 'session.update', session })
+  }
 
   /** Opens the conversation: a short-lived token for the socket (the key never rides on it), then the session. */
   async start(): Promise<void> {
@@ -212,6 +234,7 @@ export class GrokRealtime {
   }
 
   private finish(): void {
+    const was = !!this.startedAt
     this.closed = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
@@ -225,6 +248,8 @@ export class GrokRealtime {
       this.startedAt = 0
     }
     this.o.emit({ type: 'state', state: 'idle' })
+    // The call is over (by itself or hung up): the app lets go of the microphone and the conversation.
+    if (was) this.o.emit({ type: 'ended' })
   }
 
   private send(msg: Record<string, unknown>): void {
@@ -313,7 +338,9 @@ export class GrokRealtime {
         const err = (e.error ?? e) as { message?: string }
         this.requested = false
         this.cancelNext = false
-        this.o.emit({ type: 'notice', message: `Grok voice: ${err.message ?? 'something went wrong'}` })
+        // Talking over Grok: the server's own voice detection may already have cancelled or cut the reply, so our
+        // cancel or truncate is turned down. Expected, not news.
+        if (!/cancel|no active response|truncat/i.test(err.message ?? '')) this.o.emit({ type: 'notice', message: `Grok voice: ${err.message ?? 'something went wrong'}` })
         this.flush()
         return
       }
