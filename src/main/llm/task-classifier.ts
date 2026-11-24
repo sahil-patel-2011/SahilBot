@@ -279,8 +279,10 @@ const BUILD_APP = /\b(build|make|create|code|develop)\b( me)? (a|an|the|my) ([\w
  * "Make me a bot called Study Pal for chemistry": a SahilBot bot (create_bot), not code. A Discord, Slack or
  * Telegram bot, or one in a programming language, is still coding (CODE_STRONG or a chat platform named).
  */
-const SAHILBOT_BOT = /\b(build|make|create|set up)\b( me)? (a|an|another|a new) (new )?bot\b(?! (in|with|using|for (discord|slack|telegram|twitch|whatsapp)))(\s+(called|named|for|that|to help|who|which|to)\b|\s*$|\s*[.!,])/
-const BOT_PLATFORM = /\b(discord|slack|telegram|twitch|whatsapp|reddit|twitter|x\.com|irc|chatbot for (my|our) (site|website|app))\b/
+export const SAHILBOT_BOT = /\b(build|make|create|set up)\b( me)? (a|an|another|a new|my) (new )?(?!(web|website|site|app|chat|discord|slack|telegram|python|trading|crypto)\b)([\w-]+ ){0,3}bot\b(?! (in|with|using|for (discord|slack|telegram|twitch|whatsapp)))(\s+(called|named|for|that|to help|who|which|to)\b|\s*$|\s*[.!?,])/
+/** "Delete it", "undo", "bring it back", "give it a 🧪 icon": a short order about something just made (a bot, a file). */
+const SHORT_ORDER = /^(please )?((delete|remove|rename|hide|unhide|pin|unpin|restore|undo|un-?delete|trash)( (it|that|this|them|him|her|[\w-]+))?|(bring|put|get) (it|that|them|him|her|[\w-]+( [\w-]+){0,2}) back|give (it|him|her|them) (a|an|the|its|their) (\S+ ){0,2}(icon|emoji|colou?r))( (now|please|too|instead|then))?[\s.!]*$/
+const BOT_PLATFORM = /\b(discord|slack|telegram|twitch|whatsapp|reddit|twitter|x\.com|irc|(chat ?|chart )?bot for (my|our|the|a) (site|web ?site|app|store|shop|server))\b/
 /** Planning a trip ("plan a 3-day trip to Savannah", "a weekend itinerary") with the details that make it work: days, people, money. */
 const TRAVEL_PLAN = /\b(plan|planning|itinerar(y|ies)|organi[sz]e)\b.{0,40}\b(trip|vacation|getaway|weekend|visit|holiday)\b|\b\d+[- ]day (trip|itinerary|plan|vacation|getaway)\b|\bitinerar(y|ies)\b/
 const TRAVEL_SPECIFICS = /\b\d+ (people|adults|kids|of us|nights|days)\b|\bfamily of \d+\b|\$\s?\d|\bbudget\b|\bhotels?\b|\b\d+[- ]day\b/
@@ -513,7 +515,7 @@ export const RULE_CONFIDENCE: Record<string, number> = {
   // Added with holdout 4 (medical, travel, business, engineering, coding agents).
   booking: 0.85, 'math:engineering': 0.85, 'coding:agent': 0.85, 'research:travel': 0.75, 'research:medical': 0.85,
   // A new SahilBot bot by chat ("make me a bot called Study Pal"): one create_bot.
-  'agent-tools:bot': 0.85
+  'agent-tools:bot': 0.85, 'agent-tools:short': 0.85
 }
 
 interface Picked { category: TaskCategory; rule: string; why: string }
@@ -562,6 +564,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
       if (/^(send|email|post|forward) (it|this|that)\b/.test(t) && prevCat !== 'agent-tools') return { category: 'agent-tools', rule: 'follow-up:new', why: 'sends it' }
       return { category: prevCat!, rule: 'follow-up', why: 'follow-up to the last request' }
     }
+    if (!question && words <= 6 && has(SHORT_ORDER, t)) return { category: 'agent-tools', rule: 'agent-tools:short', why: 'a short order' }
     if (ctx.deepResearch) return { category: 'research', rule: 'deep-research', why: 'Deep Research' }
     if (!raw || /^[^\p{L}\p{N}]*$/u.test(raw) || (words === 1 && raw.length <= 2)) return { category: images ? 'vision' : 'chat', rule: images ? 'vision' : 'empty', why: images ? 'looks at an image' : 'nothing to do yet' }
     if ((has(GREETING, t) && words <= 4) || (words <= 12 && has(THANKS_ONLY, t)) || /^(please )?just say (hi|hello)\b/.test(t) || /^tell me a joke\b/.test(t)) return { category: 'chat', rule: 'small-talk', why: 'small talk' }
@@ -679,7 +682,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
         if (/^convert\b/.test(t) && words <= 12) return 1
         return 2
       case 'agent-tools':
-        if (pick.rule === 'agent-tools:bot') return 1
+        if (pick.rule === 'agent-tools:bot' || pick.rule === 'agent-tools:short') return 1
         if (folders || multi || /\b(go through|everything|each one)\b/.test(t)) return 3
         return 2
       case 'vision':
@@ -725,7 +728,7 @@ export function classifyTask(text: string, ctx: TaskContext = {}): TaskClass {
     if (ctx.helper || ctx.unattended || ctx.group) return { kind: 'agent', why: ctx.helper ? 'helper agent' : ctx.unattended ? 'runs unattended' : 'group chat' }
     if (ctx.planFirst || ctx.team || ctx.deepResearch || ctx.heavy || ctx.council) return { kind: 'agent', why: ctx.planFirst ? 'Plan first is on' : ctx.team ? 'Team of Experts is on' : ctx.deepResearch ? 'Deep Research is on' : ctx.heavy ? 'Heavy is on' : 'Council is on' }
     if (folders) return { kind: 'agent', why: 'works with an attached folder' }
-    if (has(IMAGE_RE, t) && !question) return { kind: 'agent', why: 'makes a picture' }
+    if (has(IMAGE_RE, t) && !question && pick.rule !== 'agent-tools:bot') return { kind: 'agent', why: 'makes a picture' }
     if (files) return { kind: 'agent', why: 'reads attached files' }
     if (ctx.openPlan && words <= 20) return { kind: 'agent', why: 'a task is in progress' }
     if (pick.rule === 'follow-up') return { kind: ctx.previousKind ?? (AGENT_WORK.has(category) ? 'agent' : 'chat'), why: 'follow-up' }

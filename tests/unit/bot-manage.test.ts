@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest'
-import { createBotTool, iconFor, manageBotTool } from '../../src/main/agent/tools/bots'
+import { createBotTool, iconFor, manageBotTool, resetBotPrompts } from '../../src/main/agent/tools/bots'
 import { undoTool } from '../../src/main/agent/tools/undo'
 import { botTrash, BOT_UNDO_MS } from '../../src/main/bot-trash'
 import { Db } from '../../src/main/db'
@@ -17,6 +17,7 @@ function setup() {
   const pins: string[] = []
   const cards: Array<{ threadId: string; name: string; icon: string }> = []
   const stopped: string[] = []
+  const resets: string[] = []
   const bin = botTrash(db, { stop: (ids) => stopped.push(...ids), emit: () => undefined })
   const create = createBotTool({
     create: (name, color, shape, icon) => { const s = db.createSpace(name, color, { kind: 'bot', shape: shape as never, icon }); return { spaceId: s.id, threadId: db.createThread(s.id, 'auto', null).id } },
@@ -27,7 +28,7 @@ function setup() {
   }, db, () => undefined)
   const manage = manageBotTool({
     remove: (id, threadId) => bin.remove(id, threadId), restore: (id) => bin.restore(id), pin: (id, on) => (on ? pins.push(id) : undefined),
-    getPrompt: (id) => prompts.get(id) ?? '', setPrompt: (id, t) => prompts.set(id, t)
+    getPrompt: (id) => prompts.get(id) ?? '', setPrompt: (id, t) => prompts.set(id, t), resetPrompt: (id) => resets.push(id)
   }, db, () => undefined)
   const say = (text: string) => db.insertMessage({ threadId: chat.id, role: 'user', content: text, kind: 'normal', status: 'done' })
   const reply = (text: string) => db.insertMessage({ threadId: chat.id, role: 'assistant', content: text, kind: 'normal', status: 'done' })
@@ -37,7 +38,7 @@ function setup() {
     await create.run({ name, job: 'Homework help', instructions, icon: '📚' }, ctx)
     return db.listSpaces().find((s) => s.name === name)!
   }
-  return { db, main, chat, create, manage, say, reply, ctx, prompts, greeted, pins, cards, bin, stopped, make }
+  return { db, main, chat, create, manage, say, reply, ctx, prompts, greeted, pins, cards, bin, stopped, resets, make }
 }
 
 test('"make me a … bot" creates a new bot with its own chat, job, icon and hello; the main bot is untouched', async () => {
@@ -207,4 +208,59 @@ test('every new bot gets an icon (one that fits its job when none is given) and 
   h.say('Make me a bot called Mailer for my inbox')
   await h.create.run({ name: 'Mailer', job: 'Inbox', instructions: 'You keep the inbox tidy.', icon: 'mail' }, h.ctx)
   expect(h.db.listSpaces().find((s) => s.name === 'Mailer')!.icon).toBe('📬')
+})
+
+test('rename swaps the old name only as a whole word in the instructions', async () => {
+  const h = setup()
+  const bot = await h.make('Ace', 'You are Ace. Keep your place in the reading; Ace\'s notes come first.')
+  h.say('Rename it Study Buddy')
+  await h.manage.run({ bot: 'Ace', action: 'rename', name: 'Study Buddy' }, h.ctx)
+  expect(h.prompts.get(bot.id)).toBe('You are Study Buddy. Keep your place in the reading; Study Buddy\'s notes come first.\n')
+})
+
+test('a rename or new instructions from another chat reach the bot\'s ongoing conversation (its frozen prompt is reset)', async () => {
+  const h = setup()
+  const bot = await h.make('Homework Helper')
+  h.say('Rename it Study Buddy')
+  await h.manage.run({ bot: 'Homework Helper', action: 'rename', name: 'Study Buddy' }, h.ctx)
+  h.say('Make it stricter')
+  await h.manage.run({ bot: 'Study Buddy', action: 'update', instructions: 'You are Study Buddy. Be strict.' }, h.ctx)
+  expect(h.resets).toEqual([bot.id, bot.id])
+  // An icon only changes nothing in its prompt.
+  h.say('Give it a 🧪 icon')
+  await h.manage.run({ bot: 'Study Buddy', action: 'update', icon: '🧪' }, h.ctx)
+  expect(h.resets).toHaveLength(2)
+  // resetBotPrompts: its own chat and a group it is in lose their snapshots; a chat working right now is cleared when it ends.
+  const own = h.db.listThreads(bot.id)[0]
+  const group = h.db.createSpace('Study group', '#000', { kind: 'group', members: [bot.id] })
+  const groupChat = h.db.createThread(group.id, 'auto', null)
+  const other = h.db.createThread(h.main.id, 'auto', null)
+  for (const t of [own, groupChat, other]) { const st = h.db.getState(t.id); st.systemSnapshot = 'Bot: Homework Helper'; st.snapshots = { [bot.id]: 'old' }; h.db.setState(t.id, st) }
+  let idle: (r: string) => void = () => undefined
+  resetBotPrompts(h.db, bot.id, { isRunning: (t) => t === groupChat.id, whenIdle: () => new Promise((r) => { idle = r }) })
+  expect(h.db.getState(own.id).systemSnapshot).toBeUndefined()
+  expect(h.db.getState(groupChat.id).snapshots).toEqual({ [bot.id]: 'old' })
+  expect(h.db.getState(other.id).systemSnapshot).toBe('Bot: Homework Helper')
+  idle('idle')
+  await Promise.resolve(); await Promise.resolve()
+  expect(h.db.getState(groupChat.id).systemSnapshot).toBeUndefined()
+  expect(h.db.getState(groupChat.id).snapshots).toEqual({})
+})
+
+test('once a deleted bot is really gone, its "Deleted X · Undo" line loses the Undo', async () => {
+  vi.useFakeTimers()
+  const emitted: Array<Record<string, unknown> | undefined> = []
+  const h = setup()
+  const bin = botTrash(h.db, { stop: () => undefined, emit: (m) => emitted.push(m.meta) })
+  const bot = await h.make('Quizzy')
+  bin.remove(bot.id, h.chat.id)
+  const notice = h.db.listMessages(h.chat.id).find((m) => m.meta?.botUndo)!
+  expect(notice.meta?.expired).toBeUndefined()
+  // Kept at least 30 s.
+  vi.advanceTimersByTime(30_000)
+  expect(h.db.trashedAt(bot.id)).toBeDefined()
+  vi.advanceTimersByTime(BOT_UNDO_MS)
+  expect(h.db.getSpace(bot.id)).toBeUndefined()
+  expect(h.db.getMessage(notice.id)!.meta?.expired).toBe(true)
+  expect(emitted.at(-1)?.expired).toBe(true)
 })

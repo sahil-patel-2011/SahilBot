@@ -1090,8 +1090,8 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
     const botUndo = m.meta?.botUndo as { spaceId: string; name: string } | undefined
     if (botUndo) return (
       <div className="notice sys-line" role="status" data-testid="bot-deleted">
-        {m.content}{' · '}
-        {m.meta?.undone ? <span>Undone</span>
+        {m.content}{m.meta?.expired && !m.meta?.undone ? null : ' · '}
+        {m.meta?.undone ? <span>Undone</span> : m.meta?.expired ? null
           : <button className="link-btn" onClick={() => void api.spaces.restore(botUndo.spaceId).catch((e) => toast((e as Error).message, 'error'))} data-testid="bot-undo">Undo</button>}
       </div>
     )

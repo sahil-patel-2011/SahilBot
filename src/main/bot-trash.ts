@@ -30,8 +30,17 @@ export function botTrash(db: Db, deps: BotTrashDeps) {
     clearTimeout(timers.get(id))
     timers.delete(id)
     if (db.trashedAt(id) === undefined) return
+    const rec = db.getSetting<TrashRecord>(key(id))
     db.deleteSpace(id)
     db.setSetting(key(id), null)
+    // "Deleted X · Undo" loses its Undo: there is nothing left to bring back.
+    for (const mid of rec?.notices ?? []) {
+      const m = db.getMessage(mid)
+      if (!m || m.meta?.undone) continue
+      const next = { ...m, meta: { ...m.meta, expired: true } }
+      db.updateMessage(next)
+      deps.emit(next)
+    }
   }
   function schedule(id: string, ms: number): void {
     clearTimeout(timers.get(id))

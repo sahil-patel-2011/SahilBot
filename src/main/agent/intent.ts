@@ -1,7 +1,7 @@
 import { CAD_RE } from '../cad/cad-intent'
 import { isMedicalQuestion } from './medical-check'
 import { VIDEO_RE } from './video-intent'
-import { IMAGE_RE, classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
+import { IMAGE_RE, SAHILBOT_BOT, classifyTask as classifyRequest, type TaskCategory as RouteCategory, type TaskClass as RouteClass } from '../llm/task-classifier'
 
 /**
  * Which on-demand tools a request needs, read from the request itself. Heavy tools (computer use, code,
@@ -79,6 +79,8 @@ export function intentTools(text: string, known: Set<string>, extra: { codeProje
   for (const g of GROUPS) if (g.when.test(text)) for (const t of g.tools) out.add(t)
   // A chat about a code project (a project folder with a repo or package file) gets the coding tools.
   if (extra.codeProject) for (const t of GROUPS[0].tools) out.add(t)
+  // "Make me a bot … with its own icon": the icon is an emoji create_bot picks, not a picture to generate.
+  if (out.has('image') && SAHILBOT_BOT.test(text.toLowerCase()) && !IMAGE_RE.test(text.replace(/\b(icons?|emojis?|avatars?)\b/gi, ''))) out.delete('image')
   return [...out].filter((t) => known.has(t))
 }
 

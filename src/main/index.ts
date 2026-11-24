@@ -22,7 +22,7 @@ import { DEFAULT_TRANSCRIBE_MODEL, speechUsd, transcribe as openaiTranscribe, tr
 import { OpenAISttEngine } from './voice/stt'
 import { hookSpend } from './apis/spend'
 import { INTRO, autoMemoryOn, setAutoMemory } from './agent/prompt'
-import { createBotTool, finishSetupTool, manageBotTool, SETUP_GREETING, SETUP_PROMPT, updateBotTool } from './agent/tools/bots'
+import { createBotTool, finishSetupTool, manageBotTool, resetBotPrompts, SETUP_GREETING, SETUP_PROMPT, updateBotTool } from './agent/tools/bots'
 import { PROVIDERS } from './llm/providers'
 import { Budget, budgetLeftFor, spendingMode } from './llm/budget'
 import { SPEED_SENSITIVE, fastHooks, fastSupport, fastTierFor, fastTradeoff, speedOptions } from './llm/fast-mode'
@@ -883,6 +883,7 @@ app.whenReady().then(() => {
       restore: (id) => restoreBot(id),
       getPrompt: (id) => spaces.getPrompt(id),
       setPrompt: (id, text) => spaces.setPrompt(id, text),
+      resetPrompt: (id) => resetBotPrompt(id),
       pin: (id, on) => { const cur = settings.get().pinnedBots ?? []; settings.set({ pinnedBots: on ? [...new Set([...cur, id])] : cur.filter((x) => x !== id) } as never) }
     }, db, () => emit({ threadId: '', type: 'spaces' })),
     finishSetupTool(db, spaces, () => emit({ threadId: '', type: 'spaces' })),
@@ -1485,6 +1486,7 @@ app.whenReady().then(() => {
     if (patch.name && db.getSetting<boolean>(`setup:${id}`)) db.setSetting(`setup:${id}`, false)
     // Keep a bot's one conversation titled after it.
     if (patch.name && s.kind === 'bot' && !s.isMain) for (const t of db.listThreads(id)) db.updateThread(t.id, { title: s.name })
+    if (patch.name) resetBotPrompt(id)
     return s
   })
   handle('spaces:markUnread', (id: string) => {
@@ -1496,6 +1498,7 @@ app.whenReady().then(() => {
   handle('spaces:getPrompt', (id: string) => spaces.getPrompt(id))
   handle('spaces:setPrompt', (id: string, text: string) => {
     spaces.setPrompt(id, text)
+    resetBotPrompt(id)
     // Instructions written by the user: a New bot being set up counts as set up.
     if (db.getSetting<boolean>(`setup:${id}`)) db.setSetting(`setup:${id}`, false)
   })
@@ -2047,6 +2050,10 @@ app.whenReady().then(() => {
   function removeBot(id: string, threadId?: string): void { botBin.remove(id, threadId) }
   function restoreBot(id: string): void { botBin.restore(id) }
   function lastDeletedBot(threadId: string): { id: string; name: string; at: number } | undefined { return botBin.lastDeleted(threadId) }
+  /** A bot's name or instructions changed: its chats and groups rebuild their system prompt (agent/tools/bots.ts). */
+  function resetBotPrompt(id: string): void {
+    resetBotPrompts(db, id, { isRunning: (t) => chat.isRunning(t), whenIdle: (t) => chat.whenIdle(t, AbortSignal.timeout(3_600_000), 3_600_000) })
+  }
   // Bots deleted before the app last quit: past their Undo time they go now, the rest when it ends.
   botBin.resume()
 
