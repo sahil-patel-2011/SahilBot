@@ -72,7 +72,7 @@ describe('connect apps from a chat', () => {
       expect(names(llm.requests.at(-1)!)).toEqual([...CHAT_SET, TOOL])
 
       // Connect apps shows the app connected (the connect came from the chat card).
-      await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
+      await page.click('[data-testid="connect-apps"]')
       await expect.poll(() => page.locator('[data-testid="preset-test-acme"]').getAttribute('data-state'), { timeout: 10_000 }).toBe('connected')
       await page.click('[data-testid="connected-count"]')
       const row = page.locator('[data-testid="connector-row"]')
