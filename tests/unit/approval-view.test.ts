@@ -63,6 +63,13 @@ describe('plain sidebar rows and quick paths', () => {
       step('6', 'web_search', { status: 'ok' })
     ])).toEqual([{ key: '3', path: '/w/deck.pptx' }, { key: '4', path: '/w/a.md' }])
   })
+
+  test('office results get a file card; a doc_export file only when no document card shows it', () => {
+    const step = (id: string, name: string, meta: Record<string, unknown>) => ({ call: { id, name }, result: { meta } })
+    const steps = [step('1', 'office', { status: 'ok', path: '/w/merged.pdf' }), step('2', 'doc_export', { status: 'ok', path: '/w/Report.docx' })]
+    expect(filesFromSteps(steps)).toEqual([{ key: '1', path: '/w/merged.pdf' }])
+    expect(filesFromSteps(steps, { exports: true })).toEqual([{ key: '1', path: '/w/merged.pdf' }, { key: '2', path: '/w/Report.docx' }])
+  })
 })
 
 describe('"Always allow" only where it is honoured', () => {

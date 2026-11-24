@@ -13,6 +13,11 @@ import { IMAGE_RE, SAHILBOT_BOT, classifyTask as classifyRequest, type TaskCateg
 
 export { IMAGE_RE, VIDEO_RE }
 
+/** An email to write from the user's words ("Write a short email to my landlord about the leak"). */
+const COMPOSE_ONLY = /^(?:(?:please|pls|can you|could you|hey)[,\s]+)*(write|draft|compose)( me)? (a|an)\b[^.?!]{0,40}?\be-?mail\b/i
+/** Anything that needs the mailbox: reading, replying, forwarding, sending, finding an earlier email. */
+const MAILBOX = /\b(inbox|repl(y|ies)|forward|thread|unread|send (it|this|that|them)|and send|send to|e-?mails? (from|about) .{0,30}\b(earlier|last|yesterday)|my (e-?mails?|mail)|gmail|apple mail|attach)\b/i
+
 const GROUPS: Array<{ tools: string[]; when: { test(text: string): boolean } }> = [
   {
     tools: ['code', 'git', 'jobs'],
@@ -42,7 +47,10 @@ const GROUPS: Array<{ tools: string[]; when: { test(text: string): boolean } }> 
   },
   {
     tools: ['mail'],
-    when: /\b(e-?mails?|inbox|gmail|mail app|apple mail|unread|reply to|draft (a|an|the)? ?(reply|email)|newsletter|unsubscribe)\b/i
+    // Writing an email from what the user said ("Draft a two-line email to my landlord") needs no mailbox; reading,
+    // replying, forwarding or sending does.
+    when: { test: (t: string) => /\b(e-?mails?|inbox|gmail|mail app|apple mail|unread|reply to|draft (a|an|the)? ?(reply|email)|newsletter|unsubscribe)\b/i.test(t)
+      && !(COMPOSE_ONLY.test(t) && !MAILBOX.test(t)) }
   },
   // CAD (src/main/cad/cad-intent.ts owns the words): the design workflow, Onshape, and FreeCAD when installed.
   { tools: ['cad_design', 'onshape', 'freecad'], when: CAD_RE },

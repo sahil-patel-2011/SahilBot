@@ -41,4 +41,16 @@ describe('Db', () => {
     expect(after.meta?.provisional).toBeUndefined()
     expect(after.meta?.sources).toEqual([])
   })
+
+  test('the startup sweep: a streaming reply is stopped, and one left out of sight (provisional) stands', () => {
+    const db = new Db(':memory:')
+    const t = db.createThread(db.createSpace('Work', '#000000').id, 'auto', 'm')
+    const a = db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Saved invoice.pdf', kind: 'normal', status: 'done', meta: { provisional: true, sources: [] } })
+    const b = db.insertMessage({ threadId: t.id, role: 'assistant', content: 'Half', kind: 'normal', status: 'streaming', meta: { provisional: true } })
+    db.sweepStreaming()
+    expect(db.getMessage(a.id)?.meta?.provisional).toBeUndefined()
+    expect(db.getMessage(a.id)?.meta?.sources).toEqual([])
+    expect(db.getMessage(b.id)?.status).toBe('stopped')
+    expect(db.getMessage(b.id)?.meta?.provisional).toBeUndefined()
+  })
 })

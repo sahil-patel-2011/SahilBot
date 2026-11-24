@@ -30,14 +30,17 @@ export function nameFromJob(job: string): string {
   return words ? words[0].toUpperCase() + words.slice(1) : ''
 }
 
-const FILE_TOOLS = new Set(['file_write', 'file_edit', 'create_document'])
+const FILE_TOOLS = new Set(['file_write', 'file_edit', 'create_document', 'office'])
 
-/** One entry per file (the latest call wins), only for calls that succeeded and said where the file is. */
-export function filesFromSteps(steps: Array<{ call: Pick<ToolCall, 'id' | 'name'>; result?: Pick<Message, 'meta'> }>): Array<{ key: string; path: string }> {
+/**
+ * One entry per file (the latest call wins), only for calls that succeeded and said where the file is.
+ * exports: a live document saved as a file (doc_export) gets a file card too (when no document card shows it).
+ */
+export function filesFromSteps(steps: Array<{ call: Pick<ToolCall, 'id' | 'name'>; result?: Pick<Message, 'meta'> }>, o: { exports?: boolean } = {}): Array<{ key: string; path: string }> {
   const out = new Map<string, { key: string; path: string }>()
   for (const s of steps) {
     const path = s.result?.meta?.path
-    if (!FILE_TOOLS.has(s.call.name) || s.result?.meta?.status !== 'ok' || typeof path !== 'string' || /\.html?$/i.test(path)) continue
+    if (!(FILE_TOOLS.has(s.call.name) || (o.exports && s.call.name === 'doc_export')) || s.result?.meta?.status !== 'ok' || typeof path !== 'string' || /\.html?$/i.test(path)) continue
     out.delete(path)
     out.set(path, { key: s.call.id, path })
   }

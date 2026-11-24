@@ -32,3 +32,14 @@ test('side-question wording, tips, discounts and "percent" are worked out instan
   expect(isAside('Quick one: 245 × 18?')).toBe(true)
   for (const q of ['quick question: what is love?', '20% tip on the bill', 'hey']) expect(quickMath(q), q).toBeUndefined()
 })
+
+// Report ARB-01: a date, range or option typed as a reply mid-task ("10/12", "2026-11-24", "1-2") is not a sum.
+test('a bare date, range or fraction is a reply, not arithmetic', () => {
+  for (const q of ['10/12', '2026-11-24', '1-2', '3/4']) {
+    expect(quickMath(q), q).toBeUndefined()
+    expect(isAside(q), q).toBe(false)
+  }
+  expect(quickMath('10/12?')).toBe('10/12 = 0.833333.')
+  expect(quickMath('what is 3/4')).toBe('3/4 = 0.75.')
+  expect(quickMath('100 - 7')).toBe('100 - 7 = 93.')
+})

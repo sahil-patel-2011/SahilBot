@@ -850,7 +850,7 @@ function QuietActivity({ steps, actions, hasDocs, artifactsOnly }: { steps: Step
     <>
       {done.map((a) => <div key={a.key} className={`quiet-action${a.failed ? ' failed' : ''}`} data-testid="quiet-action">{a.failed ? <span aria-hidden>!</span> : <I.Check size={12} />}{a.text}</div>)}
       <Gallery items={galleryFromSteps(steps)} onOpen={actions.onOpenFile} />
-      <MadeFiles files={filesFromSteps(steps).filter((f) => !galleryFromSteps(steps).some((g) => g.path === f.path))} onOpen={actions.onOpenFile} />
+      <MadeFiles files={filesFromSteps(steps, { exports: !hasDocs }).filter((f) => !galleryFromSteps(steps).some((g) => g.path === f.path))} onOpen={actions.onOpenFile} />
       {pagesFromSteps(steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
       {stocksFromSteps(steps).map((x) => <StockCard key={x.key} data={x.data} />)}
       {videosFromSteps(steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
@@ -929,7 +929,7 @@ const BlockItem = memo(function BlockItem({ b, time, cont, actions, hasDocs, run
       ) : b.kind === 'activity' ? (
         <>
           <Activity steps={b.steps} live={live} waitingApproval={waitingApproval} onOpenFile={actions.onOpenFile} />
-          {!live && <MadeFiles files={filesFromSteps(b.steps)} onOpen={actions.onOpenFile} />}
+          {!live && <MadeFiles files={filesFromSteps(b.steps, { exports: !hasDocs })} onOpen={actions.onOpenFile} />}
           {pagesFromSteps(b.steps).map((p) => <PageCard key={p.key} path={p.path} title={p.title} at={p.at} onOpen={actions.onOpenFile} />)}
           {stocksFromSteps(b.steps).map((s) => <StockCard key={s.key} data={s.data} />)}
           {videosFromSteps(b.steps).map((v) => <VideoCard key={v.key} data={v.data} progress />)}
