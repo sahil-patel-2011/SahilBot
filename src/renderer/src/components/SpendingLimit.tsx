@@ -85,3 +85,38 @@ export function SpendingLimitSection({ s, patch }: { s: Settings; patch: Patch }
     </section>
   )
 }
+
+/** Settings → AI (outside Developer mode): the limit as one row, and this month's spend in one line. */
+export function SpendingLimitRow({ s, patch }: { s: Settings; patch: Patch }) {
+  const b = useSpend()
+  const mode = modeOf(s)
+  const [amount, setAmount] = useState(String(s.cloudBudgetUsd || 200))
+  useEffect(() => setAmount(String(s.cloudBudgetUsd || 200)), [s.cloudBudgetUsd])
+  const save = (v: string): void => {
+    const n = Math.max(0, Math.round((Number(v) || 0) * 100) / 100)
+    void patch(n > 0 ? { cloudBudgetUsd: n, spendingMode: 'amount' } : { spendingMode: 'none' })
+  }
+  const spent = b ? money(b.spent) : '…'
+  const line = mode === 'amount' ? `${spent} of ${money(s.cloudBudgetUsd)} used this month` : mode === 'unlimited' ? `${spent} used this month` : `${spent} used this month · nothing pay-per-use runs`
+  return (
+    <div className="set-row" data-testid="spending-limit">
+      <div className="set-row-text">
+        <div className="set-row-title">Monthly spending limit</div>
+        <div className="set-row-sub" data-testid="spend-settings">{line}</div>
+      </div>
+      <div className="set-row-ctl">
+        {mode === 'amount' && (
+          <span className="spend-input"><span className="hint">$</span>
+            <input className="set-input" type="number" min={0} step={1} value={amount} aria-label="Monthly limit in dollars" style={{ width: 80 }} onChange={(e) => setAmount(e.target.value)} onBlur={(e) => save(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') save((e.target as HTMLInputElement).value) }} data-testid="budget-cap" />
+          </span>
+        )}
+        <select className="set-select" value={mode} aria-label="Monthly spending limit" data-testid="spend-mode"
+          onChange={(e) => { const m = e.target.value as SpendingMode; void patch(m === 'amount' ? { spendingMode: 'amount', cloudBudgetUsd: Number(amount) > 0 ? Number(amount) : 200 } : { spendingMode: m }) }}>
+          <option value="amount">Limit</option>
+          <option value="unlimited">No limit</option>
+          <option value="none">Don't spend</option>
+        </select>
+      </div>
+    </div>
+  )
+}

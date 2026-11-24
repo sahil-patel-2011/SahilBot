@@ -41,11 +41,17 @@ export async function settingsPage(page: Page, id: string): Promise<void> {
   // Settings lists every page in one flat list (the phone and server pages only once in use, or in Developer mode).
   await page.locator('[data-testid="settings"] .set-nav').waitFor()
   if (!(await item.count()) && (await page.locator('[data-testid="settings-more"]').count())) await page.click('[data-testid="settings-more"]')
-  // Pages folded into a section: Spending is under AI & spending, permissions under Privacy & safety, Advanced under You.
+  // Pages folded into a section: Spending is under AI, permissions under Privacy, Advanced under General.
   const section: Record<string, string> = { usage: 'models', permissions: 'privacy', advanced: 'general' }
   if (!(await item.count()) && section[id]) {
     await page.click(`[data-testid="settings-${section[id]}"]`)
     if (id === 'advanced') await page.locator('[data-testid="settings-advanced-section"]:not([open]) > summary').click().catch(() => undefined)
+    return
+  }
+  // A page Settings doesn't list (Memory): open it the way a link does.
+  if (!(await item.count())) {
+    await page.evaluate((p) => window.dispatchEvent(new CustomEvent('sahilbot:open-settings', { detail: p })), id)
+    await page.locator(`.set-body[data-page="${id}"]`).waitFor()
     return
   }
   await item.click()

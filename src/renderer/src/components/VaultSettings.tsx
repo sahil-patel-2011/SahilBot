@@ -91,7 +91,7 @@ export function SecretVaultSettings({ embedded }: { embedded?: boolean } = {}) {
   return (
     <>
       {!embedded && <h2>Vault</h2>}
-      <div className="set-sub">{embedded ? 'Passwords, cards and IDs SahilBot types into websites for you without ever seeing them. Encrypted on this Mac.' : 'Passwords, cards, IDs and notes SahilBot can type into a website for you, without the assistant ever seeing them. Encrypted on this Mac; every purchase still waits for your click on a Purchase card.'}</div>
+      <div className="set-sub">{embedded ? 'Passwords, cards and IDs SahilBot fills in for you. Encrypted on this Mac.' : 'Passwords, cards, IDs and notes SahilBot can type into a website for you, without the assistant ever seeing them. Encrypted on this Mac; every purchase still waits for your click on a Purchase card.'}</div>
 
       <div className={`sv-status${st.locked ? ' locked' : ' open'}`} data-testid="vault-status" data-locked={st.locked ? '1' : '0'}>
         <div className="sv-status-icon"><LockGlyph open={!st.locked} size={22} /></div>

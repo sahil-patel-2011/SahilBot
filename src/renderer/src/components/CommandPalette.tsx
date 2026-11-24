@@ -4,13 +4,16 @@ import { Mascot, SpaceAvatar } from '../brand'
 import * as I from '../icons'
 import { BrainIcon } from './BrainView'
 import { openUsageGlance } from './UsagePage'
-import { PAGE_TITLES, searchSettings } from '../lib/settings-index'
+import { searchSettings, sectionTitle } from '../lib/settings-index'
+import { useDevMode } from '../lib/dev-mode'
 
 export type PaletteAction =
   | { kind: 'new-chat' } | { kind: 'new-bot' } | { kind: 'new-group' } | { kind: 'new-project' }
   | { kind: 'scheduled' } | { kind: 'projects' } | { kind: 'files' } | { kind: 'tasks' } | { kind: 'brain' } | { kind: 'connect' } | { kind: 'settings' }
   | { kind: 'panel' } | { kind: 'voice' } | { kind: 'dictate' } | { kind: 'max' } | { kind: 'import-memory' } | { kind: 'usage' } | { kind: 'shortcuts' }
   | { kind: 'open'; id: string } | { kind: 'chat'; id: string }
+  /** Developer mode on or off: every step, tokens and cost in chats, and every setting in Settings. */
+  | { kind: 'dev-mode'; on: boolean }
   /** A setting: Settings opens on its page and tab, scrolled to it (lib/settings-index.ts). */
   | { kind: 'setting'; anchor: string }
 
@@ -23,6 +26,7 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
   const pick = (a: PaletteAction): void => { if (a.kind === 'usage') { onClose(); openUsageGlance(); return } onPick(a) }
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
+  const dev = useDevMode()
   const items = useMemo(() => {
     const ico = (n: React.ReactNode): React.ReactNode => <span className="pal-icon">{n}</span>
     const commands: Item[] = [
@@ -44,7 +48,9 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
       { a: { kind: 'voice' }, label: 'Voice chat', sub: 'Talk with your bot', icon: ico(<I.Wave size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'V'] },
       { a: { kind: 'dictate' }, label: 'Dictate a message', sub: 'Speak into the message box', icon: ico(<I.Mic size={15} />), group: 'Shortcuts', keys: ['⌘', 'D'] },
       { a: { kind: 'shortcuts' }, label: 'Keyboard shortcuts', sub: 'Every shortcut on one page', icon: ico(<I.Panel size={15} />), group: 'Shortcuts', keys: ['⌘', '/'] },
-      { a: { kind: 'max' }, label: 'Use an agent swarm', sub: 'Bring in specialists for your next request; models and roles are chosen automatically', icon: ico(<I.Bolt size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'M'] }
+      { a: { kind: 'max' }, label: 'Use an agent swarm', sub: 'Bring in specialists for your next request; models and roles are chosen automatically', icon: ico(<I.Bolt size={15} />), group: 'Shortcuts', keys: ['⌘', '⇧', 'M'] },
+      // Only found by searching ("developer"): Settings itself keeps to the basics.
+      { a: { kind: 'dev-mode', on: !dev }, label: dev ? 'Turn off Developer mode' : 'Turn on Developer mode', sub: 'Every step, tokens and cost in chats, and every setting', icon: ico(<I.Gear size={15} />), group: 'Developer' }
     ]
     const bots: Item[] = [...spaces].sort((a, b) => Number(b.isMain) - Number(a.isMain)).map((s) => ({
       a: { kind: 'open', id: s.id } as PaletteAction,
@@ -59,15 +65,16 @@ export function CommandPalette({ spaces, chats = [], onPick, onClose }: { spaces
     if (!t) return [...commands.filter((c) => c.group === 'Start'), ...bots.filter((b) => b.group === 'Bots'), ...commands.filter((c) => c.group === 'Go to'), ...bots.filter((b) => b.group === 'Projects'), ...recent.slice(0, 5), ...commands.filter((c) => c.group === 'Shortcuts')]
     const found = [...bots, ...commands, ...recent].filter((x) => x.label.toLowerCase().includes(t) || (x.group !== 'Chats' && x.sub?.toLowerCase().includes(t)) || (x.group === 'Shortcuts' && /^(short|keys?|kbd)/.test(t)))
     // Settings by what they do ("monthly limit", "dark mode", "voice"): opens Settings right at the row.
-    const settings: Item[] = searchSettings(t).slice(0, 6).map((e) => ({
-      a: { kind: 'setting', anchor: e.anchor }, label: e.title, sub: `Settings → ${PAGE_TITLES[e.page]}${e.advanced ? ' · Advanced' : ''}`,
+    // Outside Developer mode, only the settings Settings shows (lib/settings-index.ts devOnly).
+    const settings: Item[] = searchSettings(t, { dev }).slice(0, 6).map((e) => ({
+      a: { kind: 'setting', anchor: e.anchor }, label: e.title, sub: `Settings → ${sectionTitle(e.page)}`,
       icon: ico(<I.Gear size={15} />), group: 'Settings'
     }))
     // A setting whose title matches every word goes first (as the best match: the other settings, after the bots,
     // chats and commands, keep the "Settings" heading, so it never shows twice); otherwise settings follow them.
     const strong = settings.filter((x) => t.split(/\s+/).every((w) => x.label.toLowerCase().includes(w)))
     return strong.length && !found.some((x) => x.label.toLowerCase() === t) ? [...strong.map((x) => ({ ...x, group: 'Best match' })), ...found, ...settings.filter((x) => !strong.includes(x))] : [...found, ...settings]
-  }, [spaces, chats, q])
+  }, [spaces, chats, q, dev])
 
   useEffect(() => setSel(0), [q])
   useEffect(() => {
