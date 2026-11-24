@@ -93,16 +93,13 @@ describe('read state: unread dots, the running shimmer and the NEW divider', () 
       expect(pos.fromTop).toBeGreaterThanOrEqual(40)
       expect(pos.fromTop).toBeLessThan(120)
       expect(pos.toBottom).toBeGreaterThan(200)
-      // Not at the bottom yet, so not read yet; "Jump to latest" is offered.
+      // Opening it is reading it (no need to scroll to the bottom first): the dot clears at once. "Jump to latest" is
+      // still offered, and the divider stays while you're here.
       const jump = page.locator('[data-testid="jump-latest"]')
       await jump.waitFor({ timeout: 5_000 })
       expect(await jump.innerText()).toContain('Jump to latest')
-      await page.waitForTimeout(600)
-      expect((await page.evaluate((id) => window.foreman.threads.list(id), space.id))[0].unread).toBe(true)
-
-      // Jumping to the latest reads it; the divider stays while you're here.
-      await jump.click()
       await expect.poll(async () => (await page.evaluate((id) => window.foreman.threads.list(id), space.id))[0], { timeout: 5_000 }).toMatchObject({ unread: false, unreadCount: 0 })
+      await jump.click()
       expect(await divider.count()).toBe(1)
       await expect.poll(() => row.locator('[data-testid="unread-dot"], [data-testid="unread-count"]').count()).toBe(0)
       // A reply that lands while you watch the bottom is read too (and goes below the divider).
