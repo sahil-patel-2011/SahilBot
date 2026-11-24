@@ -5,7 +5,7 @@ import { api } from '../api'
 import * as I from '../icons'
 import { toast } from '../lib/toast'
 import { addRule, RULE_MAX_CHARS } from '../lib/approvalRules'
-import { approvalView, type ApprovalPreview } from '../lib/approval-view'
+import { approvalView, offersAlways, type ApprovalPreview } from '../lib/approval-view'
 import { Markdown } from './Markdown'
 import '../styles-approvals.css'
 import '../styles-purchase.css'
@@ -510,6 +510,8 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
   const ruleId = useId()
   const reason = reasonText(req.reason)
   const view = approvalView(req)
+  // Code and file bodies sit under Details: the card itself is one sentence (messages and clicks stay in view).
+  const inDetails = !!view.preview && (view.preview.kind === 'command' || view.preview.kind === 'file')
   // Which app or tool, unless the headline already says it plainly (saving a file, a command, a click).
   const who = view.preview && ['file', 'command', 'click'].includes(view.preview.kind) ? '' : name
   const meta = [who, req.effect === 'destructive' && runsOnly(words(req.tool, req.label, req.summary, req.reason)) ? 'Runs a program' : EFFECT_TEXT[req.effect ?? 'read'], reason && !warnings.some((w) => w.toLowerCase().includes(reason.toLowerCase())) ? reason : ''].filter(Boolean)
@@ -547,24 +549,25 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
           {warnings.map((w) => <li key={w} className={danger ? 'danger' : undefined}>{w}</li>)}
         </ul>
       )}
-      {view.preview && <ApprovalPreviewBox p={view.preview} thumb={thumb} />}
-      {!!req.args && (
+      {view.preview && !inDetails && <ApprovalPreviewBox p={view.preview} thumb={thumb} />}
+      {(!!req.args || inDetails || !danger) && (
         <details className="pending-details ap-details" data-testid="approval-details">
-          <summary className="hint">Technical details</summary>
-          <pre className="pending-args">{req.args}</pre>
+          <summary className="hint">Details</summary>
+          {view.preview && inDetails && <ApprovalPreviewBox p={view.preview} thumb={thumb} />}
+          {!!req.args && <pre className="pending-args">{req.args}</pre>}
+          {!danger && !ruleOpen && <button className="link-btn ap-rule-link" onClick={() => setRuleOpen(true)} data-testid="approve-make-rule">Make it a rule…</button>}
         </details>
       )}
       <div className="pending-actions">
         <button className="btn primary" onClick={() => onRespond(req.id, 'once')} data-testid="approve-once">Allow once</button>
-        <button className="btn" title={req.folder ? `Files in ${req.folder} won't ask again in this chat` : `Don't ask again for ${name} in this chat`}
+        {offersAlways(req.reason) && <button className="btn" title={req.folder ? `Files in ${req.folder} won't ask again in this chat` : `Don't ask again for ${name} in this chat`}
           onClick={() => {
             // Say so only once SahilBot has taken it.
             void Promise.resolve(onRespond(req.id, 'always')).then(
               () => toast(req.folder ? `${folderName(req.folder)} is open to this chat now` : `${name} is allowed for the rest of this chat`, 'ok'),
               (e: unknown) => toast((e as Error)?.message ?? String(e), 'error'))
-          }} data-testid="approve-always">{req.folder ? `Always allow in “${folderName(req.folder)}”` : 'Always allow'}</button>
+          }} data-testid="approve-always">{req.folder ? `Always allow in “${folderName(req.folder)}”` : 'Always allow'}</button>}
         <button className="btn danger" onClick={() => onRespond(req.id, 'deny')} data-testid="approve-deny">Deny</button>
-        {!danger && !ruleOpen && <button className="link-btn ap-rule-link" onClick={() => setRuleOpen(true)} data-testid="approve-make-rule">Make it a rule…</button>}
       </div>
       {ruleOpen && (
         <div className="ap-rule" data-testid="approval-rule">
@@ -580,7 +583,7 @@ function ApprovalCard({ req, onRespond, thumb }: { req: PendingRequest; onRespon
             <button className="btn primary" disabled={saving || !ruleText.trim()} onClick={() => void saveRule()} data-testid="approval-rule-save">{saving ? 'Saving…' : 'Save rule'}</button>
             <button className="btn" onClick={() => setRuleOpen(false)}>Cancel</button>
           </div>
-          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”. Manage rules in Settings → Permissions.</div>
+          <div className="hint">Matches any action that mentions every word above. Shorten it to cover more, e.g. “npm install”.</div>
         </div>
       )}
     </div>

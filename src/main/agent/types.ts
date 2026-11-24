@@ -280,6 +280,8 @@ export interface PermissionInput {
   hardStopsEnabled: boolean
   /** Arguments contain values that came from fetched content rather than from the user. */
   tainted: boolean
+  /** Why outside content may have steered it (steeredRisk: "deletes taxes.pdf, which you didn't name"), for the card. */
+  steerReason?: string
   /** Arguments contain a vault secret's plain text. */
   leaksSecret: boolean
   /**

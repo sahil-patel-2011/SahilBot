@@ -103,7 +103,10 @@ describe('probe a: purchases that used to slip through', () => {
     expect(clickEffect(r('Docs', { tag: 'div', navLink: false }))).toBe('write_external')
     expect(clickEffect(r('Docs'))).toBe('write_external')
     // Never a read when the label speaks of paying, ordering or sending, or names a price.
-    for (const name of ['Buy now', 'Place order', 'Checkout', 'Send', 'Get it for $9.99', 'Jetzt kaufen']) expect(clickEffect(r(name, { tag: 'a', href: '/x', navLink: true }))).not.toBe('read')
+    for (const name of ['Buy now', 'Place order', 'Checkout', 'Send', 'Jetzt kaufen']) expect(clickEffect(r(name, { tag: 'a', href: '/x', navLink: true }))).not.toBe('read')
+    // A link to another page whose only weight is a price opens that page (classifyPurchase: research, not paying);
+    // on a checkout page the Purchase card still gates it.
+    expect(clickEffect(r('Get it for $9.99', { tag: 'a', href: '/x', navLink: true }))).toBe('read')
     expect(clickEffect({ backendNodeId: 1, role: 'tab', name: 'Pay $5' })).toBe('write_external')
     expect(navLinkOf('a', '/docs', 'https://x.test/home')).toBe(true)
     expect(navLinkOf('a', '#top', 'https://x.test/home')).toBe(false)

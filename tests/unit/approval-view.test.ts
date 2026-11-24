@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { approvalView } from '../../src/renderer/src/lib/approval-view'
+import { approvalView, offersAlways } from '../../src/renderer/src/lib/approval-view'
 import { filesFromSteps, nameFromJob, rowSubtitle } from '../../src/renderer/src/lib/ux'
 
 const args = (o: unknown): string => JSON.stringify(o, null, 2)
@@ -15,7 +15,8 @@ describe('approval cards say what will happen, with a preview', () => {
   })
   test('a command: the command in a box, and the one-line reason', () => {
     const v = approvalView({ tool: 'run_command', summary: 'Run in Terminal: npm ci · installs the project\'s packages from its lockfile', args: args({ command: 'npm ci', cwd: '/Users/me/app' }) })
-    expect(v.title[0]).toBe('Run a command in Terminal')
+    expect(v.title[0]).toBe('Run a command that installs the project\'s packages from its lockfile')
+    expect(approvalView({ tool: 'run_command', summary: 'Run in Terminal: ls', args: args({ command: 'ls' }) }).title[0]).toBe('Run a command in Terminal')
     expect(v.preview).toEqual({ kind: 'command', command: 'npm ci', cwd: '/Users/me/app', why: 'installs the project\'s packages from its lockfile', background: false })
   })
   test('a browser click: "Click Submit on example.com"', () => {
@@ -61,5 +62,12 @@ describe('plain sidebar rows and quick paths', () => {
       step('5', 'file_write', { status: 'ok', path: '/w/site.html' }),
       step('6', 'web_search', { status: 'ok' })
     ])).toEqual([{ key: '3', path: '/w/deck.pptx' }, { key: '4', path: '/w/a.md' }])
+  })
+})
+
+describe('"Always allow" only where it is honoured', () => {
+  test('money, steered steps and credentials ask every time, so the card does not offer it', () => {
+    for (const r of ['Spends money: payment or checkout', 'Uses details taken from a web page or email', 'Asks first: it deletes taxes.pdf, which you didn\'t name', 'Hard stop: typing the saved login "bank" (password) into evil.example', 'Hard stop: recording what you click and type in the browser for up to 10 minutes']) expect(offersAlways(r), r).toBe(false)
+    for (const r of [undefined, '', 'Opens an address taken from a web page or email', 'Hard stop: "rm old.txt" deletes files or rewrites history']) expect(offersAlways(r), String(r)).toBe(true)
   })
 })
