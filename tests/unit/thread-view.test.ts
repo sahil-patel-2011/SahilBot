@@ -145,6 +145,23 @@ describe('voice conversations in the chat', () => {
     // The transcript itself is folded away.
     expect(html).not.toContain('data-testid="user-bubble"')
   })
+
+  it('a live call\'s words fold with the call (even after a typed message); the brief Grok wrote is a small line, not yours', () => {
+    const s0 = T0 + 70_000_000
+    const typed = msg({ role: 'user', content: 'Typed during the call', createdAt: s0 + 1000 })
+    const typedReply = msg({ content: 'Got it.', createdAt: s0 + 2000 })
+    const spokenUser = msg({ role: 'user', content: 'and what about friday', createdAt: s0 + 3000, meta: { voice: true, spoken: true, aside: true } })
+    const spokenReply = msg({ content: 'Friday is clear.', createdAt: s0 + 4000, meta: { voice: true, spoken: true, aside: true } })
+    expect(tv.foldVoice([typed, typedReply, spokenReply], new Set(), { since: s0, transcript: false }).map((m) => m.id)).toEqual([typed.id, typedReply.id])
+    expect(tv.foldVoice([typed, spokenUser, spokenReply], new Set(), { since: s0, transcript: true })).toHaveLength(3)
+    const brief = msg({ role: 'user', content: 'Email Priya the meeting notes', createdAt: s0 + 5000, meta: { voice: true, voiceBrief: true } })
+    const html = renderToString(createElement(tv.ThreadView, { messages: [spokenUser, brief, msg({ content: 'Sent.', createdAt: s0 + 6000 })], running: false, pending: [], actions }))
+    expect(html).toContain('data-testid="voice-brief"')
+    expect(html.replace(/<!-- -->/g, '')).toContain('Asked the bot: Email Priya the meeting notes')
+    // Your own words are the one bubble from you.
+    expect(html.match(/data-testid="user-bubble"/g)).toHaveLength(1)
+    expect(html).toContain('and what about friday')
+  })
 })
 
 // Grok Bot head-to-head (RLB-01, ALD-04): check first, post once. An answer the app checks before accepting it is

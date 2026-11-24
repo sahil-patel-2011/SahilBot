@@ -97,16 +97,25 @@ export class GrokRealtime {
   private timer: ReturnType<typeof setInterval> | null = null
   private chargedMin = 0
   private lastActive = 0
+  /** The bot runs one request at a time in its chat: a second do_task waits for the one before it. */
+  private work: Promise<void> = Promise.resolve()
+  /** Talked over a reply that was asked for but hadn't started: it's cancelled as soon as it starts. */
+  private cancelNext = false
 
   constructor(private o: GrokRealtimeOptions) {}
 
   /** Opens the conversation: a short-lived token for the socket (the key never rides on it), then the session. */
   async start(): Promise<void> {
     const base = (this.o.baseUrl ?? 'https://api.x.ai/v1').replace(/\/+$/, '')
-    const res = await (this.o.fetch ?? fetch)(`${base}/realtime/client_secrets`, {
-      method: 'POST', headers: { Authorization: `Bearer ${this.o.apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expires_after: { seconds: 600 } })
-    })
+    let res: Response
+    try {
+      res = await (this.o.fetch ?? fetch)(`${base}/realtime/client_secrets`, {
+        method: 'POST', headers: { Authorization: `Bearer ${this.o.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expires_after: { seconds: 600 } }), signal: AbortSignal.timeout(15_000)
+      })
+    } catch (e) {
+      throw new Error((e as Error).name === 'TimeoutError' ? 'Grok voice took too long to connect.' : 'Grok voice couldn\'t connect.')
+    }
     if (!res.ok) throw new Error(`Grok voice couldn't start (${res.status}). Check your xAI key in Settings → AI & spending.`)
     const token = (await res.json() as { value?: string }).value
     if (!token) throw new Error('Grok voice couldn\'t start: no session token.')
@@ -229,6 +238,8 @@ export class GrokRealtime {
         // You started talking: Grok stops (barge-in), the way a person would, and remembers only what you heard.
         this.lastActive = (this.o.now ?? Date.now)()
         this.o.emit({ type: 'stop-audio' })
+        // A reply asked for that hasn't started yet: cancelled the moment it does (never played over you).
+        if (this.requested && !this.responding) this.cancelNext = true
         if (this.responding) {
           this.cancelled = true
           this.send({ type: 'response.cancel' })
@@ -252,7 +263,9 @@ export class GrokRealtime {
       case 'response.created':
         this.responding = true
         this.requested = false
-        this.cancelled = false
+        this.cancelled = this.cancelNext
+        if (this.cancelNext) this.send({ type: 'response.cancel' })
+        this.cancelNext = false
         this.item = null
         this.replyText = ''
         return
@@ -279,7 +292,7 @@ export class GrokRealtime {
       case 'response.output_audio_transcript.done':
       case 'response.audio_transcript.done': {
         const text = (typeof e.transcript === 'string' ? e.transcript : this.replyText).trim()
-        if (text && !this.cancelled) this.o.emit({ type: 'reply', text })
+        if (text && !this.cancelled) this.o.emit({ type: 'reply', text, whole: true })
         this.replyText = ''
         return
       }
@@ -299,6 +312,7 @@ export class GrokRealtime {
         // on, so it's a passing note, not the bar's error state.
         const err = (e.error ?? e) as { message?: string }
         this.requested = false
+        this.cancelNext = false
         this.o.emit({ type: 'notice', message: `Grok voice: ${err.message ?? 'something went wrong'}` })
         this.flush()
         return
@@ -318,9 +332,17 @@ export class GrokRealtime {
         const ctrl = new AbortController()
         this.tasks.set(callId, ctrl)
         this.o.emit({ type: 'state', state: 'thinking' })
-        try { output = (await this.o.doTask(request, ctrl.signal)).trim().slice(0, 6000) || 'The bot finished without a reply.' }
+        // One request at a time: the bot's chat runs one job, so a second call waits for the first to finish.
+        const before = this.work
+        let release!: () => void
+        this.work = new Promise<void>((r) => { release = r })
+        try {
+          await before
+          if (ctrl.signal.aborted) throw new Error('the call ended')
+          output = (await this.o.doTask(request, ctrl.signal)).trim().slice(0, 6000) || 'The bot finished without a reply.'
+        }
         catch (err) { output = `The bot couldn't do it: ${(err as Error).message}` }
-        finally { this.tasks.delete(callId) }
+        finally { release(); this.tasks.delete(callId) }
       }
     }
     if (this.closed) return

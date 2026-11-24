@@ -2787,7 +2787,7 @@ app.whenReady().then(() => {
       if (HIDDEN && !process.env.SAHILBOT_GROK_LIVE_URL) return null
       const creds = keys.xai()
       if (!creds) return null
-      try { hookSpend.beforeUsd(XAI_URL, GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN * 5) } catch { return null }
+      try { hookSpend.beforeUsd(XAI_URL, GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN * 5) } catch { return { skip: 'The spending limit is too close for a live Grok call.' } }
       const thread = voiceThread ? db.getThread(voiceThread) : undefined
       const bot = thread ? db.getSpace(thread.spaceId) : undefined
       return {
@@ -2801,21 +2801,47 @@ app.whenReady().then(() => {
     // Each minute of a live call: the limit must still cover the next couple of minutes, or the call ends.
     liveGuard: () => { hookSpend.beforeUsd(XAI_URL, GROK_VOICE_MODEL, GROK_VOICE_USD_PER_MIN * 2) },
     emit: (e) => toWin('voice:event', e),
-    respond: (text, signal, onText) => new Promise<void>((resolve, reject) => {
+    // A live conversation's words (yours and Grok's replies) are kept in the chat: shown with the transcript and
+    // folded into the "Voice chat" line, but beside the bot's own work (aside: never in its prompt mid-run).
+    spoken: (who, text) => {
       const tid = voiceThread
-      if (!tid) return reject(new Error('No voice conversation'))
-      const off = (): void => { listeners.delete(l) }
-      const l = (e: ChatEvent): void => {
-        if (e.threadId !== tid) return
-        if (e.type === 'delta' && e.content) onText(e.content)
-        if (e.type === 'run' && e.status !== 'started') { off(); resolve() }
+      if (!tid || !db.getThread(tid) || !text.trim()) return
+      const m = db.insertMessage({ threadId: tid, role: who, kind: 'normal', status: 'done', content: text.trim(), meta: { voice: true, spoken: true, aside: true } })
+      emit({ threadId: tid, type: 'message', message: m })
+    },
+    respond: async (text, signal, onText, opts) => {
+      const tid = voiceThread
+      if (!tid) throw new Error('No voice conversation')
+      // The chat runs one job at a time: one that's ending (or a reply cut off a moment ago) gets a few seconds; a
+      // job you started earlier (typed, or before reconnecting) is left to finish there.
+      if (chat.handoffHost().isRunning(tid) && await chat.handoffHost().whenIdle(tid, signal, 4000) !== 'idle') {
+        if (signal.aborted) return
+        throw new Error('The bot is still busy with an earlier request in this chat. It will finish there; ask again once it has.')
       }
-      listeners.add(l)
-      // Hanging up ('hangup') stops waiting, not the bot: its run finishes in the chat and the answer lands there.
-      signal.addEventListener('abort', () => { if (signal.reason !== 'hangup') chat.stop(tid); off(); resolve() })
-      chat.send({ threadId: tid, text, voice: true, meta: { voice: true } }).catch((err: Error) => { off(); reject(err) })
-    })
+      const since = Date.now()
+      return new Promise<void | string>((resolve, reject) => {
+        const off = (): void => { listeners.delete(l) }
+        const l = (e: ChatEvent): void => {
+          if (e.threadId !== tid) return
+          if (e.type === 'delta' && e.content) onText(e.content)
+          if (e.type === 'run' && e.status !== 'started') { off(); resolve(opts?.task ? finalReply(tid, since) : undefined) }
+        }
+        listeners.add(l)
+        // Hanging up ('hangup') stops waiting, not the bot: its run finishes in the chat and the answer lands there.
+        signal.addEventListener('abort', () => { if (signal.reason !== 'hangup') chat.stop(tid); off(); resolve() })
+        // The live voice's do_task is real work (files, apps, research): a normal run at full effort, not a spoken
+        // turn. Its brief is the voice model's words, kept apart from what you said (voiceBrief).
+        const send = opts?.task
+          ? chat.send({ threadId: tid, text, meta: { voice: true, voiceBrief: true } })
+          : chat.send({ threadId: tid, text, voice: true, meta: { voice: true } })
+        // Some messages end without a run of their own ("stop everything" stops the chats it means, in one line).
+        send.then((r) => r.done).then(() => { off(); resolve(opts?.task ? finalReply(tid, since) : undefined) }, (err: Error) => { off(); reject(err) })
+      })
+    }
   }, { download: HIDDEN ? 'stub' : 'real' })
+  /** The answer a run in the voice chat ended with (the one that stood, not drafts sent back), for Grok to tell. */
+  const finalReply = (tid: string, since: number): string | undefined =>
+    [...db.listMessages(tid)].reverse().find((m) => m.createdAt >= since && m.role === 'assistant' && m.kind === 'normal' && !!m.content.trim() && !m.toolCalls?.length && !m.meta?.superseded && !m.meta?.hidden && !m.meta?.aside)?.content
   // Speech recognition downloads itself in the background once set up (never in test runs: 'stub').
   voicePrepRef.current = (why) => void voice.prepare(why)
   if (settings.get().onboarded) setTimeout(() => voicePrepRef.current('auto'), HIDDEN ? 300 : 20_000).unref?.()
@@ -2868,7 +2894,9 @@ app.whenReady().then(() => {
     voiceWork.prune(s.threadId)
     // The reply that was cut off lands first, so the folded line comes after the whole conversation.
     await chat.handoffHost().whenIdle(s.threadId, AbortSignal.timeout(6000), 5000).catch(() => undefined)
-    const said = db.listMessages(s.threadId).filter((m) => m.createdAt >= s.startedAt && m.role === 'user' && m.kind === 'normal' && !m.meta?.hidden && !isRelayed(m) && !!m.content.trim()).map((m) => m.content)
+    const mine = db.listMessages(s.threadId).filter((m) => m.createdAt >= s.startedAt && m.role === 'user' && m.kind === 'normal' && !m.meta?.hidden && !isRelayed(m) && !!m.content.trim())
+    // Your own words: a live call's transcript, not the briefs Grok wrote for the bot (unless nothing was transcribed).
+    const said = (mine.some((m) => !m.meta?.voiceBrief) ? mine.filter((m) => !m.meta?.voiceBrief) : mine).map((m) => m.content)
     if (!said.length) return
     const endedAt = Date.now()
     const title = voiceTitle(said)

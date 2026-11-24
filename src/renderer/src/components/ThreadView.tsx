@@ -66,7 +66,8 @@ export function foldVoice(messages: Message[], open: Set<string>, live?: { since
   let voiceTurn = false
   return messages.filter((m) => {
     if (m.role === 'user' && !m.meta?.hidden) voiceTurn = !!m.meta?.voice
-    if (!voiceTurn || m.kind === 'notice' || m.kind === 'error' || m.status === 'error' || (m.role === 'tool' && m.meta?.status === 'error')) return true
+    // A live call's words (yours and its spoken replies) fold even right after a typed message.
+    if ((!voiceTurn && !m.meta?.spoken) || m.kind === 'notice' || m.kind === 'error' || m.status === 'error' || (m.role === 'tool' && m.meta?.status === 'error')) return true
     const s = sessions.find((x) => m.createdAt >= x.startedAt && m.createdAt <= x.endedAt)
     if (s) return open.has(s.id)
     return !(hideLive && m.createdAt >= live!.since)
@@ -1112,6 +1113,8 @@ function Row({ b, actions, editable, cont, dev, retry }: { b: Exclude<Block, { k
   const reactions = (m.meta?.reactions ?? {}) as { user?: string; bot?: string }
 
   if (b.kind === 'user') {
+    // What the live voice asked the bot to do: its own words, never shown as yours (your words are the transcript).
+    if (m.meta?.voiceBrief) return <div className="notice sys-line" role="status" data-testid="voice-brief">Asked the bot: {m.content}</div>
     const files = (m.meta?.files ?? []) as Array<{ name: string; path: string }>
     const folders = (m.meta?.folders ?? []) as string[]
     if (editing !== null) {

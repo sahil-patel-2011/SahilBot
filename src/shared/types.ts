@@ -1201,7 +1201,7 @@ export type VoiceUiEvent =
   | { type: 'state'; state: 'idle' | 'listening' | 'hearing' | 'thinking' | 'speaking' }
   | { type: 'partial'; text: string }
   | { type: 'transcript'; text: string }
-  | { type: 'reply'; text: string }
+  | { type: 'reply'; text: string; whole?: boolean }
   /** Said on its own between turns: a bot's work started in this voice chat finished or needs you. */
   | { type: 'announce'; text: string }
   /** The work started in this voice chat, for the voice screen. */

@@ -8,13 +8,19 @@ import { PendingCard } from './Agent'
 
 type VState = 'starting' | 'idle' | 'listening' | 'hearing' | 'thinking' | 'speaking'
 const LABEL: Record<VState, string> = {
-  starting: 'Getting ready…', idle: 'Paused', listening: 'Listening', hearing: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking · talk to interrupt'
+  starting: 'Getting ready…', idle: 'Paused', listening: 'Listening', hearing: 'Listening…', thinking: 'Working on it…', speaking: 'Speaking · talk to interrupt'
 }
 /** Main's setup errors, in plain words with the one thing to do. */
 const friendly = (e: string): string => /speech provider|api key|key in|models & keys/i.test(e) ? 'Voice isn\'t set up yet. Add an OpenAI (ChatGPT) or Grok key to talk out loud.' : /microphone|permission|notallowed/i.test(e) ? 'SahilBot can\'t hear you yet. Allow the microphone in System Settings → Privacy & Security.' : e
 const TASK_STATE: Record<VoiceTask['status'], string> = { working: 'working', 'needs-you': 'needs you', done: 'done', failed: 'didn\'t finish', stopped: 'stopped' }
 /** Errors that are about setup (a key, the microphone): the bar offers "Set up voice". Others offer "Reconnect". */
 export const setupError = (e: string): boolean => /speech provider|api key|key in|models & keys|xai key|openai key|microphone|permission|notallowed|not set up|spending limit/i.test(e)
+/**
+ * The caption after a reply: a whole spoken reply (the live voice) replaces it, so it shows only the latest one;
+ * streamed pieces (the standard voice) join up, starting fresh after what you said.
+ */
+export const nextCaption = (prev: string, e: { text: string; whole?: boolean }): string =>
+  e.whole ? e.text : (prev.startsWith('“') ? '' : prev) + e.text
 const clean = (e: unknown): string => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
 
 /**
@@ -60,7 +66,7 @@ export function VoiceMode({ threadId, space, onClose, onThread, onLive }: {
     const off = api.voice.onEvent((e: VoiceUiEvent) => {
       if (e.type === 'state') setState(e.state as VState)
       else if (e.type === 'transcript') { setCaption(`“${e.text}”`); setUpdate(false) }
-      else if (e.type === 'reply') setCaption((c) => (c.startsWith('“') ? '' : c) + e.text)
+      else if (e.type === 'reply') setCaption((c) => nextCaption(c, e))
       else if (e.type === 'announce') { setUpdate(true); setCaption(e.text) }
       else if (e.type === 'tasks') setTasks(e.tasks)
       else if (e.type === 'audio') speaker.current?.play(e.audio, e.rate)

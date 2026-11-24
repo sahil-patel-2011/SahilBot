@@ -7,7 +7,8 @@ export type VoiceEvent =
   | { type: 'state'; state: 'idle' | 'listening' | 'hearing' | 'thinking' | 'speaking' }
   | { type: 'partial'; text: string }
   | { type: 'transcript'; text: string }
-  | { type: 'reply'; text: string }
+  /** Reply text: a streamed piece, or (whole) one complete spoken reply that replaces the caption. */
+  | { type: 'reply'; text: string; whole?: boolean }
   /** Something said on its own, between turns (a bot finished work started in this conversation). */
   | { type: 'announce'; text: string }
   | { type: 'audio'; audio: Float32Array; rate: number }
