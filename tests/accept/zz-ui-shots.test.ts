@@ -54,7 +54,7 @@ test.skipIf(!process.env.UI_SHOTS)('ui screenshots', async () => {
     await page.waitForTimeout(1500); snap(`10-settings-${id}`)
   }
   await page.keyboard.press('Escape'); await page.waitForTimeout(600)
-  await page.click('[data-testid="connect-apps"]').catch(() => undefined); await page.waitForTimeout(2000); snap('20-connect-apps')
+  await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]').catch(() => undefined); await page.waitForTimeout(2000); snap('20-connect-apps')
   await page.keyboard.press('Escape'); await page.waitForTimeout(600)
   await page.click('[data-testid="nav-vault"]').catch(() => undefined); await page.waitForTimeout(2000); snap('21-vault')
   await Promise.race([app.close(), new Promise((r) => setTimeout(r, 5000))])

@@ -28,6 +28,8 @@ export const fname = (p: unknown): string => {
   const parts = String(p ?? '').split(/[\\/]/).filter(Boolean)
   const base = parts.pop() ?? 'a file'
   const dir = parts.pop()
+  // A file right in the home folder: never "in sahil" (the username).
+  if (parts.length === 1 && /^(Users|home)$/.test(parts[0])) return base
   return dir && !/^(Users|home|tmp|var|private|\.|~)$/.test(dir) && parts.length + 1 > 1 ? `${base} in ${dir}` : base
 }
 const q = (s: unknown, n = 48): string => {

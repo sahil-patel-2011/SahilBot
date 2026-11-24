@@ -903,7 +903,11 @@ export type ChatEvent =
   /** Bots or groups changed (renamed, recolored by a bot): reload the sidebar. */
   | { threadId: string; type: 'spaces' }
   /** Live progress from a running tool call (latest test output line, what a Cursor agent is doing). */
-  | { threadId: string; type: 'tool_progress'; callId: string; tool: string; text: string }
+  /**
+   * A tool's progress line, or the stall watchdog's note (callId 'watchdog'): `step` names what is stuck and `stuck`
+   * offers Retry / Skip for it (chat.retryStep / chat.skipStep); `waitingOnYou`: it waits on your vault unlock.
+   */
+  | { threadId: string; type: 'tool_progress'; callId: string; tool: string; text: string; step?: string; stuck?: boolean; waitingOnYou?: boolean }
 
 export interface Attachment {
   path: string
@@ -1650,6 +1654,10 @@ export interface SahilBotApi {
     stop(threadId: string): Promise<void>
     /** Message a running agent: it takes it into account from its next step (or sends normally if idle). */
     steer(threadId: string, text: string): Promise<'steered' | 'sent'>
+    /** The stall note's Skip: ends only the step that hung (the task carries on without it). False: nothing to skip. */
+    skipStep(threadId: string): Promise<boolean>
+    /** The stall note's Retry: stops the step that hung and runs it again once. False: nothing to retry. */
+    retryStep(threadId: string): Promise<boolean>
     respond(threadId: string, requestId: string, answer: string): Promise<void>
     /** Drops the last reply and asks again. */
     retry(threadId: string): Promise<void>

@@ -51,6 +51,17 @@ export class VaultAuth {
     return this.now() < this.freshUntil
   }
 
+  /** Touch ID prompts open right now. */
+  private prompting = 0
+  /** A Touch ID prompt or the unlock dialog is open, waiting on the user (the stall watchdog says so instead of "slow"). */
+  waiting(): boolean {
+    return this.prompting > 0 || this.pending.size > 0
+  }
+  private async touchPrompt(reason: string): Promise<boolean> {
+    this.prompting++
+    try { return await this.o.touch.prompt(reason) } finally { this.prompting-- }
+  }
+
   /** Unlocks if needed. False when the user cancelled, or nobody can be asked. */
   async unlock(reason: string, o: { attended?: boolean } = {}): Promise<boolean> {
     const core = this.o.core
@@ -59,7 +70,7 @@ export class VaultAuth {
     const r = cleanReason(reason)
     if (this.touchIdUsable() && (!core.hasMasterPassword() || core.hasBioWrap())) {
       let ok = false
-      try { ok = await this.o.touch.prompt(r || 'unlock your SahilBot vault') } catch { ok = false }
+      try { ok = await this.touchPrompt(r || 'unlock your SahilBot vault') } catch { ok = false }
       if (ok) {
         core.unlockKeychain('touchid')
         this.markFresh()
@@ -85,7 +96,7 @@ export class VaultAuth {
     const r = cleanReason(reason)
     if (this.touchIdUsable()) {
       let ok = false
-      try { ok = await this.o.touch.prompt(r || 'confirm it\'s you') } catch { ok = false }
+      try { ok = await this.touchPrompt(r || 'confirm it\'s you') } catch { ok = false }
       if (ok) { this.markFresh(); core.auditLog.add({ event: 'reauth', outcome: 'ok', detail: `${purpose}: Touch ID` }); return true }
       if (!core.hasMasterPassword()) { core.auditLog.add({ event: 'reauth_failed', outcome: 'denied', detail: `${purpose}: Touch ID cancelled` }); return false }
     }

@@ -48,8 +48,9 @@ describe('phase 6: projects + scheduled tasks', () => {
     expect(sys).toContain(`Project folder (read and edit with absolute paths): `)
     expect(tools()[0]).toContain('Deadline Dec 1')
     expect(existsSync(join(folder, 'summary.md'))).toBe(true)
-    // Sidebar lists the project; its home lists the chat.
-    expect(await page.locator('[data-testid="project-item"]').innerText()).toContain('Acme launch')
+    // Projects (in the profile menu) list the project.
+    await page.click('[data-testid="profile"]'); await page.click('[data-testid="nav-projects"]')
+    expect(await page.locator('[data-testid="projects-view"]').innerText()).toContain('Acme launch')
     await app.close()
   })
 

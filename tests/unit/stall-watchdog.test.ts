@@ -49,5 +49,7 @@ test('a step that hangs gets a plain "still on it" note, and the run still finis
   expect(notes.length).toBeGreaterThanOrEqual(1)
   expect(notes.length).toBeLessThanOrEqual(3)
   expect(notes[0].text.startsWith(STALL_PREFIX)).toBe(true)
-  expect(notes[0].text).toMatch(/press Stop/)
+  // It names what is stuck and offers Retry / Skip for that step (report EHA-01).
+  expect(notes[0].text).toMatch(/^Still on it: this step is taking longer than usual \(\d+ min\)\. Retry it, skip it, or keep waiting\.$/)
+  expect((notes[0] as { stuck?: boolean }).stuck).toBe(true)
 })

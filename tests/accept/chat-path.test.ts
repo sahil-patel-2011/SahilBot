@@ -29,7 +29,7 @@ describe('chat path', () => {
     try {
       await page.evaluate((u) => window.foreman.settings.set({ search: { provider: 'searxng', searxngUrl: u, hasBraveKey: false } }), llm.url.replace(/\/v1$/, ''))
       // A connected app (the local notes MCP server), named Wiki here.
-      await page.click('[data-testid="connect-apps"]')
+      await page.click('[data-testid="profile"]'); await page.click('[data-testid="connect-apps"]')
       await page.click('[data-testid="preset-custom"]')
       await page.fill('.conn-form input >> nth=0', 'Wiki')
       await page.click('.conn-form .seg button:has-text("Local")')

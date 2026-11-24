@@ -232,11 +232,14 @@ describe('end-of-run summary', () => {
     expect(summaryText(f, { autonomous: false })).toBe('Ran 3 commands, edited 4 files, started 1 job')
     // The line under the reply: plain words; tokens live in the hover card.
     const u = { input: 300, output: 60, usd: 0.0004, cloud: true, calls: 1, models: [] }
-    expect(statusLine(f, u)).toBe('Done · 8 actions · 4 files changed · 1 background job started · <$0.01')
+    // The finish line: how long, what it made or changed and where (report MCD-04), then jobs and the cost.
+    expect(statusLine(f, u)).toBe('Done in 1 s · Made a.ts in w +3 more · 1 background job started · <$0.01')
+    expect(statusLine(f, u, { simple: true })).not.toContain('$')
     expect(statusLine(f, u, { asked: 1 })).toContain('asked you once')
-    expect(statusLine({ ...f, actions: 1, files: 0, jobs: 0, commands: 0 }, u)).toBe('Done · 1 action · <$0.01')
-    expect(statusLine({ ...f, actions: 0, files: 0, jobs: 0, commands: 0 }, null)).toBe('')
-    expect(statusLine({ ...f, actions: 1, files: 0, jobs: 0, commands: 0 }, { ...u, cloud: false })).toBe('Done · 1 action · free (local)')
+    const none = { ...f, actions: 1, files: 0, jobs: 0, commands: 0, paths: [], made: [] }
+    expect(statusLine(none, u)).toMatch(/^Done in \d+ s · 1 action · <\$0\.01$/)
+    expect(statusLine({ ...none, actions: 0 }, null)).toBe('')
+    expect(statusLine(none, { ...u, cloud: false })).toMatch(/· 1 action · free \(local\)$/)
   })
   test('tokens and cost', () => {
     expect(fmtTokens(950)).toBe('950')

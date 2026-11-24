@@ -96,7 +96,6 @@ export function Sidebar(p: {
   const pinnedSpaces = pinnedIds.map((id) => p.spaces.find((s) => s.id === id)!).filter(Boolean)
   const pinnedChats = p.chats.filter((t) => t.pinned && t.id !== p.mainThreadId)
   const bots = p.spaces.filter((s) => !s.hidden && s.kind !== 'project' && !pinnedIds.includes(s.id))
-  const projects = p.spaces.filter((s) => s.kind === 'project' && !s.hidden && !pinnedIds.includes(s.id))
   const hidden = p.spaces.filter((s) => s.hidden && !s.isMain)
   // Recents are your own chats and agent tasks with SahilBot, the ones you typed in. Never a bot's conversation
   // (SahilBot's widget included), and never one a routine, a Memory draft, another bot or a connected app started.
@@ -182,11 +181,11 @@ export function Sidebar(p: {
         { label: spendLabel(spend), icon: <I.Clock size={15} />, run: openUsageGlance },
         'sep',
         { label: 'Memory', icon: <BrainIcon size={15} />, run: () => p.onView('brain'), testId: 'nav-brain' },
-        { label: 'Library', icon: <I.Layers size={15} />, run: () => p.onView('files'), testId: 'menu-library' },
+        { label: 'Library', icon: <I.Layers size={15} />, run: () => p.onView('files'), testId: 'nav-artifacts' },
         { label: 'Projects', icon: <I.Folder size={15} />, run: () => p.onView('projects'), testId: 'nav-projects' },
         { label: 'Scheduled', icon: <I.Clock size={15} />, run: p.onScheduled, testId: 'nav-scheduled' },
         { label: 'Tasks', icon: <Target size={15} />, run: () => p.onView('tasks') },
-        { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect },
+        { label: 'Connect apps', icon: <I.Plug size={15} />, run: p.onConnect, testId: 'connect-apps' },
         'sep',
         { label: 'Import bot…', icon: <I.Users size={15} />, run: () => void importBot() }
       ]
@@ -328,7 +327,8 @@ export function Sidebar(p: {
 
   return (
     <aside className={`sidebar sb2${dragging ? ' is-dragging' : ''}`} onDragOver={(e) => { if (dragging) e.preventDefault() }}>
-      {/* Grok Bot's shape: search and new chat up top, then your bots. Library and Memory live in your profile menu. */}
+      {/* Grok Bot's shape, five things: search and new chat up top, your bots, Recents, Needs you (only when something
+          waits) and you. Library, Apps, Projects, Scheduled and Memory live in your profile menu. */}
       <div className="sb-top drag">
         {p.onHide && <button className="sb-circle" onClick={p.onHide} title="Hide the sidebar (⌘B)" aria-label="Hide the sidebar (⌘B)" data-testid="sidebar-hide"><I.SidebarLeft size={16} /></button>}
         <button className="sb-circle" onClick={p.onSearch} title="Search bots, chats, commands and settings (⌘K)" aria-label="Search (⌘K)" data-testid="nav-search"><I.Search size={16} /></button>
@@ -373,17 +373,6 @@ export function Sidebar(p: {
             )}
           </div>
 
-          {projects.length > 0 && section('projects', 'Projects', (
-            <>
-              {projects.map((s) => smallRow(s, 'project-item'))}
-            </>
-          ), (
-            <>
-              <button className="nav-add" onClick={() => p.onView('projects')} title="All projects" aria-label="All projects" data-testid="nav-projects"><I.Folder size={14} /></button>
-              <button className="nav-add" onClick={p.onNewProject} title="New project: a folder with its own instructions and chats" aria-label="New project" data-testid="new-project"><I.Plus size={14} /></button>
-            </>
-          ))}
-
           {(pinnedChats.length > 0 || recents.length > 0) && section('recents', 'Recents', (
             <>
               {pinnedChats.map(chatRow)}
@@ -406,12 +395,10 @@ export function Sidebar(p: {
       <UpdateButton busy={p.runningThreads?.size ?? 0} />
       <div className="sb-bottom">
         {/* You: initials and your name (like Grok Bot). Click for Settings; right-click for scheduled, usage and more. */}
-        <button className="sb-me" onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, Memory, Library and more${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
+        <button className="sb-me" onClick={meMenu} onContextMenu={meMenu} aria-label={`${me.full || 'You'}: menu`} title={`Settings, Memory, Library, Apps, Projects and Scheduled${dev && p.modelLabel ? ` · ${p.modelLabel}` : ''}`} data-testid="profile">
           <span className="sb-me-avatar" aria-hidden="true">{me.initials || <I.Gear size={16} />}</span>
           {me.full ? <span className="sb-me-name">{me.full}</span> : <span className="sb-me-name muted">Settings</span>}
         </button>
-        <button className="sb-circle sb-foot-btn" onClick={p.onConnect} title="Connect apps: Gmail, Calendar, Slack and more" aria-label="Connect apps" data-testid="connect-apps"><I.Plug size={16} /></button>
-        <button className={`sb-circle sb-foot-btn${p.view === 'files' ? ' on' : ''}`} onClick={() => p.onView('files')} title="Library: documents, decks, sheets and images your bots made" aria-label="Library" data-testid="nav-artifacts"><I.Layers size={16} /></button>
       </div>
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
     </aside>

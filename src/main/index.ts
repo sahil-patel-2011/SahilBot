@@ -430,7 +430,7 @@ app.whenReady().then(() => {
   const cursorOverlay = createOverlay({
     hidden: HIDDEN,
     rendererUrl: process.env.ELECTRON_RENDERER_URL,
-    onStop: () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini(); cursorOverlay.overlay.hide() }
+    onStop: () => { const id = mini?.threadId; if (id) void chat.stop(id, { byUser: true }); exitMini(); cursorOverlay.overlay.hide() }
   })
   app.on('before-quit', () => cursorOverlay.windows()?.dispose())
   const captureScreen = async (file: string, opts?: { rect?: Electron.Rectangle; width?: number; height?: number }): Promise<{ dataUrl: string; width: number; height: number }> => {
@@ -471,7 +471,7 @@ app.whenReady().then(() => {
     toWin('mini', { on: true, threadId })
     cursorOverlay.overlay.warm()
     // A way out that works whatever app is in front.
-    globalShortcut.register('Control+Option+Escape', () => { const id = mini?.threadId; if (id) void chat.stop(id); exitMini() })
+    globalShortcut.register('Control+Option+Escape', () => { const id = mini?.threadId; if (id) void chat.stop(id, { byUser: true }); exitMini() })
   }
   // The Quick Ask bar (created on first use); it follows the same chat events as the main window.
   let quick: BrowserWindow | null = null
@@ -1038,6 +1038,7 @@ app.whenReady().then(() => {
   // The card shows for a while when you're looking at the bot's chat; otherwise it goes to Needs you at once.
   const questionHost = createQuestionHost({ db, settings, queue: questions, learner, grace: (threadId) => (mainFocused() && viewingThread === threadId ? ATTENDED_GRACE_MS : 0) })
   const chat = new Agent({
+    vaultWaiting: () => !!vault.auth?.waiting(),
     privacy: {
       active: privacyActive,
       detect: (text, signal) => piiTracer.detect(text, signal),
@@ -3039,7 +3040,11 @@ app.whenReady().then(() => {
   // The app's own window may use the microphone (voice); websites in the browser panel may not.
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc === win?.webContents))
   session.defaultSession.setPermissionCheckHandler((wc, perm) => perm === 'media' && wc === win?.webContents)
-  handle('chat:stop', (threadId: string) => chat.stop(threadId))
+  // The Stop button (and Escape): the chat says "Stopped." once the run ends.
+  handle('chat:stop', (threadId: string) => chat.stop(threadId, { byUser: true }))
+  // The stall note's Retry / Skip: only the step that hung.
+  handle('chat:skipStep', (threadId: string) => chat.skipStep(String(threadId ?? '')))
+  handle('chat:retryStep', (threadId: string) => chat.retryStep(String(threadId ?? '')))
   handle('chat:steer', async (threadId: string, text: string) => {
     const g = guardUserText(threadId, String(text).slice(0, 20_000))
     const r = await chat.steer(threadId, g.text)

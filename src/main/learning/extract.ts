@@ -233,7 +233,7 @@ export function segmentRuns(messages: Message[]): RunInfo[] {
     const denied = tools.filter((m) => m.meta?.status === 'denied' && /declined/i.test(m.content)).map((m) => ({ tool: m.toolName ?? '?', why: String(m.meta?.label ?? m.toolName ?? '') }))
     const finals = msgs.filter((m) => m.role === 'assistant' && m.kind === 'normal' && m.content.trim() && !m.meta?.superseded)
     const last = finals.at(-1)
-    const failed = msgs.some((m) => m.kind === 'notice' && /^(Something went wrong|Run failed)/.test(m.content)) || msgs.some((m) => m.role === 'assistant' && m.status === 'error')
+    const failed = msgs.some((m) => m.kind === 'notice' && (!!m.meta?.runFailed || /^(Something went wrong|Run failed)/.test(m.content))) || msgs.some((m) => m.role === 'assistant' && m.status === 'error')
     const calls = msgs.flatMap((m) => m.toolCalls ?? [])
     out.push({
       opener: messages[i], msgs, next,

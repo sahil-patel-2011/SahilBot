@@ -7,8 +7,9 @@
 //     every continuation (5 x 8 searches before);
 //   - an idle limit: nothing at all streamed for idleMs (a stalled connection);
 //   - a wall-clock limit for the whole request (continuations included): wallMs.
-// A request stopped by a limit fails with a clear message and is never retried or handed to another model (the
-// same request would run just as long); between continuations the turn ends with what it found instead.
+// A request stopped by a limit fails with a clear message and is never retried (the same request would run just as
+// long); between continuations the turn ends with what it found instead. An idle stop (the provider went silent) is
+// handed to another model by the agent loop; a wall-clock or search-limit stop ends the run with its reason.
 
 /** The limits (tests shrink them). */
 export const requestLimits = {
