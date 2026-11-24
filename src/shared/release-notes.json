@@ -4,6 +4,8 @@
     "date": "2026-11-24",
     "title": "Answers you can trust, and fewer interruptions",
     "highlights": [
+      "Outlook: connect your Outlook.com or Microsoft 365 account to read, draft and send mail and manage your calendar",
+      "A roomier sidebar like Grok Bot: bigger bots, pin or unpin with one click, and an orange dot when a bot is waiting for you",
       "An answer shows up once and stays: it's checked before you see it, never posted and then pulled back or rewritten",
       "Ask a question back and the bot stops there; say \"stop\" (or \"Stop Test 5 now\") and you get one \"Stopped.\"",
       "Your files are safe: a file you made is never replaced unless you asked to change it; the new one is saved as \"name (2)\"",
@@ -12,6 +14,17 @@
       "Reminders arrive on time even while a bot is busy, on the clock of the place you named"
     ],
     "sections": [
+      {
+        "title": "Sidebar",
+        "items": [
+          "Bots are bigger, with more room between them",
+          "Pin a bot with the pin button on its row, unpin it with the × on its tile; both can be undone",
+          "An orange dot and \"Waiting for you\" show which bot needs you; unread stays a blue dot",
+          "Connect apps is a button next to your name again; the menu by your name is shorter (Memory is in ⌘K)",
+          "While an update downloads you see how much is done: \"42% · 90 of 215 MB\"",
+          "The morning check-in is gone: ask any bot for a daily summary instead"
+        ]
+      },
       {
         "title": "Answers",
         "items": [
