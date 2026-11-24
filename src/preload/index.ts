@@ -411,7 +411,6 @@ const api: SahilBotApi = {
     }
   },
   botAutonomy: { setLevel: call('botAutonomy:setLevel') as never },
-  checkin: { get: call('checkin:get') as never, set: call('checkin:set') as never },
   watchlist: { get: call('watchlist:get') as never, set: call('watchlist:set') as never },
   markets: { quotes: call('markets:quotes') as never, card: call('markets:card') as never, search: call('markets:search') as never },
   cad: { onshapeTest: call('onshape:test') as never },

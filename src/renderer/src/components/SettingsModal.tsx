@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { WhatsNewList } from './WhatsNew'
+import { downloadedText } from '@shared/bytes'
 import type { ConnectorStatus, ModelInfo, ModelList, PermissionKind, ProviderId, Settings, Space, SystemInfo, UpdateStatus, VoiceStatus } from '@shared/types'
 import { api, isServerRuntime } from '../api'
 import * as I from '../icons'
@@ -344,7 +345,7 @@ function UpdatesRow() {
   }, [])
   const text = !st ? 'Checking…'
     : st.state === 'checking' ? 'Checking for a new version…'
-    : st.state === 'downloading' ? `Getting the update… ${st.progress ?? 0}%`
+    : st.state === 'downloading' ? `Getting the update… ${st.progress ?? 0}%${st.size ? ` · ${downloadedText(st.received ?? ((st.progress ?? 0) / 100) * st.size, st.size)}` : ''}`
     : st.state === 'ready' ? 'Ready. Restart to finish: your chats, bots and settings stay as they are, and a copy is saved first.'
     : st.state === 'installing' ? 'Saving a copy of your data and restarting…'
     : st.state === 'error' || st.state === 'unsupported' ? st.detail ?? 'Couldn\'t check for updates.'

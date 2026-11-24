@@ -1116,13 +1116,6 @@ export interface UsageReport {
   totals: { cloudRequests: number; localRequests: number; input: number; output: number; usd: number }
 }
 
-/** The opt-in morning check-in: a daily routine on the main bot. */
-export interface CheckinSettings {
-  enabled: boolean
-  /** HH:MM, local time. */
-  time: string
-}
-
 /** A ready-made bot from packs/templates (Connect apps → Bot templates). */
 export interface BotTemplate {
   id: string
@@ -1615,11 +1608,6 @@ export interface SahilBotApi {
     /** Each bot's status (Working / Pulling context / Done / Idle) and the model its last reply ran on. */
     status(): Promise<import('./bot-status').BotStatusMap>
   }
-  /** The morning check-in routine on the main bot (off by default). */
-  checkin: {
-    get(): Promise<CheckinSettings>
-    set(c: CheckinSettings): Promise<CheckinSettings>
-  }
   /** Undo a task's file changes (the Undo button under an answer): what it would undo, and doing it. */
   undo: {
     status(threadId: string, messageId: string): Promise<{ files: number } | null>
@@ -1863,6 +1851,8 @@ export interface UpdateStatus {
   progress?: number
   /** The download's size in bytes. */
   size?: number
+  /** Bytes downloaded so far (while downloading). */
+  received?: number
   detail?: string
   checkedAt?: number
 }

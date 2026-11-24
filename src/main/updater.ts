@@ -349,21 +349,22 @@ export class Updater {
       const marker = `${file}.verified`
       const verified = (): boolean => { try { return existsSync(file) && statSync(file).size === zip.size && readFileSync(marker, 'utf8') === `${zip.size}:${want}` } catch { return false } }
       if (!verified() && (!existsSync(file) || statSync(file).size !== zip.size || (await sha256(file)) !== want)) {
-        this.set({ state: 'downloading', version: label, notes, progress: 0, size: zip.size })
+        this.set({ state: 'downloading', version: label, notes, progress: 0, size: zip.size, received: 0 })
         const dl = await f(zip.browser_download_url, { signal: AbortSignal.timeout(30 * 60_000) })
         if (!dl.ok || !dl.body) throw new Error(`The download failed (${dl.status}).`)
         let got = 0
         const counted = Readable.fromWeb(dl.body as never).on('data', (c: Buffer) => {
           got += c.length
           const p = Math.min(99, Math.floor((got / Math.max(1, zip.size)) * 100))
-          if (p !== this.status.progress) this.set({ state: 'downloading', version: label, notes, progress: p, size: zip.size })
+          // A new percent or a new whole megabyte: "Getting the update… 42% · 90 of 215 MB".
+          if (p !== this.status.progress || Math.floor(got / 1e6) !== Math.floor((this.status.received ?? 0) / 1e6)) this.set({ state: 'downloading', version: label, notes, progress: p, size: zip.size, received: got })
         })
         await pipeline(counted, createWriteStream(file))
         if ((await sha256(file)) !== want) { rmSync(file, { force: true }); throw new Error('The download didn\'t match its checksum, so it wasn\'t used.') }
       }
       try { writeFileSync(marker, `${zip.size}:${want}`) } catch { /* hashed again next time */ }
       // Unpacking and checking the signature take a moment: say so rather than "Checking for a new version…".
-      this.set({ state: 'downloading', version: label, notes, progress: 100, size: zip.size })
+      this.set({ state: 'downloading', version: label, notes, progress: 100, size: zip.size, received: zip.size })
       // Unpack next to the installed app's folder (same disk, so the swap is two renames).
       const stage = join(dir, 'app')
       rmSync(stage, { recursive: true, force: true })

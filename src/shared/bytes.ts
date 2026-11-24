@@ -6,3 +6,11 @@ export function bytesText(n: number | undefined | null): string {
   if (n >= 1e3) return `${Math.round(n / 1e3)} KB`
   return `${n} bytes`
 }
+
+/** Download progress people read: "90 of 215 MB" (whole megabytes, never more than the total). */
+export function downloadedText(received: number | undefined | null, total: number | undefined | null): string {
+  if (!total || total <= 0) return ''
+  const mb = (n: number): number => Math.round(n / 1e6)
+  const done = Math.min(mb(Math.max(0, received ?? 0)), mb(total))
+  return `${done} of ${mb(total)} MB`
+}

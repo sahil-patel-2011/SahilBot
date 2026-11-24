@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { bytesText } from '@shared/bytes'
+import { bytesText, downloadedText } from '@shared/bytes'
 import type { UpdateStatus } from '@shared/types'
 import { api, isServerRuntime } from '../api'
 import * as I from '../icons'
@@ -23,6 +23,7 @@ export function UpdateButton({ busy = 0 }: { busy?: number }) {
   if (st?.state === 'downloading') return (
     <button className="sb-update" disabled data-testid="sidebar-update-downloading" title={`Downloading ${st.version ?? 'the new version'}${st.size ? ` (${bytesText(st.size)})` : ''}. The Update button appears when it's ready.`}>
       <span className="spin" /><span>{(st.progress ?? 0) >= 100 ? 'Almost ready…' : 'Getting the update'}</span>
+      {(st.progress ?? 0) < 100 && <span className="sb-update-v" data-testid="sidebar-update-progress">{st.progress ?? 0}%{st.size ? ` · ${downloadedText(st.received ?? ((st.progress ?? 0) / 100) * st.size, st.size)}` : ''}</span>}
       <span className="sb-update-bar" aria-hidden="true"><span style={{ transform: `scaleX(${Math.min(1, (st.progress ?? 0) / 100)})` }} /></span>
     </button>
   )

@@ -1,71 +1,36 @@
-import type { CheckinSettings, PendingRequest, Schedule, ScheduledTask, Space } from '@shared/types'
+import type { PendingRequest, ScheduledTask, Space } from '@shared/types'
 import type { ToolDef } from './agent/types'
 import type { Db } from './db'
 import { runOutcome } from './scheduler'
 
-// The morning check-in (opt-in, off by default): a daily routine on the main bot that looks over the
-// day and the user's bots and suggests a few next steps. It reads; it never sends anything on its own.
-// bots_overview gives it a summary of every bot's open plans and what is waiting on the user.
+// The morning check-in is gone: a daily look-over is something you ask a bot for in chat, like any routine.
+// removeCheckin deletes the routine an earlier version made (once, at startup), so it never runs again.
+// bots_overview (below) stays: a summary of every bot's open plans and what is waiting on the user.
 
+/** The routine's title in earlier versions. */
 export const CHECKIN_TITLE = 'Morning check-in'
-export const DEFAULT_CHECKIN_TIME = '08:30'
 const SETTING = 'checkin'
-const TIME = /^([01]\d|2[0-3]):[0-5]\d$/
-
-export const CHECKIN_PROMPT = `Give me a short morning check-in. Read only: don't send, post, buy, book, delete or change anything, and don't start work in other bots. If something needs doing, suggest it and ask.
-
-1. Today: if you can read my calendar and reminders (mac_apps calendar_events with days 1, and reminders_list; or a connected calendar app), list today's events with times and anything due today or overdue. If you can't, skip this without asking me to connect anything.
-2. My bots: use bots_overview (find it with find_tools if it isn't loaded) for open plans, what is waiting on me (approvals, questions, plans to OK), routines that failed, and unread chats. Summarize: one line per bot at most, no details from inside the chats.
-3. Suggest 1–3 next actions, most important first, each one line.
-
-Keep the whole thing under about 150 words, in short sections with bullets. Skip any section with nothing in it. If there is nothing at all, say so in one line.`
-
-interface Stored { taskId: string | null; time: string }
 
 export interface CheckinScheduler {
   get(id: string): ScheduledTask | undefined
-  create(t: { title: string; prompt: string; schedule: Schedule; spaceId: string; enabled?: boolean }): ScheduledTask
-  update(id: string, patch: { enabled?: boolean; schedule?: Schedule }): ScheduledTask
+  remove(id: string): void
 }
 
-function stored(db: Db): Stored {
-  const s = db.getSetting<Partial<Stored>>(SETTING) ?? {}
-  return { taskId: typeof s.taskId === 'string' ? s.taskId : null, time: typeof s.time === 'string' && TIME.test(s.time) ? s.time : DEFAULT_CHECKIN_TIME }
-}
-
-/** The check-in routine, if it still exists on the main bot. */
-function task(db: Db, sched: CheckinScheduler): ScheduledTask | undefined {
-  const { taskId } = stored(db)
-  const t = taskId ? sched.get(taskId) : undefined
+/**
+ * Deletes the morning check-in routine an earlier version created on the main bot, and forgets its setting.
+ * Only that routine (by the id it stored, on the main bot): a routine the user made themselves is never touched.
+ * Returns whether one was deleted.
+ */
+export function removeCheckin(db: Db, sched: CheckinScheduler): boolean {
+  const s = db.getSetting<{ taskId?: unknown }>(SETTING)
+  if (s === undefined || s === null) return false
+  const id = typeof s.taskId === 'string' ? s.taskId : null
+  const t = id ? sched.get(id) : undefined
   const main = db.mainSpace()
-  return t && main && t.spaceId === main.id ? t : undefined
-}
-
-/** On only while its routine exists and is on (pausing or deleting the routine turns it off here too). */
-export function getCheckin(db: Db, sched: CheckinScheduler): CheckinSettings {
-  const t = task(db, sched)
-  const time = t?.schedule.type === 'daily' ? t.schedule.time : stored(db).time
-  return { enabled: !!t?.enabled, time }
-}
-
-/** Creates, re-times, resumes or pauses the check-in routine. Edits to its instructions are kept. */
-export function setCheckin(db: Db, sched: CheckinScheduler, c: CheckinSettings): CheckinSettings {
-  const time = String(c?.time ?? '')
-  if (!TIME.test(time)) throw new Error('Pick a time like 08:30.')
-  const enabled = c.enabled === true
-  const main = db.mainSpace()
-  if (!main) throw new Error('No main bot.')
-  const schedule: Schedule = { type: 'daily', time }
-  const cur = task(db, sched)
-  let taskId = cur?.id ?? null
-  if (cur) {
-    const sameTime = cur.schedule.type === 'daily' && cur.schedule.time === time
-    if (!sameTime || cur.enabled !== enabled) sched.update(cur.id, { enabled, ...(sameTime ? {} : { schedule }) })
-  } else if (enabled) {
-    taskId = sched.create({ title: CHECKIN_TITLE, prompt: CHECKIN_PROMPT, schedule, spaceId: main.id, enabled: true }).id
-  }
-  db.setSetting(SETTING, { taskId, time } satisfies Stored)
-  return getCheckin(db, sched)
+  const mine = !!t && !!main && t.spaceId === main.id
+  if (mine) sched.remove(t.id)
+  db.deleteSetting(SETTING)
+  return mine
 }
 
 // ------------------------------------------------------------------ bots_overview

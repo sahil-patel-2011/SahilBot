@@ -9,7 +9,7 @@ import { classifyTask, type TaskCategory } from './llm/task-classifier'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
-import type { AlwaysOnStatus, BotShape, ChatEvent, CheckinSettings, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, PermissionState, SendInput, Settings, Space, UsageRow } from '@shared/types'
+import type { AlwaysOnStatus, BotShape, ChatEvent, NeedsYouItem, PendingRequest, PermissionKind, PermissionMode, PermissionState, SendInput, Settings, Space, UsageRow } from '@shared/types'
 import type { GoalPatch, MemoryItem, VoiceBarOptions, VoiceSession, VoiceStyle } from '@shared/types'
 import { Attachments, registerScheme } from './attachments'
 // Cloud first, local opt-in (shared/local-mode.ts); attached folders are counted and indexed (knowledge/folder-scan.ts).
@@ -33,7 +33,7 @@ import { ConnectorIcons, Connectors, PRESETS } from './connectors'
 import { OAUTH_CLIENTS_FILE, readBuiltinClients } from './oauth-clients'
 import { addTemplate, loadTemplates, type TemplateDeps } from './templates'
 import { BOT_FILE_EXT, BOT_FILE_MAX_BYTES, botFileFor, duplicateBot, importPreview, importTemplate, parseBotFile, PendingImports } from './bot-share'
-import { getCheckin, overviewTool, setCheckin } from './checkin'
+import { overviewTool, removeCheckin } from './checkin'
 import { aggregateUsage, providerOf, usageDashboard, usageDetailCsv, usageGlance, usageRows, usageScope, windowStart } from './usage'
 import { VoiceService } from './voice/service'
 import { Scheduler } from './scheduler'
@@ -2172,8 +2172,8 @@ app.whenReady().then(() => {
   })
 
   // ---------------------------------------------------------------- morning check-in and usage
-  handle('checkin:get', () => getCheckin(db, scheduler))
-  handle('checkin:set', (c: CheckinSettings) => setCheckin(db, scheduler, c))
+  // The morning check-in is gone: an earlier version's routine is deleted once (a routine the user made stays).
+  try { removeCheckin(db, scheduler) } catch { /* never in the way of startup */ }
   // Stock watchlist (renderer-owned list; values cached from stock cards or a refresh).
   handle('watchlist:get', () => getWatchlist(db))
   handle('watchlist:set', (items: unknown) => setWatchlist(db, items))

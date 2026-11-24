@@ -224,6 +224,10 @@ export class Db {
       .run(key, JSON.stringify(value))
   }
 
+  deleteSetting(key: string): void {
+    this.sql.prepare('DELETE FROM settings WHERE key = ?').run(key)
+  }
+
   // ---------- spaces ----------
   listSpaces(): Space[] {
     const rows = this.sql.prepare(`
